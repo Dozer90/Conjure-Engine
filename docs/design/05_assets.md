@@ -818,9 +818,16 @@ called by the engine's `renderer_subsystem`. Renderer loaders are CPU-only; the 
 subscribes to LOADED / RELOADED / UNLOADED and drives `renderer::upload_*` / `release_*` (R10). Mesh instances
 compare cached material `version()` during extraction.
 
-**Offers to `audio`.** `conjure.audio.clip` (`.wav .ogg .mp3`; setting: decode to PCM or keep compressed).
+**Offers to `audio`.** `conjure.audio.clip` (`.wav .ogg .mp3 .flac`; setting `storage: auto | pcm | streamed`,
+`12_audio.md` 2.2). The loader is CPU-only: the clip payload is self-contained and no `audio_engine` takes part in
+`finalise` (R43). `audio` depends publicly on `assets` for `register_asset_types` and `asset_ref<audio_clip>`.
 
-**Offers to `scene`.** `conjure.scene.scene` (`.scene`) and `conjure.scene.prefab` (`.prefab`): the
+**Offers to `physics`.** `conjure.physics.collision_mesh` (`.gltf .glb .obj`, `collision_mesh_importer`,
+`14_physics.md` 2.7): positions + indices cooked deterministically; the CPU-only loader builds the Jolt shape on
+the asset job and `finalise` publishes it. A `.glb` that is also a render model is imported a second time as
+collision geometry through `.meta` importer selection (R44).
+
+**Offers to `scene`.** `conjure.scene.scene` (`.scene.json`) and `conjure.scene.prefab` (`.prefab.json`; R45): the
 importer canonicalises the JSON and extracts every `asset_ref` uuid as a dependency via reflection,
 so hot reload and the cooking closure reach everything a scene uses. `scene_manager` holds the
 `asset_handle`s that define residency, gates activation on `asset_load_batch::is_complete()`, and

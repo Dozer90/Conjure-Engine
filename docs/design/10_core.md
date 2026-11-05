@@ -48,6 +48,9 @@ namespace conjure::math {
     [[nodiscard]] constexpr bool is_power_of_two(u64 value) noexcept;
 
     // Right-handed, Y up, -Z forward (glTF convention). Depth 0..1 (GLM_FORCE_DEPTH_ZERO_TO_ONE).
+    // Quaternion storage is x, y, z, w (glm 1.0.1 default; never define GLM_FORCE_QUAT_DATA_WXYZ, and do not define
+    // GLM_FORCE_QUAT_DATA_XYZW either because it changes the constructor to (x, y, z, w)). C# mirrors memcpy quats, so
+    // math.h must static_assert(offsetof(quat, x) == 0 && offsetof(quat, w) == 12) and test_math.cpp repeats it (R58).
     struct transform {                       // trivially copyable; layout mirrored in C# (float x10)
         vec3 position = vec3(0.0f);
         quat rotation = quat(1.0f, 0.0f, 0.0f, 0.0f);   // identity (w, x, y, z)

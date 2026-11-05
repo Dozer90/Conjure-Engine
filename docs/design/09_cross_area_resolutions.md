@@ -1,8 +1,11 @@
-# Cross-area resolutions (consistency review of 01-08)
+# Cross-area resolutions (consistency review of 01-08 and of the design notes 10-15)
 
-Status: **binding**. Author: consistency critic / architecture owner. Every item below was found by
-reading `01_ecs.md` ... `08_testing.md` against each other and against `00_brief.md`; each one has been
-fixed **in place** in the affected documents, which cite the resolution id (`R<n>`) at the edited spot.
+Status: **binding**. Author: consistency critic / architecture owner. R1-R42 were found by reading
+`01_ecs.md` ... `08_testing.md` against each other and against `00_brief.md`; R43-R65 by reading the module
+design notes `11_platform.md` ... `15_bindings.md` against each other, against `10_core.md`, `ARCHITECTURE.md`
+and 01-08. Each one has been fixed **in place** in the affected documents, which cite the resolution id
+(`R<n>`) at the edited spot (`10_core.md` was not edited: it is being implemented; requirements on it are
+recorded here, R58, R63).
 When a sentence in an area document still disagrees with this file, this file wins and the area
 document has a bug.
 
@@ -41,7 +44,7 @@ and nobody designs), **N** naming/spelling drift of one shared API.
 | R23 | G/C | 04, 05, 06 | Assets required `begin_frame/update/end_frame` and `hot_reload_controller::update` per frame; the engine frame sequence had no such step. `load_blocking` was refused inside a frame, but editor commands (`prefab.instantiate`, `scene.open`) run inside frames. | `assets_subsystem::begin_frame` runs `asset_manager::begin_frame + update` and `hot_reload_controller::update` (frame step 5); `end_frame` at step 13. `load_blocking` is permitted inside a frame on the main thread with a once-per-frame WARN in Development. |
 | R24 | C | 05, 06, 07 | VFS mounts: `assets://`, `engine://` (05) vs `project://`, `assets://`, `cooked://` (06); module content "under `/modules/<name>`" (07). | Mount set: `project://`, `assets://`, `engine://`, `cooked://` (cooked projects mount `engine://` + `cooked://`), and `modules://<name>/` per loaded module. |
 | R25 | G | 01, 05 | Assets wanted reflection to bind `asset_ref<T>` fields on read through a context carrying `asset_manager *`; the ECS serializer has no context and `ecs` must depend on `core` only. | `core::reflect` field kind `ASSET_REF` serialises the uuid string; `component_info::assetRefFieldOffsets` lists the fields; the scene module runs a post-load bind pass with the new untyped `asset_manager::bind_slot(id)`. |
-| R26 | D | 03 (+ bindings gap) | `entity_*`, `component_*`, `transform_*` entries appeared in the core `.inl` listing with unclear implementers ("core entries" vs bindings). | Scripting implements `log_*`, `script_*`, `entity_*`, `component_*`, `query_*` (need only `ecs`); bindings (wave 4) implements `transform_*`, `physics_*`, `audio_*`, `prefab_*`, `scene_*`, `input_*`, `asset_*`, `diagnostics_*`. |
+| R26 | D | 03 (+ bindings gap) | `entity_*`, `component_*`, `transform_*` entries appeared in the core `.inl` listing with unclear implementers ("core entries" vs bindings). | Scripting implements `log_*`, `script_*`, `entity_*`, `component_*`, `query_*` (need only `ecs`); bindings (wave 4) implements `transform_*`, `physics_*`, `audio_*`, `prefab_*`, `scene_*`, `input_*`, `asset_*`, `diagnostics_*`. Amended by R64: the hierarchy half of `entity_*` and `modules_*` are bindings' too (ten groups, `15_bindings.md` 2.3). |
 | R27 | C | 03, 06 | Engine needed `script_host::start/load_game_assembly/request_reload`, `scripting::register_systems(scheduler, script_host &)` and initialised scripting at step 14 before bindings filled the table at step 16; scripting requires the table to be complete before `initialize`. | `scripting_subsystem::startup` (14) constructs `script_runtime`; `bindings_subsystem` (16) fills the table; `scripting_subsystem::post_startup` (17) runs `initialize` then `load_game_assembly`. Systems: `scripting.frame_begin`, `scripting.collision_dispatch`, `scripting.fixed_update`, `scripting.update`, `scripting.late_update`, `scripting.frame_end` via `register_script_systems(ecs::scheduler &, script_runtime &)`. |
 | R28 | C/N | 03, 08 | Tests wanted `scripting::host::is_runtime_available()`; "a throwing OnUpdate logs ERROR once" conflicted with 03's "log every fault, disable after three consecutive". | `scripting::is_runtime_available()` added (static hostfxr probe). 03 semantics win; the test uses `allow_errors()` and asserts the count. |
 | R29 | C | 03 (+ scene gap) | Scripting required the scene serializer to call `serialize_entity_scripts` / `remap_entity_fields` and scene unload to call `destroy_all`, creating a scene -> scripting dependency between wave-3 siblings; `script_component` (a store handle) would alias when archived/copied. | `script_component` registers custom `ops.copy`/`ops.destruct` (deep copy of the script set; memcpy relocate) and a custom `component_serializer` through `script_runtime::active()`. Scene has no scripting dependency; `scene_manager::on_before_unload` lets the engine's `scripting_subsystem` run `destroy_all(true)`. |
@@ -58,6 +61,29 @@ and nobody designs), **N** naming/spelling drift of one shared API.
 | R40 | G | 01, 04 | Editor called `ecs::component_registry::to_json/from_json(world, entity, type)`, which ECS never offered (only per-component `component_serializer` hooks). | `ecs::component_to_json(world, entity, id, writer)` / `component_from_json(world, entity, id, value)` added to `serialization.h`. |
 | R41 | C (risk) | 01, 08 | `world_hash` hashes entity ids; ECS states id *values* reserved inside PARALLEL grains are not stable across worker counts; the determinism test varies worker counts. | Documented constraint: determinism scenes spawn only from EXCLUSIVE / MAIN_THREAD systems or command buffers flushed in grain order. Remaining risk listed in section 4. |
 | R42 | N | 06, 08 | Tests referred to `engine_config::useRenderThread`; the engine has no render thread and no such field. | Removed from 08; no render thread exists in any mode (06 D1). |
+| R43 | C | 12, 05, ARCH 2.2/5 | `ARCHITECTURE.md` 2.2 drew `audio -> core` only and section 5 said "audio clips: audio_engine buffers in finalise"; 12 A12/A6 make `audio` depend publicly on `assets` (clip asset type, `asset_ref<audio_clip>` field) and give the clip a CPU-only loader whose `pcm_buffer` is shared with voices via `shared_ptr`. 05 listed `.wav .ogg .mp3` only. | 12 wins: graph shows `audio -> core, assets` (like `renderer`); section 5 and 05 8 state the CPU-only loader; clip extensions `.wav .ogg .mp3 .flac`, `storage: auto \| pcm \| streamed`. `ecs` stays out of audio (R7). |
+| R44 | G | 14, 05, ARCH 5 | Physics needs collision geometry in Distribution but may not depend on `renderer` and `mesh_asset::cpu_geometry()` is Debug/Development only (R11); nobody registered a physics asset type. | `physics::register_asset_types` registers `conjure.physics.collision_mesh` (`.gltf .glb .obj`, `collision_mesh_importer`, positions + indices cooked deterministically; CPU-only loader builds the Jolt shape on the load job). Added to 05 8 ("Offers to physics"), `ARCHITECTURE.md` 5 and 06 3.4 step 12; the C# `CollisionMeshAsset` tag joins 15 2.5. |
+| R45 | N | 13, 05 | 05 8 named the scene files `.scene` / `.prefab`; 13, 06 2.10 (`scenes/main.scene.json`) and `ARCHITECTURE.md` 4.4 use `.scene.json` / `.prefab.json`. | `.scene.json` / `.prefab.json` everywhere; 05 8 corrected. |
+| R46 | C | 13, 06, ARCH 3/4.4 | `ARCHITECTURE.md` 4.4 and 06 3.1/8 listed three scene systems; 13 adds `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE \| RUNS_WHILE_PAUSED, before propagation) to repair raw `parent` edits, and the TRANSIENT/EDITOR_HIDDEN components `depth_tag<1..31>`, `transform_state`, `inactive`, `local_bounds`, `prefab_link`. | Four systems are canonical (`13_scene.md` 4.7); `ARCHITECTURE.md` 3, 06 3.1 step 8 and 06 8 list them. The extra components are hidden, so `04_editor.md` D8 / `08_testing.md` D8 ("every non-hidden component type") are unaffected. |
+| R47 | D | 13, 14, 06 3.2, ARCH 4.4 | Three descriptions of `interpolated_transform`: scene "defines it, written by physics" (13, 06), physics adds it through the deferred buffer in the `ADDED(rigid_body)` observer (14), nobody removed it and characters were not mentioned. | Scene defines and registers the component (TRANSIENT) and never adds it. Physics is the sole adder, writer and remover: the `ADDED` observer of a DYNAMIC/KINEMATIC `rigid_body` or of a `character_controller` enqueues `deferred.add<interpolated_transform>`; the first pull writes `previous = current = pose`; `destroy_body` on a living entity (and a body turning STATIC) enqueues `deferred.remove`. 13 2.1, 14 3.3, 06 3.2 and `ARCHITECTURE.md` 4.4 say the same. Scripts never write it (15 11). |
+| R48 | C | 15, 14 | 15 2.6 proposed physics mirrors (`RigidBodyData` 56 bytes with `uint Layer`/`uint Flags`, colliders with `Center`, `CharacterControllerData` 24 bytes) that do not match 14 2.3 (`u8 layer`, `u16 flags`, `maxLinearVelocity`, `isSleeping`, `offset` + `rotation`, `convexRadius`, character ground fields); 14 claimed `rigid_body` is 64 bytes (it is 52). | The owning note defines the fields: 15 2.6 restates 14 2.3 field-for-field (`RigidBodyData` 52, `BoxColliderData` 44, `SphereColliderData` 20, `CapsuleColliderData` 40, `ConvexColliderData` 64, `MeshColliderData` 32, `CharacterControllerData` 72); `rigid_body` is 52 bytes in 14 2.3 and its test; a mirror and its native struct change in the same PR (hash test). |
+| R49 | N/G | 15, 14 | Entry names differed (14 8: `physics_layer_find/name`, `physics_character_move/ground`; 15 2.3: `physics_layer_index/layer_name/layers_collide`, `physics_character_is_grounded/character_velocity`) and 15 needed `physics_move_kinematic`, `physics_get/set_gravity` and a `conjure_force_mode`, which `physics_world` lacked. | 15 owns entry names (R26). `physics_world` gains `move_kinematic(entity, transform)` (queued `MoveKinematic`), `set_gravity(vec3)` (queued `SetGravity`) and `gravity()`; `conjure_force_mode` maps FORCE/IMPULSE/VELOCITY_CHANGE/ACCELERATION onto `add_force`/`add_impulse` with the mirror's mass (14 8); `character_is_grounded` = `character_ground() == ON_GROUND`, `character_velocity` reads the component. |
+| R50 | C | 15, 12 | Two script-to-voice designs: 12 kept a "play requested" bit in the hidden `source_handle::flags` and offered voice-id-keyed entries (`audio_play(entity, clipUuid, paramsBlob) -> u64`, `audio_stop(u64, fade)` ...); 15 B8 wrote `playbackRequest`/`isPlaying` fields and listed entity-keyed entries; 15's `AudioSourceData` (48 bytes) omitted `playOnStart`, `attenuation`, distances and `handle`. | 15's entity-keyed `audio_*` entries are canonical (15 owns the table). `audio_source` (12 2.6) gains `audio_playback_request playbackRequest` and `bool isPlaying` (hidden, never serialised) before `handle`; `source_handle::flags` keeps only "started once"; `engine.audio_sync` consumes requests, resets them to NONE and writes `isPlaying`; `engine.audio_finish_one_shots` clears `isPlaying`. `AudioSourceData` lists every `audio_source` field in order (88 bytes, `handle` opaque); `AudioListenerData` gains `Active`. `audio_play_one_shot` = `audio_engine::play(clipRef, play_params{retain = false})`; master gain is read from `group(MASTER_GROUP)`. |
+| R51 | G | 15, 14, 06 2.5 | 15 and 14 asked for `frame_stats *` and `physics_world *` to be "added" to `engine_context`; 06 2.5 already has `physics` and `audio` pointers but no stats pointer. | `engine_context` gains `const frame_stats *stats` (read by `diagnostics_frame_stats`); `physics`/`audio` pointers unchanged (null when compiled out or disabled). 14 8 corrected. |
+| R52 | G | 12, 06 2.3/2.10 | 12 needed `device`, `master_gain`, `doppler_factor`, `speed_of_sound`, `groups[] {name, parent, gain}` under `project.json` `"audio"`; `engine::audio_settings` had `enabled`, `backend`, `sampleRate`. | `engine::audio_settings` gains `device`, `masterGain`, `dopplerFactor`, `speedOfSound`, `std::vector<audio_group_setting> groups`; `project.json` sample updated; `audio_subsystem` maps it one-to-one onto `audio::audio_settings` and `audio_backend_choice::NULL_DEVICE` onto `audio_backend_kind::NULL_BACKEND`. |
+| R53 | C | 14, 06 2.3/3.4 | 06 2.3's `engine::physics_settings {enabled, gravity, maxBodies}` cannot author the 20 fields of `physics::physics_settings`; 06 3.4 step 12 did not say who parses `extensions.physics_layers`. | The engine struct stays the small summary (`enabled` is engine-only); `physics_subsystem` calls `physics::physics_settings::from_json(project.physics, project.extensions["physics_layers"])` + `validate()` (-> `PHYSICS_INIT_FAILED`) so every 14 2.1 field is authorable in snake_case without the engine naming it; step 12 also `attach`es the world, registers asset types and forwards `RELOADED`. |
+| R54 | G | 15, 03 | 15 B7/3.3 routes locked-scope structural requests into `script_runtime::deferred_commands()` and checks `current_phase()`; 03 4 had `mCurrentPhase` but neither accessor nor a named buffer (R5 only said "the script runtime's command_buffer"). 15 also puts its 106 lines into `native_api.inl` under a marker and adds generator outputs. | 03 4: `ecs::command_buffer mDeferredCommands`, `deferred_commands()`, `current_phase()`; `query_end` and the phase-end force-close flush that buffer. 03 2.1 comment names the `// --- bindings (R26) ---` section, `tools/gen_native_api.py --status/--out-manifest` and `docs/generated/native_api_manifest.json`. |
+| R55 | G/N | 15, 13 | 15 needed scene APIs 13 lacked (`deferred_set_parent`, `duplicate_subtree`, `create_many` without a template, `is_load_pending`, `active_path`) and named others wrongly (`scene::instantiate_prefab`, "parent observers rebuild children at flush"); 15's `PrefabInstance {Source, Root}` (32 B), `Parent {Value}` (8 B) and `Layer {uint}` mirrors contradict 13's `prefab_instance {prefab}` (24 B), `parent {value, siblingIndex}` (16 B), `layer {u8}`. | 13 4.3 gains `deferred_set_parent(command_buffer &, child, parent, keepWorld, index)` (records raw parent ops + `keepWorld` local + `transform_dirty`; repaired silently by `scene.apply_hierarchy_changes` via an expected-repairs counter, 13 3.7) and `duplicate_subtree(root, parent, index)`; `create_entities` accepts `NULL_ENTITY` as template; `scene_manager::is_load_pending(asset_id)`; paths cross through `asset_manager::find` / `loaded_scene_info::path`. 15 uses `prefab::instantiate(_many)` and 13's component layouts (`PrefabInstance` 24, `Parent` 16, `Layer` 1 byte). |
+| R56 | N | 11, 15 | Windows macros: `key::DELETE` is impossible (11 P14 uses `DEL`). 15's ABI enums drifted from the platform values: `conjure_cursor_mode {NORMAL, HIDDEN, LOCKED}` vs `cursor_mode {NORMAL, HIDDEN, DISABLED, CAPTURED}`; `conjure_button_action {RELEASE, PRESS, TAP}` vs `button_action {RELEASE, PRESS, REPEAT}` while claiming "platform::button_action values". | `key::DEL` (C# `Key.Delete` unchanged); every enumerator avoids Windows macro names (`DELETE`, `ERROR`, `IGNORE`, `OPTIONAL`, `NEAR`/`FAR`, `MIN`/`MAX`). `conjure_cursor_mode` and `conjure_button_action` carry exactly the platform enumerators; "tap" is C#-side sugar (PRESS now, RELEASE next frame). |
+| R57 | C/G | 15, 11 | 15 treated `input_clipboard_*` and `input_set_cursor_mode` as `NOT_SUPPORTED` stubs on the null window and excluded the clipboard entries from the `feature_test` counter check; 11 3.5 gives the null backend an in-memory clipboard and round-tripping cursor mode. 15 also needed gamepad names, which 11 did not expose. | 11 wins: those entries are real on both backends; the exclusions file keeps only `asset_path_of` and `diagnostics_call_count`. 11 4.2 gains `window::gamepad_name(u32) -> std::string_view` (`glfwGetGamepadName`; null: `"Null Gamepad <i>"` when connected). |
+| R58 | G (requirement on core) | 15, 14, 10 | 15 B5 requires `math::quat` to be stored x,y,z,w so `conjure_quat_xyzw`, `TransformData` and `LocalTransform` are memcpy-able and so the layout matches `JPH::Quat`; `10_core.md` 2.2 only shows the `(w, x, y, z)` constructor and does not fix storage (glm's default is build-dependent). 14 P5 described `math::quat` as "(w, x, y, z)" without distinguishing construction from storage. | Requirement on `core` (10_core not edited here): `core/math.h` defines `GLM_FORCE_QUAT_DATA_XYZW` before any glm include and `tests/core/test_math.cpp` asserts `offsetof(quat, x) == 0 ... offsetof(quat, w) == 12`; `type_info::layout_hash()` test vectors are published for C#. 14 P5 now says "constructed (w, x, y, z), stored x, y, z, w". Section 4 lists the residual risk. |
+| R59 | G | 11, 14, ARCH 9 | New CMake options `CONJURE_PLATFORM_GLFW` (11 4.5) and `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC` (14 P16) were absent from `ARCHITECTURE.md` 9. | Both listed in `ARCHITECTURE.md` 9 ("Module options"): GLFW ON by default (OFF = null-only platform library), cross-platform determinism OFF by default and never set by CI presets. |
+| R60 | N | 11, 06 7 | 06 7 said the null window's `pump_events()` "returns nothing" and `should_close()` is false "until `request_quit`" (an engine call that never touches the window). | 06 7: returns an empty span unless a test queued events (`push_event`, `simulate_*`); `should_close()` false until `request_close()` / `simulate_close()`; clipboard and cursor mode round-trip in memory. |
+| R61 | N | 15, 03 | 03 spelt the C# facade `RigidBody` (15: `Rigidbody`); 03 3.9 defined the mirror layout hash as "(offset, size) of fields plus total size" while core implements `type_info::layout_hash()` over `(name, kind, offset, size)`; 03 used `[NativeComponent("conjure::scene::local_transform")]` where the registered name is `conjure.scene.local_transform`. | `Rigidbody`; one hash definition = `type_info::layout_hash()` (10 2.11, 15 B10), C# field names camel-cased, `Pad*` fields excluded on both sides; `[NativeComponent]` takes the registered component name. |
+| R62 | N | 08, 12, 14, 15 | 08 5.2 audio row wanted "wav/ogg decode from `tests/assets`" (12 generates WAVs in-test and fetches ogg/mp3/flac into `tests/.downloaded`); 08 5.2 physics row said contacts are "emitted to ecs events" (R6: no ECS event queue); 08 7.2 placed the exclusions file at `tests/downloaded/binding_exclusions.json` though it is authored. | 08 5.2/7.2 corrected: in-test WAV + `precondition::DOWNLOADED_ASSETS` for the compressed formats; `physics_world::contact_events()` span; `tests/binding_exclusions.json`. |
+| R63 | N | ARCH 4.1, 10, 12, 13, 14 | `ARCHITECTURE.md` 4.1 required each module to declare its own `make_error(<module>_error, detail)` overload; `10_core.md` C3 (implemented) binds each enum with `CONJURE_DECLARE_ERROR_CATEGORY` and uses the generic `core::make_error`, which 11-15 follow and 14 states explicitly. | 10 wins: no per-module `make_error`; `ARCHITECTURE.md` 4.1 corrected. |
+| R64 | N | 15, 03, R26, ARCH 4.6 | R26 and 03 2.1 gave `entity_*` wholly to scripting and listed eight bindings prefixes; 15 adds a `modules_*` group and twenty hierarchy/tag/layer/guid `entity_*` entries that need `scene::scene`. | R26 amended: scripting implements `log_*`, `script_*`, `component_*`, `query_*` and the five core `entity_*` entries (`create`, `destroy`, `is_alive`, `get_name`, `find_by_name`); bindings implements the ten groups `transform, entity (rest), scene, prefab, physics, audio, input, asset, diagnostics, modules` under the `// --- bindings (R26) ---` marker. |
+| R65 | G (closure) | ARCH 4, 09 3 | `ARCHITECTURE.md` 4 carried inline contracts for six undocumented modules and 09 3 required design notes before implementation; the notes `10_core.md` ... `15_bindings.md` now exist and are more detailed than section 4. | Section 4 keeps the consolidated core summary (4.1, still the cross-module reference) and turns 4.2-4.6 into pointer paragraphs; the notes are binding, this file wins over a note, a note wins over `ARCHITECTURE.md` detail. Section 3 below is updated accordingly. |
 
 ---
 
@@ -78,19 +104,36 @@ and nobody designs), **N** naming/spelling drift of one shared API.
 | Scheduling of systems | ECS scheduler (01), engine `register_systems` (06) | ECS `scheduler` executes; each `ecs`-dependent module registers its own systems; engine orders the registration calls and `finalise()`s, R2/R7 |
 | Script state inside scene files | scene serializer calling scripting (03) | `script_component`'s own `component_serializer`, R29 |
 | Editor reaching scene/ecs | `editor_context` references | `editor_context` holds `scene::scene_manager &` (active `scene::scene` -> `ecs::world`), `ecs::component_registry &` via `engine_context`, and uses `ecs::component_to_json/from_json` + `entity_archive` (R40); never raw chunk layout |
+| Adding / writing / removing `interpolated_transform` | scene (13, 06 3.2 "scene defines"), physics (14 observer) | `scene` defines and registers; `physics` adds, writes and removes, R47 |
+| Component field lists mirrored in C# | bindings proposal (15 2.6), owning notes (12, 13, 14) | the owning note (`12_audio.md` 2.6, `13_scene.md` 2.1, `14_physics.md` 2.3); 15 restates, same-PR rule, R48/R50/R55 |
+| Native entry names and groups | 12 8 / 14 8 "offers to bindings" lists, 15 2.3 | `15_bindings.md` 2.3 (ten groups); 12/13/14 offer the C++ API behind them, R49/R50/R64 |
+| Script -> voice playback requests | `source_handle::flags` bit (12), `playbackRequest` field (15 B8) | `audio_source::playbackRequest` / `isPlaying`, consumed by `engine.audio_sync`, R50 |
+| Collision geometry asset | renderer `mesh_asset::cpu_geometry()` (Debug only, R11), physics own type (14 P14) | `physics::register_asset_types` -> `conjure.physics.collision_mesh`, R44 |
+| Repairing hierarchy after raw / deferred `parent` edits | ECS observers at flush (15 assumption), scene repair system (13 3.7) | `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE), silent for `deferred_set_parent`, R46/R55 |
 
 ---
 
-## 3. Gaps: modules without a design document
+## 3. Design notes for the formerly undocumented modules (R65)
 
-Six modules are used by every area document but have no judged design: `core` (wave 1), `platform`,
-`audio` (wave 2), `scene`, `physics` (wave 3), `bindings`, `runtime` (wave 4), `samples` (wave 5).
-Their contracts are the union of what the eight documents assume, now reconciled by the resolutions above
-and written down in `docs/ARCHITECTURE.md` section 4 ("Contracts of undocumented modules"). Before any
-wave-1/2/3 implementation of those modules starts, a short design note (same template as 01-08) must be
-written from that section; until then `ARCHITECTURE.md` 4 is the binding specification.
+Six modules were used by every area document but had no judged design. Each now has one, written from
+`ARCHITECTURE.md` 4 and reviewed against this file (R43-R65): `10_core.md` (wave 1; being implemented),
+`11_platform.md`, `12_audio.md` (wave 2), `13_scene.md`, `14_physics.md` (wave 3), `15_bindings.md` (wave 4).
+Authority order: this file, then the note, then `ARCHITECTURE.md` (whose section 4 is now a summary plus
+pointers). Still without a note of their own, by design: `runtime` (`runtime/main.cpp` exactly as
+`06_engine_loop.md` 4.2 describes; headless boot of an exported folder is `application` with
+`--project <dir> --headless --frames N`) and `samples` (`08_testing.md` 7.2 is their specification).
 
-The most consequential consolidated contracts:
+Cross-note decisions that an implementer must not re-decide:
+
+- `interpolated_transform`: scene defines, physics adds/writes/removes (R47).
+- Component field lists are owned by 12/13/14; the C# mirrors in 15 2.6 restate them and change in the same PR (R48, R50, R55).
+- Native entry names and the ten bindings groups are owned by 15 2.3 (R49, R50, R64); 12/13/14 offer the C++ API the entries call.
+- `audio -> assets` is a public dependency; `audio`, `renderer` never include `ecs` (R7, R43).
+- `math::quat` storage is x,y,z,w (R58); `type_info::layout_hash()` is the one mirror-hash definition (R61).
+- Scene systems are four (R46); scene files are `.scene.json` / `.prefab.json` (R45).
+
+The consolidated contracts below are kept as the short form the notes were derived from; where they differ
+from a note in detail, the note is right.
 
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
@@ -111,15 +154,17 @@ The most consequential consolidated contracts:
   `restore`, asset_ref bind pass); prefabs (`conjure.scene.prefab` asset: create/instantiate/apply/unpack,
   nested); `scene_manager(world &, asset_manager &)` (`load` sync, `request_load/unload`, additive,
   `on_before_unload`, `collect()` after unload); systems `scene.apply_pending_loads` (FRAME_BEGIN),
-  `scene.propagate_transforms` (TRANSFORM), `scene.destroy_pending` (FRAME_END); `model_asset -> prefab`.
+  `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE, R46), `scene.propagate_transforms` (TRANSFORM),
+  `scene.destroy_pending` (FRAME_END); `model_asset -> prefab`.
 - **physics** (R6): Jolt behind `physics_world(settings, jobs &)` with a `JPH::JobSystem` adapter and
   `JPH::Allocate*` hooks into `core::memory`; components `rigid_body`, `box/sphere/capsule/convex/mesh_collider`,
   `physics_material`, `character_controller`; layers from `project.json` `extensions.physics_layers`; queries
   `raycast`, `overlap_sphere`, shape casts; systems `physics.push_transforms`, `physics.step` (MAIN_THREAD),
   `physics.pull_transforms`, `physics.contact_events`; `contact_events()` span sorted by body-id pair;
   sleeping query; component sync iterates engine arrays.
-- **audio**: `audio_engine(settings)` over miniaudio/`null`, `conjure.audio.clip` asset type + importer,
-  components `audio_source`, `audio_listener`, mix groups, 3D spatialisation, `null_backend_stats`; no `ecs`
+- **audio**: `audio_engine(settings)` over miniaudio/`null`, `conjure.audio.clip` asset type + importer
+  (CPU-only loader; `audio -> core, assets`, R43), components `audio_source` (incl. `playbackRequest` /
+  `isPlaying`, R50), `audio_listener`, mix groups, 3D spatialisation, `null_backend_stats`; no `ecs`
   dependency (the engine owns `engine.audio_sync`, `engine.audio_finish_one_shots`).
 - **bindings** (R26): `scripting_bindings_subsystem` filling the non-core native entries, `[NativeComponent]`
   mirrors, call counters (`bindings::call_counters()`), `Conjure.Diagnostics.Check`, `AssetRef<T>` marshalling
@@ -146,9 +191,28 @@ The most consequential consolidated contracts:
    async commands once asset residency UX is designed.
 6. **Single game ALC for plugins (R36).** A leaky plugin assembly prevents unloading the whole game
    assembly; this is already the documented .NET limitation for the game assembly itself.
-7. **Undocumented modules (section 3).** `core`, `platform`, `scene`, `physics`, `audio`, `bindings`
-   have consolidated contracts but no full design; their implementers inherit more freedom than the brief
-   intended. Each needs a design note before implementation begins.
+7. **Design notes versus the core implementation in flight (R58, R63, section 3).** `10_core.md` is being
+   implemented while 11-15 were written against it. Two requirements this review places on core are not yet
+   visible in `10_core.md` itself: no glm define (glm 1.0.1 already stores quaternions x,y,z,w; `GLM_FORCE_QUAT_DATA_XYZW` would only change the constructor argument order and `GLM_FORCE_QUAT_DATA_WXYZ` must never be set) plus a `static_assert` on `offsetof` in `core/math` and its test, and
+   published `layout_hash` test vectors for C#. If core ships glm with w-first storage, every `TransformData` /
+   `LocalTransform` memcpy in 15 and the Jolt conversions of 14 silently rotate everything; `test_marshal::
+   quat_storage_is_xyzw` and `tests/core/test_math.cpp` are the gates and must land with core.
 8. **`CODE_STYLE.cpp` struct example (R31).** The style file's own example contradicts its rule; the
    resolution is recorded in `CONVENTIONS.md`'s spirit, but the customer-supplied file was not modified.
    Reviewers must apply R31, not the example.
+9. **Mirror/struct coupling across three modules (R48, R50, R55).** `audio_source` (88 bytes incl. an opaque
+   `source_handle`), `rigid_body` (52), `character_controller` (72) and `parent` (16) are now mirrored byte-for-byte
+   in C#. Any field added to those structs by the engine's `audio_subsystem` or a physics PR breaks
+   `component_lookup_type` for every game assembly until the mirror and `Pad*` fields are regenerated; the
+   layout-hash test catches it in CI, but the coupling is deliberate and permanent.
+10. **Deferred reparenting inside a query scope (R55).** `scene::deferred_set_parent` leaves the tree
+    inconsistent (children/depth tags) between the flush at `query_end` and `scene.apply_hierarchy_changes`
+    in the same frame's TRANSFORM phase. Systems running in UPDATE/LATE_UPDATE after a script reparent and
+    reading `children` or `depth_tag` see the old shape for the rest of that phase. Documented; a flush-time
+    repair would need the scene to own the ECS command buffer, which R5 gives to the script runtime.
+11. **Physics cross-platform determinism (R59).** `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC` is OFF and
+    untested in CI; `tests/integration/test_determinism.cpp` stays physics-free (14 P16) until it is proven.
+    Golden gameplay recordings that include physics are therefore per-platform.
+12. **Audio request latency and ordering (R50).** `playbackRequest` is consumed in SYNC; two scripts writing
+    the same source in one frame leave the last writer's request. `isPlaying` is one frame old for scripts.
+    Both match the "one native call per phase" model of 03 and are acceptable for v1.

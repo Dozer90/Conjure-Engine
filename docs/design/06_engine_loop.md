@@ -185,8 +185,8 @@ Enums: `rhi_backend_choice : uint8_t { AUTO, D3D12, VULKAN, NULL_DEVICE }`,
 | `time_settings` | `float fixedDeltaSeconds = 1/60`, `float maxFrameDeltaSeconds = 0.1f`, `uint32_t maxFixedStepsPerFrame = 8`, `float timeScale = 1`, `float forcedFrameDeltaSeconds = 0` (> 0 replaces the wall clock), `bool interpolatePhysics = true` |
 | `pacing_settings` | `uint32_t targetHz = 0` (0 = unpaced; used only when no vsync present happened), `bool sleepWhenUnfocused = true` |
 | `rendering_settings` | `bool enabled = true`, `rhi_backend_choice backend = AUTO`, `bool gpuValidation = false` (forced on in Debug by `defaults()`) |
-| `physics_settings` | `bool enabled = true`, `math::vec3 gravity = (0, -9.81, 0)`, `uint32_t maxBodies = 65536` |
-| `audio_settings` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000` |
+| `physics_settings` | `bool enabled = true`, `math::vec3 gravity = (0, -9.81, 0)`, `uint32_t maxBodies = 65536`. Engine-side summary only: `physics_subsystem` builds the full `physics::physics_settings` with `physics::physics_settings::from_json(project.physics, project.extensions["physics_layers"])`, so every field of `14_physics.md` 2.1 is authorable under `"physics"` (snake_case) without the engine naming it (R53) |
+| `audio_settings` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000`, `std::string device = ""` (empty = default), `float masterGain = 1`, `float dopplerFactor = 0`, `float speedOfSound = 343`, `std::vector<audio_group_setting> groups` (`{ std::string name; std::string parent; float gain; }`); mapped one-to-one onto `audio::audio_settings` by `audio_subsystem` (`12_audio.md` 4.4, 8; `NULL_DEVICE` -> `audio_backend_kind::NULL_BACKEND`) (R52) |
 | `scripting_settings` | `bool enabled = true`, `bool required = true` (false: missing runtime warns and disables), `std::filesystem::path gameAssembly` (relative to project root), `bool hotReload = true` (ignored in Distribution), `script_export_mode exportMode = FRAMEWORK_DEPENDENT` (`FRAMEWORK_DEPENDENT`, `SELF_CONTAINED`), `bool exportDebugSymbols = false` (R39) |
 | `modules_settings` | `std::vector<std::filesystem::path> searchPaths = {"modules"}`, `bool enginePlugins = true` (also discover `<engine>/plugins`), `std::vector<std::string> required = {}` (manifest names that must load) (R20) |
 | `jobs_settings` | `uint32_t workerCount = 0` (0 = `hardware_concurrency - 1` clamped to `[1, 16]`) |
@@ -284,6 +284,7 @@ struct engine_context {
     scripting::script_runtime *scripting = nullptr;    // nullptr when disabled or the runtime is unavailable (R27).
     modules::module_manager *modules = nullptr;        // registry() for reads; request_* for the editor (R19).
     diagnostics::check_registry *checks = nullptr;     // Self-verifying samples (area H 2.5).
+    const frame_stats *stats = nullptr;                // Read by diagnostics_frame_stats (15_bindings.md) and the editor profiler (R51).
 };
 ```
 
@@ -411,7 +412,8 @@ std::filesystem::path &directory)`, `core::result<void> save() const`, `descript
   "time": { "fixed_hz": 60, "max_frame_delta_seconds": 0.1, "max_fixed_steps_per_frame": 8 },
   "physics": { "gravity": [0.0, -9.81, 0.0], "max_bodies": 65536 },
   "rendering": { "backend": "auto" },
-  "audio": { "backend": "auto", "sample_rate": 48000 },
+  "audio": { "backend": "auto", "sample_rate": 48000, "device": "", "master_gain": 1.0, "doppler_factor": 0.0,
+             "speed_of_sound": 343.0, "groups": [{ "name": "Music", "parent": "", "gain": 0.8 }] },
   "scripting": { "assembly": "bin/FeatureTest.Game.dll", "hot_reload": true,
                  "export_mode": "framework-dependent", "debug_symbols": false },
   "extensions": { "physics_layers": { }, "editor": { } }
@@ -506,7 +508,9 @@ step_frame():
        run_phase_filtered(UPDATE, RUNS_WHILE_PAUSED); layers.on_update()
        run_phase_filtered(LATE_UPDATE, RUNS_WHILE_PAUSED)
      if simulationMode == STEP_ONCE: simulationMode = PAUSED
-  8  run_phase(TRANSFORM)                         always: world_transform + render_world_transform
+  8  run_phase(TRANSFORM)                         always: scene.apply_hierarchy_changes (EXCLUSIVE repair of raw
+                                                  parent edits, 13_scene.md 3.7, R46) then scene.propagate_transforms:
+                                                  world_transform + render_world_transform
   9  run_phase(SYNC)                              always: audio/renderer component mirrors
  10  if renderer:
        scene = renderer.begin_extract()           clears and returns the write render_scene (R8)
@@ -537,8 +541,12 @@ RUNTIME_FAILURE; break; } }` then `shutdown()`; returns `static_cast<int>(mExitC
 
 ### 3.2 Physics interpolation (scene-owned TRANSFORM pass)
 
-- `scene` defines `interpolated_transform { math::transform previous; math::transform current; }` (world-space
-  pose pair) and `render_world_transform { math::mat4 matrix; }`.
+- `scene` defines and registers `interpolated_transform { math::transform previous; math::transform current; }`
+  (world-space pose pair, TRANSIENT) and `render_world_transform { math::mat4 matrix; }`. Physics is the only
+  writer and the only module that adds or removes the component: the `ADDED` observer of a DYNAMIC/KINEMATIC
+  `rigid_body` or a `character_controller` enqueues `add<interpolated_transform>` through the deferred buffer,
+  the first pull writes `previous = current = pose`, and body destruction on a surviving entity removes it again
+  (`14_physics.md` 3.3, R47).
 - `physics.pull_transforms` (FIXED_END, PARALLEL), for every dynamic body entity: `previous = current;
   current = jolt pose; local_transform = parentWorldInverse * current`. Kinematic and teleported entities are
   pushed by `physics.push_transforms` (PHYSICS_STEP, ordered `before("physics.step")`).
@@ -579,7 +587,7 @@ the present inside `render_frame` is the back-pressure.
 | 9 | `ecs_subsystem`: `component_registry`, `world`, `scheduler(world, jobs)` | never fails |
 | 10 | `scene_subsystem`: `scene_manager(world, assets)`; scene components registered (`scene::register_components`) | never fails |
 | 11 | `audio_subsystem`: `audio_engine` (`miniaudio` or `null`); device failure falls back to `null` with `WARN`; registers audio component types into the ECS and audio asset types (R7) | never fails |
-| 12 | `physics_subsystem`: Jolt global init, `physics_world(settings, jobs)`, layers from `extensions.physics_layers`; `physics::register_components` | `PHYSICS_INIT_FAILED` |
+| 12 | `physics_subsystem`: `physics::physics_settings::from_json(project.physics, extensions.physics_layers)` + `validate()` (R53), `physics_world(settings, jobs)` (Jolt global init is reference counted inside, `14_physics.md` P4), `attach(world)`; `physics::register_components`; `physics::register_asset_types` (`conjure.physics.collision_mesh`, R44); forwards asset `RELOADED` to `on_asset_reloaded` | `PHYSICS_INIT_FAILED` |
 | 13 | `renderer_subsystem`: `renderer::create(renderer_desc)`; `renderer::register_asset_types`; registers renderer component types into the ECS; subscribes to asset events for `upload_*` / `release_*` (R7/R10) | `RENDERER_INIT_FAILED` |
 | 14 | `scripting_subsystem`: constructs `script_runtime` and registers `script_component`; no `initialize` yet because the bindings fill the native table at step 16 (R27) | never fails |
 | 15 | `modules_subsystem`: `module_manager` + consumers (`ecs`, `assets`, `scripting`, and `editor` when the executable registered one), services (`engine_context`, `application`, `ecs::world`, `assets::asset_database`, `scene::scene_manager`), manifest-only static modules for the built-in libraries, `discover` + `add_manifest` + `load_all` (R18/R19); a `modules.required` failure is fatal, others warn; entries reach `application::add_subsystem` through the `application` service during this step only | `MODULE_LOAD_FAILED` |
@@ -801,8 +809,10 @@ Rules enforced or documented by the engine:
 
 ## 7. Headless and null behaviour
 
-- `null` platform: window of `window_settings` size (1280x720 under `headless_defaults()`, R33), `pump_events()` returns nothing, `is_minimised() == false`,
-  `should_close()` false until `request_quit`; `input` reports nothing but accepts `platform::input::inject(event)`.
+- `null` platform (`platform::null_backend`, `11_platform.md` 3.5/7): window of `window_settings` size (1280x720 under `headless_defaults()`, R33),
+  `pump_events()` returns an empty span unless a test queued events (`push_event`, `simulate_resize/focus/minimise/close/drop_files`),
+  `is_minimised() == false`, `should_close()` false until `request_close()` / `simulate_close()` (the engine's `request_quit` does not touch the window) (R60);
+  `input` reports nothing but accepts `platform::input::inject(event)`; clipboard and cursor mode round-trip in memory.
 - `rendering.enabled == false` (headless default): no `rhi` device, no `renderer`, EXTRACT has no systems, steps
   10-11 skipped, `context.renderer == nullptr` and `context.device == nullptr`.
 - Tests needing extraction set `rendering.enabled = true, backend = NULL_DEVICE`: the renderer builds its render
@@ -844,8 +854,9 @@ result<unique_ptr<device>>` (`window == nullptr` for `null`/headless), `rhi::swa
 
 **Needs from `scene` (wave 3):** `local_transform`, `world_transform`, `render_world_transform`,
 `interpolated_transform`, parent/children; `scene::register_systems(scheduler, scene_manager &)` registering
-pending-load application (FRAME_BEGIN), `scene.propagate_transforms` (TRANSFORM; the single owner of transform
-propagation, R3) and `scene.destroy_pending` (FRAME_END); `scene_manager(world &, asset_manager &)` with
+`scene.apply_pending_loads` (FRAME_BEGIN), `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE, before
+propagation; R46), `scene.propagate_transforms` (TRANSFORM; the single owner of transform propagation, R3) and
+`scene.destroy_pending` (FRAME_END) - the four systems of `13_scene.md` 4.7; `scene_manager(world &, asset_manager &)` with
 synchronous `load` for startup, deferred `request_load/unload`, the `on_before_unload` event (R29) and the
 post-load asset_ref bind pass (R25).
 
@@ -857,8 +868,9 @@ device (R8). The renderer does not depend on `ecs`: `renderer_subsystem` registe
 owns `engine.render_sync` (SYNC, `RUNS_WHILE_PAUSED`) and `engine.render_extract` (EXTRACT, `RUNS_WHILE_PAUSED`)
 and drives GPU uploads from asset events (R7/R10).
 
-**Needs from `physics` (wave 3):** `physics_world(settings, jobs &)` with a `JPH::JobSystem` adapter over
-`core::jobs`; `physics::register_components`; `physics::register_systems(scheduler, physics_world &)` registering
+**Needs from `physics` (wave 3, `14_physics.md`):** `physics_settings::from_json` + `validate()` (R53),
+`physics_world(settings, jobs &)` with a `JPH::JobSystem` adapter over `core::jobs`, `attach(world)`;
+`physics::register_components`; `physics::register_asset_types` (R44); `physics::register_systems(scheduler, physics_world &)` registering
 `physics.push_transforms` (PHYSICS_STEP, before step), `physics.step` (PHYSICS_STEP, `MAIN_THREAD`),
 `physics.pull_transforms` and `physics.contact_events` (FIXED_END; the latter fills
 `physics_world::contact_events()`, read by `scripting.collision_dispatch` in the next step's FIXED_UPDATE, R6);

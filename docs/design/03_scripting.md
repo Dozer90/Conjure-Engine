@@ -91,10 +91,13 @@ CONJURE_NATIVE_FN(transform, get_world_matrix,     int32_t,   (uint64_t entity, 
 CONJURE_NATIVE_FN(transform, set_parent,           int32_t,   (uint64_t entity, uint64_t parent))
 CONJURE_NATIVE_FN(query,     begin,                int32_t,   (const uint32_t *ids, int32_t n, conjure_query_scope *o))
 CONJURE_NATIVE_FN(query,     end,                  void,      (uint32_t scopeId))
-// Ownership (R26): log_*, script_*, entity_*, component_* and query_* are implemented in this module
-// (they need only ecs); transform_*, physics_*, audio_*, prefab_*, scene_*, input_*, asset_*, diagnostics_*
-// follow the same form and are filled by conjure_bindings (wave 4). Adding an entry = one line here +
-// regenerate; appending only, never reordering within a version.
+// Ownership (R26, R64): log_*, script_*, component_*, query_* and the five entity_* entries above are
+// implemented in this module (they need only ecs). Everything after the marker line
+// `// --- bindings (R26) ---` (transform_*, the hierarchy/tag/layer/guid entity_* entries, scene_*, prefab_*,
+// physics_*, audio_*, input_*, asset_*, diagnostics_*, modules_*; the full list is 15_bindings.md 2.3) is
+// filled by conjure_bindings (wave 4) and lives in this same file so the struct is complete when
+// conjure_scripting compiles (R54). Adding an entry = one line here + regenerate (tools/gen_native_api.py
+// also emits docs/generated/native_api_manifest.json); appending only, never reordering within a version.
 ```
 
 ```cpp
@@ -435,8 +438,10 @@ while (query.NextChunk(out ChunkView chunk)) {
 
 `ComponentQuery` and `ChunkView` are `ref struct`s: spans cannot be boxed, captured or stored, so they
 cannot outlive the scope (rule enforced by the compiler). `ComponentType<T>.Id` is resolved once per class
-load through `component_lookup_type(nameHash, Unsafe.SizeOf<T>(), layoutHash)` where both sides hash the
-sequence `(offset, size)` of fields plus total size (`Marshal.OffsetOf` managed, `core::reflect` native);
+load through `component_lookup_type(nameHash, Unsafe.SizeOf<T>(), layoutHash)` where both sides compute
+`core::reflect::type_info::layout_hash()` (`10_core.md` 2.11: FNV-1a 64 over `(name, kind, offset, size)` of every
+field in declaration order; C# derives names by lower-casing the first letter and kinds from the field type,
+`15_bindings.md` B10; fields named `Pad*` are padding and excluded; R61);
 `0` means mismatch and `Begin` throws `InvalidOperationException` (caught by D11, logged once). `query_begin`
 is rejected (`WRONG_THREAD` / `NOT_IN_PHASE`) unless called on the main thread during a script phase; it
 holds an `ecs::iteration_scope` from `world::lock_iteration()` (the ECS refuses structural calls while locked;
@@ -446,7 +451,8 @@ until `query_end`, and conservatively bumps change-detection versions of every r
 at phase end is force-closed with a WARN naming the class. Debug builds poison the chunk view array on
 `query_end`.
 
-Mirrors of native components are `[NativeComponent("conjure::scene::local_transform")]` blittable structs
+Mirrors of native components are `[NativeComponent("conjure.scene.local_transform")]` (the registered component
+name, R61) blittable structs
 with `StructLayout(LayoutKind.Sequential)`; the layout test in 10 catches drift. User-defined
 `[EcsComponent] unmanaged struct` types are registered at assembly load through `component_register_managed`
 (name, size, alignment, layout hash, field schema JSON): `native_api_core.cpp` parses the schema into
@@ -571,6 +577,7 @@ namespace conjure::scripting {
             std::vector<int32_t> mPendingDestroySlots = {};
             std::vector<ecs::entity> mPendingEntityDestroys = {};
             ecs::world *mWorld = nullptr;
+            ecs::command_buffer mDeferredCommands = {};   // Structural requests made inside a DOD query scope (R5, R54).
             script_mode mMode = script_mode::EDIT;
             script_phase mCurrentPhase = script_phase::COUNT;
 
@@ -623,6 +630,11 @@ namespace conjure::scripting {
             [[nodiscard]] script_store &store() noexcept;
             [[nodiscard]] script_host_status status() const noexcept;
             [[nodiscard]] script_mode mode() const noexcept;
+
+            /// <summary>Phase being run, or COUNT outside a script phase (bindings report NOT_IN_PHASE then; R54).</summary>
+            [[nodiscard]] script_phase current_phase() const noexcept;
+            /// <summary>The buffer bindings record structural requests into while world::is_locked(); flushed at query_end and at the phase-end force-close (R5, R54).</summary>
+            [[nodiscard]] ecs::command_buffer &deferred_commands() noexcept;
 
             core::delegate<void()> on_reloaded;
     };
@@ -704,7 +716,7 @@ IComponent`, `bool HasComponent<T>()`, `void AddComponent<T>(in T)`, `void SetCo
 `T? GetScript<T>() where T : ScriptBehaviour`, `void Destroy()`, and `protected virtual` `OnCreate, OnStart,
 OnUpdate(float), OnFixedUpdate(float), OnLateUpdate(float), OnDestroy, OnCollisionEnter(in Collision),
 OnCollisionExit(in Collision), OnTriggerEnter(Entity), OnTriggerExit(Entity)`. `Entity`, `Transform`,
-`RigidBody`, `AudioSource` etc. are `readonly struct`s holding only the 64-bit id; the SDK allocates nothing
+`Rigidbody` (spelt as in `15_bindings.md` 2.5, R61), `AudioSource` etc. are `readonly struct`s holding only the 64-bit id; the SDK allocates nothing
 per frame. Vectors and quaternions are `System.Numerics`.
 
 ---
