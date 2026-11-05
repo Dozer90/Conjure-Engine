@@ -10,6 +10,7 @@ Examples:
     python tools/build.py --preset windows-msvc-dev --target conjure_core_tests
     python tools/build.py --test -R core        # run only tests matching "core"
     python tools/build.py --configure-only -- -DCONJURE_WITH_PHYSICS=OFF
+    python tools/build.py --build-dir build/my_area --target conjure_core_math_tests --test -R core_math
 """
 
 from __future__ import annotations
@@ -117,6 +118,8 @@ def preset_binary_dir(preset: str) -> pathlib.Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--preset", default=default_preset(), help="CMake preset name (default: %(default)s)")
+    parser.add_argument("--build-dir", default=None,
+                        help="private build directory (default: build/<preset>); use when other builds may run concurrently")
     parser.add_argument("--configure-only", action="store_true", help="only run the configure step")
     parser.add_argument("--no-configure", action="store_true", help="skip configure (build dir must exist)")
     parser.add_argument("--target", action="append", default=[], help="build only these targets (repeatable)")
@@ -130,18 +133,25 @@ def main() -> None:
 
     env = msvc_environment() if platform.system() == "Windows" else dict(os.environ)
 
-    binary_dir = preset_binary_dir(args.preset)
+    private_dir = pathlib.Path(args.build_dir).resolve() if args.build_dir else None
+    binary_dir = private_dir or preset_binary_dir(args.preset)
     if args.clean and binary_dir.exists():
         print(f"+ removing {binary_dir}", flush=True)
         shutil.rmtree(binary_dir)
 
     if not args.no_configure:
-        run(["cmake", "--preset", args.preset, *args.cmake_args], env)
+        configure = ["cmake", "--preset", args.preset]
+        if private_dir:
+            configure += ["-B", str(private_dir)]
+        run(configure + list(args.cmake_args), env)
 
     if args.configure_only:
         return
 
-    build = ["cmake", "--build", "--preset", args.preset]
+    if private_dir:
+        build = ["cmake", "--build", str(private_dir)]
+    else:
+        build = ["cmake", "--build", "--preset", args.preset]
     if args.jobs > 0:
         build += ["--parallel", str(args.jobs)]
     for target in args.target:
@@ -149,7 +159,10 @@ def main() -> None:
     run(build, env)
 
     if args.test:
-        test = ["ctest", "--preset", args.preset]
+        if private_dir:
+            test = ["ctest", "--test-dir", str(private_dir), "--output-on-failure"]
+        else:
+            test = ["ctest", "--preset", args.preset]
         if args.test_regex:
             test += ["-R", args.test_regex]
         if args.test_label:

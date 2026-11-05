@@ -41,16 +41,16 @@ doctest flags: `-ts` suite filter, `-tc` test case filter, `-s` success output, 
 ## Parallel agents
 
 Builds in the same directory must not overlap. If another agent may be building, use a private
-build directory from a developer shell:
+build directory:
 
 ```bash
-cmake --preset windows-msvc-debug -B build/<my-name>
-cmake --build build/<my-name> --target conjure_<module>_tests
-ctest --test-dir build/<my-name> -R <module>
+python tools/build.py --build-dir build/<my-name> --target conjure_<module>_tests --test -R <module>
 ```
 
-(On Windows run these inside a shell where `vcvars64.bat` has been imported, or prefix with
-`python tools/build.py --configure-only` once to verify the environment works.)
+Subsequent runs add `--no-configure` to skip the (slow) configure step. The equivalent raw
+commands, for a shell where `vcvars64.bat` is already imported, are `cmake --preset <preset> -B
+build/<my-name>`, `cmake --build build/<my-name> --target <target>` and
+`ctest --test-dir build/<my-name> -R <module>`.
 
 ## Reading failures
 

@@ -74,11 +74,9 @@ renderer, physics, scripting -> engine -> editor, runtime`.
 When several agents work in parallel, each owns one module directory and its test directory.
 Never edit another module's files; if you need an API change there, write it down in your report.
 
-Concurrent builds must use separate build directories. `tools/build.py` always uses
-`build/<preset>`; when another agent may be building, configure your own directory instead:
-`cmake --preset windows-msvc-debug -B build/<your-name>` (from a shell where the MSVC environment
-is loaded), then `cmake --build build/<your-name> --target <your-targets>` and
-`ctest --test-dir build/<your-name> -R <module>`.
+Concurrent builds must use separate build directories: pass `--build-dir build/<your-name>` to
+`tools/build.py` (for example `python tools/build.py --build-dir build/core_math --target
+conjure_core_math_tests --test -R core_math`; add `--no-configure` on later runs).
 
 ## 5. Build configurations
 
