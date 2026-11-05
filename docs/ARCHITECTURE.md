@@ -1,0 +1,492 @@
+# Conjure Engine - Architecture
+
+Status: **binding**. This is the top-level map of the Conjure engine. It does not repeat the area designs
+in `docs/design/01_*.md` ... `08_*.md`; it states how they fit together, fixes the contracts that no area
+document owns, and tells an implementer where to look. When this document and an area document disagree,
+`docs/design/09_cross_area_resolutions.md` (the consistency review) decides; its ids (`R<n>`) are cited here.
+
+Inputs, in order of authority: `docs/DESIGN_DOC.md` (customer), `docs/design/00_brief.md` (fixed
+decisions), `docs/CONVENTIONS.md` + `docs/CODE_STYLE.cpp` (how code is written), `docs/design/0[1-9]_*.md`.
+
+---
+
+## 1. Overview
+
+Conjure is a C++20, data-oriented 2D + 3D game engine with an AI-controllable editor and C# scripting.
+
+- **One process, one main thread, one job system.** The main thread orchestrates a fixed sequence of
+  phases every frame; `core::jobs` does the bulk work inside each phase; there is no render thread in v1
+  (`06_engine_loop.md` D1). GLFW, ImGui, NVRHI submission and the .NET host all live on the main thread.
+- **Data-oriented internals, object facade.** `ecs` stores components in 16 KiB archetype chunks and runs
+  systems as conflict-free parallel stages; `entity_handle` / `component_ref<T>` and the C# `Entity` wrap
+  it for casual users; `chunk_view` / `Span<T>` expose it for power users (`01_ecs.md`, `03_scripting.md`).
+- **Everything headless.** `null` backends for platform, rhi and audio, a C++ fake of the managed side
+  (`null_script_host`), an in-memory VFS and a deterministic engine step make every module testable in CI
+  without a GPU, window, audio device or .NET runtime (`08_testing.md`).
+- **The editor is a command dispatcher.** Every mutation is a `command_request` with an inverse; the ImGui
+  panels, the newline-delimited JSON protocol (TCP localhost / stdio) and `--headless --exec` are all
+  clients of one dispatcher (`04_editor.md`).
+- **Plugins are shared libraries with a C front door.** A module proves ABI identity before any C++
+  crosses, registers plain data records, and host-side consumers apply them atomically (`07_modules.md`).
+- **Assets are content-addressed blobs.** Sources get uuids and `.meta` sidecars, importers produce cooked
+  blobs into a hash-validated cache, loaders read blobs in editor and runtime alike, export packs them
+  (`05_assets.md`).
+
+---
+
+## 2. Module map
+
+### 2.1 Modules and targets
+
+| Wave | Module (`conjure_<name>`) | Namespace | Design doc | One-line purpose |
+|---|---|---|---|---|
+| 1 | `core` | `conjure::core` | section 4.1 here (no area doc) | log/assert, `result`/`error`, uuid, hashing, containers, memory, jobs, events, vfs, json, reflection, math, clock, process, dynamic_library |
+| 2 | `ecs` | `conjure::ecs` | `01_ecs.md` | archetype world, component registry, queries, scheduler, command buffer, archives, serialisation |
+| 2 | `platform` | `conjure::platform` | section 4.2 | window, input, events; backends `glfw`, `null` |
+| 2 | `rhi` | `conjure::rhi` | `02_renderer.md` 4.1 | NVRHI device/swapchain/shader library; backends `d3d12`, `vulkan`, `null` |
+| 2 | `assets` | `conjure::assets` | `05_assets.md` | uuid database, importers, cooked cache, async loading, hot reload, packs, cooker |
+| 2 | `audio` | `conjure::audio` | section 4.3 | miniaudio engine, clips, sources/listener, groups, spatialisation; backends `miniaudio`, `null` |
+| 2 | `modules` | `conjure::modules` | `07_modules.md` | manifests, ABI check, load/unload/reload, registration records, consumers |
+| 3a | `scene` | `conjure::scene` | section 4.4 | hierarchy + transforms, name/tag/layer/guid, prefabs, scene files, scene manager |
+| 3b | `renderer` | `conjure::renderer` | `02_renderer.md` | render graph over rhi, render_scene contract, PBR/IBL/shadows/SSAO/HDR, 2D, ImGui backend, glTF import |
+| 3b | `physics` | `conjure::physics` | section 4.5 | Jolt world, body/collider/character components, queries, contact events |
+| 3b | `scripting` | `conjure::scripting` | `03_scripting.md` | .NET host, native/managed tables, script components, hot reload, managed build |
+| 4 | `engine` | `conjure::engine` | `06_engine_loop.md` | application, frame loop, subsystems, project.json, export pipeline, layers |
+| 4 | `bindings` | `conjure::bindings` | section 4.6 | native table entries for scripting, C# mirrors, call counters, diagnostics |
+| 4 | `editor_core`, `editor_ui` | `conjure::editor` | `04_editor.md` | commands, undo, protocol, headless runner; ImGui workspace |
+| 4 | executables `conjure_editor`, `conjure_runtime` | - | `04_editor.md` 3.1, `06_engine_loop.md` 4.2 | thin `main.cpp`s |
+| 4 | `conjure_shared` (umbrella `SHARED`) | - | `07_modules.md` 5 | whole-archives every enabled module; linked by both executables and all plugins (R17) |
+| 5 | `samples/feature_test`, `samples/stress_test` | - | `08_testing.md` 7.2 | the "everything" scene, generated from an AI command file |
+
+Test-only: `conjure_test_support` (wave 1), `conjure_test_support_engine` (wave 4), `conjure_<module>_tests`,
+`conjure_integration_tests`, `conjure_downloaded_tests`, `conjure_golden_tests`, `conjure_benchmarks`.
+
+### 2.2 Dependency graph (public link dependencies; arrows point at what is depended on)
+
+```
+core
+ ^      ^        ^        ^        ^        ^
+ |      |        |        |        |        |
+ecs  platform   rhi    assets    audio   modules            wave 2 (rhi -> platform)
+ ^      ^        ^        ^        ^        ^
+ |      |        |        |        |        |
+scene --+        |        |        |        |                wave 3a (scene -> ecs, assets)
+ ^               |        |        |        |
+ +--- renderer --+--------+        |        |                renderer -> core, rhi, assets   (NO ecs)
+ +--- physics ---+--------+        |        |                physics  -> ecs, scene, assets
+ +--- scripting -+--------+        |        |                scripting -> ecs, assets        (NO scene)
+ ^               ^        ^        ^        ^
+ |               |        |        |        |
+engine ----------+--------+--------+--------+                wave 4: everything above, by CONJURE_WITH_* option
+ ^
+bindings ---> scripting, scene, physics, audio, assets, engine
+editor_core -> engine, scene, assets, ecs, (renderer*, physics*, scripting*), modules
+editor_ui   -> editor_core, renderer (imgui_renderer), ImGui, ImGuizmo
+conjure_editor / conjure_runtime / game modules -> conjure_shared only
+```
+
+Rules that keep the graph acyclic (R7, R29): `renderer` and `audio` never include `ecs`; the engine's
+subsystem adapters register their component types and own their systems. `scripting` never includes `scene`;
+`script_component` carries its own serializer. No module below `engine` includes `engine`; modules reach
+engine services only through `modules::module_context` services (R19).
+
+### 2.3 Ownership
+
+`engine::application` owns every module object through `engine_services` (`std::unique_ptr` each, created in
+the startup order of `06_engine_loop.md` 3.4, destroyed in reverse) and exposes them as non-owning pointers in
+`engine::engine_context` (R22). Nothing else owns a module object. `component_registry` outlives every
+`world`; `asset_manager` outlives every handle; `module_manager` is destroyed before the consumers and
+services it points at.
+
+---
+
+## 3. The frame
+
+All phases are `ecs::system_phase` values (R1); the engine calls `scheduler.run_phase(phase, frame_info)` and the
+scheduler flushes command buffers at every stage boundary, so structural changes are visible at the next
+phase, never mid-phase. Full sequence: `06_engine_loop.md` 3.1.
+
+```
+step_frame()
+  time.begin_frame                 clock | forced delta | step_frame(delta) | step_fixed(n) override
+  frame_memory.reset               safe: every scheduler job of frame N-1 finished at FRAME_END
+  window.pump_events -> layers / input.apply ; input.end_frame      [platform]
+  main-thread queue drain                                            [core::jobs::post_to_main_thread]
+  subsystems.begin_frame           assets: begin_frame + update (+ hot_reload_controller.update)
+                                   modules: apply_pending            scripting: write frame_block
+                                   imgui_layer: ImGui::NewFrame
+  FRAME_BEGIN     scene.apply_pending_loads | scripting.frame_begin (reload tick, OnCreate flush)
+  [ x N fixed steps, skipped while PAUSED ]
+    FIXED_UPDATE  scripting.collision_dispatch (previous step's contacts) -> scripting.fixed_update
+    PHYSICS_STEP  physics.push_transforms -> physics.step (MAIN_THREAD, Jolt jobs on core::jobs)
+    FIXED_END     physics.pull_transforms (interpolated_transform prev/curr) ; physics.contact_events
+  UPDATE          scripting.update | gameplay & plugin systems         (filtered by RUNS_WHILE_PAUSED when PAUSED)
+  layers.on_update
+  LATE_UPDATE     scripting.late_update | camera follow
+  TRANSFORM       scene.propagate_transforms: world_transform + render_world_transform in one pass (R3)
+  SYNC            engine.render_sync (camera/light/environment params), engine.audio_sync (listener/sources)
+  scene = renderer.begin_extract ; layers.on_imgui (ImGui::Render -> renderer.set_imgui_draw_data)
+  EXTRACT         engine.render_extract: cull + mesh_instance/light/sprite/debug-draw fill into `scene`
+  renderer.end_extract ; renderer.render_frame (job-parallel prepare, one command list, present)
+  FRAME_END       scripting.frame_end (OnDestroy flush), scene.destroy_pending, audio one-shots, stats
+  subsystems.end_frame ; layers.on_frame_end ; layers.apply_pending ; pacer ; stats.commit
+```
+
+Thread model (`06_engine_loop.md` 5, R38): main thread = orchestration, all structural world changes, all
+managed code (scripting systems are `EXCLUSIVE`), ImGui, GPU resource creation, submission. Job workers =
+`PARALLEL` systems over chunks, Jolt jobs, asset IO/decode/import, renderer culling/sorting/fill, IBL bake.
+Only sanctioned extra thread: `core::jobs::dedicated_thread` for the editor's blocking stdin reader; the
+miniaudio callback belongs to the audio backend. Nothing else creates threads.
+
+Pause (R13): the editor keeps the engine in `simulation_mode::PAUSED` while editing (fixed loop and
+non-`RUNS_WHILE_PAUSED` UPDATE systems skipped; TRANSFORM/SYNC/EXTRACT still run so edits render) and
+`script_mode::EDIT` (no managed instances). Play = `RUNNING` + `PLAY`. Step = `step_fixed(n)`.
+
+---
+
+## 4. Contracts of modules without an area document
+
+These are binding until each gets a design note of its own (`09_cross_area_resolutions.md` 3).
+
+### 4.1 `core` (R30, R16, R25, R31)
+
+- `result<T>` / `result<void>` / `error { uint32_t category; uint32_t code; std::string message; }`. Each
+  module declares `enum class <module>_error : uint16_t` and `[[nodiscard]] core::error make_error(<module>_error,
+  std::string_view detail = {})`; `core::error_code` holds the generic ones (`UNSUPPORTED`, `NOT_FOUND`,
+  `INVALID_ARGUMENT`, `OUT_OF_MEMORY`, `IO_ERROR`, `PARSE_FAILED`, `TIMEOUT`, `NOT_IMPLEMENTED`).
+- `CONJURE_ASSERT` / `CONJURE_VERIFY` / `CONJURE_UNREACHABLE`; `core::set_assert_handler(handler)` where the
+  handler returns `assert_action::CONTINUE` or aborts (tests wrap it as `conjure::testing::expect_assert`).
+- Logging: `CONJURE_DECLARE_LOG_CATEGORY(name)` in `<module>/log_category.h`, `CONJURE_DEFINE_LOG_CATEGORY(name)`
+  in one `.cpp`; `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR(category, fmt, ...)`; `add_log_sink` / `remove_log_sink`
+  returning `log_sink_handle`; `log_level`.
+- `core::jobs::job_system`: `start(workerCount)` (0 = every job runs inline on the caller), `stop()`,
+  `schedule(fn, priority = NORMAL) -> job_handle`, `wait(job_handle)` (executes queued jobs on the caller),
+  `wait_idle()`, `parallel_for(count, grain, fn(begin, end))` (+ `parallel_for(count, fn(index))`),
+  `worker_count()`, `thread_index()`; free functions `core::jobs::is_main_thread()`, `core::jobs::post_to_main_thread(fn)`
+  (queue drained by the engine before FRAME_BEGIN), class `core::jobs::dedicated_thread(name, fn)`.
+- `core::memory`: `arena` (stable addresses until `reset`), `pool_allocator(blockSize, alignment, blocksPerSlab)`,
+  `frame_allocator` (per-thread blocks, `overflow_count()`), `allocation_counters()` (three atomics),
+  `tracked_allocate` / `tracked_free`; no `malloc` elsewhere.
+- Containers: `slot_map`, `small_vector<T, N>`, `stable_vector<T>`, `flat_hash_map<K, V>`, `flat_map<K, V>`,
+  `bit_vector`, `string_id` (constexpr FNV-1a, interned name for debugging), `radix_sort_u64`.
+- `core::hash::fnv1a64(std::string_view)` / `(std::span<const std::byte>)`, constexpr, published test vectors
+  shared with `Conjure.Managed`.
+- `core::reflect`: `type_id` (from the registered name, stable across shared libraries), `type_info { name,
+  size, alignment, fields }`, `field_info { name, type, offset, kind, attributes (range, tooltip, hidden),
+  default }`, kinds for primitives, math types, `std::string`, `string_id`, `uuid`, nested structs,
+  `std::array`, `ENTITY` (detected by `type_id_of<ecs::entity>()`), `ASSET_REF`; `type_info_of<T>()`,
+  `type_id_of<T>()`, `type_registry` (enumeration for the inspector), runtime `type_info` construction from a
+  field list (dynamic C# components), per-type `to_json` / `from_json`.
+- `core::json`: `value` (read API), `document` (owning, deep copy, pointer-style patching), `writer`
+  (`object/array/key/value`, `write_raw_json`), `parse`, `to_string(value, canonical)` (sorted keys, shortest
+  round-trip floats, minified).
+- `core::vfs::file_system` interface (`mount`, `read_file`, `write_file_atomic`, `stat`, `enumerate`, `rename`,
+  `remove`, `create_directories`, `open_read -> file::read_at`), `native_file_system`, `memory_file_system`.
+  Mount names: `project://`, `assets://`, `engine://`, `cooked://`, `modules://<name>/` (R24).
+- `uuid` (v4 `generate()` thread-safe, `parse`, `to_string`, hash, `<=>`), `clock` / `steady_clock` /
+  `manual_clock::advance()` / `sleep_until`, `process` (spawn, capture stdout/stderr, wait, exit code),
+  `dynamic_library` (RAII dlopen/LoadLibrary, `symbol()`, `decorate_name`), `image` (RGBA8, PNG load/save),
+  `event<Args...>` (multicast, RAII `event_subscription`), `delegate<Signature>`, `event_bus`,
+  `random::default_engine()` (seedable), `math` (glm aliases `vec2/3/4`, `uvec2`, `quat`, `mat3/4`,
+  `transform`, `aabb`, `frustum`, `ray`, `urect`), `platform_detect.h`, `api.h` (`CONJURE_API`), generated
+  `build_info.h` (`CONJURE_VERSION_*`).
+
+### 4.2 `platform`
+
+`window` (`pump_events() -> span<const event>`, `should_close`, `framebuffer_size`, `is_minimised`,
+`is_focused`, `set_title`, `native_handle()` opaque per OS, `required_vulkan_instance_extensions()`,
+`create_vulkan_surface(void *instance, void **surface)`, `framebuffer_resized` event); `input` (`apply(event)`,
+`inject(event)` identical on both backends, `end_frame()` publishing the immutable `input_state` snapshot:
+512-key bitsets for down/pressed/released, mouse position/delta/scroll/buttons, 4 gamepads x 6 axes +
+buttons; `snapshot()`); `event` / `input_event` variants (key, mouse_move, mouse_button, gamepad_button,
+gamepad_axis, resize, focus, close) with `button_action` edge/level semantics; backends `glfw` (GLFW 3.4, main
+thread only) and `null` (virtual window of configured size, no OS calls); clipboard. No Vulkan or GLFW header
+in public headers.
+
+### 4.3 `audio`
+
+`audio_engine(settings)` over miniaudio or `null`; `conjure.audio.clip` asset type (`.wav .ogg .mp3`,
+decode-to-PCM or compressed) registered via `audio::register_asset_types`; components `audio_source` (clip
+ref, volume, pitch, loop, group, 3D flag, one-shot) and `audio_listener`; mix groups with gains; 3D
+attenuation; lock-free command queue from main thread to the mixer callback; `null_backend_stats` (voice
+states, group gains, listener position, virtual clock; decoding runs for real). No `ecs` dependency: the
+engine's `audio_subsystem` registers the component types and owns `engine.audio_sync` (SYNC) and
+`engine.audio_finish_one_shots` (FRAME_END) (R7).
+
+### 4.4 `scene` (R3, R25, R29)
+
+Components (all registered by `scene::register_components(component_registry &)`): `parent { entity }`,
+`children { small_vector<entity, 4> }` (`TRANSIENT`, rebuilt from `parent` on load), `local_transform`
+(`math::transform`, layout mirrored in C#), `world_transform { mat4 }`, `render_world_transform { mat4 }`,
+`interpolated_transform { transform previous, current }` (written by physics), `transform_dirty` (tag),
+`name { string_id }`, `tag`, `layer`, `guid { uuid }`, `enabled` / `disabled` tag. `scene::scene` = one
+`ecs::world` + hierarchy API (`set_parent(child, parent, keepWorld, index)` rejecting cycles, roots,
+sibling order, `name_of/set_name`, `guid_of`, `guid_index::find`, `structure_version()`, `create_entities(count,
+template)` over `instantiate_batch`, world AABB per entity, name/tag/layer queries). `scene_serializer`:
+`save_scene/load_scene` (JSON through `ecs::write_archive_json/read_archive_json`, unknown components
+preserved), `save_subtree(entity) -> json`, `instantiate_subtree(json, parent, keepGuids)`, `capture(scene)
+-> scene_snapshot` (an `entity_archive` plus guid/hierarchy tables; binary, 10k entities < 50 ms with
+`restore`), the post-load bind pass over `assetRefFieldOffsets` with `asset_manager::bind_slot`. Prefabs:
+`conjure.scene.prefab` asset (importer canonicalises JSON and extracts `asset_ref` uuids as dependencies),
+`prefab_instance` component, create/instantiate/apply/unpack, nesting, `model_asset -> prefab`.
+`scene_manager(world &, asset_manager &)`: synchronous `load` (startup), `request_load/unload` (applied in
+`scene.apply_pending_loads`, FRAME_BEGIN, gated on `asset_load_batch::is_complete()`), additive scenes,
+`unload_all`, `on_before_unload` event, `collect()` after unload. Systems: `scene.apply_pending_loads`,
+`scene.propagate_transforms` (TRANSFORM, `RUNS_WHILE_PAUSED`, depth-level parallel), `scene.destroy_pending`
+(FRAME_END; recursive destroy is observer-driven through the deferred command buffer, never recursion).
+Scene registers asset types `conjure.scene.scene` (`.scene.json`) and `conjure.scene.prefab` (`.prefab.json`).
+
+### 4.5 `physics` (R6)
+
+Jolt behind `physics_world(settings, jobs &)`: `JPH::JobSystem` adapter over `core::jobs`, `JPH::Allocate*`
+hooks into `core::memory` (visible to allocation gates), layers and collision matrix from `project.json`
+`extensions.physics_layers`. Components: `rigid_body` (static/kinematic/dynamic, mass, damping, velocities),
+`box_collider`, `sphere_collider`, `capsule_collider`, `convex_collider`, `mesh_collider`, `physics_material`,
+`character_controller`, trigger flag on colliders. Body creation/destruction through ECS `observe(ADDED/REMOVED)`
+with the deferred buffer. Queries: `raycast`, `overlap_sphere`, `overlap_box`, shape casts, all layer-masked.
+Systems: `physics.push_transforms` (PHYSICS_STEP, before step: kinematic/teleported entities), `physics.step`
+(PHYSICS_STEP, `MAIN_THREAD`), `physics.pull_transforms` (FIXED_END, writes `interpolated_transform` and
+`local_transform`), `physics.contact_events` (FIXED_END, fills `contact_events()` sorted by body-id pair;
+kinds enter/stay/exit and trigger enter/exit). Component sync iterates engine component arrays. Sleeping
+query; steady state allocation-free after warm-up.
+
+### 4.6 `bindings` (R26)
+
+`bindings::scripting_bindings_subsystem : engine::engine_subsystem` whose `startup` fills every non-core
+`conjure_native_api` entry (`transform_*`, `physics_*`, `audio_*`, `prefab_*`, `scene_*`, `input_*`,
+`asset_*`, `diagnostics_*`) before `script_runtime::initialize` (startup step 16 -> 17). Each entry is one
+line in `native_api.inl` + regeneration of `NativeApi.g.cs`; the native thunk increments a per-function
+`uint32_t` counter when `!CONJURE_DISTRIBUTION` (`bindings::call_counters()`). Ships the `[NativeComponent]`
+mirrors beyond `LocalTransform`, `AssetRef<T>` marshalling (`asset_ref_get(uuid, typeId)`),
+`Conjure.Diagnostics.Check` -> `engine::diagnostics::check_registry`, and the read-only
+`Conjure.Modules.Registry`. While a DOD query scope is open, structural requests are routed into the script
+runtime's command buffer (R5).
+
+---
+
+## 5. Asset data flow (`05_assets.md`, R10, R23, R25, R34)
+
+```
+source file + <file>.meta (uuid, importer, settings, sub-asset uuids)         [editor/dev only]
+   | asset_database::scan (hash source + side files, stale check)              main thread
+   | asset_database::import  -> importer.import() on a job (deterministic)     worker threads
+   v
+.conjure/cache/<platform>/blobs/<xx>/<uuid>.cab    cooked_blob {header, deps, payload}, hash-validated
+   | asset_manager::load(id) -> QUEUED -> LOADING (source.read + loader.load_cpu on a job)
+   | dependencies auto-loaded; FINALISING waits until every dependency is terminal
+   | loader.finalise on main (CPU payload for renderer types) -> publish (atomic pointer swap, version++)
+   v
+asset_slot (never freed) <- asset_ref<T>::get() one atomic load, valid until end of next frame
+   | asset_manager events LOADED / RELOADED / UNLOADED
+   v renderer_subsystem: renderer::upload_*(id, payload) (copies bytes) / release_*     (R10)
+   v audio clips: audio_engine buffers in finalise
+```
+
+Who registers what: `renderer::register_asset_types` (texture, mesh, material, model, environment; glTF,
+texture, `.cmat`, `.hdr` importers; IBL baked on the CPU inside the environment importer, R34),
+`audio::register_asset_types` (clip), `scene` (scene, prefab), `scripting` (`conjure.scripting.script_source`,
+`EXCLUDE_FROM_PACK`), plugins via `assets::importer_extension_desc` / `asset_type_extension_desc` records
+(R37). Component `asset_ref<T>` fields serialise as uuid strings and are bound by the scene bind pass (R25).
+Residency is owned by handles: `scene_manager` holds the scene's `asset_load_batch`, the editor holds what it
+previews; `collect()` runs at scene unload. Hot reload: polling watcher (job) -> `hot_reload_controller::update`
+(main, frame step 5) -> re-import dirty -> reload dependents in depth order; dependents observe
+`asset_ref::version()` (mesh instances compare material versions during extraction).
+
+---
+
+## 6. The scripting boundary (`03_scripting.md`, R4-R6, R26-R29, R36)
+
+```
+C# game assembly (collectible ALC)  <->  Conjure.Managed (default ALC)  <->  conjure_scripting + conjure_bindings
+         ScriptBehaviour instances         [UnmanagedCallersOnly] entries          conjure_native_api (X-macro table)
+         Entity/Transform structs           conjure_managed_api                     conjure_frame_block (shared memory)
+```
+
+- One CLR per process (`hostfxr_runtime`), two hosting paths (framework-dependent, self-contained), one
+  handshake validating size + version + layout hash on both tables.
+- Per phase one native -> managed call (`run_phase`), creates/destroys/collisions batched; `Time`/`Input`
+  read the shared `conjure_frame_block` written by the engine before FRAME_BEGIN.
+- All managed execution is on the main thread inside the six `EXCLUSIVE` scripting systems (R27); scripts may
+  mutate the world directly except inside a DOD query scope, where the bindings defer structural ops (R5).
+- `script_component` (4 bytes) points into `script_store`; its custom ops/serializer deep-copy and serialise
+  the script set, so scene files, prefabs and snapshots carry scripts without the scene module knowing
+  scripting exists (R29).
+- `[EcsComponent]` structs become ECS dynamic components via `register_dynamic`; the ABI type id is the ECS
+  `component_id` (R4). Mirrors of native components are verified by layout hash.
+- Hot reload: load new ALC -> collect fields -> destroy -> unload -> recreate (`OnCreate` again, not
+  `OnStart`); plugin assemblies share the game ALC (R36).
+- Export: `dotnet publish` of `Conjure.Bootstrap` + `dotnet build` of the game scripts into `<export>/managed`,
+  mode from `project.json` `scripting.export_mode` (R39).
+
+---
+
+## 7. Editor and AI control path (`04_editor.md`, R11-R15)
+
+```
+agent / UI panel / --exec file
+   -> protocol_server (tcp 127.0.0.1:47820+, stdio, loopback)  newline-delimited JSON, id echoed
+   -> command_dispatcher: registry lookup -> schema validation -> preconditions -> handler (all-or-nothing)
+   -> handler mutates through editor_context: scene_manager -> scene -> ecs::world,
+      component_registry + ecs::component_to_json/from_json, entity_archive, asset_database, script_runtime,
+      module_manager::request_*, play_controller -> application::set_simulation_mode / step_fixed
+   -> command_outcome {result, inverse, replay} -> undo_stack (frozen while playing) ; events broadcast
+```
+
+Entities cross the protocol as scene guids or hierarchy paths, never as `ecs::entity`. The catalogue
+(`04_editor.md` 4.4) is self-describing (`editor.schema`) and must be able to author every registered
+component type (`08_testing.md` D8). `play.start` snapshots the scene (`scene_serializer::capture`),
+`play.stop` restores it. Picking is CPU-side over per-entity bounds and `mesh_asset::cpu_geometry()` (R11);
+screenshots render into a `render_target` and `read_back` synchronously (R12). Headless:
+`conjure_editor --headless --exec commands.json --project <dir>` runs the same dispatcher over a `null`
+platform/rhi/audio application and pumps `step_frame()` for async commands; exit codes 0/1/2/3. Module
+tooling: `module.*` commands only enqueue requests; `editor_module_consumer` applies module panels and
+commands (R14).
+
+---
+
+## 8. Export path (`06_engine_loop.md` 3.6, R21)
+
+`conjure_editor --export <dir>` and the `project.export` command both call `engine::export_pipeline::run`:
+
+1. Build the project's native game module in Distribution (if `<project>/module.json` declares a binary).
+2. `assets::asset_cooker::cook` -> `<dir>/cooked/content.cpak` + `manifest.json` (closure from the startup
+   scene and `always_include`, deterministic, all-or-nothing).
+3. `dotnet publish managed/Conjure.Bootstrap` (framework-dependent or self-contained) and `dotnet build` of
+   the game scripts -> `<dir>/managed/` (skipped when scripting is disabled).
+4. `modules::module_manager::export_layout(<dir>, DISTRIBUTION)` -> `<dir>/modules/<name>/{module.json, bin/<triplet>/, managed/}`.
+5. Copy the Distribution `conjure_runtime`, `conjure_shared` and `shaders/` (index.json + DXIL/SPIR-V blobs).
+6. Write `<dir>/project.json` with `"cooked": true`; the runtime then mounts only `engine://` and `cooked://`.
+
+`conjure_runtime --project <dir>` runs the result with no editor code linked (CI greps the Distribution
+binary for `conjure::editor` and `ImGui` symbols). `tests/integration/test_export_roundtrip.cpp` and the
+nightly `distribution-export` job prove it headless.
+
+---
+
+## 9. Build and configuration matrix
+
+| Axis | Values | Notes |
+|---|---|---|
+| Configurations | `Debug`, `Development`, `Distribution` | Distribution: `CONJURE_DISTRIBUTION`, asserts out, editor off, `imgui_renderer`/`imgui_layer`/`debug_overlay_layer` not compiled |
+| Platforms / compilers | Windows 11 MSVC 14.44+; Ubuntu 24.04 GCC 13+ / Clang 16+; macOS 14 AppleClang (MoltenVK) | CMake >= 3.28, Ninja, presets `windows-msvc-*`, `linux-gcc-*`, `linux-clang-*`, `macos-*` |
+| Options (all default ON) | `CONJURE_WITH_RENDERER`, `_PHYSICS`, `_AUDIO`, `_SCRIPTING`, `CONJURE_BUILD_EDITOR`, `_RUNTIME`, `_TESTS`, `_SAMPLES`, `CONJURE_RHI_D3D12` (Windows), `CONJURE_RHI_VULKAN` | A disabled module leaves its `engine_context` pointer null; `module_feature_flags` mirror them for plugins |
+| Extra options | `CONJURE_SPIRV_COMPILER=glslang\|dxc`, `CONJURE_BUILD_MANAGED`, `CONJURE_TEST_GOLDEN_IMAGES` (OFF), `CONJURE_ENABLE_ASAN/UBSAN/TSAN` | sanitizer builds set `CONJURE_WITH_SCRIPTING=OFF` |
+| Linkage | every module `conjure_<module>` static via `conjure_add_module()`; umbrella `conjure_shared` (SHARED, whole-archive, `CONJURE_API` exports, `/MD` only); executables and game modules link `conjure_shared`; tests link the static library or `LINK_ENGINE_SHARED` | R17; game modules via `conjure_add_game_module()` to `bin/<platform>-<arch>-<config>/` |
+| Shaders | HLSL 2018 subset, `conjure_add_shaders()` -> DXIL (`dxc`) + SPIR-V (`glslang`, pinned pre-removal tag) + `shaders/index.json` | `conjure_shaders` is a dependency of `conjure_renderer` and its tests |
+| Managed | `conjure_add_managed_project()` (`dotnet build`, stamp file, explicit `<Compile>` items), `Conjure.Managed`, `Conjure.Bootstrap`, `Conjure.Templates/Game`, `Conjure.TestScripts` | `.NET 8` SDK required when `CONJURE_WITH_SCRIPTING`; CI installs it on all runners |
+| Third-party (pinned in `cmake/Dependencies.cmake`) | GLFW 3.4, NVRHI (commit), glm, Jolt, miniaudio, nethost, cgltf, stb, yyjson, Dear ImGui docking >= 1.92, ImGuizmo, doctest, glslang | exposed as `conjure::thirdparty::<name>`; never included from public headers (glm via `core/math.h` excepted) |
+| CI | PR: `windows-msvc-debug`, `windows-msvc-dev` (+export smoke), `linux-gcc-debug`, `linux-clang-sanitize`, `macos-debug`, `style-and-headers`; nightly: TSan, golden (WARP / lavapipe), benchmarks (ci class), distribution export, full matrix | `08_testing.md` 7.3; skips fail CI unless allow-listed |
+
+---
+
+## 10. Where to find what
+
+| Topic | Document and section |
+|---|---|
+| Fixed decisions, repository layout, waves | `design/00_brief.md` |
+| Entity ids, archetypes, chunk layout, queries, change detection | `design/01_ecs.md` 2-3 |
+| Scheduler, phases, `system_flags`, `frame_info`, module extension records | `design/01_ecs.md` 4.7, `design/06_engine_loop.md` 2.4 |
+| Command buffer flush semantics, archives, JSON serialisation | `design/01_ecs.md` 3.4-3.7, 4.8 |
+| `world_hash`, component `types()`, `EDITOR_HIDDEN` | `design/01_ecs.md` 4.2, `design/08_testing.md` 3.4 |
+| RHI device/swapchain/shader library, null device | `design/02_renderer.md` 4.1, 7 |
+| Render graph, passes, shadows, SSAO, HDR, 2D, ImGui backend | `design/02_renderer.md` 2.7-3.11 |
+| `render_scene` contract, `begin_extract/end_extract/render_frame` | `design/02_renderer.md` 2.3, 4.2 |
+| Shader build (`conjure_add_shaders`) | `design/02_renderer.md` 3.12 |
+| glTF import, renderer asset types, CPU IBL bake | `design/02_renderer.md` 3.6, 4.2 |
+| .NET hosting sequence, ABI tables, frame block | `design/03_scripting.md` 2.1, 3.1 |
+| Script lifecycle, collisions, fields, inspector contract | `design/03_scripting.md` 3.2-3.6 |
+| Hot reload (C#), managed build, DOD `Span<T>` | `design/03_scripting.md` 3.8-3.10 |
+| Command model, undo, protocol wire format, error codes | `design/04_editor.md` 2, 3.3-3.4 |
+| Command catalogue, events, PacMan walk-through | `design/04_editor.md` 4.4 |
+| Play/pause/step, picking, screenshots, headless runner, transports | `design/04_editor.md` 3.7-3.12 |
+| Asset identity, `.meta`, cooked blob, pack format | `design/05_assets.md` 2 |
+| Async load pipeline, publish/retire, hot reload, cook | `design/05_assets.md` 3 |
+| Frame sequence, startup/shutdown order, pacing, interpolation | `design/06_engine_loop.md` 3.1-3.5 |
+| `engine_config`, `project.json` schema, command line, exit codes | `design/06_engine_loop.md` 2.3, 2.10-2.12 |
+| Export pipeline | `design/06_engine_loop.md` 3.6; here section 8 |
+| Layers, subsystems, `engine_context` | `design/06_engine_loop.md` 2.5, 2.8-2.9 |
+| Module manifests, ABI signature, load/unload/reload, consumers | `design/07_modules.md` 2-4 |
+| `conjure_shared`, `CONJURE_API`, `conjure_add_game_module` | `design/07_modules.md` 5 |
+| Test support library, fixtures, skip discipline, benchmarks, CI | `design/08_testing.md` 2-4, 7 |
+| Required tests per module, definition of done | `design/08_testing.md` 5.2, 7.4 |
+| `feature_test` scene content | `design/08_testing.md` 7.2 |
+| Cross-area contradictions and their fixes, remaining risks | `design/09_cross_area_resolutions.md` |
+| Contracts of core, platform, audio, scene, physics, bindings | here, section 4 |
+| Coding rules | `CONVENTIONS.md`, `CODE_STYLE.cpp` (struct fields camelCase per R31) |
+
+---
+
+## 11. Implementation wave plan
+
+Each wave is implementable in parallel across its modules once the previous wave's public headers exist.
+"Inputs" are the documents an implementer must read in full before writing code; `ARCHITECTURE.md`,
+`CONVENTIONS.md`, `CODE_STYLE.cpp` and `09_cross_area_resolutions.md` are inputs to every wave. The
+definition of done for a module is `08_testing.md` 7.4; the items below add the wave-specific gates.
+
+### Wave 1 - foundation
+
+| Module | Inputs | Definition of done |
+|---|---|---|
+| `core` | section 4.1; the "Needs from core" paragraphs of 01-08; `08_testing.md` 2.2, 5.2 (core row) | every API in 4.1 exists with `tests/core/test_<header>.cpp`; `conjure_header_check(core)` passes; jobs tested with 0 and 8 workers; json canonical output stable; allocation-free `parallel_for` dispatch, `slot_map` lookup, `string_id` compare |
+| `conjure_test_support` + CMake infrastructure | `08_testing.md` 2-4, 10 steps 1-5 | `conjure_add_test_module`, `test_main.cpp`, `tracked_global_new.cpp`, `log_capture`, `expect_assert`, `memory_guard`, `allocation_scope`, `temp_directory`; `tests/support/tests` green; `.github/workflows/ci.yml` with the six PR jobs green on an empty engine |
+| Build skeleton | `00_brief.md` layout; `07_modules.md` 5 (`conjure_add_module` additions, `CONJURE_API`); `02_renderer.md` 3.12 (`conjure_add_shaders` stub) | root `CMakeLists.txt`, presets, `Dependencies.cmake` with pinned tags, `ConjureModule.cmake`, `ConjureTesting.cmake`, `CompilerWarnings.cmake`, `ConjureSanitizers.cmake`; configure + build on all three CI platforms |
+
+Wave 1 exit: `ctest` green on all PR jobs; `tools/check_style.py` and header checks pass.
+
+### Wave 2 - independent siblings (all depend on `core` only; `rhi` also on `platform`)
+
+| Module | Inputs | Definition of done |
+|---|---|---|
+| `ecs` | `01_ecs.md` (all), R1-R5, R25, R32, R40 | every test file of `01_ecs.md` 10 plus `test_world_hash`; `bench_ecs` meets 0.1 ms for 10k transform integrations on 4 workers; `scheduler::finalise`, `run_phase_filtered`, `component_type_desc.h`, `component_to_json/from_json` present |
+| `platform` | section 4.2; `06_engine_loop.md` 7-8; `08_testing.md` 5.2 (platform row), 8.4 | `null` and `glfw` backends pass the same conformance test (`[window]` for glfw); `inject` edge/level semantics identical |
+| `rhi` | `02_renderer.md` 1, 4.1, 7, 9 steps 1-4; `08_testing.md` 8.4 | null device passes `test_null_device`, `test_shader_library`, `null_device_stats` recorded; D3D12/Vulkan devices create and present a cleared swapchain locally (`[gpu]`); `conjure_add_shaders` compiles one shader on all CI platforms |
+| `assets` | `05_assets.md` (all), R10, R23-R25, R33-R37 | all `tests/assets` cases; `bind_slot`; `importer_extension_desc`/`asset_type_extension_desc`; two cooks byte-identical; 1,000-blob async load < 250 ms main-thread |
+| `audio` | section 4.3; `08_testing.md` 5.2 (audio row), 8.4 | `null_backend_stats` drive every test; wav/ogg decode from `tests/assets`; miniaudio backend plays locally |
+| `modules` | `07_modules.md` (all), R14, R17-R20, R36, R37 | static-module tests green everywhere; shared fixtures (`module_alpha` ...) load on all three CI platforms; `conjure_shared` builds and `conjure_modules_tests` links it; `check_exports.py` clean |
+
+Wave 2 exit: `conjure_shared` links all wave-2 modules; `tests/modules/sample_plugin` loads in a test host.
+
+### Wave 3 - scene first, then renderer, physics, scripting in parallel
+
+| Module | Inputs | Definition of done |
+|---|---|---|
+| `scene` (3a) | section 4.4; `01_ecs.md` 8 (offers to scene); `06_engine_loop.md` 3.2; `04_editor.md` 8 (scene row); `05_assets.md` 8 (scene); R3, R25, R29 | `tests/scene` per `08_testing.md` 5.2; depth-8 chain and 10,000-entity propagation allocation-free after frame 2; save -> load -> save byte-identical; capture + restore 10k < 50 ms; prefab nesting; `on_before_unload` |
+| `renderer` (3b) | `02_renderer.md` (all), R7-R12, R34; `05_assets.md` 8 (renderer) | all `tests/renderer` cases on the null device; `test_renderer_null_frame` 10k instances; real-device image of `feature_test` early scene locally; `bench_render_null_frame` < 3 ms; `register_asset_types`, `set_imgui_draw_data`, `begin_extract/end_extract/render_frame` |
+| `physics` (3b) | section 4.5; `06_engine_loop.md` 3.2, 8; `03_scripting.md` 3.5; `08_testing.md` 5.2 (physics row); R6 | free fall analytic; stack settles; contact events exactly once per pair in sorted order; `contact_events()` span; Jolt allocations visible to `allocation_scope`; `physics.step_10k_sleeping` allocation-free |
+| `scripting` (3b) | `03_scripting.md` (all), R4-R6, R26-R29, R36, R39 | null-host tests on every platform; `[dotnet]` tests pass where the SDK exists and CI fails on skips; reload v1->v2->v3 preserves fields; `10k_scripts_update_phase` < 2 ms; generator check `conjure_scripting_api_generated_up_to_date` |
+
+Wave 3 exit: `tests/integration/test_assets_renderer_headless.cpp`, `test_scripting_scene.cpp`,
+`test_assets_scene.cpp` green.
+
+### Wave 4 - engine, bindings, editor, runtime
+
+| Module | Inputs | Definition of done |
+|---|---|---|
+| `engine` | `06_engine_loop.md` (all), R1-R2, R7-R10, R13, R18-R24, R27, R33, R38-R39, R21 (export) | `tests/engine` per 10; `test_application_headless` (construction <= 5 ms with null backends); `test_phase_order` exact sequence; startup unwind; `export_pipeline` round trip; `bench_engine_frame` under the `desktop` thresholds |
+| `bindings` | section 4.6; `03_scripting.md` 2.1, 8; `05_assets.md` 8; `08_testing.md` 5.2 (bindings row), 7.2 (call counters) | every native entry filled; generated C# manifest equals the native table; every counter increments in `feature_test`; `Span<T>` scope test |
+| `editor_core`, `editor_ui`, `conjure_editor` | `04_editor.md` (all), R11-R15, R35, R40 | all `tests/editor` cases; `test_command_catalogue` fixture per command; `editor.schema` dump matches `docs/generated/editor_protocol.json`; `test_ai_builds_pacman` and `test_ai_protocol_e2e` green; `test_editor_process` runs the real executable |
+| `conjure_runtime` | `06_engine_loop.md` 4.2; section 4.6 | boots an exported folder headless 60 frames, exit 0; missing `project.json` -> exit 2; Distribution binary has no editor/ImGui symbols |
+| `conjure_test_support_engine` | `08_testing.md` 2.3, 4.4-4.6, 11 | `headless_engine`, `input_script`, `world_builder`, `protocol_client`, `golden_image` with their self-tests |
+
+Wave 4 exit: all `tests/integration` scenarios of `08_testing.md` 6.1 green on the PR matrix; `windows-msvc-dev`
+exports `feature_test` and runs the result 120 frames.
+
+### Wave 5 - samples and completeness
+
+| Deliverable | Inputs | Definition of done |
+|---|---|---|
+| `samples/feature_test` | `08_testing.md` 7.2, D8-D9; `04_editor.md` 4.4 | generated by replaying `commands/build_feature_test.json`; every non-hidden component type present; every binding counter > 0 (exclusions justified); `checks().all_passed()` with >= 120 checks; committed scene hash-equal to the replay |
+| `samples/stress_test` | `00_brief.md` requirement 2; `08_testing.md` 7.1 | 10,000 dynamic entities (transform, physics body, or script) at 60 Hz on the reference desktop; `engine.full_frame_10k_*` thresholds pass |
+| Golden images, nightly jobs | `08_testing.md` 6.2, 7.3 | WARP references committed via LFS; `golden-d3d12-warp` green; lavapipe `continue-on-error` |
+| `AGENTS.md`, `.claude/skills/*` | `00_brief.md` layout; `04_editor.md` D15 | `editor-ai-control` skill generated from `editor.schema`; build-test, add-module, add-component, style-review skills reference the documents in section 10 |
+
+### Cross-wave gates
+
+- A public header change in a lower wave is a PR against that module with its own tests; higher waves never
+  patch around it.
+- Every new component type, binding, editor command or feature lands in the same PR with its `feature_test`
+  entity, call site, command fixture or `Conjure.Diagnostics.Check` (`08_testing.md` 7.4 item 6).
+- `tests/integration/test_determinism.cpp` must stay green at 0, 2 and 8 threads for every system added
+  (R41 constraint on spawning).
+- No wave starts implementing `core`, `platform`, `audio`, `scene`, `physics` or `bindings` before a design
+  note derived from section 4 is reviewed against `09_cross_area_resolutions.md`.

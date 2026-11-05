@@ -12,15 +12,16 @@ reference; this document adds the project-specific conventions on top of it.
 | Classes / structs / enums / type aliases | snake_case | `class entity_world`, `struct aabb` |
 | Functions / methods | snake_case | `void destroy_entity(entity id)` |
 | Local variables / parameters | camelCase | `const int chunkIndex = 0;` |
-| Member variables | camelCase with `m` prefix | `int mEntityCount = 0;` |
+| Class member variables | camelCase with `m` prefix | `int mEntityCount = 0;` |
+| Plain struct (aggregate) fields | camelCase, no prefix (R31 of `docs/design/09_cross_area_resolutions.md`) | `u32 chunkIndex = 0;` |
 | Static members and file-scope statics | camelCase with `s` prefix | `static int sInstanceCount;` |
 | Constants / constexpr / enum values / macros | ALL_CAPS | `constexpr int MAX_COMPONENTS = 256;` |
 | Template parameters | PascalCase | `template <typename ComponentType>` |
 | Files | snake_case | `entity_world.h`, `entity_world.cpp` |
-| Public headers | `engine/include/conjure/<module>/<name>.h` | `conjure/ecs/entity_world.h` |
+| Public headers | `engine/include/conjure/<module>/<name>.h` (core areas: `conjure/core/<name>.h`, or `conjure/core/<area>/<name>.h` for large areas) | `conjure/ecs/entity_world.h` |
 | Private headers / sources | `engine/src/<module>/<name>.{h,cpp}` | |
 | Tests | `tests/<module>/test_<name>.cpp` | `tests/ecs/test_entity_world.cpp` |
-| CMake targets | `conjure_<module>`, tests `conjure_<module>_tests` | |
+| CMake targets | `conjure_<module>`, tests `conjure_<module>_tests`; core areas `conjure_core_<area>` / `conjure_core_<area>_tests` | |
 | Macros | `CONJURE_` prefix | `CONJURE_ASSERT(x)` |
 
 Abbreviations: only widely understood ones (`id`, `uuid`, `rhi`, `ecs`, `gpu`, `json`, `glm`).

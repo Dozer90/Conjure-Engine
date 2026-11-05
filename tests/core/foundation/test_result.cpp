@@ -79,7 +79,7 @@ TEST_SUITE("core.result") {
 
         REQUIRE_FALSE(failure.has_value());
         REQUIRE_FALSE(static_cast<bool>(failure));
-        CHECK(failure.get_error().code() == error_code::NOT_FOUND);
+        CHECK(failure.get_error().is(error_code::NOT_FOUND));
         CHECK(failure.get_error().message() == "missing");
     }
 
@@ -109,7 +109,7 @@ TEST_SUITE("core.result") {
 
         result<int> failure = error(error_code::TIMEOUT, "moved");
         const error taken = std::move(failure).get_error();
-        CHECK(taken.code() == error_code::TIMEOUT);
+        CHECK(taken.is(error_code::TIMEOUT));
         CHECK(taken.message() == "moved");
     }
 
@@ -131,7 +131,7 @@ TEST_SUITE("core.result") {
         const result<int> failure = divide(1, 0);
 
         REQUIRE_FALSE(failure.has_value());
-        CHECK(failure.get_error().code() == error_code::INVALID_ARGUMENT);
+        CHECK(failure.get_error().is(error_code::INVALID_ARGUMENT));
         CHECK(failure.get_error().message() == "division by zero (1 / 0)");
 
         const error plain = make_error(error_code::IO_FAILURE, "no arguments");
@@ -145,7 +145,7 @@ TEST_SUITE("core.result") {
 
         const result<int> firstFails = add_quotients(10, 0, 9, 3);
         REQUIRE_FALSE(firstFails.has_value());
-        CHECK(firstFails.get_error().code() == error_code::INVALID_ARGUMENT);
+        CHECK(firstFails.get_error().is(error_code::INVALID_ARGUMENT));
 
         const result<int> secondFails = add_quotients(10, 2, 9, 0);
         REQUIRE_FALSE(secondFails.has_value());
@@ -159,7 +159,7 @@ TEST_SUITE("core.result") {
 
         const result<std::string> failed = describe_quotient(9, 0);
         REQUIRE_FALSE(failed.has_value());
-        CHECK(failed.get_error().code() == error_code::INVALID_ARGUMENT);
+        CHECK(failed.get_error().is(error_code::INVALID_ARGUMENT));
 
         const result<std::unique_ptr<int>> doubled = make_boxed_doubled(21);
         REQUIRE(doubled.has_value());
@@ -176,7 +176,7 @@ TEST_SUITE("core.result") {
 
         const status failure = validate_all_positive(1, -2);
         REQUIRE_FALSE(failure.has_value());
-        CHECK(failure.get_error().code() == error_code::OUT_OF_RANGE);
+        CHECK(failure.get_error().is(error_code::OUT_OF_RANGE));
 
         const status defaulted = {};
         CHECK(defaulted.has_value());
@@ -196,10 +196,10 @@ TEST_SUITE("core.result") {
 
         const status moved = std::move(copy);
         REQUIRE_FALSE(moved.has_value());
-        CHECK(moved.get_error().code() == error_code::CANCELLED);
+        CHECK(moved.get_error().is(error_code::CANCELLED));
 
         const error taken = std::move(assigned).get_error();
-        CHECK(taken.code() == error_code::CANCELLED);
+        CHECK(taken.is(error_code::CANCELLED));
     }
 
     TEST_CASE("result is copyable and assignable") {

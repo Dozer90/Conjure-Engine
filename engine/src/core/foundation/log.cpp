@@ -350,7 +350,7 @@ void log::write(const log_category &category, log_level level, const char *file,
     message.category = category.name();
     message.text = text;
     message.timestamp = std::chrono::system_clock::now();
-    message.thread_id = std::this_thread::get_id();
+    message.threadId = std::this_thread::get_id();
     message.file = file;
     message.line = line;
 

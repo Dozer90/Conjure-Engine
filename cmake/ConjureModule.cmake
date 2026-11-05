@@ -36,6 +36,7 @@ function(conjure_add_module name)
     target_include_directories(${target}
         PUBLIC
             "${PROJECT_SOURCE_DIR}/engine/include"
+            "${PROJECT_BINARY_DIR}/generated/include"
         PRIVATE
             "${PROJECT_SOURCE_DIR}/engine/src"
     )
@@ -60,6 +61,68 @@ function(conjure_add_module name)
         OUTPUT_NAME "conjure_${name}"
     )
 
+    conjure_register_static_library(${target})
+    source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
+endfunction()
+
+
+# Registers a static library in the global list consumed by the umbrella shared library
+# (conjure_shared whole-archives every entry) and by header checks.
+function(conjure_register_static_library target)
+    set_property(GLOBAL APPEND PROPERTY CONJURE_STATIC_LIBRARIES "${target}")
+endfunction()
+
+
+# Declares one area of the core module as the static library conjure_core_<area> with alias
+# conjure::core_<area>. Same arguments as conjure_add_module(). Areas depend on each other through
+# PUBLIC_DEPS (e.g. conjure::core_foundation); every area implicitly depends on nothing else, so
+# list what you use.
+function(conjure_add_core_area area)
+    set(options "")
+    set(oneValueArgs "")
+    set(multiValueArgs SOURCES PUBLIC_HEADERS PUBLIC_DEPS PRIVATE_DEPS PUBLIC_DEFINES PRIVATE_DEFINES)
+    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(ARG_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "conjure_add_core_area(${area}): unknown arguments: ${ARG_UNPARSED_ARGUMENTS}")
+    endif()
+    if(NOT ARG_SOURCES)
+        message(FATAL_ERROR "conjure_add_core_area(${area}): SOURCES is required")
+    endif()
+
+    set(target "conjure_core_${area}")
+    add_library(${target} STATIC ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
+    add_library(conjure::core_${area} ALIAS ${target})
+
+    target_include_directories(${target}
+        PUBLIC
+            "${PROJECT_SOURCE_DIR}/engine/include"
+            "${PROJECT_BINARY_DIR}/generated/include"
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/engine/src"
+    )
+
+    target_link_libraries(${target}
+        PUBLIC
+            conjure::platform_defines
+            ${ARG_PUBLIC_DEPS}
+        PRIVATE
+            conjure::warnings
+            conjure::sanitizers
+            ${ARG_PRIVATE_DEPS}
+    )
+
+    target_compile_definitions(${target}
+        PUBLIC ${ARG_PUBLIC_DEFINES}
+        PRIVATE CONJURE_MODULE_NAME="core" ${ARG_PRIVATE_DEFINES}
+    )
+
+    set_target_properties(${target} PROPERTIES
+        FOLDER "Engine/core"
+        OUTPUT_NAME "conjure_core_${area}"
+    )
+
+    conjure_register_static_library(${target})
     source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
 endfunction()
 

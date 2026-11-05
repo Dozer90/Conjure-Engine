@@ -1,0 +1,10 @@
+conjure_add_test_module(core_foundation
+    SOURCES
+        test_assert.cpp
+        test_enum_flags.cpp
+        test_error.cpp
+        test_hash.cpp
+        test_log.cpp
+        test_result.cpp
+        test_uuid.cpp
+)

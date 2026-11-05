@@ -10,7 +10,7 @@ add_library(conjure::test_support ALIAS conjure_test_support)
 target_include_directories(conjure_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(conjure_test_support
     PUBLIC
-        conjure::core
+        conjure::core_foundation
         conjure::thirdparty::doctest
         conjure::platform_defines
     PRIVATE

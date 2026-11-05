@@ -53,7 +53,7 @@ TEST_SUITE("core.log") {
         CHECK(receivedCategory == "test");
         CHECK(received.line == expectedLine);
         CHECK(std::string_view(received.file) == __FILE__);
-        CHECK(received.thread_id == std::this_thread::get_id());
+        CHECK(received.threadId == std::this_thread::get_id());
         CHECK(received.timestamp != std::chrono::system_clock::time_point{});
     }
 

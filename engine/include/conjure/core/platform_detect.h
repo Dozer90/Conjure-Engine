@@ -4,6 +4,8 @@
 // allowed to inspect compiler-defined macros such as _WIN32 or __clang__; everything else uses
 // the CONJURE_* macros defined here.
 
+#include <version>   // standard-library identification macros
+
 /*===========================================================================*/
 /*===========================================================================*/
 // Platform
@@ -37,16 +39,55 @@
     #define CONJURE_COMPILER_CLANG 1
     #define CONJURE_COMPILER_MSVC 0
     #define CONJURE_COMPILER_GCC 0
+    #if defined(__apple_build_version__)
+        #define CONJURE_COMPILER_APPLECLANG 1
+    #else
+        #define CONJURE_COMPILER_APPLECLANG 0
+    #endif
 #elif defined(_MSC_VER)
     #define CONJURE_COMPILER_CLANG 0
     #define CONJURE_COMPILER_MSVC 1
     #define CONJURE_COMPILER_GCC 0
+    #define CONJURE_COMPILER_APPLECLANG 0
 #elif defined(__GNUC__)
     #define CONJURE_COMPILER_CLANG 0
     #define CONJURE_COMPILER_MSVC 0
     #define CONJURE_COMPILER_GCC 1
+    #define CONJURE_COMPILER_APPLECLANG 0
 #else
     #error "Conjure: unsupported compiler"
+#endif
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Architecture and standard library
+
+#if defined(_M_X64) || defined(__x86_64__)
+    #define CONJURE_ARCH_X64 1
+    #define CONJURE_ARCH_ARM64 0
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    #define CONJURE_ARCH_X64 0
+    #define CONJURE_ARCH_ARM64 1
+#else
+    #error "Conjure: unsupported architecture (64-bit x86 or ARM required)"
+#endif
+
+#if defined(_MSVC_STL_VERSION)
+    #define CONJURE_STDLIB_MSVC 1
+    #define CONJURE_STDLIB_LIBSTDCXX 0
+    #define CONJURE_STDLIB_LIBCXX 0
+#elif defined(_LIBCPP_VERSION)
+    #define CONJURE_STDLIB_MSVC 0
+    #define CONJURE_STDLIB_LIBSTDCXX 0
+    #define CONJURE_STDLIB_LIBCXX 1
+#elif defined(__GLIBCXX__)
+    #define CONJURE_STDLIB_MSVC 0
+    #define CONJURE_STDLIB_LIBSTDCXX 1
+    #define CONJURE_STDLIB_LIBCXX 0
+#else
+    #define CONJURE_STDLIB_MSVC 0
+    #define CONJURE_STDLIB_LIBSTDCXX 0
+    #define CONJURE_STDLIB_LIBCXX 0
 #endif
 
 /*===========================================================================*/

@@ -102,7 +102,7 @@ namespace conjure::core {
         std::string_view category = {};
         std::string_view text = {};
         std::chrono::system_clock::time_point timestamp = {};
-        std::thread::id thread_id = {};
+        std::thread::id threadId = {};
         const char *file = "";
         int line = 0;
     };
