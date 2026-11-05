@@ -121,7 +121,9 @@ Headers: `slot_map.h`, `small_vector.h`, `stable_vector.h`, `flat_hash_map.h`, `
   open addressing (robin hood or linear probing with backward-shift deletion), power-of-two capacity, load factor 0.875
   max, `find`, `contains`, `insert`, `try_emplace`, `insert_or_assign`, `erase(key)`, `erase(iterator)`, `operator[]`,
   `reserve`, `clear`, `size`, iteration over `std::pair<const K, V>`-like values (`key()`/`value()` accessors are fine);
-  pointers/iterators invalidated by rehash only. Also `flat_hash_set<K>`.
+  pointers/iterators invalidated by rehash (an insertion past the load factor) and, for the elements that follow the
+  erased one in the same probe run, by backward-shift `erase`; after `reserve(n)` the next `n` insertions move
+  nothing. Also `flat_hash_set<K>`.
 - `template <typename K, typename V, typename Compare = std::less<K>> class flat_map`: sorted `std::vector` of pairs,
   binary search, same insertion API subset; good for small maps and deterministic iteration order.
 
@@ -143,7 +145,8 @@ Headers: `string_id.h`, `string_utils.h`, `bit_vector.h`, `radix_sort.h`.
   name with the same hash asserts and logs ERROR (`LOG_CORE`).
   Literal operator: `"ecs.component"_sid` in `inline namespace literals`.
 - `string_utils.h` (`namespace conjure::core::str`): `to_lower/to_upper` (ASCII), `trim`, `starts_with/ends_with`
-  (case-insensitive variants), `split(std::string_view, char) -> small_vector<std::string_view, 8>`, `join`,
+  (case-insensitive variants), `split(std::string_view, char) -> std::vector<std::string_view>` (not
+  `small_vector`: C2 keeps `strings` independent of `containers`), `join`,
   `replace_all`, `iequals`, `parse_int/parse_float -> std::optional`, `format_bytes(u64) -> "1.5 MiB"`, UTF-8 <->
   UTF-16 conversion (`to_wide/from_wide`, Windows paths), `is_valid_identifier`.
 - `class bit_vector`: dynamic bitset: `resize`, `set/reset/test`, `any/none/all`, `count`, `find_first_set(from)`,
@@ -443,8 +446,9 @@ Windows-macro enumerator names, `using namespace` in headers, tests mirror heade
    `cmake --build build/core_<area> --target conjure_core_<area>_tests` and run the executable).
 3. Every public header compiles standalone, has `/// <summary>` docs on public methods, follows `CODE_STYLE.cpp` and
    `CONVENTIONS.md`, and is listed explicitly in your `CMakeLists.txt` (`conjure_add_core_area(<area> ...)`).
-4. Tests use the current support header `conjure_test.h` (`conjure::test::log_capture`, `assert_capture`,
-   `temp_directory`); stage 2 migrates them.
+4. Tests include `conjure/testing/doctest.h` first and the `conjure/testing/<name>.h` headers they use
+   (`conjure::testing::log_capture`, `expect_assert`, `memory_guard`, `temp_directory`, ...); the stage 1
+   compatibility header `conjure_test.h` (`conjure::test::`) is gone, stage 2 migrated every test.
 5. Write `engine/src/core/<area>/README.md` (purpose, types, threading, how to test).
 6. Definition of done: `conjure_core_<area>_tests` passes in Debug with warnings as errors on the host, every
    behaviour in this document has a named test, no file outside your area touched.

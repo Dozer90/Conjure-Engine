@@ -91,12 +91,49 @@ No Hungarian notation beyond the `m`/`s` prefixes.
 
 ## 6. Testing
 
-- doctest. Every module has a `conjure_<module>_tests` executable registered with CTest via
-  `conjure_add_test_module(<module>)`.
+The binding design is `docs/design/08_testing.md` (sections 5.1 and 7.4 in particular); this section
+is its summary.
+
+- doctest, included only through `conjure/testing/doctest.h`. Every module has a
+  `conjure_<module>_tests` executable declared with
+  `conjure_add_test_module(<module> SOURCES ... [DEPS ...] [LABELS ...] [TIMEOUT s])` from
+  `cmake/ConjureTesting.cmake`; every `TEST_CASE` becomes one CTest entry named `<module>.<case>`
+  (labels `unit;<module>;...`, `SKIP_RETURN_CODE 77`), so case names must be unique within the
+  executable and must not contain `;` or unbalanced `[` / `]`.
+- `tests/<module>/test_<name>.cpp` mirrors `engine/include/conjure/<module>/<name>.h` one to one
+  (core areas: `tests/core/<area>/test_<name>.cpp`); a header without a test file fails
+  `tools/check_style.py --tests-mirror-headers` unless listed with a reason in
+  `tools/style_exceptions.json`. Each file opens with `#include "conjure/testing/doctest.h"` and
+  `TEST_SUITE("<module>/<name>")`.
+- `TEST_CASE("<type> - <behaviour in plain English>")`, e.g.
+  `"slot_map - erase invalidates the handle generation"`. Variants are `SUBCASE`s, never copies.
+  Loops use `CAPTURE(index)`. Name tags, filterable with `-tc` when running an executable directly:
+  `[slow]` (> 1 s), `[parallel]` (asserts on multi-worker behaviour), `[scripting]`, `[window]`
+  (needs a real window; guarded by `CONJURE_TEST_REQUIRE(precondition::REAL_WINDOW)`). Every bug fix
+  adds `TEST_CASE("regression - <issue id> <summary>")`.
+- `REQUIRE` only when continuing would dereference an invalid result; `CHECK` otherwise. Floats use
+  `doctest::Approx` or `CONJURE_CHECK_APPROX`. Results use `CONJURE_REQUIRE_OK`, `CONJURE_CHECK_OK`
+  and `CONJURE_CHECK_ERROR(expression, errorCode)`. Every fixture is a local in the case body
+  (`TEST_CASE_FIXTURE` allowed; fixture inheritance not).
+- Support types (`tests/support/include/conjure/testing/`, namespace `conjure::testing`):
+  `log_capture` (fails the case on an ERROR unless `allow_errors()`), `expect_assert` and
+  `CONJURE_CHECK_ASSERTS(statement)` for code that must assert, `memory_guard` (live allocations
+  back to the baseline), `allocation_scope` and `CONJURE_CHECK_NO_ALLOCATIONS(statement)` for
+  allocation gates, `temp_directory` for file I/O, `repo_asset()` / `downloaded_asset()`,
+  `environment()` for the seed and thread count, `CONJURE_TEST_REQUIRE(precondition)` as the first
+  statement of a case with a machine precondition (exits 77 under CTest, returns in a direct run).
+- Forbidden in tests: `sleep_for`, wall-clock reads, `std::thread` (use `core::jobs`), randomness
+  not derived from `environment().seed`, file I/O outside `temp_directory`, third-party headers
+  (test through the public API), absolute paths, reading environment variables (only `test_main`
+  does). `* doctest::skip()` requires a comment with the tracking issue; `[scripting]` cases carry
+  `* doctest::timeout(60)`.
 - Tests are headless: use the `null` backends. No test may require a GPU, window, or audio device.
-- Every public type gets at least: construction/destruction, happy path, failure path, edge cases
-  (empty, max, invalid handle). Every bug fix adds a regression test.
-- Benchmarks live in `tests/benchmarks` and are not part of the default ctest run.
+- Every public type gets at least: construction/destruction, happy path, failure path (each
+  `error_code` a `result` function can return), edge cases (empty, max, invalid or stale handle).
+- Benchmarks live in `tests/benchmarks` and are not part of the default ctest run (the test presets
+  exclude the labels `benchmark|golden|downloaded|slow|process`).
+- `tools/check_style.py` runs as the CTest entry `style.check` (label `style`) and in CI; every
+  public header also compiles alone through `conjure_header_check` (part of the default build).
 - Run everything with: `cmake --preset windows-msvc-debug && cmake --build --preset windows-msvc-debug && ctest --preset windows-msvc-debug`.
 
 ## 7. CMake

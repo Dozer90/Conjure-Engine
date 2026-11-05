@@ -1,4 +1,7 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
+
+#include "conjure/testing/assert_capture.h"
+#include "conjure/testing/log_capture.h"
 
 #include "conjure/core/assert.h"
 #include "conjure/core/log.h"
@@ -21,10 +24,10 @@ namespace {
     }
 }
 
-TEST_SUITE("core.assert") {
+TEST_SUITE("core/assert") {
 
-    TEST_CASE("passing assertions do nothing") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - passing assertions do nothing") {
+        testing::expect_assert asserts = {};
 
         CONJURE_ASSERT(1 + 1 == 2);
         CONJURE_ASSERT(true, "with message {}", 1);
@@ -34,8 +37,8 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.count() == 0);
     }
 
-    TEST_CASE("failing assertions reach the handler with the formatted message") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - failing assertions reach the handler with the formatted message") {
+        testing::expect_assert asserts = {};
 
         const int value = 3;
         CONJURE_ASSERT(value == 4, "value was {}", value);
@@ -44,8 +47,8 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.last_message() == "value was 3");
     }
 
-    TEST_CASE("assertions without a message report the expression") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - assertions without a message report the expression") {
+        testing::expect_assert asserts = {};
 
         CONJURE_ASSERT(false);
 
@@ -53,8 +56,8 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.last_message() == "false");
     }
 
-    TEST_CASE("conditions with parenthesised commas are supported") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - conditions with parenthesised commas are supported") {
+        testing::expect_assert asserts = {};
 
         CONJURE_ASSERT(both_positive(1, 2));
         CONJURE_ASSERT((both_positive(1, -2)), "call with comma");
@@ -63,8 +66,8 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.last_message() == "call with comma");
     }
 
-    TEST_CASE("the message is formatted lazily") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - the message is formatted lazily") {
+        testing::expect_assert asserts = {};
         int evaluations = 0;
         const auto count = [&evaluations] {
             return ++evaluations;
@@ -78,7 +81,7 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.last_message() == "1");
     }
 
-    TEST_CASE("the handler receives expression, file, line and function") {
+    TEST_CASE("assert - the handler receives expression, file, line and function") {
         const assert_handler previous = set_assert_handler(&recording_handler);
         sLastInfo = {};
 
@@ -94,8 +97,8 @@ TEST_SUITE("core.assert") {
         CHECK(sLastInfo.message == "detail 7");
     }
 
-    TEST_CASE("CONJURE_VERIFY evaluates its expression exactly once") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - CONJURE_VERIFY evaluates its expression exactly once") {
+        testing::expect_assert asserts = {};
 
         int evaluations = 0;
         CONJURE_VERIFY(++evaluations == 1);
@@ -105,8 +108,8 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.count() == 1);
     }
 
-    TEST_CASE("CONJURE_FATAL_ASSERT reaches the handler") {
-        test::assert_capture asserts = {};
+    TEST_CASE("assert - CONJURE_FATAL_ASSERT reaches the handler") {
+        testing::expect_assert asserts = {};
 
         CONJURE_FATAL_ASSERT(false, "fatal {}", "check");
 
@@ -114,7 +117,7 @@ TEST_SUITE("core.assert") {
         CHECK(asserts.last_message() == "fatal check");
     }
 
-    TEST_CASE("set_assert_handler returns the previous handler and nullptr restores the default") {
+    TEST_CASE("assert - set_assert_handler returns the previous handler and nullptr restores the default") {
         const assert_handler original = current_assert_handler();
 
         const assert_handler previous = set_assert_handler(nullptr);
@@ -125,8 +128,9 @@ TEST_SUITE("core.assert") {
         CHECK(current_assert_handler() == original);
     }
 
-    TEST_CASE("the default handler logs a FATAL message to the core category and asks to break") {
-        test::log_capture capture = {};
+    TEST_CASE("assert - the default handler logs a FATAL message to the core category and asks to break") {
+        testing::log_capture capture = {};
+        capture.allow_errors();
 
         assert_info info = {};
         info.expression = "x > 0";
@@ -144,25 +148,28 @@ TEST_SUITE("core.assert") {
         CHECK(capture.contains("Assertion failed: x > 0 (file.cpp:12)"));
     }
 
-    TEST_CASE("report_assert_failure returns true only when the handler asks to break") {
+    TEST_CASE("assert - report_assert_failure returns true only when the handler asks to break") {
         const assert_handler previous = set_assert_handler(&recording_handler);
         const bool shouldBreak = detail::report_assert_failure("expr", "f", 1, "fn", "msg");
         set_assert_handler(previous);
         CHECK_FALSE(shouldBreak);
 
-        test::log_capture quiet = {};
+        testing::log_capture quiet = {};
+        quiet.allow_errors();
         set_assert_handler(nullptr);
         const bool defaultBreaks = detail::report_assert_failure("expr", "f", 1, "fn", "msg");
         set_assert_handler(previous);
         CHECK(defaultBreaks);
     }
 
-    TEST_CASE("assert_capture restores the previous handler") {
+    TEST_CASE("assert - expect_assert restores the previous handler") {
         const assert_handler before = current_assert_handler();
+        set_assert_handler(&recording_handler);
         {
-            test::assert_capture asserts = {};
-            CHECK(current_assert_handler() != before);
+            testing::expect_assert asserts = {};
+            CHECK(current_assert_handler() != &recording_handler);
         }
-        CHECK(current_assert_handler() == before);
+        CHECK(current_assert_handler() == &recording_handler);
+        set_assert_handler(before);
     }
 }

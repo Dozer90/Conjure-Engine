@@ -59,9 +59,12 @@ custom user materials, `KHR_texture_transform` (warned, ignored), text rendering
 `test_gpu_types`.
 
 ### 2.2 GPU ids (`gpu_ids.h`)
-`gpu_mesh_id`, `gpu_texture_id`, `gpu_material_id`, `gpu_environment_id`, `render_target_id`: 32-bit
-index + 16-bit generation `core::slot_map` keys in distinct structs with `is_valid()`. A stale id
-resolves to the fallback object (unit cube, white texture, magenta material, grey environment) and logs `WARN` once.
+`gpu_mesh_id`, `gpu_texture_id`, `gpu_material_id`, `gpu_environment_id`, `render_target_id`: distinct
+`core::slot_map` key structs with `is_valid()`. The default `core::slot_key` is `u32 index` + `u32 generation`
+(`10_core.md` 2.3); an id that wants the compact 32-bit index + 16-bit generation layout is a custom key type
+satisfying the `slot_key_type` concept (`slot_map<T, my_id>`), in which case the slot retires after 65535 reuses.
+A stale id resolves to the fallback object (unit cube, white texture, magenta material, grey environment) and
+logs `WARN` once.
 
 ### 2.3 Render scene (the extraction contract, `render_scene.h`)
 
@@ -785,7 +788,7 @@ conjure::thirdparty::cgltf conjure::thirdparty::stb conjure::thirdparty::imgui)`
 | Backend not compiled in / API refuses | `device::create` -> `error::UNSUPPORTED` / `error::DEVICE_CREATION_FAILED` with the backend message; engine tries the next backend, then `NULL_DEVICE` in headless mode. |
 | Device removed (`DXGI_ERROR_DEVICE_REMOVED`, `VK_ERROR_DEVICE_LOST`, NVRHI `Fatal` message) | `device::is_lost()` becomes true; `swapchain::present` / `renderer::render` return `rhi_error::DEVICE_LOST`; the engine logs, calls `renderer::on_device_lost()` (recording stops, GPU mirrors dropped) and quits with `exit_code::DEVICE_LOST`. Device recreation and re-upload is a v2 item (R8, `06_engine_loop.md` 6). |
 | Missing shader / permutation / pipeline creation failure | `renderer::create` fails with `error::SHADER_NOT_FOUND` or `error::PIPELINE_CREATION_FAILED` naming the key. Nothing is lazily created at frame time. |
-| glTF parse error, missing buffer, bad accessor, non-triangle topology | `gltf_importer::import` -> `error::PARSE_FAILED` / `error::NOT_FOUND` / `error::UNSUPPORTED`; unknown extensions are `warnings`, never failures. |
+| glTF parse error, missing buffer, bad accessor, non-triangle topology | `gltf_importer::import` -> `error_code::PARSE_FAILURE` / `error_code::NOT_FOUND` / `error_code::UNSUPPORTED`; unknown extensions are `warnings`, never failures. |
 | Texture decode failure, zero-sized image, > `maxTextureDimension2d` | `texture_asset::load_from_file` -> `error::DECODE_FAILED` / `error::INVALID_ARGUMENT`. |
 | Stale or invalid gpu id in `render_scene` | Fallback object + `WARN` once per id; `render_stats::fallbacksUsed` increments. |
 | More than `MAX_LIGHTS_PER_VIEW`, `MAX_VIEWS`, `MAX_SPRITES_PER_FRAME`, `MAX_DEBUG_VERTICES` | Clamped by importance / order with a `WARN` once per change of count; `CONJURE_ASSERT` in Debug. |
@@ -888,7 +891,7 @@ reusable by game modules for their own compute shaders.
 rhi: `test_texture_format` (bytes per pixel and `is_depth/is_srgb` for every enumerator, NVRHI mapping round trip),
 `test_null_device` (create/destroy, capabilities, 100 execute/garbage-collect cycles, every resource type creatable, `is_lost` false),
 `test_device_lost` (injected `Fatal` message sets `is_lost`), `test_null_swapchain` (acquire cycles indices, present ok, resize to 0 rejected, back buffers non-null),
-`test_shader_library` (index parse, hit, unknown name/entry/defines -> `NOT_FOUND`, corrupt index -> `PARSE_FAILED`, reload drops cache).
+`test_shader_library` (index parse, hit, unknown name/entry/defines -> `NOT_FOUND`, corrupt index -> `PARSE_FAILURE`, reload drops cache).
 
 renderer: `test_camera` (reverse-Z near -> 1 and far -> 0 for perspective and ortho, aspect handling, frustum planes contain known points, viewport ray hits the expected world point),
 `test_render_scene_pair` (swap semantics, `allocate_meshes` from 8 jobs covers every slot exactly once, `clear` keeps capacity),

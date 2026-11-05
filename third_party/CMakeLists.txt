@@ -128,6 +128,12 @@ if(CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS)
     add_library(conjure_thirdparty_doctest INTERFACE)
     add_library(conjure::thirdparty::doctest ALIAS conjure_thirdparty_doctest)
     target_link_libraries(conjure_thirdparty_doctest INTERFACE doctest::doctest)
+
+    # doctest_discover_tests() (one CTest entry per TEST_CASE, used by conjure_add_test_module).
+    # The function is global but the script path it records is a directory-scoped variable, so it is
+    # re-published through the cache for the tests/ directories.
+    include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
+    set(_DOCTEST_DISCOVER_TESTS_SCRIPT "${_DOCTEST_DISCOVER_TESTS_SCRIPT}" CACHE INTERNAL "doctestAddTests.cmake path")
 endif()
 
 #------------------------------------------------------------------------------

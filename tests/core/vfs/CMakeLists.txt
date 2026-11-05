@@ -1,0 +1,10 @@
+conjure_add_test_module(core_vfs
+    SOURCES
+        test_file_system.cpp
+        test_file_system_conformance.cpp
+        test_memory_file_system.cpp
+        test_mount_table.cpp
+        test_native_file_system.cpp
+        test_path_utils.cpp
+        test_vfs.cpp
+)

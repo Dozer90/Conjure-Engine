@@ -1,4 +1,7 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
+
+#include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 
 #include "conjure/core/log.h"
 
@@ -23,10 +26,10 @@ namespace {
     }
 }
 
-TEST_SUITE("core.log") {
+TEST_SUITE("core/log") {
 
-    TEST_CASE("messages reach sinks with level, category and formatted text") {
-        test::log_capture capture = {};
+    TEST_CASE("log - messages reach sinks with level, category and formatted text") {
+        testing::log_capture capture = {};
 
         CONJURE_LOG_INFO(LOG_TEST, "hello {} {}", "world", 42);
 
@@ -35,8 +38,8 @@ TEST_SUITE("core.log") {
         CHECK(capture.messages(log_level::INFO).size() == 1);
     }
 
-    TEST_CASE("messages carry source location, category name and thread id") {
-        test::log_capture quiet = {};
+    TEST_CASE("log - messages carry source location, category name and thread id") {
+        testing::log_capture quiet = {};
         log_message received = {};
         std::string receivedCategory = {};
         auto sink = std::make_shared<callback_log_sink>([&received, &receivedCategory](const log_message &message) {
@@ -57,8 +60,8 @@ TEST_SUITE("core.log") {
         CHECK(received.timestamp != std::chrono::system_clock::time_point{});
     }
 
-    TEST_CASE("category level filters messages") {
-        test::log_capture capture = {};
+    TEST_CASE("log - category level filters messages") {
+        testing::log_capture capture = {};
         const log_level previous = LOG_TEST.level();
 
         LOG_TEST.set_level(log_level::WARN);
@@ -75,8 +78,9 @@ TEST_SUITE("core.log") {
         CHECK(capture.messages().front() == "kept");
     }
 
-    TEST_CASE("global level filters messages") {
-        test::log_capture capture = {};
+    TEST_CASE("log - global level filters messages") {
+        testing::log_capture capture = {};
+        capture.allow_errors();
 
         log::set_global_level(log_level::ERR);
         CONJURE_LOG_WARN(LOG_TEST, "dropped");
@@ -88,7 +92,7 @@ TEST_SUITE("core.log") {
         CHECK(log::global_level() == log_level::TRACE);
     }
 
-    TEST_CASE("is_enabled respects both levels") {
+    TEST_CASE("log - is_enabled respects both levels") {
         CHECK(log::is_enabled(LOG_TEST, log_level::INFO));
         CHECK_FALSE(log::is_enabled(LOG_TEST, log_level::OFF));
 
@@ -98,8 +102,8 @@ TEST_SUITE("core.log") {
         log::set_global_level(log_level::TRACE);
     }
 
-    TEST_CASE("format arguments are only evaluated when the message is enabled") {
-        test::log_capture capture = {};
+    TEST_CASE("log - format arguments are only evaluated when the message is enabled") {
+        testing::log_capture capture = {};
         int evaluations = 0;
         const auto count = [&evaluations] {
             return ++evaluations;
@@ -114,7 +118,7 @@ TEST_SUITE("core.log") {
         CHECK(evaluations == 1);
     }
 
-    TEST_CASE("categories register themselves and can be adjusted by name") {
+    TEST_CASE("log - categories register themselves and can be adjusted by name") {
         log_category *found = log::find_category("test");
         REQUIRE(found == &LOG_TEST);
 
@@ -134,7 +138,7 @@ TEST_SUITE("core.log") {
         CHECK(coreRegistered);
     }
 
-    TEST_CASE("scoped categories unregister on destruction and keep registration order") {
+    TEST_CASE("log - scoped categories unregister on destruction and keep registration order") {
         const usize before = log::categories().size();
         {
             const log_category scoped("scoped-category", log_level::INFO);
@@ -148,7 +152,7 @@ TEST_SUITE("core.log") {
         CHECK(log::find_category("scoped-category") == nullptr);
     }
 
-    TEST_CASE("level names round trip") {
+    TEST_CASE("log - level names round trip") {
         CHECK(to_string(log_level::TRACE) == "TRACE");
         CHECK(to_string(log_level::FATAL) == "FATAL");
         CHECK(to_string(log_level::OFF) == "OFF");
@@ -161,9 +165,9 @@ TEST_SUITE("core.log") {
         CHECK(parse_log_level("bogus") == log_level::OFF);
     }
 
-    TEST_CASE("file sink writes formatted lines and can append") {
-        test::log_capture quiet = {};
-        test::temp_directory directory("core_log");
+    TEST_CASE("log - file sink writes formatted lines and can append") {
+        testing::log_capture quiet = {};
+        testing::temp_directory directory("core_log");
         const std::filesystem::path path = directory.path() / "logs" / "engine.log";
 
         {
@@ -194,9 +198,9 @@ TEST_SUITE("core.log") {
         CHECK(read_file(path).empty());
     }
 
-    TEST_CASE("file sink on an unwritable path reports not open and drops messages") {
-        test::log_capture quiet = {};
-        test::temp_directory directory("core_log_bad");
+    TEST_CASE("log - file sink on an unwritable path reports not open and drops messages") {
+        testing::log_capture quiet = {};
+        testing::temp_directory directory("core_log_bad");
         const std::filesystem::path blocker = directory.write_file("not_a_directory", "x");
 
         auto sink = std::make_shared<file_log_sink>(blocker / "engine.log");
@@ -209,8 +213,8 @@ TEST_SUITE("core.log") {
         CHECK(true);
     }
 
-    TEST_CASE("callback sink receives messages and sinks can be removed") {
-        test::log_capture quiet = {};
+    TEST_CASE("log - callback sink receives messages and sinks can be removed") {
+        testing::log_capture quiet = {};
         int received = 0;
         auto sink = std::make_shared<callback_log_sink>([&received](const log_message &) {
             ++received;
@@ -224,8 +228,8 @@ TEST_SUITE("core.log") {
         CHECK(received == 1);
     }
 
-    TEST_CASE("null sinks are ignored and unknown sinks can be removed") {
-        test::log_capture capture = {};
+    TEST_CASE("log - null sinks are ignored and unknown sinks can be removed") {
+        testing::log_capture capture = {};
 
         log::add_sink(nullptr);
         auto unknown = std::make_shared<callback_log_sink>([](const log_message &) {});
@@ -235,8 +239,8 @@ TEST_SUITE("core.log") {
         CHECK(capture.count() == 1);
     }
 
-    TEST_CASE("clear_sinks removes every sink") {
-        test::log_capture outer = {};
+    TEST_CASE("log - clear_sinks removes every sink") {
+        testing::log_capture outer = {};
         int received = 0;
         auto sink = std::make_shared<callback_log_sink>([&received](const log_message &) {
             ++received;
@@ -250,8 +254,8 @@ TEST_SUITE("core.log") {
         CHECK(outer.count() == 0);
     }
 
-    TEST_CASE("a sink may log and change the sink list from inside write") {
-        test::log_capture capture = {};
+    TEST_CASE("log - a sink may log and change the sink list from inside write") {
+        testing::log_capture capture = {};
         std::shared_ptr<callback_log_sink> reentrant = nullptr;
         int inner = 0;
         reentrant = std::make_shared<callback_log_sink>([&inner, &reentrant](const log_message &message) {
@@ -270,7 +274,7 @@ TEST_SUITE("core.log") {
         CHECK(capture.contains("inner"));
     }
 
-    TEST_CASE("console sink writes without colour and with colour") {
+    TEST_CASE("log - console sink writes without colour and with colour") {
         log_message message = {};
         message.level = log_level::INFO;
         message.category = "test";
@@ -289,7 +293,7 @@ TEST_SUITE("core.log") {
         CHECK(true);
     }
 
-    TEST_CASE("console can be disabled and re-enabled") {
+    TEST_CASE("log - console can be disabled and re-enabled") {
         const bool before = log::console_enabled();
         log::set_console_enabled(!before);
         CHECK(log::console_enabled() == !before);
@@ -297,8 +301,8 @@ TEST_SUITE("core.log") {
         CHECK(log::console_enabled() == before);
     }
 
-    TEST_CASE("logging from many threads delivers every message exactly once") {
-        test::log_capture capture = {};
+    TEST_CASE("log - logging from many threads delivers every message exactly once") {
+        testing::log_capture capture = {};
         constexpr int THREAD_COUNT = 8;
         constexpr int PER_THREAD = 500;
 
@@ -317,7 +321,7 @@ TEST_SUITE("core.log") {
         CHECK(capture.count() == static_cast<usize>(THREAD_COUNT * PER_THREAD));
     }
 
-    TEST_CASE("format_log_line produces the documented layout") {
+    TEST_CASE("log - format_log_line produces the documented layout") {
         log_message message = {};
         message.level = log_level::WARN;
         message.category = "renderer";
@@ -338,7 +342,7 @@ TEST_SUITE("core.log") {
         CHECK(format_log_line(message).find("[FATAL] [renderer]") != std::string::npos);
     }
 
-    TEST_CASE("format_log_line zero-pads the time of day") {
+    TEST_CASE("log - format_log_line zero-pads the time of day") {
         log_message message = {};
         message.level = log_level::INFO;
         message.category = "c";

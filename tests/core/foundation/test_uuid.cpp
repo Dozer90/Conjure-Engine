@@ -1,4 +1,4 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
 
 #include "conjure/core/uuid.h"
 
@@ -11,9 +11,9 @@
 using namespace conjure;
 using namespace conjure::core;
 
-TEST_SUITE("core.uuid") {
+TEST_SUITE("core/uuid") {
 
-    TEST_CASE("default uuid is null") {
+    TEST_CASE("uuid - default uuid is null") {
         const uuid value = {};
 
         CHECK(value.is_null());
@@ -22,7 +22,7 @@ TEST_SUITE("core.uuid") {
         CHECK(value.to_string() == "00000000-0000-0000-0000-000000000000");
     }
 
-    TEST_CASE("construction is constexpr") {
+    TEST_CASE("uuid - construction is constexpr") {
         constexpr uuid value(1, 2);
         static_assert(value.high() == 1);
         static_assert(value.low() == 2);
@@ -31,7 +31,7 @@ TEST_SUITE("core.uuid") {
         CHECK(true);
     }
 
-    TEST_CASE("generated uuids are version 4 and unique") {
+    TEST_CASE("uuid - generated uuids are version 4 and unique") {
         std::unordered_set<uuid> seen = {};
         for (int index = 0; index < 10000; ++index) {
             const uuid value = uuid::generate();
@@ -45,7 +45,7 @@ TEST_SUITE("core.uuid") {
         }
     }
 
-    TEST_CASE("generation from several threads produces no duplicates") {
+    TEST_CASE("uuid - generation from several threads produces no duplicates") {
         constexpr int THREAD_COUNT = 8;
         constexpr int PER_THREAD = 2000;
 
@@ -73,7 +73,7 @@ TEST_SUITE("core.uuid") {
         CHECK(unique.size() == generated.size());
     }
 
-    TEST_CASE("to_string and parse round trip") {
+    TEST_CASE("uuid - to_string and parse round trip") {
         const uuid original = uuid::generate();
         const std::string text = original.to_string();
 
@@ -87,7 +87,7 @@ TEST_SUITE("core.uuid") {
         CHECK(uuid::parse(allSet.to_string()) == allSet);
     }
 
-    TEST_CASE("parse accepts known values, braces and upper case") {
+    TEST_CASE("uuid - parse accepts known values, braces and upper case") {
         const std::optional<uuid> lower = uuid::parse("123e4567-e89b-12d3-a456-426614174000");
         REQUIRE(lower.has_value());
         CHECK(lower->high() == 0x123e4567e89b12d3ull);
@@ -110,7 +110,7 @@ TEST_SUITE("core.uuid") {
         CHECK(null->is_null());
     }
 
-    TEST_CASE("parse rejects malformed input") {
+    TEST_CASE("uuid - parse rejects malformed input") {
         CHECK_FALSE(uuid::parse("").has_value());
         CHECK_FALSE(uuid::parse("123e4567e89b12d3a456426614174000").has_value());
         CHECK_FALSE(uuid::parse("123e4567-e89b-12d3-a456-42661417400").has_value());
@@ -122,7 +122,7 @@ TEST_SUITE("core.uuid") {
         CHECK_FALSE(uuid::parse("{}").has_value());
     }
 
-    TEST_CASE("uuids order and hash consistently") {
+    TEST_CASE("uuid - uuids order and hash consistently") {
         const uuid smaller(1, 0);
         const uuid larger(1, 1);
 
@@ -133,7 +133,7 @@ TEST_SUITE("core.uuid") {
         CHECK(uuid(1, 0).hash() != uuid(0, 1).hash());
     }
 
-    TEST_CASE("uuid is formattable, including with format specs") {
+    TEST_CASE("uuid - uuid is formattable, including with format specs") {
         const uuid value(0x123e4567e89b12d3ull, 0xa456426614174000ull);
 
         CHECK(std::format("{}", value) == "123e4567-e89b-12d3-a456-426614174000");

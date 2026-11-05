@@ -783,13 +783,14 @@ through exactly this path.
 
 ## 8. Integration points
 
-**Needs from `core` (wave 1).** `uuid` (`generate()` thread-safe, `is_nil()`, `to_string()`,
+**Needs from `core` (wave 1).** `uuid` (`generate()` thread-safe, `is_null()`, `to_string()`,
 `parse()`, `std::hash`, `operator<=>`), `result<T>` / `error` (code + category + message; assets
 registers its own category), `hash::fnv1a64(span<const byte>)`, `flat_hash_map<K, V>`, `stable_vector<T>`,
 `jobs::job_system` (`schedule(fn, priority) -> job_handle`, `wait(job_handle)`,
 `parallel_for(count, grain, fn(begin, end))`, worker count 0 = inline for tests; names per R30),
 `vfs::file_system` (`read_file`,
-`write_file_atomic` (tmp + rename), `stat -> {size, writeTime}`, `enumerate(dir, recursive, callback)`,
+`write_file_atomic` (tmp + rename), `stat -> file_stat {size, writeTimeNanoseconds, isDirectory, isRegular}`,
+`enumerate(dir, enumerate_flags, callback)` (`RECURSIVE | FILES | DIRECTORIES`),
 `rename`, `remove`, `create_directories`, `open_read -> file` with `read_at(offset, span)`,
 `memory_file_system`), `json::value` / `parse` / `to_string(value, canonical)` (sorted keys,
 minified), `CONJURE_LOG_*`, `CONJURE_ASSERT`, `platform_detect.h` for the platform string, and a `core::reflect`

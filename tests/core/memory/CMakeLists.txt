@@ -1,0 +1,9 @@
+conjure_add_test_module(core_memory
+    SOURCES
+        test_allocation_counters.cpp
+        test_arena.cpp
+        test_frame_allocator.cpp
+        test_memory.cpp
+        test_pool_allocator.cpp
+        test_tracked_allocation.cpp
+)

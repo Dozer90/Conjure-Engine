@@ -1,4 +1,4 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
 
 #include "conjure/core/error.h"
 #include "conjure/core/result.h"
@@ -48,9 +48,9 @@ namespace {
     }
 }
 
-TEST_SUITE("core.error") {
+TEST_SUITE("core/error") {
 
-    TEST_CASE("default error is core NONE with an empty message") {
+    TEST_CASE("error - default error is core NONE with an empty message") {
         const error value = {};
 
         CHECK(value.category() == error_category_traits<error_code>::ID);
@@ -62,7 +62,7 @@ TEST_SUITE("core.error") {
         CHECK(value.to_string() == "core.NONE");
     }
 
-    TEST_CASE("code-only constructor leaves the message empty") {
+    TEST_CASE("error - code-only constructor leaves the message empty") {
         const error value(error_code::UNSUPPORTED);
 
         CHECK(value.generic_code() == error_code::UNSUPPORTED);
@@ -72,13 +72,13 @@ TEST_SUITE("core.error") {
         CHECK(value.to_string() == "core.UNSUPPORTED");
     }
 
-    TEST_CASE("to_string includes the message when present") {
+    TEST_CASE("error - to_string includes the message when present") {
         const error value(error_code::IO_FAILURE, "disk full");
 
         CHECK(value.to_string() == "core.IO_FAILURE: disk full");
     }
 
-    TEST_CASE("every generic error code has a name") {
+    TEST_CASE("error - every generic error code has a name") {
         for (u16 index = 0; index < static_cast<u16>(error_code::COUNT); ++index) {
             const std::string_view name = to_string(static_cast<error_code>(index));
             CHECK_FALSE(name.empty());
@@ -90,7 +90,7 @@ TEST_SUITE("core.error") {
         CHECK(error_category_traits<error_code>::code_name(999).empty());
     }
 
-    TEST_CASE("module categories are derived from their name") {
+    TEST_CASE("error - module categories are derived from their name") {
         using traits = error_category_traits<sample_error>;
 
         CHECK(traits::NAME == "sample");
@@ -100,7 +100,7 @@ TEST_SUITE("core.error") {
         CHECK(traits::code_name(999).empty());
     }
 
-    TEST_CASE("make_error builds module errors with and without formatting") {
+    TEST_CASE("error - make_error builds module errors with and without formatting") {
         const error formatted = make_error(sample_error::WIDGET_MISSING, "widget {} not found", 7);
         CHECK(formatted.is(sample_error::WIDGET_MISSING));
         CHECK(formatted.is_category<sample_error>());
@@ -121,14 +121,36 @@ TEST_SUITE("core.error") {
         CHECK(generic.to_string() == "core.TIMEOUT: after 250 ms");
     }
 
-    TEST_CASE("unknown codes print numerically") {
+    TEST_CASE("error - make_error with one fixed message argument accepts every common string shape") {
+        // A lone string argument must pick the std::string_view overload over the std::format_string
+        // one (partial ordering: the format overload's trailing pack makes it less specialised), so
+        // callers can write a fixed message without going through the error(code, std::string)
+        // constructor. Braces in such a message are kept verbatim.
+        const std::string owned = "owned {}";
+        const char *pointer = "pointer";
+        const std::string_view view = "view";
+
+        const error fromLiteral = make_error(error_code::NOT_FOUND, "literal {}");
+        const error fromOwned = make_error(sample_error::WIDGET_JAMMED, owned);
+        const error fromPointer = make_error(error_code::INVALID_STATE, pointer);
+        const error fromView = make_error(sample_error::WIDGET_MISSING, view);
+        const error fromTemporary = make_error(error_code::TIMEOUT, std::string("temporary"));
+
+        CHECK(fromLiteral.message() == "literal {}");
+        CHECK(fromOwned.message() == "owned {}");
+        CHECK(fromPointer.message() == "pointer");
+        CHECK(fromView.message() == "view");
+        CHECK(fromTemporary.message() == "temporary");
+    }
+
+    TEST_CASE("error - unknown codes print numerically") {
         const error value = error::from(static_cast<sample_error>(42), "odd");
         CHECK(value.code() == 42);
         CHECK(value.code_name().empty());
         CHECK(value.to_string() == "sample.42: odd");
     }
 
-    TEST_CASE("module errors flow through result") {
+    TEST_CASE("error - module errors flow through result") {
         const result<int> found = find_widget(true);
         REQUIRE(found.has_value());
         CHECK(found.value() == 7);
@@ -138,12 +160,13 @@ TEST_SUITE("core.error") {
         CHECK(missing.get_error().is(sample_error::WIDGET_MISSING));
     }
 
-    TEST_CASE("errors compare by category, code and message") {
+    TEST_CASE("error - errors compare by category, code and message") {
         const error first(error_code::NOT_FOUND, "a");
         const error second(error_code::NOT_FOUND, "a");
         const error differentMessage(error_code::NOT_FOUND, "b");
         const error differentCode(error_code::TIMEOUT, "a");
-        const error differentCategory = error::from(static_cast<sample_error>(static_cast<u32>(error_code::NOT_FOUND)), "a");
+        const sample_error sameCode = static_cast<sample_error>(static_cast<u32>(error_code::NOT_FOUND));
+        const error differentCategory = error::from(sameCode, "a");
 
         CHECK(first == second);
         CHECK_FALSE(first == differentMessage);
@@ -151,7 +174,7 @@ TEST_SUITE("core.error") {
         CHECK_FALSE(first == differentCategory);
     }
 
-    TEST_CASE("copy and move preserve every field") {
+    TEST_CASE("error - copy and move preserve every field") {
         const error original = make_error(sample_error::WIDGET_JAMMED, "line {}", 3);
 
         const error copy = original;
@@ -168,7 +191,7 @@ TEST_SUITE("core.error") {
         CHECK(moved == original);
     }
 
-    TEST_CASE("errors and codes are formattable, including with format specs") {
+    TEST_CASE("error - errors and codes are formattable, including with format specs") {
         const error value(error_code::TIMEOUT, "slow");
 
         CHECK(std::format("{}", error_code::TIMEOUT) == "TIMEOUT");

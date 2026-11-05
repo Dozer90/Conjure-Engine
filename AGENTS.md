@@ -65,9 +65,18 @@ renderer, physics, scripting -> engine -> editor, runtime`.
 2. Public headers go in `engine/include/conjure/<module>/`; everything else in
    `engine/src/<module>/`. Register files explicitly in the module's `CMakeLists.txt`
    (`conjure_add_module`).
-3. Write the tests alongside the code in `tests/<module>/` (`conjure_add_test_module`). Aim for
+3. Write the tests alongside the code in `tests/<module>/test_<header>.cpp`, one file per public
+   header, registered with `conjure_add_test_module(<module> SOURCES ...)` from
+   `cmake/ConjureTesting.cmake`. Every file opens with `#include "conjure/testing/doctest.h"` and
+   `TEST_SUITE("<module>/<header>")`; cases are named `"<type> - <behaviour>"` and are unique per
+   executable (each one is its own CTest entry). The support library (`tests/support`, namespace
+   `conjure::testing`) provides `log_capture`, `expect_assert` / `CONJURE_CHECK_ASSERTS`,
+   `memory_guard`, `allocation_scope` / `CONJURE_CHECK_NO_ALLOCATIONS`, `temp_directory`,
+   `CONJURE_REQUIRE_OK` / `CONJURE_CHECK_ERROR`, `CONJURE_CHECK_APPROX` and
+   `CONJURE_TEST_REQUIRE(precondition::...)`; see `docs/CONVENTIONS.md` section 6. Aim for
    behaviour coverage: construction, happy path, failure path, edge cases, threading where relevant.
-4. Build the Debug preset and run the tests. Fix every warning.
+4. Build the Debug preset and run the tests. Fix every warning. Run `python tools/check_style.py
+   --tests-mirror-headers` (also the CTest entry `style.check`); it must report zero findings.
 5. Update `engine/src/<module>/README.md`.
 6. Run the review checklist, then commit with a `module: summary` subject.
 
@@ -93,9 +102,14 @@ Presets live in `CMakePresets.json`; `tools/build.py` wraps them and sets up MSV
 ## 6. Definition of done (per task)
 
 - [ ] Builds in Debug with warnings as errors on the host platform.
-- [ ] All tests pass (`ctest`), new behaviour has tests, no test is skipped or disabled.
-- [ ] Code style and conventions followed (run the checklist).
-- [ ] Public headers documented with `<summary>` blocks; module README updated.
+- [ ] All tests pass (`ctest`), new behaviour has tests, no test is skipped or disabled; every
+      public header has its `tests/<module>/test_<header>.cpp`.
+- [ ] Code style and conventions followed (run the checklist); `python tools/check_style.py
+      --tests-mirror-headers` is clean (tabs, 120 columns, LF, `#pragma once`, no `using namespace`
+      in headers, no Windows-macro enumerator names, no third-party includes in public headers,
+      test naming, tests mirror headers).
+- [ ] Public headers compile on their own (`conjure_header_check`, part of the default build) and
+      are documented with `<summary>` blocks; module README updated.
 - [ ] No third-party header leaks into public headers (glm excepted).
 - [ ] No platform ifdefs outside the allowed files.
 - [ ] Report lists what was built, what was tested, and anything left undone.

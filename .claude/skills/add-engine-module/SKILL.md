@@ -59,8 +59,14 @@ A module is a static library `conjure_<name>` (alias `conjure::<name>`) living i
    conjure_add_test_module(<name>
        SOURCES
            test_<type>.cpp
+       LABELS <extra labels, optional>
+       TIMEOUT 120
    )
+   conjure_header_check(conjure_<name>)
    ```
+
+   One `test_<type>.cpp` per public header (`tools/check_style.py --tests-mirror-headers` enforces
+   it); every `TEST_CASE` becomes its own CTest entry `<name>.<case>`.
 
 4. **Backends.** If the module talks to hardware or an OS service, define an abstract backend
    interface in `engine/src/<name>/backend/<name>_backend.h`, implement the real one
@@ -71,8 +77,13 @@ A module is a static library `conjure_<name>` (alias `conjure::<name>`) living i
    `core::result<T>`. Handles over pointers. `<summary>` documentation on public methods.
 
 6. **Tests first or alongside.** Every public type: construction/destruction, happy path,
-   failure path, edge cases, and any threading guarantees. Use `conjure_test.h` helpers
-   (`log_capture`, `assert_capture`, `temp_directory`).
+   failure path, edge cases, and any threading guarantees. Each file opens with
+   `#include "conjure/testing/doctest.h"` and `TEST_SUITE("<name>/<type>")`; cases are named
+   `TEST_CASE("<type> - <behaviour>")`. Use the `conjure::testing` helpers from
+   `conjure/testing/*.h`: `log_capture`, `expect_assert` / `CONJURE_CHECK_ASSERTS`,
+   `memory_guard`, `allocation_scope` / `CONJURE_CHECK_NO_ALLOCATIONS`, `temp_directory`,
+   `CONJURE_REQUIRE_OK` / `CONJURE_CHECK_ERROR`, `CONJURE_CHECK_APPROX` (see
+   `docs/CONVENTIONS.md` section 6).
 
 7. **README.md** in `engine/src/<name>/`: purpose, main types, threading model, dependencies,
    how to test.

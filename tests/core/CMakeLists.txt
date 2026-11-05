@@ -20,4 +20,9 @@ foreach(area IN LISTS CONJURE_CORE_TEST_AREAS)
     if(EXISTS "${testDir}/CMakeLists.txt" AND TARGET conjure::core_${area})
         add_subdirectory("${testDir}")
     endif()
+
+    # Every public header of the area must compile on its own (build-only check, part of ALL).
+    if(TARGET conjure_core_${area})
+        conjure_header_check(conjure_core_${area})
+    endif()
 endforeach()

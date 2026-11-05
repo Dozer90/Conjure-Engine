@@ -1,0 +1,11 @@
+conjure_add_test_module(core_jobs
+    SOURCES
+        jobs_test_support.cpp
+        jobs_test_support.h
+        test_dedicated_thread.cpp
+        test_job_handle.cpp
+        test_job_system.cpp
+        test_jobs.cpp
+        test_main_thread.cpp
+        test_parallel_for.cpp
+)

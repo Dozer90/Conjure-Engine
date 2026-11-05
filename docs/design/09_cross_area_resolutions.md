@@ -135,9 +135,21 @@ Cross-note decisions that an implementer must not re-decide:
 The consolidated contracts below are kept as the short form the notes were derived from; where they differ
 from a note in detail, the note is right.
 
+- **core names follow `10_core.md` and the headers** (wave 1 integration): where an area document spelled a core
+  name differently, the document was corrected to the implemented API (`log::add_sink`/`log::remove_sink` with
+  `std::shared_ptr<log_sink>`, `uuid::is_null`, `error_code::IO_FAILURE`/`PARSE_FAILURE`,
+  `CONJURE_DEFINE_LOG_CATEGORY(name, "display")`, `conjure::testing`, `job_system::start(job_system_desc)`,
+  `memory::counters()`/`snapshot()`, `vfs::enumerate(dir, enumerate_flags, callback)`). Decisions taken at the same
+  time: `str::split` returns `std::vector<std::string_view>` (C2 keeps `strings` off `containers`);
+  `flat_hash_map::erase` is backward-shift and invalidates pointers to later elements of the same probe run (rehash
+  is not the only invalidation); the time interface keeps its spec name `clock` (write `core::clock` where a
+  `using namespace conjure::core;` would make it ambiguous with `::clock()`); `math::align_up`/`is_power_of_two`
+  mirror `memory::` rather than depend on it; `slot_key` stays `u32`/`u32` (renderer ids that want a 16-bit
+  generation use a `slot_key_type` key, `02_renderer.md` 2.2). CMake keeps failing hard on a listed-but-missing
+  source: parallel implementers add the `CMakeLists.txt` entry after the file exists instead.
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
-  `memory::allocation_counters()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,
+  `memory::counters()`/`snapshot()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,
   `image`, `vfs::file_system` + `memory_file_system`, `event<Args...>` + `event_subscription`, `delegate`,
   `event_bus`, containers (`slot_map`, `small_vector`, `stable_vector`, `flat_hash_map`, `flat_map`,
   `bit_vector`, `string_id`, `radix_sort_u64`), `platform_detect.h`, `api.h` (`CONJURE_API`), generated

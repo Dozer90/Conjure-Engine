@@ -101,8 +101,9 @@ namespace conjure::testing {
 
 Small value structs live next to their owners: `captured_log_entry { level, category, text }`,
 `asserted_failure { expression, message, file, line }`, `memory_snapshot { allocationCount, freeCount,
-allocatedBytes }` (cumulative). Counters come from `core::memory::allocation_counters()` (three
-`std::atomic<uint64_t>`), bumped by `tracked_global_new.cpp`, by engine allocators' block acquisition,
+allocatedBytes }` (cumulative; `core::memory::memory_snapshot`). Counters come from `core::memory::counters()`
+(the `allocation_counters` struct of three `std::atomic<u64>`, copied by `core::memory::snapshot()`), bumped by
+`tracked_global_new.cpp`, by engine allocators' block acquisition,
 and by the Jolt hooks the physics module installs (`JPH::Allocate`, `JPH::Reallocate`, `JPH::Free`,
 `JPH::AlignedAllocate`, `JPH::AlignedFree`). Live bytes are not tracked (sized `operator delete` is
 not guaranteed); counts are what the gates need.
@@ -326,7 +327,7 @@ namespace conjure::testing {
             std::vector<captured_log_entry> mEntries = {};
             std::array<uint32_t, 5> mCountsPerLevel = {};
             mutable std::mutex mMutex = {};              // job threads log too
-            core::log_sink_handle mSinkHandle = {};
+            std::shared_ptr<core::log_sink> mSink = nullptr;   // log::add_sink / log::remove_sink
             bool mErrorsAllowed = false;
 
         public:
@@ -798,8 +799,8 @@ adds a component, binding or command updates it in the same PR.
 
 **Needs from other areas**
 
-- core (A/F): `core::set_assert_handler()` returning `assert_action`; `add_log_sink` / `remove_log_sink`
-  with `log_sink_handle`; `core::memory::allocation_counters()` (three atomics) plus
+- core (A/F): `core::set_assert_handler()` returning `assert_action`; `log::add_sink` / `log::remove_sink`
+  with `std::shared_ptr<log_sink>`; `core::memory::counters()` (the three atomics) and `memory::snapshot()` plus
   `tracked_allocate` / `tracked_free` used by engine allocators; seedable `core::random::default_engine()`;
   `core::json::document` canonical serialisation (sorted keys, shortest round-trip floats); `core::image`
   PNG load/save over stb; `core::process` (spawn, wait, exit code); `core::jobs` where worker count `0`

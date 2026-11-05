@@ -1,0 +1,68 @@
+#pragma once
+
+#include <string>
+#include <string_view>
+
+// Lexical helpers for the '/'-separated UTF-8 paths used by the virtual file system. None of
+// these touch the disk. Backslashes are accepted as separators on input and always written as
+// forward slashes on output.
+
+namespace conjure::core::vfs::path_utils {
+
+    /// <summary>
+    /// Produces the canonical spelling of a path: forward slashes only, no empty or "." segments,
+    /// ".." resolved against the preceding segment (a leading ".." of a relative path is kept, a
+    /// ".." at the root of an absolute path is dropped) and no trailing slash. Drive letters
+    /// ("C:/x") and UNC prefixes ("//server/share") are preserved. "." and "" both become "".
+    /// </summary>
+    [[nodiscard]] std::string normalize(std::string_view path);
+
+    /// <summary>
+    /// Joins two paths with exactly one separator. An empty side yields the other side unchanged;
+    /// an absolute right side replaces the left side. The result is not normalised.
+    /// </summary>
+    [[nodiscard]] std::string join(std::string_view left, std::string_view right);
+
+    /// <summary>
+    /// Everything before the last separator ("a/b/c.txt" -> "a/b"). A single segment has the
+    /// empty parent; the parent of "/a" is "/". A trailing separator is ignored.
+    /// </summary>
+    [[nodiscard]] std::string_view parent(std::string_view path) noexcept;
+
+    /// <summary>
+    /// The last segment ("a/b/c.txt" -> "c.txt"). Empty when the path ends with a separator.
+    /// </summary>
+    [[nodiscard]] std::string_view filename(std::string_view path) noexcept;
+
+    /// <summary>
+    /// The file name without its extension ("c.tar.gz" -> "c.tar"). Names that start with a dot
+    /// and have no other dot (".gitignore") are returned whole.
+    /// </summary>
+    [[nodiscard]] std::string_view stem(std::string_view path) noexcept;
+
+    /// <summary>
+    /// The lower-cased extension including the dot (".PNG" -> ".png"), or "" when there is none.
+    /// </summary>
+    [[nodiscard]] std::string extension(std::string_view path);
+
+    /// <summary>
+    /// True when the path's extension equals 'extension' ignoring case; the dot is optional
+    /// ("png" and ".png" both match "a.PNG").
+    /// </summary>
+    [[nodiscard]] bool has_extension(std::string_view path, std::string_view extension) noexcept;
+
+    /// <summary>
+    /// True for paths starting with a separator, a drive letter ("C:") or a UNC prefix.
+    /// </summary>
+    [[nodiscard]] bool is_absolute(std::string_view path) noexcept;
+
+    /// <summary>
+    /// Expresses 'path' relative to 'base' lexically ("a/b/c" relative to "a/x" -> "../b/c").
+    /// Both inputs are normalised first. Equal paths yield "". When one side is absolute and the
+    /// other is not, or the roots differ, the normalised 'path' is returned unchanged. Only the
+    /// root prefix (a drive letter) is compared ignoring case; segments are compared exactly, so
+    /// "C:/Users/x" relative to "c:/users" is "../Users/x". A lexical helper cannot know the case
+    /// rules of the volume a path will be used on.
+    /// </summary>
+    [[nodiscard]] std::string relative_to(std::string_view path, std::string_view base);
+}

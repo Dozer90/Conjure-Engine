@@ -1,0 +1,10 @@
+conjure_add_test_module(core_reflect
+    SOURCES
+        reflect_test_types.h
+        test_field_info.cpp
+        test_json_conversion.cpp
+        test_reflect.cpp
+        test_type_id.cpp
+        test_type_info.cpp
+        test_type_registry.cpp
+)

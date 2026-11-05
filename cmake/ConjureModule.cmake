@@ -12,9 +12,12 @@
 # Creates the static library conjure_<name> with alias conjure::<name>.
 #
 #   conjure_add_executable(<name> [WIN32_GUI] SOURCES ... DEPS ...)
-#   conjure_add_test_module(<module> SOURCES ... [DEPS ...])
 #
-# Every target gets the shared warning, sanitizer and platform-define interface targets.
+# Test modules are declared with conjure_add_test_module() from cmake/ConjureTesting.cmake.
+#
+# Every target gets the shared warning, sanitizer and platform-define interface targets. Library
+# targets record their PUBLIC_HEADERS in the target property CONJURE_PUBLIC_HEADERS, which
+# conjure_header_check() (ConjureTesting.cmake) compiles one translation unit at a time.
 
 function(conjure_add_module name)
     set(options "")
@@ -60,6 +63,8 @@ function(conjure_add_module name)
         FOLDER "Engine"
         OUTPUT_NAME "conjure_${name}"
     )
+
+    set_property(TARGET ${target} PROPERTY CONJURE_PUBLIC_HEADERS "${ARG_PUBLIC_HEADERS}")
 
     conjure_register_static_library(${target})
     source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
@@ -122,6 +127,8 @@ function(conjure_add_core_area area)
         OUTPUT_NAME "conjure_core_${area}"
     )
 
+    set_property(TARGET ${target} PROPERTY CONJURE_PUBLIC_HEADERS "${ARG_PUBLIC_HEADERS}")
+
     conjure_register_static_library(${target})
     source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
 endfunction()
@@ -169,49 +176,6 @@ function(conjure_add_executable name)
 endfunction()
 
 
-function(conjure_add_test_module module)
-    set(options "")
-    set(oneValueArgs "")
-    set(multiValueArgs SOURCES DEPS)
-    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if(ARG_UNPARSED_ARGUMENTS)
-        message(FATAL_ERROR "conjure_add_test_module(${module}): unknown arguments: ${ARG_UNPARSED_ARGUMENTS}")
-    endif()
-    if(NOT ARG_SOURCES)
-        message(FATAL_ERROR "conjure_add_test_module(${module}): SOURCES is required")
-    endif()
-
-    set(target "conjure_${module}_tests")
-    add_executable(${target} ${ARG_SOURCES})
-
-    target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/engine/src")
-
-    target_link_libraries(${target}
-        PRIVATE
-            conjure::${module}
-            conjure::test_support
-            conjure::platform_defines
-            conjure::warnings
-            conjure::sanitizers
-            ${ARG_DEPS}
-    )
-
-    set_target_properties(${target} PROPERTIES FOLDER "Tests")
-
-    add_test(NAME ${target}
-        COMMAND ${target} --reporters=console --no-intro=true
-        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}/bin"
-    )
-    set_tests_properties(${target} PROPERTIES
-        LABELS "unit;${module}"
-        TIMEOUT 300
-    )
-
-    source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ARG_SOURCES})
-endfunction()
-
-
 function(conjure_print_configuration_summary)
     message(STATUS "")
     message(STATUS "Conjure ${PROJECT_VERSION} configuration")
@@ -226,6 +190,6 @@ function(conjure_print_configuration_summary)
     message(STATUS "  Tests / Benchmarks .... ${CONJURE_BUILD_TESTS} / ${CONJURE_BUILD_BENCHMARKS}")
     message(STATUS "  Samples ............... ${CONJURE_BUILD_SAMPLES}")
     message(STATUS "  Warnings as errors .... ${CONJURE_WARNINGS_AS_ERRORS}")
-    message(STATUS "  Sanitizers ............ ASan=${CONJURE_ENABLE_ASAN} UBSan=${CONJURE_ENABLE_UBSAN}")
+    message(STATUS "  Sanitizers ............ ASan=${CONJURE_ENABLE_ASAN} UBSan=${CONJURE_ENABLE_UBSAN} TSan=${CONJURE_ENABLE_TSAN}")
     message(STATUS "")
 endfunction()

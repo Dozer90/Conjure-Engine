@@ -1,0 +1,39 @@
+# core/system - child processes, shared libraries and RGBA8 images (PNG through stb).
+#
+# The platform backends are selected here rather than with preprocessor guards so each file is a
+# plain translation unit of one operating system.
+
+set(CONJURE_CORE_SYSTEM_SOURCES
+    dynamic_library.cpp
+    image.cpp
+    process.cpp
+    system_internal.cpp
+    system_internal.h
+)
+
+if(WIN32)
+    list(APPEND CONJURE_CORE_SYSTEM_SOURCES
+        dynamic_library_windows.cpp
+        process_windows.cpp
+        win32_utils.cpp
+        win32_utils.h
+    )
+else()
+    list(APPEND CONJURE_CORE_SYSTEM_SOURCES
+        dynamic_library_posix.cpp
+        process_posix.cpp
+    )
+endif()
+
+conjure_add_core_area(system
+    PUBLIC_HEADERS
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/dynamic_library.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/image.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/process.h
+    SOURCES
+        ${CONJURE_CORE_SYSTEM_SOURCES}
+    PUBLIC_DEPS
+        conjure::core_foundation
+    PRIVATE_DEPS
+        conjure::thirdparty::stb
+)

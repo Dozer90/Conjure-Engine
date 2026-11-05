@@ -1,0 +1,35 @@
+{
+    "tests_mirror_headers": {
+        "conjure/core/api.h": "macro-only visibility header; exercised by every translation unit that includes it",
+        "conjure/core/non_copyable.h": "one trivial base class; every non-copyable type's test covers the deleted operations",
+        "conjure/core/platform_detect.h": "compile-time macros only; the static_asserts in types.h and the build itself check them",
+        "conjure/core/types.h": "type aliases and static_asserts only; there is no runtime behaviour to test",
+        "conjure/core/containers/detail.h": "private implementation detail of the containers; covered through the container tests",
+        "conjure/core/containers/slot_key_format.h": "std::formatter for slot_key; covered by test_slot_map.cpp"
+    },
+    "forbidden_in_tests": {
+        "tests/support/src/test_main.cpp": "the one place that reads CONJURE_TEST_* environment variables (08_testing.md 5.1)",
+        "tests/core/containers/test_flat_hash_map.cpp": "concurrent-reader case; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/containers/test_slot_map.cpp": "concurrent-reader case; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/foundation/test_log.cpp": "logging from several threads and log_message timestamps; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/foundation/test_uuid.cpp": "uuid::generate() uniqueness across threads; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/jobs/jobs_test_support.h": "spin_until bounds its wait with steady_clock so a stuck job system fails instead of hanging (10_core.md 2.7)",
+        "tests/core/jobs/test_dedicated_thread.cpp": "dedicated_thread is the engine's thread primitive; sleep_for creates the still-running state the stop/join contract is tested against (10_core.md 2.7)",
+        "tests/core/jobs/test_job_system.cpp": "sleep_for inside jobs creates the contention the work-stealing, wait and stop contracts are tested against (10_core.md 2.7)",
+        "tests/core/jobs/test_parallel_for.cpp": "sleep_for inside ranges creates the imbalance the stealing contract is tested against (10_core.md 2.7)",
+        "tests/core/json/test_document.cpp": "concurrent parse/serialise cases; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/math/test_math.cpp": "thread-safety of the formatters; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/memory/test_allocation_counters.cpp": "counters are bumped from several threads; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/memory/test_frame_allocator.cpp": "10_core.md 2.5 explicitly allows std::thread in the frame_allocator test",
+        "tests/core/memory/test_tracked_allocation.cpp": "tracked_allocate from several threads; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/reflect/test_type_registry.cpp": "registry readers and writers race on purpose; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/system/process_child.cpp": "the helper program the process tests spawn: it sleeps and echoes environment variables on request (10_core.md 2.10)",
+        "tests/core/system/test_process.cpp": "process timeouts and kill() are wall-clock contracts; polling and killing from a second thread is what the API documents (10_core.md 2.10)",
+        "tests/core/time/test_event_bus.cpp": "thread-safe enqueue from several producers; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/time/test_random.cpp": "thread-local default engine checked from two threads; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/vfs/test_file_system_conformance.cpp": "concurrent reader during writes; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/vfs/test_memory_file_system.cpp": "memory_file_system is documented thread-safe (10_core.md 2.9: concurrent writers); the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/vfs/test_mount_table.cpp": "mount/unmount racing lookups; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/vfs/test_native_file_system.cpp": "write-time changes need the real clock to advance (10_core.md 2.9); the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread"
+    }
+}

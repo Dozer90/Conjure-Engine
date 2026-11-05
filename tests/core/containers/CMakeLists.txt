@@ -1,0 +1,10 @@
+conjure_add_test_module(core_containers
+    SOURCES
+        tracked_value.h
+        test_containers.cpp
+        test_flat_hash_map.cpp
+        test_flat_map.cpp
+        test_slot_map.cpp
+        test_small_vector.cpp
+        test_stable_vector.cpp
+)

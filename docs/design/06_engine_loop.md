@@ -578,7 +578,7 @@ the present inside `render_frame` is the back-pressure.
 |---|---|---|
 | 1 | `core::log` sinks (console + `logFile`), `core::platform_detect` (idempotent) | never fails |
 | 2 | `config.validate()`; assert state `CREATED` | `INVALID_CONFIG` / `ALREADY_INITIALISED` |
-| 3 | `core::jobs::job_system::start(workerCount)` | `JOBS_START_FAILED` |
+| 3 | `core::jobs::job_system::start(job_system_desc{.workerCount = workerCount})` | `JOBS_START_FAILED` |
 | 4 | `frame_memory` | `OUT_OF_MEMORY` (core) |
 | 5 | `core::vfs` mounts: `project://`, `assets://`, `engine://` (engine built-in content), `cooked://`; cooked projects mount `engine://` and `cooked://` only (R24; module content mounts as `modules://<name>/` at step 15) | `PROJECT_NOT_FOUND` |
 | 6 | `platform_subsystem`: window + input (`glfw` or `null`) | `WINDOW_CREATE_FAILED` |
@@ -834,8 +834,9 @@ Rules enforced or documented by the engine:
 ## 8. Integration points
 
 **Needs from `core` (wave 1):** `clock` interface (`now_seconds()`, `sleep_until()`), `steady_clock`,
-`manual_clock::advance()`; `jobs::job_system` with `start(count)`, `stop()`, `wait(counter &)` executing jobs on
-the caller, `wait_idle()`, `parallel_for`, `thread_index()`, `worker_count()`; `memory::frame_allocator` with
+`manual_clock::advance()`; `jobs::job_system` with `start(const job_system_desc &)` (`workerCount`, 0 = inline),
+`stop()`, `wait(const job_handle &)` executing jobs on the caller, `wait_idle()`, `parallel_for`, `thread_index()`,
+`worker_count()`; `memory::frame_allocator` with
 per-thread blocks and `overflow_count()`; `vfs` mounts; `json::document` preserving unknown objects;
 `result<T>`/`error` with category + code + message; `log_level`; reflection registry for component bootstrap.
 

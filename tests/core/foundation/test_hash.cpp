@@ -1,4 +1,4 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
 
 #include "conjure/core/hash.h"
 
@@ -10,32 +10,32 @@
 using namespace conjure;
 using namespace conjure::core;
 
-TEST_SUITE("core.hash") {
+TEST_SUITE("core/hash") {
 
     // Published FNV-1a test vectors. Conjure.Managed's NameHash tests use the same table.
-    TEST_CASE("fnv1a64 matches the reference vectors") {
+    TEST_CASE("hash - fnv1a64 matches the reference vectors") {
         CHECK(hash::fnv1a64("") == 0xCBF29CE484222325ull);
         CHECK(hash::fnv1a64("a") == 0xAF63DC4C8601EC8Cull);
         CHECK(hash::fnv1a64("foobar") == 0x85944171F73967E8ull);
         CHECK(hash::fnv1a64("hello world") == 0x779A65E7023CD2E7ull);
     }
 
-    TEST_CASE("fnv1a32 matches the reference vectors") {
+    TEST_CASE("hash - fnv1a32 matches the reference vectors") {
         CHECK(hash::fnv1a32("") == 0x811C9DC5u);
         CHECK(hash::fnv1a32("a") == 0xE40C292Cu);
         CHECK(hash::fnv1a32("foobar") == 0xBF9CF968u);
     }
 
-    TEST_CASE("string and byte overloads agree") {
-        constexpr std::string_view TEXT = "conjure";
+    TEST_CASE("hash - string and byte overloads agree") {
+        constexpr std::string_view SAMPLE = "conjure";
         std::array<std::byte, 7> bytes = {};
-        std::memcpy(bytes.data(), TEXT.data(), TEXT.size());
+        std::memcpy(bytes.data(), SAMPLE.data(), SAMPLE.size());
 
-        CHECK(hash::fnv1a64(TEXT) == hash::fnv1a64(std::span<const std::byte>(bytes)));
-        CHECK(hash::fnv1a32(TEXT) == hash::fnv1a32(std::span<const std::byte>(bytes)));
+        CHECK(hash::fnv1a64(SAMPLE) == hash::fnv1a64(std::span<const std::byte>(bytes)));
+        CHECK(hash::fnv1a32(SAMPLE) == hash::fnv1a32(std::span<const std::byte>(bytes)));
     }
 
-    TEST_CASE("hashes are usable in constant expressions") {
+    TEST_CASE("hash - hashes are usable in constant expressions") {
         constexpr u64 wide = hash::fnv1a64("constexpr");
         constexpr u32 narrow = hash::fnv1a32("constexpr");
         static_assert(wide != 0);
@@ -44,7 +44,7 @@ TEST_SUITE("core.hash") {
         CHECK(true);
     }
 
-    TEST_CASE("seeding continues a hash over concatenated input") {
+    TEST_CASE("hash - seeding continues a hash over concatenated input") {
         const u64 whole = hash::fnv1a64("hello world");
         const u64 chained = hash::fnv1a64(" world", hash::fnv1a64("hello"));
         CHECK(whole == chained);
@@ -54,7 +54,7 @@ TEST_SUITE("core.hash") {
         CHECK(whole32 == chained32);
     }
 
-    TEST_CASE("combine is order dependent and non-trivial") {
+    TEST_CASE("hash - combine is order dependent and non-trivial") {
         const u64 first = hash::combine(hash::fnv1a64("a"), hash::fnv1a64("b"));
         const u64 second = hash::combine(hash::fnv1a64("b"), hash::fnv1a64("a"));
 

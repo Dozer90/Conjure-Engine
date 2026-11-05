@@ -158,24 +158,27 @@ is written against it; 4.2-4.6 are one-paragraph pointers.
 
 ### 4.1 `core` (R30, R16, R25, R31; full design `10_core.md`)
 
-- `result<T>` / `result<void>` / `error { uint32_t category; uint32_t code; std::string message; }`. Each
-  module declares `enum class <module>_error : uint16_t` and binds it with `CONJURE_DECLARE_ERROR_CATEGORY(enum,
+- `result<T>` / `result<void>` (alias `status`) / `error` (`category()`, `code()`, `message()`, `is(code)`). Each
+  module declares `enum class <module>_error : u16` and binds it with `CONJURE_DECLARE_ERROR_CATEGORY(enum,
   "name", name_fn)`; errors are built with the generic `core::make_error(<module>_error, std::string_view detail = {})`
-  (no per-module `make_error` overload, `10_core.md` C3, R63); `core::error_code` holds the generic ones (`UNSUPPORTED`,
-  `NOT_FOUND`, `INVALID_ARGUMENT`, `OUT_OF_MEMORY`, `IO_ERROR`, `PARSE_FAILED`, `TIMEOUT`, `NOT_IMPLEMENTED`).
+  or `make_error(code, fmt, args...)` (no per-module `make_error` overload, `10_core.md` C3, R63); `core::error_code`
+  holds the generic ones (`UNSUPPORTED`, `NOT_FOUND`, `INVALID_ARGUMENT`, `INVALID_STATE`, `ALREADY_EXISTS`,
+  `OUT_OF_RANGE`, `OUT_OF_MEMORY`, `IO_FAILURE`, `PARSE_FAILURE`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_IMPLEMENTED`, ...).
 - `CONJURE_ASSERT` / `CONJURE_VERIFY` / `CONJURE_UNREACHABLE`; `core::set_assert_handler(handler)` where the
   handler returns `assert_action::CONTINUE` or aborts (tests wrap it as `conjure::testing::expect_assert`).
-- Logging: `CONJURE_DECLARE_LOG_CATEGORY(name)` in `<module>/log_category.h`, `CONJURE_DEFINE_LOG_CATEGORY(name)`
-  in one `.cpp`; `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR(category, fmt, ...)`; `add_log_sink` / `remove_log_sink`
-  returning `log_sink_handle`; `log_level`.
-- `core::jobs::job_system`: `start(workerCount)` (0 = every job runs inline on the caller), `stop()`,
+- Logging: `CONJURE_DECLARE_LOG_CATEGORY(name)` in `<module>/log_category.h`, `CONJURE_DEFINE_LOG_CATEGORY(name,
+  "display-name")` in one `.cpp`; `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR(category, fmt, ...)`; `log::add_sink` /
+  `log::remove_sink` taking a `std::shared_ptr<log_sink>` (`console_log_sink`, `file_log_sink`, `callback_log_sink`);
+  `log_level` (`ERR`, not `ERROR`, which is a Windows macro).
+- `core::jobs::job_system`: `start(job_system_desc)` (`workerCount` 0 = every job runs inline on the caller), `stop()`,
   `schedule(fn, priority = NORMAL) -> job_handle`, `wait(job_handle)` (executes queued jobs on the caller),
   `wait_idle()`, `parallel_for(count, grain, fn(begin, end))` (+ `parallel_for(count, fn(index))`),
-  `worker_count()`, `thread_index()`; free functions `core::jobs::is_main_thread()`, `core::jobs::post_to_main_thread(fn)`
-  (queue drained by the engine before FRAME_BEGIN), class `core::jobs::dedicated_thread(name, fn)`.
+  `worker_count()`, `thread_index()`; free functions `core::jobs::is_main_thread()`, `core::jobs::set_main_thread()`,
+  `core::jobs::post_to_main_thread(fn)` / `drain_main_thread_queue()` (drained by the engine before FRAME_BEGIN),
+  class `core::jobs::dedicated_thread(name, fn(std::stop_token))`.
 - `core::memory`: `arena` (stable addresses until `reset`), `pool_allocator(blockSize, alignment, blocksPerSlab)`,
-  `frame_allocator` (per-thread blocks, `overflow_count()`), `allocation_counters()` (three atomics),
-  `tracked_allocate` / `tracked_free`; no `malloc` elsewhere.
+  `frame_allocator` (per-thread blocks, `overflow_count()`), `counters()` (the `allocation_counters` struct of three
+  atomics) and `snapshot() -> memory_snapshot`, `tracked_allocate` / `tracked_free`; no `malloc` elsewhere.
 - Containers: `slot_map`, `small_vector<T, N>`, `stable_vector<T>`, `flat_hash_map<K, V>`, `flat_map<K, V>`,
   `bit_vector`, `string_id` (constexpr FNV-1a, interned name for debugging), `radix_sort_u64`.
 - `core::hash::fnv1a64(std::string_view)` / `(std::span<const std::byte>)`, constexpr, published test vectors
@@ -189,9 +192,11 @@ is written against it; 4.2-4.6 are one-paragraph pointers.
 - `core::json`: `value` (read API), `document` (owning, deep copy, pointer-style patching), `writer`
   (`object/array/key/value`, `write_raw_json`), `parse`, `to_string(value, canonical)` (sorted keys, shortest
   round-trip floats, minified).
-- `core::vfs::file_system` interface (`mount`, `read_file`, `write_file_atomic`, `stat`, `enumerate`, `rename`,
-  `remove`, `create_directories`, `open_read -> file::read_at`), `native_file_system`, `memory_file_system`.
-  Mount names: `project://`, `assets://`, `engine://`, `cooked://`, `modules://<name>/` (R24).
+- `core::vfs::file_system` interface (`read_file`, `write_file`, `write_file_atomic`, `stat`, `enumerate(dir,
+  enumerate_flags, callback)`, `rename`, `remove`, `remove_all`, `create_directories`, `open_read -> file::read_at`),
+  `native_file_system`, `memory_file_system`, and `mount_table` (itself a `file_system` routing `scheme://path`
+  URIs: `mount`, `unmount`, `find_mount`, `split`). Mount names: `project://`, `assets://`, `engine://`, `cooked://`,
+  `modules://<name>/` (R24). Lexical helpers in `vfs::path_utils`.
 - `uuid` (v4 `generate()` thread-safe, `parse`, `to_string`, hash, `<=>`), `clock` / `steady_clock` /
   `manual_clock::advance()` / `sleep_until`, `process` (spawn, capture stdout/stderr, wait, exit code),
   `dynamic_library` (RAII dlopen/LoadLibrary, `symbol()`, `decorate_name`), `image` (RGBA8, PNG load/save),

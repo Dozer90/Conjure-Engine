@@ -1,4 +1,4 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
 
 #include "conjure/core/result.h"
 
@@ -63,9 +63,9 @@ namespace {
     };
 }
 
-TEST_SUITE("core.result") {
+TEST_SUITE("core/result") {
 
-    TEST_CASE("value result reports has_value and exposes the value") {
+    TEST_CASE("result - value result reports has_value and exposes the value") {
         const result<int> value = 42;
 
         REQUIRE(value.has_value());
@@ -74,7 +74,7 @@ TEST_SUITE("core.result") {
         CHECK(*value == 42);
     }
 
-    TEST_CASE("error result exposes the error") {
+    TEST_CASE("result - error result exposes the error") {
         const result<int> failure = error(error_code::NOT_FOUND, "missing");
 
         REQUIRE_FALSE(failure.has_value());
@@ -83,7 +83,7 @@ TEST_SUITE("core.result") {
         CHECK(failure.get_error().message() == "missing");
     }
 
-    TEST_CASE("value_or returns the value or the fallback") {
+    TEST_CASE("result - value_or returns the value or the fallback") {
         const result<int> value = 7;
         const result<int> failure = error(error_code::UNKNOWN);
 
@@ -93,7 +93,7 @@ TEST_SUITE("core.result") {
         CHECK(result<int>(error(error_code::UNKNOWN)).value_or(-1) == -1);
     }
 
-    TEST_CASE("move-only values are supported") {
+    TEST_CASE("result - move-only values are supported") {
         result<std::unique_ptr<int>> value = std::make_unique<int>(5);
 
         REQUIRE(value.has_value());
@@ -102,7 +102,7 @@ TEST_SUITE("core.result") {
         CHECK(*taken == 5);
     }
 
-    TEST_CASE("rvalue accessors move out of the result") {
+    TEST_CASE("result - rvalue accessors move out of the result") {
         std::unique_ptr<int> viaStar = *result<std::unique_ptr<int>>(std::make_unique<int>(3));
         REQUIRE(viaStar != nullptr);
         CHECK(*viaStar == 3);
@@ -113,21 +113,21 @@ TEST_SUITE("core.result") {
         CHECK(taken.message() == "moved");
     }
 
-    TEST_CASE("non default constructible value types are supported") {
+    TEST_CASE("result - non default constructible value types are supported") {
         const result<only_explicit> value = only_explicit(11);
 
         REQUIRE(value.has_value());
         CHECK(value->value == 11);
     }
 
-    TEST_CASE("operator-> forwards to the value") {
+    TEST_CASE("result - operator-> forwards to the value") {
         const result<std::string> text = std::string("hello");
 
         REQUIRE(text.has_value());
         CHECK(text->size() == 5);
     }
 
-    TEST_CASE("make_error formats the message") {
+    TEST_CASE("result - make_error formats the message") {
         const result<int> failure = divide(1, 0);
 
         REQUIRE_FALSE(failure.has_value());
@@ -138,7 +138,7 @@ TEST_SUITE("core.result") {
         CHECK(plain.message() == "no arguments");
     }
 
-    TEST_CASE("CONJURE_TRY_ASSIGN propagates errors and assigns values") {
+    TEST_CASE("result - CONJURE_TRY_ASSIGN propagates errors and assigns values") {
         const result<int> ok = add_quotients(10, 2, 9, 3);
         REQUIRE(ok.has_value());
         CHECK(ok.value() == 8);
@@ -152,7 +152,7 @@ TEST_SUITE("core.result") {
         CHECK(secondFails.get_error().message() == "division by zero (9 / 0)");
     }
 
-    TEST_CASE("CONJURE_TRY_ASSIGN works across value types and with move-only values") {
+    TEST_CASE("result - CONJURE_TRY_ASSIGN works across value types and with move-only values") {
         const result<std::string> described = describe_quotient(9, 3);
         REQUIRE(described.has_value());
         CHECK(described.value() == "3");
@@ -169,7 +169,7 @@ TEST_SUITE("core.result") {
         CHECK_FALSE(rejected.has_value());
     }
 
-    TEST_CASE("status reports success and failure") {
+    TEST_CASE("result - status reports success and failure") {
         const status ok = validate_all_positive(1, 2);
         CHECK(ok.has_value());
         CHECK(static_cast<bool>(ok));
@@ -183,7 +183,7 @@ TEST_SUITE("core.result") {
         CHECK(status::success().has_value());
     }
 
-    TEST_CASE("status is copyable and movable") {
+    TEST_CASE("result - status is copyable and movable") {
         const status failure = error(error_code::CANCELLED, "stop");
 
         status copy = failure;
@@ -202,7 +202,7 @@ TEST_SUITE("core.result") {
         CHECK(taken.is(error_code::CANCELLED));
     }
 
-    TEST_CASE("result is copyable and assignable") {
+    TEST_CASE("result - result is copyable and assignable") {
         const result<std::string> original = std::string("copy me");
         const result<std::string> copy = original;
 
@@ -221,7 +221,7 @@ TEST_SUITE("core.result") {
         CHECK(movedInto.get_error().message() == "gone");
     }
 
-    TEST_CASE("mutating through value and operator* changes the held value") {
+    TEST_CASE("result - mutating through value and operator* changes the held value") {
         result<int> value = 1;
 
         value.value() = 2;

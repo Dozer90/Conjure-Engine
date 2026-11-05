@@ -1,0 +1,13 @@
+conjure_add_test_module(core_math
+    SOURCES
+        math_test.h
+        test_aabb.cpp
+        test_frustum.cpp
+        test_glm_types.cpp
+        test_math.cpp
+        test_math_utils.cpp
+        test_plane.cpp
+        test_ray.cpp
+        test_rect.cpp
+        test_transform.cpp
+)

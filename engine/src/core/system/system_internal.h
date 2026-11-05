@@ -1,0 +1,121 @@
+#pragma once
+
+// Helpers shared by the platform backends of the system area. Private to engine/src/core/system.
+
+#include "conjure/core/process.h"
+#include "conjure/core/result.h"
+#include "conjure/core/types.h"
+
+#include <chrono>
+#include <condition_variable>
+#include <filesystem>
+#include <mutex>
+#include <string>
+
+namespace conjure::core::detail {
+
+    /// <summary>
+    /// UTF-8 text of a path without the conversion failures std::filesystem::path::string() can
+    /// raise on Windows for characters outside the active code page.
+    /// </summary>
+    [[nodiscard]] inline std::string path_to_utf8(const std::filesystem::path &path) {
+        const std::u8string text = path.u8string();
+        return std::string(reinterpret_cast<const char *>(text.data()), text.size());
+    }
+
+    /// <summary>
+    /// Checks the platform-independent parts of a process description: executable set, timeout
+    /// finite and not negative, environment names non-empty and free of '=', mergeStderr only
+    /// together with captureStdout, working directory existing.
+    /// </summary>
+    [[nodiscard]] status validate_process_desc(const process_desc &desc);
+
+    /// <summary>
+    /// The timeout a backend works with: process_desc::timeoutSeconds limited to
+    /// process::MAX_TIMEOUT_SECONDS so converting it to a clock duration cannot overflow.
+    /// </summary>
+    [[nodiscard]] f64 clamp_timeout(f64 timeoutSeconds) noexcept;
+
+    /// <summary>
+    /// The moment a run started at 'start' with the given (clamped, positive) timeout must be
+    /// over.
+    /// </summary>
+    [[nodiscard]] std::chrono::steady_clock::time_point timeout_deadline(
+      std::chrono::steady_clock::time_point start,
+      f64 timeoutSeconds
+    ) noexcept;
+
+    /// <summary>
+    /// The captured output of a child, filled by the pipe reader and drained by the owner.
+    /// Thread-safe.
+    /// </summary>
+    class process_output {
+        private:
+            mutable std::mutex mMutex = {};
+            std::string mStandardOutput = {};
+            std::string mStandardError = {};
+
+        public:
+            process_output() = default;
+            ~process_output() = default;
+
+            process_output(const process_output &) = delete;
+            process_output &operator=(const process_output &) = delete;
+
+        public:
+            void append_output(const char *data, usize size);
+            void append_error(const char *data, usize size);
+
+            /// <summary>
+            /// Moves everything captured so far to the end of 'out'; returns the byte count.
+            /// </summary>
+            usize take_output(std::string &out);
+            usize take_error(std::string &out);
+    };
+
+    /// <summary>
+    /// Counts the pipe readers of a child that are still running, so the owner can wait for
+    /// them with a deadline: a grandchild holding the pipe must not stall wait() past the
+    /// timeout. Thread-safe.
+    /// </summary>
+    class completion_latch {
+        private:
+            mutable std::mutex mMutex = {};
+            std::condition_variable mCondition = {};
+            u32 mPending = 0;
+
+        public:
+            completion_latch() = default;
+            ~completion_latch() = default;
+
+            completion_latch(const completion_latch &) = delete;
+            completion_latch &operator=(const completion_latch &) = delete;
+
+        public:
+            /// <summary>
+            /// Registers one more party that has to arrive. Call before that party starts.
+            /// </summary>
+            void expect_one();
+
+            /// <summary>
+            /// One party finished.
+            /// </summary>
+            void arrive();
+
+            /// <summary>
+            /// True when every expected party has arrived (trivially true when none was expected).
+            /// </summary>
+            [[nodiscard]] bool is_complete() const;
+
+            /// <summary>
+            /// Blocks until every expected party has arrived.
+            /// </summary>
+            void wait();
+
+            /// <summary>
+            /// Blocks until every expected party has arrived or the deadline passes; returns
+            /// whether they all arrived.
+            /// </summary>
+            [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline);
+    };
+}

@@ -1,4 +1,4 @@
-#include "conjure_test.h"
+#include "conjure/testing/doctest.h"
 
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/types.h"
@@ -29,9 +29,9 @@ namespace {
     CONJURE_ENUM_FLAGS(huge_flags);
 }
 
-TEST_SUITE("core.enum_flags") {
+TEST_SUITE("core/enum_flags") {
 
-    TEST_CASE("bitwise operators combine flags") {
+    TEST_CASE("enum_flags - bitwise operators combine flags") {
         const test_flags combined = test_flags::FIRST | test_flags::THIRD;
 
         CHECK(to_underlying(combined) == 5);
@@ -41,7 +41,7 @@ TEST_SUITE("core.enum_flags") {
         CHECK((~test_flags::NONE & test_flags::ALL) == test_flags::ALL);
     }
 
-    TEST_CASE("compound assignment operators modify in place") {
+    TEST_CASE("enum_flags - compound assignment operators modify in place") {
         test_flags flags = test_flags::NONE;
 
         flags |= test_flags::SECOND;
@@ -55,7 +55,7 @@ TEST_SUITE("core.enum_flags") {
         CHECK(flags == (test_flags::FIRST | test_flags::SECOND));
     }
 
-    TEST_CASE("has_flag requires every bit, has_any_flag requires one") {
+    TEST_CASE("enum_flags - has_flag requires every bit, has_any_flag requires one") {
         const test_flags flags = test_flags::FIRST | test_flags::SECOND;
 
         CHECK(has_flag(flags, test_flags::FIRST));
@@ -65,14 +65,14 @@ TEST_SUITE("core.enum_flags") {
         CHECK_FALSE(has_any_flag(flags, test_flags::THIRD));
     }
 
-    TEST_CASE("NONE is always contained and never matched by has_any_flag") {
+    TEST_CASE("enum_flags - NONE is always contained and never matched by has_any_flag") {
         CHECK(has_flag(test_flags::NONE, test_flags::NONE));
         CHECK(has_flag(test_flags::ALL, test_flags::NONE));
         CHECK_FALSE(has_any_flag(test_flags::ALL, test_flags::NONE));
         CHECK_FALSE(has_any_flag(test_flags::NONE, test_flags::NONE));
     }
 
-    TEST_CASE("with_flag and without_flag return modified copies") {
+    TEST_CASE("enum_flags - with_flag and without_flag return modified copies") {
         const test_flags flags = test_flags::FIRST;
 
         CHECK(with_flag(flags, test_flags::THIRD) == (test_flags::FIRST | test_flags::THIRD));
@@ -82,7 +82,7 @@ TEST_SUITE("core.enum_flags") {
         CHECK(flags == test_flags::FIRST);
     }
 
-    TEST_CASE("wide underlying types keep their top bit") {
+    TEST_CASE("enum_flags - wide underlying types keep their top bit") {
         const wide_flags both = wide_flags::LOW | wide_flags::TOP;
         CHECK(to_underlying(both) == 0x80000001u);
         CHECK(has_flag(both, wide_flags::TOP));
@@ -93,7 +93,7 @@ TEST_SUITE("core.enum_flags") {
         CHECK(without_flag(huge_flags::TOP, huge_flags::TOP) == huge_flags::NONE);
     }
 
-    TEST_CASE("operators are constexpr") {
+    TEST_CASE("enum_flags - operators are constexpr") {
         constexpr test_flags combined = test_flags::FIRST | test_flags::SECOND;
         static_assert(has_flag(combined, test_flags::SECOND));
         static_assert(!has_flag(combined, test_flags::THIRD));

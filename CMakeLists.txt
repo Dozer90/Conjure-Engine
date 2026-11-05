@@ -80,6 +80,7 @@ endif()
 
 include(ConjureWarnings)
 include(ConjureModule)
+include(ConjureTesting)
 include(ConjureSanitizers)
 
 #------------------------------------------------------------------------------
