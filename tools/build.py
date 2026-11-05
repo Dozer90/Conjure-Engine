@@ -21,6 +21,7 @@ import os
 import pathlib
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -104,6 +105,16 @@ def msvc_environment() -> dict[str, str]:
     return environment
 
 
+def remove_tree(path: pathlib.Path) -> None:
+    """Deletes a build tree, clearing the read-only bit git leaves on fetched pack files on Windows."""
+
+    def on_error(function, failed_path, _exc_info):
+        os.chmod(failed_path, stat.S_IWRITE)
+        function(failed_path)
+
+    shutil.rmtree(path, onerror=on_error)
+
+
 def run(command: list[str], env: dict[str, str]) -> None:
     print("+", " ".join(command), flush=True)
     result = subprocess.run(command, cwd=ROOT, env=env)
@@ -137,7 +148,7 @@ def main() -> None:
     binary_dir = private_dir or preset_binary_dir(args.preset)
     if args.clean and binary_dir.exists():
         print(f"+ removing {binary_dir}", flush=True)
-        shutil.rmtree(binary_dir)
+        remove_tree(binary_dir)
 
     if not args.no_configure:
         configure = ["cmake", "--preset", args.preset]
