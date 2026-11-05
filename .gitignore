@@ -24,6 +24,10 @@ CMakeUserPresets.json
 *.spv
 *.cso
 
+# Python
+__pycache__/
+*.pyc
+
 # IDE / editor
 /.vs/
 /.vscode/
