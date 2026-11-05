@@ -1,0 +1,43 @@
+# Approximation of docs/CODE_STYLE.cpp. The style guide wins where the two disagree
+# (notably the two-space continuation indent for wrapped argument lists, which
+# clang-format cannot express exactly). Run as a checker, not an auto-formatter.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+AccessModifierOffset: -4
+IndentAccessModifiers: true
+NamespaceIndentation: All
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Inline
+InsertBraces: true
+PointerAlignment: Right
+ReferenceAlignment: Right
+DerivePointerAlignment: false
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+AlignTrailingComments: true
+AlignConsecutiveAssignments: false
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+BinPackParameters: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine: false
+ContinuationIndentWidth: 2
+BreakConstructorInitializers: AfterColon
+ConstructorInitializerIndentWidth: 4
+PackConstructorInitializers: Never
+FixNamespaceComments: false
+IncludeBlocks: Preserve
+SortIncludes: Never
+MaxEmptyLinesToKeep: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
+IndentPPDirectives: None

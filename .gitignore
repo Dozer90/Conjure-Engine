@@ -1,0 +1,41 @@
+# Build outputs
+/build/
+/out/
+/install/
+/export/
+*.ninja_log
+CMakeUserPresets.json
+
+# Dependency and import caches
+/.conjure/
+**/.conjure/cache/
+/third_party/_deps/
+
+# Managed (.NET) build outputs
+**/bin/
+**/obj/
+*.nupkg
+
+# Test assets downloaded by tools/download_test_assets.py
+/samples/**/assets/downloaded/
+
+# Compiled shaders
+*.dxil
+*.spv
+*.cso
+
+# IDE / editor
+/.vs/
+/.vscode/
+/.idea/
+*.user
+*.suo
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and crash dumps
+*.log
+*.dmp
+/logs/
