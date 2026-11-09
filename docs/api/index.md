@@ -12,14 +12,18 @@ to where a sibling exists).
 
 | Layer | What you get | Where it is documented |
 |---|---|---|
-| Core | numbers, errors, logging, math, containers, strings, memory, time, jobs, JSON, files, reflection | this section, below |
-| Entities and components | archetype-based ECS with change detection and system scheduling | wave 2 pages (`ecs/`) |
-| Platform and rendering | windows, input, audio, a renderer with 2D and 3D pipelines | wave 2-3 pages |
-| Physics, scene, assets | rigid bodies, colliders, scenes and prefabs, the asset pipeline | wave 3-4 pages |
+| Core | numbers, errors, logging, math, containers, strings, memory, time, jobs, JSON, files, reflection | [Core pages](#core-pages) |
+| Entities and components | archetype-based ECS with change detection, command buffers and system scheduling | [ECS pages](#ecs-pages) |
+| Platform | the game window, per-frame events and the input snapshot | [Platform pages](#platform-pages) |
+| Graphics device | the device, swapchain and compiled shaders the renderer builds on | [RHI pages](#rhi-pages) |
+| Assets | stable asset references, loading, importers, hot reload, cooking and packs | [Assets pages](#assets-pages) |
+| Audio | clips, voices, mix groups, 3D listener, backends | [Audio pages](#audio-pages) |
+| Modules | writing a plugin or game module and loading modules into a host | [Modules pages](#modules-pages) |
+| Rendering, physics, scene | the renderer with 2D and 3D pipelines, rigid bodies and colliders, scenes and prefabs | wave 3 pages |
 | Scripting | the C# API as you see it from a script (`Entity`, `Transform`, `Input`, ...) | wave 4 pages |
 | Editor and AI protocol | the editor, and the command protocol agents use to drive it | wave 5 pages |
 
-Pages for later waves appear here as their modules land; the core pages below are complete.
+Pages for later waves appear here as their modules land; the core and wave-2 pages below are complete.
 
 ## How the pages are organised
 
@@ -70,6 +74,59 @@ Everything else can be read on demand.
 | [Files and the virtual file system](core/files.md) | mounting file systems, reading and writing files, path helpers |
 | [Processes, libraries and images](core/system.md) | spawning processes, loading shared libraries, decoding images |
 | [Reflection](core/reflection.md) | describing your types so the editor, serialiser and scripts can see them |
+
+## ECS pages
+
+Start with the overview; it gives the mental model in five sentences and a table of the terms the other pages use.
+
+| Page | Covers |
+|---|---|
+| [Entities, components and systems](ecs/index.md) | the mental model (entities, components, archetypes, systems, phases), which page to read for what, local terms table |
+| [Entities and components](ecs/entities-and-components.md) | `CONJURE_COMPONENT`, the component registry, `world` create / destroy / add / get / remove, `entity_handle`, `component_type_desc` for module authors |
+| [Queries, views and systems](ecs/queries-views-and-systems.md) | typed `view<...>` iteration, `query` and `chunk_view`, `changed<T>`, `system_desc` and `make_system`, phases and the scheduler |
+| [Command buffers and observers](ecs/command-buffers-and-observers.md) | deferred structural changes from systems and jobs, `flush`, observers for added and removed components, the iteration lock, `world_hash` |
+| [Archives and serialisation](ecs/archives-and-serialization.md) | `entity_archive` for prefabs, copy and paste and undo, JSON in and out, what archetypes and chunks are when you meet them in tools |
+
+## Platform pages
+
+| Page | Covers |
+|---|---|
+| [Platform: windows, input and events](platform/index.md) | what the module gives you, who owns the window and the input in a game, backends (GLFW and null), the error codes |
+| [Windows and events](platform/windows-and-events.md) | `window_desc`, `create_window()`, pumping events, the event types, monitors, high-DPI sizes, fullscreen, cursor modes, the null backend's `push_event` / `simulate_*` |
+| [Input](platform/input.md) | the `input` accumulator and the `input_state` snapshot, pressed / released versus down / held, modifiers, mouse and gamepads, injecting input in tests |
+
+## RHI pages
+
+| Page | Covers |
+|---|---|
+| [Graphics device layer (RHI)](rhi/index.md) | what the RHI is, who needs it and when to wait for the renderer instead, the render-thread rule |
+| [Devices and swapchains](rhi/devices-and-swapchains.md) | `device_desc` and `device::create()`, backends, the null device and `null_device_stats`, `swapchain`, headless mode, device loss, texture formats |
+| [Shaders](rhi/shaders.md) | `conjure_add_shaders()` at build time, `index.json`, `shader_library` and shader keys, permutations and define axes, DXIL and SPIR-V blobs |
+
+## Assets pages
+
+| Page | Covers |
+|---|---|
+| [Assets](assets/index.md) | how assets work from the outside: uuids and `.meta` sidecars, asset paths, sub-assets, the editor and runtime halves of the pipeline |
+| [Referencing and loading assets](assets/referencing-and-loading.md) | `asset_ref<T>` and `asset_handle`, `asset_manager` load / flush / collect, batches, states, priorities, fallbacks, publish and retire |
+| [Database, importers and hot reload](assets/database-and-import.md) | `asset_database`, `.meta` records, writing an importer and a loader, `asset_type_registry`, side files, the file watcher and hot reload |
+| [Cooking, caches and packs](assets/cooking-and-packs.md) | the cooked blob format, the cache, `asset_source`, the cooker, `content.cpak` and its manifest, extension records for plugin modules |
+
+## Audio pages
+
+| Page | Covers |
+|---|---|
+| [Audio](audio/index.md) | the pieces and how they fit, the `audio_source` and `audio_listener` components and how the engine will sync them |
+| [Playing sounds](audio/playing-sounds.md) | `audio_engine`, `play_params` and `voice_id`, one-shot versus retained voices, mix groups, the listener and 3D attenuation, priorities and stealing, devices and device loss |
+| [Clips and decoding](audio/clips-and-decoding.md) | `audio_clip` (PCM and streamed), the `conjure.audio.clip` asset type and its import settings, decoders, the backend interface and the null backend |
+
+## Modules pages
+
+| Page | Covers |
+|---|---|
+| [Modules and plugins](modules/index.md) | what a module is (manifest, native library, C# assemblies, content), how the engine loads them, where to go next |
+| [Writing a module](modules/writing-a-module.md) | `module.json`, the entry point, `module_registrar` and extension points, `module_context`, services, static modules |
+| [Loading and managing modules](modules/loading-and-managing.md) | `module_manager` discover / load / unload / reload, `module_registry`, consumers, the ABI check, shadow copies, reload scopes, the export layout |
 
 ## Cross-cutting
 

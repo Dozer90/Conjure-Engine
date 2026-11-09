@@ -164,13 +164,14 @@ checker reports the headers and module pages of every later-wave module whose co
 > the page and the missing header or target; the strict build then catches what the checker does not see, such as
 > a page missing from the `nav` or a link into a file the site excludes.
 
-### 4.3 Planned test entries and CI
+### 4.3 Test entries and CI
 
-D9 registers `check_docs.py` as the CTest entry `docs.check` (label `docs`) and section 6 of the record adds a
-self-test `docs.check_tool` with fixtures under `tools/tests/check_docs/`. Neither exists yet: `tests/CMakeLists.txt`
-registers only `style.check`, the fixture directory is empty and `.github/workflows/ci.yml` has no `docs` job
-([Continuous integration](ci.md#6-planned-jobs), [Testing](testing.md#10-labels)). Until they land,
-run both commands by hand before every documentation change is reported done.
+`tests/CMakeLists.txt` registers `python -I tools/check_docs.py` as the CTest entry `docs.check` and the checker's
+self-test `tools/tests/test_check_docs.py` (fixtures under `tools/tests/check_docs/`) as `docs.check_tool`, both
+with label `docs` and a 120 s timeout, next to `style.check` (D9 and section 6 of the record). The default test
+presets run the `docs` label, so every CI test leg runs both ([Continuous integration](ci.md#2-the-matrix),
+[Testing](testing.md#10-labels)). `mkdocs build --strict` has no CI job yet ([planned jobs](ci.md#6-planned-jobs));
+run `python tools/docs.py build` by hand before a documentation change is reported done.
 
 ## 5. The site
 

@@ -6,10 +6,11 @@ Conjure keeps its internals data-oriented and hides them behind an object facade
 chapter explains the practices every module follows: why component storage is archetype chunks iterated as
 columns, when SoA beats AoS, how change detection and command buffers keep parallel systems safe, how work is
 spread over the job system, how per-frame memory is handed out without locks, why names are `string_id`s and
-handles are `slot_map` keys, and what to avoid. The `core` pieces exist today (`conjure::core::jobs`,
-`conjure::core::memory`, the containers); the ECS pieces are implemented by the wave-2 `conjure_ecs` module
-(headers under `conjure/ecs/`) following the binding design in [`../design/01_ecs.md`](../design/01_ecs.md).
-The sections that describe them cite both, and the headers are the source of truth for names and signatures.
+handles are `slot_map` keys, and what to avoid. The `core` pieces are `conjure::core::jobs`,
+`conjure::core::memory` and the containers; the ECS pieces are `conjure_ecs` (headers under `conjure/ecs/`),
+whose internals the [ECS module](modules/ecs.md) page describes section by section and whose user-facing side is
+📘 API: [Entities, components and systems](../api/ecs/index.md). The sections below explain the *why*; the
+module page and the headers are the source of truth for layout numbers, names and signatures.
 
 ## Contents
 - [1. Why data-oriented](#1-why-data-oriented)
@@ -38,8 +39,10 @@ pay for the abstraction twice and power users can drop to `chunk_view` / `Span<T
 ## 2. Archetype storage and chunk iteration
 
 > [!NOTE]
-> Wave 2 (`01_ecs.md` D1-D3, 2.3; `conjure/ecs/archetype.h`, `conjure/ecs/chunk_view.h`, `conjure/ecs/world.h`).
-> The numbers below come from the record's layout algorithm.
+> Implemented in `conjure/ecs/archetype.h`, `conjure/ecs/chunk_view.h` and `conjure/ecs/world.h`
+> ([ECS module](modules/ecs.md) 2.3 has the chunk layout as built; `01_ecs.md` D1-D3 and 2.3 the design).
+> User view: 📘 API: [Archives and serialisation](../api/ecs/archives-and-serialization.md) and
+> [Queries, views and systems](../api/ecs/queries-views-and-systems.md).
 
 Every live entity belongs to exactly one **archetype**, the set of component types it carries, encoded as a
 `component_mask` of 16 x `u64` (1024 dense component ids). An archetype stores its entities in fixed
@@ -74,7 +77,8 @@ and keep components under `MAX_COMPONENT_SIZE = 4096` bytes; bulk data belongs b
 ## 4. Change detection
 
 > [!NOTE]
-> Wave 2 (`01_ecs.md` D5, 3.3), implemented by `conjure_ecs`; the headers win over the record for names.
+> Implemented in `conjure/ecs/query.h` and `conjure/ecs/view.h` ([ECS module](modules/ecs.md) 3.2; design
+> `01_ecs.md` D5, 3.3). User view: 📘 API: [Queries, views and systems](../api/ecs/queries-views-and-systems.md).
 
 Detection is chunk-granular. The world keeps a monotonic `u64` version that is bumped at the start of every
 system run, every flush and every direct structural call. Acquiring a non-const column (`chunk_view::get<T>()`,
@@ -88,8 +92,9 @@ chunk per frame instead of a dirty bit per entity.
 ## 5. Command buffers
 
 > [!NOTE]
-> Wave 2 (`01_ecs.md` D6, 2.5, 3.4; the `STRUCTURE_LOCKED` code is `conjure/ecs/ecs_error.h`). The arena it is
-> built on, `core::memory::arena`, exists today.
+> Implemented in `conjure/ecs/command_buffer.h` ([ECS module](modules/ecs.md) 3.3; design `01_ecs.md` D6, 2.5,
+> 3.4; the `STRUCTURE_LOCKED` code is `conjure/ecs/ecs_error.h`). User view: 📘 API:
+> [Command buffers and observers](../api/ecs/command-buffers-and-observers.md).
 
 Structural changes (create, destroy, add, remove) are refused while the world is locked for iteration: the call
 asserts and returns `STRUCTURE_LOCKED`. Systems and observers record into a `command_buffer` instead. Records
@@ -138,7 +143,8 @@ void integrate(std::span<math::vec3> positions, std::span<const math::vec3> velo
 }
 ```
 
-The scheduler of wave 2 builds on this (`01_ecs.md` D7, 3.5): systems declare read and write masks, the
+The ECS scheduler builds on this (`conjure/ecs/scheduler.h`, [ECS module](modules/ecs.md) 3.4; design
+`01_ecs.md` D7, 3.5): systems declare read and write masks, the
 scheduler packs them into conflict-free **stages** per phase (`(writes & (reads | writes)) == 0` with every
 stage member), runs a stage's systems as jobs, and each system fans its chunks out with
 `ctx.parallel_for_chunks(query, fn)` using `grain = max(1, minEntitiesPerJob / capacity)` chunks per job.
@@ -275,9 +281,9 @@ pair, asset slots live in a `stable_vector` so their addresses never move while 
 | Per-row dirty bits | state to keep consistent across swap-removes | chunk column version stamps |
 
 > [!TIP]
-> Measure before and after: `job_system::stats()`, `frame_allocator::high_water_bytes()`,
-> `memory::snapshot().live_count()` and the benchmarks in `tests/benchmarks` (`08_testing.md` 7.1) exist so a
-> data-layout change is a number, not an opinion.
+> Measure before and after: `job_system::stats()`, `frame_allocator::high_water_bytes()` and
+> `memory::snapshot().live_count()` exist so a data-layout change is a number, not an opinion; the benchmark
+> harness under `tests/benchmarks` (`08_testing.md` 7.1) is still to come ([Testing](testing.md#11-benchmarks)).
 
 ## Related
 - design records: [`../design/01_ecs.md`](../design/01_ecs.md) (archetypes, change detection, command buffer,
@@ -285,4 +291,5 @@ pair, asset slots live in a `stable_vector` so their addresses never move while 
   [`../design/10_core.md`](../design/10_core.md) 2.3, 2.5, 2.7 (containers, memory, jobs),
   [`../design/09_cross_area_resolutions.md`](../design/09_cross_area_resolutions.md) R3, R5, R17, R41
 - handbook: [Architecture](architecture.md) 5-6, [Core module](modules/core.md) sections 3, 5 and 7,
-  [Coding standards](coding-standards.md)
+  [ECS module](modules/ecs.md) sections 2-5, [Coding standards](coding-standards.md)
+- 📘 API: [Entities, components and systems](../api/ecs/index.md)

@@ -3,9 +3,10 @@
 🛠 **Engineering handbook**
 
 This chapter explains the CMake build from the root `CMakeLists.txt` down: how the three configurations
-are created, what the `conjure_add_*` helpers do to a target, how warnings and sanitizers are applied,
-how third-party libraries are pinned and kept out of our warning set, where `build_info.h` comes from, and
-which build steps the design record still has in the plan.
+are created, what the `conjure_add_*` helpers do to a target, how the umbrella shared library
+`conjure_shared` and game modules are built, how shaders are compiled and indexed, how warnings and sanitizers
+are applied, how third-party libraries are pinned and kept out of our warning set, where the generated headers
+come from, and which build steps the design record still has in the plan.
 
 ## Contents
 
@@ -33,14 +34,17 @@ The root `CMakeLists.txt` (CMake 3.28+) runs in this order:
 5. Global settings: C++20 without extensions, C11, position-independent code, `CMAKE_EXPORT_COMPILE_COMMANDS`,
    `USE_FOLDERS`, outputs in `${PROJECT_BINARY_DIR}/bin` (executables and shared libraries) and `lib`
    (static libraries). MSVC additionally gets `/MP /utf-8 /Zc:__cplusplus /Zc:preprocessor /EHsc /bigobj`.
-6. `include(ConjureWarnings)`, `include(ConjureModule)`, `include(ConjureTesting)`, `include(ConjureSanitizers)`.
-7. `add_subdirectory(third_party)`, then `engine`, `managed` (when `CONJURE_BUILD_MANAGED AND CONJURE_WITH_SCRIPTING`),
+6. `include(ConjureWarnings)`, `include(ConjureModule)`, `include(ConjureSharedLibrary)`, `include(ConjureTesting)`,
+   `include(ConjureSanitizers)`.
+7. `add_subdirectory(third_party)`, then `engine`, then `conjure_finalize_engine()` (section 4.4: every engine
+   library is declared by now), then `managed` (when `CONJURE_BUILD_MANAGED AND CONJURE_WITH_SCRIPTING`),
    `editor`, `runtime`, `tests` (after `enable_testing()`), `samples`, each behind its option.
 8. `conjure_print_configuration_summary()` prints the resulting matrix.
 
 `engine/CMakeLists.txt` walks `CONJURE_ENGINE_MODULES` in dependency order and adds every module directory
 that has a `CMakeLists.txt`; `engine/src/core/CMakeLists.txt` does the same for `CONJURE_CORE_AREAS`.
-Missing directories print a status line and are skipped, so partial trees configure.
+Missing directories print a status line and are skipped, so partial trees configure. When
+`CONJURE_WITH_RENDERER` is on it also includes `ConjureShaders` and adds `engine/shaders/` (section 4.6).
 
 ## 2. Configurations
 
@@ -95,9 +99,9 @@ conjure_add_module(<name>
 Creates the static library `conjure_<name>` with alias `conjure::<name>`; public include directories
 `engine/include` and `${PROJECT_BINARY_DIR}/generated/include`, private `engine/src`; the private define
 `CONJURE_MODULE_NAME="<name>"`; `FOLDER "Engine"`; the target property `CONJURE_PUBLIC_HEADERS` (read by
-`conjure_header_check()`); registration in the global property `CONJURE_STATIC_LIBRARIES` (consumed by the
-planned umbrella shared library); and a `source_group(TREE engine)` for IDEs. Unknown arguments and a
-missing `SOURCES` are fatal.
+`conjure_header_check()`); registration in the global property `CONJURE_STATIC_LIBRARIES` through
+`conjure_register_static_library()` (whole-archived into `conjure_shared` by `conjure_finalize_engine()`,
+section 4.4); and a `source_group(TREE engine)` for IDEs. Unknown arguments and a missing `SOURCES` are fatal.
 
 ### 4.2 `conjure_add_core_area`
 
@@ -145,6 +149,58 @@ Distribution-only GUI subsystem described in section 2. `tests/core/system/CMake
 > there (other than `conjure::thirdparty::glm`) would let its headers reach public headers, which
 > `tools/check_style.py` rejects (`third-party-include`). Keep yyjson, stb, Jolt, NVRHI, GLFW, miniaudio,
 > ImGui and nethost in `PRIVATE_DEPS`.
+
+### 4.4 The umbrella shared library and game modules
+
+`cmake/ConjureSharedLibrary.cmake` provides `conjure_finalize_engine()`, called once by the root file right
+after `add_subdirectory(engine)` (idempotent). It creates two targets:
+
+| Target | What it is |
+|---|---|
+| `conjure_abi_identity` | custom target writing `${PROJECT_BINARY_DIR}/generated/include/conjure/modules/abi_identity.h`: `CONJURE_ABI_HEADER_HASH` (a hash over every public header of every engine module, recomputed at build time), `CONJURE_ABI_COMPILER_MAJOR` and the runtime facts `CONJURE_ABI_RUNTIME_DYNAMIC_CRT` / `_ASAN` / `_UBSAN`; `conjure_modules` and `conjure_shared` depend on it |
+| `conjure_shared` (alias `conjure::shared`) | `SHARED` library whole-archiving every library in `CONJURE_STATIC_LIBRARIES`, so one copy of every engine symbol and global exists in the process; compiled with `CONJURE_SHARED_EXPORTS`, consumers get `CONJURE_SHARED_IMPORTS`, the engine include directories, every engine library's interface definitions, `conjure::platform_defines` and glm |
+
+On MSVC a module definition file listing every external symbol of the whole-archived objects is generated at
+build time (CMake's `WINDOWS_EXPORT_ALL_SYMBOLS` does not look inside static libraries), followed by a count
+that fails the build with a remedy before the 65,535-export limit is hit; GCC and Clang export every
+default-visibility symbol. `CONJURE_API` (`conjure/core/api.h`) adds the dllimport side for consumers;
+`tools/check_exports.py` reports public symbols that lack it. [Modules module](modules/modules.md) 7 has the
+export story in detail.
+
+`conjure_add_game_module()` (`cmake/ConjureModule.cmake`) builds a plugin or game module:
+
+```cmake
+conjure_add_game_module(<target>
+    MANIFEST    <module.json>           # required; the "name" (and optional "binary") are read from it
+    SOURCES     <files...>              # required
+    [NAME <module name>] [OUTPUT_ROOT <dir>] [DEPS <targets...>] [DEFINES <defs...>] [EDITOR_UI]
+)
+```
+
+It creates a `SHARED` library linking `conjure::shared` privately (never the static libraries), with hidden
+visibility, `CONJURE_MODULE_NAME="<name>"`, `FOLDER "GameModules"`, `$ORIGIN` / `@loader_path` rpaths, and
+every output under `<OUTPUT_ROOT or manifest directory>/bin/<platform>-<arch>-<config>` (the binary triplet of
+`07_modules.md`). `tests/modules/CMakeLists.txt` uses it for the fixture plugins; the handbook chapter
+[Creating a module](module-system/creating-a-module.md) 3 shows the call from a module author's side.
+
+### 4.5 `LINK_ENGINE_SHARED`
+
+`conjure_add_test_module()` and `conjure_add_test_executable()` accept `LINK_ENGINE_SHARED`, which links
+`conjure::shared` and `conjure::test_support_shared` instead of the static libraries so that a test host and
+the plugins it loads share one engine copy. `tests/modules/` is the suite that needs it; the consequences for
+`memory_guard` are in [Testing](testing.md#2-registering-tests-with-cmake).
+
+### 4.6 Shaders
+
+`cmake/ConjureShaders.cmake` provides `conjure_add_shaders(TARGET <name> OUTPUT_DIR <dir> SHADERS <entries...>
+[INCLUDE_DIRS ...] [DEPENDENCIES ...])`, where each entry is `source;entry;stage;defines`. It compiles every
+permutation to DXIL with `dxc` (`CONJURE_RHI_D3D12`) and to SPIR-V with glslang or `dxc -spirv`
+(`CONJURE_RHI_VULKAN`, chosen by `CONJURE_SPIRV_COMPILER`), and `cmake/ConjureShaderIndex.cmake` writes
+`<OUTPUT_DIR>/index.json` at build time for `rhi::shader_library`. `engine/shaders/CMakeLists.txt` declares the
+engine's own list as the target `conjure_shaders` into `${PROJECT_BINARY_DIR}/shaders`; `conjure_rhi_tests`
+depends on it and the wave-3 renderer will append its pass shaders. Compiler lookup, depfiles and the index
+format are in [RHI module](modules/rhi.md#5-shader-pipeline); the user-facing side is 📘 API:
+[Shaders](../api/rhi/shaders.md).
 
 ## 5. Warnings as errors
 
@@ -194,7 +250,8 @@ chapter documents them in full; the build-relevant facts are:
   `conjure_header_check`, which is part of `ALL`. A header that does not compile alone therefore breaks the
   default build.
 - `tests/CMakeLists.txt` registers `tools/check_style.py --tests-mirror-headers` as the CTest entry
-  `style.check` (label `style`, timeout 120 s) when a Python 3 interpreter is found.
+  `style.check` (label `style`) and `tools/check_docs.py` plus its self-test as `docs.check` and
+  `docs.check_tool` (label `docs`), each with a 120 s timeout, when a Python 3 interpreter is found.
 
 ## 8. Third-party dependencies
 
@@ -215,7 +272,7 @@ CMake 4; `FETCHCONTENT_UPDATES_DISCONNECTED ON` stops re-fetching on every confi
 | `conjure::thirdparty::doctest` | doctest/doctest | `v2.4.11` | `CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS` | also includes `scripts/cmake/doctest.cmake` and caches `_DOCTEST_DISCOVER_TESTS_SCRIPT` for the `tests/` directories |
 | `conjure::thirdparty::glfw` | glfw/glfw | `3.4` | `CONJURE_PLATFORM_GLFW` | static; Wayland and X11 both on Linux |
 | `conjure::thirdparty::nvrhi` | NVIDIA-RTX/NVRHI | commit `bf0bbd9b` | `CONJURE_WITH_RENDERER` | D3D12 (`d3d12 dxgi dxguid`) and/or Vulkan per `CONJURE_RHI_*`; validation layer on |
-| glslang (`CONJURE_GLSLANG_EXECUTABLE`) | KhronosGroup/glslang | `15.1.0` | `CONJURE_WITH_RENDERER AND CONJURE_RHI_VULKAN` | HLSL front-end for SPIR-V; consumed by the planned shader step |
+| glslang (`CONJURE_GLSLANG_EXECUTABLE`) | KhronosGroup/glslang | `15.1.0` | `CONJURE_WITH_RENDERER AND CONJURE_RHI_VULKAN` | HLSL front-end for SPIR-V; the default `CONJURE_SPIRV_COMPILER` of `conjure_add_shaders()` (section 4.6, [RHI module](modules/rhi.md#5-shader-pipeline)) |
 | `conjure::thirdparty::jolt` | jrouwe/JoltPhysics | `v5.3.0` | `CONJURE_WITH_PHYSICS` | `SOURCE_SUBDIR Build`; object stream and debug renderer on, profiler off |
 | `conjure::thirdparty::imgui` | ocornut/imgui + CedricGuillemet/ImGuizmo | `v1.91.9b-docking`, commit `105e4fde` | `CONJURE_BUILD_EDITOR` | one static library from the listed `.cpp` files, GLFW backend, `IMGUI_DEFINE_MATH_OPERATORS`, obsolete functions disabled |
 | `conjure::thirdparty::nethost` | .NET SDK host pack | found, not fetched | `CONJURE_WITH_SCRIPTING` | `cmake/FindNetHost.cmake` picks the newest pack of the lowest major >= 8 and defines `NETHOST_USE_AS_STATIC` |
@@ -255,10 +312,15 @@ std::string engine_banner() {
 The version comes from `project(Conjure VERSION 0.1.0)` in the root `CMakeLists.txt`; change it there or in
 the template, never in the generated file.
 
+The second generated header is `conjure/modules/abi_identity.h`, written into the same
+`generated/include` tree by the `conjure_abi_identity` target (section 4.4). Unlike `build_info.h` it is
+produced at build time, not configure time, because its header hash must follow every public header edit.
+
 ## 10. Planned steps
 
-The design record describes build steps that later waves add. None of them exists in the tree yet; the
-links are the specification to implement against.
+The design record describes build steps that later waves add. The shader pipeline and the umbrella shared
+library landed with wave 2 (sections 4.4 to 4.6); the rows below are still to come and the links are the
+specification to implement against.
 
 > [!NOTE]
 > Planned, not implemented. Where this page and a design note disagree once the step lands, the note and
@@ -266,20 +328,21 @@ links are the specification to implement against.
 
 | Step | Helper | Design record |
 |---|---|---|
-| Shader compilation to DXIL (`dxc`) and SPIR-V (`glslang`), `shaders/index.json`, `conjure_shaders` as a dependency of `conjure_renderer` | `conjure_add_shaders()` in `cmake/ConjureShaders.cmake` | [02_renderer.md section 3.12](../design/02_renderer.md#312-shader-build-cmakeconjureshaderscmake) |
 | C# assemblies built with `dotnet build`, stamp files, explicit `<Compile>` items; `managed/CMakeLists.txt` currently returns until `Conjure.Managed.csproj` exists | `conjure_add_managed_project()` in `cmake/ConjureManaged.cmake` | [03_scripting.md section 3.10](../design/03_scripting.md#310-building-managed-projects-managed_buildh-cmakeconjuremanagedcmake) |
-| Umbrella shared library `conjure_shared` whole-archiving `CONJURE_STATIC_LIBRARIES`, `CONJURE_API` exports in `conjure/core/api.h`, game modules | `conjure_finalize_engine()`, `conjure_add_game_module()` | [07_modules.md section 5](../design/07_modules.md#5-build-system-cmakeconjuremodulecmake-cmakeconjureabiidentitycmake) |
 | Export of a project: cook, managed publish, module layout, copy the Distribution runtime and shaders | `engine::export_pipeline::run()` (library call, not CMake) | [06_engine_loop.md section 3.6](../design/06_engine_loop.md#36-export-pipeline-conjureengineexporth-enginesrcengineexport_pipelinecpp-r21) |
 | Golden-image tests and the benchmark executable | `conjure_add_golden_tests()`, `conjure_add_benchmark_sources()` | [08_testing.md section 3.8](../design/08_testing.md#38-cmake-integration-cmakeconjuretestingcmake) |
+| `CONJURE_API`-only exports (hidden visibility in `conjure_add_module`, `.def` from annotations) once the whole-archive export count approaches the limit | `conjure_finalize_engine()` | [07_modules.md section 5](../design/07_modules.md#5-build-system-cmakeconjuremodulecmake-cmakeconjuresharedlibrarycmake) |
 
-`conjure_add_test_module()` already accepts `ENGINE` and `LINK_ENGINE_SHARED` and does nothing with them
-until `conjure::test_support_engine` and `conjure::shared` exist (it says so with `message(VERBOSE)`).
+`conjure_add_test_module()` accepts `ENGINE` and does nothing with it until `conjure::test_support_engine`
+exists in wave 4 (it says so with `message(VERBOSE)`).
 
 ## Related
 
 - design record: `docs/design/00_brief.md` (repository layout and fixed decisions)
 - design record: `docs/design/07_modules.md` section 5 (shared library, `CONJURE_API`, game modules)
 - design record: `docs/design/08_testing.md` sections 3.8 and 7.3 (test CMake integration, CI)
-- design record: `docs/design/02_renderer.md` 3.12, `docs/design/03_scripting.md` 3.10, `docs/design/06_engine_loop.md` 3.6 (planned steps)
+- design record: `docs/design/02_renderer.md` 3.12 (shader build), `docs/design/03_scripting.md` 3.10, `docs/design/06_engine_loop.md` 3.6 (planned steps)
 - `docs/ARCHITECTURE.md` section 9 (build and configuration matrix)
-- [Getting started](getting-started.md), [Repository layout](repository-layout.md), [Testing](testing.md)
+- [Getting started](getting-started.md), [Repository layout](repository-layout.md), [Testing](testing.md),
+  [Modules module](modules/modules.md) 7 (umbrella library, exports), [RHI module](modules/rhi.md) 5 (shader pipeline),
+  [Creating a module](module-system/creating-a-module.md)

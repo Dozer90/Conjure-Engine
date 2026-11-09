@@ -46,8 +46,8 @@ Other modules link `conjure::core`; a core area links only the areas it needs (`
 | reflect | `conjure::core_reflect` | `reflect/` | json, strings, math, containers, time |
 
 Each area library is registered with `conjure_register_static_library()`, so the whole of core is
-whole-archived into the umbrella shared library `conjure_shared` once the `modules` module is present
-([Module system](../module-system/index.md) 1.1).
+whole-archived into the umbrella shared library `conjure_shared` by `conjure_finalize_engine()`
+([Module system](../module-system/index.md) 2, [Modules module](modules.md) 7).
 
 ## 2. Conventions shared by every area
 

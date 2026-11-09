@@ -2,7 +2,7 @@
 """Downloads the public test assets listed in tools/test_assets.json into tests/.downloaded.
 
 The engine's test suites never require these files: tests that need them are guarded by
-`precondition::DOWNLOADED_ASSETS` and skip when `tests/.downloaded/.assets_ready` is absent
+`precondition::DOWNLOADED_ASSETS` and skip when `tests/.assets_ready` is absent
 (docs/design/08_testing.md 3.2). Run this once to enable them:
 
     python tools/download_test_assets.py            # download what is missing, verify the rest
@@ -27,7 +27,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "tools" / "test_assets.json"
 TARGET = ROOT / "tests" / ".downloaded"
 LOCK = TARGET / "assets.lock"
-STAMP = TARGET / ".assets_ready"
+STAMP = TARGET.parent / ".assets_ready"   # tests/.assets_ready: where conjure::testing looks (precondition::DOWNLOADED_ASSETS)
 USER_AGENT = "conjure-test-assets/1.0"
 
 

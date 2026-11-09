@@ -18,6 +18,8 @@ CMakeUserPresets.json
 
 # Test assets downloaded by tools/download_test_assets.py
 /samples/**/assets/downloaded/
+/tests/.downloaded/
+/tests/.assets_ready
 
 # Compiled shaders
 *.dxil

@@ -30,9 +30,9 @@ namespace conjure::ecs {
 
     /// <summary>
     /// Handle of one entity: record index plus generation. Trivially copyable, 8 bytes, mirrored by
-    /// the C# Entity struct through to_u64()/from_u64(). core::reflect treats an 8-byte handle field as
-    /// 8-byte aligned, so a reflected component holding entity fields needs 8-byte alignment with the
-    /// entities at 8-byte offsets (give it an 8-byte member or alignas(8)).
+    /// the C# Entity struct through to_u64()/from_u64(). Alignment is 4 ({u32, u32}); core::reflect caps
+    /// a handle field's expected alignment at the owning type's alignment, so a reflected component may
+    /// place entity fields at any 4-byte aligned offset without alignas(8).
     /// </summary>
     struct entity {
         u32 index = 0;

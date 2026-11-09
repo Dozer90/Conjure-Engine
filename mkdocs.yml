@@ -80,6 +80,33 @@ nav:
           - Files and the virtual file system: api/core/files.md
           - Processes, libraries and images: api/core/system.md
           - Reflection: api/core/reflection.md
+      - ECS:
+          - api/ecs/index.md
+          - Entities and components: api/ecs/entities-and-components.md
+          - Queries, views and systems: api/ecs/queries-views-and-systems.md
+          - Command buffers and observers: api/ecs/command-buffers-and-observers.md
+          - Archives and serialisation: api/ecs/archives-and-serialization.md
+      - Platform:
+          - api/platform/index.md
+          - Windows and events: api/platform/windows-and-events.md
+          - Input: api/platform/input.md
+      - RHI:
+          - api/rhi/index.md
+          - Devices and swapchains: api/rhi/devices-and-swapchains.md
+          - Shaders: api/rhi/shaders.md
+      - Assets:
+          - api/assets/index.md
+          - Referencing and loading: api/assets/referencing-and-loading.md
+          - Database, importers and hot reload: api/assets/database-and-import.md
+          - Cooking, caches and packs: api/assets/cooking-and-packs.md
+      - Audio:
+          - api/audio/index.md
+          - Playing sounds: api/audio/playing-sounds.md
+          - Clips and decoding: api/audio/clips-and-decoding.md
+      - Modules:
+          - api/modules/index.md
+          - Writing a module: api/modules/writing-a-module.md
+          - Loading and managing modules: api/modules/loading-and-managing.md
       - Glossary: api/glossary.md
   - Engineering handbook:
       - handbook/index.md
@@ -95,8 +122,16 @@ nav:
               - handbook/modules/core.md
               - Foundation to memory: handbook/modules/core/foundation-to-memory.md
               - Time to reflect: handbook/modules/core/time-to-reflect.md
+          - ECS: handbook/modules/ecs.md
+          - Platform: handbook/modules/platform.md
+          - RHI: handbook/modules/rhi.md
+          - Assets: handbook/modules/assets.md
+          - Audio: handbook/modules/audio.md
+          - Modules: handbook/modules/modules.md
       - Module system:
           - handbook/module-system/index.md
+          - Creating a module: handbook/module-system/creating-a-module.md
+          - Importing and distributing modules: handbook/module-system/importing-and-distributing.md
       - Continuous integration: handbook/ci.md
       - Contributing: handbook/contributing.md
       - Documentation: handbook/documentation.md

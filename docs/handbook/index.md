@@ -33,12 +33,20 @@ One line per chapter, in reading order for a new contributor.
 | [Getting started](getting-started.md) | prerequisites, cloning, `tools/build.py`, presets, the three configurations, running tests, private build directories, IDE notes, the documentation toolchain |
 | [Architecture](architecture.md) | module map, dependency rules, the frame, threading; the summary of `docs/ARCHITECTURE.md` with links |
 | [Repository layout](repository-layout.md) | every top-level directory and what goes where, the anatomy of a module directory, where tests live, which files are generated |
-| [Build pipeline](build-pipeline.md) | the root `CMakeLists.txt`, `ConjureConfigs`, the `ConjureModule` helpers, `ConjureTesting`, third-party pinning and `SYSTEM` includes, warnings as errors, the generated `build_info.h`, planned shader, managed and export steps |
+| [Build pipeline](build-pipeline.md) | the root `CMakeLists.txt`, `ConjureConfigs`, the `ConjureModule` helpers, the umbrella shared library and game modules, the shader pipeline, `ConjureTesting`, third-party pinning and `SYSTEM` includes, warnings as errors, the generated headers, planned managed and export steps |
 | [Coding standards](coding-standards.md) | style, conventions, the review checklist, error model, logging, asserts |
 | [Data-oriented design](data-oriented-design.md) | DOD practice in Conjure: archetypes, chunk iteration, SoA, change detection, jobs, frame memory, what to avoid |
-| [Testing](testing.md) | the test support library `conjure/testing/*.h`, conventions, labels, preconditions and skipping, doctest discovery, header checks, `check_style.py`, benchmarks, how to write and run a test |
+| [Testing](testing.md) | the test support library `conjure/testing/*.h`, conventions, labels, preconditions and skipping (`REAL_WINDOW`, `SOFTWARE_GPU_ADAPTER`, `AUDIO_DEVICE`, `DOWNLOADED_ASSETS`), doctest discovery, header, style, export and documentation checks, benchmarks, how to write and run a test |
 | [Modules: core](modules/core.md) | the foundation module: purpose, areas, internals, threading, extension points, tests |
-| [Module system](module-system/index.md) | what a module is today, the plugin design (manifest, ABI boundary, registration as data, lifecycle), create / import / distribute |
+| [Modules: ecs](modules/ecs.md) | archetype storage and chunk layout, component ids and masks, queries and change detection, command buffer flush, the stage-packing scheduler, observers, archives and serialisation, threading, extension points (`component_type_desc`, `system_extension_desc`), tests |
+| [Modules: platform](modules/platform.md) | the GLFW backend (context, window creation, gamepads, monitors, high-DPI), event double buffering and resize coalescing, the input state machine, the null backend, threading, tests |
+| [Modules: rhi](modules/rhi.md) | `device` over the backend interfaces, null / D3D12 / Vulkan backends, swapchains per backend, the shader pipeline (`conjure_add_shaders`, depfiles, `index.json`), threading, testing with and without a GPU |
+| [Modules: assets](modules/assets.md) | identity and the slot table, scan and hashing, cache layout and validation, the load pipeline, publish / retire / collect, threading, hot reload and the watcher job, cooker and pack determinism, extension points, tests |
+| [Modules: audio](modules/audio.md) | mixer architecture and callback rules, command and event rings, voice tables and lifecycle, the group gain tree, spatialisation, streaming, the null backend's virtual clock, device loss, threading, tests |
+| [Modules: modules](modules/modules.md) | the ABI handshake, one load step by step, unload / fault / reload, shadow copies, registration sets and consumers, services, static modules, the umbrella shared library and `conjure_add_game_module()`, tests and fixtures |
+| [Module system](module-system/index.md) | engine modules versus plugin and game modules, how a plugin fits the engine (one engine copy, the C front door, registration as data, consumers), and the two chapters below |
+| [Module system: creating a module](module-system/creating-a-module.md) | directory layout, the manifest, the CMake target, the entry point, registering components, systems and importers, building, testing with a static test host |
+| [Module system: importing and distributing](module-system/importing-and-distributing.md) | declaring modules in a project, the binary layout `bin/<platform>-<arch>-<config>`, loading at start-up, the export layout, versioning and compatibility, C# assemblies in modules |
 | [Continuous integration](ci.md) | the GitHub Actions matrix, what each job proves, sanitizer options, how to reproduce a CI failure locally |
 | [Contributing](contributing.md) | the workflow from design note to commit, commit message convention, `AGENTS.md` and the skills, private build directories, the definition of done |
 | [Documentation](documentation.md) | how this documentation works for contributors: the two sets, badges, alert boxes, page templates, `tools/docs.py`, `tools/check_docs.py`, the site build and CI |
@@ -52,7 +60,8 @@ the reference.
 
 | Chapter | Planned file | Reference until written |
 |---|---|---|
-| Modules: ecs, platform, rhi, assets, audio, modules, scene, renderer, physics, scripting, engine | `handbook/modules/<module>.md` | the module's design note under `docs/design/` |
+| Modules: scene, renderer, physics, scripting, engine, bindings, editor | `handbook/modules/<module>.md` | the module's design note under `docs/design/` |
+| Editor internals, AI protocol internals, scripting pipeline, renderer pipeline, asset pipeline, export and distribution | `handbook/<chapter>.md` | `docs/design/04_editor.md`, `03_scripting.md`, `02_renderer.md`, `05_assets.md`, `06_engine_loop.md` 3.6 |
 
 > [!NOTE]
 > `tools/check_docs.py` (run as `python tools/docs.py check`) fails when an engine module under

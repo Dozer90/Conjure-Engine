@@ -45,6 +45,19 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set_tests_properties(style.check PROPERTIES LABELS "style" TIMEOUT 120)
+
+    # Documentation checks (docs/design/16_documentation.md D9): structure, badges, links and coverage of
+    # the wiki and handbook, plus the checker's own self-test.
+    add_test(NAME docs.check
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/check_docs.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.check PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.check_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_check_docs.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.check_tool PROPERTIES LABELS "docs" TIMEOUT 120)
 else()
     message(STATUS "tests: Python 3 not found, the style.check test is not registered")
 endif()

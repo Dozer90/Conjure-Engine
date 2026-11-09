@@ -18,7 +18,7 @@ checks, and how to write and run one test.
 - [Preconditions and skipping](#6-preconditions-and-skipping)
 - [Writing a test](#7-writing-a-test)
 - [Running tests](#8-running-tests)
-- [Header checks and the style check](#9-header-checks-and-the-style-check)
+- [Header, style, export and documentation checks](#9-header-style-export-and-documentation-checks)
 - [Labels](#10-labels)
 - [Benchmarks](#11-benchmarks)
 
@@ -33,7 +33,8 @@ checks, and how to write and run one test.
   compiled into every test executable, not into the library, so every heap allocation of a test process is
   counted and the shared `main` owns seed, thread count, log sink and assert handler.
 - Tests run against a real job system (default `clamp(hardware_concurrency(), 2, 8)` workers, `0` = inline)
-  and the `null` backends of later waves; nothing may need a GPU, window, audio device or network.
+  and the `null` backends of `platform`, `rhi` and `audio`; nothing may need a GPU, window, audio device or
+  network. The few cases that exercise real hardware guard themselves with a precondition (section 6).
 
 ## 2. Registering tests with CMake
 
@@ -43,7 +44,8 @@ conjure_add_test_module(<module>
     [DEPS <targets...>]             # extra link targets (test groups without a library of their own)
     [LABELS <labels...>]            # appended to "unit;<module>"
     [TIMEOUT <seconds>]             # default 120
-    [ENGINE] [LINK_ENGINE_SHARED]   # accepted, no effect until wave 4 (conjure::test_support_engine, conjure::shared)
+    [LINK_ENGINE_SHARED]            # link the umbrella conjure::shared instead of the static libraries (below)
+    [ENGINE]                        # accepted, no effect until wave 4 adds conjure::test_support_engine
 )
 conjure_header_check(conjure_<module>)
 ```
@@ -63,8 +65,15 @@ script flattens nested lists.
 CTest registration, used for helper programs such as `conjure_support_child`. `tests/CMakeLists.txt` adds
 every `tests/<module>/` that has a `CMakeLists.txt`; `tests/core/CMakeLists.txt` adds an area directory only
 when `TARGET conjure::core_<area>` exists (`conjure_add_test_module(core_<area> ...)` in
-`tests/core/<area>/CMakeLists.txt`). A module test directory is expected to guard itself the same way, so
-disabling a subsystem disables its tests; `core` is the only module test directory in the tree so far.
+`tests/core/<area>/CMakeLists.txt`). Every module test directory guards itself the same way, so disabling a
+subsystem disables its tests: `tests/{core,ecs,platform,rhi,assets,audio,modules}` are in the tree.
+
+`LINK_ENGINE_SHARED` (used by `tests/modules/`) links the umbrella `conjure::shared` and
+`conjure::test_support_shared` (the support library compiled against it) instead of the static libraries, so
+the executable and the fixture plugins it loads share one engine copy. Such an executable keeps the C
+runtime's allocation functions: `memory_guard` and `allocation_scope` count nothing in it, and the suite asserts
+"no growth" through the registry instead. The option needs `conjure_finalize_engine()` to have run, which the
+root `CMakeLists.txt` does before `tests/` ([Build pipeline](build-pipeline.md#44-the-umbrella-shared-library-and-game-modules)).
 
 > [!WARNING]
 > Case names become CMake list items and CTest names: they must be unique within the executable and must
@@ -104,7 +113,7 @@ a self-test in `tests/support/tests/` (`conjure_support_tests`, label `support`)
 | Header | Provides | Use it for |
 |---|---|---|
 | `conjure/testing/doctest.h` | `CONJURE_REQUIRE_OK(expr)`, `CONJURE_CHECK_OK(expr)`, `CONJURE_CHECK_ERROR(expr, errorCode)`, `CONJURE_TEST_REQUIRE(precondition)`, `describe_error(result)`, `has_error(result, code)`, `doctest::StringMaker` for `core::uuid` and `core::error`, `toString(core::error_code)` | every test file; the result macros evaluate their expression exactly once and print `category.CODE: message` on failure |
-| `conjure/testing/test_environment.h` | `enum class precondition : u8 { DOTNET_RUNTIME, DOWNLOADED_ASSETS, SOFTWARE_GPU_ADAPTER, LOOPBACK_TCP, REAL_WINDOW, COUNT }`, `struct test_environment` (seed, `jobThreadCount`, `isolatedProcess`, `goldenEnabled`, `updateGoldens`, `realWindowAllowed`, `continueOnAssert`, the four paths `repoAssetRoot`, `downloadedAssetRoot`, `outputRoot`, `temporaryRoot`, `executableName`), `environment()`, `precondition_holds()`, `require_precondition()`, `set_precondition_probe()`, `to_string(precondition)`, `SKIP_EXIT_CODE = 77` | reading the seed and thread count instead of environment variables; installing a probe for a module-dependent precondition |
+| `conjure/testing/test_environment.h` | `enum class precondition : u8 { DOTNET_RUNTIME, DOWNLOADED_ASSETS, SOFTWARE_GPU_ADAPTER, LOOPBACK_TCP, REAL_WINDOW, AUDIO_DEVICE, COUNT }`, `struct test_environment` (seed, `jobThreadCount`, `isolatedProcess`, `goldenEnabled`, `updateGoldens`, `realWindowAllowed`, `continueOnAssert`, the four paths `repoAssetRoot`, `downloadedAssetRoot`, `outputRoot`, `temporaryRoot`, `executableName`), `environment()`, `precondition_holds()`, `require_precondition()`, `set_precondition_probe()`, `to_string(precondition)`, `SKIP_EXIT_CODE = 77` | reading the seed and thread count instead of environment variables; installing a probe for a module-dependent precondition |
 | `conjure/testing/approx.h` | `approx_equal(left, right, epsilon = EPSILON)` for `f32`, `vec2/3/4`, `quat` (q and -q equal), `mat3/4`, `aabb`, `transform`; `EPSILON = 1.0e-5f`; `CONJURE_CHECK_APPROX(actual, expected)`; `StringMaker` for every math type | comparing results of whole computations |
 | `conjure/testing/log_capture.h` | `log_capture`: `contains(level, substring)`, `contains(substring)`, `count(level)`, `count()`, `entries()`, `messages()`, `messages(level)`, `allow_errors()`, `errors_allowed()`, `clear()`; `captured_log_entry { level, category, text }` | asserting on log output; the destructor fails the case when an `ERR` or `FATAL` was logged without `allow_errors()` |
 | `conjure/testing/assert_capture.h` | `expect_assert`: `count()`, `failures()` (span of `asserted_failure`, at most `CAPACITY = 8`), `last_message()`, `reset()`; `CONJURE_CHECK_ASSERTS(statement)` | code that must assert; scopes nest, record asserts from helper threads, and never allocate |
@@ -153,14 +162,10 @@ turns into *Not Run*; in a direct run it emits a doctest `MESSAGE` and returns f
 | Precondition | Holds when |
 |---|---|
 | `DOWNLOADED_ASSETS` | `tests/.downloaded/` exists and the stamp file `.assets_ready` exists in its parent directory, i.e. `tests/.assets_ready` (`precondition_holds()` in `tests/support/src/test_environment.cpp`, as `docs/design/08_testing.md` 2.2 specifies) |
-| `REAL_WINDOW` | `CONJURE_TEST_WINDOW=1` |
-| `DOTNET_RUNTIME`, `SOFTWARE_GPU_ADAPTER`, `LOOPBACK_TCP` | a probe installed with `set_precondition_probe()` by the scripting, rhi or editor test libraries returns true; without a probe they never hold |
-
-> [!WARNING]
-> `tools/download_test_assets.py` currently writes its stamp as `tests/.downloaded/.assets_ready`, one
-> directory below where `precondition_holds()` looks. Until the script and the support library agree,
-> `precondition::DOWNLOADED_ASSETS` never holds after a download and the guarded cases report *Not Run*.
-> No test in the tree depends on it yet.
+| `REAL_WINDOW` | `CONJURE_TEST_WINDOW=1`; used by `tests/platform/test_backend_conformance.cpp` to run the GLFW backend through the same cases as the null backend |
+| `SOFTWARE_GPU_ADAPTER` | the probe `tests/rhi/rhi_test_support.cpp` installs with `set_precondition_probe()` can create a device with `preferSoftwareAdapter` (WARP on Windows); guards the D3D12 and Vulkan cases of `test_device`, `test_swapchain` and `test_shader_library` ([RHI module](modules/rhi.md#9-tests)) |
+| `AUDIO_DEVICE` | the probe `tests/audio/audio_test_support.cpp` installs finds a miniaudio playback device; guards `test_miniaudio_backend` ([Audio module](modules/audio.md#13-tests)) |
+| `DOTNET_RUNTIME`, `LOOPBACK_TCP` | a probe installed by the scripting or editor test libraries (wave 3-4) returns true; without a probe they never hold |
 
 The default test presets exclude the labels `benchmark|golden|downloaded|slow|process`, so a fresh clone
 without network is green. `docs/design/08_testing.md` D12 adds `tools/ctest_check_skips.py`, which will fail
@@ -266,7 +271,7 @@ doctest's report and the ring-buffer log of that case. `log_capture: unexpected 
 means the case needs `allow_errors()` or has a real bug; `memory_guard: N allocation(s) still live` is a
 leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the process.
 
-## 9. Header checks and the style check
+## 9. Header, style, export and documentation checks
 
 - **Header check.** `conjure_header_check(<target>)` compiles every header listed in the target's
   `CONJURE_PUBLIC_HEADERS` in its own translation unit with the project warning set; the aggregate target
@@ -280,6 +285,14 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
   library, blank line between groups, quotes for Conjure headers), `third-party-include` (public headers),
   `doctest-include`, `test-case-name`, `forbidden-in-tests`, `file-name` (snake_case) and
   `tests-mirror-headers`. Exit code 0 clean, 1 findings, 2 usage error.
+- **Export check.** `python tools/check_exports.py [module ...]` (default `modules`; `--all` for every module)
+  reports public classes with out-of-line members, namespace-scope function prototypes and `extern` variables
+  that lack `CONJURE_API` (`docs/design/07_modules.md` 5 and 9). Output is `path:line: kind: message`; exit
+  code 0 clean, 1 findings, 2 usage error. Not a CTest entry yet; see [Modules module](modules/modules.md) 7.2.
+- **Documentation checks.** `python -I tools/check_docs.py` (CTest `docs.check`, label `docs`) checks badges,
+  links, page length, markers and header coverage of both documentation sets; `tools/tests/test_check_docs.py`
+  (CTest `docs.check_tool`) is the checker's self-test over the fixtures in `tools/tests/check_docs/`. The
+  [Documentation](documentation.md#4-tooling) chapter explains both.
 
 ## 10. Labels
 
@@ -288,14 +301,15 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 | `unit`, `<module>` | every entry from `conjure_add_test_module()` (`core_math`, `support`, ...) | run |
 | extra `LABELS` | e.g. `support` on the self-tests | run |
 | `style` | `style.check` | run |
+| `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
 | `benchmark`, `golden`, `downloaded`, `slow`, `process` | later waves' executables and process-level tests | excluded; `nightly-test` excludes only `benchmark` |
 
 Filter with `ctest -L <label>` or `python tools/build.py --test -L <label>`; `-R` filters by entry name.
 
 > [!NOTE]
-> Planned: `docs.check` and `docs.check_tool` with label `docs` (`docs/design/16_documentation.md` D9 and
-> section 6). Neither is registered yet (`tests/CMakeLists.txt` adds only `style.check`, and
-> `tools/tests/check_docs/` is empty); until they are, run `python tools/docs.py check` by hand.
+> The wave-2 cases that need hardware carry no extra label: they are ordinary `unit;<module>` entries that
+> exit 77 when their precondition (section 6) does not hold, so a default run reports them as *Not Run* rather
+> than skipping them silently.
 
 ## 11. Benchmarks
 
@@ -315,6 +329,9 @@ harness does not yet.
 - design record: `docs/design/08_testing.md` (the binding test strategy: D1-D15, 2.2, 3.1-3.2, 3.8, 5.1, 7.4, 11)
 - design record: `docs/design/10_core.md` section 3 (test support rework)
 - `docs/CONVENTIONS.md` section 6 (summary of the conventions)
-- `tests/support/CMakeLists.txt`, `cmake/ConjureTesting.cmake`, `tools/check_style.py`
+- `tests/support/CMakeLists.txt`, `cmake/ConjureTesting.cmake`, `tools/check_style.py`, `tools/check_exports.py`,
+  `tools/check_docs.py`, `tools/download_test_assets.py`
+- module test suites: [ECS](modules/ecs.md#8-tests), [Platform](modules/platform.md#10-tests), [RHI](modules/rhi.md#9-tests),
+  [Assets](modules/assets.md#12-tests), [Audio](modules/audio.md#13-tests), [Modules](modules/modules.md#9-tests-and-fixtures)
 - `.claude/skills/build-and-test/SKILL.md` (reading failures, single-test runs)
 - [Getting started](getting-started.md), [Build pipeline](build-pipeline.md), [Continuous integration](ci.md)

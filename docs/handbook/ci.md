@@ -35,9 +35,12 @@ proves, the sanitizer settings, and how to reproduce a red leg on your machine.
 | `windows-msvc-dist` | `windows-latest` | `windows-msvc-dist` | build only | the Distribution configuration compiles with asserts and TRACE/DEBUG logging compiled out (`CONJURE_DISTRIBUTION=1`); tests are not run on this leg |
 
 Together the five test legs cover the fixed matrix of `docs/design/08_testing.md` D15: MSVC, GCC, Clang,
-macOS and sanitizers. The style check runs inside every test leg because `tests/CMakeLists.txt` registers
-`style.check` as a CTest entry, and the header check runs inside every build because `conjure_header_check`
-is part of `ALL`.
+macOS and sanitizers. The style and documentation checks run inside every test leg because
+`tests/CMakeLists.txt` registers `style.check`, `docs.check` and `docs.check_tool` as CTest entries, and the
+header check runs inside every build because `conjure_header_check` is part of `ALL`. The wave-2 modules keep
+every leg headless: the `rhi`, `audio` and `platform` cases that need a software GPU adapter, an audio device or
+a real window guard themselves with `CONJURE_TEST_REQUIRE` and report *Not Run* on the runners
+([Testing](testing.md#6-preconditions-and-skipping)).
 
 ## 3. Steps of every job
 
@@ -119,8 +122,9 @@ design, no workflow yet).
    process-wide singleton created by the test (a log sink, a job system) that is never destroyed.
 
 5. **Not Run.** An entry marked *Not Run* exited with 77: a precondition was not met. On the PR legs no
-   precondition is expected to hold, so a new *Not Run* means a test was added without the matching
-   `downloaded`/`slow` label or its executable.
+   precondition is expected to hold, so the guarded `rhi` (`SOFTWARE_GPU_ADAPTER`), `audio` (`AUDIO_DEVICE`,
+   `DOWNLOADED_ASSETS`) and `platform` (`REAL_WINDOW`) cases are *Not Run* by design; any other new *Not Run*
+   means a test was added without the matching `downloaded`/`slow` label or its executable.
 
 ## 6. Planned jobs
 
@@ -129,7 +133,7 @@ Everything in `.github/workflows/ci.yml` today is the `build-test` matrix above.
 | Job | Where | Purpose |
 |---|---|---|
 | `style-and-headers` | PR, `ubuntu-24.04` | `check_style.py`, `clang-format-18 --dry-run -Werror`, `cmake --build --target conjure_header_check`, `dotnet format --verify-no-changes managed/` ([08_testing.md 7.3](../design/08_testing.md#73-ci-githubworkflowsciyml-push-to-main-and-pull-requests-fail-fast-false-60-min)) |
-| `docs` | PR | `mkdocs build --strict`; `docs.check` in the style job ([16_documentation.md section 4](../design/16_documentation.md#4-tooling)) |
+| `docs` | PR | `mkdocs build --strict` ([16_documentation.md section 4](../design/16_documentation.md#4-tooling)); `docs.check` already runs as a CTest entry in every test leg |
 | `ctest_check_skips.py` step | every test leg | fail on any *Not Run* whose label is not in `CONJURE_TEST_ALLOWED_SKIPS` (D12) |
 | JUnit and `test_output` upload | every test leg | `ctest --output-junit junit.xml`, golden diffs on failure |
 | `nightly.yml` | cron 03:00 UTC | `full-matrix-nightly` (`*-nightly` presets, `slow` included), `linux-clang-tsan`, `distribution-export`, `golden-d3d12-warp`, `golden-vulkan-lavapipe`, `benchmarks-ci-class` |

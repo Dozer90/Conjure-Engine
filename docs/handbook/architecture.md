@@ -34,11 +34,12 @@ principles shape every module:
 | Assets are content-addressed blobs | Sources get uuids and `.meta` sidecars, importers cook into a hash-validated cache, export packs it | `05_assets.md` |
 
 > [!NOTE]
-> Modules land wave by wave. `engine/CMakeLists.txt` adds each `engine/src/<module>/` that has a
-> `CMakeLists.txt` and skips the rest, so the tree always builds; to see what is built today, run the configure
-> step and read its `engine: module '<name>' not present yet, skipping` lines. A module's public headers may be
-> in the tree before its `CMakeLists.txt` is; until then its design record is the reference and the headers are
-> the source of truth for names.
+> Modules land wave by wave. Waves 1 and 2 are in the tree: `core`, `ecs`, `platform`, `rhi`, `assets`, `audio`
+> and `modules`, each with a handbook page under [`modules/`](modules/core.md) and wiki pages under `docs/api/`.
+> `engine/CMakeLists.txt` adds each `engine/src/<module>/` that has a `CMakeLists.txt` and skips the rest, so
+> the tree always builds; to see what is built today, run the configure step and read its
+> `engine: module '<name>' not present yet, skipping` lines. For a wave-3 or later module the design record is
+> the reference until its code lands.
 
 ## 2. Module map and waves
 
@@ -46,19 +47,19 @@ Every engine module is a static library `conjure_<name>` (alias `conjure::<name>
 `conjure_add_module()` from `cmake/ConjureModule.cmake`; `core` is an umbrella over per-area static libraries
 (see [Core](modules/core.md)). Executables and game modules link the umbrella shared library `conjure_shared`
 (alias `conjure::shared`, `07_modules.md` 5) rather than the static libraries: `conjure_finalize_engine()` in
-`cmake/ConjureSharedLibrary.cmake` whole-archives every library registered through
-`conjure_register_static_library()` once the `modules` module is present (see
-[Module system](module-system/index.md) 1.1).
+`cmake/ConjureSharedLibrary.cmake`, called by the root `CMakeLists.txt` right after `add_subdirectory(engine)`,
+whole-archives every library registered through `conjure_register_static_library()` (see
+[Module system](module-system/index.md) 2 and [Modules module](modules/modules.md) 7).
 
 | Wave | Module | Namespace | Design record | Purpose |
 |---|---|---|---|---|
-| 1 | `core` | `conjure::core` | `10_core.md` | log/assert, `result`/`error`, uuid, hashing, containers, memory, jobs, events, vfs, json, reflection, math, clock, process, dynamic libraries |
-| 2 | `ecs` | `conjure::ecs` | `01_ecs.md` | archetype world, component registry, queries, scheduler, command buffer, archives, serialisation |
-| 2 | `platform` | `conjure::platform` | `11_platform.md` | window, input, events; backends `glfw`, `null` |
-| 2 | `rhi` | `conjure::rhi` | `02_renderer.md` 4.1 | NVRHI device, swapchain, shader library; backends `d3d12`, `vulkan`, `null` |
-| 2 | `assets` | `conjure::assets` | `05_assets.md` | uuid database, importers, cooked cache, async loading, hot reload, packs |
-| 2 | `audio` | `conjure::audio` | `12_audio.md` | mixer and voices, `conjure.audio.clip` asset type, groups, spatialisation; backends `miniaudio`, `null` |
-| 2 | `modules` | `conjure::modules` | `07_modules.md` | manifests, ABI check, load/unload/reload, registration records, consumers |
+| 1 | [`core`](modules/core.md) | `conjure::core` | `10_core.md` | log/assert, `result`/`error`, uuid, hashing, containers, memory, jobs, events, vfs, json, reflection, math, clock, process, dynamic libraries |
+| 2 | [`ecs`](modules/ecs.md) | `conjure::ecs` | `01_ecs.md` | archetype world, component registry, queries, scheduler, command buffer, archives, serialisation |
+| 2 | [`platform`](modules/platform.md) | `conjure::platform` | `11_platform.md` | window, input, events; backends `glfw`, `null` |
+| 2 | [`rhi`](modules/rhi.md) | `conjure::rhi` | `02_renderer.md` 4.1 | NVRHI device, swapchain, shader library; backends `d3d12`, `vulkan`, `null` |
+| 2 | [`assets`](modules/assets.md) | `conjure::assets` | `05_assets.md` | uuid database, importers, cooked cache, async loading, hot reload, packs |
+| 2 | [`audio`](modules/audio.md) | `conjure::audio` | `12_audio.md` | mixer and voices, `conjure.audio.clip` asset type, groups, spatialisation; backends `miniaudio`, `null` |
+| 2 | [`modules`](modules/modules.md) | `conjure::modules` | `07_modules.md` | manifests, ABI check, load/unload/reload, registration records, consumers |
 | 3a | `scene` | `conjure::scene` | `13_scene.md` | hierarchy and transforms, name/tag/layer/guid, prefabs, scene files, snapshots, scene manager |
 | 3b | `renderer` | `conjure::renderer` | `02_renderer.md` | render graph over rhi, `render_scene` contract, PBR/IBL/shadows/SSAO/HDR, 2D, ImGui backend, glTF import |
 | 3b | `physics` | `conjure::physics` | `14_physics.md` | Jolt world, body/collider/character components, layers, queries, contact events |
@@ -71,7 +72,10 @@ Every engine module is a static library `conjure_<name>` (alias `conjure::<name>
 | 5 | `samples/feature_test`, `samples/stress_test` | - | `08_testing.md` 7.2 | the "everything" scene generated from an AI command file; 10,000 dynamic entities |
 
 Each wave is implementable in parallel across its modules once the previous wave's public headers exist. The
-per-wave definition of done lives in `docs/ARCHITECTURE.md` 11; the generic one is `08_testing.md` 7.4.
+linked rows are implemented (waves 1 and 2); `conjure_shared` is built today by `conjure_finalize_engine()`
+even though the executables that link it are wave 4, and the `tests/modules` suite already links it
+(`LINK_ENGINE_SHARED`). Rows from wave 3a on are design only. The per-wave definition of done lives in
+`docs/ARCHITECTURE.md` 11; the generic one is `08_testing.md` 7.4.
 
 ## 3. Dependency rules
 
@@ -171,7 +175,8 @@ Every module must be testable in CI without a GPU, window, audio device or .NET 
 
 - `platform`, `rhi` and `audio` ship `null` backends that behave like the real ones (the null window has an
   in-memory clipboard, `push_event` / `simulate_*` test controls; the null RHI records `null_device_stats`;
-  the null audio backend records `null_backend_stats`).
+  the null audio backend records `null_backend_stats` and runs a virtual clock). See [Platform](modules/platform.md) 6,
+  [RHI](modules/rhi.md) 3.4 and [Audio](modules/audio.md) 8.
 - `scripting` has `null_script_host`, a C++ fake of the managed side.
 - `core::vfs::memory_file_system` replaces the disk; `core::manual_clock` replaces time; `core::random::seed`
   fixes randomness; a `job_system` started with `workerCount = 0` runs every job inline.
@@ -206,4 +211,6 @@ enforces it); `CONJURE_ASSERTS_ENABLED` and `CONJURE_DEV_TOOLS_ENABLED` follow f
   [`../design/06_engine_loop.md`](../design/06_engine_loop.md) (frame, threads),
   [`../design/09_cross_area_resolutions.md`](../design/09_cross_area_resolutions.md) (the `R<n>` ids cited above)
 - handbook: [Coding standards](coding-standards.md), [Data-oriented design](data-oriented-design.md),
-  [Core module](modules/core.md), [Module system](module-system/index.md), [Decision records](decision-records.md)
+  the module pages [Core](modules/core.md), [ECS](modules/ecs.md), [Platform](modules/platform.md),
+  [RHI](modules/rhi.md), [Assets](modules/assets.md), [Audio](modules/audio.md), [Modules](modules/modules.md),
+  [Module system](module-system/index.md), [Decision records](decision-records.md)

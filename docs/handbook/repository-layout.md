@@ -23,25 +23,28 @@ generated or downloaded and therefore never committed.
 | `README.md` | short project description, build requirements, pointers into `docs/` |
 | `CMakeLists.txt` | root build: options, configurations, global compiler settings, `add_subdirectory` order |
 | `CMakePresets.json` | configure, build, test and workflow presets per platform and configuration |
-| `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake`, `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake` |
+| `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake` |
 | `third_party/` | `CMakeLists.txt` with every pinned dependency and `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) |
-| `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `CMakeLists.txt` with the module list |
+| `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `shaders/` the engine's HLSL sources and their `CMakeLists.txt` (`conjure_add_shaders`), `CMakeLists.txt` with the module list |
 | `editor/` | the `conjure_editor` executable (wave 4; its `CMakeLists.txt` returns until `src/main.cpp` exists) |
 | `runtime/` | the `conjure_runtime` executable (wave 4; same skip) |
 | `managed/` | the C# SDK and templates built with `dotnet` (waves 3-4; skipped until `Conjure.Managed/Conjure.Managed.csproj` exists) |
 | `samples/` | sample projects, first `feature_test` (wave 5; skipped until `feature_test/CMakeLists.txt` exists) |
 | `tests/` | the test support library, one test directory per module, the style check registration |
-| `tools/` | Python scripts: build driver, style and documentation checks, asset download |
+| `tools/` | Python scripts: build driver, style, export and documentation checks, asset download; `tests/` holds the documentation checker's self-test |
 | `docs/` | requirements, architecture, conventions, style, design record, both documentation sets |
-| `.claude/skills/` | agent skills: `build-and-test`, `add-engine-module`, `code-review-checklist`; `add-component/` and `editor-ai-control/` are empty placeholders for later waves (`AGENTS.md` already names their `SKILL.md` files) |
+| `.claude/skills/` | agent skills: `build-and-test`, `add-engine-module`, `code-review-checklist`, `write-docs`; `add-component/` and `editor-ai-control/` are empty placeholders for later waves (`AGENTS.md` already names their `SKILL.md` files) |
 | `.github/workflows/` | `ci.yml`, the pull-request matrix (see [Continuous integration](ci.md)) |
 | `mkdocs.yml` | the documentation site (navigation, theme, plugins) |
 | `.clang-format`, `.editorconfig`, `.gitattributes`, `.gitignore` | editor and git configuration: LF everywhere, binary extensions marked, build outputs ignored |
 
 Engine modules in dependency order, as listed in `engine/CMakeLists.txt` (`CONJURE_ENGINE_MODULES`):
 `core`, `ecs`, `platform`, `rhi`, `assets`, `audio`, `modules`, `scene`, `renderer`, `physics`,
-`scripting`, `engine`. A module directory that does not exist yet is skipped with a status message so the
-build keeps working while waves land.
+`scripting`, `engine`. The first seven (waves 1 and 2) are in the tree; a module directory that does not
+exist yet is skipped with a status message so the build keeps working while waves land. Modules that talk to
+hardware keep each backend's files together: `rhi` under `src/rhi/backends/{d3d12,vulkan,null}/`, `platform`
+under `src/platform/glfw/` next to a flat `null_backend.cpp`, `audio` as flat `miniaudio_backend.{h,cpp}` and
+`null_backend.cpp`.
 
 ## 2. Engine module anatomy
 
@@ -54,7 +57,7 @@ engine/src/<name>/CMakeLists.txt            conjure_add_module(<name> PUBLIC_HEA
 engine/src/<name>/log_category.h            CONJURE_DECLARE_LOG_CATEGORY(LOG_<NAME>);
 engine/src/<name>/log_category.cpp          CONJURE_DEFINE_LOG_CATEGORY(LOG_<NAME>, "<name>");
 engine/src/<name>/<type>.cpp                implementation; private headers stay here too
-engine/src/<name>/backend/                  abstract backend + real and null implementations (modules that talk to hardware)
+engine/src/<name>/<backend>/                a real backend's files (rhi: backends/<api>/, platform: glfw/); the null backend sits beside them
 engine/src/<name>/README.md                 purpose, main types, threading model, dependencies, how to test
 tests/<name>/CMakeLists.txt                 conjure_add_test_module(<name> SOURCES ...) and conjure_header_check(conjure_<name>)
 tests/<name>/test_<type>.cpp                one test file per public header
@@ -99,11 +102,16 @@ has its own `README.md` with the same four sections as a module README.
 
 ```
 tests/CMakeLists.txt                   adds support/, then one directory per module (CONJURE_TEST_MODULES), integration/ and
-                                       benchmarks/ when present; registers the CTest entry style.check (label style)
-tests/support/                         conjure_test_support: include/conjure/testing/*.h, src/*.cpp, src/test_main.cpp,
+                                       benchmarks/ when present; registers the CTest entries style.check (label style),
+                                       docs.check and docs.check_tool (label docs)
+tests/support/                         conjure_test_support (and conjure_test_support_shared, the same sources against
+                                       conjure::shared): include/conjure/testing/*.h, src/*.cpp, src/test_main.cpp,
                                        src/tracked_global_new.cpp; tests/ holds its self-tests (conjure_support_tests)
-tests/<module>/                        conjure_<module>_tests: test_<header>.cpp per public header
+tests/<module>/                        conjure_<module>_tests: test_<header>.cpp per public header, plus a
+                                       <module>_test_support.{h,cpp} where the suite needs a fixture or a precondition probe
 tests/core/<area>/                     conjure_core_<area>_tests, mirroring engine/src/core/<area>
+tests/modules/fixtures/<name>/         one fixture plugin per directory (module.json and a .cpp), built with
+                                       conjure_add_game_module() into build/<preset>/test_modules/<name>/
 ```
 
 Conventions worth knowing when looking for something:
@@ -118,9 +126,12 @@ Conventions worth knowing when looking for something:
   `conjure_support_child`. Their paths reach the tests as compile definitions.
 - `tools/style_exceptions.json` lists the public headers that have no test file (macro-only headers) and
   the test files allowed to use otherwise forbidden constructs, each with its reason.
-- Planned by `docs/design/08_testing.md` 2.1 and not present yet: `tests/assets/` (in-repo fixtures),
-  `tests/.downloaded/` (fetched by `tools/download_test_assets.py`), `tests/integration/`, `tests/downloaded/`,
-  `tests/golden/`, `tests/benchmarks/`, `tests/sanitizers/`.
+- `tests/assets/` is the `assets` module's test directory, not the in-repo fixture root that
+  `docs/design/08_testing.md` 2.1 planned there, although `CONJURE_TEST_REPO_ASSET_ROOT` still points at it;
+  the wave-2 suites build their fixtures in code or in `temp_directory` instead.
+- Planned by `docs/design/08_testing.md` 2.1 and not present yet: `tests/.downloaded/` (fetched by
+  `tools/download_test_assets.py`), `tests/integration/`, `tests/downloaded/`, `tests/golden/`,
+  `tests/benchmarks/`, `tests/sanitizers/`.
 
 ## 4. Tools
 
@@ -129,7 +140,9 @@ Conventions worth knowing when looking for something:
 | `tools/build.py` | cross-platform build driver: default preset per host, MSVC environment import, `--build-dir`, `--target`, `--test -R/-L`, `--clean` |
 | `tools/check_style.py` | mechanical style rules over `engine/`, `editor/`, `runtime/`, `tests/`, `samples/`; `--tests-mirror-headers`; CTest entry `style.check` |
 | `tools/style_exceptions.json` | the two exception tables read by `check_style.py` |
-| `tools/check_docs.py` | documentation structure and coverage checks (`docs/design/16_documentation.md` D9) |
+| `tools/check_exports.py` | reports public classes, free functions and `extern` variables without `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); default module `modules`, `--all` for every module |
+| `tools/check_docs.py` | documentation structure and coverage checks (`docs/design/16_documentation.md` D9); CTest entry `docs.check` |
+| `tools/tests/test_check_docs.py`, `tools/tests/check_docs/` | the checker's self-test and its fixture tree; CTest entry `docs.check_tool` |
 | `tools/docs.py` | `install`, `serve`, `build`, `check` for the documentation site |
 | `tools/docs_requirements.txt` | pinned MkDocs toolchain |
 | `tools/download_test_assets.py`, `tools/test_assets.json` | downloads the public fixtures listed in the manifest into `tests/.downloaded/`, pins SHA-256 hashes in `assets.lock`, writes the `.assets_ready` stamp |
@@ -156,14 +169,17 @@ is not ignored yet.
 |---|---|---|
 | `build/`, `out/`, `install/`, `export/` | CMake presets, `tools/build.py --build-dir`, future export | every build tree, including private ones |
 | `build/<preset>/generated/include/conjure/core/build_info.h` | `configure_file()` in `engine/src/core/CMakeLists.txt` | edit `build_info.h.in` or the `project()` version, never the output |
+| `build/<preset>/generated/include/conjure/modules/abi_identity.h` | the `conjure_abi_identity` target (`cmake/ConjureSharedLibrary.cmake`) | header hash, compiler major and runtime facts; rewritten at build time when a public header changes |
+| `build/<preset>/shaders/` (`*.dxil`, `*.spv`, `index.json`) | `conjure_add_shaders()` from `engine/shaders/CMakeLists.txt` | read by `rhi::shader_library`; depfiles make a changed `.hlsli` rebuild its permutations |
+| `build/<preset>/test_modules/<name>/` | `tests/modules/CMakeLists.txt` | the fixture plugins' `module.json` copies and `bin/<platform>-<arch>-<config>/` binaries |
 | `build/<preset>/_deps/` | FetchContent | cached in CI keyed by the hash of `third_party/CMakeLists.txt` |
 | `build/<preset>/tests/.../header_check/<target>/*.cpp` | `conjure_header_check()` | one stub per public header, regenerated only when the header list changes |
 | `build/<preset>/tests/.../<target>_labels.cmake`, `<target>_tests-*.cmake` | `conjure_add_test_module()`, doctest discovery | the CTest entries and their labels |
 | `build/<preset>/test_output/<executable>/`, `test_tmp/<executable>/` | test executables | `temp_directory` lives under `test_tmp`; per executable so parallel CTest processes never share a directory |
 | `CMakeUserPresets.json` | you | personal presets, ignored |
-| `tests/.downloaded/` (`assets.lock`, `.assets_ready`) | `tools/download_test_assets.py` | **not yet in `.gitignore`** (only `/samples/**/assets/downloaded/` is): check `git status` after a download, or `git add -A` stages the fixtures; `assets.lock` pins hashes; the support library expects the stamp one level up, at `tests/.assets_ready` (see [Testing](testing.md#6-preconditions-and-skipping)) |
+| `tests/.downloaded/` (`assets.lock`) and `tests/.assets_ready` | `tools/download_test_assets.py` | ignored by `.gitignore` |
 | `**/bin/`, `**/obj/`, `*.nupkg` | `dotnet` | managed build outputs |
-| `*.dxil`, `*.spv`, `*.cso` | shader compilers (planned) | compiled shaders |
+| `*.dxil`, `*.spv`, `*.cso` | `dxc`, glslang | compiled shaders, wherever they land |
 | `.venv-docs/`, `site/` | `tools/docs.py install` / `build` | documentation toolchain and site output |
 | `__pycache__/`, `*.pyc` | Python | |
 | `.vs/`, `.vscode/`, `.idea/`, `*.user`, `*.log`, `*.dmp`, `/logs/` | IDEs, the engine | editor state, logs, crash dumps |
@@ -177,5 +193,5 @@ is not ignored yet.
 - design record: `docs/design/10_core.md` (core areas and their headers)
 - design record: `docs/design/08_testing.md` section 2.1 (directories owned by the test strategy)
 - `docs/ARCHITECTURE.md` section 2 (module map and dependency graph)
-- `engine/src/core/README.md` and the area READMEs
-- [Build pipeline](build-pipeline.md), [Testing](testing.md)
+- `engine/src/<module>/README.md` for every module and the core area READMEs
+- [Build pipeline](build-pipeline.md), [Testing](testing.md), the module pages under [`modules/`](modules/core.md)

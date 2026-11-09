@@ -1,0 +1,328 @@
+# Modules module
+
+🛠 **Engineering handbook** · 📘 API: [Modules and plugins](../../api/modules/index.md)
+
+`conjure::modules` (target `conjure_modules`, alias `conjure::modules`) is the plugin system: manifests, the C ABI
+handshake, load / unload / reload in dependency order, registration records and the consumers that apply them.
+It depends on `conjure::core` only, sits in wave 2 beside `ecs`, `platform`, `rhi`, `assets` and `audio`, and is
+consumed by the wave-4 `engine` module, which owns the one `module_manager` of a process. This chapter covers the
+internals an engine programmer needs: how a load proceeds, what the records hold, how reloads keep state, how the
+umbrella shared library the whole scheme depends on is built, and how the suite tests all of it without a GPU or
+a window. The binding design is [`../../design/07_modules.md`](../../design/07_modules.md); the module README at
+`engine/src/modules/README.md` holds the finer behavioural notes.
+
+## Contents
+- [1. Purpose and position](#1-purpose-and-position)
+- [2. Public headers](#2-public-headers)
+- [3. Internals](#3-internals)
+- [4. Data layout](#4-data-layout)
+- [5. Threading](#5-threading)
+- [6. Extension points](#6-extension-points)
+- [7. Build: the umbrella shared library](#7-build-the-umbrella-shared-library)
+- [8. Failure handling](#8-failure-handling)
+- [9. Tests and fixtures](#9-tests-and-fixtures)
+- [10. Open items](#10-open-items)
+- [Related](#related)
+
+## 1. Purpose and position
+
+The module does five things: find modules through `module.json`, prove a binary is safe to load before any of its
+code runs, load / unload / reload in dependency order on the main thread between frames, collect what a module
+registers as plain data, and hand that data to *consumers* which validate first and attach only when every
+consumer agreed. Nothing here runs per frame except one relaxed atomic load in `module_manager::apply_pending()`.
+
+Three design decisions shape everything below (`07_modules.md` D1-D3): hosts and plugins link one umbrella
+shared library `conjure_shared` so a single copy of every engine global exists (section 7); a module exports a C
+front door (`conjure_module_describe`, `conjure_module_entry`) and plain C++ flows once the ABI signature matched;
+and registration is data in a `module_registration_set`, applied by consumers, never by the module calling engine
+APIs. Component identity is by name (`core::string_id`), never by a template static, so a type registered by a
+module is indistinguishable from an engine type at attach time.
+
+## 2. Public headers
+
+| Header (`conjure/modules/`) | Main types | Tests |
+|---|---|---|
+| `module_types.h` | `module_id`, the enumerations, `module_platform_flags`, `module_feature_flags`, `binary_triplet`, `host_*()` facts, names and parsers | `test_module_types.cpp` |
+| `module_version.h` | `semantic_version`, `version_range`, `parse_version`, `parse_version_range`, `host_engine_version` | `test_module_version.cpp` |
+| `module_error.h` | `module_error` (32 codes), `module_error_name`, `make_module_error`; category `"modules"` | `test_module_error.cpp` |
+| `module_manifest.h` | `module_manifest`, `module_dependency`, `parse_module_manifest`, `load_module_manifest`, `write_module_manifest`, `module_binary_path`, `decorate_binary_name` | `test_module_manifest.cpp` |
+| `module_abi.h` | `conjure_module_abi_signature`, `conjure_module_info`, `make_abi_signature`, `host_abi_signature`, `compare_abi`, `CONJURE_MODULE_ABI_VERSION` | `test_module_abi.cpp` |
+| `module_entry.h` | `static_module_desc`, `module_entry_function`, `CONJURE_DECLARE_MODULE`, `CONJURE_DECLARE_STATIC_MODULE`, `detail::entry_thunk` | `test_module_entry.cpp` |
+| `module_registration_set.h` | `extension_record`, `module_lifecycle`, `module_registration_set`, `extensions_of<T>` | `test_module_registration_set.cpp` |
+| `module_registrar.h` | `module_registrar` | `test_module_registrar.cpp` |
+| `module_service.h` | `service_id`, `make_service_id`, `CONJURE_MODULE_SERVICE`, `service_table` | `test_module_service.cpp` |
+| `module_context.h` | `module_context` | `test_module_context.cpp` |
+| `module_consumer.h` | `reload_context`, `module_consumer` | `test_module_consumer.cpp` |
+| `module_events.h` | the four event structs | `test_module_events.cpp` |
+| `module_resolver.h` | `resolution_input`, `resolution_failure`, `resolution_result`, `resolve_load_order` | `test_module_resolver.cpp` |
+| `module_registry.h` | `module_registry` | `test_module_registry.cpp` |
+| `module_manager.h` | `module_manager_desc`, `module_manager` | `test_module_manager*.cpp`, lifecycle, reload, requests, shadow copy, export |
+| `modules.h` | umbrella for module authors (entry, context, registrar, service) | `test_modules.cpp` |
+
+Private (`engine/src/modules/`): `log_category.{h,cpp}` (`LOG_MODULES`), `module_record.h`, `module_loader.{h,cpp}`
+(`detail::open_module_binary`), `shadow_copy.{h,cpp}`, one `.cpp` per public header with out-of-line code.
+
+## 3. Internals
+
+### 3.1 The ABI handshake
+
+`make_abi_signature()` is `constexpr` and reads no compiler-defined macro itself: compiler and standard library ids
+come from `conjure/core/platform_detect.h`; the compiler major, the runtime facts (dynamic CRT, ASan, UBSan) and
+the public-header hash come from the generated `conjure/modules/abi_identity.h` (section 7.1). `module_abi.h`
+prefers `CONJURE_COMPILER_VERSION_MAJOR`, `CONJURE_RUNTIME_DYNAMIC_CRT` and `CONJURE_SANITIZER_ADDRESS` when core
+defines them (so a module built against the installed SDK describes *its* translation unit rather than the engine
+build's) and falls back to the generated values until then. `CONJURE_DECLARE_MODULE` bakes the signature into a
+`static constexpr conjure_module_info` returned by `conjure_module_describe()`, a data getter and the only module
+code that runs before the comparison.
+
+`compare_abi()` checks `structSize` first, so a module built against another layout is refused before any other
+field is read, then `magic`, `abiVersion` and the rest in declaration order; the error names the field, the expected
+and the actual value and asks for a rebuild. `CONJURE_TEST_ABI_VERSION_OVERRIDE` and
+`CONJURE_TEST_ENGINE_VERSION_OVERRIDE` exist for the mismatch fixtures only.
+
+### 3.2 One load, step by step
+
+```
+load_one(record):
+  static module      -> entry = desc.entry (may be null: manifest-only module)
+  manifest-only      -> entry = null
+  shared binary      -> detail::open_module_binary: allowSharedLibraries? exists? shadow copy?
+                        dynamic_library::load, both symbols, describe(), compare_abi, name == manifest.name
+  context = module_context(id, host, engineVersion, manifest, root, services)
+  begin_entry(registrar); status = entry(context); end_entry()
+                      -> ENTRY_FAILED when status != OK or fail() was called (every reason listed); close
+  consumers.validate  -> REGISTRATION_CONFLICT (nothing applied); close
+  consumers.attach    (add order)
+  LOADED; load order; link dependents; restore a pending reload snapshot; onActivated; module_loaded_event
+```
+
+`load(id)` resolves the transitive closure of the module's unloaded dependencies with `resolve_load_order()`
+(Kahn's algorithm, name tie-breaks, `GAME` as late as the graph allows) and stops at the first failure;
+`load_all()` resolves every candidate and continues past failures, returning the first error. Before each
+`load_one` the manager re-checks every non-optional dependency named in the manifest: one that is not `LOADED`
+(it failed in this very pass, after resolution accepted it) fails the dependent with `DEPENDENCY_FAILED`, so a
+module never ends up `LOADED` without a dependency it declared. When a module becomes `LOADED` it is linked both
+ways: with the loaded modules it depends on and with the already loaded modules whose manifests name it (an optional
+dependency arriving after its dependent), so `HAS_DEPENDENTS` and the reload cascade hold whichever side loaded
+first.
+
+### 3.3 Unload, fault and reload
+
+`unload` pre-checks (`HAS_DEPENDENTS`, every consumer's `can_detach`) are side-effect free. Then: `onDeactivating`,
+`module_unloading_event`, detach in reverse consumer order, context and registration set destroyed (so retained
+subscriptions and descriptor strings die before the binary), the binary closed (unless `keepBinariesResident`), the
+generation incremented, `module_unloaded_event` with the old id and the name. A consumer still reporting live uses
+after `detach()` puts the record in `FAULTED`: its binary stays resident and every later operation on the id returns
+`FAULTED`. A leaked DLL beats a `dlclose` of unknown state.
+
+`reload(id, FULL)` computes the cascade (the module plus its transitive loaded dependents, reverse load order),
+pre-checks every member, then per member `onDeactivating`, `module_unloading_event{ reloading = true }`, `detach(id,
+&snapshot)`, close. Forward: `load_one` (a fresh shadow copy), `restore(id, snapshot)` per consumer, `onActivated`.
+A load failing inside the cascade leaves that module `FAILED` and the rest `UNLOADED`, every snapshot kept in the
+record's `pendingSnapshot` until the next successful load restores it. `MANAGED_ONLY` skips close and open and runs
+only consumers with `participates_in_managed_reload()`, but the lifecycle callbacks bracket it exactly like a full
+reload. The id stays valid across any reload.
+
+### 3.4 Shadow copies
+
+Windows locks a loaded DLL. With `module_manager_desc::shadowCopyBinaries` the loader copies the binary and its
+`.pdb` / `.dSYM` to `<shadowCopyDirectory>/<name>/<loadCount + 1>/` and opens the copy, so a rebuild can overwrite
+the original while the module is loaded. The cache is emptied when the manager is constructed (locked entries,
+another process's loaded module, are skipped with a WARN) and a copy directory is removed once its library closed.
+The code is plain `std::filesystem` and runs identically on every platform; the shadow-copy tests check the
+Windows lock behaviour only where the platform locks files.
+
+`keepBinariesResident` never closes a binary: on unload the handle and its shadow copy stay, and when a later load
+opens a new image the previous handle moves into the record's `residentBinaries` (plain assignment would unload
+it, since `core::dynamic_library`'s move assignment closes the handle it replaces). Every resident image is released
+when the manager is destroyed.
+
+### 3.5 Registration set and consumers
+
+`module_registrar::register_extension()` appends a trivially copyable descriptor into one byte buffer
+(`extensionStorage`), aligned per record, and an `extension_record { point, offset, size, alignment }` into
+`extensions`. `extensions_of<Desc>()` walks the records, matching `Desc::EXTENSION_POINT` *and* `sizeof(Desc)` (a
+record of another size under the same point is skipped, so two descriptor versions never alias) and returns
+pointers into the storage. The set also carries `managedAssemblies` (manifest entries first, then
+`register_managed_assembly()` additions, deduplicated), `lifecycle` and `errors` (any entry rejects the load).
+
+Consumers are non-owning pointers held in add order. The manager calls `validate()` on all of them before the
+first `attach()`, so a veto is free of side effects; `attach()` cannot fail. Ownership is per *type*: consumers
+record `(what they attached -> module_id)` through `module_registry::note_ownership()` and the manager calls
+`forget_ownership()` on unload. No hot path carries a module tag; "is this module in use?" is answered from
+archetype metadata by the ECS consumer, O(archetypes).
+
+### 3.6 Service table and context
+
+`service_table` wraps a `core::flat_map<service_id, void *>`; `service_id` is the FNV-1a 64 hash of the qualified
+interface name that `CONJURE_MODULE_SERVICE(name)` declares as `SERVICE_ID` (with `SERVICE_NAME` for messages).
+`provide()` asserts on a duplicate and keeps the first. The table is immutable while anything is `LOADED`
+(`provide_service` asserts otherwise), hence readable from job threads. `module_context` holds non-owning pointers
+to the manifest and the table, the registrar pointer bound by `begin_entry()` / `end_entry()` (outside the entry
+`registrar()` asserts and returns a registrar over a scratch set so a stray call cannot corrupt the real one), and
+a `std::vector<core::event_subscription>` that `retain()` fills and the destructor releases.
+
+### 3.7 Static modules
+
+`CONJURE_DECLARE_STATIC_MODULE(identifier, json, entry)` defines a function returning a function-local
+`static constexpr static_module_desc`; `detail::static_entry<EntryFunction>()` yields `nullptr` for a `nullptr`
+argument or `&detail::entry_thunk<EntryFunction>`, the C-signature adapter, otherwise. `add_static_module()` parses
+the embedded manifest text and keeps a pointer to the descriptor, which must therefore outlive the manager. The
+wave-4 `engine` module adds one manifest-only static module per built-in library (`conjure.ecs`, `conjure.renderer`,
+...) so game modules can depend on them (`07_modules.md` D7, R18); the built-ins register their types through the
+engine's subsystem adapters, never through a module entry.
+
+## 4. Data layout
+
+`module_record` (`engine/src/modules/module_record.h`) is the manager's per-module state; records live in the
+registry, are never destroyed while the manager exists and keep their slot across unloads (the generation inside
+`id` is what changes):
+
+| Field | Purpose |
+|---|---|
+| `id`, `name`, `state`, `manifest`, `rootDirectory` | identity and manifest |
+| `binaryPath`, `loadedBinaryPath` | derived binary path; the shadow copy actually opened |
+| `staticDesc` | non-null for static modules |
+| `library`, `residentBinaries` | the open `core::dynamic_library`; earlier images kept by `keepBinariesResident` |
+| `registrations`, `context`, `pendingSnapshot` | the set, the `module_context`, a reload snapshot awaiting a successful load |
+| `dependencies`, `dependents` | `small_vector<module_id, 8>` of *loaded* modules either side |
+| `lastError`, `loadOrder`, `loadCount` | diagnostics; `loadCount` also indexes shadow copies |
+
+`module_registry` hides `registry_state` behind a `unique_ptr`: the record vector (slot reuse by index), the
+load-order vector, a name map and the ownership table `(point, key) -> module_id`. Getters taking an id assert on
+an invalid or stale id and return an empty value, so a stale handle never dereferences another module's record.
+`module_manager` keeps `mDesc`, `mRegistry`, `mServices`, the consumer vector, the pending-operation vector with
+`std::atomic<bool> mHasPending`, the event bus pointer and `mNextLoadOrder`.
+
+## 5. Threading
+
+Every `module_manager` mutator and every consumer callback runs on the main thread with no jobs in flight:
+`CONJURE_ASSERT(core::jobs::is_main_thread())` and, when `isInsideFrame` is set, `CONJURE_ASSERT(!isInsideFrame())`;
+a violated precondition returns `core::error_code::INVALID_STATE` (or returns early for the `void` operations,
+keeping the request queue). `request_*` is main thread only and drops a request made elsewhere. `apply_pending()`
+costs one `mHasPending.load(std::memory_order_relaxed)` when idle; requests made while applying wait for the next
+call. `module_registry` and `service_table` are immutable between sync points and may be read from job threads.
+`dlopen` runs module static initialisers on the main thread. Module code never creates threads.
+
+## 6. Extension points
+
+| Point | How |
+|---|---|
+| New descriptor kind | the consuming area defines a trivially copyable struct with `static constexpr core::string_id EXTENSION_POINT` and a `module_consumer` that reads it with `extensions_of<T>()`; nothing in this module changes |
+| New host service | `CONJURE_MODULE_SERVICE(qualified::name)` in the interface, `manager.provide_service(object)` before loading |
+| Host policy | `module_manager_desc`: host kind, features, binary config, shared libraries on or off, shadow copies, resident binaries, default unload policy, frame hook |
+| Managed reload | a consumer returning true from `participates_in_managed_reload()` takes part in `reload_scope::MANAGED_ONLY` |
+
+## 7. Build: the umbrella shared library
+
+### 7.1 `cmake/ConjureSharedLibrary.cmake`
+
+`conjure_finalize_engine()` runs once from the root `CMakeLists.txt` right after `add_subdirectory(engine)` and
+creates two targets. `conjure_abi_identity` writes `${PROJECT_BINARY_DIR}/generated/include/conjure/modules/
+abi_identity.h` with `CONJURE_ABI_HEADER_HASH` (the first 64 bits of a SHA-256 over the relative path and SHA-256
+digest of every header in every library's `CONJURE_PUBLIC_HEADERS` property, sorted by path; recomputed at build
+time whenever one changes), `CONJURE_ABI_COMPILER_MAJOR` and `CONJURE_ABI_RUNTIME_DYNAMIC_CRT` / `_ASAN` / `_UBSAN`.
+`conjure_shared` (alias `conjure::shared`) is a `SHARED` library from one generated empty source that whole-archives
+every library in the global property `CONJURE_STATIC_LIBRARIES` (`$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` plus a
+`LINK_LIBRARY_OVERRIDE_<lib>` per library so transitive plain links agree); third-party static libraries follow
+transitively and are not whole-archived. It compiles with `CONJURE_SHARED_EXPORTS`; consumers get
+`CONJURE_SHARED_IMPORTS`, the engine include directories, every library's interface compile definitions,
+`conjure::platform_defines` and glm. Run paths are `$ORIGIN` / `@loader_path`.
+
+### 7.2 What is exported
+
+On MSVC a module definition file listing every external symbol of the whole-archived objects is generated at build
+time (`cmake -E __create_def`, the mechanism behind `WINDOWS_EXPORT_ALL_SYMBOLS`, which by itself does not look
+inside static libraries), so everything the static libraries define is exported whether or not it carries
+`CONJURE_API`. A DLL may hold 65535 exports; the 17 wave-1/2 libraries already produce 26,739, so the `.def`
+generation is followed by a `cmake -P` count that warns above 80 % and fails the build with the remedy instead of
+leaving the linker to fail with LNK1189. GCC and Clang export every default-visibility symbol. `CONJURE_API`
+(`conjure/core/api.h`) is therefore mostly an import-side matter today: it makes consumers call through the import
+thunk directly and lets exported data resolve. This module marks every public class with out-of-line members and
+every out-of-line free function; `python tools/check_exports.py modules` verifies that (`--all` checks every
+module, and core carries no annotations yet). The static libraries themselves compile without
+`CONJURE_SHARED_EXPORTS`, so tests linking them directly see an empty `CONJURE_API`.
+
+### 7.3 `conjure_add_game_module()` and `LINK_ENGINE_SHARED`
+
+`conjure_add_game_module(<target> MANIFEST <module.json> SOURCES ... [NAME <name>] [OUTPUT_ROOT <dir>] [DEPS ...]
+[DEFINES ...] [EDITOR_UI])` (`cmake/ConjureModule.cmake`) builds a plugin: a `SHARED` library linking
+`conjure::shared` privately, hidden visibility, `CONJURE_MODULE_NAME="<name>"`, output name from the manifest's
+`"binary"`, output directory `<root>/bin/<platform>-<arch>-$<LOWER_CASE:$<CONFIG>>/` and a `$ORIGIN` run path.
+`OUTPUT_ROOT` is an addition to the design so the fixtures build into the build tree. `conjure_add_test_module(...
+LINK_ENGINE_SHARED)` (`cmake/ConjureTesting.cmake`) links a test executable against `conjure::shared` and
+`conjure::test_support_shared` instead of the static libraries; see [Creating a module](../module-system/creating-a-module.md)
+for the author's view.
+
+## 8. Failure handling
+
+Every failure is a `module_error` returned as `core::error` in category `"modules"`, with a message naming the
+module and, where relevant, expected and actual values, so the editor can show it verbatim; the full list by stage
+is on the 📘 API page [Loading and managing modules](../../api/modules/loading-and-managing.md#failure-modes).
+Rules: every failure before the entry is side-effect free except a closed handle; a failed entry or validation
+closes the binary and applies nothing; unload pre-checks are side-effect free; `FAULTED` is the only non-recoverable
+state and it is contained to one record. Crashes inside module code are not caught (the engine never catches):
+the editor builds modules out of process, auto-saves before a reload and stops play mode first. `discover()`
+returns `MANIFEST_NOT_FOUND` for a directory that does not exist or cannot be listed, never passing an unreadable
+directory for an empty one. `DEPENDENCY_MISSING` names the actual cause: unregistered, `SKIPPED` on this
+platform, or `FAULTED` (with its error).
+
+## 9. Tests and fixtures
+
+`tests/modules/` builds `conjure_modules_tests` with `conjure_add_test_module(modules ... LINK_ENGINE_SHARED)`, plus
+seven fixture plugins through `conjure_add_game_module()` and four manifest-only fixtures, all under
+`${PROJECT_BINARY_DIR}/test_modules/<name>/` (`CONJURE_TEST_MODULE_DIR`), so the tree a test discovers looks
+exactly like a project's `modules/` directory:
+
+| Fixture | Proves |
+|---|---|
+| `module_alpha` | a component, a system and a probe descriptor, lifecycle counters, a log line through the host logger (one engine copy), a retained subscription through `fixtures::host_event_service` |
+| `module_beta` | depends on alpha `^1.0.0`; a panel record and a managed assembly added by the entry |
+| `module_bad_abi`, `module_bad_version` | `ABI_MISMATCH` on `abiVersion` / `engineVersionMajor`, entry never runs |
+| `module_wrong_name`, `module_no_symbol`, `module_bad_entry` | `NAME_MISMATCH`, `ENTRY_SYMBOL_MISSING`, `ENTRY_FAILED` with both reasons |
+| `module_managed_only`, `module_wrong_platform`, `module_cycle_a/b` | manifest-only load, `SKIPPED`, `DEPENDENCY_CYCLE` |
+
+`tests/modules/fixtures/fixture_descriptors.h` stands in for the consuming areas' descriptor types;
+`fake_consumer.h` records every consumer call as `"<call>:<consumer>:<module>"`; `static_fixtures.h` builds
+manifests and static modules with counting entries (`REGISTERING_ENTRY`, `FAILING_ENTRY`, `FLAKY_ENTRY`, ...) for
+the `dlopen`-free manager tests; `shared_fixtures.h` locates the built plugins. One test file per public header
+plus the topic files of the design (`test_module_manager_static`, `_shared`, `test_module_lifecycle_order`,
+`test_module_reload`, `test_module_requests`, `test_module_shadow_copy`, `test_module_export_layout`,
+`test_dynamic_library`). Beyond the design's list the suite covers the regressions found in review: a dependency
+failing at load time fails its dependents, resident binaries across reload and unload, entry-registered assemblies
+in the exported layout, a retained host subscription dying with the module, a fault inside a reload cascade, the
+`unload_all` error path, an optional dependency linked after its dependent, and a `request_*` made off the main
+thread.
+
+```
+python tools/build.py --build-dir build/mod_modules --target conjure_modules_tests --test -R modules
+python tools/check_exports.py modules
+```
+
+> [!NOTE]
+> `LINK_ENGINE_SHARED` leaves the test support's global `operator new` replacement out of the executable (it
+> would release memory allocated inside `conjure_shared` through the wrong deallocator), so `memory_guard` and
+> `allocation_scope` count nothing here; the suite asserts "no growth" through the registry (record count,
+> generations, `load_count`) instead.
+
+## 10. Open items
+
+- `platform_detect.h` does not yet define `CONJURE_COMPILER_VERSION_MAJOR`, `CONJURE_RUNTIME_DYNAMIC_CRT` and
+  `CONJURE_SANITIZER_ADDRESS` (requested from core); until then the signature reports the engine build's values.
+- Export-everything on MSVC spends the 65535-symbol budget; the switch to `CONJURE_API`-only exports
+  (`CONJURE_SHARED_EXPORTS` on the static libraries, hidden visibility in `conjure_add_module`) waits for core to
+  carry the annotations.
+- The consumers themselves (`ecs_module_consumer`, assets, scripting, editor) and `builtin_modules.cpp` belong to
+  wave 4; the integration tests `test_module_ecs_roundtrip` and `test_module_asset_importer` and the benchmark
+  `bench_module_reload` come with them.
+
+## Related
+- design records: [`../../design/07_modules.md`](../../design/07_modules.md) (binding),
+  [`../../design/09_cross_area_resolutions.md`](../../design/09_cross_area_resolutions.md) R14, R17-R20, R36, R37,
+  R64, [`../../design/06_engine_loop.md`](../../design/06_engine_loop.md) 3.4 (startup order)
+- README: `engine/src/modules/README.md`
+- handbook: [Module system](../module-system/index.md), [Creating a module](../module-system/creating-a-module.md),
+  [Importing and distributing modules](../module-system/importing-and-distributing.md),
+  [Build pipeline](../build-pipeline.md), [Testing](../testing.md), [Core module](core.md)
+- 📘 API: [Modules and plugins](../../api/modules/index.md), [Writing a module](../../api/modules/writing-a-module.md),
+  [Loading and managing modules](../../api/modules/loading-and-managing.md)
