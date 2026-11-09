@@ -1,0 +1,99 @@
+site_name: Conjure Engine
+site_description: Public API wiki and engineering handbook for the Conjure game engine
+repo_url: https://github.com/Dozer90/GameEngine_Claude-Assisted
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - assets/extra.css
+
+plugins:
+  - search
+  - gh-admonitions
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - attr_list
+  - admonition
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+
+# Pages not listed here are excluded from the site navigation (but still built). docs/design/ is the
+# design record and is reachable from the handbook's "Decision records" chapter only.
+exclude_docs: |
+  design/
+  CODE_STYLE.cpp
+
+nav:
+  - Home: index.md
+  - Public API wiki:
+      - api/index.md
+      - Core:
+          - Data types: api/core/data-types.md
+          - Errors and results: api/core/errors-and-results.md
+          - Logging and assertions: api/core/logging-and-assertions.md
+          - Math: api/core/math.md
+          - Containers: api/core/containers.md
+          - Strings and identifiers: api/core/strings-and-identifiers.md
+          - Memory: api/core/memory.md
+          - Time, events and random: api/core/time-and-events.md
+          - Jobs and threading: api/core/jobs.md
+          - JSON: api/core/json.md
+          - Files and the virtual file system: api/core/files.md
+          - Processes, libraries and images: api/core/system.md
+          - Reflection: api/core/reflection.md
+      - Glossary: api/glossary.md
+  - Engineering handbook:
+      - handbook/index.md
+      - Getting started: handbook/getting-started.md
+      - Architecture: handbook/architecture.md
+      - Repository layout: handbook/repository-layout.md
+      - Build pipeline: handbook/build-pipeline.md
+      - Coding standards: handbook/coding-standards.md
+      - Data-oriented design: handbook/data-oriented-design.md
+      - Testing: handbook/testing.md
+      - Modules:
+          - Core: handbook/modules/core.md
+      - Module system:
+          - handbook/module-system/index.md
+      - Continuous integration: handbook/ci.md
+      - Contributing: handbook/contributing.md
+      - Decision records: handbook/decision-records.md

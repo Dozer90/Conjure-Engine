@@ -43,3 +43,7 @@ Thumbs.db
 *.log
 *.dmp
 /logs/
+
+# Documentation toolchain
+/.venv-docs/
+/site/

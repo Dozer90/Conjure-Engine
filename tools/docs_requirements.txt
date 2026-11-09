@@ -1,0 +1,4 @@
+# Documentation toolchain (docs/design/16_documentation.md). Install once:
+#   python -m venv .venv-docs && .venv-docs/Scripts/pip install -r tools/docs_requirements.txt
+mkdocs-material==9.6.14
+mkdocs-github-admonitions-plugin==0.0.3
