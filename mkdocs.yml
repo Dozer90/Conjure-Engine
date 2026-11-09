@@ -56,10 +56,10 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
 
-# Pages not listed here are excluded from the site navigation (but still built). docs/design/ is the
-# design record and is reachable from the handbook's "Decision records" chapter only.
+# Pages not listed in nav are still built and reachable through links. docs/design/ is the design record:
+# it is built so that the handbook's links into it resolve, but it stays out of the navigation and is
+# reached from the handbook's chapters ("Decision records" in particular), never from the wiki.
 exclude_docs: |
-  design/
   CODE_STYLE.cpp
 
 nav:
@@ -91,9 +91,13 @@ nav:
       - Data-oriented design: handbook/data-oriented-design.md
       - Testing: handbook/testing.md
       - Modules:
-          - Core: handbook/modules/core.md
+          - Core:
+              - handbook/modules/core.md
+              - Foundation to memory: handbook/modules/core/foundation-to-memory.md
+              - Time to reflect: handbook/modules/core/time-to-reflect.md
       - Module system:
           - handbook/module-system/index.md
       - Continuous integration: handbook/ci.md
       - Contributing: handbook/contributing.md
+      - Documentation: handbook/documentation.md
       - Decision records: handbook/decision-records.md

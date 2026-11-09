@@ -737,11 +737,13 @@ configure, build, `ctest --preset <preset> --output-junit junit.xml` followed by
 6. New component type -> entity in `feature_test` (D8a); new binding -> script call in `feature_test`
    (D8b); new editor command -> `tests/editor/data/commands/<name>.json` (D8c); new feature -> a
    `Conjure.Diagnostics.Check` (D8d). `test_feature_test_scene` and `test_feature_test_replay` pass.
-7. If the module adds a system, `test_determinism` still passes with 0, 2 and 8 threads; if it
+7. The public API wiki and handbook pages for the change are written or updated and `docs.check` passes
+   (`16_documentation.md` section 5).
+8. If the module adds a system, `test_determinism` still passes with 0, 2 and 8 threads; if it
    participates in the frame loop, at least one `tests/integration` case exercises it.
-8. Zero warnings under the project warning set, `check_style.py` and clang-format clean, nightly TSan
+9. Zero warnings under the project warning set, `check_style.py` and clang-format clean, nightly TSan
    clean for anything touching the job system, no unexpected skips.
-9. Code review completed, conventional commit subject, commit builds and passes `ctest` locally.
+10. Code review completed, conventional commit subject, commit builds and passes `ctest` locally.
 
 ---
 

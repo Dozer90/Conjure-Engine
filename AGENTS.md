@@ -13,6 +13,10 @@ every AI agent (and human) working in the repository. Read it fully before touch
 | Per-area designs (ECS, renderer, scripting, editor, assets, loop, modules, testing) | `docs/design/*.md` |
 | Code style (authoritative) | `docs/CODE_STYLE.cpp` |
 | Engineering conventions (naming, headers, errors, tests, CMake, git) | `docs/CONVENTIONS.md` |
+| Public API wiki (📘, for people making games with the engine) | `docs/api/`, start at `docs/api/index.md` |
+| Engineering handbook (🛠, for people working in the source) | `docs/handbook/`, start at `docs/handbook/index.md` |
+| Documentation system (two sets, badges, alert boxes, page templates, checks) | `docs/design/16_documentation.md` |
+| How to write and check a wiki or handbook page | `.claude/skills/write-docs/SKILL.md` |
 | How to build and test | `.claude/skills/build-and-test/SKILL.md` |
 | How to add a module | `.claude/skills/add-engine-module/SKILL.md` |
 | How to add a component | `.claude/skills/add-component/SKILL.md` |
@@ -112,4 +116,7 @@ Presets live in `CMakePresets.json`; `tools/build.py` wraps them and sets up MSV
       are documented with `<summary>` blocks; module README updated.
 - [ ] No third-party header leaks into public headers (glm excepted).
 - [ ] No platform ifdefs outside the allowed files.
+- [ ] The public API wiki and handbook pages for the change are written or updated
+      (`.claude/skills/write-docs/SKILL.md`; every public header referenced by include path) and
+      `python tools/docs.py check` passes.
 - [ ] Report lists what was built, what was tested, and anything left undone.
