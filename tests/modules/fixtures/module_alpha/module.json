@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "module_alpha",
+  "displayName": "Alpha",
+  "description": "Fixture: one component, one system, lifecycle callbacks and a log line",
+  "version": "1.2.0",
+  "kind": "plugin",
+  "engine": "*",
+  "binary": "module_alpha",
+  "content": ["assets"]
+}

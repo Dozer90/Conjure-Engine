@@ -147,6 +147,33 @@ from a note in detail, the note is right.
   mirror `memory::` rather than depend on it; `slot_key` stays `u32`/`u32` (renderer ids that want a 16-bit
   generation use a `slot_key_type` key, `02_renderer.md` 2.2). CMake keeps failing hard on a listed-but-missing
   source: parallel implementers add the `CMakeLists.txt` entry after the file exists instead.
+- **Wave 2 integration (ecs, platform, rhi, assets, audio, modules on core)**: spellings corrected to the implemented
+  API, names only. `11_platform.md`: `native_handle_kind::WINDOWS` (not `WIN32`, a macro on every Windows build; `WIN32`
+  joins the macro list in `CONVENTIONS.md` 3 and `tools/check_style.py`), `input::skip_next_mouse_delta()` (called by
+  the window owner after `set_cursor_mode()`), the `inject(const EventType &)` template overload, `release_all()` also
+  clears the modifiers. `02_renderer.md`: `device_desc::window` and `swapchain::create` take `rhi::native_window`
+  (`platform::native_window_handle` copied field for field, kind `WINDOWS`; the rhi never includes platform), the
+  DXIL depfile is a second `dxc -MF` run, the null device has no `Feature::TimerQueries` (absent from the pinned
+  NVRHI). `07_modules.md` 3.8 / 5: `cmake/ConjureSharedLibrary.cmake` (not `ConjureAbiIdentity.cmake`), global property
+  `CONJURE_STATIC_LIBRARIES`, macros `CONJURE_SHARED_EXPORTS` / `CONJURE_SHARED_IMPORTS` (R17's `CONJURE_ENGINE_*`
+  names lost to `conjure/core/api.h`, which shipped first), the header hash is SHA-256 based, `conjure_add_game_module`
+  gained `OUTPUT_ROOT` and `DEFINES`, `test_module_context.cpp` replaces `test_module_context_services.cpp`.
+  `conjure_finalize_engine()` is called from the root `CMakeLists.txt`; `LINK_ENGINE_SHARED` links `conjure::shared`
+  plus `conjure::test_support_shared` and leaves `tracked_global_new.cpp` out (its `_aligned_free` cannot release
+  memory the DLL's C-runtime `operator new` produced); `/wd4251 /wd4275` moved into `conjure::warnings`;
+  `CONJURE_BUILD_EDITOR=1` is a `conjure::platform_defines` define outside Distribution. Decisions taken at the same
+  time: `core::reflect` caps the alignment it demands of a custom handle (`ENTITY` / `ASSET_REF`) at the owning
+  type's alignment (an 8-byte `ecs::entity` is `{u32, u32}` and lives in 4-byte aligned components, so `parent
+  {entity value; u32 siblingIndex}` is describable without `alignas(8)`); an `ASSET_REF` field wider than 16 bytes
+  serialises its leading uuid and reads back with the rest zeroed (`assets::asset_ref<T>` = uuid + slot pointer, the
+  layout contract of R25), and `assets/asset_ref.h` specialises `reflect_kind_override<asset_ref<T>>` under the one
+  name `conjure.assets.asset_ref`; `audio::audio_source` (88 bytes), `audio::play_params_from(source, group)` and
+  `audio_engine::apply_source` exist as `12_audio.md` 2.6 / 4.4 describe; `precondition::AUDIO_DEVICE` (probe installed
+  by the audio tests) lets the `[audio_device]` cases skip with exit 77. Declined or deferred: hidden visibility and
+  `CONJURE_SHARED_EXPORTS` on the static libraries wait for `CONJURE_API` on core's public surface (183 declarations,
+  `tools/check_exports.py core`); `engine/shaders` is added from `engine/CMakeLists.txt` instead of the rhi module;
+  CC0 `tone.{ogg,mp3,flac}` entries for `tools/test_assets.json`, `tests/benchmarks/bench_*.cpp` and the fetched glslang
+  link failure under `CONJURE_RHI_VULKAN=ON` on MSVC remain open (section 4, item 13).
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
   `memory::counters()`/`snapshot()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,
@@ -228,3 +255,15 @@ from a note in detail, the note is right.
 12. **Audio request latency and ordering (R50).** `playbackRequest` is consumed in SYNC; two scripts writing
     the same source in one frame leave the last writer's request. `isPlaying` is one frame old for scripts.
     Both match the "one native call per phase" model of 03 and are acceptable for v1.
+13. **Wave 2 loose ends (integration).** (a) `conjure_shared` exports every symbol of the 17 wave-1/2 static
+    libraries (26,739 of the 65,535 a Windows DLL may hold); the switch to `CONJURE_API`-only exports with hidden
+    visibility (`07_modules.md` 5) must land before the wave-3/4 libraries push the count past the limit, and it needs
+    `CONJURE_API` on core's public classes and functions first. (b) `glslang` 15.1.0 fetched with `ENABLE_OPT=OFF` /
+    `BUILD_EXTERNAL=OFF` fails to link `glslang-standalone` on MSVC 2026 (unresolved SPIRV symbols), so no SPIR-V blob
+    builds on Windows with `CONJURE_RHI_VULKAN=ON`; the Windows SDK `dxc` has no SPIR-V code generation either. Vulkan
+    is OFF by default on Windows and the Linux / macOS presets are unaffected; a glslang tag that links (or a fetched
+    DXC release) is wanted before Vulkan is exercised on Windows. (c) `tests/benchmarks` does not exist yet; the
+    benchmarks `01`/`05`/`11`/`12` name (`bench_ecs`, `bench_asset_ref_get`, `bench_asset_load`, `bench_pack_lookup`,
+    `bench_platform`, `bench_audio`, `bench_module_reload`) are owed by whoever creates it. (d) `tools/test_assets.json`
+    still lacks CC0 `audio/tone.{ogg,mp3,flac}` clips, so the `[downloaded]` decoder case skips. (e) The platform
+    module's `conjure_input_block` layout pins and `key::DEL` are facts the C# generator (wave 4) must honour.

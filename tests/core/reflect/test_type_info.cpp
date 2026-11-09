@@ -524,14 +524,66 @@ TEST_SUITE("core/type_info") {
         text.alignment = static_cast<u32>(alignof(std::string));
         CHECK(validate_layout(text).has_value());
 
+        // Custom handles are the exception: core does not know the handle type, so a handle never
+        // demands more than the type that embeds it provides (it is a member of that type).
         reflect::type_info handle = {};
         handle.name = "test.weak_handle";
         handle.size = 16;
         handle.alignment = 4;
         handle.fields = {make_field("asset", field_kind::ASSET_REF, 0, 16)};
-        CHECK_FALSE(validate_layout(handle).has_value());
+        CHECK(validate_layout(handle).has_value());
         handle.alignment = 8;
         CHECK(validate_layout(handle).has_value());
+    }
+
+    TEST_CASE("type_info - custom handle alignment is capped at the owning type's alignment") {
+        // ecs::entity is {u32 index; u32 generation;}: 8 bytes aligned to 4. A component such as
+        // scene's parent {entity value; u32 siblingIndex;} is therefore 12 bytes aligned to 4 and
+        // must be describable without padding it to 8.
+        reflect::type_info parent = {};
+        parent.name = "test.parent";
+        parent.size = 12;
+        parent.alignment = 4;
+        parent.fields = {
+            make_field("value", field_kind::ENTITY, 0, 8),
+            make_field("siblingIndex", field_kind::U32, 8, 4),
+        };
+        CHECK(validate_layout(parent).has_value());
+
+        // The capped alignment still governs the offset check.
+        reflect::type_info shifted = {};
+        shifted.name = "test.shifted_entity";
+        shifted.size = 16;
+        shifted.alignment = 4;
+        shifted.fields = {
+            make_field("first", field_kind::U32, 0, 4),
+            make_field("value", field_kind::ENTITY, 4, 8),
+        };
+        CHECK(validate_layout(shifted).has_value());
+        shifted.fields[0] = make_field("first", field_kind::U16, 0, 2);
+        shifted.fields[1].offset = 2;
+        const result<void> misaligned = validate_layout(shifted);
+        REQUIRE_FALSE(misaligned.has_value());
+        CHECK(misaligned.get_error().message().find("not aligned to 4") != std::string::npos);
+
+        // A wider type keeps the natural handle alignment: an 8 byte handle at offset 4 in an 8-byte
+        // aligned type is rejected as before.
+        shifted.alignment = 8;
+        shifted.fields[0] = make_field("first", field_kind::U32, 0, 4);
+        shifted.fields[1].offset = 4;
+        CHECK_FALSE(validate_layout(shifted).has_value());
+
+        // A 24 byte ASSET_REF (uuid + slot pointer) in an 8-byte aligned type aligns to 8.
+        reflect::type_info ref = {};
+        ref.name = "test.asset_ref_holder";
+        ref.size = 32;
+        ref.alignment = 8;
+        ref.fields = {
+            make_field("asset", field_kind::ASSET_REF, 8, 24),
+        };
+        CHECK(validate_layout(ref).has_value());
+        ref.fields[0].offset = 4;
+        CHECK_FALSE(validate_layout(ref).has_value());
     }
 
     TEST_CASE("type_info - validate_layout requires descriptions for enum and struct fields") {

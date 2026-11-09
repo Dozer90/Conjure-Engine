@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "module_wrong_platform",
+  "version": "1.0.0",
+  "engine": "*",
+  "platforms": []
+}

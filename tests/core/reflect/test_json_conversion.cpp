@@ -666,6 +666,62 @@ TEST_SUITE("core/json_conversion") {
         CHECK(badAsset.get_error().message().find("field 'asset'") != std::string::npos);
     }
 
+    TEST_CASE("json_conversion - an asset reference wider than a uuid serialises its leading uuid only") {
+        // assets::asset_ref<T> is the uuid followed by a slot pointer (24 bytes): the uuid travels,
+        // the pointer is runtime binding state and reads back as null (R25).
+        struct wide_ref {
+            uuid id = {};
+            const void *slot = nullptr;
+        };
+        static_assert(sizeof(wide_ref) == 24);
+
+        field_info handle = {};
+        handle.name = "clip";
+        handle.kind = field_kind::ASSET_REF;
+        handle.type = type_id::from_name("test.wide_asset_ref");
+        handle.offset = 0;
+        handle.size = sizeof(wide_ref);
+        const result<reflect::type_info> built = build_type_info(
+          "test.wide_asset_ref_holder",
+          sizeof(wide_ref),
+          alignof(wide_ref),
+          std::span<const field_info>(&handle, 1)
+        );
+        REQUIRE(built.has_value());
+
+        const int boundTarget = 7;
+        wide_ref bound = {};
+        bound.id = uuid(0x0123456789ABCDEFull, 0xFEDCBA9876543210ull);
+        bound.slot = &boundTarget;
+        CHECK(serialise(*built, &bound) == R"({"clip":"01234567-89ab-cdef-fedc-ba9876543210"})");
+
+        wide_ref restored = {};
+        restored.slot = &boundTarget;
+        REQUIRE(
+          from_json(*built, &restored, parse(R"({"clip": "01234567-89ab-cdef-fedc-ba9876543210"})").root()).has_value()
+        );
+        CHECK(restored.id == bound.id);
+        CHECK(restored.slot == nullptr);
+
+        const result<void> notAUuid = from_json(*built, &restored, parse(R"({"clip": 12})").root());
+        REQUIRE_FALSE(notAUuid.has_value());
+        CHECK(notAUuid.get_error().message().find("field 'clip'") != std::string::npos);
+
+        // The leading-uuid rule is specific to ASSET_REF: a 24 byte ENTITY handle stays unsupported.
+        handle.kind = field_kind::ENTITY;
+        const result<reflect::type_info> entityBuilt = build_type_info(
+          "test.wide_entity_holder",
+          sizeof(wide_ref),
+          alignof(wide_ref),
+          std::span<const field_info>(&handle, 1)
+        );
+        REQUIRE(entityBuilt.has_value());
+        json::writer out = {};
+        const result<void> written = to_json(*entityBuilt, &bound, out);
+        REQUIRE_FALSE(written.has_value());
+        CHECK(written.get_error().generic_code() == error_code::UNSUPPORTED);
+    }
+
     TEST_CASE("json_conversion - small handles are range-checked and odd-sized handles are unsupported") {
         field_info handle = {};
         handle.name = "handle";

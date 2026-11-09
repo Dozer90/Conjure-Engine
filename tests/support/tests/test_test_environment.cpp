@@ -73,6 +73,7 @@ TEST_SUITE("testing/test_environment") {
         CHECK(to_string(precondition::SOFTWARE_GPU_ADAPTER) == "SOFTWARE_GPU_ADAPTER");
         CHECK(to_string(precondition::LOOPBACK_TCP) == "LOOPBACK_TCP");
         CHECK(to_string(precondition::REAL_WINDOW) == "REAL_WINDOW");
+        CHECK(to_string(precondition::AUDIO_DEVICE) == "AUDIO_DEVICE");
         CHECK(to_string(precondition::COUNT) == "UNKNOWN");
     }
 

@@ -15,6 +15,10 @@ if(MSVC)
         /w14242 /w14254 /w14263 /w14265 /w14287 /we4289 /w14296 /w14311 /w14545 /w14546
         /w14547 /w14549 /w14555 /w14619 /w14640 /w14826 /w14905 /w14906 /w14928
         /wd4201                   # nameless struct/union (used deliberately in math types)
+        # Exported classes hold standard-library members: C4251/C4275 are the documented noise of
+        # every DLL-exporting C++ project (docs/design/07_modules.md 5) and carry no information
+        # here because conjure_shared and its consumers are built with the same toolchain.
+        /wd4251 /wd4275
     )
     if(CONJURE_WARNINGS_AS_ERRORS)
         target_compile_options(conjure_warnings INTERFACE /WX)
@@ -62,6 +66,9 @@ target_compile_definitions(conjure_platform_defines INTERFACE
     $<$<BOOL:${CONJURE_WITH_SCRIPTING}>:CONJURE_WITH_SCRIPTING=1>
     $<$<BOOL:${CONJURE_RHI_D3D12}>:CONJURE_RHI_D3D12=1>
     $<$<BOOL:${CONJURE_RHI_VULKAN}>:CONJURE_RHI_VULKAN=1>
+    # The editor never exists in Distribution, whatever the option says (root CMakeLists.txt);
+    # modules::host_feature_flags() mirrors this define.
+    $<$<AND:$<BOOL:${CONJURE_BUILD_EDITOR}>,$<NOT:$<CONFIG:Distribution>>>:CONJURE_BUILD_EDITOR=1>
 )
 
 if(WIN32)

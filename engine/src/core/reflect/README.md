@@ -71,7 +71,9 @@ CONJURE_REFLECT_ENUM(damage_type, "game.damage_type", BLUNT, FIRE);
 ## Registry
 
 - `register_type` validates the layout (`validate_layout`: names usable in paths, fields inside the
-  struct, no overlap, natural alignment with no field stricter than the type's alignment, size
+  struct, no overlap, natural alignment with no field stricter than the type's alignment (a custom
+  handle, `ENTITY` / `ASSET_REF`, demands at most the type's alignment: core does not know the handle
+  type, and a member can never be stricter than the type that embeds it), size
   matching the kind, struct/enum pointers present with a matching `field.type`, enum widths of 1, 2,
   4 or 8 bytes), requires every STRUCT/ENUM field pointer to be a live description of the same
   registry (a stack-local `type_info` would dangle), derives a null id from the name and rejects an
@@ -123,7 +125,7 @@ Representation (written in field order; `document::to_canonical_string()` sorts 
 | `ENUM` | the enumerator name (flags: `"A|B"`, zero as the zero enumerator's name or `""`), or the number when no name spells the value; reads accept either. 8 byte unsigned enumerators travel as their `u64` value; a number above `INT64_MAX` is `OUT_OF_RANGE` for a signed 8 byte enum |
 | `STRUCT` | nested object |
 | `ARRAY` | array; shorter input fills the leading elements, longer input is `OUT_OF_RANGE` |
-| `ENTITY`, `ASSET_REF` | the raw handle: unsigned number for 1/2/4/8 byte handles, uuid string for 16 bytes; other sizes fail with `UNSUPPORTED`. Modules remap these after loading |
+| `ENTITY`, `ASSET_REF` | the raw handle: unsigned number for 1/2/4/8 byte handles, uuid string for 16 bytes and for an `ASSET_REF` wider than 16 bytes (the leading uuid of `assets::asset_ref`; the rest, the slot pointer, reads back as zero, R25); other sizes fail with `UNSUPPORTED`. Modules remap these after loading |
 
 `from_json` keeps the current value of missing members, appends unknown members (dotted paths such
 as `nested.extra`, `parts[0].stray`) to the optional list, and stops at the first failing field with

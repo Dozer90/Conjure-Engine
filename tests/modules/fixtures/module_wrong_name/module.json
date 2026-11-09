@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "module_wrong_name",
+  "version": "1.0.0",
+  "engine": "*",
+  "binary": "module_wrong_name"
+}

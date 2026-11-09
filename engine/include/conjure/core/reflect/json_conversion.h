@@ -30,8 +30,10 @@
 //   ENUM -> the enumerator name (flags: "A|B"), or the number when no name spells the value
 //   STRUCT -> object of its fields                              ARRAY -> array of arrayCount elements
 //   ENTITY / ASSET_REF -> the raw handle: an unsigned number for 1, 2, 4 and 8 byte handles, a uuid
-//   string for 16 byte handles (other sizes fail with UNSUPPORTED). Modules that need a richer
-//   representation remap these fields after loading.
+//   string for 16 byte handles and for an ASSET_REF wider than 16 bytes, whose leading 16 bytes are
+//   the uuid (assets::asset_ref = uuid + slot pointer; the pointer reads back as null, R25). Other
+//   sizes fail with UNSUPPORTED. Modules that need a richer representation remap these fields after
+//   loading.
 //
 // Reading is lenient where it is safe: a missing member keeps the field's current value, unknown
 // members are ignored (and reported when a list is supplied), a null for a float reads as NaN, an

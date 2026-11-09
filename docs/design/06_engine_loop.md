@@ -850,8 +850,16 @@ frame_info &, system_flags)` (R2); command-buffer flush at the end of every stag
 **Needs from `platform` / `rhi`:** `window::pump_events() -> std::span<const event>`, `should_close`,
 `framebuffer_size`, `is_minimised`, `is_focused`; `input::apply(event)`, `input::end_frame()`,
 `input::inject(event)`, `input::snapshot()`; `null` backend. `rhi::device::create(device_desc) ->
-result<unique_ptr<device>>` (`window == nullptr` for `null`/headless), `rhi::swapchain::create` / `resize`,
-`device::wait_idle()`, `run_garbage_collection()`, `is_lost()` (names per `02_renderer.md` 4.1; R30).
+result<unique_ptr<device>>` (`window` of kind `NONE` for `null`/headless), `rhi::swapchain::create` / `resize`,
+`device::wait_idle()`, `run_garbage_collection()`, `is_lost()` (names per `02_renderer.md` 4.1; R30). As implemented
+(wave 2 integration, `09_cross_area_resolutions.md` 3): `device_desc::window` and `swapchain::create` take an
+`rhi::native_window`, which the `rhi_subsystem` fills by copying `window.native_handle()` field for field (kind
+`WINDOWS` / `COCOA` / `X11` / `WAYLAND`; the rhi never includes platform) and `swapchain_desc` takes
+`window.framebuffer_size()`; on macOS the Vulkan backend still needs a `CAMetalLayer` (COCOA is `INVALID_DESC` on
+Vulkan until the handle or `platform::window::create_vulkan_surface` provides one). After `window::set_cursor_mode()`
+step 3 calls `input::skip_next_mouse_delta()` so the first cursor report after the mode change is not a jump; the
+`window_settings -> window_desc` mapping is the one `tests/platform/test_backend_selection.cpp` shows (headless ->
+`NULL_BACKEND`, 1280x720, R33).
 
 **Needs from `scene` (wave 3):** `local_transform`, `world_transform`, `render_world_transform`,
 `interpolated_transform`, parent/children; `scene::register_systems(scheduler, scene_manager &)` registering

@@ -69,8 +69,9 @@ No Hungarian notation beyond the `m`/`s` prefixes.
   `core/platform_detect.h` and backend implementation files.
 - Never name an enumerator or constant after a Windows macro. Known offenders: `ERROR`, `DELETE`,
   `IN`, `OUT`, `OPTIONAL`, `TRUE`, `FALSE`, `NEAR`, `FAR`, `OPAQUE`, `TRANSPARENT`, `ABSOLUTE`,
-  `RELATIVE`, `DOMAIN`, `DIFFERENCE`, `IGNORE`, `INFINITE`, `TEXT`, `interface`, `min`, `max`.
-  Use `ERR`, `REMOVE`, `INPUT`/`OUTPUT`, `NEAR_PLANE`/`FAR_PLANE`, etc. instead.
+  `RELATIVE`, `DOMAIN`, `DIFFERENCE`, `IGNORE`, `INFINITE`, `TEXT`, `WIN32` (CMake defines it on every
+  Windows build), `interface`, `min`, `max`. Use `ERR`, `REMOVE`, `INPUT`/`OUTPUT`,
+  `NEAR_PLANE`/`FAR_PLANE`, `WINDOWS`, etc. instead. `tools/check_style.py` knows the list.
 
 ## 4. Error handling and logging
 

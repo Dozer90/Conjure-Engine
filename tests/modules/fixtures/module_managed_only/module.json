@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "module_managed_only",
+  "version": "2.0.0",
+  "engine": "*",
+  "managed": ["managed/ManagedOnly.dll"]
+}

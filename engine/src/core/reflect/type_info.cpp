@@ -60,7 +60,7 @@ namespace {
     /// <summary>
     /// Alignment one value of the field's value kind requires.
     /// </summary>
-    u32 required_alignment(const field_info &field) noexcept {
+    u32 required_alignment(const reflect::type_info &type, const field_info &field) noexcept {
         const field_kind kind = field.value_kind();
         if (is_fixed_size_kind(kind)) {
             return kind_alignment(kind);
@@ -72,15 +72,19 @@ namespace {
             return field.structType->alignment;
         }
 
-        // Custom handles: a power-of-two size up to 8 aligns to itself, 16 byte handles to 8.
+        // Custom handles (ENTITY / ASSET_REF): core does not know the handle type, so the natural
+        // guess is a power-of-two size up to 8 aligning to itself and larger handles to 8. The guess
+        // is capped at the owning type's alignment: a handle is a member of that type, so its real
+        // alignment can never exceed it (ecs::entity is {u32, u32}, 8 bytes aligned to 4, and lives
+        // in 4-byte aligned components), and instances are allocated with the type's alignment anyway.
         const u32 valueSize = field.element_size();
+        u32 natural = 1;
         if (valueSize == 1 || valueSize == 2 || valueSize == 4 || valueSize == 8) {
-            return valueSize;
+            natural = valueSize;
+        } else if (valueSize >= 16) {
+            natural = 8;
         }
-        if (valueSize == 16) {
-            return 8;
-        }
-        return 1;
+        return std::min(natural, type.alignment);
     }
 
     bool is_valid_field_name(std::string_view name) noexcept {
@@ -180,7 +184,7 @@ namespace {
             );
         }
 
-        const u32 alignment = required_alignment(field);
+        const u32 alignment = required_alignment(type, field);
         if (alignment > type.alignment) {
             // Instances are allocated with the type's alignment, so a stricter field could land
             // misaligned (and the serialiser forms real references over STRING fields).

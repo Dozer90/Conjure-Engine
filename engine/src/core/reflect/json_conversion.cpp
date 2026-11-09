@@ -262,6 +262,19 @@ namespace {
         return size == 1 || size == 2 || size == 4 || size == 8;
     }
 
+    /// <summary>
+    /// True when the handle's first 16 bytes are a uuid: a 16 byte handle of either kind, or an
+    /// ASSET_REF wider than that (assets::asset_ref is the uuid followed by the slot pointer, R25;
+    /// docs/design/05_assets.md 2.3). Only the uuid has a JSON representation; the rest is runtime
+    /// binding state and reads back as zero (unbound).
+    /// </summary>
+    bool is_uuid_handle(field_kind kind, u32 size) noexcept {
+        if (size == sizeof(uuid)) {
+            return true;
+        }
+        return kind == field_kind::ASSET_REF && size > sizeof(uuid);
+    }
+
     result<void> write_custom(field_kind kind, u32 size, const void *data, json::writer &out) {
         if (is_integer_handle_size(size)) {
             u64 bits = 0;
@@ -269,7 +282,7 @@ namespace {
             out.value(bits);
             return result<void>::success();
         }
-        if (size == sizeof(uuid)) {
+        if (is_uuid_handle(kind, size)) {
             uuid id = {};
             std::memcpy(&id, data, sizeof(uuid));
             out.value(std::string_view(id.to_string()));
@@ -293,9 +306,10 @@ namespace {
             std::memcpy(data, &bits, size);
             return result<void>::success();
         }
-        if (size == sizeof(uuid)) {
+        if (is_uuid_handle(kind, size)) {
             CONJURE_TRY_ASSIGN(const uuid id, in.to<uuid>());
             std::memcpy(data, &id, sizeof(uuid));
+            std::memset(static_cast<std::byte *>(data) + sizeof(uuid), 0, size - sizeof(uuid));
             return result<void>::success();
         }
         return error(

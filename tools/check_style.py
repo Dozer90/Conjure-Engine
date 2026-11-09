@@ -67,7 +67,7 @@ WINDOWS_MACRO_NAMES = {
     "CDECL", "WINAPI", "APIENTRY", "CALLBACK", "STRICT", "NULL", "MAX_PATH", "CREATE_NEW", "CREATE_ALWAYS",
     "OPEN_EXISTING", "OPEN_ALWAYS", "TRUNCATE_EXISTING", "FILE_BEGIN", "FILE_CURRENT", "FILE_END",
     "GENERIC_READ", "GENERIC_WRITE", "INPUT_KEYBOARD", "INPUT_MOUSE", "MOUSE_MOVED", "ALTERNATE", "WINDING",
-    "interface", "small", "hyper", "min", "max", "far", "near", "pascal", "cdecl",
+    "WIN32", "interface", "small", "hyper", "min", "max", "far", "near", "pascal", "cdecl",
 }
 
 # Third-party roots that may never appear in a public header; glm is allowed in the math umbrella.

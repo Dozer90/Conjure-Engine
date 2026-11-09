@@ -12,9 +12,19 @@
 #     doctest_discover_tests(), run with --conjure-isolated from ${PROJECT_BINARY_DIR}/bin, labelled
 #     "unit;<module>;<labels>", with TIMEOUT (default 120 s) and SKIP_RETURN_CODE 77.
 #
-#     ENGINE and LINK_ENGINE_SHARED are accepted today and do nothing: ENGINE will add
-#     conjure::test_support_engine (wave 4) and LINK_ENGINE_SHARED will link conjure::shared instead
-#     of the static conjure::<module> (07_modules.md D1) once those targets exist.
+#     LINK_ENGINE_SHARED (07_modules.md D1 and 5, R17) links the umbrella shared library
+#     conjure::shared instead of the static conjure::<module>, together with
+#     conjure::test_support_shared (tests/support, the same support sources compiled against the
+#     shared library), so the executable and the plugins it loads share one engine copy. Such an
+#     executable keeps the C runtime's allocation functions: tracked_global_new.cpp releases through
+#     tracked_free, which is only correct for memory that came from the executable's own operator
+#     new, while objects allocated inside conjure_shared come from the C runtime's (the file documents
+#     the core::memory hooks that would make it CRT-compatible). memory_guard and allocation_scope
+#     therefore count nothing in a LINK_ENGINE_SHARED executable. The option requires
+#     conjure_finalize_engine() to have run (the root CMakeLists.txt does that before tests/).
+#
+#     ENGINE is accepted today and does nothing: it will add conjure::test_support_engine (wave 4)
+#     once that target exists.
 #
 #     Multi-config generators (the windows-vs preset): doctest 2.4.11's discovery writes one
 #     configuration-independent <target>_tests-<hash>.cmake per target from a POST_BUILD step, and
@@ -23,11 +33,13 @@
 #     Development binaries). Single-config presets are unaffected; CMakePresets.json says so on the
 #     windows-vs test preset.
 #
-#   conjure_add_test_executable(<name> SOURCES <files> [DEPS <targets>] [FOLDER <folder>])
+#   conjure_add_test_executable(<name> SOURCES <files> [DEPS <targets>] [FOLDER <folder>]
+#                               [LINK_ENGINE_SHARED])
 #
 #     The executable half of conjure_add_test_module without CTest registration: a doctest program
 #     built from SOURCES plus the shared main. Used for helper programs the test tree spawns (the
 #     support library's precondition child) and by conjure_add_test_module itself.
+#     LINK_ENGINE_SHARED has the meaning described above.
 #
 #   conjure_header_check(<target>)
 #
@@ -49,8 +61,9 @@ include_guard(GLOBAL)
 option(CONJURE_TEST_GOLDEN_IMAGES "Build and register the golden-image tests (software rasteriser)" OFF)
 
 set(CONJURE_TEST_SUPPORT_DIR "${PROJECT_SOURCE_DIR}/tests/support")
+set(CONJURE_TEST_MAIN_SOURCE "${CONJURE_TEST_SUPPORT_DIR}/src/test_main.cpp")
 set(CONJURE_TEST_MAIN_SOURCES
-    "${CONJURE_TEST_SUPPORT_DIR}/src/test_main.cpp"
+    "${CONJURE_TEST_MAIN_SOURCE}"
     "${CONJURE_TEST_SUPPORT_DIR}/src/tracked_global_new.cpp"
 )
 set(CONJURE_TEST_DEFAULT_TIMEOUT 120)
@@ -72,7 +85,7 @@ endif()
 
 
 function(conjure_add_test_executable name)
-    set(options "")
+    set(options LINK_ENGINE_SHARED)
     set(oneValueArgs FOLDER)
     set(multiValueArgs SOURCES DEPS)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -87,7 +100,20 @@ function(conjure_add_test_executable name)
         set(ARG_FOLDER "Tests")
     endif()
 
-    add_executable(${name} ${ARG_SOURCES} ${CONJURE_TEST_MAIN_SOURCES})
+    set(mainSources ${CONJURE_TEST_MAIN_SOURCES})
+    set(supportLibrary conjure::test_support)
+    if(ARG_LINK_ENGINE_SHARED)
+        if(NOT TARGET conjure::shared OR NOT TARGET conjure::test_support_shared)
+            message(FATAL_ERROR
+                "conjure_add_test_executable(${name}): LINK_ENGINE_SHARED needs conjure::shared and "
+                "conjure::test_support_shared; call conjure_finalize_engine() before adding tests/"
+            )
+        endif()
+        set(mainSources "${CONJURE_TEST_MAIN_SOURCE}")
+        set(supportLibrary conjure::test_support_shared)
+    endif()
+
+    add_executable(${name} ${ARG_SOURCES} ${mainSources})
 
     # Tests may reach private module headers ("core/jobs/thread_name.h") through engine/src.
     target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/engine/src")
@@ -95,7 +121,7 @@ function(conjure_add_test_executable name)
 
     target_link_libraries(${name}
         PRIVATE
-            conjure::test_support
+            ${supportLibrary}
             conjure::platform_defines
             conjure::warnings
             conjure::sanitizers
@@ -116,7 +142,7 @@ function(conjure_add_test_executable name)
 
     set_target_properties(${name} PROPERTIES FOLDER "${ARG_FOLDER}")
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${ARG_SOURCES})
-    source_group("support" FILES ${CONJURE_TEST_MAIN_SOURCES})
+    source_group("support" FILES ${mainSources})
 endfunction()
 
 
@@ -138,19 +164,23 @@ function(conjure_add_test_module module)
     if(ARG_ENGINE)
         message(VERBOSE "conjure_add_test_module(${module}): ENGINE accepted; conjure::test_support_engine does not exist yet")
     endif()
-    if(ARG_LINK_ENGINE_SHARED)
-        message(VERBOSE "conjure_add_test_module(${module}): LINK_ENGINE_SHARED accepted; conjure::shared does not exist yet")
-    endif()
 
     set(target "conjure_${module}_tests")
     set(moduleDeps "")
-    if(TARGET conjure::${module})
+    set(linkOption "")
+    if(ARG_LINK_ENGINE_SHARED)
+        # The static conjure::<module> is inside conjure_shared; linking both would duplicate every
+        # engine global (07_modules.md D1).
+        set(moduleDeps conjure::shared)
+        set(linkOption LINK_ENGINE_SHARED)
+    elseif(TARGET conjure::${module})
         set(moduleDeps conjure::${module})
     endif()
 
     conjure_add_test_executable(${target}
         SOURCES ${ARG_SOURCES}
         DEPS ${moduleDeps} ${ARG_DEPS}
+        ${linkOption}
     )
 
     # One CTest entry per TEST_CASE (08_testing D1). TIMEOUT and SKIP_RETURN_CODE travel through

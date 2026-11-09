@@ -383,8 +383,10 @@ Each entry is `source;entry;stage;defines`, `defines` being a `|`-separated list
 axes whose cartesian product is enumerated. Per permutation two custom commands run:
 
 - DXIL (Windows, `CONJURE_RHI_D3D12`): `dxc -T <vs|ps|cs>_6_5 -E <entry> -HV 2018 -Zpr -WX
-  -D CONJURE_D3D12=1 -D<defines> -I <include dirs> -Fo <out>.dxil -MF <out>.d` plus `-Zi
-  -Qembed_debug` in Debug/Development and `-O3` otherwise.
+  -D CONJURE_D3D12=1 -D<defines> -I <include dirs> -Fo <out>.dxil` plus `-Zi -Qembed_debug` in
+  Debug/Development and `-O3` otherwise, followed by a second invocation with `-MF <out>.d` for the
+  depfile: dxc 1.8 treats `-MF` as a dependency-only mode and compiles nothing in that run (wave 2
+  integration, `cmake/ConjureShaders.cmake`).
 - SPIR-V (`CONJURE_RHI_VULKAN`), glslang default: `glslang -D -S <vert|frag|comp> -e <entry> -V
   --target-env vulkan1.2 --hlsl-iomap --auto-map-locations --shift-texture-binding 0
   --shift-sampler-binding 128 --shift-ubo-binding 256 --shift-uav-binding 384
@@ -437,7 +439,8 @@ namespace conjure::rhi {
         bool enableGpuValidation = false;
         std::uint32_t adapterIndex = 0;
         bool preferSoftwareAdapter = false;        // WARP (D3D12) / VK_DRIVER_FILES ICD (Vulkan); golden tests, area H
-        const platform::window *window = nullptr;  // needed by Vulkan for instance extensions; null = headless
+        native_window window = {};                 // platform::window::native_handle() copied field for field
+                                                   // (native_window.h; rhi never includes platform); NONE = headless
     };
 
     struct device_capabilities {
@@ -498,7 +501,7 @@ namespace conjure::rhi {
         public:
             [[nodiscard]] static core::result<std::unique_ptr<swapchain>> create(
               device &device,
-              const platform::window &window,
+              const native_window &window,        // the engine copies window.native_handle() into it (wave 4)
               const swapchain_desc &desc
             );
 
@@ -809,9 +812,11 @@ clamped and logged, so a bad scene never aborts a frame.
   `render_target` (views targeting the swapchain are skipped with a `WARN`). With a real backend this
   is the editor's `--headless --exec` screenshot path (`read_back`).
 - `graphics_backend::NULL_DEVICE`: `null_device` implements every `nvrhi::IDevice` method, storing
-  descriptors and returning valid handles; `queryFeatureSupport` returns true for `ComputeQueue`
-  and `TimerQueries`; `executeCommandLists` returns incrementing fence values; `mapStagingTexture`
-  returns zero-filled memory; `getTimerQueryTime` returns 0. `null_swapchain` has `bufferCount`
+  descriptors and returning valid handles; `queryFeatureSupport` returns true for `ComputeQueue`,
+  `CopyQueue`, `ConstantBufferRanges`, `DeferredCommandLists`, `VirtualResources` and
+  `WaveLaneCountMinMax` (`Feature::TimerQueries` does not exist in the pinned NVRHI; timer queries
+  are created and read as objects, `getTimerQueryTime` returns 0); `executeCommandLists` returns
+  incrementing fence values; `mapStagingTexture` returns zero-filled memory. `null_swapchain` has `bufferCount`
   stub textures and `acquire` cycles indices. `null_device::stats()` exposes `rhi::null_device_stats`
   (resource creations by type, command-list submissions, draws, dispatches, debug-marker pass names) for
   area H's recorder-style assertions.

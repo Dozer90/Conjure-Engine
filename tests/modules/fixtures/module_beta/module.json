@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "module_beta",
+  "displayName": "Beta",
+  "version": "0.1.0",
+  "engine": "*",
+  "binary": "module_beta",
+  "dependencies": [
+    { "name": "module_alpha", "version": "^1.0.0" }
+  ],
+  "managed": ["managed/Beta.dll"]
+}

@@ -1,0 +1,34 @@
+conjure_add_test_module(assets
+    SOURCES
+        assets_test_support.cpp
+        assets_test_support.h
+        test_asset_cache.cpp
+        test_asset_cooker.cpp
+        test_asset_database.cpp
+        test_asset_extension_desc.cpp
+        test_asset_handle_lifetime.cpp
+        test_asset_importer.cpp
+        test_asset_loader.cpp
+        test_asset_manager.cpp
+        test_asset_manager_load.cpp
+        test_asset_meta.cpp
+        test_asset_pack.cpp
+        test_asset_payload.cpp
+        test_asset_ref.cpp
+        test_asset_slot.cpp
+        test_asset_source.cpp
+        test_asset_type_registry.cpp
+        test_asset_types.cpp
+        test_assets.cpp
+        test_assets_error.cpp
+        test_binary_asset.cpp
+        test_cooked_blob.cpp
+        test_export_roundtrip.cpp
+        test_file_watcher.cpp
+        test_hot_reload.cpp
+        test_import_cache.cpp
+        test_log_category.cpp
+)
+
+# Every public header of the module must compile on its own (build-only check, part of ALL).
+conjure_header_check(conjure_assets)

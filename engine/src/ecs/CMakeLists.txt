@@ -1,0 +1,57 @@
+# conjure_ecs - archetype world, component registry, queries, scheduler, command buffers, archives and
+# serialisation (docs/design/01_ecs.md). Depends on conjure::core only; no third-party dependency.
+
+conjure_add_module(ecs
+    PUBLIC_HEADERS
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/archetype.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/chunk_view.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/command_buffer.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/component.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/component_registry.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/component_type_desc.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/ecs.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/ecs_error.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/entity.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/entity_archive.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/entity_handle.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/log_category.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/observer.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/query.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/scheduler.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/serialization.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/system.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/system_phase.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/view.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/world.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/ecs/world_hash.h
+    SOURCES
+        archetype.cpp
+        chunk.cpp
+        chunk.h
+        chunk_pool.cpp
+        chunk_pool.h
+        chunk_view.cpp
+        command_buffer.cpp
+        component_mask.cpp
+        component_registry.cpp
+        ecs_error.cpp
+        entity_allocator.cpp
+        entity_allocator.h
+        entity_archive.cpp
+        log_category.cpp
+        observer_table.cpp
+        observer_table.h
+        query.cpp
+        scheduler.cpp
+        scheduler_internal.h
+        scheduler_stages.cpp
+        serialization.cpp
+        system.cpp
+        system_phase.cpp
+        world.cpp
+        world_archive.cpp
+        world_hash.cpp
+        world_structural.cpp
+    PUBLIC_DEPS
+        conjure::core
+)

@@ -25,3 +25,11 @@ foreach(module IN LISTS CONJURE_ENGINE_MODULES)
         message(STATUS "engine: module '${module}' not present yet, skipping")
     endif()
 endforeach()
+
+# The engine's shaders (docs/design/02_renderer.md 3.12): conjure_add_shaders() lives in
+# cmake/ConjureShaders.cmake and the HLSL sources under engine/shaders. The target conjure_shaders
+# is independent of any module directory; conjure_rhi_tests and (wave 3) conjure_renderer depend on it.
+if(CONJURE_WITH_RENDERER)
+    include(ConjureShaders)
+    add_subdirectory(shaders)
+endif()

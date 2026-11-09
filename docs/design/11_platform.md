@@ -199,7 +199,7 @@ namespace conjure::platform {
         math::urect workArea = {};                        // logical coordinates, excludes task bars
     };
 
-    enum class native_handle_kind : u8 { NONE = 0, WIN32, COCOA, X11, WAYLAND };
+    enum class native_handle_kind : u8 { NONE = 0, WINDOWS, COCOA, X11, WAYLAND };   // not WIN32: a macro on Windows
     struct native_window_handle {
         native_handle_kind kind = native_handle_kind::NONE;
         void *window = nullptr;     // HWND | NSWindow * | wl_surface *   (X11 uses x11Window)
@@ -239,8 +239,9 @@ key_event k:          if k.keyCode == UNKNOWN: ignore for bitsets (still stored 
                       RELEASE &&  down[k]: down.reset, released.set
                       REPEAT: nothing          modifiers = k.modifiers
 mouse_button_event:   same rule on u32 masks; modifiers updated
-mouse_move_event:     mouseDelta += position - mousePosition (skipped on the first event after a cursor_mode change
-                      or cursor re-entry to avoid a jump); mousePosition = position
+mouse_move_event:     mouseDelta += position - mousePosition (skipped on the first event after construction, after
+                      cursor re-entry and after skip_next_mouse_delta(), which the window owner calls after
+                      set_cursor_mode() because the OS repositions the cursor); mousePosition = position
 mouse_scroll_event:   scrollDelta += offset
 cursor_enter_event:   cursorInWindow = entered
 text_event:           if textCount < 16: textCodepoints[textCount++] = codepoint   (excess dropped, counted in stats)
@@ -257,8 +258,9 @@ other window events:  ignored; apply returns false
 persist. The copy is one `memcpy` of roughly 600 bytes; `snapshot()` returns `const input_state &` to `mPublished`.
 
 `release_all()` is public (the editor's `input.clear` command, `04_editor.md` 4.4) and is also what a `focus_event`
-with `focused == false` triggers. Because GLFW itself synthesises release events on focus loss, the same key may be
-released twice in one frame; rule P4 makes the second release a no-op.
+with `focused == false` triggers; it also clears `modifiers`, since no key is down afterwards. Because GLFW itself
+synthesises release events on focus loss, the same key may be released twice in one frame; rule P4 makes the second
+release a no-op.
 
 ### 3.3 GLFW window creation (`glfw_window::create`)
 
@@ -471,6 +473,10 @@ namespace conjure::platform {
             /// <summary>Same state machine as apply(); the source for tests and the editor's input.inject (P3).</summary>
             void inject(const input_event &value);
             void inject(const event &value);   // convenience; ignores non-input events
+            template <typename EventType>      // one concrete alternative (key_event, mouse_move_event, ...), so that
+                requires std::constructible_from<input_event, const EventType &> &&          // inject(make_key(...))
+                  (!std::same_as<EventType, input_event>) && (!std::same_as<EventType, event>)  // is unambiguous
+            void inject(const EventType &value);
 
             /// <summary>Publishes the frame's snapshot and clears edges, deltas, scroll and text.</summary>
             void end_frame();
@@ -478,8 +484,11 @@ namespace conjure::platform {
             /// <summary>The snapshot published by the last end_frame(). Readable from any thread until the next end_frame().</summary>
             [[nodiscard]] const input_state &snapshot() const noexcept;
 
-            /// <summary>Releases every down key and button with a released edge this frame (focus loss, input.clear).</summary>
+            /// <summary>Releases every down key and button with a released edge this frame and clears the modifiers (focus loss, input.clear).</summary>
             void release_all() noexcept;
+
+            /// <summary>The next mouse_move_event sets the position without adding to mouseDelta (after set_cursor_mode()).</summary>
+            void skip_next_mouse_delta() noexcept;
 
             [[nodiscard]] const input_stats &stats() const noexcept;
     };

@@ -35,6 +35,7 @@ option(CONJURE_BUILD_MANAGED  "Build the C# managed assemblies with dotnet"   ON
 option(CONJURE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"         ON)
 option(CONJURE_ENABLE_ASAN    "Enable AddressSanitizer (GCC/Clang/MSVC)"      OFF)
 option(CONJURE_ENABLE_UBSAN   "Enable UndefinedBehaviorSanitizer (GCC/Clang)" OFF)
+option(CONJURE_PLATFORM_GLFW  "Build the GLFW window backend (OFF = null-only platform library)" ON)
 
 if(WIN32)
     option(CONJURE_RHI_D3D12  "Enable the D3D12 RHI backend"   ON)
@@ -42,6 +43,11 @@ if(WIN32)
 else()
     set(CONJURE_RHI_D3D12 OFF CACHE INTERNAL "D3D12 is Windows only")
     option(CONJURE_RHI_VULKAN "Enable the Vulkan RHI backend"  ON)
+endif()
+
+# The editor renders through Dear ImGui's GLFW backend, so it needs the GLFW window backend.
+if(CONJURE_BUILD_EDITOR AND NOT CONJURE_PLATFORM_GLFW)
+    message(FATAL_ERROR "CONJURE_BUILD_EDITOR requires CONJURE_PLATFORM_GLFW")
 endif()
 
 if(CONJURE_WITH_RENDERER AND NOT CONJURE_RHI_D3D12 AND NOT CONJURE_RHI_VULKAN)
@@ -80,6 +86,7 @@ endif()
 
 include(ConjureWarnings)
 include(ConjureModule)
+include(ConjureSharedLibrary)
 include(ConjureTesting)
 include(ConjureSanitizers)
 
@@ -92,6 +99,11 @@ add_subdirectory(third_party)
 # Engine, tools and executables
 #------------------------------------------------------------------------------
 add_subdirectory(engine)
+
+# The umbrella shared library conjure_shared and the ABI identity header are created once every
+# engine module has been declared (docs/design/07_modules.md 5, R17): executables, game modules and
+# the LINK_ENGINE_SHARED test modules link conjure::shared and nothing else from the engine.
+conjure_finalize_engine()
 
 if(CONJURE_BUILD_MANAGED AND CONJURE_WITH_SCRIPTING)
     add_subdirectory(managed)

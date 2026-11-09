@@ -33,6 +33,7 @@ namespace conjure::testing {
         SOFTWARE_GPU_ADAPTER,   // rhi can create a device with preferSoftwareAdapter; probe installed by rhi tests
         LOOPBACK_TCP,           // a 127.0.0.1 socket can be bound; probe installed by the editor tests
         REAL_WINDOW,            // CONJURE_TEST_WINDOW=1 set by a developer; never in CI
+        AUDIO_DEVICE,           // the miniaudio backend lists a playback device; probe installed by the audio tests
         COUNT
     };
 

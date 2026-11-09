@@ -1,0 +1,60 @@
+# conjure_assets - uuid database, importers, cooked cache, async loading, hot reload, packs and the
+# cooker (docs/design/05_assets.md). Depends on conjure::core only.
+
+conjure_add_module(assets
+    PUBLIC_HEADERS
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_cache.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_cooker.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_database.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_extension_desc.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_importer.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_loader.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_manager.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_meta.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_pack.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_payload.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_ref.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_slot.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_source.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_type_registry.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/asset_types.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/assets.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/assets_error.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/binary_asset.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/cooked_blob.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/file_watcher.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/hot_reload.h
+        ${PROJECT_SOURCE_DIR}/engine/include/conjure/assets/log_category.h
+    SOURCES
+        asset_cache.cpp
+        asset_cooker.cpp
+        asset_database.cpp
+        asset_extension_desc.cpp
+        asset_importer.cpp
+        asset_loader.cpp
+        asset_manager.cpp
+        asset_meta.cpp
+        asset_pack.cpp
+        asset_ref.cpp
+        asset_slot_table.cpp
+        asset_slot_table.h
+        asset_source.cpp
+        asset_type_registry.cpp
+        asset_types.cpp
+        assets_error.cpp
+        binary_asset.cpp
+        binary_io.h
+        completion_queue.h
+        cooked_blob.cpp
+        database_snapshot.cpp
+        database_snapshot.h
+        file_watcher.cpp
+        fnv1a.h
+        hot_reload.cpp
+        load_pipeline.cpp
+        load_pipeline.h
+        log_category.cpp
+        path_filters.h
+    PUBLIC_DEPS
+        conjure::core
+)

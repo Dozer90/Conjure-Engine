@@ -137,9 +137,10 @@ if(CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS)
 endif()
 
 #------------------------------------------------------------------------------
-# GLFW (needs X11/Wayland development packages on Linux, so only when a window is wanted)
+# GLFW (needs X11/Wayland development packages on Linux, so only when the glfw window backend
+# is wanted; CONJURE_PLATFORM_GLFW=OFF yields a null-only platform library for servers)
 #------------------------------------------------------------------------------
-if(CONJURE_WITH_RENDERER OR CONJURE_BUILD_EDITOR)
+if(CONJURE_PLATFORM_GLFW)
 FetchContent_Declare(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG        3.4
@@ -152,6 +153,10 @@ set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 set(GLFW_LIBRARY_TYPE "STATIC" CACHE STRING "" FORCE)
+if(UNIX AND NOT APPLE)
+    set(GLFW_BUILD_WAYLAND ON CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+endif()
 FetchContent_MakeAvailable(glfw)
 add_library(conjure::thirdparty::glfw ALIAS glfw)
 set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")

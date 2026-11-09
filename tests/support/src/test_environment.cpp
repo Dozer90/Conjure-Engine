@@ -62,6 +62,9 @@ std::string_view conjure::testing::to_string(precondition value) noexcept {
         case precondition::REAL_WINDOW: {
             return "REAL_WINDOW";
         }
+        case precondition::AUDIO_DEVICE: {
+            return "AUDIO_DEVICE";
+        }
         case precondition::COUNT: {
             break;
         }
@@ -83,7 +86,8 @@ bool conjure::testing::precondition_holds(precondition value) noexcept {
         }
         case precondition::DOTNET_RUNTIME:
         case precondition::SOFTWARE_GPU_ADAPTER:
-        case precondition::LOOPBACK_TCP: {
+        case precondition::LOOPBACK_TCP:
+        case precondition::AUDIO_DEVICE: {
             return probe_holds(value);
         }
         case precondition::COUNT: {

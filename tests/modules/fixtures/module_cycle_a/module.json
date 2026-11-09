@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "module_cycle_a",
+  "version": "1.0.0",
+  "engine": "*",
+  "dependencies": [{ "name": "module_cycle_b", "version": "*" }]
+}

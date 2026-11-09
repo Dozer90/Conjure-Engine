@@ -361,10 +361,13 @@ the asset pipeline, not copied raw. Static modules are omitted.
 
 ### 3.8 Public-header hash
 
-`cmake/ConjureAbiIdentity.cmake` generates `${PROJECT_BINARY_DIR}/generated/conjure/modules/abi_identity.h`
-with `#define CONJURE_ABI_HEADER_HASH 0x...ull`: FNV-1a over the SHA-256 of every file in the global
-property `CONJURE_PUBLIC_HEADERS` (appended by `conjure_add_module`), sorted by path, as a build-time
-custom command depending on those headers. Engine and modules compiled in one tree agree; a module built
+`cmake/ConjureSharedLibrary.cmake` (`conjure_finalize_engine()`, custom target `conjure_abi_identity`) generates
+`${PROJECT_BINARY_DIR}/generated/include/conjure/modules/abi_identity.h` with
+`#define CONJURE_ABI_HEADER_HASH 0x...ull`: the first 64 bits of a SHA-256 over the relative path and SHA-256 of
+every public header of every library in the global property `CONJURE_STATIC_LIBRARIES` (each target's
+`CONJURE_PUBLIC_HEADERS` property, set by `conjure_add_module` / `conjure_add_core_area`), sorted by path, as a
+build-time custom command depending on those headers (SHA-256 instead of FNV-1a because CMake has no unsigned
+64-bit arithmetic; wave 2 integration). Engine and modules compiled in one tree agree; a module built
 against stale headers is refused with `ABI_MISMATCH(headerHash)`. The installed SDK ships it frozen.
 
 ## 4. Public API - `engine/include/conjure/modules/`
@@ -667,21 +670,30 @@ namespace {
 CONJURE_DECLARE_MODULE(feature_test_entry)
 ```
 
-## 5. Build system (`cmake/ConjureModule.cmake`, `cmake/ConjureAbiIdentity.cmake`)
+## 5. Build system (`cmake/ConjureModule.cmake`, `cmake/ConjureSharedLibrary.cmake`)
 
-- `conjure_add_module()` keeps its signature. Internally it adds `PRIVATE CONJURE_ENGINE_EXPORTS`, sets
-  `CXX_VISIBILITY_PRESET hidden` and `VISIBILITY_INLINES_HIDDEN ON`, appends the target to the global
-  property `CONJURE_ENGINE_LIBRARIES` and its `PUBLIC_HEADERS` to `CONJURE_PUBLIC_HEADERS`.
+Spellings follow the implementation (wave 2 integration, `09_cross_area_resolutions.md` 3): the global property is
+`CONJURE_STATIC_LIBRARIES`, the macros are `CONJURE_SHARED_EXPORTS` / `CONJURE_SHARED_IMPORTS` (R17 kept the
+`CONJURE_ENGINE_*` names, `conjure/core/api.h` shipped the `CONJURE_SHARED_*` ones first and the code wins), and the
+umbrella lives in `cmake/ConjureSharedLibrary.cmake`.
+
+- `conjure_add_module()` keeps its signature. Internally it appends the target to the global property
+  `CONJURE_STATIC_LIBRARIES` and records its `PUBLIC_HEADERS` in the target property `CONJURE_PUBLIC_HEADERS`.
+  The intended `PRIVATE CONJURE_SHARED_EXPORTS`, `CXX_VISIBILITY_PRESET hidden` and `VISIBILITY_INLINES_HIDDEN ON`
+  are applied once every public class and function of core carries `CONJURE_API` (`tools/check_exports.py`); until
+  then the generated module definition file below exports everything on Windows and GCC/Clang export by default.
 - `conjure_finalize_engine()`, called by the root `CMakeLists.txt` right after `add_subdirectory(engine)`,
   creates `conjure_shared` (`SHARED`, alias `conjure::shared`) from one generated empty source; links
-  `PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,<every CONJURE_ENGINE_LIBRARIES>>"` (third-party dependencies
+  `PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,<every CONJURE_STATIC_LIBRARIES>>"` (third-party dependencies
   follow transitively and are not whole-archived, except `conjure::thirdparty::imgui`, whole-archived
   when `CONJURE_BUILD_EDITOR`); links `PUBLIC conjure::platform_defines conjure::thirdparty::glm`;
-  forwards each engine library's `INTERFACE_COMPILE_DEFINITIONS`; defines `INTERFACE CONJURE_ENGINE_SHARED`;
-  sets `BUILD_RPATH`/`INSTALL_RPATH` to `$ORIGIN` / `@loader_path`; creates the `conjure_abi_identity`
-  custom target (3.8) on which `conjure_modules` and `conjure_shared` depend.
-- `conjure/core/api.h`: `CONJURE_API` = `dllexport`/`visibility("default")` under `CONJURE_ENGINE_EXPORTS`,
-  `dllimport`/`visibility("default")` under `CONJURE_ENGINE_SHARED`, empty otherwise (tests linking
+  forwards each engine library's `INTERFACE_COMPILE_DEFINITIONS`; defines `PRIVATE CONJURE_SHARED_EXPORTS` and
+  `INTERFACE CONJURE_SHARED_IMPORTS`; sets `BUILD_RPATH`/`INSTALL_RPATH` to `$ORIGIN` / `@loader_path`; creates the
+  `conjure_abi_identity` custom target (3.8) on which `conjure_modules` and `conjure_shared` depend. On MSVC a
+  module definition file listing every external symbol of the whole-archived objects is generated at build time
+  and its export count is checked against the 65535 a DLL may hold.
+- `conjure/core/api.h`: `CONJURE_API` = `dllexport`/`visibility("default")` under `CONJURE_SHARED_EXPORTS`,
+  `dllimport`/`visibility("default")` under `CONJURE_SHARED_IMPORTS`, empty otherwise (tests linking
   static libraries). `cmake/ConjureWarnings.cmake` adds `/wd4251 /wd4275` (dll-interface warnings for
   standard-library members of exported classes, the standard remedy for DLL-exporting C++ projects).
 - `conjure_thirdparty_imgui` compiles with `PRIVATE IMGUI_API=<export>` and exposes
@@ -690,11 +702,12 @@ CONJURE_DECLARE_MODULE(feature_test_entry)
 - `conjure_editor` and `conjure_runtime` list `conjure::shared` in `DEPS` and nothing else from the engine.
   `conjure_add_test_module(<module> SOURCES ... [DEPS ...] [LINK_ENGINE_SHARED])` links `conjure::shared`
   instead of `conjure::<module>` with the option (used by `modules`, `integration`, `engine`, `editor` tests).
-- `conjure_add_game_module(<target> NAME <manifest name> MANIFEST <module.json> SOURCES ... [DEPS ...]
-  [EDITOR_UI])`: `add_library(SHARED)`, links `conjure::shared PRIVATE`, hidden visibility, defines
-  `CONJURE_MODULE_NAME="<manifest name>"`, output directory
-  `<manifest dir>/bin/<platform>-<arch>-$<LOWER_CASE:$<CONFIG>>/` (both `LIBRARY_` and
-  `RUNTIME_OUTPUT_DIRECTORY`), RPATH `$ORIGIN`, `/MD`. With `EDITOR_UI` links
+- `conjure_add_game_module(<target> MANIFEST <module.json> SOURCES ... [NAME <manifest name>] [OUTPUT_ROOT <dir>]
+  [DEPS ...] [DEFINES ...] [EDITOR_UI])`: `add_library(SHARED)`, links `conjure::shared PRIVATE`, hidden
+  visibility, defines `CONJURE_MODULE_NAME="<manifest name>"` (`NAME` defaults to the manifest's `"name"`), output
+  name = the manifest's `"binary"`, output directory `<root>/bin/<platform>-<arch>-$<LOWER_CASE:$<CONFIG>>/` (both
+  `LIBRARY_` and `RUNTIME_OUTPUT_DIRECTORY`; `<root>` is the manifest's directory unless `OUTPUT_ROOT` says
+  otherwise, which the test fixtures use to build into the build tree), RPATH `$ORIGIN`, `/MD`. With `EDITOR_UI` links
   `conjure::thirdparty::imgui_interface` and the editor extension headers. `ConjureConfig.cmake`
   exports the same function for installed projects (`find_package(conjure CONFIG)`) and records the
   engine's options so the `CONJURE_WITH_*` macros match.
@@ -823,7 +836,7 @@ diagnostics before any module code runs.
    hidden visibility, global properties). Build everything; nothing changes behaviour yet.
 2. `module_types.h`, `module_version.h/.cpp`, `module_error.h`, `log_category.h`, `module_manifest.h/.cpp`
    over `core::json` with binary triplet derivation. Tests `test_module_version`, `test_module_manifest`.
-3. `module_abi.h/.cpp` and `cmake/ConjureAbiIdentity.cmake` generating `abi_identity.h`. Tests `test_module_abi`.
+3. `module_abi.h/.cpp` and `cmake/ConjureSharedLibrary.cmake` generating `abi_identity.h`. Tests `test_module_abi`.
 4. `module_registration_set.h`, `module_registrar.h/.cpp`, `extensions_of<T>`. Tests `test_module_registrar`.
 5. `module_service.h/.cpp`, `module_context.h/.cpp`, `module_consumer.h/.cpp`, `module_events.h`,
    `module_registry.h/.cpp`, `module_resolver.h/.cpp`. Tests `test_module_context_services`, `test_module_resolver`.
@@ -860,7 +873,8 @@ two `fail()` calls), `module_no_symbol` (plain shared library), `module_managed_
   mismatch rejected.
 - `test_module_registrar.cpp`: extension alignment and retrieval with two interleaved descriptor types;
   managed assembly recording; `fail()` accumulates; lifecycle set; empty set.
-- `test_module_context_services.cpp`: `provide`/`try_service`/`require_service` miss names the interface;
+- `test_module_context.cpp` (the design's `test_module_context_services`): `provide`/`try_service`/`require_service`
+  miss names the interface;
   `provide_service` while loaded asserts (`assert_capture`); retained subscription fires while loaded and
   never after unload.
 - `test_module_resolver.cpp`: linear chain; diamond; name tie-break; missing and optional-missing
