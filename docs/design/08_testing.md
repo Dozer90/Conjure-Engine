@@ -576,7 +576,7 @@ scenario, one case per file (so one CTest entry each).
 | `test_script_lifecycle.cpp` `[scripting]` | `LifecycleProbe` entity, 10 frames, destroy: checks `script.on_create`, `script.update_count==10`, `script.on_destroy`. |
 | `test_hot_reload.cpp` `[scripting]` | rebuild `Conjure.TestScripts` variant B into a temp dir, trigger reload: `[Serialized]` field preserved, removed type -> component disabled with WARN. |
 | `test_export_roundtrip.cpp` | export in-repo `assets/projects/minimal` to `temp_directory` through `engine::export_pipeline`; an `application` built from `--project <dir> --headless --frames 60` returns 0 (R21); component counts equal the editor load. |
-| `test_ai_protocol_e2e.cpp` | `assets/commands/build_pacman.json` through `editor::headless_runner::run` (R15): 28x31 tile grid, 4 ghost prefab instances, player with script, pellets, score script; saved scene reloads with equal `world_hash`. |
+| `test_ai_protocol_e2e.cpp` | `assets/commands/build_grid_sweeper.json` through `editor::headless_runner::run` (R15): a minesweeper-style grid of cell prefab instances, reveal/flag scripts, timer and win/lose state script (docs/design/17_demo_games.md 2.1); saved scene reloads with equal `world_hash`. |
 
 `tests/downloaded/` (`conjure_downloaded_tests`, label `downloaded`, every case starts with
 `CONJURE_TEST_REQUIRE(precondition::DOWNLOADED_ASSETS)`):
@@ -624,7 +624,7 @@ regenerated only with `--conjure-update-golden` on the matching backend and revi
    against the JSON schemas in `engine/src/editor/core/protocol/schema/` (installed next to the editor
    for agents; R15).
 8. `test_editor_process.cpp` (label `process`, excluded from the default preset, run in CI): spawns the
-   real `conjure_editor --headless --exec tests/assets/commands/build_pacman.json --project <tmp>` via
+   real `conjure_editor --headless --exec tests/assets/commands/build_grid_sweeper.json --project <tmp>` via
    `core::process`, checks exit 0 and that the saved scene hash equals the in-process result.
 
 ---

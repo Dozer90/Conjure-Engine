@@ -40,7 +40,7 @@ forces it OFF for Distribution). Targets: `conjure_editor_core`, `conjure_editor
 | D5 | Entities are addressed by **scene guid** (`core::uuid`, stable per entity, from the `scene` module) or by hierarchy path. `ecs::entity` ids never cross the protocol. | Entity ids recycle; guids survive play/stop restore, scene reload and undo. |
 | D6 | **Main-thread execution at one frame point.** TCP sockets are non-blocking and polled from the main thread. The only extra thread is a blocking stdin reader (`core::jobs::dedicated_thread`). Long operations are **async commands** that park the request id and answer when a job completes (main-thread callback). | No shared editor state across threads; no lock-free queue dependency on `core`; deterministic ordering between UI actions and agent requests. |
 | D7 | Protocol is **newline-delimited JSON** (`\n`, UTF-8, max 16 MiB/line). Requests carry a caller `id` (int or string, echoed; `null` when absent - a response is always sent). Events carry a monotonic `seq` and the `frame`. Error codes are stable strings. | Trivial to speak from any agent runtime; resumable logs; typed failures the agent can branch on. |
-| D8 | **Bulk commands exist from day one**: `entity.create_many`, `component.set_many`, `editor.batch` (one undo entry, atomic by default). | A PacMan maze is ~400 walls; one round trip, one undo entry, one archetype insertion pass. |
+| D8 | **Bulk commands exist from day one**: `entity.create_many`, `component.set_many`, `editor.batch` (one undo entry, atomic by default). | A grid game is ~400 cell entities; one round trip, one undo entry, one archetype insertion pass. |
 | D9 | **Play mode runs in the editing world** with an opaque `scene::scene_snapshot` captured on `play.start` and restored on `play.stop`. While not `EDITING` the undo stack is frozen (mutations execute, are not recorded, and raise one `warning` event per play session). Selection is remapped by guid after restore. | Simplest consistent rule; snapshot format is the scene module's business (binary chunk copy recommended, see 8). |
 | D10 | **Picking is CPU-side**: AABB broad phase over per-entity world bounds (always), triangle narrow phase when the mesh asset keeps CPU geometry (editor builds keep it), `mode:"physics"` delegates to Jolt. No GPU id buffer. | Works with the `null` RHI, unit-testable, no readback latency. |
 | D11 | **Hierarchy and inspector are cache-driven**: flat `hierarchy_row` array rebuilt only when `scene::structure_version()` changes, drawn with `ImGuiListClipper`; inspector reads one JSON document per selected component per frame via `reflection_path`. | 10,000 entities cost O(visible rows) per frame. |
@@ -721,10 +721,10 @@ Events: `log`, `selection.changed`, `play.state`, `scene.changed {revision, labe
 `asset.imported`, `module.state {name, state, error?}`, `command.executed {clientId, cmd, ok}`,
 `client.connected`, `client.disconnected`, `events.dropped {count}`, `warning {code, message}` (R15).
 
-PacMan walk-through (proves completeness): `session.hello` -> `project.create` -> `asset.import`
-(wall/pellet glTF, sprite PNGs) -> `asset.create_material` x3 -> `scene.new` -> `editor.batch`
-[`entity.create_many` walls with `overrides` positions from a maze array, `entity.create` camera +
-directional light] -> `prefab.create` pellet/ghost -> `prefab.instantiate {count}` ->
+Grid-game walk-through (proves completeness; the generic minesweeper-style Grid Sweeper of 17_demo_games.md 2.1): `session.hello` -> `project.create` -> `asset.import`
+(cell sprite atlas PNG, UI font) -> `asset.create_material` x3 -> `scene.new` -> `editor.batch`
+[`entity.create_many` cells with `overrides` positions from the grid, `entity.create` orthographic
+camera] -> `prefab.create` cell/mine -> `prefab.instantiate {count}` ->
 `script.create` x3 -> `script.write` -> `script.compile` (fix loop on diagnostics) -> `script.attach`
 + `component.set script.fields.speed` -> `component.add rigid_body` / `character_controller` ->
 `play.start` -> `input.inject` -> `play.step` -> `entity.get` positions -> `view.screenshot` ->
@@ -898,7 +898,7 @@ for module tooling; `headless_runner` as a CI tool; `.claude/skills/editor-ai-co
 - `test_editor_options.cpp`, `test_hierarchy_cache.cpp` (`rebuild_only_on_version_change`,
   `filter_keeps_ancestors`, `10k_rows_flat`), `test_reflection_commands.cpp`
   (`every_component_listed_with_fields`, `every_command_has_schema`, `schema_dump_matches_generated_file`).
-- `tests/integration/test_ai_builds_pacman.cpp`: feeds `samples/feature_test/ai/pacman_commands.json`
+- `tests/integration/test_ai_builds_grid_game.cpp`: feeds `samples/games/grid_sweeper/commands/build_grid_sweeper.json`
   through `headless_runner`; asserts entity count, components, prefab instances, saved scene, and
   compiled script when `dotnet` is present (otherwise `NOT_AVAILABLE` is the asserted outcome).
 - `tests/benchmarks/bench_editor.cpp`: `create_many_10k`, `snapshot_capture_restore_10k`,

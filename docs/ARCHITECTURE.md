@@ -397,7 +397,7 @@ nightly `distribution-export` job prove it headless.
 | Script lifecycle, collisions, fields, inspector contract | `design/03_scripting.md` 3.2-3.6 |
 | Hot reload (C#), managed build, DOD `Span<T>` | `design/03_scripting.md` 3.8-3.10 |
 | Command model, undo, protocol wire format, error codes | `design/04_editor.md` 2, 3.3-3.4 |
-| Command catalogue, events, PacMan walk-through | `design/04_editor.md` 4.4 |
+| Command catalogue, events, grid-game walk-through | `design/04_editor.md` 4.4 |
 | Play/pause/step, picking, screenshots, headless runner, transports | `design/04_editor.md` 3.7-3.12 |
 | Asset identity, `.meta`, cooked blob, pack format | `design/05_assets.md` 2 |
 | Async load pipeline, publish/retire, hot reload, cook | `design/05_assets.md` 3 |
@@ -470,7 +470,7 @@ Wave 3 exit: `tests/integration/test_assets_renderer_headless.cpp`, `test_script
 |---|---|---|
 | `engine` | `06_engine_loop.md` (all); the "Offers to engine" sections of 11-15 (`platform_subsystem`, `audio_subsystem` incl. `engine.audio_sync` over `playbackRequest`, `scene_subsystem`, `physics_subsystem` with `physics_settings::from_json`, `model_prefab_converter`); R1-R2, R7-R10, R13, R18-R24, R27, R33, R38-R39, R21 (export), R46-R47, R50-R53 | `tests/engine` per 10; `test_application_headless` (construction <= 5 ms with null backends); `test_phase_order` exact sequence; startup unwind; `export_pipeline` round trip; `bench_engine_frame` under the `desktop` thresholds |
 | `bindings` | `15_bindings.md` (all); `03_scripting.md` 2.1, 3.9, 8; `12_audio.md` 2.6/8, `13_scene.md` 8, `14_physics.md` 8 (offers to bindings); `05_assets.md` 8; `08_testing.md` 5.2 (bindings row), 7.2 (call counters); R5, R26, R48-R51, R54-R58, R61, R62, R64 | every native entry filled (stubs for compiled-out groups); generated C# manifest equals the native table; every mirror of 15 2.6 resolves to a non-zero id; every counter increments in `feature_test` minus `tests/binding_exclusions.json`; `Span<T>` scope test |
-| `editor_core`, `editor_ui`, `conjure_editor` | `04_editor.md` (all), R11-R15, R35, R40 | all `tests/editor` cases; `test_command_catalogue` fixture per command; `editor.schema` dump matches `docs/generated/editor_protocol.json`; `test_ai_builds_pacman` and `test_ai_protocol_e2e` green; `test_editor_process` runs the real executable |
+| `editor_core`, `editor_ui`, `conjure_editor` | `04_editor.md` (all), R11-R15, R35, R40 | all `tests/editor` cases; `test_command_catalogue` fixture per command; `editor.schema` dump matches `docs/generated/editor_protocol.json`; `test_ai_builds_grid_game` and `test_ai_protocol_e2e` green; `test_editor_process` runs the real executable |
 | `conjure_runtime` | `06_engine_loop.md` 4.2; `15_bindings.md` 3.1 (`add_subsystem(scripting_bindings_subsystem)` before `initialise()`) | boots an exported folder headless 60 frames, exit 0; missing `project.json` -> exit 2; Distribution binary has no editor/ImGui symbols |
 | `conjure_test_support_engine` | `08_testing.md` 2.3, 4.4-4.6, 11 | `headless_engine`, `input_script`, `world_builder`, `protocol_client`, `golden_image` with their self-tests |
 
@@ -485,6 +485,13 @@ exports `feature_test` and runs the result 120 frames.
 | `samples/stress_test` | `00_brief.md` requirement 2; `08_testing.md` 7.1 | 10,000 dynamic entities (transform, physics body, or script) at 60 Hz on the reference desktop; `engine.full_frame_10k_*` thresholds pass |
 | Golden images, nightly jobs | `08_testing.md` 6.2, 7.3 | WARP references committed via LFS; `golden-d3d12-warp` green; lavapipe `continue-on-error` |
 | `AGENTS.md`, `.claude/skills/*` | `00_brief.md` layout; `04_editor.md` D15 | `editor-ai-control` skill generated from `editor.schema`; build-test, add-module, add-component, style-review skills reference the documents in section 10 |
+
+### Wave 6 - demo games (`docs/design/17_demo_games.md`)
+
+| Deliverable | Inputs | Definition of done |
+|---|---|---|
+| `samples/games/grid_sweeper`, `tap_tycoon`, `vault_runner` (2D) | `17_demo_games.md` 2.1, `04_editor.md` 4.4, `03_scripting.md` | each boots headless 600 frames with scripted input, all `Diagnostics.Check` pass, recorded `world_hash` matches, wiki tutorial written; Grid Sweeper is authored entirely through the AI protocol command file |
+| `samples/games/rolling_course`, `corridor_strike` (3D) | `17_demo_games.md` 2.2, `14_physics.md`, `02_renderer.md` | same gates plus an exported standalone build that runs 120 frames; placeholders swap to the customer's licensed assets by file replacement |
 
 ### Cross-wave gates
 
