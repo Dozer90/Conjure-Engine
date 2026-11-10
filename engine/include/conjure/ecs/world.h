@@ -331,7 +331,11 @@ namespace conjure::ecs {
             [[nodiscard]] void *get_raw(entity target, component_id id, bool forWrite) noexcept;
 
             /// <summary>
-            /// Read-only component data by id. nullptr when dead, absent or a tag.
+            /// Read-only component data by id. nullptr when dead, absent or a tag. Safe from grain jobs
+            /// while the world is locked (an iteration_scope, a system stage, parallel_for_chunks): no
+            /// structural change can move a row meanwhile, so a job may read another entity's component
+            /// this way (the scene's transform pass reads parent columns through it, 01_ecs.md 5.2) as
+            /// long as no grain is writing that column at the same time.
             /// </summary>
             [[nodiscard]] const void *get_raw(entity target, component_id id) const noexcept;
 
@@ -425,12 +429,16 @@ namespace conjure::ecs {
             /// <summary>
             /// Instantiates outRoots.size() copies of an archive, placing entities directly in their
             /// final archetypes and rewiring internal entity references. ARCHIVE_CORRUPT before anything
-            /// is created when the archive does not validate against this world's registry.
+            /// is created when the archive does not validate against this world's registry. When given,
+            /// outEntities receives every created id, copy-major in entry order (copies x entity_count()
+            /// entries, entries without components included); with a command buffer those are the ids
+            /// reserved for the flush. After a failed call outEntities is empty.
             /// </summary>
             [[nodiscard]] core::result<void> instantiate_batch(
               const std::shared_ptr<const entity_archive> &archive,
               std::span<entity> outRoots,
-              command_buffer *commands = nullptr
+              command_buffer *commands = nullptr,
+              std::vector<entity> *outEntities = nullptr
             );
 
             /*---------------------------------------------------------------*/

@@ -245,14 +245,81 @@ if(CONJURE_WITH_PHYSICS)
     set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
     set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
     set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
-    set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "" FORCE)
+    # docs/design/14_physics.md P16, ARCHITECTURE.md 9: cross-platform bit equality is opt-in; the engine's
+    # own physics objects get the matching floating-point options in engine/src/physics/CMakeLists.txt.
+    set(CROSS_PLATFORM_DETERMINISTIC ${CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC} CACHE BOOL "" FORCE)
     set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
     set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE ON CACHE BOOL "" FORCE)
     set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
     set(ENABLE_OBJECT_STREAM ON CACHE BOOL "" FORCE)
+    set(DOUBLE_PRECISION OFF CACHE BOOL "" FORCE)
+    set(OBJECT_LAYER_BITS 16 CACHE STRING "" FORCE)
+    # Asserts come from the per-configuration defines below, never from Jolt's global switch (which would
+    # put them into Distribution too). Jolt's floating-point exception traps (MSVC only, Debug and Release
+    # only, unmasked on the calling thread inside PhysicsSystem::Update) would make the engine's own
+    # callbacks inside the step trap on one platform and configuration and nowhere else; the engine's
+    # NaN handling is the same everywhere, so they stay off.
+    set(USE_ASSERTS OFF CACHE BOOL "" FORCE)
+    set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+    # Instruction set (docs/design/14_physics.md 8): baseline x64 is SSE4.1/4.2 and nothing newer, so a
+    # Distribution binary runs on every x64 CPU. Jolt's defaults enable AVX2, F16C, LZCNT, TZCNT and FMA
+    # and propagate the matching compiler flags and JPH_USE_* defines PUBLIC, which would make every
+    # physics object (hence conjure_shared and every executable) require an AVX2+FMA CPU. Keep this block
+    # when the tag is bumped; the check after FetchContent_MakeAvailable fails the configure if an option
+    # name changed upstream and the pin stopped taking effect.
+    set(USE_SSE4_1 ON CACHE BOOL "" FORCE)
+    set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
+    set(USE_AVX OFF CACHE BOOL "" FORCE)
+    set(USE_AVX2 OFF CACHE BOOL "" FORCE)
+    set(USE_AVX512 OFF CACHE BOOL "" FORCE)
+    set(USE_LZCNT OFF CACHE BOOL "" FORCE)
+    set(USE_TZCNT OFF CACHE BOOL "" FORCE)
+    set(USE_F16C OFF CACHE BOOL "" FORCE)
+    set(USE_FMADD OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(JoltPhysics)
     add_library(conjure::thirdparty::jolt ALIAS Jolt)
     set_target_properties(Jolt PROPERTIES FOLDER "ThirdParty")
+    # Jolt/Jolt.cmake emits the JPH_USE_* defines on MSVC only under the Visual Studio generators
+    # (CMAKE_VS_PLATFORM_NAME is x86/x64); with Ninja and cl nothing is emitted and Jolt/Core/Core.h falls
+    # back to the compiler's predefined macros, which without /arch means SSE2. cl compiles the SSE4
+    # intrinsics without a flag, so the baseline is reached by naming the defines here (PUBLIC, as Jolt
+    # does, so the library and the engine's physics objects agree).
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|X86|x86)$"
+       AND NOT CMAKE_VS_PLATFORM_NAME MATCHES "^(x86|x64)$")
+        target_compile_definitions(Jolt PUBLIC JPH_USE_SSE4_1 JPH_USE_SSE4_2)
+    endif()
+    # The pin must be visible on the target: an upstream rename of an option would silently restore the
+    # AVX2 defaults, and the test executables cannot include Jolt headers to check (CONVENTIONS 6).
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|X86|x86|i386)$")
+        get_target_property(_jolt_definitions Jolt INTERFACE_COMPILE_DEFINITIONS)
+        foreach(_jolt_required IN ITEMS JPH_USE_SSE4_1 JPH_USE_SSE4_2)
+            if(NOT "${_jolt_required}" IN_LIST _jolt_definitions)
+                message(FATAL_ERROR "third_party: Jolt does not define ${_jolt_required}; the instruction-set pin "
+                                    "of 14_physics.md 8 is not in effect (defines: ${_jolt_definitions})")
+            endif()
+        endforeach()
+        foreach(_jolt_forbidden IN ITEMS JPH_USE_AVX JPH_USE_AVX2 JPH_USE_AVX512 JPH_USE_LZCNT JPH_USE_TZCNT
+                                         JPH_USE_F16C JPH_USE_FMADD JPH_DOUBLE_PRECISION
+                                         JPH_FLOATING_POINT_EXCEPTIONS_ENABLED)
+            if("${_jolt_forbidden}" IN_LIST _jolt_definitions)
+                message(FATAL_ERROR "third_party: Jolt defines ${_jolt_forbidden}, which the baseline-x64 pin of "
+                                    "14_physics.md 8 forbids (defines: ${_jolt_definitions})")
+            endif()
+        endforeach()
+        unset(_jolt_definitions)
+    endif()
+    # Jolt checks at RegisterTypes() that the library and every including translation unit agree on the
+    # JPH_* feature defines (Jolt/Core/Core.h, JPH_VERSION_ID). Its own CMake knows Debug and Release only:
+    # it defines _DEBUG / NDEBUG and the debug renderer per configuration, and Debug gets asserts because
+    # Jolt/Core/IssueReporting.h derives JPH_ENABLE_ASSERTS from JPH_DEBUG (itself from _DEBUG). The
+    # engine's Development configuration would get neither asserts nor the debug renderer; 14_physics.md 8
+    # wants both in Debug and Development, Distribution gets neither. Naming JPH_ENABLE_ASSERTS for Debug
+    # too makes the JPH_VERSION_ID feature bits identical in both configurations. PUBLIC keeps the library
+    # and its consumers in agreement.
+    target_compile_definitions(Jolt PUBLIC
+        $<$<CONFIG:Development>:JPH_DEBUG_RENDERER>
+        $<$<CONFIG:Debug,Development>:JPH_ENABLE_ASSERTS>
+    )
 endif()
 
 #------------------------------------------------------------------------------

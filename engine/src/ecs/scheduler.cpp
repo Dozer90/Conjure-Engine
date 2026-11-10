@@ -157,8 +157,15 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
     }
 
     const bool parallelSystems = mJobs != nullptr && mDesc.parallelSystems;
-    std::vector<std::function<void()>> jobs = {};
-    std::vector<system_record *> mainThread = {};
+    // The stage scratch lives in the phase state so a warmed-up phase allocates nothing; the frame is
+    // reached through a member so the job closure stays small enough for every std::function SBO. The
+    // member is saved and restored, not cleared, because an EXCLUSIVE system (owner thread, world
+    // unlocked) may run another phase from inside this one: the outer phase's later stages must still
+    // find their own frame once the nested run_phase returns.
+    std::vector<std::function<void()>> &jobs = state.jobScratch;
+    std::vector<system_record *> &mainThread = state.mainThreadScratch;
+    const frame_info *previousFrame = mRunningFrame;
+    mRunningFrame = &frame;
     usize timingIndex = 0;
     for (const stage_info &stage : state.stages) {
         if (stage.exclusive) {
@@ -186,8 +193,8 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
                     mainThread.push_back(record);
                     continue;
                 }
-                jobs.push_back([this, record, &frame]() {
-                    run_system(*record, frame);
+                jobs.push_back([this, record]() {
+                    run_system(*record, *mRunningFrame);
                 });
             }
             core::jobs::job_handle handle = {};
@@ -212,6 +219,7 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
             ++timingIndex;
         }
     }
+    mRunningFrame = previousFrame;
 }
 
 std::span<const stage_info> scheduler::stages(system_phase target) {

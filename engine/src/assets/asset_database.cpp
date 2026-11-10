@@ -324,7 +324,6 @@ core::result<scan_report> asset_database::scan() {
         const std::string filePath = file_path_for(source.mountIndex, source.relativePath);
         const std::string metaPath = meta_path_of(filePath);
         const std::string assetPath = make_asset_path(mount.name, source.relativePath);
-        const std::string extension = path_utils::extension(source.relativePath);
 
         entry primary = {};
         primary.record.mountIndex = source.mountIndex;
@@ -340,7 +339,7 @@ core::result<scan_report> asset_database::scan() {
         } else if (metaRead.get_error().is(asset_error_code::NOT_FOUND)) {
             asset_meta fresh = {};
             fresh.id = asset_id::generate();
-            const asset_importer *importer = mImporters->find_for_extension(extension);
+            const asset_importer *importer = mImporters->find_for_path(source.relativePath);
             if (importer != nullptr) {
                 fresh.importerId = std::string(importer->id());
                 fresh.importerVersion = importer->version();
@@ -407,7 +406,7 @@ core::result<scan_report> asset_database::scan() {
         // registered since it was written.
         const asset_importer *importer = meta->importerId.empty() ? nullptr : mImporters->find(meta->importerId);
         if (importer == nullptr && meta->importerId.empty()) {
-            importer = mImporters->find_for_extension(extension);
+            importer = mImporters->find_for_path(source.relativePath);
             if (importer != nullptr) {
                 meta->importerId = std::string(importer->id());
                 meta->importerVersion = importer->version();
@@ -1022,7 +1021,6 @@ core::result<asset_id> asset_database::register_source(
     outMetaCreated = false;
     const std::string filePath = file_path_for(mountIndex, relativePath);
     const std::string metaPath = meta_path_of(filePath);
-    const std::string extension = path_utils::extension(relativePath);
 
     core::result<core::vfs::file_stat> stat = mFileSystem->stat(filePath);
     if (!stat.has_value()) {
@@ -1035,7 +1033,7 @@ core::result<asset_id> asset_database::register_source(
         meta = std::move(metaRead).value();
     } else if (metaRead.get_error().is(asset_error_code::NOT_FOUND)) {
         meta.id = asset_id::generate();
-        const asset_importer *byExtension = mImporters->find_for_extension(extension);
+        const asset_importer *byExtension = mImporters->find_for_path(relativePath);
         if (byExtension != nullptr) {
             meta.importerId = std::string(byExtension->id());
             meta.importerVersion = byExtension->version();

@@ -3,7 +3,7 @@
 Status: **binding** (owner: lead architect). Module `conjure::physics` (wave 3b), static library `conjure_physics`.
 Headers in `engine/include/conjure/physics/`, sources in `engine/src/physics/`, tests in `tests/physics/`.
 Public link dependencies: `conjure::core`, `conjure::ecs`, `conjure::scene`, `conjure::assets`. Private: Jolt Physics
-(`conjure::thirdparty::jolt`, pinned to the 5.3 line in `cmake/Dependencies.cmake`). No Jolt header is reachable
+(`conjure::thirdparty::jolt`, pinned to the 5.3 line in `third_party/CMakeLists.txt`). No Jolt header is reachable
 from a public header (CONVENTIONS 2).
 
 This note expands `ARCHITECTURE.md` 4.5 into an implementable design and supersedes it where more specific. It is
@@ -618,7 +618,7 @@ class physics_world {                // non-copyable, non-movable (Jolt listener
         [[nodiscard]] bool is_attached() const noexcept;
 
         // Step pipeline; the systems of register_systems call exactly these, tests may call them directly.
-        void push_transforms(f32 fixedDeltaTime);                                   // 3.4 (includes pending creation)
+        void push_transforms(f32 fixedDeltaTime, ecs::command_buffer *deferred = nullptr);   // 3.4 (pending creation; the system passes its buffer, R47)
         void step(f32 fixedDeltaTime);                                              // 3.5
         void pull_transforms(ecs::system_context *context = nullptr);               // 3.7 (nullptr => inline loop)
         void collect_contact_events();                                              // 3.6
@@ -870,7 +870,7 @@ action; `stats()` in the profiler. Picking stays CPU-side (R11). **Modules:** pl
 `physics_world *` in `engine_context`; nothing module-specific exists.
 
 **Build:** `conjure_add_module(physics SOURCES ... PUBLIC_HEADERS ... PUBLIC_DEPS conjure::core conjure::ecs conjure::scene
-conjure::assets PRIVATE_DEPS conjure::thirdparty::jolt conjure::thirdparty::cgltf)`. `cmake/Dependencies.cmake` pins Jolt
+conjure::assets PRIVATE_DEPS conjure::thirdparty::jolt conjure::thirdparty::cgltf)`. `third_party/CMakeLists.txt` pins Jolt
 to a 5.3.x tag with `USE_SSE4_1=ON USE_SSE4_2=ON USE_AVX=OFF USE_AVX2=OFF USE_LZCNT=OFF USE_TZCNT=OFF USE_F16C=OFF USE_FMADD=OFF`
 (baseline x64; Jolt's instruction-set defines must match the including translation units and are propagated on the
 interface target), `DOUBLE_PRECISION=OFF`, `OBJECT_LAYER_BITS=16`, `DEBUG_RENDERER_IN_DEBUG_AND_RELEASE=ON` (off in

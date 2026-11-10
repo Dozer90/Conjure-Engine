@@ -2,6 +2,7 @@
 
 #include "ecs_test_fixture.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
 
@@ -16,7 +17,9 @@
 
 #include <atomic>
 #include <mutex>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -596,5 +599,125 @@ TEST_SUITE("ecs/scheduler") {
         CHECK(world.entity_count() == 1);
         CHECK_FALSE(world.is_locked());
         CHECK(world.view<const position>().entity_count() == 1);
+    }
+
+    TEST_CASE("regression - review 3 nested run_phase from an exclusive system keeps the outer frame [parallel]") {
+        // An EXCLUSIVE system runs on the owner thread with the world unlocked, so it may run another
+        // phase. The job closures of the outer phase reach their frame through the scheduler, which the
+        // nested call must restore: the stages after the exclusive one still see the outer frame.
+        for_each_job_mode([](core::jobs::job_system *jobs) {
+            ecs_fixture fixture = {};
+            scheduler scheduler(fixture.world, jobs);
+            frame_info outer = {};
+            outer.deltaTime = 0.5f;
+            outer.frameIndex = 7;
+            frame_info inner = {};
+            inner.deltaTime = 0.125f;
+            inner.frameIndex = 99;
+            std::atomic<u64> innerIndex = 0;
+            std::atomic<u64> laterJobIndex = 0;
+            std::atomic<f32> laterJobDelta = 0.0f;
+            std::atomic<u64> laterMainIndex = 0;
+
+            system_desc innerSystem = {};
+            innerSystem.name = sid("inner");
+            innerSystem.phase = system_phase::FRAME_END;
+            innerSystem.run = [&](system_context &context) {
+                innerIndex = context.frame().frameIndex;
+            };
+            system_desc exclusive = {};
+            exclusive.name = sid("exclusive");
+            exclusive.flags = system_flags::EXCLUSIVE;
+            exclusive.run = [&](system_context &context) {
+                CHECK(context.frame().frameIndex == 7);
+                scheduler.run_phase(system_phase::FRAME_END, inner);
+            };
+            system_desc laterJob = {};
+            laterJob.name = sid("later.job");
+            laterJob.run = [&](system_context &context) {
+                laterJobIndex = context.frame().frameIndex;
+                laterJobDelta = context.delta_time();
+            };
+            system_desc laterMain = {};
+            laterMain.name = sid("later.main");
+            laterMain.flags = system_flags::MAIN_THREAD;
+            laterMain.run = [&](system_context &context) {
+                laterMainIndex = context.frame().frameIndex;
+            };
+            CONJURE_REQUIRE_OK(scheduler.add_system(std::move(innerSystem)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(std::move(exclusive)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(std::move(laterJob)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(std::move(laterMain)));
+            const std::span<const stage_info> stages = scheduler.stages(system_phase::UPDATE);
+            REQUIRE(stages.size() == 2);
+            CHECK(stages[0].exclusive);
+            CHECK(stages[1].systems.size() == 2);
+
+            for (u32 run = 0; run < 2; ++run) {
+                CAPTURE(run);
+                scheduler.run_phase(system_phase::UPDATE, outer);
+                CHECK(innerIndex.load() == 99);
+                CHECK(laterJobIndex.load() == 7);
+                CHECK(laterJobDelta.load() == 0.5f);
+                CHECK(laterMainIndex.load() == 7);
+            }
+            // A phase run on its own afterwards is unaffected by the nesting.
+            innerIndex = 0;
+            scheduler.run_phase(system_phase::FRAME_END, outer);
+            CHECK(innerIndex.load() == 7);
+        });
+    }
+
+    TEST_CASE("scheduler - a warmed-up phase allocates nothing of its own [parallel]") {
+        // The ECS-level allocation gate (13_scene.md 10 gates a whole TRANSFORM phase through the scene):
+        // the per-stage scratch lives in the phase state and the [this, record] job closure fits the
+        // std::function small buffer, so after two runs the inline mode allocates nothing at all and the
+        // parallel mode allocates only the counter of job_system::schedule, one per stage with jobs.
+        for_each_job_mode([](core::jobs::job_system *jobs) {
+            ecs_fixture fixture = {};
+            scheduler_desc options = {};
+            options.parallelSystems = jobs != nullptr;
+            scheduler scheduler(fixture.world, jobs, options);
+            std::atomic<u32> runs = 0;
+            // Three stages: two readers with a main-thread reader, then two writers of the same type.
+            const auto counting_system = [&](std::string_view name, system_flags flags, bool writer) {
+                system_desc desc = {};
+                desc.name = sid(name);
+                desc.flags = flags;
+                if (writer) {
+                    desc.writes.set(fixture.id<position>());
+                } else {
+                    desc.reads.set(fixture.id<position>());
+                }
+                desc.run = [&runs](system_context &context) {
+                    if (context.delta_time() >= 0.0f) {
+                        runs.fetch_add(1, std::memory_order_relaxed);
+                    }
+                };
+                return desc;
+            };
+            CONJURE_REQUIRE_OK(scheduler.add_system(counting_system("reader.a", system_flags::NONE, false)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(counting_system("reader.b", system_flags::NONE, false)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(counting_system("reader.main", system_flags::MAIN_THREAD, false)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(counting_system("writer.a", system_flags::NONE, true)));
+            CONJURE_REQUIRE_OK(scheduler.add_system(counting_system("writer.b", system_flags::NONE, true)));
+            const usize stageCount = scheduler.stages(system_phase::UPDATE).size();
+            REQUIRE(stageCount == 3);
+
+            const frame_info frame = {};
+            scheduler.run_phase(system_phase::UPDATE, frame);
+            scheduler.run_phase(system_phase::UPDATE, frame);
+            CHECK(runs.load() == 10);
+            if (jobs == nullptr) {
+                CONJURE_CHECK_NO_ALLOCATIONS(scheduler.run_phase(system_phase::UPDATE, frame));
+            } else {
+                // One shared counter per schedule call; a closure that spilled out of the small buffer
+                // would add one allocation per job on top and fail this bound.
+                testing::allocation_scope scope = {};
+                scheduler.run_phase(system_phase::UPDATE, frame);
+                CHECK(scope.allocation_count() <= stageCount);
+            }
+            CHECK(runs.load() == 15);
+        });
     }
 }

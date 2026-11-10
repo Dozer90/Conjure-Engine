@@ -29,6 +29,7 @@ namespace conjure::ecs {
         u32 alignment = 1;
         component_flags flags = component_flags::NONE;
         component_ops ops = {};
+        component_serializer serializer = {};       // custom JSON / remap hooks; null = the registry's reflection walk
         const core::reflect::type_info *reflection = nullptr;   // deep-copied by the registry at attach
     };
 
@@ -37,7 +38,10 @@ namespace conjure::ecs {
     /// <summary>
     /// The record of a C++ type named with CONJURE_COMPONENT: size, alignment, TAG/TRIVIAL flags, the
     /// lifecycle hooks and the reflection description (registered in core::reflect on first use, so
-    /// this is not a constant expression).
+    /// this is not a constant expression). The serializer stays null: the registry serialises a
+    /// reflected type through its own deep copy of the description, so no code of the module is
+    /// reached once it has unloaded. A type without reflection (scripting's script_component) fills
+    /// the record by hand and supplies its own serializer hooks.
     /// </summary>
     template <named_component ComponentType>
     [[nodiscard]] component_type_desc describe_component(component_flags flags = component_flags::NONE) noexcept {

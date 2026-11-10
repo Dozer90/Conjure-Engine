@@ -118,7 +118,10 @@ namespace conjure::ecs {
             /// <summary>
             /// Registers a type from a module extension record (component_type_desc.h). The reflection
             /// description is deep-copied into the registry, nested struct and enum descriptions
-            /// included, so the module may unload.
+            /// included, so the module may unload. The record's serializer hooks are copied as given:
+            /// null for a reflected type (describe_component leaves them null and the registry's
+            /// reflection walker serialises the deep copy, so nothing points into the module), while a
+            /// type without reflection must supply writeJson and readJson (UNSUPPORTED_FIELD otherwise).
             /// </summary>
             [[nodiscard]] core::result<component_id> register_described(const component_type_desc &desc);
 

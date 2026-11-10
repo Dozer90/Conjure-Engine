@@ -1,5 +1,145 @@
-# Managed (C#) assemblies - populated in implementation wave 3/4.
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Managed/Conjure.Managed.csproj")
-    message(STATUS "managed: projects not present yet, skipping")
-    return()
+# Managed (C#) assemblies (docs/design/03_scripting.md 3.10, 4.1): the SDK anchored by Conjure.Bootstrap,
+# the three hot-reload variants of Conjure.TestScripts and the game template. Every project lists its
+# compile items explicitly; conjure_add_managed_project checks that the lists agree.
+
+include(ConjureManaged)
+
+# This directory is added before the root enables testing; its CTest entries need the flag themselves.
+if(CONJURE_BUILD_TESTS)
+    enable_testing()
 endif()
+
+# Next to the executables, where script_host_config::managedDirectory points by default.
+set(CONJURE_MANAGED_OUTPUT_ROOT "${PROJECT_BINARY_DIR}/bin/managed")
+
+set(CONJURE_MANAGED_SDK_SOURCES
+    Conjure.Managed/Generated/NativeApi.g.cs
+    Conjure.Managed/Interop/FrameBlock.cs
+    Conjure.Managed/Interop/ManagedApi.cs
+    Conjure.Managed/Interop/NativeBridge.cs
+    Conjure.Managed/Interop/Records.cs
+    Conjure.Managed/Runtime/AssemblyLoader.cs
+    Conjure.Managed/Runtime/FieldBlob.cs
+    Conjure.Managed/Runtime/GameAssemblyLoadContext.cs
+    Conjure.Managed/Runtime/Guard.cs
+    Conjure.Managed/Runtime/InstanceTable.cs
+    Conjure.Managed/Runtime/JsonText.cs
+    Conjure.Managed/Runtime/LayoutHash.cs
+    Conjure.Managed/Runtime/NameHash.cs
+    Conjure.Managed/Runtime/PhaseList.cs
+    Conjure.Managed/Runtime/ScriptCatalog.cs
+    Conjure.Managed/Runtime/ScriptClassInfo.cs
+    Conjure.Managed/Runtime/ScriptRuntime.cs
+    Conjure.Managed/Api/AssetRef.cs
+    Conjure.Managed/Api/Attributes.cs
+    Conjure.Managed/Api/Audio.cs
+    Conjure.Managed/Api/Collision.cs
+    Conjure.Managed/Api/Color.cs
+    Conjure.Managed/Api/Component.cs
+    Conjure.Managed/Api/Entity.cs
+    Conjure.Managed/Api/GamepadButton.cs
+    Conjure.Managed/Api/Input.cs
+    Conjure.Managed/Api/Key.cs
+    Conjure.Managed/Api/Log.cs
+    Conjure.Managed/Api/MouseButton.cs
+    Conjure.Managed/Api/Physics.cs
+    Conjure.Managed/Api/Prefab.cs
+    Conjure.Managed/Api/Scene.cs
+    Conjure.Managed/Api/ScriptBehaviour.cs
+    Conjure.Managed/Api/Time.cs
+    Conjure.Managed/Api/Transform.cs
+    Conjure.Managed/Api/Components/LocalTransform.cs
+    Conjure.Managed/Api/Dod/ChunkView.cs
+    Conjure.Managed/Api/Dod/ComponentQuery.cs
+    Conjure.Managed/Api/Dod/ComponentType.cs
+)
+
+# The SDK: building the bootstrap builds Conjure.Managed through its project reference and lays both
+# out, with the runtime config, in one directory (the managed_directory of script_host_config).
+conjure_add_managed_project(
+    NAME sdk
+    PROJECT Conjure.Bootstrap/Conjure.Bootstrap.csproj
+    OUTPUT "${CONJURE_MANAGED_OUTPUT_ROOT}"
+    SOURCES
+        Conjure.Bootstrap/Program.cs
+        Conjure.Bootstrap/runtimeconfig.template.json
+        ${CONJURE_MANAGED_SDK_SOURCES}
+    SKIP_SOURCES_CHECK
+)
+# The bootstrap's SOURCES cover the referenced SDK too, so its project is checked on its own here (the
+# check runs in script mode without a current source directory, hence the absolute list).
+if(CONJURE_BUILD_TESTS)
+set(CONJURE_MANAGED_SDK_SOURCES_ABSOLUTE ${CONJURE_MANAGED_SDK_SOURCES})
+list(TRANSFORM CONJURE_MANAGED_SDK_SOURCES_ABSOLUTE PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+string(REPLACE ";" "\\;" CONJURE_MANAGED_SDK_SOURCES_ESCAPED "${CONJURE_MANAGED_SDK_SOURCES_ABSOLUTE}")
+add_test(NAME conjure_managed_sources_match.managed
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCONJURE_MANAGED_CHECK_PROJECT=${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Managed/Conjure.Managed.csproj"
+        "-DCONJURE_MANAGED_CHECK_SOURCES=${CONJURE_MANAGED_SDK_SOURCES_ESCAPED}"
+        -P "${CONJURE_MANAGED_CMAKE_FILE}"
+)
+set_tests_properties(conjure_managed_sources_match.managed PROPERTIES LABELS "managed" TIMEOUT 60)
+add_test(NAME conjure_managed_sources_match.bootstrap
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCONJURE_MANAGED_CHECK_PROJECT=${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Bootstrap/Conjure.Bootstrap.csproj"
+        "-DCONJURE_MANAGED_CHECK_SOURCES=${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Bootstrap/Program.cs"
+        -P "${CONJURE_MANAGED_CMAKE_FILE}"
+)
+set_tests_properties(conjure_managed_sources_match.bootstrap PROPERTIES LABELS "managed" TIMEOUT 60)
+endif()
+
+if(TARGET conjure_scripting)
+    add_dependencies(conjure_scripting conjure_managed_sdk)
+endif()
+
+# The test scripts: one project, three variants, built one after another (they share the SDK project).
+set(CONJURE_TEST_SCRIPT_SOURCES
+    Conjure.TestScripts/Collider.cs
+    Conjure.TestScripts/DestroyProbe.cs
+    Conjure.TestScripts/DodScripts.cs
+    Conjure.TestScripts/FieldKinds.cs
+    Conjure.TestScripts/InspectorProbe.cs
+    Conjure.TestScripts/LeakyTimer.cs
+    Conjure.TestScripts/LifecycleProbe.cs
+    Conjure.TestScripts/Mover.cs
+    Conjure.TestScripts/Probes.cs
+    Conjure.TestScripts/RegressionProbes.cs
+    Conjure.TestScripts/ReloadProbe.cs
+    Conjure.TestScripts/Spawner.cs
+    Conjure.TestScripts/Throwers.cs
+)
+
+if(CONJURE_BUILD_TESTS)
+    set(previousVariant conjure_managed_sdk)
+    set(skipCheck "")
+    foreach(variant V1 V2 V3)
+        string(TOLOWER "${variant}" lowerVariant)
+        conjure_add_managed_project(
+            NAME test_scripts_${lowerVariant}
+            PROJECT Conjure.TestScripts/Conjure.TestScripts.csproj
+            OUTPUT "${CONJURE_MANAGED_OUTPUT_ROOT}/test_scripts/${lowerVariant}"
+            PROPERTIES "ScriptVariant=${variant}"
+            SOURCES ${CONJURE_TEST_SCRIPT_SOURCES}
+            DEPENDS ${previousVariant}
+            ${skipCheck}
+        )
+        set(previousVariant conjure_managed_test_scripts_${lowerVariant})
+        set(skipCheck SKIP_SOURCES_CHECK)     # one project, one check
+    endforeach()
+endif()
+
+# The game template is checked but not built: it needs a project to point ConjureManagedDir at.
+if(CONJURE_BUILD_TESTS)
+    add_test(NAME conjure_managed_sources_match.template
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCONJURE_MANAGED_CHECK_PROJECT=${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Templates/Game/Game.csproj"
+            "-DCONJURE_MANAGED_CHECK_SOURCES=${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Templates/Game/Player.cs"
+            -P "${CONJURE_MANAGED_CMAKE_FILE}"
+    )
+    set_tests_properties(conjure_managed_sources_match.template PROPERTIES LABELS "managed" TIMEOUT 60)
+endif()
+
+set(CONJURE_MANAGED_SDK_DIR "${CONJURE_MANAGED_OUTPUT_ROOT}" CACHE INTERNAL "directory holding Conjure.Managed.dll and the bootstrap")
+set(CONJURE_MANAGED_TEST_SCRIPTS_DIR "${CONJURE_MANAGED_OUTPUT_ROOT}/test_scripts" CACHE INTERNAL "v1/v2/v3 builds of Conjure.TestScripts")
+set(CONJURE_MANAGED_TEST_SCRIPTS_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.TestScripts/Conjure.TestScripts.csproj" CACHE INTERNAL "")
+set(CONJURE_MANAGED_BOOTSTRAP_PROJECT "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Bootstrap/Conjure.Bootstrap.csproj" CACHE INTERNAL "")

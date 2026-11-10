@@ -629,7 +629,8 @@ pumps `progress` into protocol events when invoked as a command). Steps, each al
    `<dir>/managed` (`03_scripting.md` 3.11).
 4. `modules::module_manager::export_layout(<dir>, build_config::DISTRIBUTION)` (`07_modules.md` 3.7).
 5. Copy the Distribution `conjure_runtime` executable, the `conjure_shared` library and `shaders/` (index.json
-   + blobs) next to it.
+   + blobs) next to it; on MSVC also `nethost.dll`, which `conjure_shared` imports (the output of
+   `conjure_scripting_nethost`, `engine/src/scripting/CMakeLists.txt`).
 6. Write `<dir>/project.json` with `"cooked": true` and `cooked_root = "cooked"`.
 
 The exported folder runs standalone (`conjure_runtime --project <dir>`); `tests/integration/test_export_roundtrip.cpp`

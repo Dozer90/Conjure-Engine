@@ -38,7 +38,7 @@ Third-party facts verified against the .NET hosting docs (`native-hosting.md`, `
 |---|---|---|
 | D1 | **One CLR per process, started once** by a process-wide `hostfxr_runtime` singleton (private). `dotnet_script_host` objects and `script_runtime` objects may be created and destroyed freely on top of it; the managed `Initialize` handshake is idempotent. | CoreCLR cannot be unloaded or restarted. Making that a type invariant lets one test executable run hundreds of cases that each build and tear down a runtime. |
 | D2 | **Two hosting paths, one handshake.** Framework-dependent (editor, default export): `initialize_for_runtime_config` -> `hdt_load_assembly(Conjure.Managed.dll, default ALC)` -> `hdt_get_function_pointer`. Self-contained export: `initialize_for_dotnet_command_line({Conjure.Bootstrap.dll})` -> `hdt_get_function_pointer`. Never `load_assembly_and_get_function_pointer`. | The runtime-config path cannot host self-contained layouts, and `load_assembly_and_get_function_pointer` would put `Conjure.Managed` in an isolated ALC, breaking `ScriptBehaviour` type identity for the game ALC. `Conjure.Managed` must live in the default ALC. |
-| D3 | **All traffic after the handshake goes through two C-ABI structs of function pointers**: `conjure_native_api` (native provides) and `conjure_managed_api` (managed provides). The native table is declared once in `native_api.inl` (X-macro); `tools/gen_native_api.py` generates `NativeApi.g.cs` and a 64-bit layout hash baked into both sides. Generated files are committed; a CTest check regenerates and diffs. | `delegate* unmanaged` calls are cheap and allocation-free. One source of truth plus size + version + hash validation turns drift into a clean `ABI_MISMATCH` at startup instead of a crash later. No Python needed to build. |
+| D3 | **All traffic after the handshake goes through two C-ABI structs of function pointers**: `conjure_native_api` (native provides) and `conjure_managed_api` (managed provides). The native table is declared once in `native_api.inl` (X-macro); `tools/generate_native_api.py` generates `NativeApi.g.cs` and a 64-bit layout hash baked into both sides. Generated files are committed; a CTest check regenerates and diffs. | `delegate* unmanaged` calls are cheap and allocation-free. One source of truth plus size + version + hash validation turns drift into a clean `ABI_MISMATCH` at startup instead of a crash later. No Python needed to build. |
 | D4 | **Per-frame hot data is shared memory, not calls**: a native-owned, 64-byte-aligned `conjure_frame_block` (time, frame index, full input snapshot) is written once per frame and read directly by `Time`/`Input` in C#. | `Input.IsKeyDown` in 10k scripts would otherwise cost 10k transitions per key per frame. |
 | D5 | **One native->managed call per phase.** Native calls `run_phase(phase, dt)`; managed iterates dense per-class arrays of live instances. Creates, destroys and collision records are each one batched call per phase. | Transition count is O(phases), not O(entities). Per-class loops keep the virtual call site monomorphic and the instruction cache warm. |
 | D6 | **`script_component` is 4 bytes and trivially copyable**: a handle into `script_store` (a `core::slot_map<script_set>`) owned by `script_runtime`. A set holds up to `MAX_SCRIPTS_PER_ENTITY = 8` entries (class hash, managed slot, serialised JSON fields, flags). | Archetype moves stay `memcpy`; chunk layout is not polluted by strings; multiple scripts per entity as in Unity. |
@@ -65,7 +65,7 @@ All ABI types are standard-layout and `static_assert`ed as such. Calling convent
 `NotSupportedException("entry physics_raycast not provided")`, caught by D11.
 
 ```cpp
-// native_api.inl - exactly one entry per line; parsed by tools/gen_native_api.py.
+// native_api.inl - exactly one entry per line; parsed by tools/generate_native_api.py.
 //                 group      name                  return     arguments
 CONJURE_NATIVE_FN(log,       write,                void,      (uint8_t level, const char *utf8, int32_t length))
 CONJURE_NATIVE_FN(script,    register_class,       void,      (const conjure_script_class_desc *desc))
@@ -96,7 +96,7 @@ CONJURE_NATIVE_FN(query,     end,                  void,      (uint32_t scopeId)
 // `// --- bindings (R26) ---` (transform_*, the hierarchy/tag/layer/guid entity_* entries, scene_*, prefab_*,
 // physics_*, audio_*, input_*, asset_*, diagnostics_*, modules_*; the full list is 15_bindings.md 2.3) is
 // filled by conjure_bindings (wave 4) and lives in this same file so the struct is complete when
-// conjure_scripting compiles (R54). Adding an entry = one line here + regenerate (tools/gen_native_api.py
+// conjure_scripting compiles (R54). Adding an entry = one line here + regenerate (tools/generate_native_api.py
 // also emits docs/generated/native_api_manifest.json); appending only, never reordering within a version.
 ```
 
@@ -266,7 +266,12 @@ a correct framework-dependent or self-contained layout; `script_host_config.mana
 1. **Locate hostfxr.** `get_hostfxr_parameters params{ sizeof(params), assembly_path = <dir>/Conjure.Bootstrap.dll,
    dotnet_root = config.dotnet_root_override or nullptr }`. Call `get_hostfxr_path(nullptr, &size, &params)`,
    expect `0x80008098`, allocate `size` `char_t`, call again. `libnethost` is linked statically through
-   `conjure::thirdparty::nethost` (`NETHOST_USE_AS_STATIC`, already provided by `cmake/FindNetHost.cmake`).
+   `conjure::thirdparty::nethost` (`NETHOST_USE_AS_STATIC`, provided by `cmake/FindNetHost.cmake`) on GCC and
+   Clang; on MSVC the host pack's `libnethost.lib` is a `/MT` release-only archive that cannot link into the
+   engine's `/MD` / `/MDd` objects, so `engine/src/scripting/CMakeLists.txt` links the `nethost.lib` import
+   library and copies `nethost.dll` next to the executables as a declared build output (target
+   `conjure_scripting_nethost`, a dependency of `conjure_scripting`, so a cleaned `bin/` is repopulated and
+   the export layout can depend on it).
    Failure -> `script_error::RUNTIME_NOT_FOUND` with the download URL in the message.
 2. **Load hostfxr** with `core::dynamic_library` and resolve `hostfxr_initialize_for_runtime_config`,
    `hostfxr_initialize_for_dotnet_command_line`, `hostfxr_get_runtime_delegate`,
@@ -466,10 +471,16 @@ implemented; without instances `redefine_dynamic` alone suffices.
 ### 3.10 Building managed projects (`managed_build.h`, `cmake/ConjureManaged.cmake`)
 
 - `conjure_add_managed_project(NAME <n> PROJECT <csproj> OUTPUT <dir> SOURCES <cs files...>)` creates target
-  `conjure_managed_<n>` running `dotnet build <csproj> -c $<IF:$<CONFIG:Debug>,Debug,Release> -o <dir> --nologo
-  -clp:NoSummary -p:ContinuousIntegrationBuild=true` with a stamp file depending on the listed sources (no
-  globbing; csproj uses `EnableDefaultCompileItems=false` with explicit `<Compile>` items, and the CTest check
-  `conjure_managed_sources_match` compares both lists). `conjure_scripting` depends on `conjure_managed_sdk`
+  `conjure_managed_<n>` running `dotnet build <csproj> -c $<IF:$<CONFIG:Debug>,Debug,Release> -o <dir>
+  --artifacts-path <build>/managed/artifacts/<n> --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true` with a
+  stamp file depending on the listed sources (no globbing; csproj uses `EnableDefaultCompileItems=false` with
+  explicit `<Compile>` items, and the CTest check `conjure_managed_sources_match` compares both lists). `-o`
+  redirects the assemblies only: restore and compile intermediates follow `--artifacts-path`, one directory per
+  managed target of the build tree, so concurrent build trees and the `ScriptVariant` builds never share an
+  `obj/` and nothing is written beside the projects (`managed/Directory.Build.props` defaults `ArtifactsPath` to
+  `build/managed_artifacts` for builds run by hand; the CTest check `conjure_managed_source_tree_clean` fails when
+  an `obj/` or `bin/` appears in `managed/`). On multi-config generators the stamp carries `$<CONFIG>` and the
+  shared output holds the configuration built last. `conjure_scripting` depends on `conjure_managed_sdk`
   when `CONJURE_BUILD_MANAGED`. SDK missing with `CONJURE_WITH_SCRIPTING=ON` is a configure error (already
   the behaviour of `FindNetHost.cmake`); `dotnet` missing with `CONJURE_BUILD_MANAGED=ON` likewise.
 - `CONJURE_SCRIPTING_HAS_DOTNET` is defined for test targets when the SDK was built; CLR tests use
@@ -486,7 +497,9 @@ implemented; without instances `redefine_dynamic` alone suffices.
 "framework-dependent" | "self-contained", "debug_symbols": false }` (schema owned by area F, R39). The engine's
 `export_pipeline` (`06_engine_loop.md` 3.6, R21) runs `dotnet publish managed/Conjure.Bootstrap
 -c Release -r <rid> --self-contained <true|false> -o <export>/managed` and `dotnet build <project>/Scripts -c
-Release -o <export>/managed`. Framework-dependent exports show a platform message box with the .NET 8
+Release -o <export>/managed` (both with `--artifacts-path` below the export directory, so the intermediates never
+land beside the projects). On MSVC the export layout also carries `nethost.dll` beside `conjure_shared`, which
+imports it (`06_engine_loop.md` 3.6 step 5). Framework-dependent exports show a platform message box with the .NET 8
 download URL and exit with code 3 when `get_hostfxr_path` fails. Self-contained exports are validated by the
 CI test `self_contained_publish_hosts`; a platform where it fails has `host_capabilities::self_contained ==
 false` and the export dialog greys the option out.
@@ -831,7 +844,7 @@ Offers: `script_runtime`, `register_script_systems`, `script_class_registry` sch
 ## 9. Implementation plan (ordered)
 
 1. `log_category.h`, `script_error.h`, `native_api.h` + `native_api.inl` with the core entries of 2.1 and the
-   X-macro struct; `tools/gen_native_api.py` (emits `NativeApi.g.cs`, `CONJURE_NATIVE_API_HASH` into
+   X-macro struct; `tools/generate_native_api.py` (emits `NativeApi.g.cs`, `CONJURE_NATIVE_API_HASH` into
    `native_api_hash.h`, `--check` mode); CTest `conjure_scripting_api_generated_up_to_date`.
 2. `script_fields.h/.cpp`: blob writer/reader, `json_to_blob`, `blob_to_json`, `remap_entity_fields_json`;
    tests `test_script_fields.cpp`.

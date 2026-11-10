@@ -17,7 +17,7 @@ call counters, marshalling rules and the subsystem that installs it all before `
 
 | # | Decision | Rationale |
 |---|---|---|
-| B1 | **One `.inl`, one generator, one hash.** Every non-core entry is a line in `conjure/scripting/native_api.inl` under the comment `// --- bindings (R26) ---`, appended in group order `transform, entity, scene, prefab, physics, audio, input, asset, diagnostics, modules`. Bindings PRs edit that section and the record block of `native_api.h`; `tools/gen_native_api.py` regenerates `NativeApi.g.cs`, `native_api_hash.h` and (new) `docs/generated/native_api_manifest.json`. | The struct must be complete when `conjure_scripting` compiles (it is a member of `script_runtime`), so the lines cannot live in a wave-4 header. Splitting the table would need a second hash and a second handshake. |
+| B1 | **One `.inl`, one generator, one hash.** Every non-core entry is a line in `conjure/scripting/native_api.inl` under the comment `// --- bindings (R26) ---`, appended in group order `transform, entity, scene, prefab, physics, audio, input, asset, diagnostics, modules`. Bindings PRs edit that section and the record block of `native_api.h`; `tools/generate_native_api.py` regenerates `NativeApi.g.cs`, `native_api_hash.h` and (new) `docs/generated/native_api_manifest.json`. | The struct must be complete when `conjure_scripting` compiles (it is a member of `script_runtime`), so the lines cannot live in a wave-4 header. Splitting the table would need a second hash and a second handshake. |
 | B2 | **Filtered X-macro.** `conjure/bindings/native_api_entries.h` re-expands the same `.inl` through `CONJURE_BINDINGS_ENTRY_<group>` macros so bindings code enumerates *only* the groups it owns (declarations, fill loop, descriptors) while `call_counters.h` enumerates *all* entries for `native_function_id`. | Zero duplication of names; a new line in the `.inl` without an implementation is a link error, not a null slot. |
 | B3 | **Table is complete after `startup` in every configuration.** A compiled-out or disabled subsystem (`CONJURE_WITH_PHYSICS=OFF`, `rendering.enabled == false`, null audio) gets *stub* entries that return `-NOT_SUPPORTED` and set the last-error message naming the entry. No slot is ever left null for managed to stub (03 2.1 keeps that fallback for safety only). | `test_native_table_complete` holds on every CI job; C# always receives a status it can map, and the counter still increments so `feature_test` exclusions are about reachability, not configuration. |
 | B4 | **Status convention for every bindings-owned `int32_t` entry: `>= 0` success (0, a count, a bool, a needed length), `< 0` failure = `-static_cast<int32_t>(bindings_error)`.** `uint64_t`-returning entries return `0` (`NULL_ENTITY`) on failure. Every failure writes the main-thread last-error buffer read by `diagnostics_last_error`. | One return value per call (no out-status parameter), no allocation, and the message is available only when the caller asks. Core-owned entries keep 03's semantics. |
@@ -451,8 +451,11 @@ is called by `headless_engine` fixtures between cases. Overflow at 2^32 is irrel
 
 ### 3.6 Regenerating `NativeApi.g.cs` and checking it
 
-`tools/gen_native_api.py --inl engine/include/conjure/scripting/native_api.inl --status engine/include/conjure/bindings/bindings_error.inl --out-cs managed/Conjure.Managed/Interop --out-hash engine/include/conjure/scripting/native_api_hash.h --out-manifest docs/generated/native_api_manifest.json`
-(no Python at build time; outputs are committed). It parses the `CONJURE_NATIVE_FN` lines, maps C types to C#
+`tools/generate_native_api.py` (defaults: `--inl engine/include/conjure/scripting/native_api.inl --out-cs
+managed/Conjure.Managed/Generated/NativeApi.g.cs --out-hash engine/include/conjure/scripting/native_api_hash.h
+--out-manifest docs/generated/native_api_manifest.json`; `--check` diffs the committed outputs instead of writing
+them; the `--status engine/include/conjure/bindings/bindings_error.inl` option that emits `BindingStatus.g.cs` is
+the wave-4 extension of step 2 in section 9) (no Python at build time; outputs are committed). It parses the `CONJURE_NATIVE_FN` lines, maps C types to C#
 (`uint64_t -> ulong`, `const char * -> byte*`, `conjure_transform * -> TransformData*`, ...), emits the
 `delegate* unmanaged<...>` fields in order, the `NativeFunction` enum, `BindingStatus.g.cs`, and the manifest
 `{ "hash", "version", "entries": [{ "index", "group", "name", "returns", "args": [{"type","name"}], "signature" }] }`
@@ -655,8 +658,8 @@ and are skipped without the SDK, which CI treats as a failure where the SDK is i
 
 **Needs from `scripting` (03):** the `.inl` section and record block reserved for bindings (03 2.1, R54);
 `script_runtime::deferred_commands() -> ecs::command_buffer &` (the buffer `query_end` flushes, R5) and
-`script_runtime::current_phase()` (both in 03 4 now, R54); `gen_native_api.py` extended with `--status` and
-`--out-manifest`; `[NativeComponent]` and `ComponentType<T>` hashing per B10 (03 3.9, R61); `NameHash`; `null_script_host`.
+`script_runtime::current_phase()` (both in 03 4 now, R54); `generate_native_api.py` extended with `--status`
+(`--out-manifest` exists since wave 3); `[NativeComponent]` and `ComponentType<T>` hashing per B10 (03 3.9, R61); `NameHash`; `null_script_host`.
 
 **Needs from `core` (10):** the x,y,z,w quaternion storage guarantee in `core/math` (B5, R58; otherwise mirrors need an explicit
 `NativeQuaternion` and transforms stop being memcpy-able) with a `static_assert`/`offsetof` check in `tests/core/test_math.cpp`;
@@ -721,7 +724,7 @@ excluded when `CONJURE_WITH_SCRIPTING=OFF`. `conjure_add_test_module(bindings EN
 1. `log_category.h`, `bindings_error.h/.inl/.cpp`, `marshal.h/.cpp` (layout `static_assert`s, xyzw check);
    `test_bindings_error.cpp`, `test_marshal.cpp`.
 2. Append the 106 lines and the records of 2.3/2.4 to `native_api.inl`/`native_api.h` (scripting PR); extend
-   `gen_native_api.py` (`NativeFunction`, `BindingStatus.g.cs`, manifest); regenerate and commit.
+   `generate_native_api.py` (`NativeFunction`, `BindingStatus.g.cs`, manifest); regenerate and commit.
 3. `call_counters.h/.cpp` (ids, descriptors with normalised signatures, counters, `counting_thunk`);
    `test_call_counters.cpp`; `test_generated_manifest_matches`.
 4. `native_api_entries.h` + `native_api_fill.cpp` with **stubs for every owned entry**, `fill_native_table`,

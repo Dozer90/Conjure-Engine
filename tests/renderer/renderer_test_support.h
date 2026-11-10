@@ -1,0 +1,146 @@
+#pragma once
+
+#include "conjure/renderer/camera.h"
+#include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/renderer.h"
+
+#include "conjure/assets/asset_types.h"
+#include "conjure/core/image.h"
+#include "conjure/core/jobs/job_system.h"
+#include "conjure/core/math.h"
+#include "conjure/core/types.h"
+#include "conjure/rhi/device.h"
+#include "conjure/rhi/shader_library.h"
+
+#include <filesystem>
+#include <memory>
+#include <string_view>
+
+// Helpers shared by the renderer tests.
+//
+//   headless_renderer fixture = make_headless_renderer();          // null device, real shader index
+//   CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);       // [gpu] cases, WARP through software_device_desc()
+//   headless_renderer gpu = make_headless_renderer(true);           // the WARP device
+//
+// renderer_test_support.cpp installs the SOFTWARE_GPU_ADAPTER probe (08_testing.md 3.2) from a
+// static initialiser, the same way tests/rhi does, so the [gpu] cases skip cleanly where no software
+// adapter exists.
+
+namespace conjure::testing::renderer_support {
+
+    /// <summary>
+    /// The renderer class, named without the namespace / class ambiguity the using-directives create.
+    /// </summary>
+    using renderer_type = conjure::renderer::renderer;
+
+    /// <summary>
+    /// Where conjure_shaders wrote index.json (CONJURE_TEST_SHADER_DIR).
+    /// </summary>
+    [[nodiscard]] std::filesystem::path shader_directory();
+
+    /// <summary>
+    /// The engine/shaders source tree (CONJURE_TEST_SHADER_SOURCE_DIR).
+    /// </summary>
+    [[nodiscard]] std::filesystem::path shader_source_directory();
+
+    [[nodiscard]] rhi::device_desc null_device_desc();
+    [[nodiscard]] rhi::device_desc software_device_desc();
+
+    /// <summary>
+    /// Creates a null (or WARP) device or fails the case.
+    /// </summary>
+    [[nodiscard]] std::unique_ptr<rhi::device> make_device(bool software = false);
+
+    /// <summary>
+    /// Opens the shader index conjure_shaders built, or fails the case.
+    /// </summary>
+    [[nodiscard]] std::unique_ptr<rhi::shader_library> open_shaders(rhi::device &device);
+
+    /// <summary>
+    /// A renderer description with small shadow resolutions and no swapchain.
+    /// </summary>
+    [[nodiscard]] renderer::renderer_desc headless_desc(
+      rhi::device &device,
+      rhi::shader_library &shaders,
+      core::jobs::job_system *jobs = nullptr
+    );
+
+    /// <summary>
+    /// A device, its shader library and a headless renderer, destroyed in reverse order.
+    /// </summary>
+    struct headless_renderer {
+        std::unique_ptr<rhi::device> device = nullptr;
+        std::unique_ptr<rhi::shader_library> shaders = nullptr;
+        std::unique_ptr<renderer::renderer> instance = nullptr;
+
+        headless_renderer();
+        ~headless_renderer();
+
+        headless_renderer(const headless_renderer &) = delete;
+        headless_renderer &operator=(const headless_renderer &) = delete;
+        headless_renderer(headless_renderer &&) noexcept = default;
+        headless_renderer &operator=(headless_renderer &&) noexcept = default;
+
+        [[nodiscard]] renderer::renderer &operator*() const noexcept {
+            return *instance;
+        }
+
+        [[nodiscard]] renderer::renderer *operator->() const noexcept {
+            return instance.get();
+        }
+    };
+
+    /// <summary>
+    /// Creates the three objects or fails the case. 'software' selects WARP (after CONJURE_TEST_REQUIRE).
+    /// </summary>
+    [[nodiscard]] headless_renderer make_headless_renderer(
+      bool software = false,
+      core::jobs::job_system *jobs = nullptr
+    );
+
+    /// <summary>
+    /// A deterministic asset id for tests: {0x7E57, index}.
+    /// </summary>
+    [[nodiscard]] assets::asset_id test_asset_id(u64 index) noexcept;
+
+    /// <summary>
+    /// A perspective view looking from 'eye' at 'target' (y up) into the given render target.
+    /// </summary>
+    [[nodiscard]] renderer::render_view look_at_view(
+      const math::vec3 &eye,
+      const math::vec3 &target,
+      renderer::render_target_id renderTarget,
+      f32 verticalFovRadians = 1.0472f
+    );
+
+    /// <summary>
+    /// An instance of a mesh at a position with the bounds the mesh's local bounds transform to.
+    /// </summary>
+    [[nodiscard]] renderer::mesh_instance instance_at(
+      renderer::gpu_mesh_id mesh,
+      renderer::gpu_material_id material,
+      const math::vec3 &position,
+      const math::aabb &localBounds,
+      f32 scale = 1.0f
+    );
+
+    /// <summary>
+    /// The pixel a world position projects to for a clip-from-world matrix and a target size, or
+    /// (UINT32_MAX, UINT32_MAX) when it is outside the viewport.
+    /// </summary>
+    [[nodiscard]] math::uvec2 project_to_pixel(
+      const math::mat4 &clipFromWorld,
+      const math::vec3 &world,
+      math::uvec2 size
+    ) noexcept;
+
+    /// <summary>
+    /// sRGB-encoded 8-bit channel to linear.
+    /// </summary>
+    [[nodiscard]] f32 srgb_to_linear(u8 encoded) noexcept;
+
+    /// <summary>
+    /// Rec. 709 luminance of a read-back pixel, in linear light.
+    /// </summary>
+    [[nodiscard]] f32 linear_luminance(core::rgba8 pixel) noexcept;
+}

@@ -36,6 +36,8 @@ option(CONJURE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"         ON
 option(CONJURE_ENABLE_ASAN    "Enable AddressSanitizer (GCC/Clang/MSVC)"      OFF)
 option(CONJURE_ENABLE_UBSAN   "Enable UndefinedBehaviorSanitizer (GCC/Clang)" OFF)
 option(CONJURE_PLATFORM_GLFW  "Build the GLFW window backend (OFF = null-only platform library)" ON)
+option(CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC
+    "Build Jolt with CROSS_PLATFORM_DETERMINISTIC (bit-identical physics across platforms; slower)" OFF)
 
 if(WIN32)
     option(CONJURE_RHI_D3D12  "Enable the D3D12 RHI backend"   ON)

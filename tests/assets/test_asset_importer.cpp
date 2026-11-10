@@ -5,15 +5,46 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/vfs/memory_file_system.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 using namespace conjure;
 using namespace conjure::assets;
 using namespace conjure::assets::testing;
+
+namespace {
+    /// <summary>
+    /// An importer that claims one extension, with or without its dot, and never imports.
+    /// </summary>
+    class suffix_importer final : public asset_importer {
+        private:
+            std::string mId = {};
+            std::array<std::string_view, 1> mExtensions = {};
+
+        public:
+            suffix_importer(std::string id, std::string_view extension) :
+                mId(std::move(id)),
+                mExtensions({extension}) {}
+
+            [[nodiscard]] std::string_view id() const noexcept override {
+                return mId;
+            }
+            [[nodiscard]] u32 version() const noexcept override {
+                return 1;
+            }
+            [[nodiscard]] std::span<const std::string_view> extensions() const noexcept override {
+                return mExtensions;
+            }
+            [[nodiscard]] core::result<import_output> import(import_context &context) const override {
+                return core::error(core::error_code::UNSUPPORTED, std::string(context.source_path()));
+            }
+    };
+}
 
 TEST_SUITE("assets/asset_importer") {
 
@@ -35,6 +66,64 @@ TEST_SUITE("assets/asset_importer") {
         CHECK(registry.find_for_extension(".") == nullptr);
         CHECK(registry.importers().size() == 2);
         CHECK(registry.importers()[0]->id() == "conjure.test.text");
+    }
+
+    TEST_CASE("importer_registry - find_for_path picks the longest registered suffix") {
+        // A ".scene.json" importer next to a ".json" one (R45): the longer suffix wins for "x.scene.json"
+        // and the shorter one serves plain "x.json"; a suffix has to start at a dot of the file name.
+        importer_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.register_importer(std::make_unique<suffix_importer>("conjure.test.json", ".json")));
+        CONJURE_REQUIRE_OK(
+          registry.register_importer(std::make_unique<suffix_importer>("conjure.test.scene_json", ".scene.json"))
+        );
+        CONJURE_REQUIRE_OK(registry.register_importer(std::make_unique<test_importer>()));
+        const asset_importer *json = registry.find("conjure.test.json");
+        const asset_importer *sceneJson = registry.find("conjure.test.scene_json");
+        CHECK(registry.find_for_path("scenes/main.scene.json") == sceneJson);
+        CHECK(registry.find_for_path("scenes/MAIN.Scene.JSON") == sceneJson);
+        CHECK(registry.find_for_path("settings.json") == json);
+        CHECK(registry.find_for_path("notscene.json") == json);
+        CHECK(registry.find_for_path("a.notscene.json") == json);
+        CHECK(registry.find_for_path("dir.scene.json/readme.ta") == registry.find("conjure.test.text"));
+        // A leading dot is part of the name, not an extension (path_utils): ".scene.json" is a hidden
+        // ".scene" file with a ".json" extension, so the suffix never consumes the whole name.
+        CHECK(registry.find_for_path(".scene.json") == json);
+        CHECK(registry.find_for_path("scene.json") == json);
+        CHECK(registry.find_for_path("archive.tar.gz") == nullptr);
+        CHECK(registry.find_for_path("") == nullptr);
+        // The single-extension lookup is unchanged: it knows the last extension only.
+        CHECK(registry.find_for_extension(".json") == json);
+        CHECK(registry.find_for_extension(".scene.json") == sceneJson);
+    }
+
+    TEST_CASE("regression - review 3 find_for_path matches an extension registered without the dot") {
+        // "gz" and "scene.json" registered bare next to a dotted ".json": the bare spelling matches the
+        // same names as the dotted one, the dot boundary still applies and the longest suffix wins across
+        // both spellings. A hidden file whose whole name is the extension (".gz", ".json") matches nothing
+        // in either spelling, as find_for_extension(path_utils::extension()) never matched it.
+        importer_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.register_importer(std::make_unique<suffix_importer>("conjure.test.json", ".json")));
+        CONJURE_REQUIRE_OK(
+          registry.register_importer(std::make_unique<suffix_importer>("conjure.test.scene_json", "scene.json"))
+        );
+        CONJURE_REQUIRE_OK(registry.register_importer(std::make_unique<suffix_importer>("conjure.test.gz", "gz")));
+        const asset_importer *json = registry.find("conjure.test.json");
+        const asset_importer *sceneJson = registry.find("conjure.test.scene_json");
+        const asset_importer *gz = registry.find("conjure.test.gz");
+        CHECK(registry.find_for_path("a.scene.json") == sceneJson);
+        CHECK(registry.find_for_path("A.SCENE.JSON") == sceneJson);
+        CHECK(registry.find_for_path("ascene.json") == json);
+        CHECK(registry.find_for_path("a.json") == json);
+        CHECK(registry.find_for_path("archive.tar.gz") == gz);
+        CHECK(registry.find_for_path("dir.gz/plain.GZ") == gz);
+        CHECK(registry.find_for_path("targz") == nullptr);
+        CHECK(registry.find_for_path("gz") == nullptr);
+        CHECK(registry.find_for_path(".gz") == nullptr);
+        CHECK(registry.find_for_path(".json") == nullptr);
+        CHECK(registry.find_for_path(".scene.json") == json);
+        CHECK(registry.find_for_path("x..gz") == gz);
+        CHECK(registry.find_for_extension("gz") == gz);
+        CHECK(registry.find_for_extension(".GZ") == gz);
     }
 
     TEST_CASE("importer_registry - a duplicate id, a null importer and an unknown unregister fail") {

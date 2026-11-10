@@ -90,10 +90,16 @@ core::result<entity_archive> entity_archive::capture(
         archive.mEntries.push_back(std::move(entry));
     }
 
-    // Internal references become local indices; external ones null unless kept.
+    // Internal references become local indices; external ones null unless kept. Reflection-less types
+    // that store references of their own (R29 script sets) rewrite them through their hook with the
+    // same table world::instantiate applies on the way back.
+    const entity_remap table(std::vector<entity>(entities.begin(), entities.end()));
     for (archive_entry &entry : archive.mEntries) {
         for (archive_component &component : entry.components) {
             const component_info &info = registry.info(component.id);
+            if (info.reflection == nullptr && info.serializer.remapEntities != nullptr && !info.is_tag()) {
+                info.serializer.remapEntities(component.bytes.data(), table);
+            }
             for (const u32 offset : info.entityFieldOffsets) {
                 entity reference = {};
                 std::memcpy(&reference, component.bytes.data() + offset, sizeof(entity));

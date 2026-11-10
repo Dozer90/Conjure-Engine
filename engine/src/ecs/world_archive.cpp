@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 // Archive instantiation (docs/design/01_ecs.md 3.6).
@@ -35,8 +36,14 @@ core::result<entity> world::instantiate(
 core::result<void> world::instantiate_batch(
   const std::shared_ptr<const entity_archive> &archive,
   std::span<entity> outRoots,
-  command_buffer *commands
+  command_buffer *commands,
+  std::vector<entity> *outEntities
 ) {
+    // The id list is emptied before any early return so a caller reusing the vector never reads the
+    // ids of an earlier call after a failure.
+    if (outEntities != nullptr) {
+        outEntities->clear();
+    }
     if (archive == nullptr) {
         return core::error(core::error_code::INVALID_ARGUMENT, "instantiate_batch needs an archive");
     }
@@ -55,6 +62,9 @@ core::result<void> world::instantiate_batch(
         CONJURE_TRY_ASSIGN(const std::span<const entity> ids, commands->push_instantiate(archive, copies));
         for (u32 copy = 0; copy < copies; ++copy) {
             outRoots[copy] = ids[static_cast<usize>(copy) * count];
+        }
+        if (outEntities != nullptr) {
+            outEntities->assign(ids.begin(), ids.end());
         }
         return core::result<void>::success();
     }
@@ -81,6 +91,9 @@ core::result<void> world::instantiate_batch(
     }
     for (u32 copy = 0; copy < copies; ++copy) {
         outRoots[copy] = ids[static_cast<usize>(copy) * count];
+    }
+    if (outEntities != nullptr) {
+        *outEntities = std::move(ids);
     }
     return core::result<void>::success();
 }

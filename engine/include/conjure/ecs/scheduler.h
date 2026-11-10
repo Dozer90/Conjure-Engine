@@ -88,6 +88,7 @@ namespace conjure::ecs {
             u32 mNextGeneration = 1;
             u32 mRegistrationCounter = 0;
             std::unique_ptr<std::array<phase_state, SYSTEM_PHASE_COUNT>> mPhases = {};
+            const frame_info *mRunningFrame = nullptr;     // the frame of the run_phase in progress
 
         public:
             scheduler(ecs::world &target, core::jobs::job_system *jobs, scheduler_desc desc = {});
@@ -125,7 +126,9 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Runs every enabled system of the phase, stage by stage, flushing command buffers at each
-            /// stage boundary. Owner thread, world unlocked.
+            /// stage boundary. Owner thread, world unlocked. The per-stage bookkeeping lives in the phase
+            /// (kept at capacity), so a phase that has run once allocates nothing of its own afterwards;
+            /// with parallelSystems and a job system, job_system::schedule still allocates its counter.
             /// </summary>
             void run_phase(system_phase target, const frame_info &frame);
 

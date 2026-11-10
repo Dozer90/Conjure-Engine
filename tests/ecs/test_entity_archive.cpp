@@ -5,12 +5,16 @@
 #include "conjure/testing/memory_guard.h"
 
 #include "conjure/ecs/command_buffer.h"
+#include "conjure/ecs/component_registry.h"
+#include "conjure/ecs/component_type_desc.h"
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/entity_archive.h"
+#include "conjure/ecs/serialization.h"
 #include "conjure/ecs/world.h"
 
 #include <array>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -215,9 +219,12 @@ TEST_SUITE("ecs/entity_archive") {
           std::make_shared<const entity_archive>(std::move(captured).value());
 
         std::vector<entity> roots(1000);
+        std::vector<entity> everything = {};
         const u32 chunksBefore = world.stats().chunks;
-        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, roots));
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, roots, nullptr, &everything));
         CHECK(world.entity_count() == 1001);
+        // One entry per copy: the reported list is the root list, copy-major.
+        CHECK(everything == roots);
         const archetype *owner = nullptr;
         for (const archetype *candidate : world.archetypes()) {
             if (candidate->mask() == fixture.mask<position, velocity>()) {
@@ -273,6 +280,10 @@ TEST_SUITE("ecs/entity_archive") {
         CONJURE_CHECK_ERROR(world.instantiate_batch(shared, roots), ecs_error::ARCHETYPE_TOO_LARGE);
         CHECK(world.entity_count() == 0);
         CONJURE_CHECK_OK(world.validate());
+        // A reused id list holds nothing from an earlier call once the instantiation failed.
+        std::vector<entity> stale = {entity{1, 1}, entity{2, 1}};
+        CONJURE_CHECK_ERROR(world.instantiate_batch(shared, roots, nullptr, &stale), ecs_error::ARCHETYPE_TOO_LARGE);
+        CHECK(stale.empty());
 
         // Through a command buffer: the flush skips the instantiation and the buffer returns the ids.
         command_buffer commands(world);
@@ -295,6 +306,114 @@ TEST_SUITE("ecs/entity_archive") {
         }
         CHECK(world.entity_count() == 12);
         CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("regression - review 3 instantiate_batch empties outEntities on every failure path") {
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::result<entity> prototype = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(prototype);
+        core::result<entity_archive> captured =
+          entity_archive::capture(world, std::span<const entity>(&prototype.value(), 1));
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+        std::array<entity, 1> roots = {};
+
+        // Before the archive is looked at: a null archive.
+        std::vector<entity> everything = {entity{1, 1}, entity{2, 1}};
+        CONJURE_CHECK_ERROR(
+          world.instantiate_batch(nullptr, roots, nullptr, &everything),
+          core::error_code::INVALID_ARGUMENT
+        );
+        CHECK(everything.empty());
+
+        // An archive that validates but belongs to another registry.
+        component_registry otherRegistry = {};
+        CONJURE_REQUIRE_OK(otherRegistry.register_component<position>());
+        ecs::world otherWorld(otherRegistry);
+        everything = {entity{1, 1}};
+        CONJURE_CHECK_ERROR(
+          otherWorld.instantiate_batch(archive, roots, nullptr, &everything),
+          ecs_error::ARCHIVE_CORRUPT
+        );
+        CHECK(everything.empty());
+
+        // An archive that fails validation (a local index beyond the entry count).
+        entity_archive corrupt(fixture.registry);
+        archive_entry entry = {};
+        entry.mask = fixture.mask<link>();
+        archive_component linkBytes = {};
+        linkBytes.id = fixture.id<link>();
+        const link outOfRange{entity::archive_local(5), NULL_ENTITY};
+        linkBytes.bytes.resize(sizeof(link));
+        std::memcpy(linkBytes.bytes.data(), &outOfRange, sizeof(link));
+        entry.components.push_back(std::move(linkBytes));
+        corrupt.push_entry(std::move(entry));
+        const std::shared_ptr<const entity_archive> corruptShared =
+          std::make_shared<const entity_archive>(std::move(corrupt));
+        everything = {entity{1, 1}};
+        CONJURE_CHECK_ERROR(
+          world.instantiate_batch(corruptShared, roots, nullptr, &everything),
+          ecs_error::ARCHIVE_CORRUPT
+        );
+        CHECK(everything.empty());
+        CHECK(world.entity_count() == 1);
+
+        // The success path still reports the ids.
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, roots, nullptr, &everything));
+        REQUIRE(everything.size() == 1);
+        CHECK(everything[0] == roots[0]);
+    }
+
+    TEST_CASE("entity_archive - instantiate_batch reports every entity copy-major in entry order") {
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        // Entry 0 carries components, entry 1 is an empty entity (the empty archetype), entry 2 a tag.
+        const core::result<entity> first = world.create_entity(fixture.mask<position>());
+        const core::result<entity> second = world.create_entity();
+        const core::result<entity> third = world.create_entity(fixture.mask<player_tag>());
+        CONJURE_REQUIRE_OK(first);
+        CONJURE_REQUIRE_OK(second);
+        CONJURE_REQUIRE_OK(third);
+        const std::array<entity, 3> sources = {first.value(), second.value(), third.value()};
+        core::result<entity_archive> captured = entity_archive::capture(world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+
+        std::array<entity, 2> roots = {};
+        std::vector<entity> everything = {};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, roots, nullptr, &everything));
+        REQUIRE(everything.size() == 6);
+        CHECK(everything[0] == roots[0]);
+        CHECK(everything[3] == roots[1]);
+        for (u32 copy = 0; copy < 2; ++copy) {
+            CAPTURE(copy);
+            CHECK(world.has<position>(everything[copy * 3 + 0]));
+            CHECK(world.mask_of(everything[copy * 3 + 1]).none());
+            CHECK(world.has<player_tag>(everything[copy * 3 + 2]));
+        }
+        CHECK(world.entity_count() == 9);
+
+        // Through a command buffer the reserved ids are reported before the flush places them.
+        command_buffer commands(world);
+        std::array<entity, 1> deferredRoot = {};
+        std::vector<entity> deferred = {};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, deferredRoot, &commands, &deferred));
+        REQUIRE(deferred.size() == 3);
+        CHECK(deferred[0] == deferredRoot[0]);
+        CHECK_FALSE(world.is_alive(deferred[1]));
+        const flush_report report = world.flush(commands);
+        CHECK(report.skipped == 0);
+        CHECK(world.is_alive(deferred[1]));
+        CHECK(world.mask_of(deferred[1]).none());
+        CHECK(world.has<player_tag>(deferred[2]));
+
+        // An empty archive or no copies reports nothing.
+        std::vector<entity> none = {entity{1, 1}};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, std::span<entity>(), nullptr, &none));
+        CHECK(none.empty());
     }
 
     TEST_CASE("entity_archive - instantiate via command buffer resolves at flush") {
@@ -474,5 +593,83 @@ TEST_SUITE("ecs/entity_archive") {
             CHECK(tracked::live() == 2);
         }
         CHECK(tracked::live() == 1);
+    }
+
+    TEST_CASE("regression - review 3 capture remaps references held by a reflection-less hook") {
+        // What scripting's script_component does (R29): the entity lives where reflection cannot see it,
+        // so capture must call the hook (real -> local) exactly as instantiate does (local -> real).
+        struct hidden_link {
+            u64 packed = 0;    // an entity, stored opaquely
+        };
+        static constexpr auto writeHook = [](const void *component, core::json::writer &out) -> core::result<void> {
+            out.begin_object();
+            out.key("packed");
+            out.value(static_cast<const hidden_link *>(component)->packed);
+            out.end_object();
+            return core::result<void>::success();
+        };
+        static constexpr auto readHook = [](void *component, const core::json::value &in) -> core::result<void> {
+            static_cast<hidden_link *>(component)->packed = in["packed"].as_u64();
+            return core::result<void>::success();
+        };
+        static constexpr auto remapHook = [](void *component, const entity_remap &map) {
+            auto *value = static_cast<hidden_link *>(component);
+            value->packed = map.remap(entity::from_u64(value->packed)).to_u64();
+        };
+        component_registry registry = {};
+        component_type_desc desc = {};
+        desc.name = "test.hidden_link";
+        desc.size = sizeof(hidden_link);
+        desc.alignment = alignof(hidden_link);
+        desc.flags = component_flags::TRIVIAL;
+        desc.serializer.writeJson = writeHook;
+        desc.serializer.readJson = readHook;
+        desc.serializer.remapEntities = remapHook;
+        const core::result<component_id> id = registry.register_described(desc);
+        CONJURE_REQUIRE_OK(id);
+
+        world world(registry);
+        const core::result<entity> first = world.create_entity();
+        const core::result<entity> second = world.create_entity();
+        const core::result<entity> outsider = world.create_entity();
+        CONJURE_REQUIRE_OK(first);
+        CONJURE_REQUIRE_OK(second);
+        CONJURE_REQUIRE_OK(outsider);
+        const core::result<void *> firstCell = world.add_raw(first.value(), id.value());
+        const core::result<void *> secondCell = world.add_raw(second.value(), id.value());
+        CONJURE_REQUIRE_OK(firstCell);
+        CONJURE_REQUIRE_OK(secondCell);
+        static_cast<hidden_link *>(firstCell.value())->packed = second.value().to_u64();
+        static_cast<hidden_link *>(secondCell.value())->packed = outsider.value().to_u64();
+
+        const std::array<entity, 2> captured = {first.value(), second.value()};
+        core::result<entity_archive> archive = entity_archive::capture(world, captured);
+        CONJURE_REQUIRE_OK(archive);
+        // Inside the archive the internal reference is local; the external one is the hook's business
+        // and stays as it was.
+        core::json::writer out = {};
+        CONJURE_REQUIRE_OK(write_archive_json(archive.value(), out));
+        const std::string text = out.finish();
+        CHECK(text.find(std::format("\"packed\":{}", entity::archive_local(1).to_u64())) != std::string::npos);
+        CHECK(text.find(std::format("\"packed\":{}", outsider.value().to_u64())) != std::string::npos);
+        CHECK(text.find(std::format("\"packed\":{}", second.value().to_u64())) == std::string::npos);
+
+        const std::shared_ptr<const entity_archive> shared =
+          std::make_shared<const entity_archive>(std::move(archive).value());
+        std::vector<entity> roots(1);
+        std::vector<entity> created = {};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(shared, roots, nullptr, &created));
+        REQUIRE(created.size() == 2);
+        CHECK(created[0] != first.value());
+        const auto *copiedFirst = static_cast<const hidden_link *>(world.get_raw(created[0], id.value()));
+        const auto *copiedSecond = static_cast<const hidden_link *>(world.get_raw(created[1], id.value()));
+        REQUIRE(copiedFirst != nullptr);
+        REQUIRE(copiedSecond != nullptr);
+        // The copy references its own sibling, not the authoring entity.
+        CHECK(entity::from_u64(copiedFirst->packed) == created[1]);
+        CHECK(entity::from_u64(copiedSecond->packed) == outsider.value());
+        // The originals are untouched.
+        CHECK(entity::from_u64(static_cast<const hidden_link *>(world.get_raw(first.value(), id.value()))->packed)
+              == second.value());
     }
 }

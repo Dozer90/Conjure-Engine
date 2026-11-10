@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Scripts the [dotnet] tests load (docs/design/03_scripting.md 9 step 8). One project builds the
+       three hot-reload variants with -p:ScriptVariant=V1|V2|V3 (each variant defines its symbol). -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>Conjure.TestScripts</RootNamespace>
+    <AssemblyName>Conjure.TestScripts</AssemblyName>
+    <ScriptVariant Condition="'$(ScriptVariant)' == ''">V1</ScriptVariant>
+    <DefineConstants>$(DefineConstants);$(ScriptVariant)</DefineConstants>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Collider.cs" />
+    <Compile Include="DestroyProbe.cs" />
+    <Compile Include="DodScripts.cs" />
+    <Compile Include="FieldKinds.cs" />
+    <Compile Include="InspectorProbe.cs" />
+    <Compile Include="LeakyTimer.cs" />
+    <Compile Include="LifecycleProbe.cs" />
+    <Compile Include="Mover.cs" />
+    <Compile Include="Probes.cs" />
+    <Compile Include="RegressionProbes.cs" />
+    <Compile Include="ReloadProbe.cs" />
+    <Compile Include="Spawner.cs" />
+    <Compile Include="Throwers.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Conjure.Managed/Conjure.Managed.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+</Project>

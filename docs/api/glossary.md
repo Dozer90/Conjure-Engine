@@ -127,6 +127,6 @@ alphabetical; engine type names are in code spans.
 | Version (ECS) | The world's monotonic counter stamped on a chunk column when it is written; what `changed<T>` compares against | [Queries, views and systems](ecs/queries-views-and-systems.md) |
 | Voice | One playing instance of a clip, addressed by a `voice_id` | [Playing sounds](audio/playing-sounds.md) |
 | Voice stealing / priority | When every voice is busy, the lowest-priority voice is faded out and reused for the new sound | [Playing sounds](audio/playing-sounds.md) |
-| Wave | A stage of the engine's development plan; wave 1 is core, wave 2 adds ECS, platform, RHI, assets, audio and modules, later waves add rendering, physics, scripting and the editor | [Public API wiki](index.md) |
+| Wave | A stage of the engine's development plan; wave 1 is core, wave 2 adds ECS, platform, RHI, assets, audio and modules, wave 3 adds scene, rendering, physics and scripting, later waves the engine loop, bindings and the editor | [Public API wiki](index.md) |
 | Windowed fullscreen | A borderless window covering the monitor at the desktop resolution, switched without a mode change | [Windows and events](platform/windows-and-events.md) |
 | `world_hash` | A deterministic hash of a whole world, used to prove two runs produced the same state | [Command buffers and observers](ecs/command-buffers-and-observers.md) |

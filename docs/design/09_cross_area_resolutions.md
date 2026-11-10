@@ -174,6 +174,35 @@ from a note in detail, the note is right.
   `tools/check_exports.py core`); `engine/shaders` is added from `engine/CMakeLists.txt` instead of the rhi module;
   CC0 `tone.{ogg,mp3,flac}` entries for `tools/test_assets.json`, `tests/benchmarks/bench_*.cpp` and the fetched glslang
   link failure under `CONJURE_RHI_VULKAN=ON` on MSVC remain open (section 4, item 13).
+- **Wave 3 integration (scene, renderer, physics, scripting on waves 1-2)**: spellings corrected to the implemented
+  API, names only. `02_renderer.md`: `alpha_mode::SOLID` (glTF `OPAQUE` is a Windows macro), `ray_from_viewport` takes the
+  viewport aspect ratio, the opaque draw key is `[variant:8][material:22][mesh:22][submesh:4][depth:8]` and the blended
+  key carries a 24-bit depth; the shadow comparison samplers use `Less` under the reverse-Z linearisation. `03_scripting.md`
+  3: on MSVC the scripting module links the `nethost.lib` import library (the static `libnethost.lib` is `/MT`) and copies
+  `nethost.dll` beside the executables. `13_scene.md`: `parent` is 12 bytes (`entity` is 4-byte aligned; the C# mirror
+  follows `type_info::layout_hash()`), `instantiate_report::entities` lists every created entity, `scene` gained
+  `set_guid`, `resolve_guid`, `set_root_owner`, `set_root_order`, `root_owner`, `tag_of`, `layer_of`,
+  `pending_destroy_count`, `pending_repair_count`, an archive entry without components loads as a plain root.
+  `14_physics.md`: `character_controller` is 68 bytes (R48 said 72), `push_transforms(dt, command_buffer *deferred)`,
+  `physics_settings::penetrationSlop` (0.005 m) is an extra field, queries are refused during the push and the pull as
+  well as the step. Cross-module changes made for the wave: `ecs::component_type_desc::serializer` (copied by
+  `register_described`; `describe_component<T>` leaves it null for reflected types so the registry's reflection walk over its deep copy serves them after a module unload) so `script_component` serialises its
+  script set through every archive path without a scene -> scripting dependency (R29); `world::instantiate_batch(archive,
+  outRoots, commands, outEntities)` reports every created id, which replaced the scene's ADDED-observer collector;
+  the ECS scheduler keeps its per-stage scratch in the phase state so a whole phase is allocation-free after its first
+  run (`13_scene.md` 10; `job_system::schedule` still allocates its counter when `parallelSystems` is on);
+  `world::get_raw(entity, id) const` documents the locked-world read from grain jobs (`01_ecs.md` 5.2);
+  `assets::importer_registry::find_for_path` (longest registered suffix) lets the database pick the `.scene.json` /
+  `.prefab.json` importers (R45); the Jolt Development defines and the `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC`
+  option live in `third_party/CMakeLists.txt` and the root `CMakeLists.txt` (R59); `tests/rhi/test_shader_library.cpp`
+  accepts the renderer's permutations in the shader index. `tests/integration/` (`conjure_integration_tests`) holds
+  `test_assets_renderer_headless.cpp`, `test_scripting_scene.cpp` and `test_assets_scene.cpp` (the wave 3 exit of
+  `ARCHITECTURE.md` 11). Owed to wave 4 (engine): `renderer_subsystem` (asset events -> `upload_*` / `release_*`,
+  `register_asset_types`, `set_imgui_draw_data` / `imgui()`, `on_swapchain_resized` / `on_device_lost`, `model_asset ->
+  prefab` over `prefab_builder`), `scene_subsystem` (`register_components` at startup step 10, `register_asset_types`
+  before `scan()`, `register_systems` at step 18, `scene_manager::load` at step 20, `unload_all` at shutdown step 2,
+  `time.interpolatePhysics` -> `transform_system::set_interpolation_enabled`, `layer_table` from `project.json`).
+  Declined or deferred: see section 4, item 14.
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
   `memory::counters()`/`snapshot()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,
@@ -267,3 +296,18 @@ from a note in detail, the note is right.
     `bench_platform`, `bench_audio`, `bench_module_reload`) are owed by whoever creates it. (d) `tools/test_assets.json`
     still lacks CC0 `audio/tone.{ogg,mp3,flac}` clips, so the `[downloaded]` decoder case skips. (e) The platform
     module's `conjure_input_block` layout pins and `key::DEL` are facts the C# generator (wave 4) must honour.
+14. **Wave 3 loose ends (integration).** (a) `conjure_shared` now exports 46,318 symbols in Debug and 47,320 in
+    Distribution of the 65,535 limit (21 static libraries); the `CONJURE_API`-only export switch (item 13a) is the
+    next thing wave 4 must land before `engine`, `bindings` and the editor libraries join the umbrella. (b) Dear ImGui
+    stays at 1.91.9b-docking: the `IMGUI_HAS_TEXTURES` path of `imgui_renderer` is written against >= 1.92 but a bump
+    was not attempted inside the integration (the GLFW backend and the font-atlas path are what the tests exercise);
+    `ARCHITECTURE.md` 9 records the pinned version. (c) `core::jobs` has no allocation-free fire-and-forget
+    `schedule` with a caller-owned counter; the physics Jolt adapter keeps its `parallel_for` helper-range trick and
+    the ECS scheduler's `parallelSystems` path still allocates one counter per stage. (d) `tests/benchmarks`
+    (`bench_scene`, `bench_physics`, `bench_render_null_frame`, `10k_scripts_update_phase`) is still owed with the
+    directory itself (item 13c). (e) `scene::transform_state` has no "physics wrote this" flag; the pull writes
+    `local_transform` directly and the pass re-dirties those rows once. (f) `physics.physics_world - 600 empty steps
+    allocate nothing after the first` failed once in each of the Debug and Development CTest runs while the other
+    configuration was compiling on the same machine and passes alone and in an idle run; the suspect is the job
+    system's block pool growing under contention, to be measured before it is called flaky. (g) The `.gitignore`
+    already covers `build/`, `**/bin/` and `**/obj/`, so no entry was added for the managed outputs.

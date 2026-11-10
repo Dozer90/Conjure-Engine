@@ -19,11 +19,14 @@ to where a sibling exists).
 | Assets | stable asset references, loading, importers, hot reload, cooking and packs | [Assets pages](#assets-pages) |
 | Audio | clips, voices, mix groups, 3D listener, backends | [Audio pages](#audio-pages) |
 | Modules | writing a plugin or game module and loading modules into a host | [Modules pages](#modules-pages) |
-| Rendering, physics, scene | the renderer with 2D and 3D pipelines, rigid bodies and colliders, scenes and prefabs | wave 3 pages |
-| Scripting | the C# API as you see it from a script (`Entity`, `Transform`, `Input`, ...) | wave 4 pages |
+| Scene | the entity hierarchy, transforms, names and guids, scene files, prefabs, snapshots and scene loading | [Scene pages](#scene-pages) |
+| Rendering | the renderer with 2D and 3D pipelines, render targets, the renderer's asset types and the glTF importer | [Renderer pages](#renderer-pages) |
+| Physics | rigid bodies and colliders, the character controller, layers, contacts and queries over Jolt | [Physics pages](#physics-pages) |
+| Scripting | the .NET host, the script runtime and components, hot reload and the managed build | [Scripting pages](#scripting-pages) |
+| C# API | the API as you see it from a script (`Entity`, `Transform`, `Input`, ...) | wave 4 pages |
 | Editor and AI protocol | the editor, and the command protocol agents use to drive it | wave 5 pages |
 
-Pages for later waves appear here as their modules land; the core and wave-2 pages below are complete.
+Pages for later waves appear here as their modules land; the pages for waves 1 to 3 below are complete.
 
 ## How the pages are organised
 
@@ -127,6 +130,38 @@ Start with the overview; it gives the mental model in five sentences and a table
 | [Modules and plugins](modules/index.md) | what a module is (manifest, native library, C# assemblies, content), how the engine loads them, where to go next |
 | [Writing a module](modules/writing-a-module.md) | `module.json`, the entry point, `module_registrar` and extension points, `module_context`, services, static modules |
 | [Loading and managing modules](modules/loading-and-managing.md) | `module_manager` discover / load / unload / reload, `module_registry`, consumers, the ABI check, shadow copies, reload scopes, the export layout |
+
+## Scene pages
+
+| Page | Covers |
+|---|---|
+| [Scenes, hierarchy and prefabs](scene/index.md) | the mental model (one world, roots, depth, guids, owners), the scene components, which page to read for what |
+| [Scenes and the hierarchy](scene/scenes-and-hierarchy.md) | `scene` create / parent / move / destroy, names, tags, layers, finding entities, the tree queries, the transform system and the four scene systems |
+| [Scene files, prefabs and snapshots](scene/scene-files-and-prefabs.md) | `.scene.json` save and load, `scene_manager` loads and unloads, prefabs (build, instantiate, diff, revert, apply, unpack, `prefab_builder`), snapshots |
+
+## Renderer pages
+
+| Page | Covers |
+|---|---|
+| [Rendering](renderer/index.md) | what the renderer does, CPU assets versus GPU ids, the `render_scene` contract, headless rendering |
+| [Rendering a frame](renderer/rendering-a-frame.md) | `renderer::create`, uploads and ids, views, instances, lights, sprites, debug lines, render targets and read-back, `render_stats`, the components, ImGui |
+| [Renderer assets](renderer/renderer-assets.md) | meshes, textures, materials, models, environments, the glTF importer, the built-in shader programs |
+
+## Physics pages
+
+| Page | Covers |
+|---|---|
+| [Physics](physics/index.md) | bodies from components, the four-call fixed step, queued commands, contacts, queries, layers |
+| [Bodies, colliders and characters](physics/bodies-and-colliders.md) | `rigid_body`, the colliders, materials, motion types and flags, layers from `project.json`, the character controller, collision mesh assets |
+| [The physics world and queries](physics/physics-world-and-queries.md) | `physics_world` creation and stepping, forces and teleports, contact events, raycasts, overlaps and shape casts, `physics_settings`, debug drawing |
+
+## Scripting pages
+
+| Page | Covers |
+|---|---|
+| [Scripting](scripting/index.md) | hosts, the runtime, the script component, modes and phases, the field blob |
+| [Scripts, components and the runtime](scripting/scripts-and-components.md) | `add_script`, fields, play and edit modes, the phases and the six systems, destruction, the class registry, DOD query scopes |
+| [Hosting, the native API and hot reload](scripting/hosting-and-hot-reload.md) | the CLR host and the null host, the managed directory, the two ABI tables and their hash, `hot_reload_controller`, `managed_build_runner` |
 
 ## Cross-cutting
 

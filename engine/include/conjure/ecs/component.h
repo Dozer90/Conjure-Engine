@@ -106,7 +106,11 @@ namespace conjure::ecs {
     /// <summary>
     /// Serialisation hooks of a component type. Null hooks select the reflection-driven default, which
     /// walks component_info::reflection (serialization.h). remapEntities is consulted only when a type
-    /// stores entity references that reflection cannot see.
+    /// stores entity references that reflection cannot see: entity_archive::capture calls it with a
+    /// table whose targets are the captured entities (real -> archive-local) and world::instantiate with
+    /// the table of the created copy (archive-local -> real). A hook rewrites each reference through
+    /// entity_remap::remap, which serves both directions; references to entities outside the archive
+    /// are left as they are (archive_options::keepExternalReferences only governs reflected fields).
     /// </summary>
     struct component_serializer {
         core::result<void> (*writeJson)(const void *component, core::json::writer &out) = nullptr;

@@ -162,6 +162,29 @@ namespace conjure::ecs {
             }
 
             /// <summary>
+            /// Resolves one reference in whichever direction the value needs: an archive-local value
+            /// becomes its real entity (as resolve), a real entity that is one of the targets becomes the
+            /// archive-local index of that target, and every other value is returned unchanged. The same
+            /// table therefore serves entity_archive::capture (real -> local, targets = the captured
+            /// entities) and world::instantiate (local -> real): a live world never holds archive-local
+            /// ids and an archive never holds a real id that is also one of its own targets.
+            /// </summary>
+            [[nodiscard]] entity remap(entity value) const noexcept {
+                if (value.is_archive_local()) {
+                    return target(value.index);
+                }
+                if (value.is_null()) {
+                    return value;
+                }
+                for (u32 index = 0; index < mTargets.size(); ++index) {
+                    if (mTargets[index] == value) {
+                        return entity::archive_local(index);
+                    }
+                }
+                return value;
+            }
+
+            /// <summary>
             /// The whole table.
             /// </summary>
             [[nodiscard]] std::span<const entity> targets() const noexcept {

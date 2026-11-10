@@ -1,0 +1,2233 @@
+{
+  "hash": "0x4B06362D38B412A6",
+  "version": 1,
+  "entryCount": 126,
+  "coreEntryCount": 20,
+  "entries": [
+    {
+      "index": 0,
+      "group": "log",
+      "name": "write",
+      "returns": "void",
+      "args": [
+        {
+          "type": "uint8_t",
+          "name": "level"
+        },
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "void (uint8_t level, const char *utf8, int32_t length)"
+    },
+    {
+      "index": 1,
+      "group": "script",
+      "name": "register_class",
+      "returns": "void",
+      "args": [
+        {
+          "type": "const conjure_script_class_desc *",
+          "name": "desc"
+        }
+      ],
+      "signature": "void (const conjure_script_class_desc *desc)"
+    },
+    {
+      "index": 2,
+      "group": "script",
+      "name": "register_field",
+      "returns": "void",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "classHash"
+        },
+        {
+          "type": "const conjure_script_field_desc *",
+          "name": "desc"
+        }
+      ],
+      "signature": "void (uint64_t classHash, const conjure_script_field_desc *desc)"
+    },
+    {
+      "index": 3,
+      "group": "script",
+      "name": "mark_faulted",
+      "returns": "void",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "slot"
+        },
+        {
+          "type": "uint8_t",
+          "name": "callback"
+        }
+      ],
+      "signature": "void (int32_t slot, uint8_t callback)"
+    },
+    {
+      "index": 4,
+      "group": "script",
+      "name": "add",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint64_t",
+          "name": "classHash"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint64_t classHash)"
+    },
+    {
+      "index": 5,
+      "group": "script",
+      "name": "get_slots",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "int32_t *",
+          "name": "slots"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, int32_t *slots, int32_t capacity)"
+    },
+    {
+      "index": 6,
+      "group": "entity",
+      "name": "create",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Name"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "uint64_t (const char *utf8Name, int32_t length)"
+    },
+    {
+      "index": 7,
+      "group": "entity",
+      "name": "destroy",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 8,
+      "group": "entity",
+      "name": "is_alive",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 9,
+      "group": "entity",
+      "name": "get_name",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 10,
+      "group": "entity",
+      "name": "find_by_name",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "uint64_t (const char *utf8, int32_t length)"
+    },
+    {
+      "index": 11,
+      "group": "component",
+      "name": "lookup_type",
+      "returns": "uint32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "nameHash"
+        },
+        {
+          "type": "uint32_t",
+          "name": "size"
+        },
+        {
+          "type": "uint64_t",
+          "name": "layoutHash"
+        }
+      ],
+      "signature": "uint32_t (uint64_t nameHash, uint32_t size, uint64_t layoutHash)"
+    },
+    {
+      "index": 12,
+      "group": "component",
+      "name": "register_managed",
+      "returns": "uint32_t",
+      "args": [
+        {
+          "type": "const conjure_managed_component_desc *",
+          "name": "desc"
+        }
+      ],
+      "signature": "uint32_t (const conjure_managed_component_desc *desc)"
+    },
+    {
+      "index": 13,
+      "group": "component",
+      "name": "has",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint32_t",
+          "name": "typeId"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint32_t typeId)"
+    },
+    {
+      "index": 14,
+      "group": "component",
+      "name": "add",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint32_t",
+          "name": "typeId"
+        },
+        {
+          "type": "const void *",
+          "name": "data"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint32_t typeId, const void *data)"
+    },
+    {
+      "index": 15,
+      "group": "component",
+      "name": "remove",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint32_t",
+          "name": "typeId"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint32_t typeId)"
+    },
+    {
+      "index": 16,
+      "group": "component",
+      "name": "get",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint32_t",
+          "name": "typeId"
+        },
+        {
+          "type": "void *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint32_t typeId, void *out)"
+    },
+    {
+      "index": 17,
+      "group": "component",
+      "name": "set",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint32_t",
+          "name": "typeId"
+        },
+        {
+          "type": "const void *",
+          "name": "data"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint32_t typeId, const void *data)"
+    },
+    {
+      "index": 18,
+      "group": "query",
+      "name": "begin",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const uint32_t *",
+          "name": "ids"
+        },
+        {
+          "type": "int32_t",
+          "name": "count"
+        },
+        {
+          "type": "conjure_query_scope *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (const uint32_t *ids, int32_t count, conjure_query_scope *out)"
+    },
+    {
+      "index": 19,
+      "group": "query",
+      "name": "end",
+      "returns": "void",
+      "args": [
+        {
+          "type": "uint32_t",
+          "name": "scopeId"
+        }
+      ],
+      "signature": "void (uint32_t scopeId)"
+    },
+    {
+      "index": 20,
+      "group": "transform",
+      "name": "get_local",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_transform *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_transform *out)"
+    },
+    {
+      "index": 21,
+      "group": "transform",
+      "name": "set_local",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_transform *",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_transform *value)"
+    },
+    {
+      "index": 22,
+      "group": "transform",
+      "name": "get_world_matrix",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_mat4 *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_mat4 *out)"
+    },
+    {
+      "index": 23,
+      "group": "transform",
+      "name": "set_parent",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint64_t",
+          "name": "parent"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint64_t parent)"
+    },
+    {
+      "index": 24,
+      "group": "transform",
+      "name": "get_world",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_transform *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_transform *out)"
+    },
+    {
+      "index": 25,
+      "group": "transform",
+      "name": "set_world",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_transform *",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_transform *value)"
+    },
+    {
+      "index": 26,
+      "group": "transform",
+      "name": "set_parent_ex",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint64_t",
+          "name": "parent"
+        },
+        {
+          "type": "int32_t",
+          "name": "keepWorld"
+        },
+        {
+          "type": "int32_t",
+          "name": "index"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint64_t parent, int32_t keepWorld, int32_t index)"
+    },
+    {
+      "index": 27,
+      "group": "transform",
+      "name": "get_interpolated",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_transform *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_transform *out)"
+    },
+    {
+      "index": 28,
+      "group": "entity",
+      "name": "set_name",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const char *utf8, int32_t length)"
+    },
+    {
+      "index": 29,
+      "group": "entity",
+      "name": "get_parent",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "uint64_t (uint64_t entity)"
+    },
+    {
+      "index": 30,
+      "group": "entity",
+      "name": "get_root",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "uint64_t (uint64_t entity)"
+    },
+    {
+      "index": 31,
+      "group": "entity",
+      "name": "get_children",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 32,
+      "group": "entity",
+      "name": "set_enabled",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "int32_t",
+          "name": "enabled"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, int32_t enabled)"
+    },
+    {
+      "index": 33,
+      "group": "entity",
+      "name": "is_enabled",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 34,
+      "group": "entity",
+      "name": "get_tag",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "uint64_t (uint64_t entity)"
+    },
+    {
+      "index": 35,
+      "group": "entity",
+      "name": "set_tag",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const char *utf8, int32_t length)"
+    },
+    {
+      "index": 36,
+      "group": "entity",
+      "name": "get_layer",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 37,
+      "group": "entity",
+      "name": "set_layer",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "int32_t",
+          "name": "layer"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, int32_t layer)"
+    },
+    {
+      "index": 38,
+      "group": "entity",
+      "name": "get_guid",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_uuid *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_uuid *out)"
+    },
+    {
+      "index": 39,
+      "group": "entity",
+      "name": "find_by_guid",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "guid"
+        }
+      ],
+      "signature": "uint64_t (const conjure_uuid *guid)"
+    },
+    {
+      "index": 40,
+      "group": "entity",
+      "name": "find_by_tag",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (const char *utf8, int32_t length, uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 41,
+      "group": "entity",
+      "name": "find_by_layer",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "layer"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t layer, uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 42,
+      "group": "entity",
+      "name": "duplicate",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "uint64_t (uint64_t entity)"
+    },
+    {
+      "index": 43,
+      "group": "entity",
+      "name": "create_many",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "count"
+        },
+        {
+          "type": "uint64_t",
+          "name": "parent"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (int32_t count, uint64_t parent, uint64_t *out)"
+    },
+    {
+      "index": 44,
+      "group": "scene",
+      "name": "request_load",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Path"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        },
+        {
+          "type": "int32_t",
+          "name": "additive"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Path, int32_t length, int32_t additive)"
+    },
+    {
+      "index": 45,
+      "group": "scene",
+      "name": "request_load_asset",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "scene"
+        },
+        {
+          "type": "int32_t",
+          "name": "additive"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *scene, int32_t additive)"
+    },
+    {
+      "index": 46,
+      "group": "scene",
+      "name": "request_unload",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Path"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Path, int32_t length)"
+    },
+    {
+      "index": 47,
+      "group": "scene",
+      "name": "is_loaded",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Path"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Path, int32_t length)"
+    },
+    {
+      "index": 48,
+      "group": "scene",
+      "name": "is_load_pending",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Path"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Path, int32_t length)"
+    },
+    {
+      "index": 49,
+      "group": "scene",
+      "name": "active_path",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 50,
+      "group": "scene",
+      "name": "loaded_count",
+      "returns": "int32_t",
+      "args": [],
+      "signature": "int32_t (void)"
+    },
+    {
+      "index": 51,
+      "group": "scene",
+      "name": "loaded_path",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t index, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 52,
+      "group": "scene",
+      "name": "entity_count",
+      "returns": "int32_t",
+      "args": [],
+      "signature": "int32_t (void)"
+    },
+    {
+      "index": 53,
+      "group": "scene",
+      "name": "structure_version",
+      "returns": "uint64_t",
+      "args": [],
+      "signature": "uint64_t (void)"
+    },
+    {
+      "index": 54,
+      "group": "scene",
+      "name": "roots",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 55,
+      "group": "prefab",
+      "name": "instantiate",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "prefab"
+        },
+        {
+          "type": "uint64_t",
+          "name": "parent"
+        },
+        {
+          "type": "const conjure_transform *",
+          "name": "localOrNull"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "outRoot"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *prefab, uint64_t parent, const conjure_transform *localOrNull, uint64_t *outRoot)"
+    },
+    {
+      "index": 56,
+      "group": "prefab",
+      "name": "instantiate_many",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "prefab"
+        },
+        {
+          "type": "uint64_t",
+          "name": "parent"
+        },
+        {
+          "type": "int32_t",
+          "name": "count"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "outRoots"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *prefab, uint64_t parent, int32_t count, uint64_t *outRoots)"
+    },
+    {
+      "index": 57,
+      "group": "prefab",
+      "name": "source_of",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_uuid *",
+          "name": "outPrefab"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_uuid *outPrefab)"
+    },
+    {
+      "index": 58,
+      "group": "prefab",
+      "name": "is_instance_root",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 59,
+      "group": "physics",
+      "name": "raycast",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_ray_query *",
+          "name": "query"
+        },
+        {
+          "type": "conjure_raycast_hit *",
+          "name": "outHit"
+        }
+      ],
+      "signature": "int32_t (const conjure_ray_query *query, conjure_raycast_hit *outHit)"
+    },
+    {
+      "index": 60,
+      "group": "physics",
+      "name": "raycast_all",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_ray_query *",
+          "name": "query"
+        },
+        {
+          "type": "conjure_raycast_hit *",
+          "name": "outHits"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (const conjure_ray_query *query, conjure_raycast_hit *outHits, int32_t capacity)"
+    },
+    {
+      "index": 61,
+      "group": "physics",
+      "name": "shape_cast",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_shape_query *",
+          "name": "query"
+        },
+        {
+          "type": "conjure_raycast_hit *",
+          "name": "outHit"
+        }
+      ],
+      "signature": "int32_t (const conjure_shape_query *query, conjure_raycast_hit *outHit)"
+    },
+    {
+      "index": 62,
+      "group": "physics",
+      "name": "overlap_sphere",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "center"
+        },
+        {
+          "type": "float",
+          "name": "radius"
+        },
+        {
+          "type": "uint32_t",
+          "name": "layerMask"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *center, float radius, uint32_t layerMask, uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 63,
+      "group": "physics",
+      "name": "overlap_box",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "center"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "halfExtents"
+        },
+        {
+          "type": "const conjure_quat_xyzw *",
+          "name": "rotation"
+        },
+        {
+          "type": "uint32_t",
+          "name": "layerMask"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "out"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, uint32_t layerMask, uint64_t *out, int32_t capacity)"
+    },
+    {
+      "index": 64,
+      "group": "physics",
+      "name": "get_linear_velocity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_vec3 *out)"
+    },
+    {
+      "index": 65,
+      "group": "physics",
+      "name": "set_linear_velocity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *value)"
+    },
+    {
+      "index": 66,
+      "group": "physics",
+      "name": "get_angular_velocity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_vec3 *out)"
+    },
+    {
+      "index": 67,
+      "group": "physics",
+      "name": "set_angular_velocity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *value)"
+    },
+    {
+      "index": 68,
+      "group": "physics",
+      "name": "add_force",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "force"
+        },
+        {
+          "type": "uint8_t",
+          "name": "mode"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *force, uint8_t mode)"
+    },
+    {
+      "index": 69,
+      "group": "physics",
+      "name": "add_force_at",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "force"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "worldPoint"
+        },
+        {
+          "type": "uint8_t",
+          "name": "mode"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *force, const conjure_vec3 *worldPoint, uint8_t mode)"
+    },
+    {
+      "index": 70,
+      "group": "physics",
+      "name": "add_torque",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "torque"
+        },
+        {
+          "type": "uint8_t",
+          "name": "mode"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *torque, uint8_t mode)"
+    },
+    {
+      "index": 71,
+      "group": "physics",
+      "name": "move_kinematic",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_transform *",
+          "name": "target"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_transform *target)"
+    },
+    {
+      "index": 72,
+      "group": "physics",
+      "name": "teleport",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_transform *",
+          "name": "target"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_transform *target)"
+    },
+    {
+      "index": 73,
+      "group": "physics",
+      "name": "is_sleeping",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 74,
+      "group": "physics",
+      "name": "wake",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 75,
+      "group": "physics",
+      "name": "get_gravity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "conjure_vec3 *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (conjure_vec3 *out)"
+    },
+    {
+      "index": 76,
+      "group": "physics",
+      "name": "set_gravity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *value)"
+    },
+    {
+      "index": 77,
+      "group": "physics",
+      "name": "layer_index",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8, int32_t length)"
+    },
+    {
+      "index": 78,
+      "group": "physics",
+      "name": "layer_name",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "layer"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t layer, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 79,
+      "group": "physics",
+      "name": "layers_collide",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "layerA"
+        },
+        {
+          "type": "int32_t",
+          "name": "layerB"
+        }
+      ],
+      "signature": "int32_t (int32_t layerA, int32_t layerB)"
+    },
+    {
+      "index": 80,
+      "group": "physics",
+      "name": "character_move",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "velocity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, const conjure_vec3 *velocity)"
+    },
+    {
+      "index": 81,
+      "group": "physics",
+      "name": "character_is_grounded",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 82,
+      "group": "physics",
+      "name": "character_velocity",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "conjure_vec3 *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, conjure_vec3 *out)"
+    },
+    {
+      "index": 83,
+      "group": "audio",
+      "name": "play",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 84,
+      "group": "audio",
+      "name": "stop",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 85,
+      "group": "audio",
+      "name": "pause",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 86,
+      "group": "audio",
+      "name": "resume",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 87,
+      "group": "audio",
+      "name": "is_playing",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity)"
+    },
+    {
+      "index": 88,
+      "group": "audio",
+      "name": "play_one_shot",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "clip"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "positionOrNull"
+        },
+        {
+          "type": "float",
+          "name": "volume"
+        },
+        {
+          "type": "float",
+          "name": "pitch"
+        },
+        {
+          "type": "uint64_t",
+          "name": "groupHash"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *clip, const conjure_vec3 *positionOrNull, float volume, float pitch, uint64_t groupHash)"
+    },
+    {
+      "index": 89,
+      "group": "audio",
+      "name": "set_group_gain",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "groupHash"
+        },
+        {
+          "type": "float",
+          "name": "gain"
+        }
+      ],
+      "signature": "int32_t (uint64_t groupHash, float gain)"
+    },
+    {
+      "index": 90,
+      "group": "audio",
+      "name": "get_group_gain",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "groupHash"
+        },
+        {
+          "type": "float *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (uint64_t groupHash, float *out)"
+    },
+    {
+      "index": 91,
+      "group": "audio",
+      "name": "set_master_gain",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "float",
+          "name": "gain"
+        }
+      ],
+      "signature": "int32_t (float gain)"
+    },
+    {
+      "index": 92,
+      "group": "audio",
+      "name": "get_master_gain",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "float *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (float *out)"
+    },
+    {
+      "index": 93,
+      "group": "audio",
+      "name": "clip_duration",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "clip"
+        },
+        {
+          "type": "float *",
+          "name": "outSeconds"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *clip, float *outSeconds)"
+    },
+    {
+      "index": 94,
+      "group": "input",
+      "name": "set_cursor_mode",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint8_t",
+          "name": "mode"
+        }
+      ],
+      "signature": "int32_t (uint8_t mode)"
+    },
+    {
+      "index": 95,
+      "group": "input",
+      "name": "get_cursor_mode",
+      "returns": "int32_t",
+      "args": [],
+      "signature": "int32_t (void)"
+    },
+    {
+      "index": 96,
+      "group": "input",
+      "name": "gamepad_name",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t index, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 97,
+      "group": "input",
+      "name": "inject_key",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint16_t",
+          "name": "key"
+        },
+        {
+          "type": "uint8_t",
+          "name": "action"
+        }
+      ],
+      "signature": "int32_t (uint16_t key, uint8_t action)"
+    },
+    {
+      "index": 98,
+      "group": "input",
+      "name": "inject_mouse_button",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint8_t",
+          "name": "button"
+        },
+        {
+          "type": "uint8_t",
+          "name": "action"
+        }
+      ],
+      "signature": "int32_t (uint8_t button, uint8_t action)"
+    },
+    {
+      "index": 99,
+      "group": "input",
+      "name": "inject_mouse_move",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "float",
+          "name": "x"
+        },
+        {
+          "type": "float",
+          "name": "y"
+        }
+      ],
+      "signature": "int32_t (float x, float y)"
+    },
+    {
+      "index": 100,
+      "group": "input",
+      "name": "inject_gamepad_button",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "uint8_t",
+          "name": "button"
+        },
+        {
+          "type": "uint8_t",
+          "name": "action"
+        }
+      ],
+      "signature": "int32_t (int32_t index, uint8_t button, uint8_t action)"
+    },
+    {
+      "index": 101,
+      "group": "input",
+      "name": "inject_gamepad_axis",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "uint8_t",
+          "name": "axis"
+        },
+        {
+          "type": "float",
+          "name": "value"
+        }
+      ],
+      "signature": "int32_t (int32_t index, uint8_t axis, float value)"
+    },
+    {
+      "index": 102,
+      "group": "input",
+      "name": "clipboard_get",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 103,
+      "group": "input",
+      "name": "clipboard_set",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8, int32_t length)"
+    },
+    {
+      "index": 104,
+      "group": "asset",
+      "name": "ref_get",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "uint64_t",
+          "name": "typeId"
+        },
+        {
+          "type": "conjure_asset_info *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, uint64_t typeId, conjure_asset_info *out)"
+    },
+    {
+      "index": 105,
+      "group": "asset",
+      "name": "ref_bind",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "uint64_t",
+          "name": "typeId"
+        },
+        {
+          "type": "const void **",
+          "name": "outSlot"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, uint64_t typeId, const void **outSlot)"
+    },
+    {
+      "index": 106,
+      "group": "asset",
+      "name": "find",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Path"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        },
+        {
+          "type": "conjure_uuid *",
+          "name": "outId"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Path, int32_t length, conjure_uuid *outId)"
+    },
+    {
+      "index": 107,
+      "group": "asset",
+      "name": "path_of",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 108,
+      "group": "asset",
+      "name": "load",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "uint64_t",
+          "name": "typeId"
+        },
+        {
+          "type": "uint8_t",
+          "name": "priority"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, uint64_t typeId, uint8_t priority)"
+    },
+    {
+      "index": 109,
+      "group": "asset",
+      "name": "load_blocking",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "uint64_t",
+          "name": "typeId"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, uint64_t typeId)"
+    },
+    {
+      "index": 110,
+      "group": "asset",
+      "name": "release",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id)"
+    },
+    {
+      "index": 111,
+      "group": "asset",
+      "name": "state_of",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id)"
+    },
+    {
+      "index": 112,
+      "group": "asset",
+      "name": "type_of",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_uuid *",
+          "name": "id"
+        },
+        {
+          "type": "uint64_t *",
+          "name": "outTypeId"
+        }
+      ],
+      "signature": "int32_t (const conjure_uuid *id, uint64_t *outTypeId)"
+    },
+    {
+      "index": 113,
+      "group": "asset",
+      "name": "type_id",
+      "returns": "uint64_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8TypeName"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "uint64_t (const char *utf8TypeName, int32_t length)"
+    },
+    {
+      "index": 114,
+      "group": "diagnostics",
+      "name": "check",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Name"
+        },
+        {
+          "type": "int32_t",
+          "name": "nameLength"
+        },
+        {
+          "type": "int32_t",
+          "name": "passed"
+        },
+        {
+          "type": "const char *",
+          "name": "utf8Detail"
+        },
+        {
+          "type": "int32_t",
+          "name": "detailLength"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Name, int32_t nameLength, int32_t passed, const char *utf8Detail, int32_t detailLength)"
+    },
+    {
+      "index": 115,
+      "group": "diagnostics",
+      "name": "last_error",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t *",
+          "name": "outStatus"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t *outStatus, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 116,
+      "group": "diagnostics",
+      "name": "draw_line",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "a"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "b"
+        },
+        {
+          "type": "uint32_t",
+          "name": "rgba"
+        },
+        {
+          "type": "float",
+          "name": "seconds"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *a, const conjure_vec3 *b, uint32_t rgba, float seconds)"
+    },
+    {
+      "index": 117,
+      "group": "diagnostics",
+      "name": "draw_box",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "center"
+        },
+        {
+          "type": "const conjure_vec3 *",
+          "name": "halfExtents"
+        },
+        {
+          "type": "const conjure_quat_xyzw *",
+          "name": "rotation"
+        },
+        {
+          "type": "uint32_t",
+          "name": "rgba"
+        },
+        {
+          "type": "float",
+          "name": "seconds"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *center, const conjure_vec3 *halfExtents, const conjure_quat_xyzw *rotation, uint32_t rgba, float seconds)"
+    },
+    {
+      "index": 118,
+      "group": "diagnostics",
+      "name": "draw_sphere",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "center"
+        },
+        {
+          "type": "float",
+          "name": "radius"
+        },
+        {
+          "type": "uint32_t",
+          "name": "rgba"
+        },
+        {
+          "type": "float",
+          "name": "seconds"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *center, float radius, uint32_t rgba, float seconds)"
+    },
+    {
+      "index": 119,
+      "group": "diagnostics",
+      "name": "draw_text",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const conjure_vec3 *",
+          "name": "position"
+        },
+        {
+          "type": "const char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        },
+        {
+          "type": "uint32_t",
+          "name": "rgba"
+        },
+        {
+          "type": "float",
+          "name": "seconds"
+        }
+      ],
+      "signature": "int32_t (const conjure_vec3 *position, const char *utf8, int32_t length, uint32_t rgba, float seconds)"
+    },
+    {
+      "index": 120,
+      "group": "diagnostics",
+      "name": "frame_stats",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "conjure_frame_stats_block *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (conjure_frame_stats_block *out)"
+    },
+    {
+      "index": 121,
+      "group": "diagnostics",
+      "name": "call_count",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "functionIndex"
+        }
+      ],
+      "signature": "int32_t (int32_t functionIndex)"
+    },
+    {
+      "index": 122,
+      "group": "modules",
+      "name": "count",
+      "returns": "int32_t",
+      "args": [],
+      "signature": "int32_t (void)"
+    },
+    {
+      "index": 123,
+      "group": "modules",
+      "name": "find",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "const char *",
+          "name": "utf8Name"
+        },
+        {
+          "type": "int32_t",
+          "name": "length"
+        }
+      ],
+      "signature": "int32_t (const char *utf8Name, int32_t length)"
+    },
+    {
+      "index": 124,
+      "group": "modules",
+      "name": "info",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "conjure_module_record *",
+          "name": "out"
+        }
+      ],
+      "signature": "int32_t (int32_t index, conjure_module_record *out)"
+    },
+    {
+      "index": 125,
+      "group": "modules",
+      "name": "name",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "int32_t",
+          "name": "index"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (int32_t index, char *utf8, int32_t capacity)"
+    }
+  ]
+}

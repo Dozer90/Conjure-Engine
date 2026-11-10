@@ -112,7 +112,10 @@ TEST_SUITE("rhi/shader_library") {
 
         CHECK(library->directory() == directory);
         CHECK(library->backend() == graphics_backend::NULL_DEVICE);
-        CHECK(library->entry_count() == 2);
+        // The built index also carries the renderer's pass permutations (engine/shaders/CMakeLists.txt),
+        // a list no rhi-visible constant counts, so this case only asserts the floor: the fullscreen
+        // triangle pair is what this module proves. Every other case writes its own index and is exact.
+        CHECK(library->entry_count() >= 2);
         CHECK(library->loaded_blob_count() == 0);
         CHECK(library->contains({"fullscreen_triangle", "vs_main", ""}));
         CHECK(library->contains({"fullscreen_triangle", "ps_main", ""}));
@@ -357,6 +360,7 @@ TEST_SUITE("rhi/shader_library") {
         write_or_fail(directory, "index.json", index_json(entries));
 
         CONJURE_REQUIRE_OK(library->reload());
+        // Exactly the two entries of the rewritten index: a reload replaces the table, never merges it.
         CHECK(library->entry_count() == 2);
         CHECK(library->loaded_blob_count() == 0);
         CHECK(as_text(library->get({"a", "vs_main", ""}).value()) == BLOB_B);

@@ -212,9 +212,10 @@ textures unused for 120 frames are released in `end_frame()`.
 
 ### 2.8 Draw lists (private, `draw_list_builder`)
 `draw_item { std::uint64_t sortKey; std::uint32_t instanceIndex; }`. Opaque/masked key =
-`[pipelineVariant:8][materialIndex:24][meshIndex:24][depthBucket:8]`, ascending; runs with equal
+`[pipelineVariant:8][materialIndex:22][meshIndex:22][submesh:4][depthBucket:8]` (as implemented: the submesh
+needs its own field so an overflow can never merge different meshes into one batch), ascending; runs with equal
 (pipeline, material, mesh, submesh) collapse into one `drawIndexed` with `instanceCount > 1` and
-`firstInstance` in push constants. Blended key = `[layer:8][inverseDepth:32][material:24]`, no
+`firstInstance` in push constants. Blended key = `[layer:8][inverseDepth:24][material:32]` (24-bit depth), no
 instancing across different depths. Shadow lists reuse the builder with a `castsShadows` filter and
 the cascade or tile frustum. Sorting uses `core::radix_sort_u64`.
 
@@ -564,7 +565,7 @@ next compiled backend and finally `NULL_DEVICE` in headless mode.
 | `renderer.h` | `struct renderer_desc`, `struct render_stats`, `class renderer` |
 | `mesh_asset.h` | `struct mesh_streams`, `struct submesh`, `class mesh_asset` (`cpu_geometry()` keeps positions + indices in Debug/Development for the editor's CPU picking, R11) |
 | `texture_asset.h` | `enum class texture_colour_space : std::uint8_t { SRGB, LINEAR }`, `enum class sampler_filter : std::uint8_t { LINEAR, POINT }`, `struct texture_mip`, `class texture_asset` |
-| `material_asset.h` | `enum class alpha_mode : std::uint8_t { OPAQUE, MASK, BLEND }`, `struct material_desc`, `class material_asset` |
+| `material_asset.h` | `enum class alpha_mode : std::uint8_t { SOLID, MASK, BLEND }` (`SOLID` is glTF's `OPAQUE`, a Windows macro name, CONVENTIONS 3), `struct material_desc`, `class material_asset` |
 | `environment_asset.h` | `using sh9 = std::array<math::vec3, 9>;`, `class environment_asset` |
 | `shader_asset.h` | `struct shader_program_desc { std::string name; std::string vertexEntry; std::string pixelEntry; }`, `class shader_asset` (v1: built-in programs only, `validate(rhi::shader_library&)`) |
 | `model_asset.h` | `struct model_node`, `class model_asset` (glTF node tree that `scene` turns into a prefab) |
@@ -591,7 +592,8 @@ namespace conjure::renderer {
     [[nodiscard]] math::ray ray_from_viewport(
       const camera &camera,
       const math::mat4 &worldFromView,
-      math::vec2 viewportUv
+      math::vec2 viewportUv,
+      f32 aspectRatio                      // viewport width over height (a non-square viewport cannot be unprojected without it)
     ) noexcept;
 
     struct renderer_desc {

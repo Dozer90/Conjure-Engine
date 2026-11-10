@@ -39,6 +39,11 @@ Private: `asset_slot_table.{h,cpp}` (slots + `slot_data`), `completion_queue.h`,
 `binary_io.h` (little-endian field I/O for every on-disk format), `fnv1a.h`, `path_filters.h`
 (`is_temporary_path`: `*.tmp` and `*.tmp-<uuid>` atomic-write leftovers are never sources, never watched).
 
+`importer_registry::find_for_path(path)` picks the importer whose registered extension is the longest
+suffix of the file name (a `.scene.json` importer wins over a `.json` one, R45); the database uses it at
+scan, at `add_file` and for a meta without an importer, while `find_for_extension` keeps matching one
+extension exactly.
+
 Deviations from `05_assets.md` worth knowing: `asset_type_registry::types()` returns
 `std::span<const asset_type_desc *const>` (descriptions live in their own heap blocks so a `find()`
 pointer survives the removal of any other type, as the header promises); `hot_reload_controller`

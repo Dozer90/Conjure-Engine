@@ -16,6 +16,11 @@ CMakeUserPresets.json
 **/obj/
 *.nupkg
 
+# Asset packs supplied by the project owner live here but are not part of the repository
+# (several GB; see samples/assets/README.md for the expected layout and licences)
+/samples/assets/*
+!/samples/assets/README.md
+
 # Test assets downloaded by tools/download_test_assets.py
 /samples/**/assets/downloaded/
 /tests/.downloaded/

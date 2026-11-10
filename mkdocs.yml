@@ -107,6 +107,22 @@ nav:
           - api/modules/index.md
           - Writing a module: api/modules/writing-a-module.md
           - Loading and managing modules: api/modules/loading-and-managing.md
+      - Scene:
+          - api/scene/index.md
+          - Scenes and the hierarchy: api/scene/scenes-and-hierarchy.md
+          - Scene files, prefabs and snapshots: api/scene/scene-files-and-prefabs.md
+      - Renderer:
+          - api/renderer/index.md
+          - Rendering a frame: api/renderer/rendering-a-frame.md
+          - Renderer assets: api/renderer/renderer-assets.md
+      - Physics:
+          - api/physics/index.md
+          - Bodies, colliders and characters: api/physics/bodies-and-colliders.md
+          - The physics world and queries: api/physics/physics-world-and-queries.md
+      - Scripting:
+          - api/scripting/index.md
+          - Scripts, components and the runtime: api/scripting/scripts-and-components.md
+          - Hosting, the native API and hot reload: api/scripting/hosting-and-hot-reload.md
       - Glossary: api/glossary.md
   - Engineering handbook:
       - handbook/index.md
@@ -128,6 +144,10 @@ nav:
           - Assets: handbook/modules/assets.md
           - Audio: handbook/modules/audio.md
           - Modules: handbook/modules/modules.md
+          - Scene: handbook/modules/scene.md
+          - Renderer: handbook/modules/renderer.md
+          - Physics: handbook/modules/physics.md
+          - Scripting: handbook/modules/scripting.md
       - Module system:
           - handbook/module-system/index.md
           - Creating a module: handbook/module-system/creating-a-module.md

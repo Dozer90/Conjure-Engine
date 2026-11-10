@@ -86,6 +86,22 @@ TEST_SUITE("ecs/entity") {
         CHECK(map.target(3) == NULL_ENTITY);
     }
 
+    TEST_CASE("entity_remap - remap serves capture and instantiate with one table") {
+        const entity_remap map(std::vector<entity>{entity{10, 1}, entity{12, 4}});
+        // Instantiate direction: local -> real, out of range -> null.
+        CHECK(map.remap(entity::archive_local(0)) == entity{10, 1});
+        CHECK(map.remap(entity::archive_local(1)) == entity{12, 4});
+        CHECK(map.remap(entity::archive_local(7)) == NULL_ENTITY);
+        // Capture direction: a target -> its local index; anything else unchanged.
+        CHECK(map.remap(entity{12, 4}) == entity::archive_local(1));
+        CHECK(map.remap(entity{10, 1}) == entity::archive_local(0));
+        CHECK(map.remap(entity{10, 2}) == entity{10, 2});
+        CHECK(map.remap(NULL_ENTITY) == NULL_ENTITY);
+        // Applying it twice is the identity for members of the set.
+        CHECK(map.remap(map.remap(entity{12, 4})) == entity{12, 4});
+        CHECK(entity_remap().remap(entity{5, 5}) == entity{5, 5});
+    }
+
     TEST_CASE("entity - reflects as the ENTITY field kind") {
         static_assert(core::reflect::kind_of<entity>() == core::reflect::field_kind::ENTITY);
         CHECK(core::reflect::type_id_of<entity>() == core::reflect::type_id::from_name("conjure.ecs.entity"));

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The hosting anchor (docs/design/03_scripting.md 3.1): an executable that is never run. Its
+       runtimeconfig.json and deps.json describe the framework (or, published self-contained, the included
+       framework) and place Conjure.Managed.dll next to it; one dotnet publish yields either layout. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Conjure.Bootstrap</RootNamespace>
+    <AssemblyName>Conjure.Bootstrap</AssemblyName>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <UserRuntimeConfig>runtimeconfig.template.json</UserRuntimeConfig>
+    <SelfContained>false</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Conjure.Managed/Conjure.Managed.csproj" />
+  </ItemGroup>
+</Project>

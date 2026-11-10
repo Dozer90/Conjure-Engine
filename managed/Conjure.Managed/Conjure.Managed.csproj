@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The managed SDK (docs/design/03_scripting.md 4.1): lives in the default load context, owns every
+       [UnmanagedCallersOnly] entry point and the ScriptBehaviour base class. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>Conjure</RootNamespace>
+    <AssemblyName>Conjure.Managed</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Generated/NativeApi.g.cs" />
+    <Compile Include="Interop/FrameBlock.cs" />
+    <Compile Include="Interop/ManagedApi.cs" />
+    <Compile Include="Interop/NativeBridge.cs" />
+    <Compile Include="Interop/Records.cs" />
+    <Compile Include="Runtime/AssemblyLoader.cs" />
+    <Compile Include="Runtime/FieldBlob.cs" />
+    <Compile Include="Runtime/GameAssemblyLoadContext.cs" />
+    <Compile Include="Runtime/Guard.cs" />
+    <Compile Include="Runtime/InstanceTable.cs" />
+    <Compile Include="Runtime/JsonText.cs" />
+    <Compile Include="Runtime/LayoutHash.cs" />
+    <Compile Include="Runtime/NameHash.cs" />
+    <Compile Include="Runtime/PhaseList.cs" />
+    <Compile Include="Runtime/ScriptCatalog.cs" />
+    <Compile Include="Runtime/ScriptClassInfo.cs" />
+    <Compile Include="Runtime/ScriptRuntime.cs" />
+    <Compile Include="Api/AssetRef.cs" />
+    <Compile Include="Api/Attributes.cs" />
+    <Compile Include="Api/Audio.cs" />
+    <Compile Include="Api/Collision.cs" />
+    <Compile Include="Api/Color.cs" />
+    <Compile Include="Api/Component.cs" />
+    <Compile Include="Api/Entity.cs" />
+    <Compile Include="Api/GamepadButton.cs" />
+    <Compile Include="Api/Input.cs" />
+    <Compile Include="Api/Key.cs" />
+    <Compile Include="Api/Log.cs" />
+    <Compile Include="Api/MouseButton.cs" />
+    <Compile Include="Api/Physics.cs" />
+    <Compile Include="Api/Prefab.cs" />
+    <Compile Include="Api/Scene.cs" />
+    <Compile Include="Api/ScriptBehaviour.cs" />
+    <Compile Include="Api/Time.cs" />
+    <Compile Include="Api/Transform.cs" />
+    <Compile Include="Api/Components/LocalTransform.cs" />
+    <Compile Include="Api/Dod/ChunkView.cs" />
+    <Compile Include="Api/Dod/ComponentQuery.cs" />
+    <Compile Include="Api/Dod/ComponentType.cs" />
+  </ItemGroup>
+</Project>

@@ -288,6 +288,12 @@ run_phase(p, dt):
         for system in stage order: world.flush(system.commands)
 ```
 
+The per-stage bookkeeping (the job closures and the main-thread list) lives in the phase's state and is kept
+at capacity, so a phase that has run once allocates nothing of its own afterwards (with `parallelSystems` and
+a job system, `jobs.schedule` still allocates its completion counter once per stage). The job closures reach
+the frame through the scheduler, which saves and restores that pointer around the phase so an `EXCLUSIVE`
+system may run another phase from inside this one.
+
 `build_stages(p)`: resolve `after`/`before` names into edges (unknown names are ignored with one `DEBUG` log
 each, because the referenced module may be compiled out); Kahn topological sort with registration order as the
 tiebreak (a cycle is detected incrementally in `add_system`, which fails with `SYSTEM_CYCLE` and does not add
@@ -481,7 +487,8 @@ class world {
         [[nodiscard]] core::result<void> instantiate_batch(
           const std::shared_ptr<const entity_archive> &archive,
           std::span<entity> outRoots,
-          command_buffer *commands = nullptr
+          command_buffer *commands = nullptr,
+          std::vector<entity> *outEntities = nullptr     // every created id, copy-major in entry order; empty after a failure
         );
 
         // Observers.
@@ -708,9 +715,10 @@ struct component_type_desc {
     uint32_t alignment = 1;
     component_flags flags = component_flags::NONE;
     component_ops ops = {};
+    component_serializer serializer = {};       // null for a reflected type: the registry's walker serialises the deep copy
     const core::reflect::type_info *reflection = nullptr;   // deep-copied by the registry at attach
 };
-template <typename ComponentType> [[nodiscard]] constexpr component_type_desc describe_component();
+template <typename ComponentType> [[nodiscard]] component_type_desc describe_component(component_flags flags = {});
 
 struct system_extension_desc {
     static constexpr core::string_id EXTENSION_POINT{"ecs.system"};
@@ -725,8 +733,13 @@ struct system_extension_desc {
 };
 ```
 
-The engine's `ecs_module_consumer` turns them into `register_component` / `add_system` calls on attach (ids
+The engine's `ecs_module_consumer` turns them into `register_described` / `add_system` calls on attach (ids
 resolved by name, masks built from the name lists) and into `remove_system` / `remove_from_all` on detach.
+`describe_component<T>` leaves `serializer` null for a reflected type so that no function pointer into the
+module reaches the registry: the registry serialises the type through its own deep copy of the reflection
+description, which is what lets data authored with the module survive its unload (D11). A record without
+reflection (scripting's `script_component`, R29) must supply `writeJson` and `readJson` (`UNSUPPORTED_FIELD`
+otherwise); `register_described` copies the hooks as given.
 
 ### 4.8 `entity_archive.h` and `serialization.h`
 

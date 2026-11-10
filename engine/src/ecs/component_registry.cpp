@@ -207,6 +207,7 @@ core::result<component_id> component_registry::register_described(const componen
     info.alignment = desc.alignment;
     info.flags = desc.flags;
     info.ops = desc.ops;
+    info.serializer = desc.serializer;
 
     // The module may unload: the registry keeps a private deep copy of the description. The copy is
     // owned locally until registration succeeds so a refused type leaves nothing behind.

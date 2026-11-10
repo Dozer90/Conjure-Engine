@@ -264,6 +264,16 @@ namespace conjure::assets {
             [[nodiscard]] const asset_importer *find_for_extension(std::string_view extension) const noexcept;
 
             /// <summary>
+            /// The importer whose registered extension is the longest suffix of the path's file name,
+            /// ignoring case, so a ".scene.json" importer wins over a ".json" one for "main.scene.json"
+            /// (R45). nullptr when no extension matches. An extension registered without its dot ("json")
+            /// matches the same names as the dotted spelling. A suffix never consumes the whole file
+            /// name: a leading dot is part of the name (path_utils), so ".scene.json" matches ".json"
+            /// and ".json" matches nothing.
+            /// </summary>
+            [[nodiscard]] const asset_importer *find_for_path(std::string_view path) const noexcept;
+
+            /// <summary>
             /// Every importer in registration order.
             /// </summary>
             [[nodiscard]] std::span<const asset_importer *const> importers() const noexcept;

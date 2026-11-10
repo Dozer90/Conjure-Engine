@@ -125,7 +125,10 @@ reused, so a stale id can never alias another type and every world on the same r
   runs its systems as jobs over a locked world (main-thread systems last on the caller, everything
   inline without a job system or with `parallelSystems = false`), then flushes each system's buffer in
   stage order. `EXCLUSIVE` systems run alone with an unlocked world. `finalise()` builds every phase
-  now; `run_phase_filtered` runs only systems whose flags contain the required bits.
+  now; `run_phase_filtered` runs only systems whose flags contain the required bits. The per-stage job
+  and main-thread lists live in the phase state (kept at capacity), so a phase that has run once allocates
+  nothing of its own afterwards; with `parallelSystems` and a job system, `job_system::schedule` still
+  allocates its counter per stage.
 - **`parallel_for_chunks`** flattens the matched chunks, groups them into grains of
   `max(1, minEntitiesPerJob / capacity)` chunks, runs one job per grain with its own command buffer
   (inline without a job system or with `parallelChunks = false`) and appends the grain buffers to the
@@ -140,12 +143,16 @@ reused, so a stale id can never alias another type and every world on the same r
   is simply absent everywhere.
 - **Archives.** `entity_archive::capture` copies every non-`TRANSIENT` component with `ops.copy` (or
   memcpy) and rewrites entity fields: inside the set they become `entity::archive_local(index)`, outside
-  `NULL_ENTITY` unless `keepExternalReferences`. `instantiate_batch` validates first (`ARCHIVE_CORRUPT`
+  `NULL_ENTITY` unless `keepExternalReferences`. A reflection-less type with a `serializer.remapEntities`
+  hook (the script set, R29) rewrites its own references through `entity_remap::remap` with a table whose
+  targets are the captured entities; `instantiate_batch` hands the same hook the table of the copy, so one
+  symmetric call serves both directions. `instantiate_batch` validates first (`ARCHIVE_CORRUPT`
   before anything is created), resolves every archetype, places all copies of an entry together, copies
   payloads, remaps entity fields through an `entity_remap` per copy and fires `ADDED` last. A placement
   that fails part-way discards the rows placed so far and returns every id unused, so the world and the
   id space are as before. With a command buffer the ids are reserved immediately and the roots returned
-  now.
+  now. The optional `outEntities` vector receives every created id, copy-major in entry order (entries
+  without components included), in both paths; the scene's link pass relies on it.
 - **Serialisation.** Archives serialise as `{"entities":[{"components":{"<name>":{...}}}]}`. Entity
   fields are the integer local index, `null`, or `{"external":"<index>:<generation>"}`; the live
   `component_to_json` uses the external form. Scalars, strings, `string_id`, `uuid`, math types, enums
@@ -170,7 +177,12 @@ reused, so a stale id can never alias another type and every world on the same r
   gets capacity 0 and answers every placement with `ARCHETYPE_TOO_LARGE`). The hot-reload flow is
   serialise -> `remove_from_all` -> `redefine_dynamic` -> `add_raw` -> `component_from_json`.
   `register_described` deep-copies the module's description, nested struct and enum descriptions
-  included, and keeps the copy only when the registration succeeds.
+  included, keeps the copy only when the registration succeeds, and takes the record's
+  `component_serializer` as given. `describe_component<T>` leaves the hooks null for a reflected type:
+  the registry's reflection walker serialises the deep copy, so a scene or prefab that names the
+  component never calls into the module after it has unloaded (`make_default_serializer<T>` would point
+  at the module's instantiation). A type without reflection must supply `writeJson` and `readJson`,
+  which is how scripting's `script_component` serialises its store handle as the script set.
 - **`world_hash`** visits archetypes in ascending order of their mask hash, entities in chunk order,
   and hashes the entity id plus every component (name hash combined with the bytes of every reflected
   field for trivial types, nested structs walked, so padding never takes part; with the raw bytes for

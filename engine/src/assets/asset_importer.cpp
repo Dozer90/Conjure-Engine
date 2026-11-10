@@ -231,6 +231,34 @@ const asset_importer *importer_registry::find_for_extension(std::string_view ext
     return nullptr;
 }
 
+const asset_importer *importer_registry::find_for_path(std::string_view path) const noexcept {
+    const std::string_view name = core::vfs::path_utils::filename(path);
+    const asset_importer *best = nullptr;
+    usize bestLength = 0;
+    for (const asset_importer *importer : mView) {
+        for (const std::string_view suffix : importer->extensions()) {
+            if (suffix.empty() || name.size() <= suffix.size()) {
+                continue;
+            }
+            // The match starts at the dot before the extension: part of the suffix when it was registered
+            // with one, the character before it otherwise. Index 0 is never that dot, since a leading dot
+            // belongs to the name (path_utils), so a suffix never consumes the whole file name.
+            const bool dotted = suffix.front() == '.';
+            const usize start = name.size() - suffix.size() - (dotted ? 0u : 1u);
+            if (start == 0 || (!dotted && name[start] != '.')) {
+                continue;
+            }
+            const std::string_view tail = name.substr(dotted ? start : start + 1);
+            const usize matched = name.size() - start;     // dot included, so both spellings compare alike
+            if (matched > bestLength && core::str::iequals(tail, suffix)) {
+                best = importer;
+                bestLength = matched;
+            }
+        }
+    }
+    return best;
+}
+
 std::span<const asset_importer *const> importer_registry::importers() const noexcept {
     return mView;
 }

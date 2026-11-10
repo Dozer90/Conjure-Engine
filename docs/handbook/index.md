@@ -44,6 +44,10 @@ One line per chapter, in reading order for a new contributor.
 | [Modules: assets](modules/assets.md) | identity and the slot table, scan and hashing, cache layout and validation, the load pipeline, publish / retire / collect, threading, hot reload and the watcher job, cooker and pack determinism, extension points, tests |
 | [Modules: audio](modules/audio.md) | mixer architecture and callback rules, command and event rings, voice tables and lifecycle, the group gain tree, spatialisation, streaming, the null backend's virtual clock, device loss, threading, tests |
 | [Modules: modules](modules/modules.md) | the ABI handshake, one load step by step, unload / fault / reload, shadow copies, registration sets and consumers, services, static modules, the umbrella shared library and `conjure_add_game_module()`, tests and fixtures |
+| [Modules: scene](modules/scene.md) | hierarchy storage, one structural change per flush, the propagation algorithm, instantiation and the link pass, files, prefabs and snapshots, the scene manager, threading, tests |
+| [Modules: renderer](modules/renderer.md) | the frame and the render graph, the resource cache and uploads, assets and importers, threading, deviations from the design, failure model, engine wiring, tests |
+| [Modules: physics](modules/physics.md) | Jolt encapsulation, bodies following components, the fixed step and change detection, the job adapter, contacts, commands and queries, characters, collision meshes, settings and build options, tests |
+| [Modules: scripting](modules/scripting.md) | the two ABI tables and the handshake, the runtime's re-entrancy rules, the component registration, hot reload, the managed side, nethost on MSVC, threading, tests |
 | [Module system](module-system/index.md) | engine modules versus plugin and game modules, how a plugin fits the engine (one engine copy, the C front door, registration as data, consumers), and the two chapters below |
 | [Module system: creating a module](module-system/creating-a-module.md) | directory layout, the manifest, the CMake target, the entry point, registering components, systems and importers, building, testing with a static test host |
 | [Module system: importing and distributing](module-system/importing-and-distributing.md) | declaring modules in a project, the binary layout `bin/<platform>-<arch>-<config>`, loading at start-up, the export layout, versioning and compatibility, C# assemblies in modules |
@@ -60,7 +64,7 @@ the reference.
 
 | Chapter | Planned file | Reference until written |
 |---|---|---|
-| Modules: scene, renderer, physics, scripting, engine, bindings, editor | `handbook/modules/<module>.md` | the module's design note under `docs/design/` |
+| Modules: engine, bindings, editor | `handbook/modules/<module>.md` | the module's design note under `docs/design/` |
 | Editor internals, AI protocol internals, scripting pipeline, renderer pipeline, asset pipeline, export and distribution | `handbook/<chapter>.md` | `docs/design/04_editor.md`, `03_scripting.md`, `02_renderer.md`, `05_assets.md`, `06_engine_loop.md` 3.6 |
 
 > [!NOTE]
