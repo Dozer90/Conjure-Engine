@@ -15,6 +15,7 @@
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/ecs/world.h"
+#include "conjure/ecs/world_hash.h"
 #include "conjure/scene/components.h"
 #include "conjure/scene/register.h"
 #include "conjure/scene/scene.h"
@@ -155,5 +156,74 @@ TEST_SUITE("integration/assets_scene") {
         CHECK(pipeline.manager->bind_slot(sceneId)->state.load() == assets::asset_state::UNLOADED);
         CONJURE_CHECK_OK(manager.active().validate());
         CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("regression - demo-review P1 a scene-bound asset_ref hashes like the unbound reference") {
+        log_capture logs = {};
+        ecs::component_registry registry = {};
+        register_types(registry);
+
+        asset_pipeline pipeline = {};
+        CONJURE_REQUIRE_OK(assets::register_binary_asset_type(pipeline.manager->types(), &pipeline.importers));
+        CONJURE_REQUIRE_OK(scene::register_asset_types(pipeline.manager->types(), pipeline.importers, registry));
+        pipeline.open();
+        pipeline.write_source("data/loot.bin", LOOT_BYTES);
+        pipeline.write_source("data/other.bin", "arrow:30");
+        pipeline.scan_and_import();
+        const assets::asset_id lootId = pipeline.id_of("data/loot.bin");
+        const assets::asset_id otherId = pipeline.id_of("data/other.bin");
+        REQUIRE(lootId != otherId);
+
+        // The scene on disk carries the uuid alone.
+        {
+            ecs::world authoring(registry);
+            scene::scene draft(authoring, nullptr);
+            draft.set_name("vault");
+            const core::result<ecs::entity> chest = draft.create_entity(core::string_id("chest"));
+            CONJURE_REQUIRE_OK(chest);
+            const loot_table filled{assets::asset_ref<assets::binary_asset>(lootId)};
+            CONJURE_REQUIRE_OK(authoring.add<loot_table>(chest.value(), filled));
+            CONJURE_REQUIRE_OK(
+              scene::scene_serializer::save_scene_file(draft, *pipeline.fileSystem, "assets/scenes/vault.scene.json")
+            );
+            draft.clear();
+        }
+        pipeline.scan_and_import();
+        const assets::asset_id sceneId = pipeline.id_of("scenes/vault.scene.json");
+
+        // scene_manager::load binds the field to the live slot of this process (R25): the reference now
+        // holds a heap address that no other process and no unbound copy of the world shares.
+        ecs::world world(registry);
+        scene::scene_manager manager(world, *pipeline.manager);
+        CONJURE_REQUIRE_OK(manager.load(sceneId, scene::load_mode::REPLACE));
+        const ecs::entity chest = manager.active().find_path("chest");
+        REQUIRE_FALSE(chest.is_null());
+        const loot_table *loaded = world.get<loot_table>(chest);
+        REQUIRE(loaded != nullptr);
+        REQUIRE(loaded->table.is_bound());
+        REQUIRE(loaded->table.slot() == pipeline.manager->bind_slot(lootId));
+        CHECK(loaded->table.state() == assets::asset_state::LOADED);
+        const u64 sceneBound = ecs::world_hash(world);
+
+        // The same uuid, unbound: what a process that has not run its bind pass yet holds.
+        CONJURE_REQUIRE_OK(world.set(chest, loot_table{assets::asset_ref<assets::binary_asset>(lootId)}));
+        REQUIRE_FALSE(world.get<loot_table>(chest)->table.is_bound());
+        const u64 unbound = ecs::world_hash(world);
+        CHECK(unbound == sceneBound);
+
+        // Bound again, this time by asset_manager::bind (what gameplay code and scripts do).
+        const assets::asset_ref<assets::binary_asset> rebound = pipeline.manager->bind<assets::binary_asset>(lootId);
+        REQUIRE(rebound.is_bound());
+        CONJURE_REQUIRE_OK(world.set(chest, loot_table{rebound}));
+        CHECK(ecs::world_hash(world) == unbound);
+
+        // The identity still counts: another asset changes the hash, bound or not.
+        const assets::asset_ref<assets::binary_asset> other = pipeline.manager->bind<assets::binary_asset>(otherId);
+        REQUIRE(other.is_bound());
+        CONJURE_REQUIRE_OK(world.set(chest, loot_table{other}));
+        const u64 otherBound = ecs::world_hash(world);
+        CHECK(otherBound != unbound);
+        CONJURE_REQUIRE_OK(world.set(chest, loot_table{assets::asset_ref<assets::binary_asset>(otherId)}));
+        CHECK(ecs::world_hash(world) == otherBound);
     }
 }

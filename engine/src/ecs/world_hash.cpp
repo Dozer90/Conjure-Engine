@@ -10,6 +10,7 @@
 #include "conjure/core/json/writer.h"
 #include "conjure/core/reflect/field_info.h"
 #include "conjure/core/reflect/type_info.h"
+#include "conjure/core/uuid.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -23,16 +24,26 @@ namespace {
     /// <summary>
     /// FNV-1a over the bytes of every reflected field, nested structs walked recursively, so the
     /// padding between fields (which add/set copy from the caller's object) never reaches the hash.
+    /// An ASSET_REF wider than a uuid (assets::asset_ref: the uuid, then the bound slot pointer, R25)
+    /// contributes its leading uuid only, like its JSON form: the pointer is runtime binding state
+    /// that differs between processes and between a bound and an unbound reference to one asset.
     /// </summary>
     u64 hash_fields(const core::reflect::type_info &type, const std::byte *base, u64 hash) {
         using core::reflect::field_kind;
         for (const core::reflect::field_info &field : type.fields) {
             const std::byte *fieldBytes = base + field.offset;
+            const u32 elementSize = field.element_size();
+            const u32 elementCount = field.is_array() ? field.arrayCount : 1u;
             if (field.value_kind() == field_kind::STRUCT && field.structType != nullptr) {
-                const u32 elementSize = field.element_size();
-                const u32 elementCount = field.is_array() ? field.arrayCount : 1u;
                 for (u32 element = 0; element < elementCount; ++element) {
                     hash = hash_fields(*field.structType, fieldBytes + static_cast<usize>(elementSize) * element, hash);
+                }
+                continue;
+            }
+            if (field.value_kind() == field_kind::ASSET_REF && elementSize > sizeof(core::uuid)) {
+                for (u32 element = 0; element < elementCount; ++element) {
+                    const std::byte *identity = fieldBytes + static_cast<usize>(elementSize) * element;
+                    hash = core::hash::fnv1a64(std::span<const std::byte>(identity, sizeof(core::uuid)), hash);
                 }
                 continue;
             }

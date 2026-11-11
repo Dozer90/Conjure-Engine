@@ -212,9 +212,16 @@ reused, so a stale id can never alias another type and every world on the same r
   which is how scripting's `script_component` serialises its store handle as the script set.
 - **`world_hash`** visits archetypes in ascending order of their mask hash, entities in chunk order,
   and hashes the entity id plus every component (name hash combined with the bytes of every reflected
-  field for trivial types, nested structs walked, so padding never takes part; with the raw bytes for
-  trivial types without a description; with the serialised text for non-trivial ones; the name alone
-  for tags). It allocates nothing below 64 archetypes for trivial worlds.
+  field for trivial types, nested structs walked, so padding never takes part, and an `ASSET_REF` field
+  wider than a uuid through its leading uuid alone, so the bound slot pointer never takes part and a
+  world hashes the same in every process, bound or not; with the raw bytes for
+  trivial types without a description, padding and pointers included, so such a type must not hold a
+  bound reference or any other process-dependent value in a world whose hash is recorded; with the
+  serialised text for non-trivial ones; the name alone for tags). It allocates nothing below 64
+  archetypes for trivial worlds. Entity ids and TRANSIENT components are hashed too: ids created
+  through command buffers from parallel grains or concurrently running systems come in thread-timing
+  order, and bookkeeping such as `transform_state::lastUpdateRun` counts passes, so recorded hashes
+  compare only for runs that create from EXCLUSIVE or MAIN_THREAD systems and at equal frame counts.
 - **`world::clear()`** destroys every entity (observers fire), returns every chunk, the parked chunk
   metadata and the structural scratch (flush plan, placement list, the deferred buffers' arena room) to
   the heap and keeps the archetypes, the observers and the id space: destroyed indices come back with a

@@ -29,6 +29,10 @@
 // Records live in an arena; payloads are moved in and destroyed on apply or clear(). Each buffer owns
 // a block of up to 64 reserved ids refilled from the world's allocator (the module's only mutex), so
 // create_entity() is safe from job threads as long as one buffer belongs to one thread at a time.
+// Blocks are taken in the order the buffers reach the allocator, so the ids created from parallel
+// grains or from systems that run concurrently are not reproducible between runs (the order the
+// commands apply in is); create from EXCLUSIVE or MAIN_THREAD systems when ecs::world_hash values
+// are compared across runs.
 
 namespace conjure::ecs {
 

@@ -206,7 +206,11 @@ archetypes in an order that does not depend on when they were created. Equal wor
 bit changes the result. It is the tool for "serial and parallel runs agree" tests: run the same systems with
 `scheduler_desc{parallelSystems = false, parallelChunks = false}` and with a job system, compare the hashes.
 Trivially copyable components contribute their reflected fields (padding never takes part), non-trivial ones
-their serialised JSON, tags their name only. Call it while no structural change is in flight.
+their serialised JSON, tags their name only. An asset reference field contributes its uuid alone, never its bound
+slot, so the hash is the same in every process and whether or not references are bound yet. Entity ids are part of
+the hash: ids created through command buffers from parallel chunks or from systems that run concurrently are not
+reproducible between runs, so create from `EXCLUSIVE` or `MAIN_THREAD` systems when hashes are compared across
+runs. Call it while no structural change is in flight.
 
 ## API summary
 

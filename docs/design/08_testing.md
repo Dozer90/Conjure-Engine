@@ -200,7 +200,8 @@ headless_engine::step_frames(count, delta):
 Archetypes sorted by component-set hash; within an archetype, entities in chunk order; per entity
 FNV-1a 64 over the entity id then each component's bytes via the reflection registry's `hash_bytes`
 (trivially copyable) or canonical `serialize`, combined with the component type hash. Floats hash as
-raw bits: determinism tests demand bit-identical state. Allocation-free, ~1 ms for 10,000 entities.
+raw bits: determinism tests demand bit-identical state. An `ASSET_REF` field hashes its leading uuid
+only, never the bound slot pointer (`17_demo_games.md` P1). Allocation-free, ~1 ms for 10,000 entities.
 
 ### 3.5 Golden compare
 

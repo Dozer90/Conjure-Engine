@@ -206,7 +206,12 @@ types serialise through their runtime description with the same walker.
 `world_hash` visits archetypes in ascending order of mask hash and entities in chunk order; per entity it hashes
 the id, then per component in id order the name hash combined with: the reflected fields for trivial types with a
 description (padding excluded), the raw bytes for trivial types without one, the canonical JSON for non-trivial
-types, nothing more for tags. Allocation-free below 64 archetypes for trivial worlds.
+types, nothing more for tags. An `ASSET_REF` field of a described type wider than a uuid contributes its leading
+uuid alone, never its bound slot pointer, so the hash is the same in every process and whether or not references
+are bound; an undescribed trivial type hashes every byte, pointers included. Entity ids and TRANSIENT components
+(`transform_state::lastUpdateRun` among them) are hashed, so recorded hashes compare only at equal frame counts and
+when no id came from a command buffer on a parallel grain or a concurrently running system. Allocation-free below
+64 archetypes for trivial worlds.
 
 ## 4. Observers
 

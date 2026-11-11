@@ -5,6 +5,7 @@
 #include "conjure/testing/allocation_scope.h"
 
 #include "conjure/core/reflect/reflect.h"
+#include "conjure/core/uuid.h"
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/world.h"
 #include "conjure/ecs/world_hash.h"
@@ -13,7 +14,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace conjure;
@@ -28,10 +31,79 @@ namespace hash_test {
         u8 flag = 0;
         u32 value = 0;
     };
+
+    /// <summary>
+    /// The layout of assets::asset_ref (R25): the uuid, then the slot pointer the manager binds.
+    /// </summary>
+    struct fake_asset_ref {
+        core::uuid id = {};
+        const void *slot = nullptr;
+    };
+
+    /// <summary>
+    /// One reference, an array of two and a plain value after them.
+    /// </summary>
+    struct sprite_like_component {
+        fake_asset_ref texture = {};
+        std::array<fake_asset_ref, 2> layers = {};
+        u32 tint = 0;
+    };
+
+    /// <summary>
+    /// A nested struct that holds a reference.
+    /// </summary>
+    struct material_slot {
+        fake_asset_ref material = {};
+        u32 pass = 0;
+    };
+
+    /// <summary>
+    /// The nested struct as a field and as an array of structs.
+    /// </summary>
+    struct mesh_like_component {
+        material_slot primary = {};
+        std::array<material_slot, 2> extras = {};
+    };
+
+    /// <summary>
+    /// An asset reference handle that is the uuid and nothing else.
+    /// </summary>
+    struct bare_asset_ref {
+        core::uuid id = {};
+    };
+
+    struct bare_ref_component {
+        bare_asset_ref clip = {};
+    };
 }
+
+template <>
+struct conjure::core::reflect::reflect_kind_override<hash_test::fake_asset_ref> {
+    static constexpr conjure::core::reflect::field_kind KIND = conjure::core::reflect::field_kind::ASSET_REF;
+    static constexpr std::string_view NAME = "test.hash_asset_ref";
+};
+
+template <>
+struct conjure::core::reflect::reflect_kind_override<hash_test::bare_asset_ref> {
+    static constexpr conjure::core::reflect::field_kind KIND = conjure::core::reflect::field_kind::ASSET_REF;
+    static constexpr std::string_view NAME = "test.hash_bare_asset_ref";
+};
 
 CONJURE_REFLECT_STRUCT(hash_test::padded_component, "test.padded", CONJURE_FIELD(flag), CONJURE_FIELD(value));
 CONJURE_COMPONENT(hash_test::padded_component, "test.padded");
+CONJURE_REFLECT_STRUCT(
+  hash_test::sprite_like_component,
+  "test.sprite_like",
+  CONJURE_FIELD(texture),
+  CONJURE_FIELD(layers),
+  CONJURE_FIELD(tint)
+);
+CONJURE_COMPONENT(hash_test::sprite_like_component, "test.sprite_like");
+CONJURE_REFLECT_STRUCT(hash_test::material_slot, "test.material_slot", CONJURE_FIELD(material), CONJURE_FIELD(pass));
+CONJURE_REFLECT_STRUCT(hash_test::mesh_like_component, "test.mesh_like", CONJURE_FIELD(primary), CONJURE_FIELD(extras));
+CONJURE_COMPONENT(hash_test::mesh_like_component, "test.mesh_like");
+CONJURE_REFLECT_STRUCT(hash_test::bare_ref_component, "test.bare_ref", CONJURE_FIELD(clip));
+CONJURE_COMPONENT(hash_test::bare_ref_component, "test.bare_ref");
 
 namespace {
     /// <summary>
@@ -184,6 +256,147 @@ TEST_SUITE("ecs/world_hash") {
         changed.flag = 1;
         changed.value = 8;
         CONJURE_REQUIRE_OK(b.world.set(second.value(), changed));
+        CHECK(world_hash(a.world) != world_hash(b.world));
+    }
+
+    TEST_CASE("regression - demo-review P1 a bound and an unbound asset reference hash equal") {
+        ecs_fixture a = {};
+        ecs_fixture b = {};
+        CONJURE_REQUIRE_OK(a.registry.register_component<hash_test::sprite_like_component>());
+        CONJURE_REQUIRE_OK(b.registry.register_component<hash_test::sprite_like_component>());
+        const core::result<entity> first = a.world.create_entity();
+        const core::result<entity> second = b.world.create_entity();
+        CONJURE_REQUIRE_OK(first);
+        CONJURE_REQUIRE_OK(second);
+
+        const std::optional<core::uuid> texture = core::uuid::parse("11111111-2222-4333-8444-555555555555");
+        const std::optional<core::uuid> layer = core::uuid::parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        REQUIRE(texture.has_value());
+        REQUIRE(layer.has_value());
+
+        // The same three references: unbound in one world, bound to two different "slots" in the other
+        // (what scene load and a script's AddComponent do, at addresses that differ in every process).
+        const int slotStorage[2] = {0, 0};
+        hash_test::sprite_like_component unbound = {};
+        unbound.texture.id = *texture;
+        unbound.layers[1].id = *layer;
+        unbound.tint = 7;
+        hash_test::sprite_like_component bound = unbound;
+        bound.texture.slot = &slotStorage[0];
+        bound.layers[0].slot = &slotStorage[1];
+        bound.layers[1].slot = &slotStorage[0];
+        CONJURE_REQUIRE_OK(a.world.add(first.value(), unbound));
+        CONJURE_REQUIRE_OK(b.world.add(second.value(), bound));
+        CHECK(world_hash(a.world) == world_hash(b.world));
+
+        SUBCASE("the uuid of a single reference still counts") {
+            hash_test::sprite_like_component other = bound;
+            other.texture.id = *layer;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+
+        SUBCASE("the uuid of every array element still counts") {
+            hash_test::sprite_like_component other = bound;
+            other.layers[1].id = *texture;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+            other = bound;
+            other.layers[0].id = *layer;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+
+        SUBCASE("the field after the references still counts") {
+            hash_test::sprite_like_component other = bound;
+            other.tint = 8;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+    }
+
+    TEST_CASE("regression - demo-review P1 asset references inside nested structs hash by uuid alone") {
+        ecs_fixture a = {};
+        ecs_fixture b = {};
+        CONJURE_REQUIRE_OK(a.registry.register_component<hash_test::mesh_like_component>());
+        CONJURE_REQUIRE_OK(b.registry.register_component<hash_test::mesh_like_component>());
+        const core::result<entity> first = a.world.create_entity();
+        const core::result<entity> second = b.world.create_entity();
+        CONJURE_REQUIRE_OK(first);
+        CONJURE_REQUIRE_OK(second);
+
+        const std::optional<core::uuid> stone = core::uuid::parse("11111111-2222-4333-8444-555555555555");
+        const std::optional<core::uuid> moss = core::uuid::parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        REQUIRE(stone.has_value());
+        REQUIRE(moss.has_value());
+
+        // A struct field and both elements of an array of structs, each bound in one world only.
+        const int slotStorage[2] = {0, 0};
+        hash_test::mesh_like_component unbound = {};
+        unbound.primary.material.id = *stone;
+        unbound.primary.pass = 1;
+        unbound.extras[0].material.id = *moss;
+        unbound.extras[1].material.id = *stone;
+        unbound.extras[1].pass = 2;
+        hash_test::mesh_like_component bound = unbound;
+        bound.primary.material.slot = &slotStorage[0];
+        bound.extras[0].material.slot = &slotStorage[1];
+        bound.extras[1].material.slot = &slotStorage[0];
+        CONJURE_REQUIRE_OK(a.world.add(first.value(), unbound));
+        CONJURE_REQUIRE_OK(b.world.add(second.value(), bound));
+        CHECK(world_hash(a.world) == world_hash(b.world));
+
+        SUBCASE("the uuid inside the struct field still counts") {
+            hash_test::mesh_like_component other = bound;
+            other.primary.material.id = *moss;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+
+        SUBCASE("the uuid inside every struct of the array still counts") {
+            hash_test::mesh_like_component other = bound;
+            other.extras[0].material.id = *stone;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+            other = bound;
+            other.extras[1].material.id = *moss;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+
+        SUBCASE("the field after the reference in a nested struct still counts") {
+            hash_test::mesh_like_component other = bound;
+            other.extras[1].pass = 3;
+            CONJURE_REQUIRE_OK(b.world.set(second.value(), other));
+            CHECK(world_hash(a.world) != world_hash(b.world));
+        }
+    }
+
+    TEST_CASE("world_hash - an asset reference handle no wider than a uuid hashes every byte") {
+        static_assert(sizeof(hash_test::bare_asset_ref) == sizeof(core::uuid));
+        ecs_fixture a = {};
+        ecs_fixture b = {};
+        CONJURE_REQUIRE_OK(a.registry.register_component<hash_test::bare_ref_component>());
+        CONJURE_REQUIRE_OK(b.registry.register_component<hash_test::bare_ref_component>());
+        const core::result<entity> first = a.world.create_entity();
+        const core::result<entity> second = b.world.create_entity();
+        CONJURE_REQUIRE_OK(first);
+        CONJURE_REQUIRE_OK(second);
+
+        // Two uuids that differ in their last byte only.
+        const std::optional<core::uuid> clip = core::uuid::parse("11111111-2222-4333-8444-555555555555");
+        const std::optional<core::uuid> lastByte = core::uuid::parse("11111111-2222-4333-8444-555555555556");
+        REQUIRE(clip.has_value());
+        REQUIRE(lastByte.has_value());
+
+        hash_test::bare_ref_component value = {};
+        value.clip.id = *clip;
+        CONJURE_REQUIRE_OK(a.world.add(first.value(), value));
+        CONJURE_REQUIRE_OK(b.world.add(second.value(), value));
+        CHECK(world_hash(a.world) == world_hash(b.world));
+
+        value.clip.id = *lastByte;
+        CONJURE_REQUIRE_OK(b.world.set(second.value(), value));
         CHECK(world_hash(a.world) != world_hash(b.world));
     }
 

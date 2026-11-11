@@ -297,14 +297,19 @@ from a note in detail, the note is right.
   that admits a project-owned native module built through the public module API while still forbidding engine changes
   for a demo, and a G5 whose recorded hash is a per-configuration data file. The two designs were checked against the
   headers; the engine gaps they found, each a follow-up owed before or during wave 6. **Prerequisites** (engine
-  changes with their own tests, 17 4.1): (P1) `ecs::world_hash` hashes all 24 bytes of an `ASSET_REF` field, slot
-  pointer included (`world_hash.cpp` `hash_fields`), so no world with a bound sprite hashes equal across processes;
-  hash the leading 16 uuid bytes only, before any demo (Grid Sweeper included) records a hash; (P2)
+  changes with their own tests, 17 4.1): (P1, done) `ecs::world_hash` hashed all 24 bytes of an `ASSET_REF` field,
+  slot pointer included (`world_hash.cpp` `hash_fields`), so no world with a bound sprite hashed equal across
+  processes; it now hashes the leading 16 uuid bytes only; (P2)
   `entry_component_add` rejects an id that `Entity.Create` reserved inside a query scope, so C# cannot spawn with
   components through the deferred buffer; accept `add_raw` for ids reserved by the runtime's deferred buffer, before
   Barrage; (P3) no benchmark row contains a sprite; add `renderer.sprites_10k` (extraction, `sprite_batcher::build`,
   upload), which confirms both demos' frame gates; (P4) the renderer components' `CONJURE_COMPONENT` name bindings are
   in the private `engine/src/engine/subsystems/renderer_components.h`; move them to a public header, before Colony.
+  The review of P1 added two: (P5) every guid minted at run time (`scene::create_entity`, `ensure_guid`, instantiate
+  with `REGENERATE_ALL`, additive-load conflicts, `prefab_builder::build`) is a per-process random uuid that
+  `world_hash` covers, so the scene owes a guid source that is seedable in headless mode before a hashed run creates
+  scene entities at run time; (P6) `audio_source` hashes its voice handle and `isPlaying`, so a field attribute for
+  runtime link state that `world_hash` skips is owed before a hashed run contains an audio source.
   **Follow-ups with a way around in the demo** (17 2.3.11, 2.4.12): `world_hash` depends on component registration
   order and hashes TRANSIENT components (`transform_state::lastUpdateRun`); no world resource or singleton storage and
   no user data on `system_extension_desc::run` (Colony's grids are module-static memory behind a hashed stand-in
