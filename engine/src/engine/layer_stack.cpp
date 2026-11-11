@@ -118,6 +118,11 @@ void layer_stack::apply_pending(engine_context &context) {
     if (mIterating) {
         return;
     }
+    if (mPendingPop.empty() && mPendingPush.empty()) {
+        // The common frame: nothing queued, and the moves below would cost three blocks under MSVC's debug
+        // iterators (a moved-to vector allocates its container proxy).
+        return;
+    }
 
     std::vector<layer *> pops = std::move(mPendingPop);
     mPendingPop.clear();

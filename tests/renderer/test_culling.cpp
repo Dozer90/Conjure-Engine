@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/test_environment.h"
 
 #include "renderer/culling.h"
@@ -8,6 +9,7 @@
 #include "conjure/renderer/render_scene.h"
 
 #include "conjure/core/jobs/job_system.h"
+#include "conjure/core/jobs/parallel_for.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -168,5 +170,98 @@ TEST_SUITE("renderer/culling") {
         cull_instances(instances, frustum, options, &inlineJobs, inlineResult);
         CHECK(inlineResult == serial);
         inlineJobs.stop();
+    }
+
+    TEST_CASE("cull_instances - a warm cull_scratch makes the parallel path allocation-free [parallel]") {
+        // The renderer culls every view and shadow slice through one persistent scratch
+        // (renderer.extract_10k, allocs 0): the first cull sizes it for the instance count, the
+        // following ones write into the same slices and the result still equals the serial cull.
+        const math::frustum frustum = test_frustum();
+        const u32 count = CULLING_PARALLEL_THRESHOLD * 4 + 5;
+        std::vector<mesh_instance> instances = {};
+        instances.reserve(count);
+        for (u32 index = 0; index < count; ++index) {
+            const f32 x = static_cast<f32>(index % 61) - 30.0f;
+            const f32 z = -static_cast<f32>(index % 113) - 0.5f;
+            instances.push_back(instance_with(box_at(math::vec3(x, 0.0f, z), 0.5f)));
+        }
+        std::vector<u32> serial = {};
+        cull_instances(instances, frustum, cull_options(), nullptr, serial);
+        CHECK_FALSE(serial.empty());
+
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc desc = {};
+        desc.workerCount = environment().jobThreadCount;
+        CONJURE_REQUIRE_OK(jobs.start(desc));
+        cull_scratch scratch = {};
+        std::vector<u32> parallel = {};
+        cull_instances(instances, frustum, cull_options(), &jobs, scratch, parallel);
+        CHECK(parallel == serial);
+        CHECK(scratch.chunkVisible.size() >= count);
+        CHECK(scratch.chunkCounts.size() == core::jobs::range_count(count, CULLING_PARALLEL_GRAIN));
+        const usize scratchSize = scratch.chunkVisible.size();
+
+        cull_instances(instances, frustum, cull_options(), &jobs, scratch, parallel);   // the job pool warms up
+        CONJURE_CHECK_NO_ALLOCATIONS(cull_instances(instances, frustum, cull_options(), &jobs, scratch, parallel));
+        CHECK(parallel == serial);
+        CHECK(scratch.chunkVisible.size() == scratchSize);
+
+        // A smaller instance count reuses the scratch; a larger one grows it once.
+        const std::span<const mesh_instance> fewer = std::span<const mesh_instance>(instances).subspan(0, count / 2);
+        std::vector<u32> fewerSerial = {};
+        cull_instances(fewer, frustum, cull_options(), nullptr, fewerSerial);
+        CONJURE_CHECK_NO_ALLOCATIONS(cull_instances(fewer, frustum, cull_options(), &jobs, scratch, parallel));
+        CHECK(parallel == fewerSerial);
+        CHECK(scratch.chunkVisible.size() == scratchSize);
+        jobs.stop();
+    }
+
+    TEST_CASE("regression - the overload without a scratch allocates nothing on the serial path") {
+        // The convenience overload used to build its cull_scratch before deciding the path; under the
+        // MSVC Debug runtime two empty std::vectors cost two heap blocks (iterator-debugging proxies),
+        // so every serial cull through it failed a Debug allocation gate. The serial path (no job
+        // system, no workers, or a count at or below the threshold) now touches nothing but 'out'.
+        const math::frustum frustum = test_frustum();
+        const u32 count = CULLING_PARALLEL_THRESHOLD + 1;
+        std::vector<mesh_instance> instances = {};
+        instances.reserve(count);
+        for (u32 index = 0; index < count; ++index) {
+            const f32 x = static_cast<f32>(index % 61) - 30.0f;
+            const f32 z = -static_cast<f32>(index % 113) - 0.5f;
+            instances.push_back(instance_with(box_at(math::vec3(x, 0.0f, z), 0.5f)));
+        }
+        std::vector<u32> expected = {};
+        cull_instances(instances, frustum, cull_options(), nullptr, expected);
+        CHECK_FALSE(expected.empty());
+        const std::span<const mesh_instance> atThreshold =
+          std::span<const mesh_instance>(instances).subspan(0, CULLING_PARALLEL_THRESHOLD);
+        std::vector<u32> expectedAtThreshold = {};
+        cull_instances(atThreshold, frustum, cull_options(), nullptr, expectedAtThreshold);
+        std::vector<u32> out = {};
+        out.reserve(count);
+
+        // No job system.
+        CONJURE_CHECK_NO_ALLOCATIONS(cull_instances(instances, frustum, cull_options(), nullptr, out));
+        CHECK(out == expected);
+
+        // A job system without workers runs inline: the serial path above the threshold.
+        core::jobs::job_system inlineJobs = {};
+        core::jobs::job_system_desc inlineDesc = {};
+        inlineDesc.workerCount = 0;
+        CONJURE_REQUIRE_OK(inlineJobs.start(inlineDesc));
+        CONJURE_CHECK_NO_ALLOCATIONS(cull_instances(instances, frustum, cull_options(), &inlineJobs, out));
+        CHECK(out == expected);
+        inlineJobs.stop();
+
+        // Workers, but a count that does not exceed the threshold.
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc desc = {};
+        desc.workerCount = environment().jobThreadCount;
+        CONJURE_REQUIRE_OK(jobs.start(desc));
+        cull_instances(instances, frustum, cull_options(), &jobs, out);   // the job pool warms up
+        CHECK(out == expected);
+        CONJURE_CHECK_NO_ALLOCATIONS(cull_instances(atThreshold, frustum, cull_options(), &jobs, out));
+        CHECK(out == expectedAtThreshold);
+        jobs.stop();
     }
 }

@@ -118,6 +118,18 @@ namespace conjure::engine {
         [[nodiscard]] bool operator==(const audio_settings &) const = default;
     };
 
+    /// <summary>
+    /// The asset pipeline of a development (non-cooked) project. hotReload drives the polling file watcher
+    /// and the assets::hot_reload_controller whose stat passes run on job threads every 500 ms; it is
+    /// ignored in Distribution (no database there) and off in headless_defaults() so a headless frame
+    /// stays allocation-free (09 item 15a). A project's "assets" section sets it for interactive runs.
+    /// </summary>
+    struct assets_settings {
+        bool hotReload = true;                  // ignored in Distribution and by cooked projects
+
+        [[nodiscard]] bool operator==(const assets_settings &) const = default;
+    };
+
     struct scripting_settings {
         bool enabled = true;
         bool required = true;                   // false: a missing runtime warns and disables scripting
@@ -178,6 +190,7 @@ namespace conjure::engine {
         rendering_settings rendering = {};
         physics_settings physics = {};
         audio_settings audio = {};
+        assets_settings assets = {};
         scripting_settings scripting = {};
         modules_settings modules = {};
         jobs_settings jobs = {};
@@ -190,8 +203,9 @@ namespace conjure::engine {
 
         /// <summary>
         /// headless = true, a 1280 x 720 null window (R33), rendering disabled on the null device, the
-        /// null audio backend, scripting disabled, a forced 1/60 frame delta and two job workers. Tests
-        /// opt individual subsystems back in.
+        /// null audio backend, scripting disabled, asset hot reload off (no file watcher stat passes on the
+        /// job threads), a forced 1/60 frame delta and two job workers. Tests opt individual subsystems
+        /// back in.
         /// </summary>
         [[nodiscard]] static engine_config headless_defaults();
 

@@ -99,7 +99,8 @@ physics_world::state::state(const physics_settings &requested, core::jobs::job_s
     physicsSystem->SetContactListener(&contacts);
     physicsSystem->SetBodyActivationListener(&activation);
 
-    // P15: every container is sized once.
+    // P15: every container is sized once; liveRowByEntityIndex is the exception (sized by entity index,
+    // grown by claim_row: physics_world_internal.h).
     const usize initialRows = std::min<usize>(settings.maxBodies, ROW_BLOCK);
     records.reserve(initialRows);
     rowOfEntity.reserve(std::max<usize>(initialRows, 64));
@@ -140,20 +141,30 @@ bool physics_world::state::is_owner_thread() const noexcept {
     return std::this_thread::get_id() == ownerThread;
 }
 
+// A live row is found through the dense entity-index table (one load and the generation check the
+// row's entity provides) rather than the hash map: the pull resolves every body this way each step.
+// Pending markers have no row, so they are correctly absent here.
+
 const body_record *physics_world::state::find_row(ecs::entity target) const noexcept {
-    const auto found = rowOfEntity.find(target);
-    if (found == rowOfEntity.end() || is_marker(found->second)) {
+    if (target.index >= liveRowByEntityIndex.size()) {
         return nullptr;
     }
-    return &records[found->second];
+    const u32 rowIndex = liveRowByEntityIndex[target.index];
+    if (rowIndex == NO_ROW || records[rowIndex].entity != target) {
+        return nullptr;
+    }
+    return &records[rowIndex];
 }
 
 body_record *physics_world::state::find_row(ecs::entity target) noexcept {
-    const auto found = rowOfEntity.find(target);
-    if (found == rowOfEntity.end() || is_marker(found->second)) {
+    if (target.index >= liveRowByEntityIndex.size()) {
         return nullptr;
     }
-    return &records[found->second];
+    const u32 rowIndex = liveRowByEntityIndex[target.index];
+    if (rowIndex == NO_ROW || records[rowIndex].entity != target) {
+        return nullptr;
+    }
+    return &records[rowIndex];
 }
 
 bool physics_world::state::is_pending(ecs::entity target) const noexcept {
@@ -592,6 +603,12 @@ core::result<void> physics_world::validate() const {
               std::format("entity {} does not map back to row {}", row.entity, index)
             );
         }
+        if (s.find_row(row.entity) != &row) {
+            return core::error(
+              core::error_code::INVALID_STATE,
+              std::format("entity {} is not indexed to row {} by entity index", row.entity, index)
+            );
+        }
         const JPH::BodyLockRead lock(s.physicsSystem->GetBodyLockInterface(), row.bodyId);
         if (!lock.Succeeded()) {
             return core::error(core::error_code::INVALID_STATE, std::format("row {} has no Jolt body", index));
@@ -624,6 +641,27 @@ core::result<void> physics_world::validate() const {
               std::format("entity {} maps to a free row", entry.first)
             );
         }
+    }
+    u32 indexedRows = 0;
+    for (usize entityIndex = 0; entityIndex < s.liveRowByEntityIndex.size(); ++entityIndex) {
+        const u32 rowIndex = s.liveRowByEntityIndex[entityIndex];
+        if (rowIndex == state::NO_ROW) {
+            continue;
+        }
+        ++indexedRows;
+        if (rowIndex >= s.records.size() || s.records[rowIndex].is_free()
+          || s.records[rowIndex].entity.index != entityIndex) {
+            return core::error(
+              core::error_code::INVALID_STATE,
+              std::format("entity index {} is indexed to row {}, which does not hold it", entityIndex, rowIndex)
+            );
+        }
+    }
+    if (indexedRows != rows) {
+        return core::error(
+          core::error_code::INVALID_STATE,
+          std::format("{} rows but {} entity indices point at a row", rows, indexedRows)
+        );
     }
     if (rows != s.physicsSystem->GetNumBodies()) {
         return core::error(

@@ -35,7 +35,7 @@ One line per chapter, in reading order for a new contributor.
 | [Repository layout](repository-layout.md) | every top-level directory and what goes where, the anatomy of a module directory, where tests live, which files are generated |
 | [Build pipeline](build-pipeline.md) | the root `CMakeLists.txt`, `ConjureConfigs`, the `ConjureModule` helpers, the umbrella shared library and game modules, the shader pipeline, `ConjureTesting`, third-party pinning and `SYSTEM` includes, warnings as errors, the generated headers, planned managed and export steps |
 | [Coding standards](coding-standards.md) | style, conventions, the review checklist, error model, logging, asserts |
-| [Data-oriented design](data-oriented-design.md) | DOD practice in Conjure: archetypes, chunk iteration, SoA, change detection, jobs, frame memory, what to avoid |
+| [Data-oriented design](data-oriented-design.md) | DOD practice in Conjure: archetypes, chunk iteration, SoA, change detection, jobs, frame memory, allocation-free steady state, what to avoid |
 | [Testing](testing.md) | the test support library `conjure/testing/*.h`, conventions, labels, preconditions and skipping (`REAL_WINDOW`, `SOFTWARE_GPU_ADAPTER`, `AUDIO_DEVICE`, `DOWNLOADED_ASSETS`), doctest discovery, header, style, export and documentation checks, benchmarks, how to write and run a test |
 | [Modules: core](modules/core.md) | the foundation module: purpose, areas, internals, threading, extension points, tests |
 | [Modules: ecs](modules/ecs.md) | archetype storage and chunk layout, component ids and masks, queries and change detection, command buffer flush, the stage-packing scheduler, observers, archives and serialisation, threading, extension points (`component_type_desc`, `system_extension_desc`), tests |

@@ -40,7 +40,7 @@ nvrhi::IBindingSet *pass_shared::mesh_view_set(
     nvrhi::ITexture *white = resources->fallback_texture(material_texture::BASE_COLOUR).texture.Get();
     nvrhi::ITexture *ao = ambientOcclusion != nullptr ? ambientOcclusion : white;
     nvrhi::ITexture *aoDepth = ambientOcclusionDepth != nullptr ? ambientOcclusionDepth : white;
-    nvrhi::BindingSetDesc desc = {};
+    nvrhi::BindingSetDesc &desc = binding_desc();
     desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, frame->view_constants()));
     desc.addItem(nvrhi::BindingSetItem::PushConstants(1, gpu::DRAW_CONSTANTS_SIZE));
     desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, frame->instances()));
@@ -68,7 +68,7 @@ nvrhi::IBindingSet *pass_shared::fullscreen_set(
 ) const {
     nvrhi::ITexture *white = resources->fallback_texture(material_texture::BASE_COLOUR).texture.Get();
     nvrhi::IBuffer *fallbackBuffer = frame->view(view->viewIndex).exposureState;
-    nvrhi::BindingSetDesc desc = {};
+    nvrhi::BindingSetDesc &desc = binding_desc();
     desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, frame->view_constants()));
     desc.addItem(nvrhi::BindingSetItem::PushConstants(1, gpu::DRAW_CONSTANTS_SIZE));
     desc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture0 != nullptr ? texture0 : white));

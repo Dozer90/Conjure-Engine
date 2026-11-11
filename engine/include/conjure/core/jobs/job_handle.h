@@ -86,4 +86,48 @@ namespace conjure::core::jobs {
                 return mCounter == other.mCounter;
             }
     };
+
+    /// <summary>
+    /// Caller-owned completion state of one or more batches: the allocation-free counterpart of a
+    /// job_handle for code that dispatches the same batch every frame (the ECS scheduler's stages).
+    /// job_system::schedule(jobs, fence) adds a batch, job_system::wait(fence) returns once every job
+    /// added so far has run. Queued jobs hold the fence's address, so the owner keeps it alive and in
+    /// place until it is complete; it can then be reused. Neither copyable nor movable for that reason.
+    /// </summary>
+    class CONJURE_API job_fence {
+        private:
+            friend class job_system;
+
+            detail::job_counter mCounter = {};
+
+        public:
+            job_fence() noexcept = default;
+
+            /// <summary>
+            /// Asserts when jobs are still pending: a batch that outlives its fence would signal freed
+            /// memory.
+            /// </summary>
+            ~job_fence();
+
+            job_fence(const job_fence &) = delete;
+            job_fence &operator=(const job_fence &) = delete;
+            job_fence(job_fence &&) = delete;
+            job_fence &operator=(job_fence &&) = delete;
+
+        public:
+            /// <summary>
+            /// True when every job scheduled on this fence has finished executing (a fresh fence is
+            /// complete).
+            /// </summary>
+            [[nodiscard]] bool is_complete() const noexcept {
+                return pending() == 0;
+            }
+
+            /// <summary>
+            /// Number of jobs scheduled on this fence that have not finished yet.
+            /// </summary>
+            [[nodiscard]] u64 pending() const noexcept {
+                return mCounter.remaining.load(std::memory_order_acquire);
+            }
+    };
 }

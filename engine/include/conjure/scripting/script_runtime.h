@@ -6,6 +6,8 @@
 #include "conjure/scripting/script_host.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/containers/flat_map.h"
+#include "conjure/core/containers/small_vector.h"
 #include "conjure/core/delegate.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
@@ -18,8 +20,10 @@
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/ecs/observer.h"
+#include "conjure/ecs/query.h"
 #include "conjure/ecs/world.h"
 
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -72,9 +76,23 @@ namespace conjure::scripting {
         u32 openQueryScopes = 0;
         u32 reloadCount = 0;
         u32 zombieAssemblies = 0;
+        u32 cachedQueries = 0;      // ecs::query objects kept per component set for the DOD scopes
     };
 
     class CONJURE_API script_runtime {
+        public:
+            /// <summary>
+            /// Chunk views a query scope holds without touching the heap: 10,000 rows of a 12-byte component
+            /// are 13 chunks of 819 rows. A larger scope spills its state once per size step; finished states
+            /// are reused best-fit, so the spilled one keeps serving the large scope.
+            /// </summary>
+            static constexpr u32 QUERY_SCOPE_INLINE_CHUNKS = 16;
+
+            /// <summary>
+            /// Scope states (open and reusable) reserved up front: the nesting depth scripts realistically reach.
+            /// </summary>
+            static constexpr u32 QUERY_SCOPE_RESERVE = 4;
+
         private:
             struct pending_create {
                 script_entry_id id = {};
@@ -83,9 +101,16 @@ namespace conjure::scripting {
             struct query_scope_state {
                 u32 id = 0;
                 ecs::iteration_scope lock = {};
-                std::vector<conjure_chunk_view> chunks = {};
-                std::vector<ecs::component_id> types = {};
+                core::small_vector<conjure_chunk_view, QUERY_SCOPE_INLINE_CHUNKS> chunks = {};
+                core::small_vector<ecs::component_id, static_cast<usize>(QUERY_MAX_COMPONENTS)> types = {};
             };
+
+            /// <summary>
+            /// The component ids of a scope sorted ascending, without repeats and padded with
+            /// component_id::INVALID: the same set in any order, {a, a} included, finds the same cached query
+            /// (columns still follow the request order).
+            /// </summary>
+            using query_cache_key = std::array<u16, static_cast<usize>(QUERY_MAX_COMPONENTS)>;
 
             std::unique_ptr<script_host> mHost = nullptr;
             conjure_native_api mNativeApi = {};
@@ -98,8 +123,12 @@ namespace conjure::scripting {
             ecs::world *mWorld = nullptr;
             ecs::component_registry *mRegistry = nullptr;
             std::unique_ptr<ecs::command_buffer> mDeferredCommands = nullptr;   // query-scope structural requests (R5)
-            std::vector<query_scope_state> mQueryScopes = {};
-            core::memory::frame_allocator mScratch;                            // no default: sized by the constructor
+            // Scope states live on the heap because managed holds a pointer into their chunk views for the
+            // scope's lifetime: open scopes (oldest first) and the finished states kept for reuse.
+            std::vector<std::unique_ptr<query_scope_state>> mQueryScopes = {};
+            std::vector<std::unique_ptr<query_scope_state>> mFreeQueryScopes = {};
+            core::flat_map<query_cache_key, ecs::query> mQueryCache = {};      // one query per component set
+            core::memory::frame_allocator mScratch;                           // no default: sized by the constructor
             std::vector<u8> mBlobBuffer = {};
             script_mode mMode = script_mode::EDIT;
             script_phase mCurrentPhase = script_phase::COUNT;
@@ -355,7 +384,9 @@ namespace conjure::scripting {
             /// Opens a scope over the archetypes holding every type: locks the world, fills the chunk views
             /// (columns in 'typeIds' order, null for an absent id), bumps the change versions of the written
             /// columns. WRONG_THREAD, NOT_IN_PHASE, NOT_INITIALIZED, INVALID_ARGUMENT (no world, bad id;
-            /// id 0 is never valid, R4).
+            /// id 0 is never valid, R4). Allocation-free once warm: the ecs::query behind a component set is
+            /// cached for the life of the attached world (cached_query_count()) and finished scope states
+            /// are reused, so the scripting.update_10k_dod gate of 08_testing.md 7.1 holds.
             /// </summary>
             [[nodiscard]] core::result<u32> begin_query_scope(std::span<const u32> typeIds, conjure_query_scope &out);
 
@@ -367,6 +398,13 @@ namespace conjure::scripting {
 
             [[nodiscard]] u32 open_query_scope_count() const noexcept {
                 return static_cast<u32>(mQueryScopes.size());
+            }
+
+            /// <summary>
+            /// Distinct component sets begin_query_scope has cached a query for since the world was attached.
+            /// </summary>
+            [[nodiscard]] u32 cached_query_count() const noexcept {
+                return static_cast<u32>(mQueryCache.size());
             }
 
             /*---------------------------------------------------------------*/
@@ -521,6 +559,8 @@ namespace conjure::scripting {
               const core::json::value &fields
             );
             void mark_started_entries();
+            [[nodiscard]] ecs::query &cached_query(const query_cache_key &key, const ecs::query_desc &desc);
+            [[nodiscard]] std::unique_ptr<query_scope_state> take_scope_state(usize chunkCount);
             void force_close_query_scopes();
             void flush_deferred_commands();
             void warn_missing_class_once(u64 classHash);

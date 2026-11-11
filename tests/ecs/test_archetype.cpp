@@ -2,6 +2,8 @@
 
 #include "ecs_test_fixture.h"
 
+#include "conjure/testing/allocation_scope.h"
+
 #include "conjure/ecs/archetype.h"
 #include "conjure/ecs/world.h"
 
@@ -115,6 +117,46 @@ TEST_SUITE("ecs/archetype") {
         CONJURE_REQUIRE_OK(reused);
         CHECK(world.stats().chunks == chunksBefore);
         CHECK(owner->chunk_entity_count(0) == 1);
+        CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("archetype - drained chunk metadata is parked and reused without allocating") {
+        // Only one drained chunk stays in the archetype with its block; the metadata of every further
+        // drained chunk is parked without a block and re-attached before a new chunk object is made, so
+        // destroy/create churn over several chunks allocates nothing once it has happened once.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const component_mask mask = fixture.mask<velocity>();
+        const archetype *owner = nullptr;
+        std::vector<entity> ids(3000);
+        CONJURE_REQUIRE_OK(world.create_entities(mask, ids));
+        owner = find_archetype(world, mask);
+        REQUIRE(owner != nullptr);
+        const u32 peakChunks = owner->chunk_count();
+        CHECK(peakChunks > 2);
+        CHECK(owner->spare_chunk_count() == 0);
+
+        for (const entity id : ids) {
+            CONJURE_REQUIRE_OK(world.destroy_entity(id));
+        }
+        CHECK(owner->chunk_count() == 1);
+        CHECK(owner->spare_chunk_count() == peakChunks - 1);
+        CONJURE_CHECK_OK(world.validate());
+
+        // Growing back re-attaches the parked metadata to pool blocks: no chunk object is allocated.
+        CONJURE_REQUIRE_OK(world.create_entities(mask, ids));
+        CHECK(owner->chunk_count() == peakChunks);
+        CHECK(owner->spare_chunk_count() == 0);
+        CONJURE_CHECK_OK(world.validate());
+        for (const entity id : ids) {
+            CONJURE_REQUIRE_OK(world.destroy_entity(id));
+        }
+        CHECK(owner->spare_chunk_count() == peakChunks - 1);
+        bool regrown = false;
+        CONJURE_CHECK_NO_ALLOCATIONS(regrown = world.create_entities(mask, ids).has_value());
+        CHECK(regrown);
+        CHECK(owner->entity_count() == 3000);
+        CHECK(owner->spare_chunk_count() == 0);
         CONJURE_CHECK_OK(world.validate());
     }
 

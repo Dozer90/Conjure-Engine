@@ -221,9 +221,23 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Drops every command, destroying payloads that were not applied. Unused reserved ids are kept.
+            /// Drops every command, destroying payloads that were not applied. Unused reserved ids are kept,
+            /// and so is room for the records: a recording that outgrew the arena's 16 KiB block makes the
+            /// buffer keep one block spanning the blocks that recording used (its bytes rounded up to whole
+            /// 16 KiB blocks, like a vector's capacity: at most one block more than it needed), so repeating
+            /// a recording of the same size allocates nothing after the next one. The room is kept for the
+            /// buffer's lifetime unless shrink_to_fit() returns it.
             /// </summary>
             void clear() noexcept;
+
+            /// <summary>
+            /// Returns the room an earlier recording left behind to the heap: the arena's blocks and the
+            /// capacity of the instantiation list. Only an empty buffer has room to give back; with
+            /// commands pending the call changes nothing. Reserved ids are kept either way. The next
+            /// recording acquires a fresh block, so call it when the buffer goes idle for good (a removed
+            /// system, a cleared world), not between frames.
+            /// </summary>
+            void shrink_to_fit() noexcept;
 
             /// <summary>
             /// The world this buffer targets.
@@ -249,6 +263,7 @@ namespace conjure::ecs {
               u32 copies
             );
             void destroy_payloads() noexcept;
+            void recycle_arena() noexcept;
             void return_reserved() noexcept;
             [[nodiscard]] bool refill_reserved();
     };

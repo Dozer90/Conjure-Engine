@@ -166,6 +166,7 @@ TEST_SUITE("scene/components") {
         CHECK(registry.info(ids.interpolatedTransform).reflection != nullptr);
         CHECK(sizeof(scene::parent) == 12);
         CHECK(sizeof(scene::transform_state) == 8);
+        CHECK_FALSE(scene::transform_state{}.pending);
         CHECK(scene::MAX_HIERARCHY_DEPTH == 32);
         CHECK(scene::APPEND_CHILD == 0xFFFFFFFFu);
         CHECK(scene::SCENE_FORMAT_VERSION == 1);

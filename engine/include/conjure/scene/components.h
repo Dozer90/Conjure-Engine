@@ -127,12 +127,19 @@ namespace conjure::scene {
 
     /// <summary>
     /// Bookkeeping of the propagation pass: the run that last recomputed the world matrix (children
-    /// compare it against the current run) and the flags (TRANSIENT, EDITOR_HIDDEN).
+    /// compare it against the current run), the flags, and the pending mark the parent's level pass
+    /// sets on a child that must be revisited this run (its parent recomputed, sits in an interpolated
+    /// subtree or changed flags); the child's level clears it. The mark lets a level find its dirty
+    /// rows with a sequential scan of this column instead of a parent lookup per row
+    /// (TRANSIENT, EDITOR_HIDDEN).
     /// </summary>
     struct transform_state {
         u32 lastUpdateRun = 0;
         transform_state_flags flags = transform_state_flags::NONE;
+        bool pending = false;
     };
+
+    static_assert(sizeof(transform_state) == 8, "transform_state stays two words: the pass scans the column");
 
     /// <summary>
     /// Set by structural hierarchy changes; cleared by the propagation pass (TRANSIENT, EDITOR_HIDDEN).

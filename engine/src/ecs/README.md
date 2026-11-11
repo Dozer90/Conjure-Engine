@@ -16,11 +16,11 @@ phases and the module extension records follow `docs/design/09_cross_area_resolu
 | `entity.h` | `entity`, `NULL_ENTITY`, `ARCHIVE_LOCAL_GENERATION`, `entity_remap`, `std::hash<entity>`, `std::formatter<entity>`, the `reflect_kind_override<entity>` (kind `ENTITY`) |
 | `component.h` | `component_id`, `component_flags`, `component_ops`, `component_serializer`, `component_info`, `component_mask`, `component_name<T>` / `CONJURE_COMPONENT`, `component_type_cache<T>`, `make_component_ops<T>`, `derive_component_flags<T>`, `default_component_bytes<T>`, `MAX_COMPONENTS` (1024), `MAX_COMPONENT_SIZE` (4096), `MAX_COMPONENT_ALIGNMENT` (64) |
 | `component_registry.h` | `component_registry`, `dynamic_component_desc`, `dynamic_field_desc` |
-| `archetype.h` | `archetype` (read-only), `chunk_layout`, `CHUNK_SIZE`, `CHUNK_ALIGNMENT`, `COLUMN_ALIGNMENT` |
+| `archetype.h` | `archetype` (read-only, `spare_chunk_count()` for the parked chunk metadata), `chunk_layout`, `CHUNK_SIZE`, `CHUNK_ALIGNMENT`, `COLUMN_ALIGNMENT` |
 | `chunk_view.h` | `chunk_view` |
-| `query.h` | `query_desc`, `query` |
+| `query.h` | `query_desc`, `query`, `QUERY_INLINE_MATCHES` |
 | `view.h` | `view<ComponentTypes...>`, `maybe<T>`, `view_access` |
-| `command_buffer.h` | `command_buffer`, `flush_report` |
+| `command_buffer.h` | `command_buffer` (`clear()` keeps its room, `shrink_to_fit()` returns it), `flush_report` |
 | `observer.h` | `component_event`, `component_observer_fn`, `entity_observer_fn`, `observer_id` |
 | `world.h` | `world`, `world_desc`, `world_stats`, `iteration_scope` |
 | `entity_handle.h` | `entity_handle`, `component_ref<T>` |
@@ -82,15 +82,22 @@ reused, so a stale id can never alias another type and every world on the same r
   (`chunk_layout::compute`, `ARCHETYPE_TOO_LARGE` when not even one row fits, one `WARN` below 8
   rows). Rows are packed by swap-remove; one drained trailing chunk is kept as a spare, and a new row
   fills the partial chunk ahead of the spare before the spare itself, so only the last used chunk is
-  ever partial. Default construction zeroes the cell first so padding bytes are deterministic.
-  Archetypes are append-only, so `archetype *` stays valid for the world's lifetime and queries cache
-  them. `world_desc::maxChunkSlabs` caps the chunk pool (0 = unlimited); a structural call that needs a
-  chunk beyond the cap fails with `OUT_OF_MEMORY` and changes nothing.
+  ever partial. Every further drained chunk returns its block to the pool and parks its metadata (the
+  `chunk` object with its column versions) on the archetype (`spare_chunk_count()`), where `reserve_row`
+  re-attaches it to the next block before allocating a new object, so create/destroy churn allocates no
+  chunk metadata once it has reached its peak. Default construction zeroes the cell first so padding
+  bytes are deterministic. Archetypes are append-only, so `archetype *` stays valid for the world's
+  lifetime and queries cache them (inline up to `QUERY_INLINE_MATCHES` = 16 archetypes, so a query or
+  view built per system run allocates nothing in the common case). `world_desc::maxChunkSlabs` caps the
+  chunk pool (0 = unlimited); a structural call that needs a chunk beyond the cap fails with
+  `OUT_OF_MEMORY` and changes nothing.
 - **Structural rule.** Create, destroy, add, remove, `remove_from_all`, `flush`, `clear`, observer
   registration and `scheduler::run_phase` run on the owner thread while the world is unlocked.
   Elsewhere they `CONJURE_ASSERT` and return `WRONG_THREAD`; under an `iteration_scope` (every
-  `for_each`, `for_each_chunk`, system stage) or inside an observer they assert and return
-  `STRUCTURE_LOCKED`. `set<T>`, `get<T>` and the untyped getters are not structural.
+  `for_each`, `for_each_chunk`, system stage), inside an observer or inside another structural call
+  (the only foreign code there is a component's constructor, destructor or relocation, so one that
+  calls back into its world is refused) they assert and return `STRUCTURE_LOCKED`. `set<T>`, `get<T>`
+  and the untyped getters are not structural.
 - **Observers** fire synchronously inside the structural call: `ADDED` after the value is in place
   (also after a flush payload or an archive copy), `REMOVED` before the data is destroyed and only
   once the move can no longer fail (the destination row is reserved first), destroyed observers
@@ -113,10 +120,29 @@ reused, so a stale id can never alias another type and every world on the same r
   entities (`DEBUG` log, `flush_report::skipped`). An entity whose placement or move fails at flush
   (`ARCHETYPE_TOO_LARGE`, `OUT_OF_MEMORY`) has all of its commands counted as skipped and, when it was
   only reserved, its id released with a bumped generation. The plan uses a flush-stamped slot table
-  kept across flushes, so a flush allocates nothing proportional to the record count. Typed
-  `add<T>`/`set<T>`/`remove<T>` of an unregistered type assert and record nothing. Unused reserved
-  ids survive `clear()` and go back to the allocator when the buffer is destroyed; a buffer destroyed
-  with pending commands logs `WARN`.
+  kept across flushes and the world's member plan vector `mFlushPlan` (`world::flush_entry`, payload
+  records inline up to `FLUSH_INLINE_PAYLOADS` = 4), used in place and cleared on exit, never moved
+  into a local (a vector object costs an allocation under MSVC's debug iterators); `place_rows` uses
+  its member undo list `mPlacedScratch` the same way. Both rely on the paths never nesting:
+  `check_structural` refuses structural calls from observers, under the iteration lock and from inside
+  an open structural call (a component constructor or destructor calling back into its world), and the
+  deferred buffer drains only after the outermost structural call has returned. So a warmed-up flush
+  allocates nothing of its own (`tests/ecs/test_world_structural.cpp` gates the 7.1 spawn/destroy churn
+  at <= 2). `clear()` keeps room for the records as well: a recording that outgrew the arena's 16 KiB
+  block leaves the buffer with a single block spanning the blocks the recording used (its bytes rounded
+  up to whole 16 KiB blocks, vector-style: at most one block more than it needed; one allocation on the
+  next recording, none afterwards). Typed `add<T>`/`set<T>`/`remove<T>` of an unregistered type assert
+  and record nothing. Unused reserved ids survive `clear()` and go back to the allocator when the buffer
+  is destroyed; a buffer destroyed with pending commands logs `WARN`.
+- **Retention.** The scratch above is sized by the peak it has seen and kept for the owner's lifetime:
+  the world's flush plan (about 330 bytes per entity the largest flush touched) and placement list, every
+  archetype's parked chunk metadata (`spare_chunk_count()`, bounded by its peak chunk count) and every
+  command buffer's arena room. `command_buffer::shrink_to_fit()` returns a buffer's room (arena blocks,
+  instantiation list) when it is empty and keeps its reserved ids; `scheduler::remove_system` calls it
+  on the removed system's buffer and drops its grain buffers and chunk scratch, and `world::clear()`
+  releases the plan, the placement list, every archetype's spares and the deferred buffers' room next to
+  the chunk pool shrink. Nothing else shrinks: a world that flushed a large command buffer once keeps
+  that plan until it is cleared or destroyed.
 - **Scheduler.** Systems are packed per phase into stages: Kahn's topological sort over the
   `after`/`before` edges (registration order as the tiebreak; a cycle is `SYSTEM_CYCLE` at `add_system`
   and the system is not added; unknown names are ignored with a `DEBUG` log), then greedy append-only
@@ -126,9 +152,10 @@ reused, so a stale id can never alias another type and every world on the same r
   inline without a job system or with `parallelSystems = false`), then flushes each system's buffer in
   stage order. `EXCLUSIVE` systems run alone with an unlocked world. `finalise()` builds every phase
   now; `run_phase_filtered` runs only systems whose flags contain the required bits. The per-stage job
-  and main-thread lists live in the phase state (kept at capacity), so a phase that has run once allocates
-  nothing of its own afterwards; with `parallelSystems` and a job system, `job_system::schedule` still
-  allocates its counter per stage.
+  and main-thread lists live in the phase state (kept at capacity) and the stage jobs complete on a
+  `core::jobs::job_fence` held on `run_phase`'s stack (`job_system::schedule(jobs, fence)`, no shared
+  counter), so a phase that has run once allocates nothing of its own afterwards, `parallelSystems`
+  with a job system included (`test_scheduler.cpp` gates both modes at zero).
 - **`parallel_for_chunks`** flattens the matched chunks, groups them into grains of
   `max(1, minEntitiesPerJob / capacity)` chunks, runs one job per grain with its own command buffer
   (inline without a job system or with `parallelChunks = false`) and appends the grain buffers to the
@@ -188,9 +215,10 @@ reused, so a stale id can never alias another type and every world on the same r
   field for trivial types, nested structs walked, so padding never takes part; with the raw bytes for
   trivial types without a description; with the serialised text for non-trivial ones; the name alone
   for tags). It allocates nothing below 64 archetypes for trivial worlds.
-- **`world::clear()`** destroys every entity (observers fire), returns every chunk and keeps the
-  archetypes, the observers and the id space: destroyed indices come back with a bumped generation, so
-  stale handles stay stale and ids still reserved by command buffers remain valid.
+- **`world::clear()`** destroys every entity (observers fire), returns every chunk, the parked chunk
+  metadata and the structural scratch (flush plan, placement list, the deferred buffers' arena room) to
+  the heap and keeps the archetypes, the observers and the id space: destroyed indices come back with a
+  bumped generation, so stale handles stay stale and ids still reserved by command buffers remain valid.
 - **`world::validate()`** checks records against rows, chunk counts, packing (every chunk before the
   last non-empty one is full, at most one spare), column alignment and bounds, free-list consistency,
   the archetype map and the pool's live block count; the error message names the first violation.
@@ -220,7 +248,8 @@ reused, so a stale id can never alias another type and every world on the same r
 `tests/ecs/` builds `conjure_ecs_tests`: one `test_<header>.cpp` per public header plus the topic files
 of `01_ecs.md` section 10 (`test_entity_allocator`, `test_component_mask`, `test_chunk_layout`,
 `test_world_entities`, `test_world_components`, `test_change_detection`, `test_parallel_iteration`,
-`test_dynamic_components`). `ecs_test_fixture.h` provides the test component types, `ecs_fixture`
+`test_dynamic_components`) and `test_world_structural` (the allocation gates of flush and placement
+churn). `ecs_test_fixture.h` provides the test component types, `ecs_fixture`
 (registry + world, validated in the destructor), `make_zero_capacity_archetype` (an archetype laid out
 with capacity 0 through `redefine_dynamic`, for the failure paths of placement, flush and
 instantiation) and `for_each_job_mode` (SUBCASEs `inline` and `parallel`, the latter on a worker pool

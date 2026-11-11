@@ -101,7 +101,15 @@ core::result<void> scheduler::remove_system(system_id id) {
     }
     const system_phase phase = record->desc.phase;
     record->alive = false;
+    // The record waits on the free list for the next add_system; the room its buffers and grain scratch
+    // grew to belongs to the removed system's workload, so it goes back to the heap here (a grain buffer's
+    // destructor returns its reserved ids as well).
     record->commands.clear();
+    record->commands.shrink_to_fit();
+    record->scratch.grainBuffers.clear();
+    record->scratch.grainBuffers.shrink_to_fit();
+    record->scratch.chunks.clear();
+    record->scratch.chunks.shrink_to_fit();
     record->desc = {};
     mFreeRecords.push_back(id.index);
     mark_dirty(phase);
@@ -161,9 +169,12 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
     // reached through a member so the job closure stays small enough for every std::function SBO. The
     // member is saved and restored, not cleared, because an EXCLUSIVE system (owner thread, world
     // unlocked) may run another phase from inside this one: the outer phase's later stages must still
-    // find their own frame once the nested run_phase returns.
+    // find their own frame once the nested run_phase returns. The stage jobs complete on a fence held
+    // on this stack frame (like parallel_for's counter) instead of a heap-allocated job_handle; one
+    // fence serves every stage because a stage is waited for before the next one is scheduled.
     std::vector<std::function<void()>> &jobs = state.jobScratch;
     std::vector<system_record *> &mainThread = state.mainThreadScratch;
+    core::jobs::job_fence stageFence = {};
     const frame_info *previousFrame = mRunningFrame;
     mRunningFrame = &frame;
     usize timingIndex = 0;
@@ -197,15 +208,14 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
                     run_system(*record, *mRunningFrame);
                 });
             }
-            core::jobs::job_handle handle = {};
             if (!jobs.empty()) {
-                handle = mJobs->schedule(std::span<const std::function<void()>>(jobs));
+                mJobs->schedule(std::span<const std::function<void()>>(jobs), stageFence);
             }
             for (system_record *record : mainThread) {
                 run_system(*record, frame);
             }
             if (!jobs.empty()) {
-                mJobs->wait(handle);
+                mJobs->wait(stageFence);
             }
         }
 

@@ -40,6 +40,7 @@ engine_config engine_config::headless_defaults() {
     config.rendering.enabled = false;
     config.rendering.backend = rhi_backend_choice::NULL_DEVICE;
     config.audio.backend = audio_backend_choice::NULL_DEVICE;
+    config.assets.hotReload = false;
     config.scripting.enabled = false;
     config.time.forcedFrameDeltaSeconds = 1.0f / 60.0f;
     config.jobs.workerCount = 2;

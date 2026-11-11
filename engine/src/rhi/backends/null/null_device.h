@@ -23,6 +23,11 @@
 //
 // Threading: resource creation and recording are render-thread operations like on a real
 // backend; the statistics are guarded by a mutex so they may be read from any thread.
+//
+// Allocation: the device is the instrument of the renderer's allocation gates, so recording never
+// allocates in steady state. Marker names are the only growing record; they are stored only once a
+// consumer called reset_stats() (device::reset_null_stats()) and at most MAX_RECORDED_MARKER_NAMES
+// per reset, so a run that never asks for them stores nothing.
 
 namespace conjure::rhi {
     class message_callback;
@@ -35,6 +40,7 @@ namespace conjure::rhi::null_backend {
             message_callback &mMessages;   // set by the only constructor; device::impl owns it and outlives the backend
             mutable std::mutex mStatsMutex = {};
             null_device_stats mStats = {};
+            bool mRecordMarkerNames = false;    // guarded by mStatsMutex; armed by the first reset_stats()
             std::atomic<u64> mNextFenceValue = 1;
             std::atomic<u64> mNextVirtualAddress = 0x10000;    // fake GPU addresses, 64 KiB apart, never 0
             std::atomic<null_fault> mPendingFault = null_fault::NONE;
@@ -55,12 +61,19 @@ namespace conjure::rhi::null_backend {
             }
 
             /// <summary>
+            /// Counts a beginMarker and stores its name when a consumer asked for names (reset_stats()
+            /// has been called) and fewer than MAX_RECORDED_MARKER_NAMES are stored; otherwise the name
+            /// is counted in markerNamesDropped.
+            /// </summary>
+            void record_marker(const char *name);
+
+            /// <summary>
             /// Snapshot of the statistics.
             /// </summary>
             [[nodiscard]] null_device_stats stats() const;
 
             /// <summary>
-            /// Resets every counter.
+            /// Resets every counter and starts (or restarts) storing marker names.
             /// </summary>
             void reset_stats();
 

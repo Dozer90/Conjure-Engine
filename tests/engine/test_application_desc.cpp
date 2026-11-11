@@ -59,6 +59,40 @@ TEST_SUITE("engine/application_desc") {
         CHECK(config.window.width == 1280);
         CHECK(config.maxFrames == 3);
         CHECK(config.time.forcedFrameDeltaSeconds == 1.0f / 60.0f);
+        CHECK_FALSE(config.scripting.enabled);
+        CHECK_FALSE(config.assets.hotReload);
+    }
+
+    TEST_CASE("regression - review 4 --headless turns asset hot reload off even when the project asks for it") {
+        // Before the fix the --headless merge copied every headless_defaults() field but assets.hotReload, so a
+        // command-line headless run (conjure_runtime --headless, conjure_editor --headless / --offscreen) kept the
+        // defaults() watcher and project::apply_to's headless guard protected a value this path never set.
+        log_capture logs = {};
+        temp_directory directory("engine_desc_hot_reload");
+        const project loaded = engine_test::write_project(
+          directory.path(),
+          "watching",
+          "start.scene.json",
+          R"("assets": { "hot_reload": true })"
+        );
+        CHECK(loaded.description().assets.hotReload);
+
+        const std::string projectArgument = directory.path().string();
+        const std::vector<std::string_view> arguments = {"--project", projectArgument, "--headless"};
+        const core::result<application_desc> desc =
+          application_desc::from_command_line(std::span<const std::string_view>(arguments), engine_config::defaults());
+        CONJURE_REQUIRE_OK(desc);
+        CHECK(desc.value().config.headless);
+        CHECK_FALSE(desc.value().config.assets.hotReload);
+
+        // Without --headless the same project switches the watcher on over a base that had it off.
+        engine_config base = engine_config::defaults();
+        base.assets.hotReload = false;
+        const std::vector<std::string_view> interactive = {"--project", projectArgument};
+        const core::result<application_desc> windowed =
+          application_desc::from_command_line(std::span<const std::string_view>(interactive), base);
+        CONJURE_REQUIRE_OK(windowed);
+        CHECK(windowed.value().config.assets.hotReload);
     }
 
     TEST_CASE("application_desc - the command line wins over project.json which wins over defaults") {

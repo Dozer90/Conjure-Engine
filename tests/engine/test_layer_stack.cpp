@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "engine_test_support.h"
 
@@ -143,6 +144,24 @@ TEST_SUITE("engine/layer_stack") {
         CHECK_FALSE(stack.is_attached());
         CHECK(log.back() == "first.detach");
         CHECK(log[log.size() - 2] == "late.detach");
+    }
+
+    TEST_CASE("layer_stack - apply_pending with nothing queued allocates nothing") {
+        // The frame loop calls it every frame (step 13); the deferred pushes and pops are the rare case and the
+        // only one that may touch the heap.
+        std::vector<std::string> log = {};
+        layer_stack stack = {};
+        engine_context context = {};
+        stack.push_layer(std::make_unique<probe_layer>("first", log));
+        stack.push_overlay(std::make_unique<probe_layer>("overlay", log));
+        CONJURE_REQUIRE_OK(stack.attach_all(context));
+        for (u32 frame = 0; frame < 3; ++frame) {
+            CAPTURE(frame);
+            CONJURE_CHECK_NO_ALLOCATIONS(stack.apply_pending(context));
+        }
+        CHECK(stack.layers().size() == 2);
+        CHECK(stack.pending_count() == 0);
+        stack.detach_all(context);
     }
 
     TEST_CASE("layer_stack - destruction runs top first") {

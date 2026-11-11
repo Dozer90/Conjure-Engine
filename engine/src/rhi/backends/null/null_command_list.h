@@ -1,18 +1,21 @@
 #pragma once
 
+#include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/types.h"
 
 #include <nvrhi/nvrhi.h>
 
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 // The null backend's command list (docs/design/02_renderer.md R17): records counters and debug
 // marker names into the owning null_device's stats, applies buffer writes to the CPU storage of
 // null buffers, and tracks resource states so getTextureSubresourceState / getBufferState answer
 // like a real backend: per-list tracking lives here and resets on open(), permanent states live on
-// the null_texture / null_buffer themselves (null_resources.h). Nothing is executed.
+// the null_texture / null_buffer themselves (null_resources.h). Nothing is executed. The per-list
+// containers (referenced resources, state trackers) keep their storage across open() so a command
+// list that records the same frame again allocates nothing (the renderer's allocation gates measure
+// through this device).
 
 namespace conjure::rhi::null_backend {
 
@@ -37,8 +40,8 @@ namespace conjure::rhi::null_backend {
             bool mOpen = false;
             bool mAutomaticBarriers = true;
             std::vector<nvrhi::ResourceHandle> mReferencedResources = {};   // liveness until the next open()
-            std::unordered_map<subresource_key, nvrhi::ResourceStates, subresource_key_hash> mTextureStates = {};
-            std::unordered_map<nvrhi::IBuffer *, nvrhi::ResourceStates> mBufferStates = {};
+            core::flat_hash_map<subresource_key, nvrhi::ResourceStates, subresource_key_hash> mTextureStates = {};
+            core::flat_hash_map<nvrhi::IBuffer *, nvrhi::ResourceStates> mBufferStates = {};
 
         public:
             null_command_list(null_device &device, const nvrhi::CommandListParameters &parameters);
@@ -226,5 +229,6 @@ namespace conjure::rhi::null_backend {
               nvrhi::TextureSubresourceSet subresources,
               nvrhi::ResourceStates state
             );
+            void track_buffer(nvrhi::IBuffer *buffer, nvrhi::ResourceStates state);
     };
 }

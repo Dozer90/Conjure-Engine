@@ -89,7 +89,7 @@ the main-thread queue, `subsystems.begin_frame` and `layers.on_frame_begin`, `FR
 |---|---|---|
 | `platform_subsystem` | the window (`glfw` or `null`) and the `input` | the event pump, `skip_next_mouse_delta` after a cursor-mode change |
 | `rhi_subsystem` | the device (`AUTO` tries the platform default then the other compiled backend), the swapchain (not headless), the shader library | resize handling (retry once, then `RUNTIME_FAILURE`) |
-| `assets_subsystem` | importer registry, `asset_manager`, `asset_database` (development) or `pack_reader` (cooked), the file watcher and `hot_reload_controller` | `begin_frame` (manager begin + update + hot reload), `end_frame` (R23) |
+| `assets_subsystem` | importer registry, `asset_manager`, `asset_database` (development) or `pack_reader` (cooked), the file watcher and `hot_reload_controller` when `assets_settings::hotReload` is set (off in `headless_defaults()`: the watcher's stat pass allocates on a job thread) | `begin_frame` (manager begin + update + hot reload), `end_frame` (R23) |
 | `ecs_subsystem` | `component_registry`, `world`, `scheduler` | nothing per frame; the scheduler runs the phases |
 | `scene_subsystem` | `scene_manager`, the layer table from `project.json` | registers the four scene systems, loads the startup scene, `time.interpolatePhysics` -> `transform_system::set_interpolation_enabled` |
 | `audio_subsystem` | `audio_engine` (`audio_settings` mapped one to one, `NULL_DEVICE` -> null backend) | registers the audio components and `engine.audio_sync` (SYNC) / `engine.audio_finish_one_shots` (FRAME_END) (R7, R50) |
@@ -115,7 +115,8 @@ section 12). Services a module entry may require: `engine::engine_context`, `eng
 
 `engine_config` is merged by `application_desc::from_command_line` in the fixed order defaults, `--headless`
 (`headless_defaults()` before everything else), `project.json` (`project::apply_to`, which leaves headless,
-frame count, jobs, memory, pacing and log settings alone), the flags, `validate()`. `project` parses schema
+frame count, jobs, memory, pacing and log settings alone, and under `headless` also the null backends, the
+window size, the disabled scripting and the disabled asset hot reload), the flags, `validate()`. `project` parses schema
 version 1 with snake_case keys, keeps unknown top-level keys in `extensions`, converts `fixed_hz` to a delta,
 stores the raw `physics` section for `physics_settings::from_json` (R53) and resolves relative paths against the
 root; `module_manifests()` lists the game module and every `<search path>/*/module.json`. `--jobs <n|auto>` maps
@@ -136,7 +137,11 @@ and `tests/runtime/test_runtime_process.cpp` prove the round trip.
 
 Everything the engine does itself happens on the main thread: the pump, the phases, the layer hooks,
 `render_frame`, the resize. The scheduler fans `PARALLEL` systems over `core::jobs` and the main thread executes
-jobs while it waits (D2). `post_to_main_thread()` is the one thread-safe entry: tasks run at frame step 4, a task
+jobs while it waits (D2). A steady-state frame allocates nothing in Development, inline or with workers (the
+`engine.full_frame_10k_*` gates of `08_testing.md` 7.1): the main-thread queues are drained only when they hold
+a task, `layer_stack::apply_pending` returns early when nothing is queued, the extraction keeps its camera list
+as a member and sorts it without `std::stable_sort`'s buffer, and the asset watcher is opt-in
+(`engine/src/engine/README.md` "Allocation-free frames"). `post_to_main_thread()` is the one thread-safe entry: tasks run at frame step 4, a task
 posted during the drain waits a frame. `modules_subsystem` keeps a mutex-guarded process-wide list of the
 applications whose modules are running to answer "inside a frame" for the module manager's refusal hook. No
 render thread exists in v1 (06 D1).
@@ -180,9 +185,10 @@ python tools/build.py --build-dir build/mod_engine --target conjure_engine_tests
 
 ## 12. Open items
 
-Recorded in `09_cross_area_resolutions.md` 4 item 15 and `engine/src/engine/README.md`: an empty frame
-allocates about a dozen blocks (the frame loop is not allocation-free yet); off-screen rendering without a
-swapchain (`validate()` refuses a real backend headless, `renderer_subsystem` drops swapchain views) is one task
+Recorded in `09_cross_area_resolutions.md` 4 item 15 and `engine/src/engine/README.md`: a Debug test executable
+still sees one debug-iterator block per frame (`assets::detail::completion_queue::drain`) and the prefab churn
+of `test_prefab_spawn_destroy` 20 blocks per frame in Development (`prefab::instantiate_many`), both outside this
+module; off-screen rendering without a swapchain (`validate()` refuses a real backend headless, `renderer_subsystem` drops swapchain views) is one task
 shared with the renderer; `script_runtime` has no entry point for the assemblies `scripting_module_consumer`
 records; `executable_path.{h,cpp}` duplicates a platform shim core could own; `ecs::world`, `asset_database` and
 `scene_manager` are not module services because the service tag lives in `modules`; the Debug allocation-epoch

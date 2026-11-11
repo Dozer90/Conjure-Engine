@@ -9,6 +9,7 @@
 #include "conjure/scene/components.h"
 
 #include <array>
+#include <cstring>
 #include <vector>
 
 using namespace conjure;
@@ -34,6 +35,25 @@ namespace {
             }
         }
         return 0;
+    }
+
+    /// <summary>
+    /// Chunks of the archetypes the pull visits in parallel: those holding rigid_body, interpolated_transform
+    /// and local_transform without a scene::parent (parented rows are written by the serial tail).
+    /// </summary>
+    [[nodiscard]] u32 parallel_pull_chunk_count(physics_fixture &fixture) {
+        const ecs::component_id body = fixture.registry.id_of<physics::rigid_body>();
+        const ecs::component_id interpolated = fixture.registry.id_of<scene::interpolated_transform>();
+        const ecs::component_id local = fixture.registry.id_of<scene::local_transform>();
+        const ecs::component_id parent = fixture.registry.id_of<scene::parent>();
+        u32 count = 0;
+        for (const ecs::archetype *archetype : fixture.world.archetypes()) {
+            if (archetype->has(body) && archetype->has(interpolated) && archetype->has(local)
+              && !archetype->has(parent)) {
+                count += archetype->chunk_count();
+            }
+        }
+        return count;
     }
 }
 
@@ -180,6 +200,92 @@ TEST_SUITE("physics/component_sync") {
         fixture.run_steps(30);
         CHECK(fixture.position_of(crate).z == doctest::Approx(0.5f).epsilon(0.05));
         CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("component_sync - the scheduled parallel pull writes what the serial fallback writes") {
+        // The same scene in two worlds: one stepped through the physics_world calls (the serial
+        // pull_transforms() fallback), one through a scheduler with the registered systems (the PARALLEL
+        // pull over chunks, one chunk per job). Jolt is deterministic for any worker count, so every
+        // component the pull writes must be bit-identical, the serial tail (parented rows) included.
+        // The boxes fill several chunks of one archetype whatever the row size (about 60 rows fit a 16 KiB
+        // chunk today, so 400 boxes are 7 chunks) and the scheduled pull really fans out; a scene that shrank
+        // to one chunk would take the inline branch of dispatch_chunks and the subcase would stop exercising
+        // the worker path.
+        constexpr u32 BOX_COUNT = 400;
+        for_each_job_mode([](core::jobs::job_system &jobs) {
+            physics::physics_settings settings = test_settings();
+            settings.allowSleeping = false;
+            physics_fixture serial(jobs, settings);
+            physics_fixture scheduled(jobs, settings);
+            scheduled_physics schedule(scheduled, 1);
+            std::vector<ecs::entity> serialEntities = {};
+            std::vector<ecs::entity> scheduledEntities = {};
+            const auto build = [](physics_fixture &fixture, std::vector<ecs::entity> &entities) {
+                (void)fixture.spawn_ground();
+                for (u32 index = 0; index < BOX_COUNT; ++index) {
+                    const f32 x = static_cast<f32>(index % 20) * 1.1f - 11.0f;
+                    const f32 y = 0.5f + static_cast<f32>(index / 20) * 1.1f;
+                    entities.push_back(fixture.spawn_box(math::vec3(x, y, 0.0f)));
+                }
+                const ecs::entity parent = fixture.create_at(math::vec3(20.0f, 0.0f, 0.0f));
+                const ecs::entity child = fixture.spawn_box(math::vec3(0.0f, 3.0f, 0.0f));
+                scene::parent link = {};
+                link.value = parent;
+                CONJURE_REQUIRE_OK(fixture.world.add<scene::parent>(child, link));
+                entities.push_back(child);
+            };
+            build(serial, serialEntities);
+            build(scheduled, scheduledEntities);
+            REQUIRE(serialEntities.size() == scheduledEntities.size());
+
+            // The first pull of the scheduled path can lag one step (interpolated_transform arrives through
+            // the stage's command buffer), so the poses are compared once both previous and current are
+            // steps of the same simulation.
+            serial.run_steps(40);
+            schedule.run_steps(40);
+            REQUIRE(serial.physics.body_count() == scheduled.physics.body_count());
+            const u32 chunkCount = parallel_pull_chunk_count(scheduled);
+            CAPTURE(chunkCount);
+            CHECK(chunkCount > 1);
+
+            u32 moved = 0;
+            for (usize index = 0; index < serialEntities.size(); ++index) {
+                CAPTURE(index);
+                const ecs::entity a = serialEntities[index];
+                const ecs::entity b = scheduledEntities[index];
+                const scene::local_transform *localA = serial.world.get<scene::local_transform>(a);
+                const scene::local_transform *localB = scheduled.world.get<scene::local_transform>(b);
+                const scene::interpolated_transform *lerpA = serial.world.get<scene::interpolated_transform>(a);
+                const scene::interpolated_transform *lerpB = scheduled.world.get<scene::interpolated_transform>(b);
+                const physics::rigid_body *bodyA = serial.world.get<physics::rigid_body>(a);
+                const physics::rigid_body *bodyB = scheduled.world.get<physics::rigid_body>(b);
+                REQUIRE(localA != nullptr);
+                REQUIRE(localB != nullptr);
+                REQUIRE(lerpA != nullptr);
+                REQUIRE(lerpB != nullptr);
+                REQUIRE(bodyA != nullptr);
+                REQUIRE(bodyB != nullptr);
+                // The transforms are padding-free floats; rigid_body carries padding, so its own ==.
+                CHECK(std::memcmp(localA, localB, sizeof(scene::local_transform)) == 0);
+                CHECK(std::memcmp(lerpA, lerpB, sizeof(scene::interpolated_transform)) == 0);
+                CHECK(*bodyA == *bodyB);
+                if (lerpA->current.position != lerpA->previous.position) {
+                    ++moved;
+                }
+            }
+            // The scene is still settling after 40 steps: the comparison covered written rows, not idle ones.
+            CHECK(moved > 0);
+        });
+    }
+
+    TEST_CASE("component_sync - the scheduled pull over 2000 bodies allocates nothing after warm-up, 0 and 4 workers") {
+        // The design's allocation gate (08_testing.md 7.1, physics.sync_10k: 0) on the path the engine
+        // takes, at a body count that keeps the default run short: 2,000 bodies fill some 35 chunks, enough to
+        // prove the chunk pass and its fan-out allocation-free. The 10,000-body figure is the [slow] case
+        // of slow/test_component_sync_10k.cpp and the benchmark physics.sync_10k.
+        for_each_job_mode([](core::jobs::job_system &jobs) {
+            check_pull_allocation_free(jobs, 2000);
+        });
     }
 
     TEST_CASE("component_sync - pull over 2000 sleeping bodies allocates nothing [bench]") {

@@ -64,13 +64,16 @@ combination once (`INVALID_CONFIG` names the field). The merge order is fixed: d
 | `rendering` | `enabled`, `backend` (`AUTO`, `D3D12`, `VULKAN`, `NULL_DEVICE`), `gpuValidation`, `shaderDirectory` |
 | `physics` | `enabled`, `gravity`, `maxBodies`; the rest of the physics settings come from the project's `"physics"` section |
 | `audio` | `enabled`, `backend` (`AUTO`, `MINIAUDIO`, `NULL_DEVICE`), `sampleRate`, `device`, `masterGain`, `dopplerFactor`, `speedOfSound`, `groups` |
+| `assets` | `hotReload`: the file watcher that re-imports changed sources while a development project runs (on by default, off in `headless_defaults()`, ignored in Distribution and by cooked projects) |
 | `scripting` | `enabled`, `required`, `gameAssembly`, `managedDirectory`, `hotReload`, `exportMode`, `exportDebugSymbols`, `useNullHost` |
 | `modules` | `searchPaths`, `enginePlugins`, `required` |
 | `jobs` | `workerCount`: `AUTO_WORKER_COUNT` (default) resolves to `hardware_concurrency - 1` clamped to `[1, 16]`; `0` runs every job on the calling thread |
 | `memory` | `frameArenaBytes`, `frameThreadBlockBytes` |
 
 `headless_defaults()` sets a 1280 x 720 null window, rendering off on the null device, the null audio backend,
-scripting off, a forced 1/60 frame delta and two workers. Tests opt subsystems back in field by field.
+scripting off, asset hot reload off, a forced 1/60 frame delta and two workers; `--headless` applies the same
+fields over the base configuration, and a project cannot switch the devices, scripting or hot reload back on
+under it. Tests opt subsystems back in field by field.
 
 > [!IMPORTANT]
 > `validate()` rejects rendering on a real backend while `headless` is true. Headless rendering means the null
@@ -90,10 +93,13 @@ refuses unknown options). `command_line_help()` is the text the executables prin
 
 `project::load(directory)` reads `<directory>/project.json` (schema version 1, snake_case keys): `name`,
 `version`, `assets_root`, `cooked_root`, `startup_scene`, the `window`, `time`, `physics`, `rendering`, `audio`,
-`scripting` and `modules` sections, `layers` (the 32 scene layer names) and `cooked`. Unknown top-level keys
-are kept in `extensions` and written back by `save()`. `apply_to(config)` copies the sections into a
-configuration without touching the headless, frame-count, jobs and log settings, so a headless test keeps its
-null backends while reading the project's scenes and physics layers.
+`assets` (`hot_reload`), `scripting` and `modules` sections, `layers` (the 32 scene layer names) and `cooked`.
+Unknown top-level keys are kept in `extensions` and written back by `save()`; schema 1 reserves `"assets"`, so a
+file that used that key for its own data is parsed as the section and its unknown members are dropped on
+`save()` like those of every other section. `apply_to(config)` copies the
+sections into a configuration without touching the headless, frame-count, jobs and log settings, so a headless
+test keeps its null backends (and its disabled asset hot reload) while reading the project's scenes and physics
+layers.
 
 ```cpp
 core::result<engine::project> loaded = engine::project::load("C:/games/rolling_course");

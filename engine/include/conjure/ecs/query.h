@@ -5,11 +5,11 @@
 #include "conjure/ecs/component.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/containers/small_vector.h"
 #include "conjure/core/types.h"
 
 #include <span>
 #include <utility>
-#include <vector>
 
 // Queries (docs/design/01_ecs.md 2.4, 3.2, 4.4). A query is a value type that caches the archetypes
 // matching its description and refreshes incrementally (new archetypes only). Iteration locks the
@@ -21,6 +21,14 @@ namespace conjure::ecs {
     class component_registry;
     class system_context;
     class world;
+
+    /// <summary>
+    /// Matching archetypes a query stores inline before it touches the heap. A view built per system
+    /// run (the documented context.view&lt;...&gt;().for_each idiom, system.h) therefore allocates
+    /// nothing while it matches at most this many archetypes; beyond that the first refresh of each
+    /// new query allocates once.
+    /// </summary>
+    inline constexpr usize QUERY_INLINE_MATCHES = 16;
 
     namespace detail {
         /// <summary>
@@ -50,7 +58,7 @@ namespace conjure::ecs {
             const component_registry *mRegistry = nullptr;
             const system_context *mContext = nullptr;       // the running system, for Debug write validation
             query_desc mDesc = {};
-            std::vector<archetype *> mMatches = {};
+            core::small_vector<archetype *, QUERY_INLINE_MATCHES> mMatches = {};
             u32 mSeenArchetypeCount = 0;
 
         public:

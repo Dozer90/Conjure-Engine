@@ -428,11 +428,7 @@ void null_command_list::endTimerQuery(nvrhi::ITimerQuery *query) {
 }
 
 void null_command_list::beginMarker(const char *name) {
-    const char *text = name != nullptr ? name : "";
-    mDevice.record([text](null_device_stats &stats) {
-        ++stats.markersBegun;
-        stats.markerNames.emplace_back(text);
-    });
+    mDevice.record_marker(name);
 }
 
 void null_command_list::endMarker() {
@@ -467,9 +463,7 @@ void null_command_list::beginTrackingTextureState(
 }
 
 void null_command_list::beginTrackingBufferState(nvrhi::IBuffer *buffer, nvrhi::ResourceStates stateBits) {
-    if (buffer != nullptr) {
-        mBufferStates[buffer] = stateBits;
-    }
+    track_buffer(buffer, stateBits);
 }
 
 void null_command_list::setTextureState(
@@ -489,7 +483,7 @@ void null_command_list::setBufferState(nvrhi::IBuffer *buffer, nvrhi::ResourceSt
     if (buffer == nullptr || permanent_buffer_state(buffer).has_value()) {
         return;
     }
-    mBufferStates[buffer] = stateBits;
+    track_buffer(buffer, stateBits);
 }
 
 void null_command_list::setAccelStructState(nvrhi::rt::IAccelStruct *as, nvrhi::ResourceStates) {
@@ -513,7 +507,7 @@ void null_command_list::setPermanentBufferState(nvrhi::IBuffer *buffer, nvrhi::R
         return;
     }
     target->set_permanent_state(stateBits);
-    mBufferStates[buffer] = stateBits;
+    track_buffer(buffer, stateBits);
 }
 
 void null_command_list::commitBarriers() {}
@@ -618,8 +612,15 @@ void null_command_list::track_texture(
     const nvrhi::TextureSubresourceSet resolved = subresources.resolve(texture->getDesc(), false);
     for (u32 slice = 0; slice < resolved.numArraySlices; ++slice) {
         for (u32 mip = 0; mip < resolved.numMipLevels; ++mip) {
-            mTextureStates[subresource_key{texture, resolved.baseArraySlice + slice, resolved.baseMipLevel + mip}] =
-              state;
+            const subresource_key key{texture, resolved.baseArraySlice + slice, resolved.baseMipLevel + mip};
+            mTextureStates.try_emplace(key, state).first->second = state;
         }
     }
+}
+
+void null_command_list::track_buffer(nvrhi::IBuffer *buffer, nvrhi::ResourceStates state) {
+    if (buffer == nullptr) {
+        return;
+    }
+    mBufferStates.try_emplace(buffer, state).first->second = state;
 }

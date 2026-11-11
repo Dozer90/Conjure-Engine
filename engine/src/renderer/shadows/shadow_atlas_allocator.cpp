@@ -166,13 +166,14 @@ bool shadow_atlas_allocator::claim_exact(u32 nodeIndex, const atlas_tile &tile) 
 }
 
 bool shadow_atlas_allocator::allocate_tiles(u32 size, u8 tileCount) {
-    // All or nothing: the tree is restored when one of the tiles does not fit.
-    const std::vector<node> snapshot = mNodes;
+    // All or nothing: the tree is restored when one of the tiles does not fit. The backup is a
+    // member so the copy reuses its capacity frame after frame (vector assignment never shrinks).
+    mNodesBackup = mNodes;
     const usize firstTile = mTiles.size();
     for (u8 index = 0; index < tileCount; ++index) {
         atlas_tile tile = {};
         if (!allocate_node(0, size, tile)) {
-            mNodes = snapshot;
+            mNodes = mNodesBackup;
             mTiles.resize(firstTile);
             return false;
         }
@@ -191,7 +192,8 @@ void shadow_atlas_allocator::allocate(std::span<const atlas_request> requests) {
     mReused = 0;
 
     // Pass 1: lights whose request is unchanged keep their tiles (stable map coordinates).
-    std::vector<bool> settled(requests.size(), false);
+    std::vector<bool> &settled = mSettled;
+    settled.assign(requests.size(), false);
     for (usize index = 0; index < requests.size(); ++index) {
         const atlas_request &request = requests[index];
         const auto unchanged = [&request](const atlas_allocation &entry) {
@@ -202,7 +204,7 @@ void shadow_atlas_allocator::allocate(std::span<const atlas_request> requests) {
         if (previous == mPreviousAllocations.end()) {
             continue;
         }
-        const std::vector<node> snapshot = mNodes;
+        mNodesBackup = mNodes;
         const usize firstTile = mTiles.size();
         bool kept = true;
         for (u8 tile = 0; tile < previous->tileCount; ++tile) {
@@ -214,7 +216,7 @@ void shadow_atlas_allocator::allocate(std::span<const atlas_request> requests) {
             mTiles.push_back(old);
         }
         if (!kept) {
-            mNodes = snapshot;
+            mNodes = mNodesBackup;
             mTiles.resize(firstTile);
             continue;
         }

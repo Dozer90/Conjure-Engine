@@ -20,9 +20,10 @@ module page and the headers are the source of truth for layout numbers, names an
 - [5. Command buffers](#5-command-buffers)
 - [6. Job-parallel systems](#6-job-parallel-systems)
 - [7. Frame memory](#7-frame-memory)
-- [8. `string_id` over strings](#8-string_id-over-strings)
-- [9. `slot_map` handles over pointers](#9-slot_map-handles-over-pointers)
-- [10. What to avoid](#10-what-to-avoid)
+- [8. Allocation-free steady state](#8-allocation-free-steady-state)
+- [9. `string_id` over strings](#9-string_id-over-strings)
+- [10. `slot_map` handles over pointers](#10-slot_map-handles-over-pointers)
+- [11. What to avoid](#11-what-to-avoid)
 - [Related](#related)
 
 ## 1. Why data-oriented
@@ -113,6 +114,14 @@ queued jobs, so waiting inside a job never deadlocks) and `parallel_for(count, g
 `[0, count)` into ranges of at most `grain`, queues them under one lock acquisition, runs range 0 on the caller
 and helps until the stack-held counter reaches zero. The body is referenced, not copied, and once the block pool
 has warmed up a dispatch allocates nothing (`stats().poolGrowths` stays constant; the jobs tests assert it).
+Batches a frame dispatches again and again (`schedule(jobs, fence)` with a caller-owned `job_fence`) allocate
+nothing either; only `schedule(fn)` / `schedule(span)` returning a `job_handle` allocate their shared counter.
+Workers and waiters spin for a bounded 50 us before they sleep and the queue lock is a spinlock that parks
+after a bounded spin, so dispatches less than 50 us apart (consecutive transform levels) pay no kernel wake-up
+and a queued job costs about 0.8 us with 16 workers in the round's final enforced run (`core.job_parallel_for_1m`
+0.052 ms for 64 ranges; 0.6 us with the ticket lock the round first used, `engine/src/core/jobs/README.md`); a stage
+boundary that runs main-thread systems or flushes between dispatches still parks the workers, and every awake
+worker spins the window once the queue runs dry ([Core module](modules/core/time-to-reflect.md) 2.2).
 With `workerCount = 0` everything runs inline on the caller, which is how headless tests stay deterministic.
 
 ```cpp
@@ -199,7 +208,39 @@ whole) and fixed-size objects use `pool_allocator`; both are single-owner and re
 process-wide `allocation_counters`, which is what lets tests gate a code path on zero allocations with
 `CONJURE_CHECK_NO_ALLOCATIONS`.
 
-## 8. `string_id` over strings
+## 8. Allocation-free steady state
+
+> [!NOTE]
+> The gates are the `allocs` column of `08_testing.md` 7.1 (`tests/benchmarks/thresholds.json`, enforced in
+> Development) and the `CONJURE_CHECK_NO_ALLOCATIONS` cases next to each hot path. The performance round of
+> 2026-11 (`09_cross_area_resolutions.md` 4 item 15, "Performance round" in section 3) closed every
+> allocation breach with the four patterns below; `tests/benchmarks/README.md` has the measured table.
+
+A frame that allocates nothing after its first few runs is not a property of any one container; it is the
+sum of every per-frame object that was either built fresh each run or returned its storage at the end of
+the run. The patterns the engine settled on, each with the site that uses it:
+
+| Pattern | Rule | Where |
+|---|---|---|
+| **Persistent frame state** | Everything a frame fills lives on its owner and is reset *in place*: `clear()` on a vector that keeps its capacity, a pool of state objects reused by index (`renderer_state::next_view_state()` / `prepared_views()`), member scratch instead of a local (`world::mFlushPlan`, `transform_system::mLevelChunks`, `cull_scratch`). Never `vector.clear()` on a container that is destroyed at the end of the run, never a moved-to local (`std::swap` with a fresh object), never `std::stable_sort` (its buffer is a heap block; `std::sort` with an index tie-break is the stable order for free). | `renderer.cpp`, `render_graph::reset`, `world_structural.cpp`, `transform_propagation.cpp`, `command_buffer::clear()` (keeps one arena block spanning the last recording) |
+| **Caller-owned job counters** | The completion state of a per-frame dispatch belongs to the dispatcher's stack or object, never to a `std::shared_ptr` the job system allocates: `parallel_for` counts on a stack `job_counter`, `job_system::schedule(jobs, fence)` signals a `core::jobs::job_fence` the ECS scheduler holds on `run_phase`'s stack (one fence serves every stage because a stage is waited for before the next is queued). `schedule(fn)` / `schedule(span)` returning a `job_handle` are for work whose handle may outlive the frame. | `ecs/scheduler.cpp`, `core/jobs/job_system.cpp` |
+| **Cached queries** | An `ecs::query` is built once per component set and kept for the life of the world it matches (its match list refreshes incrementally; archetype pointers are stable). A system owns its queries as members (`transform_system::mLevelQueries`, the physics pull's `pullQuery`), the script runtime keys them by the sorted component-id set (`script_runtime::cached_query`), and a view built per run (`context.view<...>()`) stores up to `QUERY_INLINE_MATCHES` = 16 matches inline so the documented idiom stays allocation-free in the common case. | `scene/transform_system.h`, `physics_world_sync.cpp`, `scripting/script_runtime.cpp`, `ecs/query.h` |
+| **Opt-in background work** | Anything that allocates on a job thread on its own schedule (the asset hot-reload watcher's 500 ms stat pass) is a switch (`assets_settings::hotReload`), off in `headless_defaults()`, because `allocation_scope` counts every thread of the process and the frame gate is the maximum over the measured iterations. | `engine/subsystems/assets_subsystem.cpp` |
+
+Two rules follow for new code. Size by the peak and keep it: scratch that grew to its largest run stays at
+that capacity for its owner's lifetime, and one explicit release point (`world::clear()`,
+`command_buffer::shrink_to_fit()`, `scheduler::remove_system`) returns it, never the end of a frame. And
+count the instrument too: the null device the renderer gates measure through records marker names only
+after `reset_null_stats()` asked for them, so a headless run stores nothing and the gate counts device-side
+blocks without excluding them.
+
+> [!WARNING]
+> MSVC's debug iterators (`_ITERATOR_DEBUG_LEVEL 2`, Debug test executables) allocate a container proxy for
+> every `std::vector` *object*, an empty or moved-to one included. A gate that is zero in Development can
+> therefore read one block per local vector in Debug; the integration budgets record both figures
+> (`09_cross_area_resolutions.md` 4 item 15a) and the Development benchmark is the design gate.
+
+## 9. `string_id` over strings
 
 Names that are compared at runtime (component types, extension points, mount schemes, log categories in
 tooling) are `conjure::core::string_id` (`conjure/core/string_id.h`): the 64-bit FNV-1a of the name and
@@ -228,7 +269,7 @@ bool is_sprite(string_id componentName) {
 Component ids themselves are dense `u16`s assigned per *name* (`01_ecs.md` D3-D4), so archetype matching is a
 mask operation and a plugin's components agree with the host's without any template static.
 
-## 9. `slot_map` handles over pointers
+## 10. `slot_map` handles over pointers
 
 Anything that can be destroyed while something still refers to it (GPU resources, voices, script instances,
 editor requests, asset slots) is addressed by a generational key, not a pointer. `conjure::core::slot_map<T>`
@@ -267,7 +308,7 @@ void fade_all(slot_map<voice> &voices) {
 The same shape recurs everywhere: `ecs::entity` is `{index, generation}`, `modules::module_id` is a 16-bit
 pair, asset slots live in a `stable_vector` so their addresses never move while handles point at them.
 
-## 10. What to avoid
+## 11. What to avoid
 
 | Avoid | Because | Do instead |
 |---|---|---|

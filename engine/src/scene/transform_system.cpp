@@ -19,6 +19,7 @@ namespace {
             desc.with.set(ids.depth[level]);
         }
         desc.optional.set(ids.parent);
+        desc.optional.set(ids.children);
         desc.optional.set(ids.interpolatedTransform);
         desc.optional.set(ids.transformDirty);
         desc.optional.set(ids.worldTransform);
@@ -59,6 +60,7 @@ ecs::system_desc transform_system::describe() {
     desc.flags = ecs::system_flags::RUNS_WHILE_PAUSED;
     desc.reads.set(ids.localTransform);
     desc.reads.set(ids.parent);
+    desc.reads.set(ids.children);
     desc.reads.set(ids.interpolatedTransform);
     desc.reads.set(ids.transformDirty);
     desc.writes.set(ids.worldTransform);

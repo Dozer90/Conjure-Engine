@@ -38,10 +38,47 @@ cache (`.conjure/cache`) then lives under that root.
 `--scene` / `startupSceneOverride` is relative to the assets root unless it is already scheme-qualified
 (`assets://scenes/x.scene.json`), which is used as given.
 
+The polling file watcher and the `assets::hot_reload_controller` exist only when `assets_settings::hotReload`
+is set (`engine_config::assets`, the project's `"assets": { "hot_reload": ... }` section; always off in
+Distribution and for cooked projects). `headless_defaults()` turns it off, `application_desc::from_options`
+copies that switch with the other headless defaults when `--headless` is given (so `conjure_runtime --headless`
+and the editor's `--headless` / `--offscreen` modes are covered, not only configurations built from
+`headless_defaults()` directly) and `project::apply_to` leaves it off under `headless`, so a headless frame never
+schedules the watcher's 500 ms stat pass on a job thread. Schema 1 reserves the top-level `"assets"` section for
+these settings: a `project.json` that used the key for its own data is no longer preserved in `extensions`, and
+unknown members of the section are dropped on `save()` like those of every other section.
+
 `frame_loop::run_frame()` is 06 3.1 verbatim. The scheduler receives one `ecs::frame_info` per phase built by
 `make_frame_info(engine_time)`; `inFixedStep` is true only inside FIXED_UPDATE / PHYSICS_STEP / FIXED_END.
 PAUSED runs UPDATE / LATE_UPDATE through `run_phase_filtered(RUNS_WHILE_PAUSED)`; STEP_ONCE and
 `step_fixed(n)` leave the mode PAUSED afterwards (R13). EXTRACT runs only when a renderer exists.
+
+## Allocation-free frames
+
+`08_testing.md` 7.1 gates the three `engine.full_frame_10k_*` benchmarks (and the `headless_engine` integration
+scenarios) at zero heap allocations per steady-state frame; the frame loop holds it in Development, inline and
+with workers (performance round 2026-11, `09_cross_area_resolutions.md` 4 item 15a):
+
+- `frame_loop::run_frame` drains the two main-thread queues only when they hold a task (the core drain builds a
+  local task vector) and `layer_stack::apply_pending` returns before moving its pending vectors when nothing is
+  queued (a moved-to `std::vector` allocates its container proxy under MSVC's debug iterators).
+- `renderer_subsystem::extract` keeps its camera candidate list as a member (`mCameras`, capacity kept across
+  frames) and orders it with `std::sort` plus the world-order tie-break instead of `std::stable_sort`, whose
+  temporary buffer is a heap block.
+- The asset hot-reload watcher is opt-in (above); its stat pass is the one job-thread allocator a headless frame
+  used to carry.
+- The scheduler, the per-run `context.view<...>()` idiom, the scene propagation, the physics pull, the renderer
+  frame and the script runtime are allocation-free by their own gates (see their READMEs).
+
+What remains, by configuration: a Debug test executable (`_ITERATOR_DEBUG_LEVEL 2`) sees one block per frame,
+the container proxy of the local `std::vector` in `assets::detail::completion_queue::drain`
+(`asset_manager::update`), which `tests/integration/test_hierarchy_propagation.cpp` records as
+`EMPTY_FRAME_ALLOCATION_BUDGET = 1`; spawning and destroying 100 prefab instances per frame costs 20 blocks in
+Development and 258 in Debug (`prefab::instantiate_many`'s archive shape, link pass and report vectors,
+`core::event::finish_emit`'s graveyard vector behind `scene::bump_structure`, the temporary `command_buffer` of
+`world::drain_deferred`), none of them in this module (`test_prefab_spawn_destroy.cpp`,
+`STEADY_FRAME_ALLOCATION_BUDGET = 258`). `tests/engine/test_renderer_subsystem.cpp` and `test_layer_stack.cpp`
+gate the two engine-side fixes directly.
 
 ## Threading model
 

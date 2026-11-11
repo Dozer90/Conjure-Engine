@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "engine_test_support.h"
 
@@ -28,6 +29,7 @@
 #include "engine/subsystems/renderer_components.h"
 #include "engine/subsystems/renderer_subsystem.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,6 +44,11 @@ using namespace conjure::engine;
 using namespace conjure::testing;
 
 namespace {
+
+    // Frames the empty-frame baseline is taken over (test_hierarchy_propagation.cpp uses the same count): the
+    // maximum over several frames absorbs a periodic block (an asset manager sweep, a stats sample) that two
+    // frames would miss and the relative gate below would then report against the extraction.
+    constexpr u32 BASELINE_FRAMES = 5;
 
     [[nodiscard]] renderer_subsystem *find_renderer_subsystem(application &app) {
         for (const std::unique_ptr<engine_subsystem> &subsystem : app.subsystems()) {
@@ -109,6 +116,19 @@ TEST_SUITE("engine/renderer_subsystem") {
         renderer_subsystem *subsystem = find_renderer_subsystem(app);
         REQUIRE(subsystem != nullptr);
 
+        // The empty frame's own cost in this executable (0 in Development; an MSVC Debug build sees the
+        // debug-iterator block of asset_manager::update, test_hierarchy_propagation.cpp): the extraction must add
+        // nothing to it. The gate is relative, so a standard library whose empty frame costs more or less than
+        // MSVC's (libstdc++, libc++) measures its own baseline.
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CONJURE_REQUIRE_OK(app.step_frame());
+        u64 emptyFrame = 0;
+        for (u32 frame = 0; frame < BASELINE_FRAMES; ++frame) {
+            allocation_scope scope = {};
+            CONJURE_REQUIRE_OK(app.step_frame());
+            emptyFrame = std::max(emptyFrame, scope.allocation_count());
+        }
+
         // A cube from a memory source added next to the project's cache source.
         const assets::asset_id meshId = core::uuid::generate();
         std::unique_ptr<assets::memory_asset_source> source = std::make_unique<assets::memory_asset_source>();
@@ -145,6 +165,22 @@ TEST_SUITE("engine/renderer_subsystem") {
         CHECK(subsystem->stats().lights == 1);
         CHECK_FALSE(subsystem->stats().environmentSeen);
         CHECK(app.context().renderer->frame_count() >= 1);
+
+        // Steady state (08_testing.md 7.1, engine.full_frame_10k_transform_render): the camera candidate list and
+        // the render_scene keep their capacity, so a frame with a camera, a mesh and a light costs no more than
+        // the empty frame.
+        for (u32 frame = 0; frame < 3; ++frame) {
+            CAPTURE(frame);
+            allocation_scope scope = {};
+            CONJURE_REQUIRE_OK(app.step_frame());
+            const u64 allocations = scope.allocation_count();
+            CHECK_MESSAGE(
+              allocations <= emptyFrame,
+              "a warmed-up extraction frame allocated " << allocations << " block(s); the empty frame " << emptyFrame
+            );
+        }
+        CHECK(subsystem->stats().views == 1);
+        CHECK(subsystem->stats().meshes == 1);
 
         // The test's own reference goes before shutdown: the manager asserts on live handles.
         CONJURE_REQUIRE_OK(app.context().world->destroy_entity(cube.value()));

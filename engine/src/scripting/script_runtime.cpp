@@ -71,6 +71,9 @@ script_runtime::script_runtime(std::unique_ptr<script_host> host) :
     mFrameBlock->time_scale = 1.0f;
     mFrameBlock->current_phase = static_cast<uint8_t>(script_phase::COUNT);
     mBlobBuffer.resize(INITIAL_BLOB_BUFFER_BYTES);
+    // Reserved once: a scope open or close must not grow either list in steady state (08_testing.md 7.1).
+    mQueryScopes.reserve(QUERY_SCOPE_RESERVE);
+    mFreeQueryScopes.reserve(QUERY_SCOPE_RESERVE);
 }
 
 script_runtime::~script_runtime() {
@@ -174,6 +177,7 @@ void script_runtime::attach_world(ecs::world *world) {
         mAddedObserver = {};
         mRemovedObserver = {};
         mQueryScopes.clear();
+        mQueryCache.clear();        // the cached queries point into the old world's archetypes
         mDeferredCommands.reset();
         mEntityNames.clear();
     }
@@ -721,9 +725,11 @@ core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds
         return core::error(core::error_code::INVALID_ARGUMENT, "query_begin needs 1..8 component types");
     }
 
-    query_scope_state state = {};
     ecs::query_desc desc = {};
-    for (const u32 typeId : typeIds) {
+    query_cache_key key = {};
+    key.fill(ecs::component_id::INVALID);
+    for (usize index = 0; index < typeIds.size(); ++index) {
+        const u32 typeId = typeIds[index];
         // 0 is unresolved_components: never handed out, so it means "lookup failed" (R4).
         if (typeId == 0 || typeId >= ecs::MAX_COMPONENTS) {
             return core::error(core::error_code::INVALID_ARGUMENT, "query_begin: component id out of range");
@@ -734,53 +740,70 @@ core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds
         }
         desc.with.set(id);
         desc.writes.set(id);
-        state.types.push_back(id);
+        key[index] = id.value;
     }
+    // INVALID sorts behind every valid id, so the padding stays at the tail whatever the request order; a
+    // repeated id ({a, a}) is the set {a}, so it collapses onto that set's key (the columns keep the request).
+    std::sort(key.begin(), key.end());
+    std::fill(std::unique(key.begin(), key.end()), key.end(), ecs::component_id::INVALID);
 
     // Like scheduler::run_system: a fresh version so the columns the scope stamps read as changed to the
     // systems that run after this phase.
     static_cast<void>(mWorld->bump_version());
-    ecs::query query = mWorld->create_query(desc);
+    ecs::query &query = cached_query(key, desc);
     const u32 chunkCount = query.chunk_count();
-    state.lock = mWorld->lock_iteration();
-    state.chunks.reserve(chunkCount);
-    for (u32 index = 0; index < chunkCount; ++index) {
-        ecs::chunk_view view = query.chunk(index);
-        if (!view.is_valid()) {
-            continue;
-        }
+    std::unique_ptr<query_scope_state> state = take_scope_state(chunkCount);
+    state->id = mNextScopeId++;
+    for (const u32 typeId : typeIds) {
+        state->types.push_back(ecs::component_id{static_cast<u16>(typeId)});
+    }
+    state->lock = mWorld->lock_iteration();
+    state->chunks.reserve(chunkCount);              // no-op once the state has seen this many chunks
+    query.for_each_chunk([&state](ecs::chunk_view &view) {
         conjure_chunk_view chunk = {};
         chunk.entities = reinterpret_cast<const uint64_t *>(view.entities().data());
         chunk.count = static_cast<int32_t>(view.count());
-        for (usize column = 0; column < state.types.size(); ++column) {
+        for (usize column = 0; column < state->types.size(); ++column) {
             // Conservative stamp: every requested column counts as written for change detection.
-            chunk.columns[column] = view.column_data(state.types[column], true);
+            chunk.columns[column] = view.column_data(state->types[column], true);
         }
-        state.chunks.push_back(chunk);
-    }
-    state.id = mNextScopeId++;
+        state->chunks.push_back(chunk);
+    });
 
-    out.scope_id = state.id;
-    out.chunk_count = static_cast<int32_t>(state.chunks.size());
-    out.chunks = state.chunks.data();
+    // The views stay where they are until end_query_scope: the state is heap-owned and only its pointer moves.
+    out.scope_id = state->id;
+    out.chunk_count = static_cast<int32_t>(state->chunks.size());
+    out.chunks = state->chunks.data();
     mQueryScopes.push_back(std::move(state));
     return out.scope_id;
 }
 
 void script_runtime::end_query_scope(u32 scopeId) {
-    const auto found = std::find_if(mQueryScopes.begin(), mQueryScopes.end(), [scopeId](const query_scope_state &s) {
-        return s.id == scopeId;
-    });
+    const auto found = std::find_if(
+      mQueryScopes.begin(),
+      mQueryScopes.end(),
+      [scopeId](const std::unique_ptr<query_scope_state> &scope) {
+          return scope->id == scopeId;
+      }
+    );
     if (found == mQueryScopes.end()) {
         CONJURE_LOG_DEBUG(LOG_SCRIPTING, "query_end for unknown scope {}", scopeId);
         return;
     }
+    query_scope_state &finished = **found;
 #if !CONJURE_DISTRIBUTION
-    // Poison the view array so a span that escaped the scope faults loudly instead of reading live data.
-    if (!found->chunks.empty()) {
-        std::memset(found->chunks.data(), 0xDD, found->chunks.size() * sizeof(conjure_chunk_view));
+    // Poison the view array: a conjure_chunk_view pointer that escaped the scope reads 0xDD until a later
+    // begin_query_scope reuses this state (the reuse is the point of the free list, so the state is kept).
+    if (!finished.chunks.empty()) {
+        std::memset(finished.chunks.data(), 0xDD, finished.chunks.size() * sizeof(conjure_chunk_view));
     }
 #endif
+    // The state keeps its capacity on the free list: the next scope over as many chunks allocates nothing.
+    finished.lock.release();
+    finished.chunks.clear();
+    finished.types.clear();
+    finished.id = 0;
+    mFreeQueryScopes.push_back(std::move(*found));
     mQueryScopes.erase(found);
     if (mQueryScopes.empty()) {
         flush_deferred_commands();
@@ -806,6 +829,7 @@ script_runtime_stats script_runtime::stats() const noexcept {
     result.openQueryScopes = static_cast<u32>(mQueryScopes.size());
     result.reloadCount = mReloadCount;
     result.zombieAssemblies = mZombieAssemblies;
+    result.cachedQueries = static_cast<u32>(mQueryCache.size());
     return result;
 }
 
@@ -1266,15 +1290,57 @@ void script_runtime::mark_started_entries() {
     });
 }
 
+ecs::query &script_runtime::cached_query(const query_cache_key &key, const ecs::query_desc &desc) {
+    const auto found = mQueryCache.find(key);
+    if (found != mQueryCache.end()) {
+        return found->second;
+    }
+    // First scope over this set: the query's matches fill on its first refresh and grow only with new
+    // archetypes afterwards, so this is the one allocation the set ever costs.
+    return mQueryCache.try_emplace(key, *mWorld, desc).first->second;
+}
+
+std::unique_ptr<script_runtime::query_scope_state> script_runtime::take_scope_state(usize chunkCount) {
+    if (mFreeQueryScopes.empty()) {
+        return std::make_unique<query_scope_state>();
+    }
+
+    // Best fit, not last-in first-out: the free state with the smallest capacity that still holds every chunk
+    // view, so a spilled buffer keeps serving the large scope while the small scopes take the inline-only ones
+    // whatever order the scopes were closed in. When none fits, the largest spills (once per size step).
+    auto chosen = mFreeQueryScopes.begin();
+    for (auto candidate = mFreeQueryScopes.begin() + 1; candidate != mFreeQueryScopes.end(); ++candidate) {
+        const usize chosenCapacity = (*chosen)->chunks.capacity();
+        const usize candidateCapacity = (*candidate)->chunks.capacity();
+        const bool chosenFits = chosenCapacity >= chunkCount;
+        const bool candidateFits = candidateCapacity >= chunkCount;
+        if (candidateFits != chosenFits) {
+            if (candidateFits) {
+                chosen = candidate;
+            }
+            continue;
+        }
+        // Both fit: the tighter one. Neither fits: the one that needs the smaller spill.
+        const bool tighterFit = candidateFits && candidateCapacity < chosenCapacity;
+        const bool smallerSpill = !candidateFits && candidateCapacity > chosenCapacity;
+        if (tighterFit || smallerSpill) {
+            chosen = candidate;
+        }
+    }
+    std::unique_ptr<query_scope_state> state = std::move(*chosen);
+    mFreeQueryScopes.erase(chosen);                     // erase keeps the capacity: no allocation on the path
+    return state;
+}
+
 void script_runtime::force_close_query_scopes() {
     while (!mQueryScopes.empty()) {
         CONJURE_LOG_WARN(
           LOG_SCRIPTING,
           "query scope {} was left open at the end of {}; force-closed (dispose ComponentQuery with 'using')",
-          mQueryScopes.back().id,
+          mQueryScopes.back()->id,
           mCurrentPhase == script_phase::COUNT ? std::string_view("the managed call") : to_string(mCurrentPhase)
         );
-        end_query_scope(mQueryScopes.back().id);
+        end_query_scope(mQueryScopes.back()->id);
     }
 }
 

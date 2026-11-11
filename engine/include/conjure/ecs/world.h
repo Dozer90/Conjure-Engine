@@ -11,6 +11,7 @@
 #include "conjure/ecs/view.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/containers/small_vector.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -148,6 +149,26 @@ namespace conjure::ecs {
                 u32 plan = 0;
             };
 
+            /// <summary>
+            /// Payload records a flush plan entry stores inline: a spawn with up to this many add/set
+            /// payloads costs the plan no heap allocation.
+            /// </summary>
+            static constexpr usize FLUSH_INLINE_PAYLOADS = 4;
+
+            /// <summary>
+            /// One entry of the flush plan (01_ecs.md 3.4): everything a command buffer says about one
+            /// entity, folded into a single archetype move. The plan vector is kept across flushes.
+            /// </summary>
+            struct flush_entry {
+                entity id = {};
+                bool alive = false;
+                bool destroy = false;
+                u32 commands = 0;                                   // commands counted as applied for this entity
+                component_mask addMask = {};
+                component_mask removeMask = {};
+                core::small_vector<command_buffer::record *, FLUSH_INLINE_PAYLOADS> payloads = {};
+            };
+
             const component_registry *mRegistry = nullptr;
             std::string mName = {};
             std::thread::id mOwnerThread = {};
@@ -168,6 +189,14 @@ namespace conjure::ecs {
             u32 mAliveCount = 0;
             std::vector<flush_slot> mFlushSlots = {};      // indexed by entity index, grown lazily
             u32 mFlushStamp = 0;                           // the stamp of the flush in progress
+            // Scratch of the structural paths, used in place (never moved into a local: a vector object
+            // costs an allocation under debug iterators) and kept at capacity across calls, so a warmed-up
+            // flush or placement allocates nothing of its own. Neither path nests inside itself:
+            // check_structural refuses structural calls from observers, under the iteration lock and from
+            // inside an open structural call, and the deferred buffer drains only after the outermost call
+            // returned. world::clear() is the one point that returns the peak capacity to the heap.
+            std::vector<flush_entry> mFlushPlan = {};
+            std::vector<entity> mPlacedScratch = {};
 
         public:
             explicit world(const component_registry &registry, world_desc desc = {});
@@ -509,10 +538,11 @@ namespace conjure::ecs {
             [[nodiscard]] core::result<void> validate() const;
 
             /// <summary>
-            /// Destroys every entity (firing observers) and returns every chunk. Archetypes, observers
-            /// and the id space are kept: destroyed ids come back with a bumped generation, so handles
-            /// into the cleared world stay stale and ids reserved by command buffers stay valid.
-            /// Owner thread, unlocked.
+            /// Destroys every entity (firing observers) and returns every chunk, the parked chunk metadata
+            /// and the structural scratch (flush plan, placement undo list, the deferred buffers' room) to
+            /// the heap. Archetypes, observers and the id space are kept: destroyed ids come back with a
+            /// bumped generation, so handles into the cleared world stay stale and ids reserved by command
+            /// buffers stay valid. Owner thread, unlocked.
             /// </summary>
             void clear();
 

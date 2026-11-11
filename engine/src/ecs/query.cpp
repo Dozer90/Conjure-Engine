@@ -81,7 +81,7 @@ chunk_view query::chunk(u32 index) {
 
 std::span<archetype *const> query::matches() {
     refresh();
-    return mMatches;
+    return std::span<archetype *const>(mMatches.data(), mMatches.size());
 }
 
 void query::reset(query_desc desc) {

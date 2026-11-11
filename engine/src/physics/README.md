@@ -43,9 +43,15 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
 
 - **Jolt stays inside.** `physics_world` owns a `JPH::PhysicsSystem`, a `TempAllocatorImpl`, the layer
   tables and the job adapter through a pimpl `state`. Every public call translates entities to
-  `JPH::BodyID`s through the row table (`body_record`, indexed by body index, grown in 1024-row blocks)
-  and `rowOfEntity`. Jolt's own allocations go through the engine's tracked allocator, so the "allocation
-  free step" tests cover Jolt too.
+  `JPH::BodyID`s through the row table (`body_record`, indexed by body index, grown in 1024-row blocks):
+  `rowOfEntity` knows every entity the world tracks (live rows and the pending markers) and
+  `liveRowByEntityIndex`, a dense table indexed by `entity.index` and generation-checked against the row's
+  entity, is the one load `find_row` makes for a live row (the pull resolves every body through it each
+  step). That table is the one container not reserved at construction: it is sized by entity index, not
+  body count, so `claim_row` grows it in 1024-index blocks when a body lands beyond it (body creation, where
+  Jolt allocates anyway) and the pull never grows it; a world whose few bodies sit on high entity indices
+  pays 4 bytes per index up to the highest one. Jolt's own allocations go through the engine's tracked
+  allocator, so the "allocation free step" tests cover Jolt too.
 - **Jobs.** `core::jobs::job_system::schedule` allocates a counter per call, which would break P15, so
   the adapter uses `parallel_for`: `run_parallel` dispatches `worker_count()` helper ranges that pop Jolt
   jobs from a fixed ring while range 0 (always the caller) runs `PhysicsSystem::Update`; helpers wait on a
@@ -84,10 +90,16 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   filter cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic`, and parented bodies
   and characters are composed through their ancestors and teleported when an ancestor moved (a design
   gap of `14_physics.md` 3.4, which only names the chunk filter).
-- **Pull.** `pull_transforms` acquires a chunk's non-const spans only when a row of it needs writing
-  (awake, first pull, teleported), so chunks of sleeping bodies are left unstamped; parented bodies and
+- **Pull.** `pull_transforms` acquires a chunk's non-const spans at the first row that needs writing
+  (awake, first pull, teleported), so chunks of sleeping bodies are left unstamped and every row resolves
+  its record once; the body is fetched once per row through `BodyLockInterfaceNoLock::TryGetBody` (no
+  step runs during the pull) and its pose and velocities read from the `JPH::Body`. Parented bodies and
   characters are written in a serial tail (local pose = parent world pose inverse times body pose).
-  `pull_transforms(system_context *)` is the scheduled form (parallel chunks).
+  `pull_transforms(system_context *)` is the scheduled form: the persistent pull query (the match list,
+  nothing more) is fanned out through `system_context::parallel_for_chunks`, so the step allocates
+  nothing (a `context.view<>()` per run would allocate its match list every time); the dispatching
+  `system_context` builds every chunk view with itself as the validating context, so the Debug write
+  validation checks the pull's writes against the system's declaration without binding the query.
 - **Contacts (R6).** The listener records raw added / persisted / removed contacts into per-thread
   buffers (global budget `maxContactEventsPerStep`); `collect_contact_events` merges them, sorts twice
   with the stable `core::radix_sort_u64` (sub-shape pair, then body pair) and folds each body pair into
@@ -188,5 +200,12 @@ nothing meanwhile. The contact listener runs on Jolt's job threads and writes on
 header plus the design's topic files (`test_layers`, `test_rigid_body`, `test_colliders`, `test_fixed_step`,
 `test_component_sync`, `test_physics_stack`, `test_determinism`). `physics_test_fixture.h` builds a
 registry, world and attached physics world with small budgets and runs push / step / pull / collect;
-`for_each_job_mode` runs a body with 0 and 4 workers. Build and run with
-`python tools/build.py --build-dir <dir> --target conjure_physics_tests --test -R physics`.
+`for_each_job_mode` runs a body with 0 and 4 workers; `scheduled_physics` is the engine's view of the four
+systems (an `ecs::scheduler` with `register_systems`, the PARALLEL pull over chunks) and
+`check_pull_allocation_free` the allocation gate of that pull at a body count. The `[slow]` cases (the
+0-versus-4-workers determinism run over `determinism_scenario.h`, the 10,000-body allocation gate) live in
+`tests/physics/slow/` as the second executable `conjure_physics_slow_tests` (labels `physics;slow`), which
+the default test presets skip and the nightly presets run; the default executable keeps the same gate at
+2,000 bodies. Build and run with
+`python tools/build.py --build-dir <dir> --target conjure_physics_tests --test -R physics` (add
+`--target conjure_physics_slow_tests -L slow` for the slow cases).

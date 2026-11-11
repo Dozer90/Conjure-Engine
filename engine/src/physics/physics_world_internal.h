@@ -32,7 +32,11 @@
 #include <vector>
 
 // The private state of physics_world (docs/design/14_physics.md 2.6) and the operations the
-// physics_world_*.cpp files share. Every container is reserved at construction (P15).
+// physics_world_*.cpp files share. Every container is reserved at construction (P15) except
+// liveRowByEntityIndex, which is sized by entity index rather than by body count: claim_row grows it in
+// ROW_BLOCK entity-index steps when a body lands on an index beyond the table (body creation, where Jolt
+// allocates the body anyway), and the pull never grows it. A reserve by body count would buy nothing, and
+// the ecs world exposes no entity capacity to reserve from, so the table starts empty.
 
 namespace conjure::physics {
 
@@ -127,6 +131,11 @@ namespace conjure::physics {
         }
 
         /// <summary>
+        /// Entry of liveRowByEntityIndex for an entity index without a live row.
+        /// </summary>
+        static constexpr u32 NO_ROW = 0xFFFFFFFFu;
+
+        /// <summary>
         /// Rows are grown in blocks of this many entries.
         /// </summary>
         static constexpr u32 ROW_BLOCK = 1024;
@@ -164,9 +173,13 @@ namespace conjure::physics {
         std::optional<ecs::query> bodyChangeQuery = std::nullopt;
         std::optional<ecs::query> characterChangeQuery = std::nullopt;
 
-        // Records.
+        // Records. rowOfEntity holds every entity the world knows (live rows and the two pending markers);
+        // liveRowByEntityIndex is the pull's fast path to the same live rows: indexed by entity index,
+        // generation-checked against the row's entity, grown in ROW_BLOCK entity-index steps by claim_row
+        // (see the file comment) and cleared, never shrunk, by destroy_all_bodies.
         std::vector<body_record> records = {};
         core::flat_hash_map<ecs::entity, u32> rowOfEntity = {};
+        std::vector<u32> liveRowByEntityIndex = {};
         std::vector<ecs::entity> pendingCreate = {};
         std::vector<ecs::entity> pendingScratch = {};
         std::vector<ecs::entity> pendingRebuild = {};   // rows with dirty != NONE (the row is the truth)

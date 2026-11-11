@@ -234,6 +234,14 @@ core::result<void> archetype::reserve_row(chunk_pool &pool) {
     if (block == nullptr) {
         return make_error(ecs_error::OUT_OF_MEMORY, "the chunk pool could not provide a block");
     }
+    if (!mSpareChunks.empty()) {
+        // A drained chunk's metadata was parked by the world; attaching the block is allocation-free.
+        std::unique_ptr<chunk> spare = std::move(mSpareChunks.back());
+        mSpareChunks.pop_back();
+        spare->rebind(block);
+        mChunks.push_back(std::move(spare));
+        return core::result<void>::success();
+    }
     mChunks.push_back(std::make_unique<chunk>(block, mLayout.column_count()));
     return core::result<void>::success();
 }

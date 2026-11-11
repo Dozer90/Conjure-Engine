@@ -156,21 +156,20 @@ namespace editor_test {
             return *response;
         }
         // An asynchronous reply arrives through the sink some frames later. Frames are pumped until it does.
-        // The dispatcher's own timeout runs on the engine clock (the headless forced 1/60 s delta) and answers
-        // every pending request with TIMEOUT, so a reply always arrives in a well-behaved editor; the loop is a
-        // fallback for a dispatcher that never answers and gives up at whichever comes first: twice the
-        // dispatcher's timeout on the engine clock, or the frame cap. (Review 4: the two bounds were joined
-        // with "and", so the engine-clock bound never mattered and a Debug build pumped 100,000 frames before
-        // the message below could fire, which tripped the CTest timeout first.)
+        // The application clock is wall time (the headless forced 1/60 s delta shapes each frame's delta, not the
+        // clock), and the dispatcher's own timeout runs on that clock and answers every pending request with
+        // TIMEOUT, so a reply always arrives in a well-behaved editor; the loop is a fallback for a dispatcher
+        // that never answers and gives up after twice the dispatcher's timeout. There is no frame cap: a request
+        // that waits on a real process (script.compile runs dotnet) needs real seconds, and a Development build
+        // pumps an allocation-free headless frame in microseconds, so 100,000 frames passed before dotnet could
+        // answer (performance round).
         const f64 pumpStart = mApplication.engine().clock().now_seconds();
         const f64 pumpLimit = mApplication.options().timeoutSeconds * 2.0 + 5.0;
-        u32 frames = 0;
         while (!mCaptured.has_value()) {
             const core::result<void> stepped = mApplication.pump_frame();
             REQUIRE_MESSAGE(stepped.has_value(), testing::describe_error(stepped));
-            ++frames;
             const f64 elapsed = mApplication.engine().clock().now_seconds() - pumpStart;
-            if (frames >= MAX_PUMPED_FRAMES || elapsed >= pumpLimit) {
+            if (elapsed >= pumpLimit) {
                 break;
             }
         }

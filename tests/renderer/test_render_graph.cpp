@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
 #include "renderer_test_support.h"
@@ -7,6 +8,7 @@
 #include "renderer/framebuffer_cache.h"
 #include "renderer/gpu_types.h"
 #include "renderer/render_graph.h"
+#include "renderer/timer_ring.h"
 #include "renderer/transient_pool.h"
 
 #include "conjure/renderer/renderer.h"
@@ -28,7 +30,8 @@
 
 // The render graph (docs/design/02_renderer.md R3, 2.7, 10 "test_render_graph"): declaration
 // order is execution order, dead passes are culled backwards, validation rejects reads before
-// writes, lifetimes are computed over the live passes and transients come from the pool.
+// writes, lifetimes are computed over the live passes and transients come from the pool. The
+// timer_ring execute() drives is covered here as well (02_renderer.md 3.1 step 1).
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -69,10 +72,19 @@ namespace {
             }
 
             void execute(pass_context &context) override {
-                mLog->push_back(mName);
+                if (mLog != nullptr) {
+                    mLog->push_back(mName);
+                }
                 if (mExecute) {
                     mExecute(context);
                 }
+            }
+
+            /// <summary>
+            /// Stops appending to the log (the allocation gate must not measure the test's own strings).
+            /// </summary>
+            void mute() noexcept {
+                mLog = nullptr;
             }
     };
 
@@ -151,6 +163,7 @@ TEST_SUITE("renderer/render_graph") {
 
     TEST_CASE("render_graph - passes execute in declaration order and transients flow between them") {
         graph_fixture fixture = {};
+        fixture.device->reset_null_stats();   // the null device stores marker names only once asked
         graph_resource hdr = INVALID_GRAPH_RESOURCE;
         const graph_resource target = fixture.graph.import_texture(fixture.target, "target");
         CHECK(fixture.graph.is_imported(target));
@@ -390,6 +403,126 @@ TEST_SUITE("renderer/render_graph") {
         CHECK(fixture.graph.texture(hdr) == firstTexture);
         CHECK(fixture.framebuffers->size() == 2);
         CHECK(fixture.framebuffers->hits() >= 2);
+    }
+
+    TEST_CASE("render_graph - a graph rebuilt from the same passes allocates nothing after its first frame") {
+        // reset() keeps the pass entries and their declaration vectors, compile keeps its scratch
+        // and the pool hands back the same transients, so the per-view graph of a steady-state frame
+        // never touches the heap (renderer.null_frame_10k, allocs 0).
+        graph_fixture fixture = {};
+        graph_resource hdr = INVALID_GRAPH_RESOURCE;
+        graph_resource target = INVALID_GRAPH_RESOURCE;
+        scripted_pass x("x", fixture.log, [&](pass_builder &builder) {
+            hdr = builder.create_texture(colour_desc("hdr"));
+            builder.write(hdr);
+            builder.colour_target(hdr, 0);
+        });
+        scripted_pass y("y", fixture.log, [&](pass_builder &builder) {
+            builder.read(hdr);
+            builder.write(target);
+            builder.colour_target(target, 0);
+        });
+        scripted_pass dead("dead", fixture.log, [&](pass_builder &builder) {
+            builder.read(hdr);
+            builder.write(builder.create_texture(colour_desc("unused")));
+        });
+        const auto frame = [&](u64 frameIndex) {
+            fixture.graph.reset();
+            target = fixture.graph.import_texture(fixture.target, "target");
+            fixture.graph.add_pass(x);
+            fixture.graph.add_pass(y);
+            fixture.graph.add_pass(dead);
+            fixture.graph.compile(*fixture.pool, frameIndex);
+            fixture.stats.reset();
+            fixture.commandList->open();
+            fixture.graph.execute(
+              *fixture.commandList,
+              *fixture.framebuffers,
+              fixture.constants,
+              fixture.stats,
+              nullptr
+            );
+            fixture.commandList->close();
+            nvrhi::ICommandList *list = fixture.commandList.Get();
+            fixture.device->native_device()->executeCommandLists(&list, 1);
+            fixture.pool->end_frame(frameIndex);
+        };
+        frame(1);
+        frame(2);
+        CHECK(fixture.stats.passesExecuted == 2);
+        CHECK(fixture.stats.passesCulled == 1);
+        CHECK(fixture.log == std::vector<std::string>{"x", "y", "x", "y"});
+        // The scripted passes' own log strings are not under test (the MSVC Debug runtime gives every
+        // std::string an iterator-debugging allocation).
+        x.mute();
+        y.mute();
+        dead.mute();
+
+        CONJURE_CHECK_NO_ALLOCATIONS(for (u64 frameIndex = 3; frameIndex <= 10; ++frameIndex) { frame(frameIndex); });
+        CHECK(fixture.stats.passesExecuted == 2);
+        CHECK(fixture.stats.passesCulled == 1);
+        CHECK(fixture.graph.pass_count() == 3);
+        CHECK(fixture.pool->textures_created() == 1);
+    }
+
+    TEST_CASE("timer_ring - queries are created for every slot when first needed, never at a steady pass count") {
+        // An idle ring takes nothing from the device's timer-query budget (NVRHI's default is 256 per
+        // device, shared by every renderer on it); the first frame that needs more queries than any
+        // frame before it creates them for all three slots at once, so the next frames (the other
+        // slots) create none and a steady pass count is allocation-free from its second frame.
+        log_capture logs = {};
+        std::unique_ptr<rhi::device> device = renderer_support::make_device();
+        nvrhi::IDevice &native = *device->native_device();
+        const auto created = [&]() {
+            return device->null_stats().value().timerQueriesCreated;
+        };
+        timer_ring ring(native);
+        CHECK(ring.query_count() == 0);
+        CHECK(created() == 0);
+
+        nvrhi::CommandListHandle commandList = native.createCommandList();
+        REQUIRE(commandList != nullptr);
+        const auto frame = [&](u32 passCount) {
+            ring.begin_frame();
+            commandList->open();
+            for (u32 pass = 0; pass < passCount; ++pass) {
+                ring.begin(*commandList, "pass");
+                ring.end(*commandList);
+            }
+            commandList->close();
+            nvrhi::ICommandList *list = commandList.Get();
+            native.executeCommandLists(&list, 1);
+        };
+        frame(5);
+        CHECK(created() == 5 * timer_ring::FRAME_COUNT);
+        CHECK(ring.query_count() == 5 * timer_ring::FRAME_COUNT);
+        frame(5);
+        frame(5);
+        CHECK(created() == 5 * timer_ring::FRAME_COUNT);
+        CHECK(ring.resolved().empty());         // the slot of frame 1 comes round with frame 4
+        frame(5);
+        CHECK(ring.resolved().size() == 5);
+        CONJURE_CHECK_NO_ALLOCATIONS(frame(5));
+        CHECK(created() == 5 * timer_ring::FRAME_COUNT);
+
+        // More passes grow every slot once; fewer passes reuse what is there.
+        frame(7);
+        CHECK(created() == 7 * timer_ring::FRAME_COUNT);
+        frame(3);
+        frame(7);
+        CHECK(created() == 7 * timer_ring::FRAME_COUNT);
+        frame(1);
+        CHECK(ring.resolved().size() == 7);     // the first seven-pass frame, three begin_frames ago
+
+        // The per-frame cap bounds what one renderer can take from the budget.
+        frame(timer_ring::MAX_QUERIES_PER_FRAME + 20);
+        CHECK(created() == timer_ring::MAX_QUERIES_PER_FRAME * timer_ring::FRAME_COUNT);
+        frame(timer_ring::MAX_QUERIES_PER_FRAME + 20);
+        frame(timer_ring::MAX_QUERIES_PER_FRAME + 20);
+        frame(1);
+        CHECK(ring.resolved().size() == timer_ring::MAX_QUERIES_PER_FRAME);
+        CHECK(created() == timer_ring::MAX_QUERIES_PER_FRAME * timer_ring::FRAME_COUNT);
+        CHECK(logs.count(core::log_level::WARN) == 0);
     }
 
     TEST_CASE("render_graph - two live transients of the same description get distinct textures within a frame") {

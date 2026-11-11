@@ -2,6 +2,7 @@
 
 #include "ecs_test_fixture.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 
 #include "conjure/ecs/ecs_error.h"
@@ -192,5 +193,36 @@ TEST_SUITE("ecs/view") {
         CHECK(chunks >= 2);
         CHECK(rows == 2000);
         CHECK(world.get<position>(ids[1999])->z == 1.0f);
+    }
+
+    TEST_CASE("view - a second run of a view built per call allocates nothing") {
+        // The documented idiom builds the view inside the system body on every run (system.h); the
+        // query behind it keeps its matches inline, so constructing, iterating and counting a fresh view
+        // over a handful of archetypes never touches the heap once the world is warm.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::vector<entity> plain(700);
+        std::vector<entity> moving(600);
+        std::vector<entity> tagged(300);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), plain));
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position, velocity>(), moving));
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position, velocity, player_tag>(), tagged));
+
+        u32 visited = 0;
+        const auto run = [&world, &visited]() {
+            visited = 0;
+            world.view<position, maybe<const velocity>>().for_each([&visited](entity, position &p, const velocity *v) {
+                p.x += v == nullptr ? 1.0f : v->x;
+                ++visited;
+            });
+            visited += world.view<const position>().with<player_tag>().entity_count();
+            world.view<const velocity>().for_each_chunk([&visited](chunk_view &chunk) {
+                visited += chunk.count();
+            });
+        };
+        run();
+        CHECK(visited == 1600 + 300 + 900);
+        CONJURE_CHECK_NO_ALLOCATIONS(run());
+        CHECK(visited == 1600 + 300 + 900);
     }
 }

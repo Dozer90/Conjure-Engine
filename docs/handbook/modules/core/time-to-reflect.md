@@ -66,13 +66,23 @@ Purpose: the engine's threading primitives, and the only area that creates `std:
 
 ### 2.2 Algorithms
 
-- **Queue.** `job_system` is a facade over a private `state`. One mutex-guarded queue holds three fixed-capacity
+- **Queue.** `job_system` is a facade over a private `state`. One lock-guarded queue holds three fixed-capacity
   ring lanes (one per priority) of `job_block` pointers taken from a pool that starts at 16 blocks and doubles
   up to `maxQueuedJobs`; popping moves the block onto the executing thread's stack inside the same critical
-  section. Workers are named `<prefix>-<index>` from names `start()` prepares in the OS encoding before it
-  creates the threads, re-check the queue a bounded number of times with `yield()` and then sleep on a
-  condition variable. `start()` returns only after every worker has named itself and entered the queue loop
-  (a counter under the queue mutex plus a condition variable), so a worker allocates nothing after `start()`
+  section. The lock is a spinlock that parks after a bounded spin (a test-and-test-and-set word with
+  backoff; the FIFO ticket lock the performance round first used stalled every later waiter behind a
+  preempted one and was replaced after review), the hot counters sit on cache lines of their own and the
+  statistics are per thread, because with 16 workers draining one dispatch every queued job is a
+  serialisation point (a parked `std::mutex` waiter cost about 1.7 us per job; `core.job_parallel_for_1m`
+  went from 0.100 to 0.042 ms with the ticket lock and measures 0.052 with the current parking lock). Workers are named
+  `<prefix>-<index>` from names `start()` prepares in the OS encoding before it creates the threads, re-check
+  the queue for a bounded time (50 us, a `pause` per check and a `yield()` every 64th) and then sleep on a
+  condition variable; a thread in `wait()` spins the same window before it parks. The window hides the
+  wake-up for dispatches less than 50 us apart (consecutive dispatched transform levels); a stage boundary
+  that runs main-thread systems or flushes between dispatches still parks the workers, and every awake worker
+  spins the window once the queue runs dry (16 x 50 us of CPU per dispatch). `start()` returns only after
+  every worker has named itself and entered the queue loop (a counter under the queue lock plus a condition
+  variable), so a worker allocates nothing after `start()`
   returns and an allocation gate opened right after it is never charged a worker prologue. With zero workers,
   before `start()`, after `stop()` or when the queue is full the scheduling thread runs the job itself before
   `schedule` returns.
@@ -81,6 +91,9 @@ Purpose: the engine's threading primitives, and the only area that creates `std:
   hot path never locks it; waiting from a worker never deadlocks, even on a single worker. `wait_idle()`
   inside a job publishes the caller's own execution frames so two in-flight jobs both calling it return
   instead of waiting for each other (only a call outside every job guarantees a completely idle system).
+  Finishing a job wakes the monitor when a counter or the active count reaches zero, or when the active
+  count drops to the published idle-waiter depth, because the last sibling of a parked waiter's own batch
+  drops neither to zero.
 - **`parallel_for`.** Splits `[0, count)` into `ceil(count / grain)` ranges, queues them under one lock
   acquisition, runs range 0 plus every range that did not fit on the caller and helps until a stack-allocated
   64-bit counter hits zero; the body is referenced through a `(fn pointer, context)` pair, so steady-state
@@ -103,7 +116,9 @@ configure time.
 
 `tests/core/jobs/`: every behavioural case runs with 0 and 8 workers through `CONJURE_JOBS_WORKER_SUBCASES`
 (`[parallel]`); coverage includes `wait()` from inside jobs, nested `parallel_for`, two jobs calling
-`wait_idle()` at once on 1 and 8 workers, and `stop()`/`start()` cycling under four producers.
+`wait_idle()` at once on 1 and 8 workers, a `wait_idle()` inside a batch job and inside a `parallel_for` range
+whose sibling of the same batch finishes after the waiter has parked, a worker of one system scheduling a batch
+into another (counted in the external statistics slot), and `stop()`/`start()` cycling under four producers.
 
 ## 3. json
 

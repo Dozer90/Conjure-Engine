@@ -8,6 +8,7 @@
 
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/log.h"
+#include "conjure/core/memory/allocation_counters.h"
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/scheduler.h"
@@ -669,14 +670,15 @@ TEST_SUITE("ecs/scheduler") {
     }
 
     TEST_CASE("scheduler - a warmed-up phase allocates nothing of its own [parallel]") {
-        // The ECS-level allocation gate (13_scene.md 10 gates a whole TRANSFORM phase through the scene):
-        // the per-stage scratch lives in the phase state and the [this, record] job closure fits the
-        // std::function small buffer, so after two runs the inline mode allocates nothing at all and the
-        // parallel mode allocates only the counter of job_system::schedule, one per stage with jobs.
-        for_each_job_mode([](core::jobs::job_system *jobs) {
+        // The ECS-level allocation gate (13_scene.md 10 gates a whole TRANSFORM phase through the scene,
+        // 08_testing.md 7.1 the engine frame): the per-stage scratch lives in the phase state, the
+        // [this, record] job closure fits the std::function small buffer and the stage jobs complete on
+        // a stack-held job_fence, so after two runs a phase allocates nothing in either mode, with
+        // parallelSystems on and a four-worker pool included.
+        const auto check_phase = [](core::jobs::job_system *jobs) {
             ecs_fixture fixture = {};
             scheduler_desc options = {};
-            options.parallelSystems = jobs != nullptr;
+            options.parallelSystems = true;
             scheduler scheduler(fixture.world, jobs, options);
             std::atomic<u32> runs = 0;
             // Three stages: two readers with a main-thread reader, then two writers of the same type.
@@ -708,16 +710,118 @@ TEST_SUITE("ecs/scheduler") {
             scheduler.run_phase(system_phase::UPDATE, frame);
             scheduler.run_phase(system_phase::UPDATE, frame);
             CHECK(runs.load() == 10);
-            if (jobs == nullptr) {
+            for (u32 repetition = 0; repetition < 5; ++repetition) {
+                CAPTURE(repetition);
                 CONJURE_CHECK_NO_ALLOCATIONS(scheduler.run_phase(system_phase::UPDATE, frame));
-            } else {
-                // One shared counter per schedule call; a closure that spilled out of the small buffer
-                // would add one allocation per job on top and fail this bound.
-                testing::allocation_scope scope = {};
-                scheduler.run_phase(system_phase::UPDATE, frame);
-                CHECK(scope.allocation_count() <= stageCount);
             }
-            CHECK(runs.load() == 15);
+            CHECK(runs.load() == 35);
+        };
+
+        SUBCASE("inline") {
+            check_phase(nullptr);
+        }
+        SUBCASE("four workers") {
+            core::jobs::job_system jobs = {};
+            core::jobs::job_system_desc desc = {};
+            desc.workerCount = 4;
+            REQUIRE(jobs.start(desc).has_value());
+            check_phase(&jobs);
+            jobs.stop();
+        }
+    }
+
+    TEST_CASE("scheduler - the documented view idiom allocates nothing after the first run [parallel]") {
+        // system.h documents context.view<...>().for_each inside the system body; the view's query keeps
+        // its matches inline (QUERY_INLINE_MATCHES), so the idiom allocates nothing per run. The second
+        // system fans out over chunks on the workers, the shape of the engine's PARALLEL systems.
+        for_each_job_mode([](core::jobs::job_system *jobs) {
+            ecs_fixture fixture = {};
+            world &world = fixture.world;
+            std::vector<entity> moving(3000);
+            std::vector<entity> still(500);
+            CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position, velocity>(), moving));
+            CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position, velocity, player_tag>(), still));
+            scheduler_desc options = {};
+            options.minEntitiesPerJob = 256;
+            scheduler scheduler(world, jobs, options);
+            std::atomic<u32> rows = 0;
+            CONJURE_REQUIRE_OK(scheduler.add_system(make_system<const velocity, position>(
+              sid("integrate"),
+              system_phase::UPDATE,
+              [](system_context &context) {
+                  context.view<const velocity, position>().for_each([&](entity, const velocity &v, position &p) {
+                      p.x += v.x * context.delta_time();
+                  });
+              }
+            )));
+            CONJURE_REQUIRE_OK(scheduler.add_system(make_system<const position>(
+              sid("count"),
+              system_phase::UPDATE,
+              [&rows](system_context &context) {
+                  context.view<const position>().parallel_for_each_chunk(
+                    context,
+                    [&rows](chunk_view &chunk, command_buffer &) {
+                        rows.fetch_add(chunk.count(), std::memory_order_relaxed);
+                    }
+                  );
+              }
+            )));
+            CHECK(scheduler.stages(system_phase::UPDATE).size() == 2);
+
+            frame_info frame = {};
+            frame.deltaTime = 0.5f;
+            scheduler.run_phase(system_phase::UPDATE, frame);
+            scheduler.run_phase(system_phase::UPDATE, frame);
+            CHECK(rows.load() == 7000);
+            CONJURE_CHECK_NO_ALLOCATIONS(scheduler.run_phase(system_phase::UPDATE, frame));
+            CHECK(rows.load() == 10500);
         });
+    }
+
+    TEST_CASE("scheduler - remove_system returns the removed system's buffer room") {
+        // A system's command buffer keeps the arena room its largest recording grew to (vector-style);
+        // the record waits on the free list after remove_system, so the room goes back to the heap there
+        // instead of outliving the system.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::vector<entity> targets(1000);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), targets));
+        scheduler scheduler(world, nullptr);
+
+        // A removed placeholder leaves the free list with capacity, so the removal measured below pushes
+        // without allocating and the only change in live allocations is what the removal frees.
+        system_desc placeholderDesc = {};
+        placeholderDesc.name = sid("placeholder");
+        placeholderDesc.phase = system_phase::UPDATE;
+        placeholderDesc.run = [](system_context &) {};
+        const core::result<system_id> placeholder = scheduler.add_system(std::move(placeholderDesc));
+        CONJURE_REQUIRE_OK(placeholder);
+        CONJURE_REQUIRE_OK(scheduler.remove_system(placeholder.value()));
+
+        system_desc recorder = {};
+        recorder.name = sid("recorder");
+        recorder.phase = system_phase::UPDATE;
+        recorder.run = [&targets](system_context &context) {
+            for (const entity id : targets) {
+                context.commands().set<position>(id, position{1.0f, 2.0f, 3.0f});
+                context.commands().add<velocity>(id, velocity{0.5f, 0.0f, 0.0f});
+                context.commands().add<player_tag>(id);
+                context.commands().remove<player_tag>(id);
+            }
+        };
+        const core::result<system_id> added = scheduler.add_system(std::move(recorder));
+        CONJURE_REQUIRE_OK(added);
+        const frame_info frame = {};
+        // The first run spills the 16 KiB block many times; its flush leaves the buffer with one block
+        // of the peak size, which the second run fills without allocating.
+        scheduler.run_phase(system_phase::UPDATE, frame);
+        scheduler.run_phase(system_phase::UPDATE, frame);
+        CHECK(world.has<velocity>(targets[999]));
+
+        const u64 liveBefore = core::memory::snapshot().live_count();
+        CONJURE_REQUIRE_OK(scheduler.remove_system(added.value()));
+        const u64 liveAfter = core::memory::snapshot().live_count();
+        CHECK(liveAfter < liveBefore);
+        CHECK(scheduler.system(added.value()) == nullptr);
     }
 }

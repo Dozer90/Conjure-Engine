@@ -75,6 +75,8 @@ namespace conjure::renderer {
             std::vector<atlas_allocation> mAllocations = {};
             std::vector<atlas_tile> mPreviousTiles = {};
             std::vector<atlas_allocation> mPreviousAllocations = {};
+            std::vector<node> mNodesBackup = {};        // all-or-nothing scratch; capacity kept across frames
+            std::vector<bool> mSettled = {};            // per request: kept its previous tiles this frame
             u32 mDropped = 0;
             u32 mReused = 0;
 

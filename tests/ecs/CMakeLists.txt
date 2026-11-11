@@ -37,6 +37,7 @@ conjure_add_test_module(ecs
         test_world_components.cpp
         test_world_entities.cpp
         test_world_hash.cpp
+        test_world_structural.cpp
 )
 
 conjure_header_check(conjure_ecs)

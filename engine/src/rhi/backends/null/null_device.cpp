@@ -52,6 +52,16 @@ null_device::~null_device() {}
 /*===========================================================================*/
 // Statistics
 
+void null_device::record_marker(const char *name) {
+    const std::scoped_lock lock(mStatsMutex);
+    ++mStats.markersBegun;
+    if (!mRecordMarkerNames || mStats.markerNames.size() >= MAX_RECORDED_MARKER_NAMES) {
+        ++mStats.markerNamesDropped;
+        return;
+    }
+    mStats.markerNames.emplace_back(name != nullptr ? name : "");
+}
+
 null_device_stats null_device::stats() const {
     const std::scoped_lock lock(mStatsMutex);
     return mStats;
@@ -60,6 +70,7 @@ null_device_stats null_device::stats() const {
 void null_device::reset_stats() {
     const std::scoped_lock lock(mStatsMutex);
     mStats.reset();
+    mRecordMarkerNames = true;
 }
 
 void null_device::inject_fault(null_fault fault) noexcept {

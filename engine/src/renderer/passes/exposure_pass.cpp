@@ -30,7 +30,7 @@ void exposure_histogram_pass::setup(pass_builder &builder) {
 void exposure_histogram_pass::execute(pass_context &context) {
     const view_resources &resourcesOfView = mShared.frame->view(mShared.view->viewIndex);
     context.command_list().clearBufferUInt(resourcesOfView.histogram, 0);
-    nvrhi::BindingSetDesc desc = {};
+    nvrhi::BindingSetDesc &desc = mShared.binding_desc();
     desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, mShared.frame->view_constants()));
     desc.addItem(nvrhi::BindingSetItem::PushConstants(1, gpu::DRAW_CONSTANTS_SIZE));
     desc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, context.texture(mShared.graph.hdr)));
@@ -76,7 +76,7 @@ void exposure_adapt_pass::setup(pass_builder &builder) {
 
 void exposure_adapt_pass::execute(pass_context &context) {
     const view_resources &resourcesOfView = mShared.frame->view(mShared.view->viewIndex);
-    nvrhi::BindingSetDesc desc = {};
+    nvrhi::BindingSetDesc &desc = mShared.binding_desc();
     desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, mShared.frame->view_constants()));
     desc.addItem(nvrhi::BindingSetItem::PushConstants(1, gpu::DRAW_CONSTANTS_SIZE));
     desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(0, resourcesOfView.histogram));

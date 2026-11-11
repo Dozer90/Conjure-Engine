@@ -219,7 +219,7 @@ void command_buffer::append(command_buffer &&other) {
     other.mFirst = nullptr;
     other.mLast = nullptr;
     other.mCount = 0;
-    other.mArena.reset();
+    other.recycle_arena();
 }
 
 void command_buffer::clear() noexcept {
@@ -233,7 +233,7 @@ void command_buffer::clear() noexcept {
     mFirst = nullptr;
     mLast = nullptr;
     mCount = 0;
-    mArena.reset();
+    recycle_arena();
 }
 
 
@@ -329,6 +329,33 @@ void command_buffer::destroy_payloads() noexcept {
         }
         entry->payloadLive = false;
     }
+}
+
+void command_buffer::shrink_to_fit() noexcept {
+    if (mCount > 0) {
+        // The records live in the arena's blocks; the room can only go once clear() or a flush has
+        // emptied the buffer.
+        return;
+    }
+    mArena.release();
+    mInstantiates.shrink_to_fit();
+}
+
+void command_buffer::recycle_arena() noexcept {
+    // arena::reset() keeps its first block and frees the rest, so a recording that spilled into more
+    // blocks would re-acquire them from the heap on every repeat. Like a vector's capacity, the buffer
+    // instead keeps room for its peak: the arena is rebuilt with a single block as large as the blocks
+    // the last recording spanned together. That is the recorded bytes rounded up to whole
+    // COMMAND_ARENA_BLOCK_BYTES blocks plus the unused tail of every block the recording spilled past,
+    // so the room kept is at most one block more than the recording needed (vector-style, not exact);
+    // shrink_to_fit() gives it back. One allocation on the next recording, none afterwards.
+    if (mArena.block_count() <= 1) {
+        mArena.reset();
+        return;
+    }
+    const usize reserved = mArena.bytes_reserved();
+    const usize blocks = (reserved + COMMAND_ARENA_BLOCK_BYTES - 1) / COMMAND_ARENA_BLOCK_BYTES;
+    mArena = core::memory::arena(blocks * COMMAND_ARENA_BLOCK_BYTES);
 }
 
 void command_buffer::return_reserved() noexcept {

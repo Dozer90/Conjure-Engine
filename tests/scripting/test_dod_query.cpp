@@ -1,23 +1,28 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/test_environment.h"
 #include "scripting_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/world.h"
 #include "conjure/scripting/native_api.h"
+#include "conjure/scripting/null_script_host.h"
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_host.h"
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -287,6 +292,302 @@ TEST_SUITE("scripting/dod_query") {
         runtime.destroy_all(false);
         runtime.shutdown();
         runtime.attach_world(nullptr);
+    }
+
+    TEST_CASE("dod query - reopening a scope over the same types allocates nothing after warm-up") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        // More rows than one chunk holds, in two archetypes, so a scope spans several chunk views.
+        constexpr u32 POSITION_COUNT = 2000;
+        for (u32 index = 0; index < POSITION_COUNT; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            if (index % 4 == 0) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(entity));
+            }
+        }
+        const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
+        u32 failures = 0;
+        u32 chunksSeen = 0;
+        const auto openAndClose = [&](u32 repetitions) {
+            for (u32 repetition = 0; repetition < repetitions; ++repetition) {
+                conjure_query_scope scope = {};
+                const core::result<u32> opened = fixture.runtime.begin_query_scope(position, scope);
+                if (!opened.has_value()) {
+                    ++failures;
+                    continue;
+                }
+                chunksSeen = static_cast<u32>(scope.chunk_count);
+                fixture.runtime.end_query_scope(opened.value());
+            }
+        };
+
+        // Warm-up: the first scope builds the cached query and the reusable scope state.
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            openAndClose(1);
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(failures == 0);
+        CHECK(chunksSeen >= 2);                                         // at least one chunk per archetype
+        CHECK(fixture.runtime.stats().cachedQueries == 1);
+
+        // Steady state: 100 scopes over the same type set take no heap block (08_testing.md 7.1).
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            CONJURE_CHECK_NO_ALLOCATIONS(openAndClose(100));
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(failures == 0);
+        CHECK(fixture.runtime.stats().cachedQueries == 1);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("dod query - a cached query follows new archetypes and is dropped with the world") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        const ecs::entity first = fixture.create_entity();
+        CONJURE_REQUIRE_OK(fixture.world.add<test_position>(first));
+        const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
+        const std::array<u32, 2> both = {position[0], fixture.registry.id_of<test_velocity>().value};
+        const std::array<u32, 2> swapped = {both[1], both[0]};
+        const std::array<std::span<const u32>, 3> requests = {position, both, swapped};
+        std::vector<i32> chunkCounts = {};
+        std::array<void *, 2> bothColumns = {};
+        std::array<void *, 2> swappedColumns = {};
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            for (usize request = 0; request < requests.size(); ++request) {
+                conjure_query_scope scope = {};
+                const core::result<u32> opened = fixture.runtime.begin_query_scope(requests[request], scope);
+                REQUIRE(opened.has_value());
+                chunkCounts.push_back(scope.chunk_count);
+                if (scope.chunk_count > 0 && request == 1) {
+                    bothColumns = {scope.chunks[0].columns[0], scope.chunks[0].columns[1]};
+                }
+                if (scope.chunk_count > 0 && request == 2) {
+                    swappedColumns = {scope.chunks[0].columns[0], scope.chunks[0].columns[1]};
+                }
+                fixture.runtime.end_query_scope(opened.value());
+            }
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        REQUIRE(chunkCounts.size() == 3);
+        CHECK(chunkCounts[0] == 1);
+        CHECK(chunkCounts[1] == 0);
+        CHECK(chunkCounts[2] == 0);
+        CHECK(fixture.runtime.stats().cachedQueries == 2);              // {position} and {position, velocity}
+
+        // An archetype created after the first scope is picked up by the cached query; the columns keep
+        // the order of the request even though both orders share one cached query.
+        const ecs::entity second = fixture.create_entity();
+        CONJURE_REQUIRE_OK(fixture.world.add<test_position>(second));
+        CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(second));
+        chunkCounts.clear();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        REQUIRE(chunkCounts.size() == 3);
+        CHECK(chunkCounts[0] == 2);
+        CHECK(chunkCounts[1] == 1);
+        CHECK(chunkCounts[2] == 1);
+        CHECK(bothColumns[0] != nullptr);
+        CHECK(bothColumns[0] == swappedColumns[1]);
+        CHECK(bothColumns[1] == swappedColumns[0]);
+        CHECK(fixture.runtime.stats().cachedQueries == 2);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+
+        // The cache belongs to the world: detaching drops it.
+        fixture.runtime.attach_world(nullptr);
+        CHECK(fixture.runtime.stats().cachedQueries == 0);
+        fixture.runtime.attach_world(&fixture.world);
+    }
+
+    TEST_CASE("dod query - a scope's chunk views stay put while other scopes open and close around it") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        for (u32 index = 0; index < 50; ++index) {
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        }
+        const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
+        bool viewsStable = false;
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            conjure_query_scope outer = {};
+            const core::result<u32> outerId = fixture.runtime.begin_query_scope(position, outer);
+            REQUIRE(outerId.has_value());
+            REQUIRE(outer.chunk_count == 1);
+            const conjure_chunk_view *outerViews = outer.chunks;
+            const void *outerColumn = outer.chunks[0].columns[0];
+
+            // Nested scopes beyond the reserved count, then the outer one closed first (not LIFO).
+            std::array<conjure_query_scope, script_runtime::QUERY_SCOPE_RESERVE + 2> inner = {};
+            std::array<u32, script_runtime::QUERY_SCOPE_RESERVE + 2> innerIds = {};
+            for (usize index = 0; index < inner.size(); ++index) {
+                const core::result<u32> opened = fixture.runtime.begin_query_scope(position, inner[index]);
+                REQUIRE(opened.has_value());
+                innerIds[index] = opened.value();
+            }
+            fixture.runtime.end_query_scope(outerId.value());
+            viewsStable = true;
+            for (usize index = 0; index < inner.size(); ++index) {
+                CAPTURE(index);
+                CHECK(inner[index].chunk_count == 1);
+                CHECK(inner[index].chunks[0].columns[0] == outerColumn);
+                CHECK(inner[index].chunks[0].count == 50);
+                viewsStable = viewsStable && inner[index].chunks != outerViews;
+                fixture.runtime.end_query_scope(innerIds[index]);
+            }
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(viewsStable);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("regression - review 4 a request with a repeated id shares the cached query of its set") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        for (u32 index = 0; index < 10; ++index) {
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        }
+        const u32 positionId = fixture.registry.id_of<test_position>().value;
+        const std::array<u32, 1> single = {positionId};
+        const std::array<u32, 2> repeated = {positionId, positionId};
+        std::array<i32, 2> chunkCounts = {};
+        std::array<const void *, 2> repeatedColumns = {};
+        const void *singleColumn = nullptr;
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            conjure_query_scope scope = {};
+            const core::result<u32> singleId = fixture.runtime.begin_query_scope(single, scope);
+            REQUIRE(singleId.has_value());
+            REQUIRE(scope.chunk_count == 1);
+            chunkCounts[0] = scope.chunk_count;
+            singleColumn = scope.chunks[0].columns[0];
+            fixture.runtime.end_query_scope(singleId.value());
+
+            const core::result<u32> repeatedId = fixture.runtime.begin_query_scope(repeated, scope);
+            REQUIRE(repeatedId.has_value());
+            REQUIRE(scope.chunk_count == 1);
+            chunkCounts[1] = scope.chunk_count;
+            repeatedColumns = {scope.chunks[0].columns[0], scope.chunks[0].columns[1]};
+            fixture.runtime.end_query_scope(repeatedId.value());
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(chunkCounts[0] == 1);
+        CHECK(chunkCounts[1] == 1);
+        // The columns follow the request, so both name the one position column ...
+        CHECK(singleColumn != nullptr);
+        CHECK(repeatedColumns[0] == singleColumn);
+        CHECK(repeatedColumns[1] == singleColumn);
+        // ... and {a, a} is the component set {a}: one cached query, not two.
+        CHECK(fixture.runtime.stats().cachedQueries == 1);
+        CHECK(fixture.runtime.cached_query_count() == 1);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("regression - review 4 nested scopes closed outer-first reuse the spilled state without allocating") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        // More chunks than a state holds inline: 14,000 rows of {position} are 18 chunks of 819, plus the one
+        // chunk of the {position, velocity} archetype, which is also the whole small scope.
+        constexpr u32 POSITION_COUNT = 14000;
+        constexpr u32 MOVING_COUNT = 10;
+        for (u32 index = 0; index < POSITION_COUNT; ++index) {
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        }
+        for (u32 index = 0; index < MOVING_COUNT; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(entity));
+        }
+        const std::array<u32, 1> large = {fixture.registry.id_of<test_position>().value};
+        const std::array<u32, 2> small = {large[0], fixture.registry.id_of<test_velocity>().value};
+        std::span<const u32> outerRequest = large;
+        std::span<const u32> innerRequest = small;
+        SUBCASE("the large scope is the outer one") {
+        }
+        SUBCASE("the large scope is the inner one") {
+            outerRequest = small;
+            innerRequest = large;
+        }
+
+        // Closing the outer scope first puts its state on the free list below the inner one's, so a last-in
+        // first-out reuse would hand the inline-only state to the large scope on the next frame.
+        u32 failures = 0;
+        i32 largeChunks = 0;
+        i32 smallChunks = 0;
+        const auto nestClosedOuterFirst = [&]() {
+            conjure_query_scope outer = {};
+            conjure_query_scope inner = {};
+            const core::result<u32> outerId = fixture.runtime.begin_query_scope(outerRequest, outer);
+            const core::result<u32> innerId = fixture.runtime.begin_query_scope(innerRequest, inner);
+            if (!outerId.has_value() || !innerId.has_value()) {
+                ++failures;
+                return;                                                 // force-closed at phase end
+            }
+            largeChunks = std::max(outer.chunk_count, inner.chunk_count);
+            smallChunks = std::min(outer.chunk_count, inner.chunk_count);
+            fixture.runtime.end_query_scope(outerId.value());
+            fixture.runtime.end_query_scope(innerId.value());
+        };
+
+        // Warm-up: both states exist and the one that carried the large scope has spilled.
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            nestClosedOuterFirst();
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(failures == 0);
+        CHECK(largeChunks > static_cast<i32>(script_runtime::QUERY_SCOPE_INLINE_CHUNKS));
+        CHECK(smallChunks == 1);
+
+        // Steady state: the large scope finds the spilled state again, whatever the close order was.
+        fixture.null_host().set_phase_hook([&](script_phase, f32) {
+            CONJURE_CHECK_NO_ALLOCATIONS(nestClosedOuterFirst());
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(failures == 0);
+        CHECK(fixture.runtime.stats().cachedQueries == 2);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("dod query - PositionWriter frames allocate nothing after warm-up [dotnet]" * doctest::timeout(60)) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        constexpr u32 POSITION_COUNT = 2000;
+        for (u32 index = 0; index < POSITION_COUNT; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity));
+            if (index % 4 == 0) {
+                CONJURE_REQUIRE_OK(fixture.world.add<test_velocity>(entity));
+            }
+        }
+        const script_entry_id writer = fixture.add_script(fixture.create_entity(), POSITION_WRITER);
+
+        // The update phase is what scripting.update_10k_dod measures: frames 3..10 are the steady state.
+        constexpr u32 FRAME_COUNT = 10;
+        std::array<u64, FRAME_COUNT> allocations = {};
+        for (u32 frame = 0; frame < FRAME_COUNT; ++frame) {
+            allocation_scope scope = {};
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            allocations[frame] = scope.allocation_count();
+        }
+        for (u32 frame = 2; frame < FRAME_COUNT; ++frame) {
+            CAPTURE(frame);
+            CHECK(allocations[frame] == 0);
+        }
+        CHECK(fixture.field_i64(writer, "Rows") == static_cast<i64>(POSITION_COUNT) * FRAME_COUNT);
+        CHECK(fixture.runtime.stats().cachedQueries == 1);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("dod query - begin_query_scope rejects bad requests natively [dotnet]" * doctest::timeout(60)) {

@@ -69,7 +69,11 @@ namespace {
         }
         const math::vec3 offset = value.position - cameraPosition;
         const f32 distanceSquared = std::max(glm::dot(offset, offset), 1.0e-2f);
-        return value.intensity * value.range * value.range / distanceSquared;
+        const f32 importance = value.intensity * value.range * value.range / distanceSquared;
+        // Intensity, range and position are user data and may be NaN, which compares neither greater
+        // nor less than any value and would make the std::sort comparators below inconsistent (no
+        // strict weak ordering, undefined behaviour). Such a light is the least important one.
+        return std::isnan(importance) ? 0.0f : importance;
     }
 
     [[nodiscard]] draw_variant variant_of(alpha_mode mode) noexcept {
@@ -654,7 +658,7 @@ namespace {
 void prepare_view(renderer_state &state, frame_view_state &stateOfView, const render_scene &scene);
 
 void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITexture *backBuffer) {
-    state.views.clear();
+    state.preparedViewCount = 0;
     state.instanceData.clear();
     state.atlasTileData.clear();
     state.lightTileBase.assign(scene.lights.size(), INVALID_INDEX);
@@ -723,18 +727,23 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
     state.atlasRendered = false;
     const bool shadowsEnabled = scene.shadows.enabled;
     if (shadowsEnabled) {
-        std::vector<u32> casters = {};
+        std::vector<u32> &casters = state.shadowCasters;
+        casters.clear();
         for (u32 index = 0; index < scene.lights.size(); ++index) {
             const light &value = scene.lights[index];
             if (value.castsShadows && value.type != light_type::DIRECTIONAL) {
                 casters.push_back(index);
             }
         }
-        std::stable_sort(casters.begin(), casters.end(), [&](u32 left, u32 right) {
-            return light_importance(
-              scene.lights[left],
-              primaryCamera
-            ) > light_importance(scene.lights[right], primaryCamera);
+        // std::sort with the scene index as the tie-break is the stable order without the temporary
+        // buffer std::stable_sort allocates.
+        std::sort(casters.begin(), casters.end(), [&](u32 left, u32 right) {
+            const f32 leftImportance = light_importance(scene.lights[left], primaryCamera);
+            const f32 rightImportance = light_importance(scene.lights[right], primaryCamera);
+            if (leftImportance != rightImportance) {
+                return leftImportance > rightImportance;
+            }
+            return left < right;
         });
         for (const u32 index : casters) {
             const light &value = scene.lights[index];
@@ -742,7 +751,9 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
             // The key identifies the light across frames (stable tile coordinates), never its
             // position in scene.lights: inserting a light must not re-key the ones after it.
             const u64 baseKey = atlas_light_key(value);
-            const u32 occurrence = state.atlasKeyOccurrences[baseKey]++;
+            u32 &occurrences = state.atlasKeyOccurrences.try_emplace(baseKey, 0u).first->second;
+            const u32 occurrence = occurrences;
+            ++occurrences;
             request.lightKey = atlas_light_key_occurrence(baseKey, occurrence);
             request.size = clamp_shadow_resolution(value.shadowResolution);
             request.tileCount = value.type == light_type::POINT ? 6 : 1;
@@ -786,10 +797,11 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
         }
     }
 
-    // Per view preparation.
+    // Per view preparation. The view states persist across frames (next_view_state resets one in
+    // place), so their draw regions keep the capacity of earlier frames.
     for (u32 viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
         const render_view &view = scene.views[viewIndex];
-        frame_view_state stateOfView = {};
+        frame_view_state &stateOfView = state.next_view_state();
         stateOfView.view = &view;
         stateOfView.viewIndex = viewIndex;
         stateOfView.worldSprites = worldSprites;
@@ -838,7 +850,7 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
         stateOfView.viewport = viewport;
 
         prepare_view(state, stateOfView, scene);
-        state.views.push_back(std::move(stateOfView));
+        ++state.preparedViewCount;
     }
 
     // One instance upload for every region of every view.
@@ -880,7 +892,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     // Visibility and the main region.
     cull_options options = {};
     options.layerMask = view.layerMask;
-    cull_instances(scene.meshes, stateOfView.frustum, options, state.desc.jobs, state.visible);
+    cull_instances(scene.meshes, stateOfView.frustum, options, state.desc.jobs, state.cullScratch, state.visible);
     state.stats.instancesCulled += static_cast<u32>(scene.meshes.size() - state.visible.size());
     build_region(
       state,
@@ -897,16 +909,20 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     std::vector<u32> &order = state.lightOrder;
     order.resize(scene.lights.size());
     std::iota(order.begin(), order.end(), 0u);
-    std::stable_sort(order.begin(), order.end(), [&](u32 left, u32 right) {
+    // Scene order breaks ties, which makes std::sort produce the stable order without the temporary
+    // buffer std::stable_sort allocates.
+    std::sort(order.begin(), order.end(), [&](u32 left, u32 right) {
         const bool leftDirectional = scene.lights[left].type == light_type::DIRECTIONAL;
         const bool rightDirectional = scene.lights[right].type == light_type::DIRECTIONAL;
         if (leftDirectional != rightDirectional) {
             return leftDirectional;
         }
-        return light_importance(
-          scene.lights[left],
-          view.cameraPosition
-        ) > light_importance(scene.lights[right], view.cameraPosition);
+        const f32 leftImportance = light_importance(scene.lights[left], view.cameraPosition);
+        const f32 rightImportance = light_importance(scene.lights[right], view.cameraPosition);
+        if (leftImportance != rightImportance) {
+            return leftImportance > rightImportance;
+        }
+        return left < right;
     });
     const u32 lightCount = static_cast<u32>(std::min<usize>(order.size(), MAX_LIGHTS_PER_VIEW));
     const u32 lightOverflow = static_cast<u32>(order.size()) - lightCount;
@@ -988,7 +1004,14 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
             cascadeOptions.ignoreFarPlane = true;
             cascadeOptions.shadowCastersOnly = true;
             const math::frustum lightFrustum = frustum_from_clip(slice.clipFromWorld);
-            cull_instances(scene.meshes, lightFrustum, cascadeOptions, state.desc.jobs, state.visible);
+            cull_instances(
+              scene.meshes,
+              lightFrustum,
+              cascadeOptions,
+              state.desc.jobs,
+              state.cullScratch,
+              state.visible
+            );
             build_region(
               state,
               list.region,
@@ -1007,7 +1030,6 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
 
     // Atlas tiles are rendered once per frame, by the first view that is actually prepared with
     // shadows enabled (the allocation is scene-wide; view 0 may skip shadows or be skipped itself).
-    stateOfView.atlasTiles.clear();
     if (!state.atlasRendered && stateOfView.shadows && !state.atlasTileData.empty()) {
         state.atlasRendered = true;
         const std::span<const atlas_allocation> allocations = state.atlas.allocations();
@@ -1021,7 +1043,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
             const u32 base = state.lightTileBase[lightIndex];
             for (u8 face = 0; face < allocation.tileCount; ++face) {
                 const atlas_tile &tile = tiles[allocation.firstTile + face];
-                shadow_draw_list list = {};
+                shadow_draw_list &list = stateOfView.push_atlas_tile();
                 list.tileIndex = base + face;
                 list.atlasX = tile.x;
                 list.atlasY = tile.y;
@@ -1031,7 +1053,14 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
                 tileOptions.shadowCastersOnly = true;
                 const math::mat4 &clip = state.atlasTileData[base + face].clipFromWorld;
                 const math::frustum lightFrustum = frustum_from_clip(clip);
-                cull_instances(scene.meshes, lightFrustum, tileOptions, state.desc.jobs, state.visible);
+                cull_instances(
+                  scene.meshes,
+                  lightFrustum,
+                  tileOptions,
+                  state.desc.jobs,
+                  state.cullScratch,
+                  state.visible
+                );
                 const light &value = scene.lights[lightIndex];
                 const math::mat4 lightView = math::look_at(
                   value.position,
@@ -1041,7 +1070,6 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
                   CUBE_FACE_UP[face]
                 );
                 build_region(state, list.region, state.visible, scene, lightView, value.range, true, nullptr);
-                stateOfView.atlasTiles.push_back(std::move(list));
             }
         }
     }
@@ -1195,7 +1223,7 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
     for (u32 cascade = 0; cascade < stateOfView.cascadeCount; ++cascade) {
         graph.add_pass(*state.cascadePasses[cascade]);
     }
-    if (!stateOfView.atlasTiles.empty()) {
+    if (stateOfView.atlasTileCount > 0) {
         graph.add_pass(*state.atlasPass);
     }
     if (hasOpaque) {
@@ -1307,7 +1335,7 @@ core::result<void> renderer::render(const render_scene &scene) {
     //    references they return live until the next collect(), so jobs the render thread helps with
     //    inside parallel_for may call upload_* / release_* without deadlocking (design 5).
     prepare_frame(state, scene, backBuffer);
-    for (frame_view_state &view : state.views) {
+    for (frame_view_state &view : state.prepared_views()) {
         render_view_graph(state, view, scene);
     }
 

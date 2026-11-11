@@ -52,6 +52,41 @@ the HLSL defines to keep the two in step.
 4. ImGui into the swapchain (editor builds).
 5. `end_frame`: close, execute, present, evict idle transients and binding sets, fill `render_stats`.
 
+### Steady-state frames allocate nothing
+
+`08_testing.md` 7.1 gates `renderer.extract_10k` and `renderer.null_frame_10k` at zero allocations after
+warm-up, and `tests/renderer/test_renderer_null_frame.cpp` asserts the same for frames 3..10 of a 10k
+scene (sun, 63 local lights with four shadow casters, environment, every post-process pass) both with
+and without a job system, and for extraction plus culling alone. Everything a frame touches is
+therefore owned by the renderer and reset in place:
+
+- `renderer_state::views` is a pool of `frame_view_state` objects (`next_view_state()` resets one,
+  `prepared_views()` is this frame's prefix); the draw regions of the main view, the cascades and the
+  atlas tile lists (`push_atlas_tile()` / `atlas_tiles()`) keep their capacity.
+- `cull_instances` takes a `cull_scratch` (one per renderer, `renderer_state::cullScratch`): the
+  job-parallel path writes each chunk's indices into its own slice of a buffer sized once for the
+  instance count, no per-call chunk lists. The overload without a scratch still exists for callers off
+  the hot path; it decides the path first and builds its scratch only when it runs on jobs, so a serial
+  cull through it touches nothing but the output (an empty `std::vector` is a heap block under the MSVC
+  Debug runtime).
+- `render_graph::reset()` keeps the pass entries (their read / write / target vectors keep capacity)
+  and `compile` works in member scratch; `pass_shared::binding_desc()` hands every pass the one
+  `nvrhi::BindingSetDesc` (NVRHI's holds a `std::vector`) to fill before it looks the set up in the cache.
+- `shadow_atlas_allocator` keeps its all-or-nothing node backup and the settled flags as members.
+- `timer_ring` creates a query for all three slots at once the first time a frame needs one more than
+  any frame before it (never per slot on its first use, which would allocate in frames 1..3), so a
+  steady pass count creates nothing after its first frame and an idle ring holds no query: NVRHI's
+  default timer-query budget is 256 per device and every renderer on the device shares it (at most
+  `MAX_QUERIES_PER_FRAME` x 3 = 144 per ring). One WARN names the query the device refused; the passes
+  beyond it go untimed. `query_count()` exposes the total for tests.
+- Lights and shadow casters are ordered with `std::sort` and the scene index as the tie-break, which
+  is the stable order without the temporary buffer `std::stable_sort` allocates (libstdc++ always
+  allocates one). `light_importance` maps a NaN result (NaN intensity, range or position in user data)
+  to 0 so the comparators keep their strict weak ordering.
+
+The null device the gates measure through is allocation-free in steady state as well (`rhi` README,
+"Null device"); the renderer gate therefore counts device-side allocations and does not exclude them.
+
 Conventions: reverse-Z everywhere (near = 1, far = 0, `GreaterOrEqual`), classic NVRHI binding sets
 with `registerSpaceIsDescriptorSet`, a volatile constant buffer at `b0` and 16 bytes of push constants
 at `b1` in space 0, the material set in space 1, matrices uploaded verbatim from glm and consumed with
@@ -111,7 +146,12 @@ WARNs once.
 `gpu_types`, `tonemap_reference`, `exposure_math`, `pipeline_cache`, `gpu_resource_cache`,
 `renderer_null_frame`, `renderer_failures`, `renderer_gpu`). Everything runs on the null device; the
 `[gpu]` cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG and
-HDR inputs are generated in the tests (no binary assets).
+HDR inputs are generated in the tests (no binary assets). The allocation gates
+(`CONJURE_CHECK_NO_ALLOCATIONS`) live next to the code they pin: the whole frame and extraction plus
+culling in `test_renderer_null_frame.cpp`, the warm `cull_scratch` in `test_culling.cpp`, the rebuilt
+graph in `test_render_graph.cpp` and the repeated atlas allocation in `test_shadow_atlas_allocator.cpp`.
+Their benchmark counterparts are `renderer.extract_10k` and `renderer.null_frame_10k`
+(`tests/benchmarks/bench_render_null_frame.cpp`, thresholds `allocs: 0`).
 
 ```
 python tools/build.py --target conjure_renderer_tests --test -R renderer

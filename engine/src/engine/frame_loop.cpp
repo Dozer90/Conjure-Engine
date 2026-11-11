@@ -91,11 +91,14 @@ core::result<void> frame_loop::run_frame(std::optional<f64> deltaOverride) {
     pump_events();
     apply_pending_resize();
 
-    // 4. Main-thread tasks.
-    if (app.mMainThreadQueue != nullptr) {
+    // 4. Main-thread tasks. The core queue is drained only when something is queued: its drain builds a
+    // local task vector, which costs a block per frame under MSVC's debug iterators even when empty.
+    if (app.mMainThreadQueue != nullptr && app.mMainThreadQueue->pending_count() > 0) {
         app.mMainThreadQueue->drain();
     }
-    core::jobs::drain_main_thread_queue();
+    if (core::jobs::main_thread_queue_size() > 0) {
+        core::jobs::drain_main_thread_queue();
+    }
 
     // 5. Subsystem and layer frame begin.
     for (const std::unique_ptr<engine_subsystem> &subsystem : app.mSubsystems) {

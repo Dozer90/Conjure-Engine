@@ -40,7 +40,7 @@ docs/handbook/                     🛠 Engineering handbook
   repository-layout.md
   build-pipeline.md                CMake structure, configs, options, third-party pinning, shaders, managed build, export
   coding-standards.md              style, conventions, review checklist, error model, logging, asserts
-  data-oriented-design.md          DOD practices in Conjure: archetypes, chunk iteration, SoA, change detection, jobs, frame memory, what to avoid
+  data-oriented-design.md          DOD practices in Conjure: archetypes, chunk iteration, SoA, change detection, jobs, frame memory, allocation-free steady state, what to avoid
   testing.md                       test support library, conventions, labels, preconditions, benchmarks, CI matrix
   modules/                         one page per engine module: purpose, internals, threading, extension points, tests
   module-system/                   dedicated section: what a module is, manifest, ABI, create a module, import, distribute, game modules, C# in modules

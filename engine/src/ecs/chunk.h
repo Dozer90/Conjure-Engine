@@ -53,6 +53,27 @@ namespace conjure::ecs {
             }
 
             /// <summary>
+            /// Detaches the block (the caller returns it to the pool) so the metadata can be parked as a
+            /// spare; returns the block. The chunk holds no rows afterwards.
+            /// </summary>
+            [[nodiscard]] void *release_block() noexcept {
+                void *block = mBlock;
+                mBlock = nullptr;
+                mCount = 0;
+                return block;
+            }
+
+            /// <summary>
+            /// Attaches a fresh block to a parked spare: no rows and every column version 0, exactly the
+            /// state of a newly constructed chunk of the same layout.
+            /// </summary>
+            void rebind(void *block) noexcept {
+                mBlock = block;
+                mCount = 0;
+                stamp_all(0);
+            }
+
+            /// <summary>
             /// The entity column (capacity entries, count() of them live).
             /// </summary>
             [[nodiscard]] entity *entities() noexcept {

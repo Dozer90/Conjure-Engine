@@ -39,6 +39,7 @@ core::result<application_desc> application_desc::from_options(
         desc.config.rendering.enabled = headless.rendering.enabled;
         desc.config.rendering.backend = headless.rendering.backend;
         desc.config.audio.backend = headless.audio.backend;
+        desc.config.assets.hotReload = headless.assets.hotReload;
         desc.config.scripting.enabled = headless.scripting.enabled;
         desc.config.time.forcedFrameDeltaSeconds = headless.time.forcedFrameDeltaSeconds;
         desc.config.jobs.workerCount = headless.jobs.workerCount;

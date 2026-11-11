@@ -225,4 +225,5 @@ system call.
   [`../../../design/09_cross_area_resolutions.md`](../../../design/09_cross_area_resolutions.md) R30, R58, R63
 - area READMEs: `engine/src/core/{foundation,math,containers,strings,memory}/README.md`
 - handbook: [Coding standards](../../coding-standards.md) 5-7 (error model, asserts, logging),
-  [Data-oriented design](../../data-oriented-design.md) 7-9 (frame memory, `string_id`, `slot_map`)
+  [Data-oriented design](../../data-oriented-design.md) 7-10 (frame memory, allocation-free steady state,
+  `string_id`, `slot_map`)

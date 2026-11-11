@@ -100,8 +100,9 @@ namespace {
     };
 
     [[nodiscard]] ecs::scheduler_desc inline_stages() noexcept {
-        // Stages run inline so the per-stage job counter of job_system::schedule never shows up in the
-        // allocation gate; parallel_for_chunks still fans the system out over the workers.
+        // The scenario measures one system's chunk fan-out, not stage dispatch: the stage runs inline on
+        // the caller (its only system would otherwise be one job that waits for its own grains) while
+        // parallel_for_chunks still fans the system out over the workers.
         ecs::scheduler_desc desc = {};
         desc.parallelSystems = false;
         desc.parallelChunks = true;

@@ -2,6 +2,11 @@
 # docs/design/14_physics.md 10 (test_layers, test_rigid_body, test_colliders, test_fixed_step,
 # test_component_sync, test_physics_stack, test_determinism). Everything is headless; the world-level
 # cases run under for_each_job_mode (0 workers inline, 4 workers parallel).
+#
+# The [slow] cases (the 0-versus-4-workers determinism run and the 10,000-body allocation gate, seconds
+# each in Debug and far longer under the sanitizer legs) live in the second executable
+# conjure_physics_slow_tests, labelled "physics;slow" so the default test presets skip them and the nightly
+# presets run them (the same split as tests/scripting).
 
 if(NOT TARGET conjure::physics)
     return()
@@ -9,6 +14,7 @@ endif()
 
 conjure_add_test_module(physics
     SOURCES
+        determinism_scenario.h
         physics_test_fixture.h
         test_character_controller.cpp
         test_colliders.cpp
@@ -32,5 +38,17 @@ conjure_add_test_module(physics
         test_rigid_body.cpp
     TIMEOUT 300
 )
+
+conjure_add_test_module(physics_slow
+    SOURCES
+        determinism_scenario.h
+        physics_test_fixture.h
+        slow/test_component_sync_10k.cpp
+        slow/test_determinism_parallel.cpp
+    DEPS conjure::physics
+    LABELS physics;slow
+    TIMEOUT 600
+)
+target_include_directories(conjure_physics_slow_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 conjure_header_check(conjure_physics)

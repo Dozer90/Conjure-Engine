@@ -128,8 +128,9 @@ namespace conjure::ecs {
             /// <summary>
             /// Runs every enabled system of the phase, stage by stage, flushing command buffers at each
             /// stage boundary. Owner thread, world unlocked. The per-stage bookkeeping lives in the phase
-            /// (kept at capacity), so a phase that has run once allocates nothing of its own afterwards;
-            /// with parallelSystems and a job system, job_system::schedule still allocates its counter.
+            /// (kept at capacity) and stage jobs complete on a stack-held core::jobs::job_fence, so a
+            /// phase that has run once allocates nothing of its own afterwards, with parallelSystems and
+            /// a job system included (tests/ecs/test_scheduler.cpp gates it at zero in both modes).
             /// </summary>
             void run_phase(system_phase target, const frame_info &frame);
 

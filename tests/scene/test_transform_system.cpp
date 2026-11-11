@@ -2,10 +2,14 @@
 #include "conjure/testing/approx.h"
 #include "scene_test_fixture.h"
 
+#include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
 #include "conjure/ecs/system_phase.h"
 #include "conjure/scene/register.h"
 #include "conjure/scene/transform_system.h"
+
+#include <span>
+#include <utility>
 
 using namespace conjure;
 using namespace scene_test;
@@ -25,6 +29,7 @@ TEST_SUITE("scene/transform_system") {
         CHECK_FALSE(has_flag(desc.flags, ecs::system_flags::MAIN_THREAD));
         CHECK(desc.reads.test(ids.localTransform));
         CHECK(desc.reads.test(ids.parent));
+        CHECK(desc.reads.test(ids.children));
         CHECK(desc.reads.test(ids.interpolatedTransform));
         CHECK(desc.reads.test(ids.transformDirty));
         CHECK(desc.writes.test(ids.worldTransform));
@@ -34,6 +39,43 @@ TEST_SUITE("scene/transform_system") {
         CHECK(static_cast<bool>(desc.run));
         CHECK(system.interpolation_enabled());
         CHECK(system.run_count() == 0);
+    }
+
+    TEST_CASE("regression - review 4 a TRANSFORM writer of children is staged apart from propagate_transforms") {
+        // The pass reads `children` from job threads (it marks a recomputed row's children pending) and the
+        // scheduler packs a phase's stages from the declared masks alone, so an undeclared read would let
+        // a system writing `children` in the same phase share the pass's stage and mutate the lists the
+        // jobs iterate.
+        scene_fixture fixture = {};
+        const scene::scene_component_ids &ids = fixture.active().ids();
+        ecs::system_desc writer = {};
+        writer.name = core::string_id("test.children_writer");
+        writer.phase = ecs::system_phase::TRANSFORM;
+        writer.writes.set(ids.children);
+        writer.run = [](ecs::system_context &) {};
+        const core::result<ecs::system_id> writerId = fixture.scheduler.add_system(std::move(writer));
+        CONJURE_REQUIRE_OK(writerId);
+        CONJURE_REQUIRE_OK(fixture.scheduler.finalise());
+
+        const std::span<const ecs::stage_info> stages = fixture.scheduler.stages(ecs::system_phase::TRANSFORM);
+        const usize notFound = stages.size();
+        usize propagateStage = notFound;
+        usize writerStage = notFound;
+        for (usize index = 0; index < stages.size(); ++index) {
+            for (const ecs::system_id id : stages[index].systems) {
+                const ecs::system_desc *member = fixture.scheduler.system(id);
+                REQUIRE(member != nullptr);
+                if (member->name == core::string_id(scene::SYSTEM_PROPAGATE_TRANSFORMS)) {
+                    propagateStage = index;
+                }
+                if (id == writerId.value()) {
+                    writerStage = index;
+                }
+            }
+        }
+        REQUIRE(propagateStage != notFound);
+        REQUIRE(writerStage != notFound);
+        CHECK(propagateStage != writerStage);
     }
 
     TEST_CASE("transform_system - stats count visited and skipped") {

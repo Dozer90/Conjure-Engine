@@ -1,11 +1,17 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/assert_capture.h"
+
 #include "jobs_test_support.h"
 
 #include "conjure/core/jobs/job_handle.h"
+#include "conjure/core/jobs/job_system.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
+#include <span>
+#include <vector>
 
 using namespace conjure;
 using namespace conjure::core;
@@ -120,5 +126,93 @@ TEST_SUITE("core/job_handle") {
         }
         CHECK(handle.valid());
         CHECK(handle.is_complete());
+    }
+
+    /*-----------------------------------------------------------------------*/
+    // job_fence
+
+    TEST_CASE("job_fence - a fresh fence is complete with nothing pending") {
+        const job_fence fence = {};
+
+        CHECK(fence.is_complete());
+        CHECK(fence.pending() == 0);
+    }
+
+    TEST_CASE("job_fence - a batch scheduled on a fence is pending until wait returns [parallel]") {
+        CONJURE_JOBS_WORKER_SUBCASES(workers);
+        testing::scoped_job_system fixture(workers);
+        std::atomic<int> ran = 0;
+        std::vector<std::function<void()>> jobs = {};
+        for (int index = 0; index < 4; ++index) {
+            jobs.emplace_back([&ran] {
+                ran.fetch_add(1);
+            });
+        }
+
+        job_fence fence = {};
+        fixture->schedule(std::span<const std::function<void()>>(jobs), fence);
+        // Inline execution (0 workers) finishes before schedule returns; workers may still be running.
+        CHECK(fence.pending() <= 4);
+        fixture->wait(fence);
+
+        CHECK(fence.is_complete());
+        CHECK(fence.pending() == 0);
+        CHECK(ran.load() == 4);
+
+        // Waiting again on a complete fence returns at once and the fence is reusable.
+        fixture->wait(fence);
+        fixture->schedule(std::span<const std::function<void()>>(jobs), fence);
+        fixture->wait(fence);
+        CHECK(fence.is_complete());
+        CHECK(ran.load() == 8);
+    }
+
+    TEST_CASE("job_fence - several batches gather on one fence and one wait covers them all [parallel]") {
+        CONJURE_JOBS_WORKER_SUBCASES(workers);
+        testing::scoped_job_system fixture(workers);
+        std::atomic<int> ran = 0;
+        std::vector<std::function<void()>> first = {};
+        std::vector<std::function<void()>> second = {};
+        for (int index = 0; index < 3; ++index) {
+            first.emplace_back([&ran] {
+                ran.fetch_add(1);
+            });
+            second.emplace_back([&ran] {
+                ran.fetch_add(10);
+            });
+        }
+
+        job_fence fence = {};
+        fixture->schedule(std::span<const std::function<void()>>(first), fence);
+        fixture->schedule(std::span<const std::function<void()>>(second), fence, job_priority::HIGH);
+        fixture->wait(fence);
+
+        CHECK(fence.is_complete());
+        CHECK(ran.load() == 33);
+        CHECK(fixture->stats().scheduled == 6);
+    }
+
+    TEST_CASE("job_fence - an empty batch leaves the fence complete and empty entries are skipped [parallel]") {
+        CONJURE_JOBS_WORKER_SUBCASES(workers);
+        testing::scoped_job_system fixture(workers);
+        testing::expect_assert asserts = {};
+        std::atomic<int> ran = 0;
+
+        job_fence fence = {};
+        const std::vector<std::function<void()>> empty = {};
+        fixture->schedule(std::span<const std::function<void()>>(empty), fence);
+        CHECK(fence.is_complete());
+        CHECK(fixture->stats().scheduled == 0);
+
+        std::vector<std::function<void()>> sparse = {};
+        sparse.emplace_back([&ran] { ran.fetch_add(1); });
+        sparse.emplace_back(std::function<void()>());
+        sparse.emplace_back([&ran] { ran.fetch_add(1); });
+        fixture->schedule(std::span<const std::function<void()>>(sparse), fence);
+        fixture->wait(fence);
+
+        CHECK(ran.load() == 2);
+        CHECK(asserts.count() == 1);
+        CHECK(fixture->stats().scheduled == 2);
     }
 }

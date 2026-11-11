@@ -55,10 +55,20 @@ namespace conjure::renderer {
         u32 atlasX = 0;                         // atlas placement (atlas tiles only)
         u32 atlasY = 0;
         u32 atlasSize = 0;
+
+        void clear() noexcept {
+            tileIndex = 0;
+            region.clear();
+            atlasX = 0;
+            atlasY = 0;
+            atlasSize = 0;
+        }
     };
 
     /// <summary>
-    /// What the renderer resolved for one view before building its graph.
+    /// What the renderer resolved for one view before building its graph. The renderer keeps these
+    /// objects alive across frames and resets them in place (reset()), so the draw regions and the
+    /// atlas tile lists keep their capacity and a steady-state frame allocates nothing.
     /// </summary>
     struct frame_view_state {
         const render_view *view = nullptr;
@@ -82,7 +92,8 @@ namespace conjure::renderer {
         u32 opaqueBatchCount = 0;
         std::array<shadow_draw_list, MAX_SHADOW_CASCADES> cascades = {};
         u32 cascadeCount = 0;
-        std::vector<shadow_draw_list> atlasTiles = {};
+        std::vector<shadow_draw_list> atlasTiles = {};   // pool of lists; the first atlasTileCount are this frame's
+        u32 atlasTileCount = 0;
         u32 lightCount = 0;
         u32 directionalLightCount = 0;
         u32 localLightCount = 0;
@@ -93,6 +104,65 @@ namespace conjure::renderer {
 
         bool hdrCleared = false;
         bool depthCleared = false;
+
+        /// <summary>
+        /// The atlas tiles this frame renders through the view (shadow_atlas_pass).
+        /// </summary>
+        [[nodiscard]] std::span<const shadow_draw_list> atlas_tiles() const noexcept {
+            return std::span<const shadow_draw_list>(atlasTiles.data(), atlasTileCount);
+        }
+
+        /// <summary>
+        /// The next atlas tile list of this frame, reset in place; a list object is created only when
+        /// the view has never rendered that many tiles.
+        /// </summary>
+        [[nodiscard]] shadow_draw_list &push_atlas_tile() {
+            if (atlasTiles.size() <= atlasTileCount) {
+                atlasTiles.emplace_back();
+            }
+            shadow_draw_list &list = atlasTiles[atlasTileCount];
+            ++atlasTileCount;
+            list.clear();
+            return list;
+        }
+
+        /// <summary>
+        /// Back to the default values with every list emptied and its capacity kept.
+        /// </summary>
+        void reset() noexcept {
+            view = nullptr;
+            viewIndex = 0;
+            viewport = math::urect{};
+            targetSize = math::uvec2(1, 1);
+            targetFormat = rhi::texture_format::RGBA8_SRGB;
+            targetTexture = nullptr;
+            constants = gpu::view_constants{};
+            frustum = math::frustum{};
+            postProcess = true;
+            autoExposure = false;
+            bloom = false;
+            ssao = false;
+            shadows = false;
+            hasEnvironment = false;
+            drawDebug = false;
+            environment = nullptr;
+            main.clear();
+            opaqueBatchCount = 0;
+            for (shadow_draw_list &cascade : cascades) {
+                cascade.clear();
+            }
+            cascadeCount = 0;
+            atlasTileCount = 0;
+            lightCount = 0;
+            directionalLightCount = 0;
+            localLightCount = 0;
+            worldSprites = false;
+            screenSprites = false;
+            debugDepthTestedVertices = 0;
+            debugOverlayVertices = 0;
+            hdrCleared = false;
+            depthCleared = false;
+        }
     };
 
     /// <summary>
@@ -140,6 +210,20 @@ namespace conjure::renderer {
         nvrhi::ISampler *linearClampSampler = nullptr;
         nvrhi::ISampler *pointClampSampler = nullptr;
         u64 frameIndex = 0;
+        // nvrhi::BindingSetDesc holds a std::vector, so a description built per pass per frame would
+        // allocate; every builder fills this one scratch instead (binding_desc()), whose capacity
+        // persists. Mutable because the builders are const views of the shared state.
+        mutable nvrhi::BindingSetDesc bindingScratch = {};
+
+        /// <summary>
+        /// The scratch binding set description, emptied and ready to be filled; valid until the next
+        /// call, so a pass fills it, looks the set up in the cache and only then builds the next one.
+        /// </summary>
+        [[nodiscard]] nvrhi::BindingSetDesc &binding_desc() const noexcept {
+            bindingScratch.bindings.clear();
+            bindingScratch.trackLiveness = true;
+            return bindingScratch;
+        }
 
         /// <summary>
         /// The viewport and scissor covering the view's viewport.

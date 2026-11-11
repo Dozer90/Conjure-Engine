@@ -200,6 +200,7 @@ CONJURE_BENCHMARK(renderer.extract_10k) {
     const renderer::cull_options options = {};
     std::vector<u32> visible = {};
     visible.reserve(GRID_SIDE * GRID_SIDE);
+    renderer::cull_scratch cullScratch = {};    // the renderer keeps one per instance; sized on the first cull
     u64 frameIndex = 0;
 
     // Extraction through the renderer's pair (begin_extract clears the write slot and keeps its capacity),
@@ -210,7 +211,7 @@ CONJURE_BENCHMARK(renderer.extract_10k) {
         scene.views.push_back(view);
         fill_grid(scene, mesh, opaque, cube.bounds());
         instance.end_extract();
-        renderer::cull_instances(scene.meshes, frustum, options, &context.jobs(), visible);
+        renderer::cull_instances(scene.meshes, frustum, options, &context.jobs(), cullScratch, visible);
     };
     extractAndCull();
     const f32 visibleFraction = static_cast<f32>(visible.size()) / static_cast<f32>(GRID_SIDE * GRID_SIDE);

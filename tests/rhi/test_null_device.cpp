@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/memory_guard.h"
 #include "conjure/testing/test_environment.h"
@@ -421,6 +422,7 @@ TEST_SUITE("rhi/null_device") {
         nvrhi::IDevice &native = *created->native_device();
         const nvrhi::CommandListHandle commandList = native.createCommandList();
         REQUIRE(commandList != nullptr);
+        created->reset_null_stats();   // marker names are stored only once a consumer asked
 
         u64 previousFence = 0;
         for (int cycle = 0; cycle < 100; ++cycle) {
@@ -446,6 +448,107 @@ TEST_SUITE("rhi/null_device") {
         CHECK(stats.markersBegun == 100);
         CHECK(stats.markersEnded == 100);
         CHECK(stats.markerNames.size() == 100);
+        CHECK(stats.markerNamesDropped == 0);
+    }
+
+    TEST_CASE("null_device - marker names are stored only after a stats consumer asked and are capped") {
+        // The null device is the instrument of the renderer's allocation gates: without a consumer
+        // the names (the one growing record) are counted but not stored, reset_null_stats() arms the
+        // recording, and MAX_RECORDED_MARKER_NAMES bounds it per reset.
+        const std::unique_ptr<device> created = make_null_device();
+        nvrhi::IDevice &native = *created->native_device();
+        const nvrhi::CommandListHandle commandList = native.createCommandList();
+        REQUIRE(commandList != nullptr);
+        const auto record_markers = [&](u32 count) {
+            commandList->open();
+            for (u32 index = 0; index < count; ++index) {
+                commandList->beginMarker("a_marker_name_longer_than_the_sso");
+                commandList->endMarker();
+            }
+            commandList->close();
+        };
+
+        record_markers(3);
+        null_device_stats stats = stats_of(*created);
+        CHECK(stats.markersBegun == 3);
+        CHECK(stats.markersEnded == 3);
+        CHECK(stats.markerNames.empty());
+        CHECK(stats.markerNamesDropped == 3);
+
+        created->reset_null_stats();
+        record_markers(2);
+        stats = stats_of(*created);
+        CHECK(stats.markersBegun == 2);
+        REQUIRE(stats.markerNames.size() == 2);
+        CHECK(stats.markerNames[1] == "a_marker_name_longer_than_the_sso");
+        CHECK(stats.markerNamesDropped == 0);
+
+        record_markers(MAX_RECORDED_MARKER_NAMES + 10);
+        stats = stats_of(*created);
+        CHECK(stats.markersBegun == MAX_RECORDED_MARKER_NAMES + 12);
+        CHECK(stats.markerNames.size() == MAX_RECORDED_MARKER_NAMES);
+        CHECK(stats.markerNamesDropped == 12);
+
+        // A second reset starts over and keeps recording.
+        created->reset_null_stats();
+        record_markers(1);
+        stats = stats_of(*created);
+        CHECK(stats.markerNames.size() == 1);
+        CHECK(stats.markerNamesDropped == 0);
+    }
+
+    TEST_CASE("null_device - open/close 100 command lists after warm-up allocates nothing") {
+        // The renderer's steady-state gates (renderer.null_frame_10k, allocs 0) measure through this
+        // device, so recording a frame must not touch the heap: the referenced-resource list and the
+        // state trackers keep their storage across open(), the counters are integers and no marker
+        // name is stored while no consumer asked for them.
+        log_capture logs = {};
+        const std::unique_ptr<device> created = make_null_device();
+        nvrhi::IDevice &native = *created->native_device();
+        const nvrhi::TextureHandle texture = native.createTexture(colour_texture_desc(16, 16));
+        const nvrhi::BufferHandle buffer = native.createBuffer(vertex_buffer_desc(256));
+        const nvrhi::CommandListHandle commandList = native.createCommandList();
+        REQUIRE(texture != nullptr);
+        REQUIRE(buffer != nullptr);
+        REQUIRE(commandList != nullptr);
+        const std::array<u32, 4> payload = {1, 2, 3, 4};
+
+        const auto record_frame = [&]() {
+            commandList->open();
+            commandList->beginMarker("a_marker_name_longer_than_the_sso");
+            commandList->beginTrackingTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::Common);
+            commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::RenderTarget);
+            commandList->setBufferState(buffer, nvrhi::ResourceStates::VertexBuffer);
+            commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 0);
+            commandList->clearTextureFloat(texture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+            nvrhi::GraphicsState state = {};
+            state.addVertexBuffer(nvrhi::VertexBufferBinding().setBuffer(buffer));
+            commandList->setGraphicsState(state);
+            commandList->setPushConstants(payload.data(), 16);
+            nvrhi::DrawArguments draw = {};
+            draw.vertexCount = 3;
+            commandList->draw(draw);
+            commandList->endMarker();
+            commandList->close();
+            native.executeCommandList(commandList);
+            native.runGarbageCollection();
+        };
+        record_frame();
+        record_frame();
+        CHECK(commandList->getTextureSubresourceState(texture, 0, 0) == nvrhi::ResourceStates::RenderTarget);
+
+        CONJURE_CHECK_NO_ALLOCATIONS(for (u32 cycle = 0; cycle < 100; ++cycle) { record_frame(); });
+        const null_device_stats stats = stats_of(*created);
+        CHECK(stats.commandListsOpened == 102);
+        CHECK(stats.commandListsClosed == 102);
+        CHECK(stats.commandListsSubmitted == 102);
+        CHECK(stats.draws == 102);
+        CHECK(stats.markersBegun == 102);
+        CHECK(stats.markerNames.empty());
+        CHECK(stats.markerNamesDropped == 102);
+        CHECK(commandList->getTextureSubresourceState(texture, 0, 0) == nvrhi::ResourceStates::RenderTarget);
+        CHECK(commandList->getBufferState(buffer) == nvrhi::ResourceStates::VertexBuffer);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("null_device - executing an open command list is an error and is not counted") {
@@ -479,6 +582,7 @@ TEST_SUITE("rhi/null_device") {
         REQUIRE(buffer != nullptr);
         REQUIRE(staging != nullptr);
         REQUIRE(commandList != nullptr);
+        created->reset_null_stats();   // marker names are stored only once a consumer asked
 
         const std::array<u32, 4> payload = {1, 2, 3, 4};
         commandList->open();
@@ -850,6 +954,8 @@ TEST_SUITE("rhi/null_device") {
         nvrhi::IDevice &native = *created->native_device();
         constexpr usize LIST_COUNT = 4;
         constexpr usize MARKERS_PER_LIST = 1000;
+        static_assert(LIST_COUNT * MARKERS_PER_LIST <= MAX_RECORDED_MARKER_NAMES, "every name must be stored");
+        created->reset_null_stats();   // marker names are stored only once a consumer asked
 
         std::vector<nvrhi::CommandListHandle> lists = {};
         for (usize index = 0; index < LIST_COUNT; ++index) {

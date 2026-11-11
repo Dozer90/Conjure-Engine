@@ -1,9 +1,13 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/test_environment.h"
 #include "renderer_test_support.h"
 
+#include "renderer/culling.h"
+
+#include "conjure/renderer/camera.h"
 #include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/limits.h"
 #include "conjure/renderer/material_asset.h"
@@ -21,15 +25,19 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The whole frame on the null device (docs/design/02_renderer.md 10 "test_renderer_null_frame"):
 // 10k instances, 64 lights with shadow casters, every pass of the graph, the view flags that cull
 // passes, sprites, debug lines, the environment, blended materials and the blit for non-sRGB targets.
 // The null device records what was submitted (null_device_stats), the renderer what it did
-// (render_stats).
+// (render_stats). The allocation gates at the end are the test counterparts of the benchmark rows
+// renderer.null_frame_10k and renderer.extract_10k (08_testing.md 7.1, allocs 0): after two warm-up
+// frames nothing in the frame, the extraction or the cull may touch the heap.
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -138,6 +146,139 @@ namespace {
 
     [[nodiscard]] render_view grid_view(render_target_id target) {
         return look_at_view(math::vec3(0.0f, 30.0f, 20.0f), math::vec3(0.0f, 0.0f, -80.0f), target);
+    }
+
+    /// <summary>
+    /// A job system with the environment's worker count, stopped with the case, for the [parallel]
+    /// allocation gates (the renderer culling and filling on jobs).
+    /// </summary>
+    struct worker_jobs {
+        core::jobs::job_system system = {};
+
+        worker_jobs() {
+            core::jobs::job_system_desc desc = {};
+            desc.workerCount = environment().jobThreadCount;
+            CONJURE_REQUIRE_OK(system.start(desc));
+        }
+
+        ~worker_jobs() {
+            system.stop();
+        }
+
+        worker_jobs(const worker_jobs &) = delete;
+        worker_jobs &operator=(const worker_jobs &) = delete;
+    };
+
+    /// <summary>
+    /// Renders 'count' frames and returns the number that succeeded, so the gate statement itself
+    /// stays free of doctest's (allocating) assertion machinery.
+    /// </summary>
+    [[nodiscard]] u32 render_frames(renderer_type &instance, render_scene &scene, u32 count) {
+        u32 rendered = 0;
+        for (u32 frame = 0; frame < count; ++frame) {
+            ++scene.frameIndex;
+            if (instance.render(scene).has_value()) {
+                ++rendered;
+            }
+        }
+        return rendered;
+    }
+
+    /// <summary>
+    /// The frustum the renderer culls a view with (prepare_view: clip_from_view at the target's aspect
+    /// ratio times viewFromWorld).
+    /// </summary>
+    [[nodiscard]] math::frustum frustum_of(const render_view &view, math::uvec2 targetSize) {
+        const f32 aspect = static_cast<f32>(targetSize.x) / static_cast<f32>(targetSize.y);
+        return frustum_from_clip(clip_from_view(view.cameraData, aspect) * view.viewFromWorld);
+    }
+
+    /// <summary>
+    /// The allocation gate of renderer.null_frame_10k (08_testing.md 7.1, allocs 0) over a scene that
+    /// also exercises the atlas, the environment and every post-process pass: the first two frames
+    /// size the view states, draw regions, graph entries, cull scratch and null device trackers; from
+    /// then on the whole frame, device bookkeeping included, stays off the heap. Shared by the serial
+    /// case and the [parallel] one (culling and the instance fill on 'jobs').
+    /// </summary>
+    void check_frame_allocation_gate(core::jobs::job_system *jobs) {
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(false, jobs);
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(320, 180));
+        render_scene scene = {};
+        scene.views.push_back(grid_view(target));
+        fill_grid(scene, assets);
+        scene.lights.push_back(sun_light(true));
+        add_local_lights(scene, 63, 4);
+        scene.environment.environment = assets.environment;
+
+        CHECK(render_frames(*fixture, scene, 2) == 2);
+        CHECK(fixture->stats().instancesDrawn > 0);
+        CHECK(fixture->stats().shadowTilesAllocated == 4 + 2 * 5);
+        CHECK(fixture->stats().uploadsCompleted == 0);
+
+        u32 rendered = 0;
+        CONJURE_CHECK_NO_ALLOCATIONS(rendered = render_frames(*fixture, scene, 8));
+        CHECK(rendered == 8);
+        CHECK(fixture->frame_count() == 10);
+        CHECK(fixture->stats().instancesDrawn > 0);
+        CHECK(fixture->stats().executed("shadow_atlas"));
+        CHECK(fixture->stats().executed("forward_opaque"));
+        CHECK(fixture->stats().executed("tonemap"));
+        CHECK(fixture->stats().transientTexturesCreated == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    /// <summary>
+    /// The allocation gate of renderer.extract_10k: the pair's write slot keeps its capacity across
+    /// begin_extract / end_extract and the cull works in a persistent cull_scratch (on 'jobs' when
+    /// given, which is the [parallel] case).
+    /// </summary>
+    void check_extract_allocation_gate(core::jobs::job_system *jobs) {
+        headless_renderer fixture = make_headless_renderer(false, jobs);
+        const scene_assets assets = upload_assets(*fixture);
+        const math::uvec2 targetSize(320, 180);
+        const render_target_id target = make_target(*fixture, targetSize);
+        const render_view view = grid_view(target);
+        const math::frustum frustum = frustum_of(view, targetSize);
+        const cull_options options = {};
+        cull_scratch scratch = {};
+        std::vector<u32> visible = {};
+
+        const auto extractAndCull = [&]() {
+            render_scene &scene = fixture->begin_extract();
+            ++scene.frameIndex;
+            scene.views.push_back(view);
+            fill_grid(scene, assets);
+            fixture->end_extract();
+            cull_instances(scene.meshes, frustum, options, jobs, scratch, visible);
+        };
+        extractAndCull();
+        extractAndCull();
+        const usize visibleCount = visible.size();
+        CHECK(visibleCount > 0);
+        CHECK(visibleCount < 10000);
+
+        CONJURE_CHECK_NO_ALLOCATIONS(for (u32 frame = 0; frame < 8; ++frame) { extractAndCull(); });
+        CHECK(visible.size() == visibleCount);
+        CHECK(fixture->begin_extract().meshes.empty());   // begin_extract clears the write slot
+        fixture->end_extract();
+    }
+
+    /// <summary>
+    /// A shadow-casting light with 'intensity' at 'position' and an entity id of its own (a stable
+    /// atlas key), for the importance-order cases.
+    /// </summary>
+    [[nodiscard]] light caster_light(light_type type, const math::vec3 &position, f32 intensity, u32 entityId) {
+        light value = {};
+        value.type = type;
+        value.position = position;
+        value.intensity = intensity;
+        value.range = 8.0f;
+        value.castsShadows = true;
+        value.shadowResolution = 256;
+        value.entityId = entityId;
+        return value;
     }
 }
 
@@ -634,5 +775,69 @@ TEST_SUITE("renderer/null_frame") {
         scene.lights[1].position.x += 1.0f;
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().shadowTilesReused == 3);
+    }
+
+    TEST_CASE("null_frame - 10k instances with lights and shadows: frames 3 to 10 allocate nothing") {
+        check_frame_allocation_gate(nullptr);
+    }
+
+    TEST_CASE(
+      "null_frame - 10k instances with lights and shadows: frames 3 to 10 allocate nothing on jobs [parallel]"
+    ) {
+        worker_jobs jobs = {};
+        check_frame_allocation_gate(&jobs.system);
+    }
+
+    TEST_CASE("null_frame - extraction and culling of 10k instances allocate nothing after warm-up") {
+        check_extract_allocation_gate(nullptr);
+    }
+
+    TEST_CASE(
+      "null_frame - extraction and culling of 10k instances allocate nothing after warm-up on jobs [parallel]"
+    ) {
+        worker_jobs jobs = {};
+        check_extract_allocation_gate(&jobs.system);
+    }
+
+    TEST_CASE("regression - a light with NaN intensity is the least important instead of breaking the sort") {
+        // light_importance of NaN user data (intensity, range or position) is NaN, which is neither
+        // greater nor less than any value: the std::sort comparators of the atlas casters and the
+        // per-view light order would lose their strict weak ordering (undefined behaviour, a read before
+        // begin() in libstdc++'s unguarded insertion sort). Such a light now sorts last. Observable
+        // through the atlas: the 1024^2 atlas holds sixteen 256-texel tiles, twelve valid spot lights
+        // take twelve and the NaN point light (six tiles) is the one dropped; a comparator that let the
+        // NaN light keep its place in front took six tiles for it and dropped two valid lights.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(64, 64));
+        render_scene scene = {};
+        scene.views.push_back(grid_view(target));
+        fill_grid(scene, assets, 4);
+        const f32 nan = std::numeric_limits<f32>::quiet_NaN();
+        scene.lights.push_back(caster_light(light_type::POINT, math::vec3(0.0f, 2.0f, -4.0f), nan, 1));
+        for (u32 index = 0; index < 12; ++index) {
+            const math::vec3 position(static_cast<f32>(index) * 4.0f - 22.0f, 2.0f, -8.0f);
+            scene.lights.push_back(caster_light(light_type::SPOT, position, 10.0f, 2 + index));
+        }
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().lightsRendered == 13);
+        CHECK(fixture->stats().lightsDropped == 0);
+        CHECK(fixture->stats().shadowTilesAllocated == 12);
+        CHECK(fixture->stats().shadowTilesDropped == 1);
+
+        // NaN in the range or the position (NaN distance) is the same case, wherever the light sits.
+        scene.lights[0].intensity = 10.0f;
+        scene.lights[0].range = nan;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().shadowTilesAllocated == 12);
+        CHECK(fixture->stats().shadowTilesDropped == 1);
+        scene.lights[0].range = 8.0f;
+        scene.lights[0].position = math::vec3(nan, 2.0f, -4.0f);
+        std::swap(scene.lights[0], scene.lights[6]);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().shadowTilesAllocated == 12);
+        CHECK(fixture->stats().shadowTilesDropped == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

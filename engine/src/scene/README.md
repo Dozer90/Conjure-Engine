@@ -65,15 +65,34 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   mask delta of one flush); a buffer that is dropped instead of flushed leaves its entry waiting and one
   later raw edit unwarned. The guid observers always index (first mapping wins; a raw duplicate warns);
   the `local_transform` observer adds missing companions.
-- **Propagation.** A chunk is recomputed when its `local_transform` column changed since the previous
-  run (`since_version`), when it carries `transform_dirty`, when a row's parent was recomputed this run
-  (`transform_state::lastUpdateRun`), or when an interpolated pose is involved; a chunk that needs
-  nothing is left unstamped (`chunksSkipped`). Both matrices are written in one visit: `render` is the
-  lerp of `interpolated_transform` for the entity itself, `parentRender * local` below one, and the world
-  matrix elsewhere; the `INTERPOLATED_SUBTREE` bit carries the mode down the tree. A transformless
-  ancestor contributes the identity (the pass and `compute_world_transform` both skip it and continue
-  upwards). Dirty tags are removed through the grain command buffers, so the second frame after a
-  structural change recomputes the moved rows once more and the pass is allocation-free from the third.
+- **Propagation.** A chunk is recomputed as a whole when its `local_transform` column changed since the
+  previous run (`since_version`), when it carries `transform_dirty` or when it holds interpolated poses;
+  otherwise only its rows marked `transform_state::pending` are recomputed, the mark a parent's visit
+  left on each child when it recomputed its world matrix (`transform_state::lastUpdateRun`, the S4
+  stamp the child still reads), sits in an interpolated subtree or changed flags. Every level runs in
+  three steps on the system thread: *collect* walks the level's chunks once (`query::for_each_chunk`),
+  keeps the ones with work and counts their rows (a clean chunk costs one sequential scan of its 8-byte
+  state column and is left unstamped, `chunksSkipped`; no parent is looked up for a clean row);
+  *dispatch* splits the kept chunks into jobs of about `ROWS_PER_JOB` (128) dirty rows over
+  `job_system::parallel_for` (inline without a job system or below `INLINE_ROW_LIMIT` = 512 rows, where
+  the dispatch costs more than the rows; the limit is a fixed row count, not one per worker, see the
+  deviations), each job resolving a row's parent once (consecutive siblings share the lookup) and
+  marking the row's children through its own `children` column (a transformless child, S5, is not in
+  any level: the mark goes to its children, an explicit stack bounded by `MAX_HIERARCHY_DEPTH`); then
+  the `transform_dirty` tags of the recomputed chunks are removed through the system's command buffer.
+  `describe()` declares reads `{local_transform, parent, children, interpolated_transform,
+  transform_dirty}` and writes `{world_transform, render_world_transform, transform_state}`; the
+  `children` read is what keeps a TRANSFORM-phase writer of the lists out of the pass's stage (the
+  scheduler packs stages from the declared masks alone). Both matrices are written in one visit: `render` is the lerp of
+  `interpolated_transform` for the entity itself, `parentRender * local` below one, and the world matrix
+  elsewhere; the `INTERPOLATED_SUBTREE` bit carries the mode down the tree. A transformless ancestor
+  contributes the identity (the pass and `compute_world_transform` both skip it and continue upwards).
+  The second frame after a structural change recomputes the moved rows once more and the pass is
+  allocation-free from the third (the level scratch, `mLevelChunks` and `mJobBounds`, keeps its
+  capacity). Work is proportional to the dirty rows, where a dirty row is one of a stamped chunk or a
+  descendant of one: moving one root recomputes every root of its chunk and their subtrees (S4 is
+  chunk-granular), so `scene.transform_propagation_10k_sparse` (10 of 100 roots in one 67-row chunk)
+  recomputes 6,770 of its 10,000 rows, 68 % of the dense scenario.
 - **Instantiation (3.9).** `instantiate_archive` validates the archive, its shape (pre-order, depths,
   cycles) and the guid policy before anything exists, then runs `world::instantiate_batch` once with its
   `outEntities` vector, which reports every created id copy-major in entry order (entries without
@@ -132,6 +151,23 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   apply, in the pass and in the fresh walk alike.
 - The guid policy of a multi-copy instantiation is always `REGENERATE_ALL`.
 - `set_enabled` is not a structural change: it does not bump `structure_version()`.
+- `transform_state` carries a `pending` byte (in the padding of 3.4's `{lastUpdateRun, flags}`, still 8
+  bytes) that the parent's level writes and the child's level clears: the design's pull-only stamp made
+  every level look up every row's parent (O(N) random reads per frame whatever the dirty set); the mark
+  keeps the stamp as the truth the child reads and adds the address where to read it. Written only when a
+  transform changed, like the stamp, so it is not the per-frame dirty bit section 1 rejects.
+- The pass's inline limit (`INLINE_ROW_LIMIT` = 512 dirty rows) is not scaled by the worker count. The
+  review-4 suggestion (256 rows per worker, 4,096 with 16) was measured in Development on the reference
+  machine with interleaved A/B runs of `scene.transform_propagation_10k_sparse` / `_10k`: with 16 workers
+  the fixed limit gives 0.152-0.163 / 0.223-0.225 ms (median), the scaled one 0.201-0.206 / 0.322-0.340 ms;
+  with 2 workers both limits coincide at 512 and measure the same (0.102-0.106 / 0.148-0.151 ms). A level
+  that runs inline between two dispatched levels used to let the workers fall asleep (they spun a few
+  yields only), so the next dispatch paid the wake-up again, while back-to-back dispatches paid it once per
+  run; the 1,072-row sparse level is therefore cheaper dispatched than inline. The performance round gave
+  the job system a 50 us spin window and a spinlock on its queue (`core/jobs` README), which moved the
+  two scenarios to 0.136 / 0.173 ms with 16 workers (0.125 / 0.172 with the ticket lock the round first
+  used, `tests/benchmarks/README.md`); the sparse row stays over its 0.100 ms budget
+  (`tests/benchmarks/README.md`, deviations).
 
 ## Cross-module requests
 
@@ -151,9 +187,17 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
 
 `scene`, `scene_manager`, `guid_index`, the prefab functions and the serializer are owner-thread only
 (the world's rules apply and return `WRONG_THREAD` / `STRUCTURE_LOCKED`); events fire on that thread.
-`scene.propagate_transforms` is the only parallel code: grain jobs write `world_transform`,
+`scene.propagate_transforms` is the only parallel code: level jobs write `world_transform`,
 `render_world_transform` and `transform_state` of their own rows, read their parents' columns through
-const random access (finished in the previous level) and accumulate relaxed counters once per chunk.
+const random access (finished in the previous level), read their own rows' `children` lists and write
+the `transform_state::pending` byte of those children (rows of the next level, which no job touches
+until the level join; one parent per child, so no two jobs write the same byte; the mark goes through
+the non-const `world::get_raw(entity, id, false)`, which stamps nothing) and accumulate relaxed counters
+once per chunk. The pass takes `world::lock_iteration()` for the dispatch and records dirty-tag removals
+on the system thread only. Chunk parallelism follows `system_context::jobs()`: with a job system present the level jobs fan
+out even when the scheduler was built with `parallelChunks = false` (the flag has no accessor, requested
+from ecs as `system_context::parallel_chunks()`; every caller that disables it today also runs without a
+job system).
 The asset loaders and importers run on workers and touch only their inputs and `component_registry`
 lookups. Observers run synchronously inside structural calls on the owner thread and only enqueue into
 the deferred buffer or push into scene-side queues.

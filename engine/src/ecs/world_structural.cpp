@@ -9,12 +9,12 @@
 #include "conjure/ecs/log_category.h"
 
 #include "conjure/core/assert.h"
-#include "conjure/core/containers/small_vector.h"
 #include "conjure/core/log.h"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -214,7 +214,13 @@ flush_report world::flush(command_buffer &commands) {
 core::result<void> world::place_rows(archetype &target, std::span<const entity> ids) {
     const chunk_layout &layout = target.mLayout;
     const u64 stamp = version();
-    core::small_vector<entity, 64> placed = {};
+    // The undo list is the world's scratch (used in place, not a fresh local: a vector object costs an
+    // allocation under debug iterators), cleared on exit and kept at capacity, so a bulk create of any
+    // size places without allocating once the list has reached that size before. The one call-out below
+    // is the component's ops.constructDefault; a constructor that called back into its world would
+    // re-enter place_rows over this list, which check_structural refuses while a structural call is open.
+    std::vector<entity> &placed = mPlacedScratch;
+    placed.clear();
 
     for (const entity id : ids) {
         const core::result<archetype::row_location> pushed = target.push_row(*mChunkPool);
@@ -223,6 +229,7 @@ core::result<void> world::place_rows(archetype &target, std::span<const entity> 
             for (const entity undo : placed) {
                 discard_placed(undo);
             }
+            placed.clear();
             return pushed.get_error();
         }
 
@@ -244,6 +251,7 @@ core::result<void> world::place_rows(archetype &target, std::span<const entity> 
         ++mAliveCount;
         placed.push_back(id);
     }
+    placed.clear();
     return core::result<void>::success();
 }
 
@@ -301,11 +309,15 @@ void world::remove_row(archetype &owner, u32 chunkIndex, u32 row) {
     last->set_count(last->count() - 1);
     --owner.mEntityCount;
 
-    // Keep one empty trailing chunk as a spare; return any further empties.
+    // Keep one empty trailing chunk as a spare; return the blocks of any further empties to the pool
+    // and park their metadata on the archetype, so the next growth re-attaches it instead of
+    // allocating a chunk object (spawn/destroy churn stays allocation-free).
     while (owner.mChunks.size() >= 2 && owner.mChunks.back()->count() == 0 &&
       owner.mChunks[owner.mChunks.size() - 2]->count() == 0) {
-        mChunkPool->deallocate(owner.mChunks.back()->block());
+        std::unique_ptr<chunk> drained = std::move(owner.mChunks.back());
         owner.mChunks.pop_back();
+        mChunkPool->deallocate(drained->release_block());
+        owner.mSpareChunks.push_back(std::move(drained));
     }
 }
 
@@ -554,17 +566,12 @@ flush_report world::flush_internal(command_buffer &commands) {
     }
 
     // Plan: one entry per touched entity, found through the stamped slot table so no per-flush
-    // allocation or zero-fill scales with the record count.
-    struct touched_entity {
-        entity id = {};
-        bool alive = false;
-        bool destroy = false;
-        u32 commands = 0;                                   // commands counted as applied for this entity
-        component_mask addMask = {};
-        component_mask removeMask = {};
-        core::small_vector<record_type *, 4> payloads = {};
-    };
-    std::vector<touched_entity> plan = {};
+    // allocation or zero-fill scales with the record count. The plan vector is the world's scratch,
+    // used in place and kept at capacity; a flush never nests inside another (observers only enqueue
+    // into the deferred buffer, which drains after the outermost structural call has returned, and
+    // check_structural refuses a component constructor or destructor that calls back into the world).
+    std::vector<flush_entry> &plan = mFlushPlan;
+    plan.clear();
     ++mFlushStamp;
     if (mFlushStamp == 0) {
         // The stamp wrapped: forget every entry so none can match the restarted sequence.
@@ -589,7 +596,7 @@ flush_report world::flush_internal(command_buffer &commands) {
         }
         consume(command);
     };
-    const auto skip_entry = [this, &report, &discard_payload](touched_entity &entry) {
+    const auto skip_entry = [this, &report, &discard_payload](flush_entry &entry) {
         for (record_type *pending : entry.payloads) {
             discard_payload(pending);
         }
@@ -618,7 +625,7 @@ flush_report world::flush_internal(command_buffer &commands) {
             continue;
         }
         if (slot == NO_PLAN) {
-            touched_entity fresh = {};
+            flush_entry fresh = {};
             fresh.id = target;
             fresh.alive = find_alive(target) != nullptr;
             if (!fresh.alive && !is_reserved(target)) {
@@ -632,7 +639,7 @@ flush_report world::flush_internal(command_buffer &commands) {
             mFlushSlots[target.index] = flush_slot{mFlushStamp, slot};
         }
 
-        touched_entity &entry = plan[slot];
+        flush_entry &entry = plan[slot];
         switch (command->op) {
             case opcode::CREATE:
                 break;
@@ -690,7 +697,7 @@ flush_report world::flush_internal(command_buffer &commands) {
     }
 
     // Apply: structure first, destroys last.
-    for (touched_entity &entry : plan) {
+    for (flush_entry &entry : plan) {
         if (entry.destroy) {
             continue;
         }
@@ -770,7 +777,7 @@ flush_report world::flush_internal(command_buffer &commands) {
         fire_added(entry.id, added);
     }
 
-    for (touched_entity &entry : plan) {
+    for (flush_entry &entry : plan) {
         if (!entry.destroy) {
             continue;
         }
@@ -786,6 +793,8 @@ flush_report world::flush_internal(command_buffer &commands) {
         release_reserved(entry.id);
     }
 
+    // The entries point into the buffer's arena, which clear() recycles: drop them first.
+    plan.clear();
     commands.clear();
     return report;
 }

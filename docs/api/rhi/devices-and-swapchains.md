@@ -229,7 +229,7 @@ them. The most useful fields:
 | `texturesCreated`, `buffersCreated`, `shadersCreated`, `graphicsPipelinesCreated`, ... | resource creation by type |
 | `commandListsOpened`, `commandListsClosed`, `commandListsSubmitted` | command list lifecycle |
 | `draws`, `instancesDrawn`, `dispatches`, `textureClears`, `bufferWrites`, `bufferWriteBytes`, `textureCopies` | recorded work |
-| `markersBegun`, `markerNames` | debug markers, names in recording order (your pass names) |
+| `markersBegun`, `markerNames`, `markerNamesDropped` | debug markers: `markersBegun` counts every `beginMarker`; `markerNames` holds the names in recording order (your pass names), stored only after your first `reset_null_stats()` and at most `MAX_RECORDED_MARKER_NAMES` (4096) per reset, the rest counted in `markerNamesDropped` |
 | `garbageCollections`, `waitsForIdle`, `acquires`, `presents`, `resizes` | device and swapchain calls |
 
 ```cpp
@@ -268,8 +268,10 @@ error paths run in CTest.
 
 > [!WARNING]
 > `null_stats()` is a copy taken under a lock, so it is safe to read from any thread and never changes after
-> it is returned. `markerNames` grows with every `beginMarker`; call `reset_null_stats()` between the frames
-> you want to assert on.
+> it is returned. Marker names are stored only once you have asked for them: call `reset_null_stats()` before
+> the frames you want to assert on; without it `markerNames` stays empty and every `beginMarker` is counted in
+> `markerNamesDropped` instead. Each reset keeps at most `MAX_RECORDED_MARKER_NAMES` (4096) names, so reset
+> again between long runs of frames.
 
 ## API summary
 
@@ -296,7 +298,8 @@ error paths run in CTest.
 | `constexpr u32 bytes_per_pixel(f)` / `block_size(f)` / `bytes_per_block(f)` / `constexpr u64 row_pitch(f, width)` | sizes |
 | `constexpr bool is_depth(f)` / `is_srgb(f)` / `is_compressed(f)` | classification |
 | `std::string_view to_string(texture_format)` / `result<texture_format> parse_texture_format(std::string_view)` | names |
-| `struct null_device_stats { ... u32 counters, std::vector<std::string> markerNames; void reset() }` | what the null device recorded |
+| `struct null_device_stats { ... u32 counters, std::vector<std::string> markerNames, u32 markerNamesDropped; void reset() }` | what the null device recorded |
+| `inline constexpr u32 MAX_RECORDED_MARKER_NAMES = 4096` | marker names kept per `reset_null_stats()`; the rest count in `markerNamesDropped` |
 
 ## See also
 

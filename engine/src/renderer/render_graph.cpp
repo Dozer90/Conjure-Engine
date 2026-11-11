@@ -6,6 +6,7 @@
 #include "conjure/core/assert.h"
 
 #include <algorithm>
+#include <span>
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -30,9 +31,21 @@ render_graph::render_graph() {}
 
 render_graph::~render_graph() {}
 
+void render_graph::pass_entry::clear() noexcept {
+    pass = nullptr;
+    reads.clear();
+    writes.clear();
+    colourTargets.clear();
+    depthTarget = graph_attachment{};
+    hasDepthTarget = false;
+    sideEffect = false;
+    live = false;
+    invalid = false;
+}
+
 void render_graph::reset() {
     mResources.clear();
-    mPasses.clear();
+    mPassCount = 0;
     mExecutedNames.clear();
     mCompiled = false;
 }
@@ -56,9 +69,14 @@ graph_resource render_graph::import_buffer(nvrhi::IBuffer *buffer, const char *n
 }
 
 void render_graph::add_pass(render_pass &pass) {
-    pass_entry entry = {};
+    // Entries outlive reset() so their declaration vectors keep their capacity across frames.
+    if (mPasses.size() <= mPassCount) {
+        mPasses.emplace_back();
+    }
+    pass_entry &entry = mPasses[mPassCount];
+    entry.clear();
     entry.pass = &pass;
-    mPasses.push_back(std::move(entry));
+    ++mPassCount;
 }
 
 void render_graph::report_validation(const char *passName, const char *problem) {
@@ -75,18 +93,20 @@ void render_graph::report_skipped(const char *passName, const char *problem) {
 
 void render_graph::compile(transient_pool &pool, u64 frameIndex) {
     // 1. Setup: every pass declares its resources.
-    for (usize index = 0; index < mPasses.size(); ++index) {
+    for (usize index = 0; index < mPassCount; ++index) {
         pass_builder builder(*this, index);
         mPasses[index].pass->setup(builder);
     }
+    const std::span<pass_entry> passes(mPasses.data(), mPassCount);
 
     // 2. Validation: unknown resources and reads of transient resources nobody wrote earlier.
-    std::vector<bool> written(mResources.size(), false);
+    std::vector<bool> &written = mWritten;
+    written.assign(mResources.size(), false);
     for (usize index = 0; index < mResources.size(); ++index) {
         written[index] = mResources[index].kind == resource_kind::IMPORTED_TEXTURE ||
           mResources[index].kind == resource_kind::IMPORTED_BUFFER;
     }
-    for (pass_entry &entry : mPasses) {
+    for (pass_entry &entry : passes) {
         // A pass may read what it writes itself (read-modify-write), so its own writes count first.
         for (const graph_resource resource : entry.writes) {
             if (valid_resource(resource)) {
@@ -123,8 +143,9 @@ void render_graph::compile(transient_pool &pool, u64 frameIndex) {
 
     // 3. Culling, backwards: a pass lives when it has a side effect, writes an imported resource, or
     //    writes a resource a later live pass reads.
-    std::vector<bool> needed(mResources.size(), false);
-    for (usize reverse = mPasses.size(); reverse > 0; --reverse) {
+    std::vector<bool> &needed = mNeeded;
+    needed.assign(mResources.size(), false);
+    for (usize reverse = mPassCount; reverse > 0; --reverse) {
         pass_entry &entry = mPasses[reverse - 1];
         if (entry.invalid) {
             entry.live = false;
@@ -152,7 +173,7 @@ void render_graph::compile(transient_pool &pool, u64 frameIndex) {
         resource.firstPass = 0;
         resource.lastPass = 0;
     }
-    for (usize index = 0; index < mPasses.size(); ++index) {
+    for (usize index = 0; index < mPassCount; ++index) {
         const pass_entry &entry = mPasses[index];
         if (!entry.live) {
             continue;
@@ -184,7 +205,7 @@ void render_graph::compile(transient_pool &pool, u64 frameIndex) {
     }
     // A pass whose transient resource the device refused cannot run. That is a runtime failure
     // (out of memory), not a declaration error (design 6): ERROR once and skip, no assert.
-    for (pass_entry &entry : mPasses) {
+    for (pass_entry &entry : passes) {
         if (!entry.live) {
             continue;
         }
@@ -211,7 +232,7 @@ void render_graph::execute(
 ) {
     CONJURE_ASSERT(mCompiled, "render_graph: execute before compile");
     mExecutedNames.clear();
-    for (usize index = 0; index < mPasses.size(); ++index) {
+    for (usize index = 0; index < mPassCount; ++index) {
         pass_entry &entry = mPasses[index];
         if (!entry.live) {
             ++stats.passesCulled;
@@ -237,7 +258,7 @@ void render_graph::execute(
 }
 
 bool render_graph::is_pass_live(usize index) const noexcept {
-    return index < mPasses.size() && mPasses[index].live;
+    return index < mPassCount && mPasses[index].live;
 }
 
 bool render_graph::lifetime(graph_resource resource, usize &firstPass, usize &lastPass) const noexcept {

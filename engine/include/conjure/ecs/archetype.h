@@ -151,6 +151,9 @@ namespace conjure::ecs {
             component_mask mMask = {};
             chunk_layout mLayout = {};
             std::vector<std::unique_ptr<chunk>> mChunks = {};
+            // Metadata of drained chunks whose blocks went back to the pool, re-attached by reserve_row
+            // before a new chunk object is allocated. Bounded by the archetype's peak chunk count.
+            std::vector<std::unique_ptr<chunk>> mSpareChunks = {};
             std::vector<archetype_edge> mEdges = {};
             u32 mEntityCount = 0;
             u32 mIndex = 0;                     // position in the world's archetype list
@@ -198,6 +201,14 @@ namespace conjure::ecs {
             /// </summary>
             [[nodiscard]] u32 chunk_count() const noexcept {
                 return static_cast<u32>(mChunks.size());
+            }
+
+            /// <summary>
+            /// Drained chunk objects parked without a block (their blocks are back in the pool), reused
+            /// by the next growth so create/destroy churn allocates no chunk metadata.
+            /// </summary>
+            [[nodiscard]] u32 spare_chunk_count() const noexcept {
+                return static_cast<u32>(mSpareChunks.size());
             }
 
             /// <summary>

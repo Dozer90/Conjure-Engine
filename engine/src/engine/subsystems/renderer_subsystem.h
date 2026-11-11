@@ -16,6 +16,7 @@
 
 #include <filesystem>
 #include <string_view>
+#include <vector>
 
 // Startup step 13 (docs/design/06_engine_loop.md 3.4, 09 R7/R8/R10 and section 3): the renderer over the
 // device, swapchain and shader library (RENDERER_INIT_FAILED), renderer::register_asset_types, the renderer
@@ -46,9 +47,21 @@ namespace conjure::engine {
             static constexpr std::string_view SYSTEM_EXTRACT = "engine.render_extract";
 
         private:
+            /// <summary>
+            /// A camera seen by the extraction, ordered by priority then by world order before selection.
+            /// </summary>
+            struct camera_candidate {
+                renderer::render_view view = {};
+                i32 priority = 0;
+                bool isMain = false;
+                u32 order = 0;
+            };
+
+        private:
             engine_services *mServices = nullptr;
             assets::asset_subscription mSubscription = {};
             render_extract_stats mStats = {};
+            std::vector<camera_candidate> mCameras = {};    // extraction scratch, keeps its capacity across frames
             f32 mLastDeltaSeconds = 0.0f;
 
         public:

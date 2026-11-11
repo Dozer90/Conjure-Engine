@@ -3,10 +3,14 @@
 // Shared fixture of the physics tests (docs/design/14_physics.md 7, 10): a registry with the scene and
 // physics components, an ecs::world, a physics_world built from test_settings() (small limits so overflow
 // paths are testable), spawn helpers for boxes, spheres, ground and characters, run_steps() running
-// push / step / pull / collect in order, and for_each_job_mode() running a body with 0 and 4 workers.
+// push / step / pull / collect in order, for_each_job_mode() running a body with 0 and 4 workers,
+// scheduled_physics, the engine's view of the four systems (an ecs::scheduler with
+// physics::register_systems, the PARALLEL pull fanned out over chunks), and check_pull_allocation_free(),
+// the allocation gate of the scheduled pull at a given body count.
 
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/test_environment.h"
 
 #include "conjure/core/jobs/job_system.h"
@@ -17,6 +21,8 @@
 #include "conjure/ecs/command_buffer.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/entity.h"
+#include "conjure/ecs/scheduler.h"
+#include "conjure/ecs/system_phase.h"
 #include "conjure/ecs/world.h"
 #include "conjure/physics/character_controller.h"
 #include "conjure/physics/components.h"
@@ -29,6 +35,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace physics_test {
 
@@ -256,11 +263,120 @@ namespace physics_test {
     };
 
     /// <summary>
+    /// The engine's view of the physics systems: an ecs::scheduler over a fixture's world with the four systems
+    /// of physics::register_systems, stages inline (job_system::schedule would allocate its counter) and chunks
+    /// parallel over the fixture's job system, which is how physics.pull_transforms runs in engine::application
+    /// (14_physics.md 3.7 PARALLEL). 'minEntitiesPerJob' sets the grain; 1 makes every chunk its own job.
+    /// </summary>
+    class scheduled_physics {
+        public:
+            conjure::ecs::scheduler scheduler;   // no default: bound to the fixture's world
+            conjure::ecs::frame_info frame = {};
+
+        public:
+            explicit scheduled_physics(physics_fixture &fixture, conjure::u32 minEntitiesPerJob = 1024) :
+                scheduler(
+                  fixture.world,
+                  fixture.jobs->worker_count() == 0 ? nullptr : fixture.jobs,
+                  make_desc(minEntitiesPerJob)
+                ) {
+                CONJURE_REQUIRE_OK(conjure::physics::register_systems(scheduler, fixture.physics));
+                CONJURE_REQUIRE_OK(scheduler.finalise());
+                frame.deltaTime = STEP;
+                frame.fixedDeltaTime = STEP;
+                frame.inFixedStep = true;
+            }
+
+            ~scheduled_physics() {}
+
+            scheduled_physics(const scheduled_physics &) = delete;
+            scheduled_physics &operator=(const scheduled_physics &) = delete;
+
+        public:
+            /// <summary>
+            /// One fixed step as the engine runs it: PHYSICS_STEP (push, step) then FIXED_END (pull, contacts).
+            /// </summary>
+            void run_step() {
+                ++frame.frameIndex;
+                scheduler.run_phase(conjure::ecs::system_phase::PHYSICS_STEP, frame);
+                scheduler.run_phase(conjure::ecs::system_phase::FIXED_END, frame);
+            }
+
+            void run_steps(conjure::u32 count) {
+                for (conjure::u32 index = 0; index < count; ++index) {
+                    run_step();
+                }
+            }
+
+            /// <summary>
+            /// FIXED_END alone: the PARALLEL pull followed by the contact collection.
+            /// </summary>
+            void run_fixed_end() {
+                ++frame.frameIndex;
+                scheduler.run_phase(conjure::ecs::system_phase::FIXED_END, frame);
+            }
+
+        private:
+            [[nodiscard]] static conjure::ecs::scheduler_desc make_desc(conjure::u32 minEntitiesPerJob) noexcept {
+                conjure::ecs::scheduler_desc desc = {};
+                desc.parallelSystems = false;
+                desc.parallelChunks = true;
+                desc.minEntitiesPerJob = minEntitiesPerJob;
+                return desc;
+            }
+    };
+
+    /// <summary>
     /// Closed form of Jolt's semi-implicit Euler free fall: after n steps of dt from rest the body has
     /// dropped g * dt^2 * n * (n + 1) / 2 (velocity is updated before the position every step).
     /// </summary>
     [[nodiscard]] inline conjure::f32 free_fall_drop(conjure::u32 steps, conjure::f32 dt = STEP) noexcept {
         const conjure::f32 n = static_cast<conjure::f32>(steps);
         return GRAVITY * dt * dt * n * (n + 1.0f) * 0.5f;
+    }
+
+    /// <summary>
+    /// The design's allocation gate (08_testing.md 7.1, physics.sync_10k: 0) on the path the engine takes: the
+    /// PARALLEL pull through a scheduler, then the serial fallback, over 'bodyCount' boxes falling freely (no
+    /// ground, so no contacts, and every step writes every row). Step 1 creates the bodies and makes the first
+    /// pull, step 2 warms the scheduler's scratch, the job pool and the query's match list; the FIXED_END and
+    /// the pull that follow must allocate nothing. Shared by the 2,000-body case of the default run and the
+    /// 10,000-body [slow] case of conjure_physics_slow_tests.
+    /// </summary>
+    inline void check_pull_allocation_free(conjure::core::jobs::job_system &jobs, conjure::u32 bodyCount) {
+        conjure::physics::physics_settings settings = {};
+        settings.allowSleeping = false;
+        physics_fixture fixture(jobs, settings);
+        scheduled_physics schedule(fixture);
+        std::vector<conjure::ecs::entity> boxes = {};
+        boxes.reserve(bodyCount);
+        for (conjure::u32 index = 0; index < bodyCount; ++index) {
+            const conjure::f32 x = static_cast<conjure::f32>(index % 100) * 2.0f - 99.0f;
+            const conjure::f32 z = static_cast<conjure::f32>(index / 100) * 2.0f - 99.0f;
+            boxes.push_back(fixture.spawn_box(conjure::math::vec3(x, 50.0f, z)));
+        }
+        schedule.run_steps(2);
+        REQUIRE(fixture.physics.body_count() == bodyCount);
+
+        {
+            conjure::testing::allocation_scope scope = {};
+            schedule.run_fixed_end();
+            const conjure::u64 allocations = scope.allocation_count();
+            CHECK(allocations == 0);
+        }
+        {
+            conjure::testing::allocation_scope scope = {};
+            fixture.physics.pull_transforms();
+            const conjure::u64 allocations = scope.allocation_count();
+            CHECK(allocations == 0);
+        }
+        // Every row was written: the boxes fell for two steps.
+        const conjure::f32 expected = 50.0f - free_fall_drop(2);
+        CHECK(fixture.transform_position(boxes.front()).y == doctest::Approx(expected).epsilon(1.0e-5));
+        CHECK(fixture.transform_position(boxes.back()).y == doctest::Approx(expected).epsilon(1.0e-5));
+        const conjure::physics::rigid_body *pulled = fixture.world.get<conjure::physics::rigid_body>(boxes.back());
+        REQUIRE(pulled != nullptr);
+        CHECK(pulled->linearVelocity.y < 0.0f);
+        CHECK_FALSE(pulled->isSleeping);
     }
 }

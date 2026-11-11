@@ -8,6 +8,7 @@
 #include "conjure/scene/transform_system.h"
 
 #include <random>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -115,6 +116,127 @@ namespace {
         }
         REQUIRE(trees.all.size() == 10000);
         return trees;
+    }
+
+    /// <summary>
+    /// One entity of a randomised forest: its index in creation order, its parent's index (or NO_PARENT
+    /// for a root) and whether it still carries a transform (a transformless node contributes the
+    /// identity, S5).
+    /// </summary>
+    struct forest_node {
+        static constexpr usize NO_PARENT = static_cast<usize>(-1);
+
+        ecs::entity entity = {};
+        usize parentIndex = NO_PARENT;
+        bool transformed = true;
+    };
+
+    /// <summary>
+    /// A random forest of about 'budget' entities: roots with random fan-out and depth, random
+    /// transforms, some entities in their own chunks (an extra component) and about one interior node
+    /// in twenty stripped of its transform and companions. Creation order puts every parent before its
+    /// children.
+    /// </summary>
+    std::vector<forest_node> build_random_forest(scene_fixture &fixture, std::mt19937_64 &engine, usize budget) {
+        scene::scene &target = fixture.active();
+        std::uniform_int_distribution<u32> fanOut(0, 4);
+        std::uniform_int_distribution<u32> depthLimit(1, 6);
+        std::uniform_int_distribution<u32> percent(0, 99);
+        std::vector<forest_node> nodes = {};
+        std::vector<std::pair<usize, u32>> frontier = {};      // node index, levels still allowed below it
+        while (nodes.size() < budget) {
+            forest_node root = {};
+            root.entity = fixture.create("root");
+            REQUIRE(target.set_local_transform(root.entity, random_transform(engine)).has_value());
+            if (percent(engine) < 30) {
+                REQUIRE(fixture.world.add<test_speed>(root.entity, test_speed{1.0f}).has_value());
+            }
+            nodes.push_back(root);
+            frontier.clear();
+            frontier.emplace_back(nodes.size() - 1, depthLimit(engine));
+            while (!frontier.empty() && nodes.size() < budget) {
+                const std::pair<usize, u32> current = frontier.back();
+                frontier.pop_back();
+                if (current.second == 0) {
+                    continue;
+                }
+                const u32 childCount = fanOut(engine);
+                for (u32 index = 0; index < childCount && nodes.size() < budget; ++index) {
+                    forest_node child = {};
+                    child.parentIndex = current.first;
+                    child.entity = fixture.create("node", nodes[current.first].entity);
+                    REQUIRE(target.set_local_transform(child.entity, random_transform(engine)).has_value());
+                    if (percent(engine) < 10) {
+                        REQUIRE(fixture.world.add<test_speed>(child.entity, test_speed{2.0f}).has_value());
+                    }
+                    nodes.push_back(child);
+                    frontier.emplace_back(nodes.size() - 1, current.second - 1);
+                }
+            }
+        }
+        for (forest_node &node : nodes) {
+            if (target.tree().children_of(node.entity).empty() || percent(engine) >= 5) {
+                continue;
+            }
+            REQUIRE(fixture.world.remove<scene::local_transform>(node.entity).has_value());
+            REQUIRE(fixture.world.remove<scene::world_transform>(node.entity).has_value());
+            REQUIRE(fixture.world.remove<scene::render_world_transform>(node.entity).has_value());
+            REQUIRE(fixture.world.remove<scene::transform_state>(node.entity).has_value());
+            node.transformed = false;
+        }
+        return nodes;
+    }
+
+    /// <summary>
+    /// The world matrix of every node from the live local transforms with exactly the arithmetic of
+    /// the pass: the nearest transformed ancestor's matrix times the local matrix, the local matrix
+    /// alone when there is none. A transformless node carries its ancestor's matrix down unchanged.
+    /// </summary>
+    std::vector<math::mat4> reference_worlds(const scene_fixture &fixture, const std::vector<forest_node> &nodes) {
+        std::vector<math::mat4> worlds(nodes.size(), math::mat4(1.0f));
+        std::vector<bool> hasAncestorWorld(nodes.size(), false);
+        for (usize index = 0; index < nodes.size(); ++index) {
+            const forest_node &node = nodes[index];
+            const bool parentHasWorld =
+              node.parentIndex != forest_node::NO_PARENT && hasAncestorWorld[node.parentIndex];
+            const math::mat4 &parentWorld = node.parentIndex != forest_node::NO_PARENT ? worlds[node.parentIndex]
+                                                                                        : worlds[index];
+            if (!node.transformed) {
+                worlds[index] = parentWorld;
+                hasAncestorWorld[index] = parentHasWorld;
+                continue;
+            }
+            const scene::local_transform *local = fixture.world.get<scene::local_transform>(node.entity);
+            REQUIRE(local != nullptr);
+            const math::mat4 localMatrix = local->to_transform().to_matrix();
+            worlds[index] = parentHasWorld ? parentWorld * localMatrix : localMatrix;
+            hasAncestorWorld[index] = true;
+        }
+        return worlds;
+    }
+
+    /// <summary>
+    /// Fails on the first node whose written world or render matrix differs from 'expected' by a bit.
+    /// </summary>
+    void check_exact_worlds(
+      const scene_fixture &fixture,
+      const std::vector<forest_node> &nodes,
+      const std::vector<math::mat4> &expected
+    ) {
+        REQUIRE(expected.size() == nodes.size());
+        for (usize index = 0; index < nodes.size(); ++index) {
+            if (!nodes[index].transformed) {
+                continue;
+            }
+            const math::mat4 world = fixture.world_matrix(nodes[index].entity);
+            const math::mat4 render = fixture.render_matrix(nodes[index].entity);
+            if (world != expected[index] || render != expected[index]) {
+                CAPTURE(index);
+                CHECK(world == expected[index]);
+                CHECK(render == expected[index]);
+                return;
+            }
+        }
     }
 }
 
@@ -388,6 +510,92 @@ TEST_SUITE("scene/transform_propagation") {
         CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(child)), math::vec3(10.0f, 1.0f, 0.0f));
         CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(leaf)), math::vec3(10.0f, 1.0f, 1.0f));
         fixture.step_transform();
+        fixture.step_transform();
+        CHECK(system.last_stats().worldRecomputed == 0);
+    }
+
+    TEST_CASE("propagation - sparse and whole-chunk paths match the exact reference on random forests [parallel]") {
+        // The pass has two ways to find a row's work: a chunk recomputed as a whole (its local column
+        // changed) and the pending marks the parents' level left. Random forests with a few moved
+        // entities per frame take the sparse path; re-writing every transform afterwards takes the
+        // whole-chunk path; both must equal, bit for bit, the reference product computed here. Every
+        // frame after the third is gated: the level scratch and the job block pool saw their largest
+        // level in the all-whole first frame, so irregular dirty sets over mixed archetypes allocate
+        // nothing either (the two_trees gates above only cover contiguous dirty levels).
+        for_each_job_mode([](core::jobs::job_system *jobs) {
+            scene_fixture fixture(jobs);
+            scene::scene &target = fixture.active();
+            scene::transform_system &system = fixture.manager.transforms();
+            std::mt19937_64 engine(testing::environment().seed);
+            const std::vector<forest_node> nodes = build_random_forest(fixture, engine, 3000);
+            std::uniform_int_distribution<usize> pick(0, nodes.size() - 1);
+            fixture.step(3);
+            CHECK(system.last_stats().worldRecomputed == 0);
+            check_exact_worlds(fixture, nodes, reference_worlds(fixture, nodes));
+
+            const u32 movesPerFrame[6] = {1, 1, 3, 10, 60, 300};
+            for (u32 frame = 0; frame < 6; ++frame) {
+                CAPTURE(frame);
+                for (u32 move = 0; move < movesPerFrame[frame]; ++move) {
+                    const forest_node &node = nodes[pick(engine)];
+                    if (node.transformed) {
+                        CONJURE_REQUIRE_OK(target.set_local_transform(node.entity, random_transform(engine)));
+                    }
+                }
+                CONJURE_CHECK_NO_ALLOCATIONS(fixture.step_transform());
+                CHECK(system.last_stats().worldRecomputed > 0);
+                CHECK(system.last_stats().worldRecomputed < nodes.size());
+                check_exact_worlds(fixture, nodes, reference_worlds(fixture, nodes));
+            }
+
+            // The whole-chunk path over the same transforms: every local column is re-written in place.
+            std::vector<math::mat4> sparseWorlds = {};
+            for (const forest_node &node : nodes) {
+                sparseWorlds.push_back(fixture.world_matrix(node.entity));
+                if (node.transformed) {
+                    const scene::local_transform *local = fixture.world.get<scene::local_transform>(node.entity);
+                    REQUIRE(local != nullptr);
+                    CONJURE_REQUIRE_OK(target.set_local_transform(node.entity, *local));
+                }
+            }
+            CONJURE_CHECK_NO_ALLOCATIONS(fixture.step_transform());
+            CHECK(system.last_stats().chunksSkipped == 0);
+            check_exact_worlds(fixture, nodes, sparseWorlds);
+            check_exact_worlds(fixture, nodes, reference_worlds(fixture, nodes));
+        });
+    }
+
+    TEST_CASE("propagation - pending marks pass through a transformless parent") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        scene::transform_system &system = fixture.manager.transforms();
+        const ecs::entity grand = fixture.create("grand");
+        const ecs::entity middle = fixture.create("middle", grand);
+        const ecs::entity leaf = fixture.create("leaf", middle);
+        const ecs::entity other = fixture.create("other");
+        CONJURE_UNUSED(other);
+        CONJURE_REQUIRE_OK(target.set_local_transform(grand, at(100.0f, 0.0f, 0.0f)));
+        CONJURE_REQUIRE_OK(target.set_local_transform(middle, at(10.0f, 0.0f, 0.0f)));
+        CONJURE_REQUIRE_OK(target.set_local_transform(leaf, at(1.0f, 0.0f, 0.0f)));
+        CONJURE_REQUIRE_OK(fixture.world.remove<scene::local_transform>(middle));
+        CONJURE_REQUIRE_OK(fixture.world.remove<scene::world_transform>(middle));
+        CONJURE_REQUIRE_OK(fixture.world.remove<scene::render_world_transform>(middle));
+        CONJURE_REQUIRE_OK(fixture.world.remove<scene::transform_state>(middle));
+        fixture.step(3);
+        CHECK(system.last_stats().worldRecomputed == 0);
+        CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(leaf)), math::vec3(101.0f, 0.0f, 0.0f));
+
+        // Only the grandparent's chunk changes (the other root sits in a chunk of its own: it has no
+        // children list); the leaf is two levels down behind a node no level visits, and still follows
+        // in the same frame.
+        CONJURE_REQUIRE_OK(target.set_local_transform(grand, at(200.0f, 0.0f, 0.0f)));
+        fixture.step_transform();
+        CHECK(system.last_stats().worldRecomputed == 2);
+        CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(leaf)), math::vec3(201.0f, 0.0f, 0.0f));
+        CONJURE_CHECK_APPROX(translation_of(fixture.render_matrix(leaf)), math::vec3(201.0f, 0.0f, 0.0f));
+        const scene::transform_state *state = fixture.world.get<scene::transform_state>(leaf);
+        REQUIRE(state != nullptr);
+        CHECK_FALSE(state->pending);
         fixture.step_transform();
         CHECK(system.last_stats().worldRecomputed == 0);
     }

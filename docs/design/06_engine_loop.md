@@ -187,6 +187,7 @@ Enums: `rhi_backend_choice : uint8_t { AUTO, D3D12, VULKAN, NULL_DEVICE }`,
 | `rendering_settings` | `bool enabled = true`, `rhi_backend_choice backend = AUTO`, `bool gpuValidation = false` (forced on in Debug by `defaults()`) |
 | `physics_settings` | `bool enabled = true`, `math::vec3 gravity = (0, -9.81, 0)`, `uint32_t maxBodies = 65536`. Engine-side summary only: `physics_subsystem` builds the full `physics::physics_settings` with `physics::physics_settings::from_json(project.physics, project.extensions["physics_layers"])`, so every field of `14_physics.md` 2.1 is authorable under `"physics"` (snake_case) without the engine naming it (R53) |
 | `audio_settings` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000`, `std::string device = ""` (empty = default), `float masterGain = 1`, `float dopplerFactor = 0`, `float speedOfSound = 343`, `std::vector<audio_group_setting> groups` (`{ std::string name; std::string parent; float gain; }`); mapped one-to-one onto `audio::audio_settings` by `audio_subsystem` (`12_audio.md` 4.4, 8; `NULL_DEVICE` -> `audio_backend_kind::NULL_BACKEND`) (R52) |
+| `assets_settings` | `bool hotReload = true` (polling file watcher + `hot_reload_controller`; ignored in Distribution and by cooked projects, off in `headless_defaults()` so a headless frame stays allocation-free, 09 item 15a) |
 | `scripting_settings` | `bool enabled = true`, `bool required = true` (false: missing runtime warns and disables), `std::filesystem::path gameAssembly` (relative to project root), `bool hotReload = true` (ignored in Distribution), `script_export_mode exportMode = FRAMEWORK_DEPENDENT` (`FRAMEWORK_DEPENDENT`, `SELF_CONTAINED`), `bool exportDebugSymbols = false` (R39) |
 | `modules_settings` | `std::vector<std::filesystem::path> searchPaths = {"modules"}`, `bool enginePlugins = true` (also discover `<engine>/plugins`), `std::vector<std::string> required = {}` (manifest names that must load) (R20) |
 | `jobs_settings` | `uint32_t workerCount = AUTO_WORKER_COUNT` (`0xFFFFFFFF` = `hardware_concurrency - 1` clamped to `[1, 16]`; `0` = every job runs inline on the calling thread, `08_testing.md` D4) |
@@ -414,6 +415,7 @@ std::filesystem::path &directory)`, `core::result<void> save() const`, `descript
   "rendering": { "backend": "auto" },
   "audio": { "backend": "auto", "sample_rate": 48000, "device": "", "master_gain": 1.0, "doppler_factor": 0.0,
              "speed_of_sound": 343.0, "groups": [{ "name": "Music", "parent": "", "gain": 0.8 }] },
+  "assets": { "hot_reload": true },
   "scripting": { "assembly": "bin/FeatureTest.Game.dll", "hot_reload": true,
                  "export_mode": "framework-dependent", "debug_symbols": false },
   "extensions": { "physics_layers": { }, "editor": { } }
@@ -583,7 +585,7 @@ the present inside `render_frame` is the back-pressure.
 | 5 | `core::vfs` mounts: `project://`, `assets://`, `engine://` (engine built-in content), `cooked://`; cooked projects mount `engine://` and `cooked://` only (R24; module content mounts as `modules://<name>/` at step 15) | `PROJECT_NOT_FOUND` |
 | 6 | `platform_subsystem`: window + input (`glfw` or `null`) | `WINDOW_CREATE_FAILED` |
 | 7 | `rhi_subsystem`: `rhi::device::create(device_desc)` + `rhi::swapchain::create`; `AUTO` tries the platform default then the other compiled backend once; skipped when `rendering.enabled == false` | `DEVICE_CREATE_FAILED` |
-| 8 | `assets_subsystem`: `asset_manager` (`cache_asset_source` or, when `cooked`, `pack_asset_source`), `asset_database` + importer registry + polling file watcher (non-cooked only); `scan()` waits for `post_startup` so every importer is registered first (R33) | `ASSET_DATABASE_FAILED` |
+| 8 | `assets_subsystem`: `asset_manager` (`cache_asset_source` or, when `cooked`, `pack_asset_source`), `asset_database` + importer registry + polling file watcher (non-cooked only, and only when `assets.hotReload`); `scan()` waits for `post_startup` so every importer is registered first (R33) | `ASSET_DATABASE_FAILED` |
 | 9 | `ecs_subsystem`: `component_registry`, `world`, `scheduler(world, jobs)` | never fails |
 | 10 | `scene_subsystem`: `scene_manager(world, assets)`; scene components registered (`scene::register_components`) | never fails |
 | 11 | `audio_subsystem`: `audio_engine` (`miniaudio` or `null`); device failure falls back to `null` with `WARN`; registers audio component types into the ECS and audio asset types (R7) | never fails |

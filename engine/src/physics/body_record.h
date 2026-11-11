@@ -36,7 +36,9 @@ namespace conjure::physics {
     CONJURE_ENUM_FLAGS(record_dirty_flags);
 
     /// <summary>
-    /// One body or character known to the world. A free row has an invalid bodyId.
+    /// One body or character known to the world. A free row has an invalid bodyId. The fields the pull
+    /// reads and writes for every awake body (the flags, mirror and lastPulled) come first so a row costs
+    /// the pull two cache lines; the character and asset fields it never touches follow.
     /// </summary>
     struct body_record {
         ecs::entity entity = {};
@@ -53,11 +55,11 @@ namespace conjure::physics {
         bool implicitStatic = false;                 // colliders without a rigid_body
         bool hasDesiredVelocity = false;             // CHARACTER rows: a character_move waits in desiredVelocity
         record_dirty_flags dirty = record_dirty_flags::NONE;
-        u64 shapeKey = 0;                            // shape_cache key of the leaf (0 = per-entity compound)
         rigid_body mirror = {};                      // last pushed / pulled component value (field diffing)
-        character_controller characterMirror = {};   // CHARACTER rows: last pushed authored fields
         math::transform lastPulled = {};             // world pose written by the last pull (teleport detection)
         math::vec3 lastScale = math::vec3(1.0f);     // world scale the shape was built with
+        u64 shapeKey = 0;                            // shape_cache key of the leaf (0 = per-entity compound)
+        character_controller characterMirror = {};   // CHARACTER rows: last pushed authored fields
         // CHARACTER rows: the velocity queued by character_move, consumed by the next step so the push
         // never writes character_controller (the push system declares the component as a read).
         math::vec3 desiredVelocity = math::vec3(0.0f);

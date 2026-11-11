@@ -141,11 +141,32 @@ namespace conjure::core::jobs {
             );
 
             /// <summary>
+            /// Queues a batch that signals a caller-owned fence instead of returning a handle: the
+            /// handle's shared counter is the one heap allocation of schedule(), so this overload
+            /// allocates nothing once the block pool has warmed up, which per-frame dispatch (the
+            /// ECS scheduler's stages) relies on. The batch is added to whatever the fence already
+            /// counts; wait(fence) returns when all of it has run. The fence must stay alive and in
+            /// place until then. Empty entries are skipped (asserting); an empty batch leaves the
+            /// fence unchanged. Inline execution follows the same rules as the handle overload.
+            /// </summary>
+            void schedule(
+              std::span<const std::function<void()>> jobs,
+              job_fence &fence,
+              job_priority priority = job_priority::NORMAL
+            );
+
+            /// <summary>
             /// Blocks until the handle is complete. While waiting the caller executes queued jobs,
             /// so this is safe from inside a job and from a worker. Returns immediately for an
             /// invalid or complete handle.
             /// </summary>
             void wait(const job_handle &handle);
+
+            /// <summary>
+            /// Blocks until every job scheduled on the fence has run, helping with queued jobs
+            /// meanwhile like wait(handle). Returns immediately for a complete fence.
+            /// </summary>
+            void wait(const job_fence &fence);
 
             /// <summary>
             /// Blocks until no job is queued or running, helping with queued jobs meanwhile. From
@@ -182,7 +203,9 @@ namespace conjure::core::jobs {
             [[nodiscard]] static job_system *current() noexcept;
 
             /// <summary>
-            /// Snapshot of the counters accumulated since start().
+            /// Snapshot of the counters accumulated since start(). Sums one per-thread slot per worker
+            /// plus one for every other thread (a few hundred bytes of loads), so reading it every
+            /// frame is fine.
             /// </summary>
             [[nodiscard]] job_system_stats stats() const noexcept;
 

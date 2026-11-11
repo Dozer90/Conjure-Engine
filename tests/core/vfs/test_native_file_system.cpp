@@ -16,6 +16,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -229,6 +230,32 @@ TEST_SUITE("core/native_file_system") {
         REQUIRE_FALSE(atomic);
         CHECK_MESSAGE(atomic.get_error().message().find(child) != std::string::npos, atomic.get_error().message());
         REQUIRE(fileSystem.remove(blocker));
+    }
+
+    TEST_CASE("regression - perf-round: an atomic write whose temporary alone crosses the classic Windows limit") {
+        // write_file_atomic builds "<target>.tmp-<uuid>" (41 characters more than the target) after the
+        // destination was resolved: a target of 219-247 characters (below the 248-character classic limit)
+        // stayed in the classic form while its temporary reached 260 and could not be opened. The
+        // integration tests hit it as soon as their
+        // build directory was four characters longer. The target below is built to sit just under the
+        // limit wherever the temporary root lives; the directory stays under the classic directory limit.
+        testing::temp_directory directory("core_vfs_native");
+        native_file_system fileSystem(directory.path());
+        constexpr usize TARGET_LENGTH = 247;
+        constexpr std::string_view FILE_NAME = "target.bin";
+        const usize rootLength = directory.path().native().size();
+        REQUIRE(rootLength + 1 + 1 + 1 + FILE_NAME.size() < TARGET_LENGTH);
+        const std::string directoryName(TARGET_LENGTH - rootLength - 1 - 1 - FILE_NAME.size(), 'd');
+        const std::string file = directoryName + "/" + std::string(FILE_NAME);
+        CHECK(rootLength + 1 + file.size() == TARGET_LENGTH);
+        CHECK(rootLength + 1 + file.size() + 41 > 262);
+
+        REQUIRE(fileSystem.write_file_atomic(file, to_bytes("first")));
+        REQUIRE(fileSystem.write_file_atomic(file, to_bytes("second")));
+        const result<std::string> read = fileSystem.read_text_file(file);
+        REQUIRE(read);
+        CHECK(*read == "second");
+        CHECK(native_entries(directory.path() / directoryName) == std::vector<std::string>{std::string(FILE_NAME)});
     }
 
     TEST_CASE("native_file_system - write_file_atomic leaves exactly the target behind") {

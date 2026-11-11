@@ -132,6 +132,39 @@ first drains the pending destroys so no detached slot keeps the retired load con
 exist) and adopts the sets the new world's entities already carry; `set_mode(PLAY)` and reload create
 instances for the attached world's entities only.
 
+## DOD query scopes
+
+`begin_query_scope(typeIds, out)` is the native side of `ComponentQuery.Begin<T...>()` (03_scripting.md 3.9)
+and the path `scripting.update_10k_dod` gates at zero allocations per frame (08_testing.md 7.1). Nothing on it
+touches the heap once warm:
+
+- The `ecs::query` behind a scope is cached per component set in `mQueryCache`, a `core::flat_map` keyed by
+  the sorted, deduplicated, `component_id::INVALID`-padded ids (`std::array<u16, QUERY_MAX_COMPONENTS>`), so
+  `{a, b}`, `{b, a}` and `{a, a, b}` share one query while the chunk views keep the columns in the order of
+  the request (a repeated id names the same column twice). A cached query refreshes incrementally (new
+  archetypes only) and belongs to the attached world: `attach_world` drops the cache; `stats().cachedQueries`
+  and `cached_query_count()` report its size.
+- A `query_scope_state` keeps its chunk views in a `core::small_vector<conjure_chunk_view,
+  QUERY_SCOPE_INLINE_CHUNKS>` (16 inline: 10,000 rows of a 12-byte component are 13 chunks of 819 rows) and
+  its types in a `core::small_vector<ecs::component_id, QUERY_MAX_COMPONENTS>`. States are heap-owned
+  (`std::unique_ptr`) because managed holds `conjure_query_scope::chunks` for the scope's lifetime and an inline
+  buffer would move with the state; a finished state is not destroyed but moved to `mFreeQueryScopes` (its
+  block and any spilled capacity included). `take_scope_state(chunkCount)` reuses them best-fit: the free
+  state with the smallest capacity that holds the scope's chunk views, or the largest one when none fits (it
+  spills, once per size step). A scope therefore allocates only when no free state has room for it, whatever
+  order nested scopes were closed in; with a steady entity count each state spills at most once and the path
+  is allocation-free from then on. In Debug and Development a closed state's view array is memset to `0xDD`
+  (03_scripting.md 3.9): a `conjure_chunk_view` pointer that escaped its scope reads `0xDD` until a later
+  `begin_query_scope` reuses that state.
+- `mQueryScopes` and `mFreeQueryScopes` are reserved once in the constructor (`QUERY_SCOPE_RESERVE` = 4, the
+  nesting depth scripts realistically reach); `erase` never releases capacity.
+
+`tests/scripting/test_dod_query.cpp` holds the gates: a null-host case opens and closes a scope 100 times
+after a warm-up under `CONJURE_CHECK_NO_ALLOCATIONS`, a null-host regression nests a scope over 19 chunks
+with a one-chunk scope in both orders, closes the outer one first and requires 0 allocations from the second
+frame on, a `[dotnet]` case runs `PositionWriter` for ten frames and requires an allocation count of 0 from
+the third frame on.
+
 ## nethost on MSVC
 
 The static `libnethost.lib` of the host pack is built against the static release CRT, which the engine's

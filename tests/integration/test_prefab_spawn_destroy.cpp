@@ -24,10 +24,10 @@
 // docs/design/08_testing.md 6.1 test_prefab_spawn_destroy: tests/assets/prefabs/crate.prefab.json is instantiated
 // 100 times and the previous frame's 100 instances are destroyed every frame for 300 frames: the entity count is
 // stable and every handle is invalid after its destroy. The design asks for zero per-frame allocations after frame
-// 10; the archive instantiation path allocates per batch today (measured and recorded in
-// 09_cross_area_resolutions.md 4 item 15a), so three gates hold here: from frame 10 on a frame stays within the
-// recorded budget, the number of live allocations stops growing (every block a frame allocates is released by a
-// later one) and the per-frame count stays within a narrow band.
+// 10; the archive instantiation path and the structural notifications allocate per batch today (measured and
+// recorded in 09_cross_area_resolutions.md 4 item 15a), so three gates hold here: from frame 10 on a frame stays
+// within the recorded budget, the number of live allocations stops growing (every block a frame allocates is
+// released by a later one) and the per-frame count stays within a narrow band.
 
 using namespace conjure;
 using namespace conjure::testing;
@@ -39,12 +39,16 @@ namespace {
     constexpr u32 CRATE_ENTITIES = 2;   // the crate and its lid
     constexpr u64 STEADY_BAND = 64;     // per-frame variation the chunk and guid-index churn may show
 
-    // What spawning 100 crates and destroying 100 costs per steady-state frame with inline jobs, measured and
-    // recorded in docs/design/09_cross_area_resolutions.md 4 item 15a (526-542 blocks: archive instantiation and
-    // the guid index). 08_testing.md 6.1 asks for zero; this budget may only go down as prefab::instantiate_many
-    // is made allocation-free, never up. Run the case the way CTest does (one case per process, no doctest -s):
-    // the success reporter's own bookkeeping adds a block to a frame.
-    constexpr u64 STEADY_FRAME_ALLOCATION_BUDGET = 542;
+    // What spawning 100 crates and destroying 100 costs per steady-state frame with inline jobs in this Debug
+    // executable, measured and recorded in docs/design/09_cross_area_resolutions.md 4 item 15a (258 blocks, none
+    // in the frame loop: 101 are the local graveyard vector of core::event::finish_emit behind the 101
+    // scene::bump_structure notifications, 100 the temporary command_buffer std::swap builds in
+    // ecs::world::drain_deferred once per scene::destroy, 57 the archive shape, link pass and report vectors of
+    // prefab::instantiate_many; about 200 of them are MSVC debug-iterator container proxies). 08_testing.md 6.1
+    // asks for zero; this budget may only go down as those paths are made allocation-free, never up. Run the case
+    // the way CTest does (one case per process, no doctest -s): the success reporter's own bookkeeping adds a
+    // block to a frame.
+    constexpr u64 STEADY_FRAME_ALLOCATION_BUDGET = 258;
 
     [[nodiscard]] scene::prefab_asset load_crate(const ecs::component_registry &registry) {
         const std::string text = integration_test::read_file(repo_asset("prefabs/crate.prefab.json"));

@@ -26,7 +26,7 @@ namespace {
       const math::uvec2 &size,
       u32 flags
     ) {
-        nvrhi::BindingSetDesc desc = {};
+        nvrhi::BindingSetDesc &desc = shared.binding_desc();
         desc.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, shared.frame->view_constants()));
         desc.addItem(nvrhi::BindingSetItem::PushConstants(1, gpu::DRAW_CONSTANTS_SIZE));
         desc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, source));

@@ -84,11 +84,19 @@ namespace conjure::renderer {
                 bool sideEffect = false;
                 bool live = false;
                 bool invalid = false;       // failed validation; skipped with an ERROR
+
+                /// <summary>
+                /// Back to an empty declaration; the vectors keep their capacity.
+                /// </summary>
+                void clear() noexcept;
             };
 
             std::vector<resource_entry> mResources = {};
-            std::vector<pass_entry> mPasses = {};
+            std::vector<pass_entry> mPasses = {};       // pool of entries; the first mPassCount are this frame's
+            usize mPassCount = 0;
             std::vector<const char *> mExecutedNames = {};
+            std::vector<bool> mWritten = {};            // compile scratch, per resource
+            std::vector<bool> mNeeded = {};             // compile scratch, per resource
             bool mCompiled = false;
             u32 mValidationErrorsLogged = 0;
 
@@ -104,7 +112,8 @@ namespace conjure::renderer {
 
         public:
             /// <summary>
-            /// Forgets every pass and resource; capacity is kept.
+            /// Forgets every pass and resource; capacity is kept, the pass entries included, so a graph
+            /// rebuilt every frame from the same passes allocates nothing once it has run once.
             /// </summary>
             void reset();
 
@@ -146,7 +155,7 @@ namespace conjure::renderer {
             );
 
             [[nodiscard]] usize pass_count() const noexcept {
-                return mPasses.size();
+                return mPassCount;
             }
 
             [[nodiscard]] usize resource_count() const noexcept {

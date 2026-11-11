@@ -9,10 +9,12 @@
 #include "conjure/core/log.h"
 #include "conjure/ecs/chunk_view.h"
 #include "conjure/ecs/query.h"
-#include "conjure/ecs/view.h"
+#include "conjure/ecs/system.h"
 #include "conjure/scene/components.h"
 
+#include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/EActivation.h>
 
 #include <utility>
@@ -131,9 +133,12 @@ void physics_world::pull_transforms(ecs::system_context *context) {
     // Rows are written from the chunk pass (worker threads) and the serial tail: no query meanwhile.
     s.busy.store(true, std::memory_order_release);
     if (context != nullptr) {
-        ecs::view<rigid_body, scene::interpolated_transform, scene::local_transform> bodies =
-          context->view<rigid_body, scene::interpolated_transform, scene::local_transform>();
-        bodies.parallel_for_each_chunk(*context, [&s](ecs::chunk_view &chunk, ecs::command_buffer &) {
+        // The persistent query fans out through the system's parallel_for_chunks (P15): a view built
+        // per run would allocate its match list every step. The query is only the match list here: the
+        // dispatching system_context builds every chunk view with itself as the validating context, so
+        // the Debug write validation of 01_ecs.md 3.5 checks the chunk writes against this system's
+        // declaration without the query being bound to it.
+        context->parallel_for_chunks(*s.pullQuery, [&s](ecs::chunk_view &chunk, ecs::command_buffer &) {
             s.pull_chunk(chunk);
         });
     } else {
@@ -483,26 +488,16 @@ void physics_world::state::apply_commands(f32 fixedDeltaTime) {
 void physics_world::state::pull_chunk(ecs::chunk_view &chunk) {
     const std::span<const ecs::entity> entities = chunk.entities();
     const u32 count = chunk.count();
+    // No step runs during the pull, so the bodies are read without locks (3.7): one body lookup per row
+    // instead of one per BodyInterface call.
+    const JPH::BodyLockInterfaceNoLock &joltBodies = physicsSystem->GetBodyLockInterfaceNoLock();
 
-    // First pass: does any row of this chunk need writing? Acquiring a non-const span stamps the
-    // chunk, so a chunk of sleeping bodies must not be touched.
-    bool anyWrite = false;
-    for (u32 index = 0; index < count && !anyWrite; ++index) {
-        const body_record *row = find_row(entities[index]);
-        if (row == nullptr || row->kind != record_kind::BODY || row->motion == motion_type::STATIC
-          || row->movesWithTransform || row->hasParent) {
-            continue;
-        }
-        anyWrite = row->firstPull || row->awaitingPull || is_awake(*row) || !row->mirror.isSleeping;
-    }
-    if (!anyWrite) {
-        return;
-    }
-
-    const std::span<rigid_body> bodies = chunk.get<rigid_body>();
-    const std::span<scene::interpolated_transform> interpolated = chunk.get<scene::interpolated_transform>();
-    const std::span<scene::local_transform> locals = chunk.get<scene::local_transform>();
-    const JPH::BodyInterface &joltBodies = physicsSystem->GetBodyInterfaceNoLock();
+    // The non-const spans are acquired at the first row that needs writing: acquiring one stamps the
+    // chunk, so a chunk whose bodies all sleep is left untouched without a second pass over the rows
+    // (every row resolves its record once).
+    std::span<rigid_body> bodies = {};
+    std::span<scene::interpolated_transform> interpolated = {};
+    std::span<scene::local_transform> locals = {};
     for (u32 index = 0; index < count; ++index) {
         body_record *row = find_row(entities[index]);
         if (row == nullptr || row->kind != record_kind::BODY || row->motion == motion_type::STATIC
@@ -513,12 +508,18 @@ void physics_world::state::pull_chunk(ecs::chunk_view &chunk) {
         if (!awakeNow && row->mirror.isSleeping && !row->firstPull && !row->awaitingPull) {
             continue;
         }
-        JPH::RVec3 position = {};
-        JPH::Quat rotation = {};
-        joltBodies.GetPositionAndRotation(row->bodyId, position, rotation);
+        const JPH::Body *joltBody = joltBodies.TryGetBody(row->bodyId);
+        if (joltBody == nullptr) {
+            continue;
+        }
+        if (bodies.empty()) {
+            bodies = chunk.get<rigid_body>();
+            interpolated = chunk.get<scene::interpolated_transform>();
+            locals = chunk.get<scene::local_transform>();
+        }
         math::transform current = {};
-        current.position = jolt::from_jolt(position);
-        current.rotation = jolt::from_jolt(rotation);
+        current.position = jolt::from_jolt(joltBody->GetPosition());
+        current.rotation = jolt::from_jolt(joltBody->GetRotation());
         current.scale = locals[index].scale;
 
         interpolated[index].previous = row->firstPull ? current : interpolated[index].current;
@@ -528,8 +529,8 @@ void physics_world::state::pull_chunk(ecs::chunk_view &chunk) {
         row->lastPulled = current;
 
         rigid_body &body = bodies[index];
-        body.linearVelocity = jolt::from_jolt(joltBodies.GetLinearVelocity(row->bodyId));
-        body.angularVelocity = jolt::from_jolt(joltBodies.GetAngularVelocity(row->bodyId));
+        body.linearVelocity = jolt::from_jolt(joltBody->GetLinearVelocity());
+        body.angularVelocity = jolt::from_jolt(joltBody->GetAngularVelocity());
         body.isSleeping = !awakeNow;
         row->mirror = body;
 
@@ -539,7 +540,7 @@ void physics_world::state::pull_chunk(ecs::chunk_view &chunk) {
 }
 
 void physics_world::state::pull_parented_rows() {
-    const JPH::BodyInterface &joltBodies = physicsSystem->GetBodyInterfaceNoLock();
+    const JPH::BodyLockInterfaceNoLock &joltBodies = physicsSystem->GetBodyLockInterfaceNoLock();
     for (body_record &row : records) {
         if (row.is_free() || row.kind != record_kind::BODY || !row.hasParent || row.motion == motion_type::STATIC
           || row.movesWithTransform) {
@@ -549,16 +550,17 @@ void physics_world::state::pull_parented_rows() {
         if (!awakeNow && row.mirror.isSleeping && !row.firstPull && !row.awaitingPull) {
             continue;
         }
+        const JPH::Body *joltBody = joltBodies.TryGetBody(row.bodyId);
+        if (joltBody == nullptr) {
+            continue;
+        }
         rigid_body *body = write<rigid_body>(row.entity);
         if (body == nullptr || !world->has_raw(row.entity, ids.localTransform)) {
             continue;
         }
-        JPH::RVec3 position = {};
-        JPH::Quat rotation = {};
-        joltBodies.GetPositionAndRotation(row.bodyId, position, rotation);
         math::transform current = {};
-        current.position = jolt::from_jolt(position);
-        current.rotation = jolt::from_jolt(rotation);
+        current.position = jolt::from_jolt(joltBody->GetPosition());
+        current.rotation = jolt::from_jolt(joltBody->GetRotation());
         current.scale = row.lastScale;
 
         scene::interpolated_transform *interpolated = write<scene::interpolated_transform>(row.entity);
@@ -570,8 +572,8 @@ void physics_world::state::pull_parented_rows() {
         row.awaitingPull = false;
         row.lastPulled = current;
 
-        body->linearVelocity = jolt::from_jolt(joltBodies.GetLinearVelocity(row.bodyId));
-        body->angularVelocity = jolt::from_jolt(joltBodies.GetAngularVelocity(row.bodyId));
+        body->linearVelocity = jolt::from_jolt(joltBody->GetLinearVelocity());
+        body->angularVelocity = jolt::from_jolt(joltBody->GetAngularVelocity());
         body->isSleeping = !awakeNow;
         row.mirror = *body;
         write_local_pose(row.entity, current);

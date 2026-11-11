@@ -125,14 +125,22 @@ core::result<void> assets_subsystem::startup(engine_context &context) {
         );
 
 #if !CONJURE_DISTRIBUTION
-        mServices->fileWatcher = std::make_unique<assets::polling_file_watcher>(*databaseFileSystem, mServices->jobs);
-        mServices->fileWatcher->add_root(mAssetsMountRoot);
-        mServices->hotReload = std::make_unique<assets::hot_reload_controller>(
-          *mServices->assetDatabase,
-          *mServices->assetManager,
-          *mServices->fileWatcher,
-          mServices->jobs
-        );
+        // The watcher's stat pass runs on a job thread every 500 ms and allocates its file table there, so
+        // it exists only when asked for (assets_settings::hotReload, off in headless_defaults()): a headless
+        // frame, a benchmark or a server never pays for it (09 item 15a).
+        if (context.config->assets.hotReload) {
+            mServices->fileWatcher =
+              std::make_unique<assets::polling_file_watcher>(*databaseFileSystem, mServices->jobs);
+            mServices->fileWatcher->add_root(mAssetsMountRoot);
+            mServices->hotReload = std::make_unique<assets::hot_reload_controller>(
+              *mServices->assetDatabase,
+              *mServices->assetManager,
+              *mServices->fileWatcher,
+              mServices->jobs
+            );
+        } else {
+            CONJURE_LOG_DEBUG(LOG_ENGINE, "assets: hot reload disabled by configuration");
+        }
 #endif
     }
 

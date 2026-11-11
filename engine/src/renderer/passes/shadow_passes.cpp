@@ -83,7 +83,7 @@ void shadow_atlas_pass::execute(pass_context &context) {
     }
     nvrhi::utils::ClearDepthStencilAttachment(&context.command_list(), framebuffer, 0.0f, 0);
     nvrhi::IBindingSet *viewSet = mShared.mesh_view_set(nullptr);
-    for (const shadow_draw_list &list : mShared.view->atlasTiles) {
+    for (const shadow_draw_list &list : mShared.view->atlas_tiles()) {
         nvrhi::ViewportState viewport = {};
         viewport.addViewportAndScissorRect(nvrhi::Viewport(
           static_cast<f32>(list.atlasX),

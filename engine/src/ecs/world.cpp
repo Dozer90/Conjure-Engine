@@ -376,17 +376,29 @@ void world::clear() {
     CONJURE_ASSERT(mAliveCount == 0, "world::clear: observers keep creating entities");
     end_structural();
 
-    // Drop every chunk, including spares. The id space stays: every destroyed index is on the free list
-    // with a bumped generation, so ids still reserved by command buffers (scheduler systems, scripts)
-    // cannot alias the entities created next.
+    // Drop every chunk, including spares and the parked chunk metadata. The id space stays: every
+    // destroyed index is on the free list with a bumped generation, so ids still reserved by command
+    // buffers (scheduler systems, scripts) cannot alias the entities created next.
     for (std::unique_ptr<archetype> &owner : mArchetypes) {
         for (std::unique_ptr<chunk> &block : owner->mChunks) {
             mChunkPool->deallocate(block->block());
         }
         owner->mChunks.clear();
+        owner->mSpareChunks.clear();
+        owner->mSpareChunks.shrink_to_fit();
         owner->mEntityCount = 0;
     }
     mChunkPool->shrink_to_fit();
+
+    // The structural scratch is sized by the largest flush and placement the world has seen; clear() is
+    // the one point where that peak is given back (the deferred buffers are empty: the drain loop above
+    // ran until nothing was left).
+    mFlushPlan.clear();
+    mFlushPlan.shrink_to_fit();
+    mPlacedScratch.clear();
+    mPlacedScratch.shrink_to_fit();
+    mDeferred->shrink_to_fit();
+    mDeferredFlushing->shrink_to_fit();
     bump_version();
 }
 
@@ -407,6 +419,17 @@ core::result<void> world::check_structural() const {
     if (mInObserver) {
         CONJURE_ASSERT(false, "observer of world '{}' called a structural method; use the deferred buffer", mName);
         return make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside an observer");
+    }
+    if (mStructuralDepth > 0) {
+        // The only code of a structural call that is not the world's own is a component's constructor or
+        // destructor (ops.constructDefault, ops.destruct, ops.relocate); one that calls back into its world
+        // would re-enter place_rows or flush_internal over the scratch they use in place.
+        CONJURE_ASSERT(
+          false,
+          "structural change to world '{}' from inside a structural call (a component constructor or destructor)",
+          mName
+        );
+        return make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside a structural call");
     }
     return core::result<void>::success();
 }
@@ -513,6 +536,8 @@ void world::relayout_archetypes(component_id id) {
             mChunkPool->deallocate(block->block());
         }
         owner->mChunks.clear();
+        // Parked spares carry the old column count; the new layout may have another.
+        owner->mSpareChunks.clear();
         core::result<chunk_layout> layout = chunk_layout::compute(owner->mask(), *mRegistry);
         if (layout.has_value()) {
             owner->mLayout = std::move(layout).value();

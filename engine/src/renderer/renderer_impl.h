@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/binding_layouts.h"
+#include "renderer/culling.h"
 #include "renderer/draw_list_builder.h"
 #include "renderer/frame_resources.h"
 #include "renderer/framebuffer_cache.h"
@@ -20,6 +21,7 @@
 #include "conjure/renderer/renderer.h"
 #include "conjure/renderer/sprite_batch.h"
 
+#include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/containers/slot_map.h"
 #include "conjure/core/types.h"
 
@@ -27,13 +29,15 @@
 
 #include <array>
 #include <memory>
+#include <span>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 // The private state of renderer (renderer.cpp). Members are declared in reverse destruction order:
 // the pass objects and caches that hold NVRHI handles die before the device-owning rhi objects the
 // renderer borrows, and the resource cache dies after the render targets that registered textures in it.
+// Every per-frame list below is scratch that persists across frames and is reset in place, so a
+// steady-state frame allocates nothing (02_renderer.md "steady-state frames do not allocate").
 
 namespace conjure::renderer {
 
@@ -63,17 +67,20 @@ namespace conjure::renderer {
         sprite_batcher sprites = {};
         shadow_atlas_allocator atlas;
         std::vector<gpu::instance> instanceData = {};
-        std::vector<frame_view_state> views = {};
+        std::vector<frame_view_state> views = {};                 // pool; the first preparedViewCount are this frame's
+        u32 preparedViewCount = 0;
         std::vector<u32> visible = {};
+        cull_scratch cullScratch = {};
         std::vector<u32> lightOrder = {};
         draw_list_builder drawLists = {};
         std::vector<gpu::light> lightData = {};
         std::vector<gpu::shadow_tile> tileData = {};
         std::vector<gpu::shadow_tile> atlasTileData = {};        // scene-wide atlas tiles of this frame
         std::vector<u32> lightTileBase = {};                      // per scene light: first atlas tile or INVALID_INDEX
+        std::vector<u32> shadowCasters = {};                      // scene indices of the local casters, by importance
         std::vector<atlas_request> atlasRequests = {};
         std::vector<u32> atlasRequestLights = {};                 // scene light index per request
-        std::unordered_map<u64, u32> atlasKeyOccurrences = {};    // lights sharing an atlas key this frame
+        core::flat_hash_map<u64, u32> atlasKeyOccurrences = {};  // lights sharing an atlas key this frame
         bool atlasRendered = false;                               // a prepared view owns the atlas pass this frame
         u32 lastViewOverflow = 0;
         u32 lastLightOverflow = 0;
@@ -108,6 +115,27 @@ namespace conjure::renderer {
 
         explicit renderer_state(u32 atlasResolution) :
             atlas(atlasResolution) {}
+
+        /// <summary>
+        /// The views prepared this frame, in scene order.
+        /// </summary>
+        [[nodiscard]] std::span<frame_view_state> prepared_views() noexcept {
+            return std::span<frame_view_state>(views.data(), preparedViewCount);
+        }
+
+        /// <summary>
+        /// The next view state of this frame, reset in place; a state object is created only when
+        /// the renderer has never prepared that many views. The caller commits it with
+        /// ++preparedViewCount once the view is prepared, or leaves it for the next view when skipped.
+        /// </summary>
+        [[nodiscard]] frame_view_state &next_view_state() {
+            if (views.size() <= preparedViewCount) {
+                views.emplace_back();
+            }
+            frame_view_state &stateOfView = views[preparedViewCount];
+            stateOfView.reset();
+            return stateOfView;
+        }
     };
 
     struct renderer::impl final : renderer_state {

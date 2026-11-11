@@ -34,7 +34,9 @@ URIs when enumerating through a `mount_table`.
   `open(O_RDONLY | O_CLOEXEC)` on POSIX) and positional `read_at` (`ReadFile` with an `OVERLAPPED`
   offset, `pread`). The delete sharing is the point: a `std::ifstream` reader would make every
   rename over or removal of the file fail on Windows for as long as it is open. `write_file_atomic`
-  writes `<path>.tmp-<uuid>` next to the target and swaps it in with `internal::replace_file`:
+  writes `<path>.tmp-<uuid>` next to the target (the temporary goes through `extend_native_path` on
+  its own: it is 41 characters longer than the target, so a target just under the classic Windows
+  limit has a temporary beyond it) and swaps it in with `internal::replace_file`:
   `SetFileInformationByHandle(FileRenameInfoEx)` with `FILE_RENAME_FLAG_POSIX_SEMANTICS` (falling
   back to `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on volumes without it) in
   `native_platform_windows.cpp`, `std::filesystem::rename` in `native_platform_posix.cpp` (CMake

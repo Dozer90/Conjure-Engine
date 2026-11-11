@@ -424,6 +424,45 @@ TEST_SUITE("ecs/command_buffer") {
         commands.clear();
     }
 
+    TEST_CASE("command_buffer - a recording that outgrew the arena keeps its room across clear") {
+        // Recording 4,000 commands spills the 16 KiB arena block many times over. clear() keeps room for
+        // that peak like a vector keeps capacity: the next recording of the same size acquires its one
+        // block, every later one allocates nothing.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::vector<entity> targets(1000);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), targets));
+        command_buffer commands(world);
+        const auto record = [&commands, &targets]() {
+            for (const entity id : targets) {
+                commands.set<position>(id, position{1.0f, 2.0f, 3.0f});
+                commands.add<velocity>(id, velocity{0.5f, 0.0f, 0.0f});
+                commands.add<player_tag>(id);
+                commands.remove<player_tag>(id);
+            }
+        };
+
+        testing::allocation_scope first = {};
+        record();
+        CHECK(first.allocation_count() > 4);
+        CHECK(commands.command_count() == 4000);
+        commands.clear();
+
+        testing::allocation_scope second = {};
+        record();
+        const u64 secondCount = second.allocation_count();
+        CHECK(secondCount <= 1);
+        commands.clear();
+
+        CONJURE_CHECK_NO_ALLOCATIONS(record());
+        CHECK(commands.command_count() == 4000);
+        const flush_report report = world.flush(commands);
+        CHECK(report.applied == 4000);
+        CHECK(world.get<position>(targets[999])->y == 2.0f);
+        CHECK(world.has<velocity>(targets[0]));
+        CHECK_FALSE(world.has<player_tag>(targets[0]));
+    }
+
     TEST_CASE("command_buffer - flush into another world asserts") {
         ecs_fixture fixture = {};
         world other(fixture.registry);
@@ -457,5 +496,47 @@ TEST_SUITE("ecs/command_buffer") {
             CHECK(fixture.world.entity_count() == 100);
         }
         guard.check();
+    }
+
+    TEST_CASE("command_buffer - shrink_to_fit returns the room of an idle buffer and keeps pending commands") {
+        // clear() keeps the arena room a recording grew to (vector-style capacity); shrink_to_fit() is the
+        // release path world::clear and scheduler::remove_system use. With commands pending it changes
+        // nothing; once the buffer is empty every block goes back and the next recording starts afresh.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::vector<entity> targets(1000);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), targets));
+        command_buffer commands(world);
+        const auto record = [&commands, &targets]() {
+            for (const entity id : targets) {
+                commands.set<position>(id, position{1.0f, 2.0f, 3.0f});
+                commands.add<velocity>(id, velocity{0.5f, 0.0f, 0.0f});
+                commands.add<player_tag>(id);
+                commands.remove<player_tag>(id);
+            }
+        };
+        // Warm everything that is kept on purpose: the per-type id caches, the world's flush plan and
+        // slot table, the velocity archetype the first flush moves the entities into.
+        record();
+        CHECK(world.flush(commands).applied == 4000);
+
+        testing::memory_guard guard = {};
+        record();
+        CHECK(commands.command_count() == 4000);
+        commands.shrink_to_fit();
+        CHECK(commands.command_count() == 4000);
+        CHECK(world.flush(commands).applied == 4000);
+        CHECK(commands.empty());
+        commands.shrink_to_fit();
+        guard.check();
+
+        // Still a working buffer: the next recording acquires a fresh block and applies.
+        testing::allocation_scope fresh = {};
+        record();
+        CHECK(fresh.allocation_count() >= 1);
+        CHECK(world.flush(commands).applied == 4000);
+        CHECK(world.get<position>(targets[0])->z == 3.0f);
+        CHECK(world.has<velocity>(targets[999]));
+        CHECK_FALSE(world.has<player_tag>(targets[999]));
     }
 }

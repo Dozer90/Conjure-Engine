@@ -67,6 +67,16 @@ namespace {
         CHECK(system.stats().poolGrowths == 0);
         system.stop();
     }
+
+    // Frees a job parked in wait_idle() whose wake-up never came, so a case that detects the lost
+    // wake-up reports a failure instead of hanging the fixture's stop(): a job entering wait_idle()
+    // publishes itself to the idle-waiter depth and notifies the monitor, and the parked job then
+    // sees active <= depth whichever thread runs the rescue job.
+    void release_parked_idle_waiter(job_system &system) {
+        static_cast<void>(system.schedule([&system] {
+            system.wait_idle();
+        }));
+    }
 }
 
 TEST_SUITE("core/job_system") {
@@ -555,6 +565,81 @@ TEST_SUITE("core/job_system") {
         CHECK(system.stats().executed == 3);
     }
 
+    TEST_CASE("job_system - wait_idle inside a batch job wakes when a sibling of its own batch finishes") {
+        // Both jobs share the batch's counter, so the sibling finishing drops neither the counter nor
+        // the active count to zero: the waiter's wake-up has to come from finish_job noticing a
+        // published idle waiter. The sibling is queued first and holds its worker until the waiter is
+        // running, so the waiter cannot run it nested while helping, and it outlives the waiter's spin
+        // window so the waiter is parked when it finishes: the 20 ms margin is against a waiter that is
+        // preempted for a scheduler quantum between announcing itself and parking, not only the 50 us
+        // window. The shared state is declared before the fixture because on the lost wake-up path the
+        // rescued jobs may still be running when the case unwinds; the fixture's stop() joins them first.
+        std::atomic<bool> waiterArrived = false;
+        std::atomic<bool> siblingDone = false;
+        std::atomic<bool> siblingDoneWhenIdle = false;
+        testing::scoped_job_system fixture(2);
+        job_system &system = fixture.system();
+
+        const std::array<std::function<void()>, 2> jobs = {
+            [&waiterArrived, &siblingDone] {
+                static_cast<void>(testing::spin_until([&waiterArrived] { return waiterArrived.load(); }));
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                siblingDone.store(true);
+            },
+            [&system, &waiterArrived, &siblingDone, &siblingDoneWhenIdle] {
+                waiterArrived.store(true);
+                system.wait_idle();
+                siblingDoneWhenIdle.store(siblingDone.load());
+            },
+        };
+        const job_handle batch = system.schedule(std::span<const std::function<void()>>(jobs));
+
+        // Polled rather than waited for: helping would let this thread run one of the two itself.
+        const bool completed = testing::spin_until([&batch] { return batch.is_complete(); });
+        if (!completed) {
+            release_parked_idle_waiter(system);
+        }
+        REQUIRE(completed);
+        CHECK(siblingDoneWhenIdle.load());
+    }
+
+    TEST_CASE("job_system - wait_idle inside a parallel_for range wakes when a sibling range finishes") {
+        // The parallel_for variant of the batch case: every queued range counts on the dispatch's stack
+        // counter, so one range finishing never drops it to zero while another is still running. Range
+        // 1 (queued first) is the sibling, range 2 the waiter; the dispatching thread runs range 0 and
+        // then helps, so a dedicated thread dispatches and this thread watches with a timeout. The
+        // sibling's 20 ms outlive a waiter preempted between announcing itself and parking.
+        testing::scoped_job_system fixture(2);
+        job_system &system = fixture.system();
+        std::atomic<bool> waiterArrived = false;
+        std::atomic<bool> siblingDone = false;
+        std::atomic<bool> siblingDoneWhenIdle = false;
+        std::atomic<bool> dispatched = false;
+
+        const std::function<void(usize, usize)> body = [&](usize begin, usize) {
+            if (begin == 1) {
+                static_cast<void>(testing::spin_until([&waiterArrived] { return waiterArrived.load(); }));
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                siblingDone.store(true);
+            } else if (begin == 2) {
+                waiterArrived.store(true);
+                system.wait_idle();
+                siblingDoneWhenIdle.store(siblingDone.load());
+            }
+        };
+        dedicated_thread dispatcher("dispatcher", [&system, &body, &dispatched](std::stop_token) {
+            system.parallel_for(3, 1, body);
+            dispatched.store(true);
+        });
+
+        const bool completed = testing::spin_until([&dispatched] { return dispatched.load(); });
+        if (!completed) {
+            release_parked_idle_waiter(system);
+        }
+        REQUIRE(completed);
+        CHECK(siblingDoneWhenIdle.load());
+    }
+
     TEST_CASE("job_system - stop completes pending jobs before returning [parallel]") {
         CONJURE_JOBS_WORKER_SUBCASES(workers);
         constexpr int JOB_COUNT = 2000;
@@ -775,6 +860,89 @@ TEST_SUITE("core/job_system") {
         CHECK(stats.queuedNow == 0);
     }
 
+    TEST_CASE("job_system - a batch on a warmed-up fence allocates nothing [parallel]") {
+        // The handle overload pays one heap allocation per call for its shared counter; the fence
+        // overload is the per-frame path (the ECS scheduler's stages) and must pay none once the block
+        // pool holds enough blocks. The closures fit the std::function small buffer.
+        CONJURE_JOBS_WORKER_SUBCASES(workers);
+        testing::scoped_job_system fixture(workers);
+        std::atomic<usize> ran = 0;
+        std::vector<std::function<void()>> jobs = {};
+        for (usize index = 0; index < 8; ++index) {
+            jobs.emplace_back([&ran] {
+                ran.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+        job_fence fence = {};
+        const auto dispatch = [&fixture, &jobs, &fence] {
+            fixture->schedule(std::span<const std::function<void()>>(jobs), fence);
+            fixture->wait(fence);
+        };
+
+        dispatch();
+        CHECK(ran.load() == 8);
+        for (u32 repetition = 0; repetition < 10; ++repetition) {
+            CAPTURE(repetition);
+            CONJURE_CHECK_NO_ALLOCATIONS(dispatch());
+        }
+        CHECK(ran.load() == 88);
+        CHECK(fence.is_complete());
+        CHECK(fixture->stats().scheduled == 88);
+        CHECK(fixture->stats().executed == 88);
+    }
+
+    TEST_CASE("job_system - a full queue runs part of a fenced batch inline and the fence still completes") {
+        constexpr usize QUEUE_CAPACITY = 2;
+        testing::scoped_job_system fixture(1, QUEUE_CAPACITY);
+        gate blocker = {};
+        std::atomic<int> ran = 0;
+
+        static_cast<void>(fixture->schedule(blocker.job()));
+        REQUIRE(testing::spin_until([&blocker] { return blocker.entered.load(); }));
+
+        std::vector<std::function<void()>> jobs = {};
+        for (int index = 0; index < 5; ++index) {
+            jobs.emplace_back([&ran] {
+                ran.fetch_add(1);
+            });
+        }
+        job_fence fence = {};
+        fixture->schedule(std::span<const std::function<void()>>(jobs), fence);
+
+        // Two were queued behind the gate; the other three ran on this thread.
+        CHECK(ran.load() == 3);
+        CHECK(fence.pending() == 2);
+        CHECK(fixture->stats().queueFullFallbacks >= 1);
+
+        blocker.open.store(true, std::memory_order_release);
+        fixture->wait(fence);
+        CHECK(ran.load() == 5);
+        CHECK(fence.is_complete());
+    }
+
+    TEST_CASE("job_system - a fenced batch scheduled from inside a job can be waited for there [parallel]") {
+        CONJURE_JOBS_WORKER_SUBCASES(workers);
+        testing::scoped_job_system fixture(workers);
+        job_system &system = fixture.system();
+        std::atomic<int> innerRan = 0;
+        std::vector<std::function<void()>> inner = {};
+        for (int index = 0; index < 4; ++index) {
+            inner.emplace_back([&innerRan] {
+                innerRan.fetch_add(1);
+            });
+        }
+
+        const job_handle outer = system.schedule([&system, &inner, &innerRan] {
+            job_fence fence = {};
+            system.schedule(std::span<const std::function<void()>>(inner), fence);
+            system.wait(fence);
+            CHECK(fence.is_complete());
+            CHECK(innerRan.load() == 4);
+        });
+        system.wait(outer);
+        CHECK(innerRan.load() == 4);
+    }
+
     TEST_CASE("job_system - a full queue falls back inline for part of a batch") {
         constexpr usize QUEUE_CAPACITY = 2;
         testing::scoped_job_system fixture(1, QUEUE_CAPACITY);
@@ -899,9 +1067,11 @@ TEST_SUITE("core/job_system") {
             stillRunning.store(system.is_running());
             done.store(true);
         });
-        // Poll rather than wait(): waiting would let this thread help and run the job itself.
+        // Poll rather than wait(): waiting would let this thread help and run the job itself. The body
+        // sets 'done' before it returns and the counter drops only after it has, so the handle is polled
+        // too (the check right after 'done' raced the worker and failed once in 50 runs).
         REQUIRE(testing::spin_until([&done] { return done.load(); }));
-        CHECK(handle.is_complete());
+        CHECK(testing::spin_until([&handle] { return handle.is_complete(); }));
 
         CHECK(asserts.count() == 1);
         CHECK(stillRunning.load());
@@ -1048,6 +1218,43 @@ TEST_SUITE("core/job_system") {
         observer->wait(handle);
 
         CHECK(handle.is_complete());
+    }
+
+    TEST_CASE("job_system - a worker of another system scheduling here counts with the external threads") {
+        // Statistics are kept per thread, indexed by the worker's own index; a thread that is a worker of
+        // a different system has a non-zero index there but is an external thread here, so its work
+        // lands in slot 0 and the totals still add up. The outer job is polled, not waited for, so it
+        // runs on one of the outer system's workers and not on this thread. The inner system has no
+        // workers, so the batch runs inline on that outer worker and the inner totals sum slot 0 alone:
+        // counting in the outer worker's slot 1 or 2 instead would leave both totals at zero.
+        testing::scoped_job_system outer(2);
+        testing::scoped_job_system inner(0);
+        constexpr usize BATCH_SIZE = 4;
+        std::atomic<usize> ran = 0;
+        std::atomic<bool> ranOnOuterWorker = false;
+        std::vector<std::function<void()>> jobs = {};
+        for (usize index = 0; index < BATCH_SIZE; ++index) {
+            jobs.emplace_back([&ran] {
+                ran.fetch_add(1);
+            });
+        }
+
+        const job_handle outerJob = outer->schedule([&] {
+            ranOnOuterWorker.store(job_system::current() == &outer.system() && job_system::thread_index() != 0);
+            const job_handle batch = inner->schedule(std::span<const std::function<void()>>(jobs));
+            inner->wait(batch);
+        });
+        REQUIRE(testing::spin_until([&outerJob] { return outerJob.is_complete(); }));
+
+        CHECK(ranOnOuterWorker.load());
+        CHECK(ran.load() == BATCH_SIZE);
+        const job_system_stats innerStats = inner->stats();
+        CHECK(innerStats.scheduled == BATCH_SIZE);
+        CHECK(innerStats.executed == BATCH_SIZE);
+        CHECK(innerStats.inlineExecutions == BATCH_SIZE);
+        const job_system_stats outerStats = outer->stats();
+        CHECK(outerStats.scheduled == 1);
+        CHECK(outerStats.executed == 1);
     }
 
     TEST_CASE("job_system - 100k tiny jobs complete [parallel]") {

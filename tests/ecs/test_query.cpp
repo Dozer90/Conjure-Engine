@@ -7,6 +7,7 @@
 #include "conjure/ecs/query.h"
 #include "conjure/ecs/world.h"
 
+#include <array>
 #include <unordered_set>
 #include <vector>
 
@@ -188,6 +189,61 @@ TEST_SUITE("ecs/query") {
             CAPTURE(index);
             CHECK(visits[index] == 1);
         }
+    }
+
+    TEST_CASE("query - a fresh query stores up to QUERY_INLINE_MATCHES archetypes without allocating") {
+        // position plus every subset of four other components: exactly QUERY_INLINE_MATCHES archetypes
+        // match, so a query built and refreshed from scratch (what a per-run system view does) allocates
+        // nothing; the archetype beyond that spills the match list to the heap exactly once.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        REQUIRE(QUERY_INLINE_MATCHES == 16);
+        const std::array<component_id, 4> extras = {
+            fixture.id<velocity>(),
+            fixture.id<health>(),
+            fixture.id<player_tag>(),
+            fixture.id<frozen_tag>(),
+        };
+        for (u32 subset = 0; subset < 16; ++subset) {
+            component_mask mask = fixture.mask<position>();
+            for (u32 bit = 0; bit < extras.size(); ++bit) {
+                if ((subset & (1u << bit)) != 0) {
+                    mask.set(extras[bit]);
+                }
+            }
+            CONJURE_REQUIRE_OK(world.create_entity(mask));
+        }
+        query_desc desc = {};
+        desc.with = fixture.mask<position>();
+
+        u32 visited = 0;
+        const auto run_fresh_query = [&world, &desc, &visited]() {
+            visited = 0;
+            query positions = world.create_query(desc);
+            positions.for_each_chunk([&visited](chunk_view &chunk) {
+                visited += chunk.count();
+            });
+            visited += positions.entity_count();
+            return positions.matches().size();
+        };
+        usize matched = 0;
+        CONJURE_CHECK_NO_ALLOCATIONS(matched = run_fresh_query());
+        CHECK(matched == QUERY_INLINE_MATCHES);
+        CHECK(visited == 32);
+
+        // A seventeenth archetype: the first refresh of a fresh query spills once, a refreshed query
+        // iterating again allocates nothing.
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, odd_component>()));
+        testing::allocation_scope spill = {};
+        matched = run_fresh_query();
+        const u64 spilled = spill.allocation_count();
+        CHECK(spilled == 1);
+        CHECK(matched == QUERY_INLINE_MATCHES + 1);
+        CHECK(visited == 34);
+
+        query warm = world.create_query(desc);
+        warm.refresh();
+        CONJURE_CHECK_NO_ALLOCATIONS(warm.for_each_chunk([](chunk_view &) {}));
     }
 
     TEST_CASE("query - iteration locks the world and allocates nothing") {

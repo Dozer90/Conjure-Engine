@@ -45,9 +45,6 @@ namespace editor_test {
     /// unless allow_errors() was called.
     /// </summary>
     class headless_editor {
-        public:
-            static constexpr conjure::u32 MAX_PUMPED_FRAMES = 100000;
-
         private:
             conjure::testing::log_capture mLog = {};
             conjure::testing::temp_directory mDirectory = {};

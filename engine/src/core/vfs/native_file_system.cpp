@@ -211,7 +211,13 @@ result<void> native_file_system::write_file_atomic(std::string_view path, std::s
       internal::path_to_utf8(nativePath.filename()),
       uuid::generate().to_string()
     );
-    const std::filesystem::path temporary = nativePath.parent_path() / internal::path_from_utf8(temporaryName);
+    // The destination came back from resolve_writable in the form its own length needs, but the
+    // temporary is 41 characters longer: a target just under the classic Windows limit has a temporary
+    // beyond it, which the standard library cannot open without the extended-length form (performance
+    // round: the integration tests' scratch path in a build directory four characters longer failed
+    // every meta write with "open for writing failed" while the shorter tree passed).
+    const std::filesystem::path temporary =
+      internal::extend_native_path(nativePath.parent_path() / internal::path_from_utf8(temporaryName));
 
     // Validate the destination before the temporary is created so a rejected call leaves
     // nothing behind.

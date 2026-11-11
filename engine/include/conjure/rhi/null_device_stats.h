@@ -10,8 +10,21 @@
 // are counted when they are created, command-list work when it is recorded, submissions when
 // executeCommandLists runs, and debug markers keep their names in recording order so renderer
 // tests can assert on the pass stream. Read a snapshot with device::null_stats().
+//
+// The null device is the instrument the renderer's allocation gates measure through
+// (tests/benchmarks `renderer.null_frame_10k`, allocs 0), so its own bookkeeping is allocation-free
+// in steady state: the counters are plain integers and the marker names, the one growing list, are
+// stored only after a consumer asked for them by calling device::reset_null_stats() and at most
+// MAX_RECORDED_MARKER_NAMES per reset (the rest are counted in markerNamesDropped). A headless run
+// that never resets the stats therefore stores no names and never grows.
 
 namespace conjure::rhi {
+
+    /// <summary>
+    /// Marker names kept per reset_null_stats(); beginMarker calls beyond this are counted in
+    /// markersBegun and markerNamesDropped but their names are not stored.
+    /// </summary>
+    inline constexpr u32 MAX_RECORDED_MARKER_NAMES = 4096;
 
     struct CONJURE_API null_device_stats {
         // Resource creation, by type.
@@ -61,7 +74,11 @@ namespace conjure::rhi {
         u32 timerQueriesBegun = 0;
         u32 markersBegun = 0;
         u32 markersEnded = 0;
-        std::vector<std::string> markerNames = {};   // beginMarker names in recording order
+        // beginMarker names in recording order since the last device::reset_null_stats(); empty
+        // until the first reset (nothing is stored for a consumer that never asked) and capped at
+        // MAX_RECORDED_MARKER_NAMES.
+        std::vector<std::string> markerNames = {};
+        u32 markerNamesDropped = 0;     // beginMarker calls whose name was not stored (cap or no consumer)
 
         // Null swapchains.
         u32 swapchainsCreated = 0;
@@ -70,7 +87,7 @@ namespace conjure::rhi {
         u32 resizes = 0;
 
         /// <summary>
-        /// Resets every counter and forgets the marker names.
+        /// Resets every counter and forgets the marker names (the vector keeps its capacity).
         /// </summary>
         void reset() noexcept;
     };

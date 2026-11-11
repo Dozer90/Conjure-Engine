@@ -234,6 +234,62 @@ from a note in detail, the note is right.
   in the `LINK_ENGINE_SHARED` executable `conjure_integration_plugin_tests` with the fixture plugin
   `tests/integration/fixtures/sample_plugin`, so the static executable keeps meaningful `memory_guard` and
   `allocation_scope` gates. Declined or deferred: see section 4, item 15.
+- **Performance round (2026-11; integration on waves 1-4)**: the allocation and time budgets of `08_testing.md`
+  7.1 applied to the implemented engine. Each shortfall of item 15(j) was closed by its module owner without
+  touching `tests/benchmarks/thresholds.json`, then the tree was integrated as one: clean Debug, Development and
+  Distribution builds in `build/perf_integration{,_dev,_dist}`; 4,064 Debug tests and 4,062 of 4,063 Development
+  tests green after the review of the integration added its three regression cases (the one red entry is the
+  enforced benchmark row below); the three contention-sensitive gates
+  (`physics.physics_world - 600 empty steps`, `integration.hierarchy_propagation` 10,000-entity budget,
+  `integration.prefab_spawn_destroy` budget) repeated with `ctest --repeat until-fail:20` in both trees without a
+  failure; `check_style.py --tests-mirror-headers`, `check_exports.py`, `check_docs.py` and `docs.py build`
+  clean. Closed shortfalls (allocations per measured iteration, before -> after, Development, 16 workers, from
+  `build/perf_final_dev_run.json`): `ecs.iterate_100k` 1 -> 0 (query matches inline,
+  `QUERY_INLINE_MATCHES`), `ecs.spawn_destroy_10k` 33 -> 0 against a budget of 2 (the world's member flush
+  plan, recycled command-buffer arenas, parked spare chunks), `renderer.extract_10k` 21 -> 0 and
+  `renderer.null_frame_10k` 306 -> 0 (persistent view states, `cull_scratch`, pooled graph entries, binding-desc
+  scratch, pre-created timer queries, an allocation-free null device), `scripting.update_10k_dod` 3 -> 0 (a cached
+  `ecs::query` per component set, reused scope states), `physics.sync_10k` 2 -> 0 and 0.43 -> 0.07 ms (the pull
+  through `parallel_for_chunks` on a persistent query, one `TryGetBody` per row, a dense entity-index row table),
+  `engine.full_frame_10k_transform_render` 12 -> 0, `engine.full_frame_10k_physics` 42 -> 0 and
+  `engine.full_frame_10k_scripts` 1 -> 0 (stage jobs on a stack-held `core::jobs::job_fence`, the asset
+  hot-reload watcher opt-in through `assets_settings::hotReload` and off headless, the extraction's member camera
+  list, main-thread queues drained only when non-empty). Integration changes on top, each the smallest one:
+  `core/jobs` keeps an idle worker and a thread in `wait()` spinning for a bounded 50 us (`pause`, a `yield()`
+  every 64th) before it sleeps, guards the queue with a spinlock instead of a `std::mutex` (a ticket lock when
+  measured; the review of the integration replaced it with a test-and-test-and-set lock that parks after a
+  bounded spin, because a FIFO ticket stalls every later waiter behind a preempted one on a pool sized to the
+  machine, and had `finish_job` wake a job parked in `wait_idle()` when the last sibling of its own batch
+  finishes, a pre-existing lost wake-up the review found), separates the
+  hot queue atomics onto their own cache lines and counts its statistics per thread (a queued job cost 1.7 us
+  of serialised hand-off with 16 workers; `core.job_parallel_for_1m` 0.100 -> 0.042 ms,
+  `scene.transform_propagation_10k` 0.225 -> 0.172, `_sparse` 0.150 -> 0.125, `ecs.iterate_100k` 0.113 -> 0.055,
+  `engine.full_frame_10k_transform_render` 0.571 -> 0.492, all with the ticket lock; the final parking lock measures
+  0.052, 0.173, 0.136, 0.049 and 0.470, `build/perf_final_dev_run.json`); `core/vfs` `native_file_system::write_file_atomic`
+  passes its `<target>.tmp-<uuid>` temporary through `extend_native_path` on its own (the temporary is 41
+  characters longer than the target, so a target just under the classic Windows limit had a temporary beyond it:
+  the integration tests' meta writes failed in a build directory four characters longer than the owners',
+  `tests/core/vfs` regression `perf-round`); `tests/core/jobs` "stop called from a worker" polls the handle
+  after the body's `done` flag instead of checking it at once (the counter drops after the body returns; the
+  check raced the worker once); `tests/editor` `headless_editor::send` bounds its wait for an asynchronous reply by
+  wall time alone (twice the dispatcher's timeout: the application clock is wall time, the forced 1/60 s delta
+  shapes the frame delta only) and no longer by a 100,000-frame cap, which a Development build's microsecond
+  headless frame exhausted before `dotnet` could answer `script.compile` (two editor cases failed in
+  Development after the round). Threshold left unmet, unchanged for the design owner to decide:
+  `scene.transform_propagation_10k_sparse` p50 0.136 ms against 0.100 (p99 0.411, allocations 0; 0.125 with the
+  ticket lock). The
+  arithmetic, owner's and integrator's: S4's chunk-granular stamp makes "10 % of the roots" 6,770 of 10,000 rows
+  (68 %), 25 ns each, so the work fits any worker count from two up (inline 0.122 ms, 2 workers 0.094, 4 workers
+  0.070, 8 workers 0.092, 16 workers 0.125 with the ticket lock and 0.136 with the parking lock); the 16-worker
+  figure is the dispatch of about 41 jobs per iteration through the single shared queue at about 0.6 to 0.8 us
+  per pop (down from 1.7 us), plus two joins, and neither
+  one range per thread (load imbalance: dense 0.199, sparse 0.097 at 4 workers) nor dropping the pass's per-chunk
+  counters changes it. Closing it needs per-worker queues with stealing or a `parallel_for` that queues
+  min(ranges, workers) claim blocks, both of which the core tests pin against (`test_parallel_for.cpp`:
+  `poolCapacity >= range_count - 1`, the per-range queue-full fallback) and `10_core.md` describes; or the
+  scenario at `--threads 4`; or 7.1's "10 % dirty" read as 10 % of the rows. The patterns the round settled on
+  (persistent frame state, caller-owned job counters, cached queries, opt-in background work) are
+  `docs/handbook/data-oriented-design.md` section 8; `tests/benchmarks/README.md` has the full table.
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
   `memory::counters()`/`snapshot()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,
@@ -343,16 +399,39 @@ from a note in detail, the note is right.
     configuration was compiling on the same machine and passes alone and in an idle run; the suspect is the job
     system's block pool growing under contention, to be measured before it is called flaky. (g) The `.gitignore`
     already covers `build/`, `**/bin/` and `**/obj/`, so no entry was added for the managed outputs.
-15. **Wave 4 loose ends (integration).** (a) An engine frame is not allocation-free: an empty headless frame
-    allocates 13 blocks with inline jobs and 11 with two workers (frame statistics, the scheduler's per-stage
-    counters, the main-thread queue swap are the suspects), a frame over a 10,000-entity hierarchy with 10 % of its
-    entities moved allocates the same 13, and spawning 100 crate prefab instances plus destroying 100 costs 526-542
-    blocks per frame in steady state (archive instantiation and the guid index). `test_hierarchy_propagation` and
-    `test_prefab_spawn_destroy` therefore gate what holds (the hierarchy adds nothing to the frame; the churn
-    accumulates nothing) plus these measured numbers as absolute budgets (`EMPTY_FRAME_ALLOCATION_BUDGET` 13 and
-    `STEADY_FRAME_ALLOCATION_BUDGET` 542, pinned in the tests, which may only go down; review 4 measured the empty
-    frame at 10) instead of the zero `08_testing.md` 6.1 asks for; making the frame loop and
-    `prefab::instantiate_many` allocation-free is owed by engine and scene. (b) Jolt settles ten stacked unit boxes
+15. **Wave 4 loose ends (integration).** (a) *Resolved in the performance round (2026-11)*: an engine frame is
+    allocation-free in Development. The wave-4 integration measured an empty headless frame at 13 blocks with
+    inline jobs and 11 with two workers (review 4: 10), the same over a 10,000-entity hierarchy, and 526-542 per
+    frame for spawning and destroying 100 crate prefab instances. The sites, named with a stack-capturing hook on
+    `tracked_allocate`, were the scheduler's per-stage `make_shared<job_counter>` (now a stack-held
+    `core::jobs::job_fence`, item 14c), the per-run `context.view<...>()` query (now `small_vector<archetype *,
+    QUERY_INLINE_MATCHES>`), the asset hot-reload watcher created unconditionally outside Distribution whose
+    500 ms stat pass allocated on a job thread (now opt-in through `engine_config::assets.hotReload` and the
+    project's `"assets": {"hot_reload"}`, off in `headless_defaults()`, copied by the `--headless` merge of
+    `application_desc::from_options` (review 4: the merge had every other headless default but this one, so the
+    runtime's and the editor's command-line headless modes kept the watcher) and kept off by `project::apply_to`
+    under headless), the extraction's per-frame camera candidate vector and `std::stable_sort` buffer (a member
+    list and `std::sort` with a world-order tie-break), and, under MSVC's debug iterators only, the container
+    proxies of the main-thread queue drain's and `layer_stack::apply_pending`'s local vectors (both skipped
+    when nothing is queued). Measured after the round (Development, `headless_engine`): the empty frame 0
+    blocks inline and with two workers, a frame with the renderer, physics and audio on 0, and the three
+    `engine.full_frame_10k_*` benchmarks 0 (item j); the integration's enforced run
+    (`build/perf_integration_dev_run.json`) and its 20-fold repeats of the two integration budgets and the
+    physics "600 empty steps" gate in both trees confirm it (section 3, "Performance round"). A Debug test executable still sees one block per frame, the
+    debug-iterator proxy of the local `std::vector` in `assets::detail::completion_queue::drain`
+    (`asset_manager::update`), so `test_hierarchy_propagation` pins `EMPTY_FRAME_ALLOCATION_BUDGET = 1` (13
+    before); the prefab churn costs 20 blocks per frame in Development and 258 in Debug, none in the frame
+    loop (101 the local graveyard vector of `core::event::finish_emit` behind `scene::bump_structure`, 100 the
+    temporary `command_buffer` that `std::swap` builds in `ecs::world::drain_deferred` once per
+    `scene::destroy`, 57 the archive shape, link pass and report vectors of `prefab::instantiate_many`), so
+    `test_prefab_spawn_destroy` pins `STEADY_FRAME_ALLOCATION_BUDGET = 258` (542 before). Both budgets may only
+    go down. They and the renderer_subsystem gate (a frame with a camera, a mesh and a light costs no more than
+    the empty frame, both measured in the same executable over five baseline frames) were measured on MSVC
+    alone; libstdc++ and libc++ have no debug-iterator proxies, so the Linux and macOS CI legs are their first
+    measurement (item h) and the relative gates, not the MSVC figures, are the primary assertions there. The
+    zero of `08_testing.md` 6.1 for the Debug executables is owed by assets (a member drain
+    vector), core (`finish_emit` without a local vector when nothing died), ecs (swap the deferred buffer
+    pointers) and scene (`instantiate_many` scratch kept across calls). (b) Jolt settles ten stacked unit boxes
     1.3 cm low at the top and lets them slide up to 4 cm sideways before sleeping (penetrationSlop 0.005 m per
     contact); `test_physics_stack` gates 2 cm and 5 cm instead of the design's 1 cm. (c) `samples/feature_test` does
     not exist yet (wave 5); `test_engine_project_boot` boots `tests/assets/projects/minimal` and `test_export_roundtrip`
@@ -384,21 +463,48 @@ from a note in detail, the note is right.
     the classic Windows limit (`extend_native_path`); the Distribution `CONJURE_VERIFY` discards its condition's
     value explicitly (MSVC C4834 when the condition is a `[[nodiscard]]` call, found by the Distribution build of
     `tests/modules/fixtures/module_surface`). (j) The first Development benchmark run (`conjure_benchmarks`,
-    desktop class, 16 threads, 200 iterations, 2025-11 integration machine) passes 8 of 17 scenarios against
-    `thresholds.json`. Timings are inside their budgets except `physics.sync_10k` (p50 0.43 ms, budget 0.30) and
-    `scene.transform_propagation_10k_sparse` (p50 0.25 ms, budget 0.10); the other breaches are allocation
-    counts the design sets to zero: `ecs.iterate_100k` 1, `ecs.spawn_destroy_10k` 33 (budget 2),
-    `engine.full_frame_10k_physics` 42, `engine.full_frame_10k_scripts` 1, `engine.full_frame_10k_transform_render`
-    12, `renderer.null_frame_10k` 306, `scripting.update_10k_dod` 3. Reference timings (p50): `ecs.iterate_100k`
-    0.11 ms, `engine.full_frame_10k_physics` 4.4 ms, `engine.full_frame_10k_transform_render` 0.55 ms,
-    `physics.step_10k_active` 4.8 ms, `renderer.null_frame_10k` 0.93 ms, `scene.load_10k` 50 ms,
-    `scene.snapshot_capture_restore_10k` 22 ms, `scripting.update_10k` 0.09 ms. The allocation breaches are item
-    (a) measured per module; the nightly `benchmarks-ci-class` job is red until they are closed or the thresholds
-    are revisited by the module owners. Fix round 4 (2026-11) corrected the scenario set: the 17 of that run were
-    not the 17 of 08 7.1 (`core.job_parallel_for_1m`, `renderer.extract_10k` and `scripting.native_call_100k`
-    were missing; `scene.snapshot_capture_restore_10k`, `renderer.null_frame_10k` and `physics.step_2k_settling`
-    stood in their place). The three design scenarios now exist with the 7.1 budgets (measured 0.10 ms / 0 allocs,
-    0.22 ms / 21 allocs in the job-parallel culler, 1.40 ms / 0 allocs), and `physics.sync_10k` is measured through
-    a scheduler with `physics::register_systems` (the PARALLEL pull, 0.17 ms, inside its budget; the 0.43 ms above
-    was the serial fallback). The budget of `physics.step_2k_settling` is a harness regression guard, not a
-    14_physics.md figure; `tests/benchmarks/README.md` records every remaining deviation and the full table.
+    desktop class, 16 threads, 200 iterations, 2025-11 integration machine) passed 8 of 17 scenarios against
+    `thresholds.json`: timings inside their budgets except `physics.sync_10k` (p50 0.43 ms, budget 0.30; the serial
+    fallback, as fix round 4 found) and `scene.transform_propagation_10k_sparse` (p50 0.25 ms, budget 0.10), the
+    other breaches allocation counts the design sets to zero (`ecs.iterate_100k` 1, `ecs.spawn_destroy_10k` 33
+    against 2, `engine.full_frame_10k_physics` 42, `engine.full_frame_10k_scripts` 1,
+    `engine.full_frame_10k_transform_render` 12, `renderer.null_frame_10k` 306, `scripting.update_10k_dod` 3). Fix
+    round 4 (2026-11) corrected the scenario set (`core.job_parallel_for_1m`, `renderer.extract_10k` and
+    `scripting.native_call_100k` were missing; `scene.snapshot_capture_restore_10k`, `renderer.null_frame_10k` and
+    `physics.step_2k_settling` stood in their place) and measured `physics.sync_10k` through a scheduler with
+    `physics::register_systems`. *The performance round (2026-11) closed every allocation breach*, each by its
+    module owner without touching `thresholds.json`: ecs (query matches inline, the world's member flush plan and
+    placement scratch, recycled command-buffer arenas, parked spare chunks; `ecs.iterate_100k` 1 -> 0,
+    `ecs.spawn_destroy_10k` 33 -> 0 at 0.24 ms), core/ecs (stage jobs on a stack-held `core::jobs::job_fence`,
+    a warmed-up phase allocates nothing in both scheduler modes), renderer and rhi (persistent view states,
+    `cull_scratch`, pooled render-graph entries, binding-desc scratch, pre-created timer queries, an
+    allocation-free null device with marker names recorded only after `reset_null_stats()`;
+    `renderer.extract_10k` 21 -> 0, `renderer.null_frame_10k` 306 -> 0), scripting (a cached `ecs::query` per
+    component set and reusable scope states; `scripting.update_10k_dod` 3 -> 0), physics (the pull through
+    `parallel_for_chunks` on a persistent query, one `TryGetBody` per row, a dense entity-index row table;
+    `physics.sync_10k` 2 -> 0 at 0.11 ms, its serial fallback 0.44 -> 0.27 ms) and engine (item a;
+    `engine.full_frame_10k_transform_render` 12 -> 0 at 0.57 ms, `engine.full_frame_10k_physics` 42 -> 0 at
+    4.47 ms, `engine.full_frame_10k_scripts` 1 -> 0 at 0.12 ms). One enforced Development run of all 20
+    scenarios (`build/perf_engine_dev_run.json`, idle machine) passed 19; the integration's run after its
+    job-system change (`build/perf_integration_dev_run.json`: a 50 us spin window before a thread sleeps and a
+    spinlock on the queue, the ticket form of section 3, `core.job_parallel_for_1m` 0.100 -> 0.042 ms) and the final run with the
+    parking lock that replaced it (`build/perf_final_dev_run.json`, 0.052 ms) pass
+    the same 19 and the
+    nightly `benchmarks-ci-class` job stays red on the one remaining row, the time budget of
+    `scene.transform_propagation_10k_sparse` (p50 0.136 ms against 0.100 with the parking lock, 0.125 with the
+    ticket lock; 0.150 before the job-system change,
+    0.17 before the scene owner's pass rewrite; dense 0.172 of 0.400). The arithmetic, recorded with the
+    threshold unchanged: the scenario moves 10 % of the roots, but the 100 roots share one 67-row chunk, so the
+    chunk-granular `local_transform` stamp (13_scene.md S4) recomputes 6,770 of the 10,000 rows (68 %); at
+    about 25 ns per row the work fits every worker count (inline 0.122 ms, 2 workers 0.094, 4 workers 0.070,
+    8 workers 0.092, 16 workers 0.125 with the ticket lock, 0.136 with the parking lock), and the 16-worker
+    figure is the dispatch of about 41 jobs per iteration through the single shared queue at about 0.6 to 0.8 us
+    of serialised hand-off per pop (1.7 us before the
+    integration's change, which is what the owner measured as 80-100 us of wake-up and join) plus two joins.
+    Closing it needs per-worker queues or a claim-based `parallel_for` in core (both against what
+    `tests/core/jobs/test_parallel_for.cpp` and `10_core.md` pin), the scenario at `--threads 4`, or a reading
+    of 7.1's "10 % dirty" as 10 % of the rows rather than of the roots (section 3, "Performance round", has the
+    experiments that were rejected). Allocation gates are sensitive
+    to CPU contention (a frame that is allocation-free idle reported 4 blocks while another build saturated the
+    machine, item 14f), so the enforced run belongs on an idle machine. `tests/benchmarks/README.md` records the
+    full table and every remaining deviation.

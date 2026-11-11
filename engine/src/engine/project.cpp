@@ -28,9 +28,9 @@ namespace {
     /// <summary>
     /// The top-level keys the schema knows; everything else is preserved in extensions.
     /// </summary>
-    constexpr std::array<std::string_view, 16> KNOWN_KEYS = {
+    constexpr std::array<std::string_view, 17> KNOWN_KEYS = {
         "schema_version", "name", "version", "engine_version", "assets_root", "cooked_root", "startup_scene",
-        "cooked", "modules", "window", "time", "physics", "rendering", "audio", "scripting", "layers",
+        "cooked", "modules", "window", "time", "physics", "rendering", "audio", "assets", "scripting", "layers",
     };
 
     [[nodiscard]] core::error invalid(std::string_view pointer, std::string_view reason) {
@@ -286,6 +286,15 @@ namespace {
         return core::result<void>::success();
     }
 
+    [[nodiscard]] core::result<void> read_assets(const value &root, assets_settings &settings) {
+        CONJURE_TRY_ASSIGN(const value section, read_object(root, "assets"));
+        if (!section.is_valid()) {
+            return core::result<void>::success();
+        }
+        CONJURE_TRY(read_bool(section, "hot_reload", settings.hotReload));
+        return core::result<void>::success();
+    }
+
     [[nodiscard]] core::result<void> read_scripting(const value &root, scripting_settings &settings) {
         CONJURE_TRY_ASSIGN(const value section, read_object(root, "scripting"));
         if (!section.is_valid()) {
@@ -398,6 +407,7 @@ core::result<project> project::parse(std::string_view text, std::filesystem::pat
     CONJURE_TRY(read_physics(root, description));
     CONJURE_TRY(read_rendering(root, description.rendering));
     CONJURE_TRY(read_audio(root, description.audio));
+    CONJURE_TRY(read_assets(root, description.assets));
     CONJURE_TRY(read_scripting(root, description.scripting));
     CONJURE_TRY(read_strings(root, "layers", description.layers));
     if (description.layers.size() > 32) {
@@ -514,6 +524,10 @@ core::json::document project::to_json() const {
     audio.set("groups", groups);
     root.set("audio", audio);
 
+    core::json::document assets = core::json::document::object();
+    assets.set("hot_reload", desc.assets.hotReload);
+    root.set("assets", assets);
+
     core::json::document scripting = core::json::document::object();
     scripting.set("enabled", desc.scripting.enabled);
     scripting.set("required", desc.scripting.required);
@@ -581,12 +595,14 @@ void project::apply_to(engine_config &config) const {
     config.window.vsync = desc.window.vsync;
 
     if (!headless) {
-        // Headless keeps its null devices, its window size and its disabled scripting (D8).
+        // Headless keeps its null devices, its window size, its disabled scripting and its disabled asset hot
+        // reload (D8; the watcher's stat passes would run on job threads during a headless frame).
         config.window.width = desc.window.width;
         config.window.height = desc.window.height;
         config.rendering.enabled = desc.rendering.enabled;
         config.rendering.backend = desc.rendering.backend;
         config.audio.backend = desc.audio.backend;
+        config.assets.hotReload = desc.assets.hotReload;
         config.scripting.enabled = desc.scripting.enabled;
     } else {
         // A headless time setting keeps its forced delta: the project's wall-clock preference is for

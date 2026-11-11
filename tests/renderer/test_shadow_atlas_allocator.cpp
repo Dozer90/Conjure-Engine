@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/approx.h"
 
 #include "renderer/shadows/shadow_atlas_allocator.h"
@@ -273,6 +274,29 @@ TEST_SUITE("renderer/shadow_atlas_allocator") {
         allocator.allocate(requests);
         const std::vector<atlas_tile> after(allocator.tiles().begin(), allocator.tiles().end());
         CHECK(before == after);
+    }
+
+    TEST_CASE("shadow_atlas_allocator - a repeated frame allocates no memory once the scratch is sized") {
+        // The renderer allocates the atlas every frame (renderer.null_frame_10k, allocs 0): the
+        // all-or-nothing backups, the settled flags and the history are members that keep their
+        // capacity, so neither the stable path (pass 1) nor halving and dropping (pass 2) allocate.
+        shadow_atlas_allocator allocator(2048);
+        std::vector<atlas_request> requests = {};
+        for (u64 key = 1; key <= 12; ++key) {
+            requests.push_back(request(key, key % 2 == 0 ? 1024 : 512, key % 5 == 0 ? 6 : 1));
+        }
+        allocator.allocate(requests);
+        CHECK(allocator.dropped_count() > 0);   // the atlas is oversubscribed: halving and dropping ran
+        allocator.allocate(requests);
+        CHECK(allocator.reused_count() > 0);
+        CONJURE_CHECK_NO_ALLOCATIONS(allocator.allocate(requests));
+        CHECK(tiles_disjoint(allocator));
+        // A changed request set (the stable path fails for the moved lights) is allocation-free too.
+        std::vector<atlas_request> rotated(requests.rbegin(), requests.rend());
+        allocator.allocate(rotated);
+        CONJURE_CHECK_NO_ALLOCATIONS(allocator.allocate(requests));
+        CONJURE_CHECK_NO_ALLOCATIONS(allocator.allocate(rotated));
+        CHECK(tiles_disjoint(allocator));
     }
 
     TEST_CASE("shadow_atlas_allocator - reset forgets the history so the next frame allocates from scratch") {

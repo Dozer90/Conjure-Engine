@@ -37,6 +37,7 @@ conjure_add_core_area(jobs
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/jobs/main_thread.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/jobs/parallel_for.h
     SOURCES
+        cpu_pause.h
         dedicated_thread.cpp
         job_handle.cpp
         job_system.cpp

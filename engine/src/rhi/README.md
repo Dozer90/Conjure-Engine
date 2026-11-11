@@ -70,12 +70,21 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   `getBufferState` answer like D3D12 (`keepInitialState` textures start at their initial state;
   per-list tracking resets on `open()`; a permanent state is stored on the `null_texture` /
   `null_buffer` itself, so it is visible to every command list and dies with the resource instead of
-  surviving in a pointer-keyed map). `executeCommandLists` returns an increasing fence and refuses a
+  surviving in a pointer-keyed map). The device is the instrument the renderer's allocation gates
+  measure through (`renderer.null_frame_10k`, allocs 0, counts device-side allocations too), so its
+  bookkeeping is allocation-free in steady state: the referenced-resource list and the state trackers
+  (`core::flat_hash_map`, `clear()` keeps the table) keep their storage across `open()`, the counters
+  are integers, and marker names, the one growing record, are stored only after a consumer asked for
+  them with `device::reset_null_stats()` and at most `MAX_RECORDED_MARKER_NAMES` (4096) per reset;
+  the rest are counted in `null_device_stats::markerNamesDropped`. A headless run that never resets
+  the stats stores no names and never grows (`test_null_device.cpp` "open/close 100 command lists
+  after warm-up allocates nothing"). `executeCommandLists` returns an increasing fence and refuses a
   list that is still open. `queryFeatureSupport` is true for `ComputeQueue`, `CopyQueue`,
   `ConstantBufferRanges`, `DeferredCommandLists`, `VirtualResources` and `WaveLaneCountMinMax`
   (32 lanes); every GPU-only feature is false. `getGraphicsAPI()` reports `D3D12` so code that
   branches on the API takes the zero-based `SV_InstanceID` path the design assumes. The statistics
-  are read with `device::null_stats()` (a snapshot) and cleared with `reset_null_stats()`.
+  are read with `device::null_stats()` (a snapshot) and cleared with `reset_null_stats()`, which is
+  also what starts the marker-name recording: a test that asserts on the pass stream resets first.
 - **Null swapchain.** `bufferCount` textures in the `Present` state with `keepInitialState`;
   `acquire()` returns the current index and `present()` advances it, so acquire/present pairs
   cycle `0, 1, 2, 0, ...`; `resize` recreates the buffers and restarts at 0. Zero sizes are

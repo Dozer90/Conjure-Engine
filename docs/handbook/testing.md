@@ -381,7 +381,7 @@ steady state is still asserted in unit tests as well (`CONJURE_CHECK_NO_ALLOCATI
 - module test suites: [ECS](modules/ecs.md#8-tests), [Platform](modules/platform.md#10-tests), [RHI](modules/rhi.md#9-tests),
   [Assets](modules/assets.md#12-tests), [Audio](modules/audio.md#13-tests), [Modules](modules/modules.md#9-tests-and-fixtures),
   [Engine](modules/engine.md#11-tests), [Bindings](modules/bindings.md#9-tests), [Editor](modules/editor.md#10-tests),
-  [Runtime](modules/runtime.md#5-tests)
+  [Runtime](modules/runtime.md#6-tests)
 - `tests/integration/CMakeLists.txt` (the scenario list), `tests/benchmarks/README.md`, `tests/support/engine/README.md`
 - `.claude/skills/build-and-test/SKILL.md` (reading failures, single-test runs)
 - [Getting started](getting-started.md), [Build pipeline](build-pipeline.md), [Continuous integration](ci.md)

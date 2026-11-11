@@ -27,11 +27,14 @@ namespace {
     constexpr u32 BASELINE_FRAMES = 5;
 
     // The frame loop's own per-frame cost with inline jobs, measured and recorded in
-    // docs/design/09_cross_area_resolutions.md 4 item 15a (13 blocks: frame statistics, the scheduler's per-stage
-    // counters, the main-thread queue swap). 08_testing.md 6.1 asks for zero; this budget may only go down as the
-    // frame loop is made allocation-free, never up. Run the case the way CTest does (one case per process, no
-    // doctest -s): the success reporter's own bookkeeping adds blocks to a frame.
-    constexpr u64 EMPTY_FRAME_ALLOCATION_BUDGET = 13;
+    // docs/design/09_cross_area_resolutions.md 4 item 15a. The engine's frame is allocation-free in Development
+    // (the engine.full_frame_10k_* benchmarks gate 0); the one block left in this Debug executable is the
+    // container proxy MSVC's debug iterators give the local std::vector of
+    // assets::detail::completion_queue::drain (asset_manager::update, engine/src/assets), which does not exist
+    // without _ITERATOR_DEBUG_LEVEL. 08_testing.md 6.1 asks for zero; this budget may only go down, never up.
+    // Run the case the way CTest does (one case per process, no doctest -s): the success reporter's own
+    // bookkeeping adds blocks to a frame.
+    constexpr u64 EMPTY_FRAME_ALLOCATION_BUDGET = 1;
 }
 
 TEST_SUITE("integration/hierarchy_propagation") {
@@ -72,11 +75,11 @@ TEST_SUITE("integration/hierarchy_propagation") {
     }
 
     TEST_CASE("hierarchy_propagation - a 10,000-entity hierarchy adds nothing to the frame's allocations once warm") {
-        // 08_testing.md 6.1 asks for an allocation-free frame. The frame loop itself allocates a small, constant
-        // number of blocks per frame today (EMPTY_FRAME_ALLOCATION_BUDGET, 09_cross_area_resolutions.md 4 item 15a),
-        // so two gates hold here: the empty frame stays within that recorded budget, and a 10,000-entity hierarchy
-        // with 10 % of its entities moved every frame costs no more than the empty frame, frame after frame, from
-        // frame 2 on.
+        // 08_testing.md 6.1 asks for an allocation-free frame. The frame loop itself is allocation-free in
+        // Development; this Debug executable sees one block of debug-iterator bookkeeping per frame
+        // (EMPTY_FRAME_ALLOCATION_BUDGET, 09_cross_area_resolutions.md 4 item 15a), so two gates hold here: the
+        // empty frame stays within that recorded budget, and a 10,000-entity hierarchy with 10 % of its entities
+        // moved every frame costs no more than the empty frame, frame after frame, from frame 2 on.
         u64 emptyFrame = 0;
         u64 worstFrame = 0;
         {

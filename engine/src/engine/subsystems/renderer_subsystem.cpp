@@ -50,13 +50,6 @@ namespace {
         const math::vec3 up = rotate_direction(worldFromCamera, math::vec3(0.0f, 1.0f, 0.0f));
         return glm::lookAt(position, position + forward, up);
     }
-
-    struct camera_candidate {
-        renderer::render_view view = {};
-        i32 priority = 0;
-        bool isMain = false;
-        u32 order = 0;
-    };
 }
 
 /*===========================================================================*/
@@ -195,6 +188,8 @@ void renderer_subsystem::shutdown(engine_context &context) {
     }
     mSubscription = {};
     mServices->extractTarget = nullptr;
+    mCameras.clear();
+    mCameras.shrink_to_fit();
     mServices->debugDraw.reset();
     mServices->renderer.reset();
     mServices->shaders.reset();
@@ -224,7 +219,9 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
     target.deltaSeconds = context.frame().deltaTime;
 
     // Cameras: the main cameras first in priority order; a scene without an isMain camera renders every camera.
-    std::vector<camera_candidate> cameras = {};
+    // The candidate list is a member so a steady-state frame allocates nothing (08_testing.md 7.1).
+    std::vector<camera_candidate> &cameras = mCameras;
+    cameras.clear();
     context.view<const renderer::camera_component, const scene::render_world_transform>()
       .without<scene::disabled>()
       .without<scene::inactive>()
@@ -249,7 +246,8 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
     const bool anyMain = std::any_of(cameras.begin(), cameras.end(), [](const camera_candidate &c) {
         return c.isMain;
     });
-    std::stable_sort(cameras.begin(), cameras.end(), [](const camera_candidate &a, const camera_candidate &b) {
+    // The world-order tie-break makes the sort stable without std::stable_sort's temporary buffer.
+    std::sort(cameras.begin(), cameras.end(), [](const camera_candidate &a, const camera_candidate &b) {
         if (a.priority != b.priority) {
             return a.priority > b.priority;
         }

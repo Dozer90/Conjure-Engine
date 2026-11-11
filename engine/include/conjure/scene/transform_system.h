@@ -6,6 +6,7 @@
 #include "conjure/core/api.h"
 #include "conjure/core/math/transform.h"
 #include "conjure/core/types.h"
+#include "conjure/ecs/chunk_view.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/ecs/query.h"
 #include "conjure/ecs/system.h"
@@ -14,12 +15,16 @@
 #include <vector>
 
 // Transform propagation (docs/design/13_scene.md 3.4, R3): the body of scene.propagate_transforms. One
-// parallel_for_chunks per hierarchy level (roots first), so the parent of every entity in a level has
-// been finished by the previous level's join. A chunk is recomputed when its local_transform column
-// changed since the previous run, when it carries transform_dirty, when a parent was recomputed this run
-// (the transform_state::lastUpdateRun stamp) or when an interpolated pose is involved. world_transform
-// and render_world_transform are written in the same visit; dirty tags are removed through the grain
-// command buffers. Allocation-free once the queries have seen every archetype.
+// job dispatch per hierarchy level (roots first), so the parent of every entity in a level has been
+// finished by the previous level's join. A chunk is recomputed as a whole when its local_transform
+// column changed since the previous run, when it carries transform_dirty or when it holds interpolated
+// poses; otherwise only its rows marked transform_state::pending are recomputed, the mark a parent's
+// pass left when it recomputed its own world matrix (the transform_state::lastUpdateRun stamp), sits in
+// an interpolated subtree or changed flags. Clean rows are never looked up: a level scans the state
+// column of its chunks, collects the chunks with work and splits them into jobs by dirty rows.
+// world_transform and render_world_transform are written in the same visit; dirty tags are removed
+// through the system's command buffer after the level join. Allocation-free once the queries have seen
+// every archetype and the level scratch has seen its largest level.
 
 namespace conjure::scene {
 
@@ -54,9 +59,22 @@ namespace conjure::scene {
                 std::atomic<u32> chunksSkipped = 0;
             };
 
+            /// <summary>
+            /// One chunk of the level being processed that has rows to recompute.
+            /// </summary>
+            struct level_chunk {
+                ecs::chunk_view view = {};
+                u32 rows = 0;                 // rows the pass visits: count() when whole, pending rows otherwise
+                bool whole = false;           // every row: the local column changed, the chunk is dirty or has poses
+                bool recomputeAll = false;    // every row's world matrix: local column changed or chunk dirty
+                bool removeDirty = false;     // the chunk carries transform_dirty
+            };
+
             scene *mScene = nullptr;
             ecs::query mRootQuery;                             // no default: built from the world in the constructor
             std::vector<ecs::query> mLevelQueries = {};        // index d - 1 holds level d
+            std::vector<level_chunk> mLevelChunks = {};        // scratch: the current level's chunks with work
+            std::vector<u32> mJobBounds = {};                  // scratch: first chunk of every job plus a sentinel
             run_counters mCounters = {};
             propagation_stats mStats = {};
             u32 mRunCounter = 0;
@@ -105,13 +123,18 @@ namespace conjure::scene {
 
             /// <summary>
             /// The system description: name, TRANSFORM phase, RUNS_WHILE_PAUSED, reads (local_transform,
-            /// parent, interpolated_transform, transform_dirty) and writes (world_transform,
-            /// render_world_transform, transform_state); run() bound to this instance.
+            /// parent, children, interpolated_transform, transform_dirty) and writes (world_transform,
+            /// render_world_transform, transform_state); run() bound to this instance. children is read
+            /// to mark a recomputed row's children pending, so the scheduler keeps a children writer out
+            /// of the pass's stage.
             /// </summary>
             [[nodiscard]] ecs::system_desc describe();
 
         private:
-            void process_chunk(ecs::chunk_view &chunk, ecs::command_buffer &commands, u32 runId, u64 since, f32 alpha);
+            void run_level(ecs::query &level, ecs::system_context &context, u32 runId, u64 since, f32 alpha);
+            void collect_chunk(ecs::chunk_view &chunk, u64 since);
+            void process_chunk(const level_chunk &item, u32 runId, f32 alpha);
+            void mark_children_pending(const children &list);
     };
 
     /// <summary>

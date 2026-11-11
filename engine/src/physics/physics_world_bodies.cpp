@@ -366,6 +366,12 @@ body_record &physics_world::state::claim_row(const JPH::BodyID &bodyId, ecs::ent
     row.entity = target;
     row.bodyId = bodyId;
     rowOfEntity.insert_or_assign(target, index);
+    if (target.index >= liveRowByEntityIndex.size()) {
+        // Grown in blocks like the rows; body creation allocates in Jolt anyway.
+        const usize grown = ((static_cast<usize>(target.index) / ROW_BLOCK) + 1) * ROW_BLOCK;
+        liveRowByEntityIndex.resize(grown, NO_ROW);
+    }
+    liveRowByEntityIndex[target.index] = index;
     awake[index].store(0, std::memory_order_relaxed);
     ++liveRows;
     return row;
@@ -578,6 +584,9 @@ void physics_world::state::destroy_body(u32 rowIndex, ecs::command_buffer *defer
 
     const ecs::entity target = row.entity;
     rowOfEntity.erase(target);
+    if (target.index < liveRowByEntityIndex.size() && liveRowByEntityIndex[target.index] == rowIndex) {
+        liveRowByEntityIndex[target.index] = NO_ROW;
+    }
     awake[rowIndex].store(0, std::memory_order_relaxed);
     // A pendingRebuild entry for this entity stays in the list: the row is the truth (dirty is reset
     // here), so apply_rebuilds skips it, or rebuilds the entity's next body only if that one is dirty.
@@ -597,6 +606,7 @@ void physics_world::state::destroy_all_bodies() {
     }
     records.clear();
     rowOfEntity.clear();
+    liveRowByEntityIndex.clear();
     pendingCreate.clear();
     pendingRebuild.clear();
     activePairs.clear();

@@ -40,6 +40,7 @@ namespace {
   "audio": { "enabled": true, "backend": "miniaudio", "sample_rate": 44100, "device": "Speakers", "master_gain": 0.5,
              "doppler_factor": 1.0, "speed_of_sound": 340.0,
              "groups": [{ "name": "music", "gain": 0.8 }, { "name": "voice", "parent": "music", "gain": 0.9 }] },
+  "assets": { "hot_reload": false },
   "scripting": { "enabled": true, "required": false, "assembly": "Scripts/bin/Game.dll", "hot_reload": false,
                  "export_mode": "self-contained", "debug_symbols": true },
   "layers": ["default", "player", "enemies"],
@@ -83,6 +84,7 @@ TEST_SUITE("engine/project") {
         CHECK(desc.audio.device == "Speakers");
         REQUIRE(desc.audio.groups.size() == 2);
         CHECK(desc.audio.groups[1].parent == "music");
+        CHECK_FALSE(desc.assets.hotReload);
         CHECK(desc.scripting.gameAssembly.generic_string() == "Scripts/bin/Game.dll");
         CHECK(desc.scripting.exportMode == script_export_mode::SELF_CONTAINED);
         CHECK(desc.scripting.exportDebugSymbols);
@@ -161,6 +163,38 @@ TEST_SUITE("engine/project") {
         const core::json::document written = reloaded.value().to_json();
         CHECK(written.root()["time"]["fixed_hz"].as_f64() == 120.0);
         CHECK(written.root()["cooked"].as_bool() == false);
+        CHECK(written.root()["assets"]["hot_reload"].as_bool() == false);
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "'assets'"));
+    }
+
+    TEST_CASE("project - the assets section defaults to hot reload on and rejects a non-boolean") {
+        const core::result<project> bare = project::parse(
+          R"({"schema_version": 1, "name": "bare"})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(bare);
+        CHECK(bare.value().description().assets.hotReload);
+        const core::result<project> bad = project::parse(
+          R"({"schema_version": 1, "name": "bad", "assets": {"hot_reload": 1}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_CHECK_ERROR(bad, engine_error::PROJECT_INVALID);
+
+        // Schema 1 reserves "assets": an unknown member of the section parses (no error, no WARN) and is dropped by
+        // to_json like the unknown members of every other section; only a top-level unknown key reaches extensions.
+        log_capture logs = {};
+        const core::result<project> extra = project::parse(
+          R"({"schema_version": 1, "name": "extra", "assets": {"hot_reload": false, "cache_dir": ".cache"}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(extra);
+        CHECK_FALSE(extra.value().description().assets.hotReload);
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "cache_dir"));
+        const core::json::document written = extra.value().to_json();
+        CHECK(written.root()["assets"]["hot_reload"].as_bool() == false);
+        CHECK_FALSE(written.root()["assets"]["cache_dir"].is_valid());
+        CHECK_FALSE(written.root()["extensions"]["assets"].is_valid());
+        CHECK_FALSE(written.root()["extensions"]["cache_dir"].is_valid());
     }
 
     TEST_CASE("project - apply_to copies the project settings and honours headless") {
@@ -173,6 +207,7 @@ TEST_SUITE("engine/project") {
         CHECK(interactive.rendering.backend == rhi_backend_choice::VULKAN);
         CHECK(interactive.audio.backend == audio_backend_choice::MINIAUDIO);
         CHECK(interactive.scripting.enabled);
+        CHECK_FALSE(interactive.assets.hotReload);
         CHECK(interactive.scripting.exportMode == script_export_mode::SELF_CONTAINED);
         CHECK(interactive.startupSceneOverride.generic_string() == "levels/main.scene.json");
         CHECK(interactive.modules.required == std::vector<std::string>{"com.studio.core"});
@@ -184,6 +219,20 @@ TEST_SUITE("engine/project") {
         CHECK(headless.audio.backend == audio_backend_choice::NULL_DEVICE);
         CHECK_FALSE(headless.scripting.enabled);
         CHECK(headless.time.forcedFrameDeltaSeconds == 1.0f / 60.0f);
+
+        // A project asking for hot reload never switches the watcher on under headless (D8, 09 item 15a).
+        core::result<project> watching = project::parse(
+          R"({"schema_version": 1, "name": "watching", "assets": {"hot_reload": true}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(watching);
+        engine_config headlessWatching = engine_config::headless_defaults();
+        watching.value().apply_to(headlessWatching);
+        CHECK_FALSE(headlessWatching.assets.hotReload);
+        engine_config interactiveWatching = engine_config::defaults();
+        interactiveWatching.assets.hotReload = false;
+        watching.value().apply_to(interactiveWatching);
+        CHECK(interactiveWatching.assets.hotReload);
         CHECK(std::abs(headless.time.fixedDeltaSeconds - 1.0f / 120.0f) < 1.0e-7f);
 
         engine_config overridden = engine_config::defaults();

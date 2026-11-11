@@ -1,5 +1,6 @@
 #include "conjure/core/jobs/job_system.h"
 
+#include "core/jobs/cpu_pause.h"
 #include "core/jobs/thread_name.h"
 
 #include "conjure/core/assert.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <format>
 #include <mutex>
@@ -29,9 +31,56 @@ namespace {
     // Blocks the pool starts with; it doubles on demand up to maxQueuedJobs.
     constexpr usize INITIAL_POOL_BLOCKS = 16;
 
-    // How many times an idle worker re-checks the queue (yielding in between) before it sleeps on
-    // the condition variable. Bounded so idle workers never burn a core.
-    constexpr u32 IDLE_SPIN_ITERATIONS = 64;
+    // One spin-wait step: a pause instruction (jobs::detail::cpu_pause) hands the core's execution resources
+    // to its SMT sibling (the worker that is doing the work) for a few dozen cycles, where a yield()
+    // syscall keeps them busy. Every YIELD_EVERY_PAUSES steps the spinner yields once so a runnable
+    // thread of an oversubscribed machine still gets the core.
+    constexpr u32 YIELD_EVERY_PAUSES = 64;
+
+    void spin_step(u32 &steps) noexcept {
+        if ((++steps % YIELD_EVERY_PAUSES) == 0) {
+            std::this_thread::yield();
+        } else {
+            jobs::detail::cpu_pause();
+        }
+    }
+
+    // How long a thread with nothing to run keeps re-checking (a spin_step between checks) before it
+    // sleeps: an idle worker on the queue condition variable, a thread in wait() or wait_idle() on the
+    // completion monitor. A sleeping thread costs a kernel wake-up of tens of microseconds on both
+    // sides of a dispatch (the workers when the ranges are queued, the waiter when the last range
+    // finishes), which is more than a level of a 10,000-entity transform pass does in work; a window
+    // this long covers the gap between back-to-back dispatches of one frame, and it is bounded so an
+    // idle pool never burns a core beyond it (measured against the scene and core benchmarks,
+    // tests/benchmarks/README.md).
+    constexpr std::chrono::microseconds IDLE_SPIN_WINDOW(50);
+
+    // The spin window of one thread: armed by the first empty check, over when the clock passes the
+    // deadline, re-armed after the thread ran a job (another may follow right away).
+    struct spin_window {
+        std::chrono::steady_clock::time_point deadline = {};
+        u32 steps = 0;
+        bool armed = false;
+
+        // True while the window is open; takes one spin step (pause, or a yield every
+        // YIELD_EVERY_PAUSES) so the caller only re-checks its condition.
+        [[nodiscard]] bool keep_spinning() noexcept {
+            const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+            if (!armed) {
+                armed = true;
+                deadline = now + IDLE_SPIN_WINDOW;
+                steps = 0;
+            } else if (now >= deadline) {
+                return false;
+            }
+            spin_step(steps);
+            return true;
+        }
+
+        void reset() noexcept {
+            armed = false;
+        }
+    };
 
     thread_local job_system *sCurrentSystem = nullptr;
     thread_local u32 sThreadIndex = 0;
@@ -82,6 +131,89 @@ namespace {
         monitor.blockedWaiters.fetch_sub(1, std::memory_order_seq_cst);
     }
 
+    // Spin steps a thread takes on the queue lock before it parks, at least: the bound is checked
+    // between backoff runs, so a thread takes up to QUEUE_LOCK_MAX_BACKOFF_STEPS - 1 more. A critical
+    // section is a handful of pointer moves, so the lock is normally free again within a few steps;
+    // the bound (about the IDLE_SPIN_WINDOW at a pause per step and a yield every 64th) is for the
+    // sections that are not (pool growth, a closure copy that allocates) and for a holder that lost
+    // its core.
+    constexpr u32 QUEUE_LOCK_SPIN_STEPS = 1024;
+
+    // Longest run of spin steps between two re-reads of the lock word. Doubling the run after every
+    // failed attempt keeps the release of a contended lock from starting a storm of exchanges on its
+    // line: most spinners are mid-run when the word changes and only a few race for it.
+    constexpr u32 QUEUE_LOCK_MAX_BACKOFF_STEPS = 16;
+
+    // The queue lock. Its critical sections are a handful of pointer moves, so a spinner hands it
+    // over in the time a contended std::mutex spends parking and waking one waiter (about 1.7 us per
+    // queued job on Windows, measured as the whole cost of core.job_parallel_for_1m with 16 workers:
+    // 64 ranges took 100 us however little work each held). A test-and-test-and-set word with
+    // exponential backoff, not a FIFO ticket: a ticket lock stalls every later ticket behind a waiter
+    // that lost its core (the pool is sized to hardware_concurrency - 1 workers, so any other runnable
+    // thread preempts one), where here a preempted waiter delays nobody. Waiting is bounded: after
+    // QUEUE_LOCK_SPIN_STEPS the thread parks on a mutex and condition variable and the holder's
+    // unlock wakes it (the CONTENDED state), so a long critical section or a preempted holder puts
+    // the contenders to sleep like the std::mutex did instead of keeping every core busy.
+    class queue_lock {
+        private:
+            static constexpr u32 UNLOCKED = 0;
+            static constexpr u32 LOCKED = 1;
+            static constexpr u32 CONTENDED = 2;   // locked, and a thread is or may be parked
+
+            std::atomic<u32> mState = UNLOCKED;
+            [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mStatePadding = {};   // park words off the hot line
+            std::mutex mParkMutex = {};
+            std::condition_variable mParkCondition = {};
+
+        public:
+            void lock() {
+                if (try_acquire()) {
+                    return;
+                }
+                u32 steps = 0;
+                u32 backoff = 1;
+                while (steps < QUEUE_LOCK_SPIN_STEPS) {
+                    for (u32 step = 0; step < backoff; ++step) {
+                        spin_step(steps);
+                    }
+                    if (mState.load(std::memory_order_relaxed) == UNLOCKED && try_acquire()) {
+                        return;
+                    }
+                    backoff = std::min(backoff * 2, QUEUE_LOCK_MAX_BACKOFF_STEPS);
+                }
+                park();
+            }
+
+            void unlock() {
+                if (mState.exchange(UNLOCKED, std::memory_order_release) != CONTENDED) {
+                    return;
+                }
+                // Taking the mutex pairs with the parker's exchange-then-wait so the wake-up cannot be lost.
+                {
+                    const std::scoped_lock guard(mParkMutex);
+                }
+                mParkCondition.notify_one();
+            }
+
+        private:
+            [[nodiscard]] bool try_acquire() noexcept {
+                u32 expected = UNLOCKED;
+                return mState.compare_exchange_strong(
+                  expected, LOCKED, std::memory_order_acquire, std::memory_order_relaxed
+                );
+            }
+
+            // Marks the lock contended and sleeps until an unlock hands it over. A lock acquired here
+            // stays CONTENDED, so its own unlock wakes the next parked thread (a spurious notify when
+            // nobody is parked costs one uncontended mutex round trip).
+            void park() {
+                std::unique_lock guard(mParkMutex);
+                while (mState.exchange(CONTENDED, std::memory_order_acquire) != UNLOCKED) {
+                    mParkCondition.wait(guard);
+                }
+            }
+    };
+
     usize lane_index(job_priority priority) noexcept {
         const usize index = static_cast<usize>(priority);
         return index < JOB_PRIORITY_COUNT ? index : static_cast<usize>(job_priority::NORMAL);
@@ -129,9 +261,36 @@ class job_system::state {
         // creates the threads so a worker's prologue allocates nothing.
         std::vector<detail::prepared_thread_name> mWorkerNames = {};
 
-        // Queue and block pool, guarded by mQueueMutex.
-        std::mutex mQueueMutex = {};
-        std::condition_variable mWorkerCondition = {};
+        // Per-thread statistics: one slot per worker (index 1..N) and one shared by every other thread
+        // (0: the main thread, dedicated threads, workers of other systems). Slots are two cache lines
+        // apart with the counters leading, so on the 64-byte-line targets no worker's counting shares
+        // a line with another worker's whatever the array's own alignment; snapshot() sums the slots
+        // in use. Explicit padding instead of alignas (MSVC C4324), as the audio rings do.
+        static constexpr usize THREAD_STATS_COUNTERS = 6;
+        static constexpr usize THREAD_STATS_PADDING =
+          2 * CACHE_LINE_SIZE - THREAD_STATS_COUNTERS * sizeof(std::atomic<u64>);
+
+        struct thread_stats {
+            std::atomic<u64> scheduled = 0;
+            std::atomic<u64> executed = 0;
+            std::atomic<u64> stolen = 0;
+            std::atomic<u64> helped = 0;
+            std::atomic<u64> inlineExecutions = 0;
+            std::atomic<u64> queueFullFallbacks = 0;
+            [[maybe_unused]] std::array<byte, THREAD_STATS_PADDING> padding = {};
+        };
+        static_assert(sizeof(thread_stats) == 2 * CACHE_LINE_SIZE, "thread_stats must span exactly two cache lines");
+
+        // Queue and block pool, guarded by mQueueLock. The lock word (read by every waiting thread)
+        // and the two counters every pop and push touch each sit between full lines of padding
+        // (mActiveJobs shares its line with mIdleWaiterDepth, written only when a job enters or leaves
+        // wait_idle()), so on the 64-byte-line targets no line holding one of them holds anything
+        // another thread writes: with 16 workers draining a dispatch, a shared line bounces once per
+        // field per job.
+        [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mLockLeadPadding = {};
+        queue_lock mQueueLock = {};
+        [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mLockTailPadding = {};
+        std::condition_variable_any mWorkerCondition = {};
         std::array<lane, JOB_PRIORITY_COUNT> mLanes = {};
         usize mMaxQueuedJobs = 0;
         bool mAcceptingJobs = false;
@@ -139,28 +298,27 @@ class job_system::state {
         std::vector<std::unique_ptr<job_block[]>> mChunks = {};
         std::vector<job_block *> mFreeBlocks = {};
 
-        // Workers that have finished their prologue (also guarded by mQueueMutex). start() blocks on
+        // Workers that have finished their prologue (also guarded by mQueueLock). start() blocks on
         // mStartCondition until every worker it created is counted.
         u32 mStartedWorkers = 0;
-        std::condition_variable mStartCondition = {};
+        std::condition_variable_any mStartCondition = {};
 
         // Lock-free mirrors read outside the lock.
+        [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mQueuedLeadPadding = {};
         std::atomic<usize> mQueuedCount = 0;
+        [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mQueuedTailPadding = {};
         std::atomic<usize> mActiveJobs = 0;        // queued + executing jobs that went through the queue
         std::atomic<usize> mIdleWaiterDepth = 0;   // active jobs owned by threads inside wait_idle()
+        [[maybe_unused]] std::array<byte, CACHE_LINE_SIZE> mActiveTailPadding = {};
 
         std::vector<std::thread> mWorkers = {};
 
-        // Statistics.
-        std::atomic<u64> mScheduled = 0;
-        std::atomic<u64> mExecuted = 0;
-        std::atomic<u64> mStolen = 0;
-        std::atomic<u64> mHelped = 0;
-        std::atomic<u64> mInlineExecutions = 0;
-        std::atomic<u64> mQueueFullFallbacks = 0;
+        // Statistics. The per-thread counters are summed by snapshot(); the pool figures change
+        // under the lock only.
         std::atomic<usize> mMaxQueueDepth = 0;
         std::atomic<usize> mPoolCapacity = 0;
         std::atomic<u32> mPoolGrowths = 0;
+        std::array<thread_stats, static_cast<usize>(MAX_WORKER_COUNT) + 1> mThreadStats = {};
 
     public:
         explicit state(job_system *owner);
@@ -177,7 +335,8 @@ class job_system::state {
 
         [[nodiscard]] job_handle schedule(std::function<void()> job, job_priority priority);
         [[nodiscard]] job_handle schedule(std::span<const std::function<void()>> jobs, job_priority priority);
-        void wait(detail::job_counter &counter);
+        void schedule(std::span<const std::function<void()>> jobs, detail::job_counter &counter, job_priority priority);
+        void wait(const detail::job_counter &counter);
         void wait_idle();
         void parallel_for(usize count, usize grain, detail::range_invoke_fn invoke, const void *context);
 
@@ -186,12 +345,22 @@ class job_system::state {
     private:
         [[nodiscard]] bool inline_only() const noexcept;
 
-        // Block pool (mQueueMutex held).
+        // Block pool (mQueueLock held).
         void grow_pool_locked();
         [[nodiscard]] job_block *acquire_block_locked();
         void release_block_locked(job_block *block);
 
-        // Queue (mQueueMutex held unless stated otherwise).
+        // Scheduling.
+        [[nodiscard]] static u64 count_valid(std::span<const std::function<void()>> jobs) noexcept;
+        void enqueue_batch(
+          std::span<const std::function<void()>> jobs,
+          u64 validCount,
+          detail::job_counter *counter,
+          const std::shared_ptr<detail::job_counter> &shared,
+          job_priority priority
+        );
+
+        // Queue (mQueueLock held unless stated otherwise).
         [[nodiscard]] job_block *begin_enqueue_locked(bool fromOwnWorker);
         void commit_enqueue_locked(job_block *block, job_priority priority);
         [[nodiscard]] bool pop_locked(job_block &out);
@@ -206,6 +375,10 @@ class job_system::state {
 
         // Waiting.
         [[nodiscard]] bool is_idle_for(usize ownJobs) const noexcept;
+
+        // Statistics.
+        [[nodiscard]] thread_stats &my_stats() noexcept;
+        [[nodiscard]] u64 sum_stats(std::atomic<u64> thread_stats::*field) const noexcept;
 
         // Workers.
         [[nodiscard]] bool next_job(job_block &out);
@@ -260,7 +433,7 @@ result<void> job_system::state::start(const job_system_desc &desc) {
     }
 
     {
-        const std::scoped_lock lock(mQueueMutex);
+        const std::scoped_lock lock(mQueueLock);
         mStartedWorkers = 0;
         mMaxQueuedJobs = desc.maxQueuedJobs;
         for (lane &priorityLane : mLanes) {
@@ -274,12 +447,14 @@ result<void> job_system::state::start(const job_system_desc &desc) {
         mAcceptingJobs = desc.workerCount > 0;
         mStopRequested = false;
 
-        mScheduled.store(0, std::memory_order_relaxed);
-        mExecuted.store(0, std::memory_order_relaxed);
-        mStolen.store(0, std::memory_order_relaxed);
-        mHelped.store(0, std::memory_order_relaxed);
-        mInlineExecutions.store(0, std::memory_order_relaxed);
-        mQueueFullFallbacks.store(0, std::memory_order_relaxed);
+        for (thread_stats &stats : mThreadStats) {
+            stats.scheduled.store(0, std::memory_order_relaxed);
+            stats.executed.store(0, std::memory_order_relaxed);
+            stats.stolen.store(0, std::memory_order_relaxed);
+            stats.helped.store(0, std::memory_order_relaxed);
+            stats.inlineExecutions.store(0, std::memory_order_relaxed);
+            stats.queueFullFallbacks.store(0, std::memory_order_relaxed);
+        }
         mMaxQueueDepth.store(0, std::memory_order_relaxed);
         mPoolGrowths.store(0, std::memory_order_relaxed);
     }
@@ -297,7 +472,7 @@ result<void> job_system::state::start(const job_system_desc &desc) {
     // pool allocates nothing of its own, which callers gating allocations right after start() rely
     // on, and worker_count() describes threads that exist.
     {
-        std::unique_lock lock(mQueueMutex);
+        std::unique_lock lock(mQueueLock);
         mStartCondition.wait(lock, [this, &desc] {
             return mStartedWorkers == desc.workerCount;
         });
@@ -308,18 +483,21 @@ result<void> job_system::state::start(const job_system_desc &desc) {
 }
 
 void job_system::state::stop() {
-    const std::scoped_lock lifecycle(mLifecycleMutex);
-
-    if (!mRunning.load(std::memory_order_acquire)) {
-        return;
-    }
+    // Checked before the lifecycle lock: a worker blocking on that lock while the owner's stop() holds
+    // it and joins the workers would deadlock that stop().
     CONJURE_ASSERT(sCurrentSystem != mOwner, "job_system::stop called from one of its own workers");
     if (sCurrentSystem == mOwner) {
         return;
     }
 
+    const std::scoped_lock lifecycle(mLifecycleMutex);
+
+    if (!mRunning.load(std::memory_order_acquire)) {
+        return;
+    }
+
     {
-        const std::scoped_lock lock(mQueueMutex);
+        const std::scoped_lock lock(mQueueLock);
         mStopRequested = true;
         mAcceptingJobs = false;
     }
@@ -340,12 +518,14 @@ void job_system::state::stop() {
     }
 
     {
-        const std::scoped_lock lock(mQueueMutex);
+        const std::scoped_lock lock(mQueueLock);
         mStopRequested = false;
     }
     mRunning.store(false, std::memory_order_release);
 
-    CONJURE_LOG_DEBUG(LOG_CORE, "job_system stopped after executing {} job(s)", mExecuted.load());
+    CONJURE_LOG_DEBUG(
+      LOG_CORE, "job_system stopped after executing {} job(s)", sum_stats(&thread_stats::executed)
+    );
 }
 
 bool job_system::state::is_running() const noexcept {
@@ -373,12 +553,12 @@ job_handle job_system::state::schedule(std::function<void()> job, job_priority p
     std::shared_ptr<detail::job_counter> counter = std::make_shared<detail::job_counter>();
     counter->remaining.store(1, std::memory_order_relaxed);
     job_handle handle(counter);
-    mScheduled.fetch_add(1, std::memory_order_relaxed);
+    my_stats().scheduled.fetch_add(1, std::memory_order_relaxed);
 
     if (!inline_only()) {
         bool queued = false;
         {
-            const std::scoped_lock lock(mQueueMutex);
+            const std::scoped_lock lock(mQueueLock);
             job_block *block = begin_enqueue_locked(sCurrentSystem == mOwner);
             if (block != nullptr) {
                 block->kind = job_kind::FUNCTION;
@@ -401,13 +581,7 @@ job_handle job_system::state::schedule(std::function<void()> job, job_priority p
 }
 
 job_handle job_system::state::schedule(std::span<const std::function<void()>> jobs, job_priority priority) {
-    u64 validCount = 0;
-    for (const std::function<void()> &job : jobs) {
-        CONJURE_ASSERT(job != nullptr, "job_system::schedule: empty job in batch");
-        if (job) {
-            ++validCount;
-        }
-    }
+    const u64 validCount = count_valid(jobs);
     if (validCount == 0) {
         return {};
     }
@@ -415,16 +589,55 @@ job_handle job_system::state::schedule(std::span<const std::function<void()>> jo
     std::shared_ptr<detail::job_counter> counter = std::make_shared<detail::job_counter>();
     counter->remaining.store(validCount, std::memory_order_relaxed);
     job_handle handle(counter);
-    mScheduled.fetch_add(validCount, std::memory_order_relaxed);
+    enqueue_batch(jobs, validCount, counter.get(), counter, priority);
+    return handle;
+}
 
-    // Queue as many as fit in one critical section; whatever is left runs on the caller.
+void job_system::state::schedule(
+  std::span<const std::function<void()>> jobs,
+  detail::job_counter &counter,
+  job_priority priority
+) {
+    const u64 validCount = count_valid(jobs);
+    if (validCount == 0) {
+        return;
+    }
+    // The count is raised before any job is queued so a finishing job can never drive it below zero,
+    // and added rather than stored so a fence may gather several batches before one wait().
+    counter.remaining.fetch_add(validCount, std::memory_order_seq_cst);
+    enqueue_batch(jobs, validCount, &counter, nullptr, priority);
+}
+
+u64 job_system::state::count_valid(std::span<const std::function<void()>> jobs) noexcept {
+    u64 validCount = 0;
+    for (const std::function<void()> &job : jobs) {
+        CONJURE_ASSERT(job != nullptr, "job_system::schedule: empty job in batch");
+        if (job) {
+            ++validCount;
+        }
+    }
+    return validCount;
+}
+
+// Queues the 'validCount' non-empty entries of a batch under 'counter' (already holding their count).
+// 'shared' is the handle's owning reference, null for a caller-owned fence. As many jobs as fit are
+// queued in one critical section; whatever is left runs on the caller.
+void job_system::state::enqueue_batch(
+  std::span<const std::function<void()>> jobs,
+  u64 validCount,
+  detail::job_counter *counter,
+  const std::shared_ptr<detail::job_counter> &shared,
+  job_priority priority
+) {
+    my_stats().scheduled.fetch_add(validCount, std::memory_order_relaxed);
+
     usize firstInline = 0;
     if (!inline_only()) {
         usize pushed = 0;
         const std::thread::id self = std::this_thread::get_id();
         const bool fromOwnWorker = sCurrentSystem == mOwner;
         {
-            const std::scoped_lock lock(mQueueMutex);
+            const std::scoped_lock lock(mQueueLock);
             firstInline = jobs.size();
             for (usize index = 0; index < jobs.size(); ++index) {
                 if (!jobs[index]) {
@@ -437,8 +650,8 @@ job_handle job_system::state::schedule(std::span<const std::function<void()>> jo
                 }
                 block->kind = job_kind::FUNCTION;
                 block->function = jobs[index];
-                block->counter = counter.get();
-                block->sharedCounter = counter;
+                block->counter = counter;
+                block->sharedCounter = shared;
                 block->scheduler = self;
                 commit_enqueue_locked(block, priority);
                 ++pushed;
@@ -451,21 +664,25 @@ job_handle job_system::state::schedule(std::span<const std::function<void()>> jo
 
     for (usize index = firstInline; index < jobs.size(); ++index) {
         if (jobs[index]) {
-            run_inline(jobs[index], counter.get());
+            run_inline(jobs[index], counter);
         }
     }
-    return handle;
 }
 
 /*===========================================================================*/
 /*===========================================================================*/
 // state: waiting
 
-void job_system::state::wait(detail::job_counter &counter) {
+void job_system::state::wait(const detail::job_counter &counter) {
     job_block job = {};
+    spin_window spin = {};
     while (counter.remaining.load(std::memory_order_seq_cst) != 0) {
         if (try_pop(job)) {
             execute(job, true);
+            spin.reset();
+            continue;
+        }
+        if (spin.keep_spinning()) {
             continue;
         }
         block_until([this, &counter] {
@@ -499,13 +716,18 @@ void job_system::state::wait_idle() {
     }
 
     job_block job = {};
+    spin_window spin = {};
     while (true) {
         if (try_pop(job)) {
             execute(job, true);
+            spin.reset();
             continue;
         }
         if (is_idle_for(ownJobs)) {
             break;
+        }
+        if (spin.keep_spinning()) {
+            continue;
         }
         block_until([this, ownJobs] {
             return is_idle_for(ownJobs) || mQueuedCount.load(std::memory_order_seq_cst) > 0;
@@ -548,13 +770,13 @@ void job_system::state::parallel_for(usize count, usize grain, detail::range_inv
 
     const usize effectiveGrain = std::max<usize>(1, grain);
     if (inline_only() || count <= effectiveGrain) {
-        mScheduled.fetch_add(1, std::memory_order_relaxed);
+        my_stats().scheduled.fetch_add(1, std::memory_order_relaxed);
         run_range_inline(invoke, context, 0, count);
         return;
     }
 
     const usize rangeCount = 1 + (count - 1) / effectiveGrain;
-    mScheduled.fetch_add(rangeCount, std::memory_order_relaxed);
+    my_stats().scheduled.fetch_add(rangeCount, std::memory_order_relaxed);
 
     // The counter and the body live on this stack frame; every queued range has finished (and
     // dropped its pointers) by the time wait() returns.
@@ -568,7 +790,7 @@ void job_system::state::parallel_for(usize count, usize grain, detail::range_inv
     {
         const std::thread::id self = std::this_thread::get_id();
         const bool fromOwnWorker = sCurrentSystem == mOwner;
-        const std::scoped_lock lock(mQueueMutex);
+        const std::scoped_lock lock(mQueueLock);
         for (usize range = 1; range < rangeCount; ++range) {
             job_block *block = begin_enqueue_locked(fromOwnWorker);
             if (block == nullptr) {
@@ -591,7 +813,7 @@ void job_system::state::parallel_for(usize count, usize grain, detail::range_inv
     }
 
     invoke(context, 0, std::min(effectiveGrain, count));
-    mExecuted.fetch_add(1, std::memory_order_relaxed);
+    my_stats().executed.fetch_add(1, std::memory_order_relaxed);
 
     for (usize range = firstInline; range < rangeCount; ++range) {
         const usize begin = range * effectiveGrain;
@@ -608,12 +830,12 @@ void job_system::state::parallel_for(usize count, usize grain, detail::range_inv
 
 job_system_stats job_system::state::snapshot() const noexcept {
     job_system_stats stats = {};
-    stats.scheduled = mScheduled.load(std::memory_order_relaxed);
-    stats.executed = mExecuted.load(std::memory_order_relaxed);
-    stats.stolen = mStolen.load(std::memory_order_relaxed);
-    stats.helped = mHelped.load(std::memory_order_relaxed);
-    stats.inlineExecutions = mInlineExecutions.load(std::memory_order_relaxed);
-    stats.queueFullFallbacks = mQueueFullFallbacks.load(std::memory_order_relaxed);
+    stats.scheduled = sum_stats(&thread_stats::scheduled);
+    stats.executed = sum_stats(&thread_stats::executed);
+    stats.stolen = sum_stats(&thread_stats::stolen);
+    stats.helped = sum_stats(&thread_stats::helped);
+    stats.inlineExecutions = sum_stats(&thread_stats::inlineExecutions);
+    stats.queueFullFallbacks = sum_stats(&thread_stats::queueFullFallbacks);
     stats.maxQueueDepth = mMaxQueueDepth.load(std::memory_order_relaxed);
     stats.queuedNow = mQueuedCount.load(std::memory_order_relaxed);
     stats.poolGrowths = mPoolGrowths.load(std::memory_order_relaxed);
@@ -621,9 +843,28 @@ job_system_stats job_system::state::snapshot() const noexcept {
     return stats;
 }
 
+job_system::state::thread_stats &job_system::state::my_stats() noexcept {
+    // sThreadIndex is the worker's index in its own system; a worker of another system counts
+    // with the external threads.
+    const usize slot = sCurrentSystem == mOwner ? static_cast<usize>(sThreadIndex) : 0;
+    return mThreadStats[slot];
+}
+
+u64 job_system::state::sum_stats(std::atomic<u64> thread_stats::*field) const noexcept {
+    // Slots above the worker count are zero (start() resets every slot and a worker index never
+    // exceeds the count), so the walk stops at the slots in use: the frame loop reads stats() twice a
+    // frame and a walk over all MAX_WORKER_COUNT slots would load 32 KB each time.
+    const usize slotsInUse = static_cast<usize>(mWorkerCount.load(std::memory_order_relaxed)) + 1;
+    u64 total = 0;
+    for (usize slot = 0; slot < slotsInUse; ++slot) {
+        total += (mThreadStats[slot].*field).load(std::memory_order_relaxed);
+    }
+    return total;
+}
+
 /*===========================================================================*/
 /*===========================================================================*/
-// state: block pool (mQueueMutex held)
+// state: block pool (mQueueLock held)
 
 void job_system::state::grow_pool_locked() {
     const usize currentCapacity = mPoolCapacity.load(std::memory_order_relaxed);
@@ -668,7 +909,7 @@ void job_system::state::release_block_locked(job_block *block) {
 
 /*===========================================================================*/
 /*===========================================================================*/
-// state: queue (mQueueMutex held unless stated otherwise)
+// state: queue (mQueueLock held unless stated otherwise)
 
 // Returns a block to fill, or nullptr when the caller has to run the job itself: the system is
 // stopping (workers keep queueing so the drain stays local to them) or the queue is full.
@@ -677,7 +918,7 @@ job_system::state::job_block *job_system::state::begin_enqueue_locked(bool fromO
         return nullptr;
     }
     if (mQueuedCount.load(std::memory_order_relaxed) >= mMaxQueuedJobs) {
-        mQueueFullFallbacks.fetch_add(1, std::memory_order_relaxed);
+        my_stats().queueFullFallbacks.fetch_add(1, std::memory_order_relaxed);
         return nullptr;
     }
     return acquire_block_locked();
@@ -717,7 +958,7 @@ bool job_system::state::try_pop(job_block &out) {
     if (mQueuedCount.load(std::memory_order_acquire) == 0) {
         return false;
     }
-    const std::scoped_lock lock(mQueueMutex);
+    const std::scoped_lock lock(mQueueLock);
     return pop_locked(out);
 }
 
@@ -739,14 +980,20 @@ void job_system::state::notify_pushed(usize pushed) {
 // state: execution
 
 // Decrements the handle counter (and the active count for queued jobs) and wakes blocked waiters
-// when either reaches zero.
+// when either reaches zero, or when the active count drops to the published idle-waiter depth: a job
+// blocked in wait_idle() waits for active <= depth, and its last sibling finishing drops neither
+// their shared counter nor the active count to zero (a two-job batch, the queued ranges of one
+// parallel_for). mIdleWaiterDepth shares mActiveJobs' cache line, so the extra load is served from
+// the line the decrement just fetched and costs the hot path nothing; its seq_cst pairing with
+// wait_idle()'s publish is what makes the wake-up impossible to lose.
 void job_system::state::finish_job(detail::job_counter *counter, bool wasQueued) {
     bool wake = false;
     if (counter != nullptr) {
         wake = counter->remaining.fetch_sub(1, std::memory_order_seq_cst) == 1;
     }
     if (wasQueued) {
-        wake = (mActiveJobs.fetch_sub(1, std::memory_order_seq_cst) == 1) || wake;
+        const usize stillActive = mActiveJobs.fetch_sub(1, std::memory_order_seq_cst) - 1;
+        wake = wake || stillActive <= mIdleWaiterDepth.load(std::memory_order_seq_cst);
     }
     if (wake) {
         notify_blocked_waiters();
@@ -769,11 +1016,12 @@ void job_system::state::execute(job_block &job, bool helping) {
     }
     sInnermostFrame = frame.parent;
 
-    mExecuted.fetch_add(1, std::memory_order_relaxed);
+    thread_stats &stats = my_stats();
+    stats.executed.fetch_add(1, std::memory_order_relaxed);
     if (helping) {
-        mHelped.fetch_add(1, std::memory_order_relaxed);
+        stats.helped.fetch_add(1, std::memory_order_relaxed);
     } else if (job.scheduler != std::this_thread::get_id()) {
-        mStolen.fetch_add(1, std::memory_order_relaxed);
+        stats.stolen.fetch_add(1, std::memory_order_relaxed);
     }
 
     detail::job_counter *counter = job.counter;
@@ -787,15 +1035,17 @@ void job_system::state::execute(job_block &job, bool helping) {
 
 void job_system::state::run_inline(const std::function<void()> &job, detail::job_counter *counter) {
     job();
-    mExecuted.fetch_add(1, std::memory_order_relaxed);
-    mInlineExecutions.fetch_add(1, std::memory_order_relaxed);
+    thread_stats &stats = my_stats();
+    stats.executed.fetch_add(1, std::memory_order_relaxed);
+    stats.inlineExecutions.fetch_add(1, std::memory_order_relaxed);
     finish_job(counter, false);
 }
 
 void job_system::state::run_range_inline(detail::range_invoke_fn invoke, const void *context, usize begin, usize end) {
     invoke(context, begin, end);
-    mExecuted.fetch_add(1, std::memory_order_relaxed);
-    mInlineExecutions.fetch_add(1, std::memory_order_relaxed);
+    thread_stats &stats = my_stats();
+    stats.executed.fetch_add(1, std::memory_order_relaxed);
+    stats.inlineExecutions.fetch_add(1, std::memory_order_relaxed);
 }
 
 /*===========================================================================*/
@@ -804,14 +1054,14 @@ void job_system::state::run_range_inline(detail::range_invoke_fn invoke, const v
 
 // Returns false when the system is stopping and nothing is left to run.
 bool job_system::state::next_job(job_block &out) {
-    for (u32 spin = 0; spin < IDLE_SPIN_ITERATIONS; ++spin) {
+    spin_window spin = {};
+    while (spin.keep_spinning()) {
         if (try_pop(out)) {
             return true;
         }
-        std::this_thread::yield();
     }
 
-    std::unique_lock lock(mQueueMutex);
+    std::unique_lock lock(mQueueLock);
     while (true) {
         if (pop_locked(out)) {
             return true;
@@ -830,7 +1080,7 @@ void job_system::state::worker_main(u32 index) {
 
     // The prologue is over and nothing below allocates; let start() return.
     {
-        const std::scoped_lock lock(mQueueMutex);
+        const std::scoped_lock lock(mQueueLock);
         ++mStartedWorkers;
     }
     mStartCondition.notify_one();
@@ -886,11 +1136,22 @@ job_handle job_system::schedule(std::span<const std::function<void()>> jobs, job
     return mState->schedule(jobs, priority);
 }
 
+void job_system::schedule(std::span<const std::function<void()>> jobs, job_fence &fence, job_priority priority) {
+    mState->schedule(jobs, fence.mCounter, priority);
+}
+
 void job_system::wait(const job_handle &handle) {
     if (!handle.valid() || handle.is_complete()) {
         return;
     }
     mState->wait(*handle.mCounter);
+}
+
+void job_system::wait(const job_fence &fence) {
+    if (fence.is_complete()) {
+        return;
+    }
+    mState->wait(fence.mCounter);
 }
 
 void job_system::wait_idle() {

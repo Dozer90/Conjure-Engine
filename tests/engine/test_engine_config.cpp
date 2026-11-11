@@ -36,9 +36,21 @@ TEST_SUITE("engine/engine_config") {
         CHECK(config.rendering.backend == rhi_backend_choice::NULL_DEVICE);
         CHECK(config.audio.backend == audio_backend_choice::NULL_DEVICE);
         CHECK_FALSE(config.scripting.enabled);
+        CHECK_FALSE(config.assets.hotReload);
         CHECK(config.window.width == 1280);
         CHECK(config.window.height == 720);
         CHECK(config.time.forcedFrameDeltaSeconds == 1.0f / 60.0f);
+    }
+
+    TEST_CASE("engine_config - asset hot reload is on by default and off headless") {
+        // The file watcher's stat pass runs on a job thread every 500 ms and allocates there; a headless frame
+        // (tests, servers, benchmarks) must not carry it (09 item 15a). Interactive runs keep the editor behaviour.
+        CHECK(engine_config::defaults().assets.hotReload);
+        CHECK_FALSE(engine_config::headless_defaults().assets.hotReload);
+        engine_config config = engine_config::headless_defaults();
+        config.assets.hotReload = true;
+        CONJURE_CHECK_OK(config.validate());
+        CHECK(config != engine_config::headless_defaults());
     }
 
     TEST_CASE("engine_config - validate rejects a non-positive fixed delta") {
