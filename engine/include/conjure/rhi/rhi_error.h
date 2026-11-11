@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -27,7 +28,7 @@ namespace conjure::rhi {
     /// <summary>
     /// The enumerator name of an rhi error code ("DEVICE_LOST"), or "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view rhi_error_name(rhi_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view rhi_error_name(rhi_error code) noexcept;
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::rhi::rhi_error, "rhi", conjure::rhi::rhi_error_name);

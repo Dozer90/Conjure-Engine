@@ -1,0 +1,15 @@
+{
+  "setup": [
+    {
+      "cmd": "scene.save",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "scene.close",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

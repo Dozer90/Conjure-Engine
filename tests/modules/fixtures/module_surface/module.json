@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "module_surface",
+  "displayName": "Surface",
+  "description": "Fixture: compiles and links a representative slice of the public engine surface through the import side of conjure_shared",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "engine": "*",
+  "binary": "module_surface"
+}

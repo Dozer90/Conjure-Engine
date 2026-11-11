@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "session.subscribe",
+    "args": {
+      "events": [
+        "nope"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

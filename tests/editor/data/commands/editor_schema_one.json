@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.schema",
+    "args": {
+      "command": "entity.create"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "name": "entity.create"
+    }
+  }
+}

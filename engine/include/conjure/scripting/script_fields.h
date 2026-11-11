@@ -3,6 +3,7 @@
 #include "conjure/scripting/native_api.h"
 #include "conjure/scripting/script_class_registry.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/result.h"
@@ -44,7 +45,7 @@ namespace conjure::scripting {
         std::span<const u8> payload = {};
     };
 
-    class field_blob_writer {
+    class CONJURE_API field_blob_writer {
         private:
             std::span<u8> mOutput = {};
             usize mCursor = 0;
@@ -130,7 +131,7 @@ namespace conjure::scripting {
             void patch_u16(usize offset, u16 value);
     };
 
-    class field_blob_reader {
+    class CONJURE_API field_blob_reader {
         private:
             std::span<const u8> mBlob = {};
             usize mCursor = 0;
@@ -182,7 +183,7 @@ namespace conjure::scripting {
     /// Appends the payload of one value of 'field' (default when 'value' is invalid or mismatched, with a
     /// WARN naming the class and field unless 'warnOnMismatch' is false) as one blob field.
     /// </summary>
-    void write_field_value(
+    CONJURE_API void write_field_value(
       field_blob_writer &writer,
       const script_class_info &classInfo,
       const script_field_info &field,
@@ -193,7 +194,7 @@ namespace conjure::scripting {
     /// <summary>
     /// Decodes one payload into JSON. FIELD_BLOB_INVALID when the payload is too short or malformed.
     /// </summary>
-    [[nodiscard]] core::result<core::json::document> read_field_value(
+    [[nodiscard]] CONJURE_API core::result<core::json::document> read_field_value(
       const script_field_info &field,
       std::span<const u8> payload
     );
@@ -202,7 +203,7 @@ namespace conjure::scripting {
     /// True when a JSON value can be encoded as this kind (number for INT32, array of 3 numbers for VEC3,
     /// ...). An invalid value is never compatible.
     /// </summary>
-    [[nodiscard]] bool is_value_compatible(
+    [[nodiscard]] CONJURE_API bool is_value_compatible(
       script_field_kind kind,
       script_field_kind elementKind,
       const core::json::value &value
@@ -215,7 +216,7 @@ namespace conjure::scripting {
     /// the caller retries with the returned size. Only a pass with a non-empty output warns about
     /// mismatched members, so the measure-then-write idiom reports each once.
     /// </summary>
-    [[nodiscard]] core::result<usize> json_to_blob(
+    [[nodiscard]] CONJURE_API core::result<usize> json_to_blob(
       const script_class_info &classInfo,
       const core::json::value &fields,
       std::span<u8> output
@@ -225,7 +226,7 @@ namespace conjure::scripting {
     /// Decodes a blob into a JSON object keyed by field name. Fields whose hash the class does not know are
     /// skipped (counted in a DEBUG log). FIELD_BLOB_INVALID for a malformed blob.
     /// </summary>
-    [[nodiscard]] core::result<core::json::document> blob_to_json(
+    [[nodiscard]] CONJURE_API core::result<core::json::document> blob_to_json(
       const script_class_info &classInfo,
       std::span<const u8> blob
     );
@@ -234,7 +235,7 @@ namespace conjure::scripting {
     /// Rewrites every ENTITY field and every element of a LIST of ENTITY in 'fields' through 'remap' and
     /// returns the result; members the schema does not know pass through unchanged.
     /// </summary>
-    [[nodiscard]] core::json::document remap_entity_fields_json(
+    [[nodiscard]] CONJURE_API core::json::document remap_entity_fields_json(
       const script_class_info &classInfo,
       const core::json::value &fields,
       const std::function<ecs::entity(ecs::entity)> &remap
@@ -243,5 +244,5 @@ namespace conjure::scripting {
     /// <summary>
     /// The JSON form of an entity reference in script fields: the packed id as a number (0 = null).
     /// </summary>
-    [[nodiscard]] ecs::entity entity_from_json(const core::json::value &value) noexcept;
+    [[nodiscard]] CONJURE_API ecs::entity entity_from_json(const core::json::value &value) noexcept;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/vfs/file_system.h"
 
 #include <filesystem>
@@ -15,7 +16,7 @@ namespace conjure::core::vfs {
     /// Files are read through handles that share deletion, so an open reader never makes a
     /// write_file_atomic, rename or remove of the same file fail.
     /// </summary>
-    class native_file_system final : public file_system {
+    class CONJURE_API native_file_system final : public file_system {
         private:
             std::filesystem::path mRoot = {};
             bool mReadOnly = false;
@@ -67,6 +68,7 @@ namespace conjure::core::vfs {
             [[nodiscard]] result<std::filesystem::path> resolve_writable(std::string_view path) const;
             [[nodiscard]] result<void> write_bytes(
               const std::filesystem::path &nativePath,
+              std::string_view displayPath,
               std::span<const std::byte> data
             ) const;
     };

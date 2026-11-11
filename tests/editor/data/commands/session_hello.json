@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "session.hello",
+    "args": {
+      "clientName": "fixture"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "protocolVersion": 1
+    }
+  }
+}

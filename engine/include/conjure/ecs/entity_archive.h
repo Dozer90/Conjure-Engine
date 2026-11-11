@@ -4,6 +4,7 @@
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -49,7 +50,7 @@ namespace conjure::ecs {
     /// A typed copy of a set of entities, bound to the registry whose ids it uses. Move-only; the
     /// destructor destroys non-trivial component payloads.
     /// </summary>
-    class entity_archive {
+    class CONJURE_API entity_archive {
         private:
             const component_registry *mRegistry = nullptr;
             std::vector<archive_entry> mEntries = {};

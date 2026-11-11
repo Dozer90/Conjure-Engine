@@ -173,8 +173,10 @@ python tools/build.py --build-dir build/mod_physics --target conjure_physics_tes
 
 - `core::jobs`: an allocation-free fire-and-forget `schedule` (a counter owned by the caller) would let the
   adapter drop the `parallel_for` helper trick.
-- `tests/benchmarks/bench_physics.cpp` (10k sleeping bodies, 2k active, raycast batches) waits for the benchmarks
-  directory; the `[bench]` / `[slow]` cases in `tests/physics` cover the allocation-free behaviour only.
+- `tests/benchmarks/bench_physics.cpp` (`physics.step_10k_active`, `physics.step_10k_sleeping`, `physics.sync_10k`,
+  `physics.step_2k_settling`, `engine.full_frame_10k_physics`) holds the scenarios; the raycast batch scenario of
+  the design is not written yet, and the `[bench]` / `[slow]` cases in `tests/physics` cover the allocation-free
+  behaviour.
 - The pull writes `local_transform` of bodies directly; a "physics wrote this" flag on `scene::transform_state`
   would let the transform pass skip redundant dirtying.
 - `physics_world::step - 600 empty steps allocate nothing` has been seen to fail once under heavy parallel load

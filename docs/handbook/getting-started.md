@@ -27,7 +27,7 @@ documentation site.
 | Ninja | any recent | Used by every preset except `windows-vs`. On Windows `tools/build.py` adds the Ninja and CMake bundled with Visual Studio to `PATH` when the shell has none. |
 | C++20 compiler | MSVC 19.40+ (VS 2022 17.10 or VS 2026), GCC 13+, Clang 16+ | Warnings are errors on every compiler (`cmake/ConjureWarnings.cmake`). |
 | C++ standard library | libstdc++ 10+, MSVC 19.28+, libc++ 18+ (Xcode 16+) | `core::jobs::dedicated_thread` needs `std::jthread` and `std::stop_token`; `engine/src/core/jobs/CMakeLists.txt` checks at configure time. |
-| .NET SDK | 8.0+ | Required when `CONJURE_WITH_SCRIPTING=ON` (the default); `cmake/FindNetHost.cmake` locates `nethost.h` and `libnethost`. Configure with `-DCONJURE_WITH_SCRIPTING=OFF` to build without it. |
+| .NET SDK | 8.0+ | Needed for scripting (`CONJURE_WITH_SCRIPTING=ON`, the default); `cmake/FindNetHost.cmake` locates `nethost.h` and `libnethost`. A machine without the host pack still configures: the root `CMakeLists.txt` turns scripting and the managed build off for that tree with a CMake warning (the configure summary shows `Scripting ... OFF`). Configure with `-DCONJURE_WITH_SCRIPTING=OFF` to make that explicit and silent. |
 | Python | 3 | `tools/build.py`, `tools/check_style.py`, `tools/check_docs.py`, `tools/docs.py`, `tools/download_test_assets.py`. |
 
 Platform packages, as installed by `.github/workflows/ci.yml`:
@@ -118,8 +118,10 @@ target, including fetched third-party ones. Single-config generators default to 
 The macros come from `conjure::platform_defines` (`cmake/ConjureWarnings.cmake`); `conjure/core/platform_detect.h`
 turns them into `CONJURE_ASSERTS_ENABLED` and `CONJURE_DEV_TOOLS_ENABLED`, and `conjure/core/assert.h` and
 `conjure/core/log.h` read those. With a single-config generator a `Distribution` build sets
-`CONJURE_BUILD_EDITOR` to `OFF`; with the multi-config `windows-vs` preset the editor target stays and is
-excluded per configuration.
+`CONJURE_BUILD_EDITOR` to `OFF`. The multi-config `windows-vs` preset offers `Debug` and `Development` only: the
+editor is never part of a Distribution build and a multi-config tree builds every configuration from one set of
+targets, so `cmake/ConjureConfigs.cmake` adds `Distribution` to such a tree only when it is configured with
+`-DCONJURE_BUILD_EDITOR=OFF`. Build what ships with the single-config `*-dist` presets.
 
 > [!IMPORTANT]
 > Run the Distribution test preset before claiming a change is done when it touches assertions or
@@ -178,7 +180,7 @@ Options are declared in the root `CMakeLists.txt` (`CONJURE_ENABLE_TSAN` in `cma
 | Option | Default | Effect |
 |---|---|---|
 | `CONJURE_WITH_RENDERER` / `_PHYSICS` / `_AUDIO` / `_SCRIPTING` | ON | build the subsystem and fetch its dependency (NVRHI, Jolt, miniaudio, nethost); a disabled subsystem also disables its tests |
-| `CONJURE_BUILD_EDITOR` / `_RUNTIME` / `_TESTS` / `_BENCHMARKS` / `_SAMPLES` / `_MANAGED` | ON | build the executables, tests, benchmarks, samples and C# assemblies (the editor, runtime, managed and sample directories skip themselves until their sources exist) |
+| `CONJURE_BUILD_EDITOR` / `_RUNTIME` / `_TESTS` / `_BENCHMARKS` / `_SAMPLES` / `_MANAGED` | ON | build the executables, tests, benchmarks, samples and C# assemblies (the `samples/` directory skips itself until wave 5 adds its sources) |
 | `CONJURE_RHI_D3D12` | ON on Windows, forced OFF elsewhere | D3D12 backend; the renderer needs at least one of D3D12 / Vulkan |
 | `CONJURE_RHI_VULKAN` | OFF on Windows, ON elsewhere | Vulkan backend, fetches glslang |
 | `CONJURE_PLATFORM_GLFW` | ON | GLFW window backend; required by `CONJURE_BUILD_EDITOR` |
@@ -188,8 +190,9 @@ Options are declared in the root `CMakeLists.txt` (`CONJURE_ENABLE_TSAN` in `cma
 
 ## 8. IDE notes
 
-- **Visual Studio.** `cmake --preset windows-vs` writes `build/windows-vs/Conjure.sln` with the three
-  configurations. Targets are grouped by the `FOLDER` property (`Engine`, `Engine/core`, `ThirdParty`,
+- **Visual Studio.** `cmake --preset windows-vs` writes `build/windows-vs/Conjure.sln` with the `Debug` and
+  `Development` configurations (`Distribution` appears only with `-DCONJURE_BUILD_EDITOR=OFF`, section 5).
+  Targets are grouped by the `FOLDER` property (`Engine`, `Engine/core`, `ThirdParty`,
   `Tests`, `Tests/HeaderChecks`, `Executables`) and sources by `source_group(TREE ...)`. Opening the
   repository folder directly also works because Visual Studio reads `CMakePresets.json`.
 - **VS Code / CLion.** Both read `CMakePresets.json`; pick a configure preset and the matching build and

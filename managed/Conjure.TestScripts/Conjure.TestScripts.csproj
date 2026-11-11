@@ -10,6 +10,7 @@
     <DebugType>portable</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="BindingProbes.cs" />
     <Compile Include="Collider.cs" />
     <Compile Include="DestroyProbe.cs" />
     <Compile Include="DodScripts.cs" />
@@ -18,6 +19,7 @@
     <Compile Include="LeakyTimer.cs" />
     <Compile Include="LifecycleProbe.cs" />
     <Compile Include="Mover.cs" />
+    <Compile Include="NativeCallProbe.cs" />
     <Compile Include="Probes.cs" />
     <Compile Include="RegressionProbes.cs" />
     <Compile Include="ReloadProbe.cs" />

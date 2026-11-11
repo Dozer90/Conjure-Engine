@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.end_transaction",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_REQUEST"
+    }
+  }
+}

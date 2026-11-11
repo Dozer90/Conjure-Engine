@@ -1,6 +1,7 @@
 #pragma once
 
 #include "conjure/assets/asset_ref.h"
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/math/aabb.h"
@@ -66,7 +67,7 @@ namespace conjure::scene {
     /// Position, rotation and scale relative to the parent (or to the world for roots). Byte-identical
     /// to math::transform and mirrored by the C# LocalTransform struct.
     /// </summary>
-    struct local_transform {
+    struct CONJURE_API local_transform {
         math::vec3 position = math::vec3(0.0f);
         math::quat rotation = math::quat(1.0f, 0.0f, 0.0f, 0.0f);
         math::vec3 scale = math::vec3(1.0f);
@@ -252,7 +253,7 @@ namespace conjure::scene {
     /// The component ids of every scene component in one registry, resolved once (depth[0] is INVALID:
     /// roots carry no tag).
     /// </summary>
-    struct scene_component_ids {
+    struct CONJURE_API scene_component_ids {
         ecs::component_id parent = {};
         ecs::component_id children = {};
         ecs::component_id localTransform = {};

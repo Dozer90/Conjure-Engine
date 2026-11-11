@@ -5,6 +5,7 @@
 
 #include "conjure/assets/asset_manager.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -65,7 +66,7 @@ namespace conjure::scene {
     /// <summary>
     /// Stateless file and archive operations over a scene.
     /// </summary>
-    class scene_serializer {
+    class CONJURE_API scene_serializer {
         public:
             /// <summary>
             /// Writes the scene (header keys format, version, name, settings, roots, archive) into the

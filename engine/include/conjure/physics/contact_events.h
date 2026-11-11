@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/entity.h"
@@ -28,7 +29,7 @@ namespace conjure::physics {
     /// <summary>
     /// The upper-case enumerator name of a kind ("ENTER"); "UNKNOWN" for out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(contact_kind kind) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(contact_kind kind) noexcept;
 
     /// <summary>
     /// One contact event. 48 bytes, trivially copyable.

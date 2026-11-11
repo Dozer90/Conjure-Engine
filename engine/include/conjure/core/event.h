@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/types.h"
 
@@ -29,7 +30,7 @@ namespace conjure::core {
         /// What an event_subscription talks to. Events implement it through their shared state so
         /// a subscription outliving its event finds the state gone and becomes inert.
         /// </summary>
-        class subscription_target {
+        class CONJURE_API subscription_target {
             public:
                 subscription_target();
                 virtual ~subscription_target();
@@ -55,7 +56,7 @@ namespace conjure::core {
     /// releasing it unsubscribes. When the event is destroyed first the subscription becomes inert
     /// and release() is a no-op.
     /// </summary>
-    class event_subscription {
+    class CONJURE_API event_subscription {
         private:
             std::weak_ptr<detail::subscription_target> mTarget = {};
             u64 mId = 0;

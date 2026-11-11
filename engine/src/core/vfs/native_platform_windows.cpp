@@ -9,7 +9,9 @@
 #include <cstring>
 #include <format>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -222,6 +224,43 @@ void internal::close_read_handle(std::intptr_t value) noexcept {
 /*===========================================================================*/
 /*===========================================================================*/
 // Replacing
+
+std::filesystem::path internal::extend_native_path(const std::filesystem::path &path) {
+    // MAX_PATH (260) counts the terminating character and CreateDirectoryW keeps 12 characters for a
+    // short file name, so the classic limit for a directory component is 248; everything from there on
+    // goes through the extended-length form, which Win32 accepts up to about 32,767 characters.
+    constexpr usize CLASSIC_LIMIT = 248;
+    constexpr std::wstring_view EXTENDED_PREFIX = L"\\\\?\\";
+    constexpr std::wstring_view DEVICE_PREFIX = L"\\\\.\\";
+    constexpr std::wstring_view UNC_PREFIX = L"\\\\";
+
+    const std::wstring &native = path.native();
+    if (native.starts_with(EXTENDED_PREFIX) || native.starts_with(DEVICE_PREFIX)) {
+        // Already a literal form (a user-supplied root, or one derived from native_path() of a long path).
+        // Win32 does not translate '/' inside it, so the components the VFS appended with forward slashes
+        // must still be normalised (review 4: an extended root failed every stat and read of a nested path).
+        return path.lexically_normal().make_preferred();
+    }
+    if (native.size() < CLASSIC_LIMIT) {
+        return path;
+    }
+
+    // The extended form is taken literally: it must be absolute, use backslashes and hold no "." or
+    // ".." components, which lexically_normal and make_preferred guarantee.
+    std::error_code ignored = {};
+    std::filesystem::path absolute = std::filesystem::absolute(path, ignored);
+    if (ignored) {
+        return path;
+    }
+    absolute = absolute.lexically_normal().make_preferred();
+    std::wstring extended = absolute.native();
+    if (extended.starts_with(UNC_PREFIX)) {
+        extended.replace(0, UNC_PREFIX.size(), L"\\\\?\\UNC\\");
+    } else {
+        extended.insert(0, EXTENDED_PREFIX);
+    }
+    return std::filesystem::path(std::move(extended));
+}
 
 result<void> internal::replace_file(const std::filesystem::path &source, const std::filesystem::path &target) {
     DWORD errorCode = rename_posix(source, target);

@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "scene.set_settings",
+    "args": {
+      "settings": 3
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

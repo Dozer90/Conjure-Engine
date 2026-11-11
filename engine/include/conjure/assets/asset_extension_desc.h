@@ -5,6 +5,7 @@
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
 
@@ -46,7 +47,7 @@ namespace conjure::assets {
     /// Instantiates the importer of a record and registers it. INVALID_ARGUMENT when the factory
     /// is missing, returns nothing or the created importer's id differs from the record's.
     /// </summary>
-    [[nodiscard]] core::result<void> register_importer_extension(
+    [[nodiscard]] CONJURE_API core::result<void> register_importer_extension(
       importer_registry &importers,
       const importer_extension_desc &desc
     );
@@ -55,7 +56,7 @@ namespace conjure::assets {
     /// Instantiates the loader of a record and registers the type. INVALID_ARGUMENT when the
     /// factory is missing, returns nothing or the loader's type differs from the record's name.
     /// </summary>
-    [[nodiscard]] core::result<void> register_asset_type_extension(
+    [[nodiscard]] CONJURE_API core::result<void> register_asset_type_extension(
       asset_type_registry &types,
       const asset_type_extension_desc &desc
     );

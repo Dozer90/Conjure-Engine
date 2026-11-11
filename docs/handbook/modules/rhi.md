@@ -302,7 +302,7 @@ Vulkan SDK because every entry point is loaded at runtime).
 | Block-compressed formats | `BC1_SRGB`, `BC5_UNORM`, `BC7_SRGB` are reserved; nothing produces them until the cook step |
 | Style exceptions | the NVRHI header includes in the four null-device tests need a `third_party_in_tests` section in `tools/style_exceptions.json` |
 | glslang HLSL front-end | deprecated upstream; the pinned tag keeps it, `CONJURE_SPIRV_COMPILER=dxc` is the exit |
-| Skip accounting | `tools/ctest_check_skips.py` (08_testing D12) does not exist yet, so a machine that silently skips every `[gpu]` case is not flagged |
+| Skip accounting | `tools/ctest_check_skips.py` (08_testing D12) flags a *Not Run* outside the allow-list in CI; the `SOFTWARE_GPU_ADAPTER` cases carry no label, so a machine that silently skips every `[gpu]` case is flagged only through the JUnit report |
 
 ## Related
 

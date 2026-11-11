@@ -21,7 +21,8 @@ every AI agent (and human) working in the repository. Read it fully before touch
 | How to add a module | `.claude/skills/add-engine-module/SKILL.md` |
 | How to add a component | `.claude/skills/add-component/SKILL.md` |
 | Review checklist before every commit | `.claude/skills/code-review-checklist/SKILL.md` |
-| Driving the editor as an agent | `.claude/skills/editor-ai-control/SKILL.md` |
+| Driving the editor as an agent | `.claude/skills/editor-ai-control/SKILL.md` (the command catalogue itself: `docs/generated/editor_protocol.json`, wiki page `docs/api/editor/ai-protocol.md`) |
+| Benchmarks (harness, scenarios, thresholds, how to run them) | `tests/benchmarks/README.md`, `docs/handbook/testing.md` section 11 |
 | Module internals | `engine/src/<module>/README.md` |
 
 ## 2. Non-negotiable rules

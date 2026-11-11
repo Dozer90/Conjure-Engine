@@ -1,0 +1,1225 @@
+[
+  {
+    "id": "hello",
+    "cmd": "session.hello",
+    "args": {
+      "clientName": "grid-sweeper-agent"
+    }
+  },
+  {
+    "id": "scene",
+    "cmd": "scene.new",
+    "args": {
+      "name": "grid_sweeper",
+      "path": "scenes/grid_sweeper"
+    }
+  },
+  {
+    "id": "material",
+    "cmd": "asset.create_material",
+    "args": {
+      "path": "materials/cell",
+      "baseColor": [
+        0.82,
+        0.84,
+        0.88,
+        1.0
+      ],
+      "metallic": 0.0,
+      "roughness": 0.9
+    }
+  },
+  {
+    "id": "script-cell",
+    "cmd": "script.create",
+    "args": {
+      "name": "CellBehaviour"
+    }
+  },
+  {
+    "id": "script-state",
+    "cmd": "script.create",
+    "args": {
+      "name": "GameState"
+    }
+  },
+  {
+    "id": "script-write",
+    "cmd": "script.write",
+    "args": {
+      "path": "GameState.cs",
+      "source": "using Conjure;\n\nnamespace Game;\n\n/// <summary>\n/// Grid Sweeper game state: board size, mine count, elapsed time and the win/lose state.\n/// </summary>\npublic sealed class GameState : ScriptBehaviour\n{\n    public int Width = 8;\n    public int Height = 8;\n    public int Mines = 10;\n    public float Elapsed = 0.0f;\n    public string State = \"ready\";\n\n    protected override void OnUpdate(float deltaTime)\n    {\n        if (State == \"playing\")\n        {\n            Elapsed += deltaTime;\n        }\n    }\n}\n"
+    }
+  },
+  {
+    "id": "template",
+    "cmd": "entity.create",
+    "args": {
+      "name": "Cell",
+      "guid": "86a80321-ab92-5a2c-98b0-4edcd44df8fa",
+      "components": {
+        "sprite": {
+          "size": [
+            0.9,
+            0.9
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "template-script",
+    "cmd": "script.attach",
+    "args": {
+      "entity": "86a80321-ab92-5a2c-98b0-4edcd44df8fa",
+      "className": "Game.CellBehaviour",
+      "fields": {
+        "mine": false,
+        "adjacent": 0,
+        "revealed": false,
+        "flagged": false
+      }
+    }
+  },
+  {
+    "id": "template-away",
+    "cmd": "entity.set_transform",
+    "args": {
+      "entity": "86a80321-ab92-5a2c-98b0-4edcd44df8fa",
+      "position": [
+        -20.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  {
+    "id": "prefab",
+    "cmd": "prefab.create",
+    "args": {
+      "entity": "86a80321-ab92-5a2c-98b0-4edcd44df8fa",
+      "path": "prefabs/cell",
+      "uuid": "07feef0a-1838-5e4d-8d6a-65a0378eaa65"
+    }
+  },
+  {
+    "id": "board",
+    "cmd": "entity.create",
+    "args": {
+      "name": "Board",
+      "guid": "74fcd624-2d0f-5f74-99c9-c4b8a9ed367d"
+    }
+  },
+  {
+    "id": "cells",
+    "cmd": "prefab.instantiate",
+    "args": {
+      "prefab": "07feef0a-1838-5e4d-8d6a-65a0378eaa65",
+      "count": 64,
+      "parent": "74fcd624-2d0f-5f74-99c9-c4b8a9ed367d",
+      "name": "Cell",
+      "guids": [
+        "a361c275-37a7-542e-9cca-e00bd794488c",
+        "69af342d-841a-51b3-84df-c4b5776b6c76",
+        "204e451b-2990-509c-808e-fd341f880e0a",
+        "d27d98f9-eba1-52e4-8b07-b6da0ab4ebcb",
+        "e4b1496b-658c-52fc-892a-e55c11d5fb0d",
+        "af769551-bead-552e-bb6f-5f4acfd767be",
+        "5529fd27-cae6-56ea-bcd8-e63e72a05ccc",
+        "992d13ba-ae68-543d-9022-dcd65e29b12d",
+        "d4a2225c-550a-59d4-be8a-f3ce025c8750",
+        "a15898b8-3e10-5834-be2e-71d92168a010",
+        "7dd34b7c-7afb-5693-86f4-911322cb04a9",
+        "784f8809-9bd9-58b9-b4e9-8c4cd5bf1d02",
+        "ee55dde0-abd1-5ed0-93a2-3ac92c68caff",
+        "e3b06308-739f-5953-8a83-26e1b21e2926",
+        "1f46da1d-0cf5-5dc9-8645-7680ef28372c",
+        "ba4f8048-aab5-56cb-a083-9a9b4b1e3cb3",
+        "99d7fc9a-31e7-5d27-bef1-f7c9f0f47083",
+        "6f8540c8-38e5-5b47-a151-34e29e3a80ef",
+        "18698823-c3aa-5dd9-bb8b-f915ec3ed880",
+        "a00ee891-44c4-55f9-946e-e0e3053a6b54",
+        "905965ce-ecf1-5e3c-944d-5ed2ebe44431",
+        "50e26bfd-73bc-5f76-8cee-0251672661ad",
+        "b2553266-49cb-5e2a-926c-b7b0d4a58ccf",
+        "cb66144e-a328-5966-903a-c1e16b828b5e",
+        "60689899-1ae6-536a-ab65-84ad9ec89b19",
+        "e5f02dc8-7900-5af7-8aea-6c82555a274c",
+        "7d62fad2-682f-5274-b825-5b204ee386b7",
+        "20a2bf00-6953-5b08-b634-24d5e5df9b38",
+        "431c2556-6ac7-5d2c-b504-06084a936921",
+        "86a04849-0d58-5afb-8511-25fa45da9afe",
+        "2308b630-f7aa-5b3a-8e16-6d11c396fac0",
+        "d9fc31b3-9560-55c9-97b5-0e686cec144c",
+        "1f4cd940-0479-55a2-a4c5-7e3df8e651f9",
+        "f0db7b6f-b97e-5c51-a2b9-5f38d47225e1",
+        "9ff7b196-64d3-554c-9702-da8d7d7e06b0",
+        "d21964db-95ee-5a71-bf5a-7b0b5bb88fc3",
+        "7ad1b164-d56b-53a7-8302-dad7046dd370",
+        "e8990f2b-612c-5cd0-84cb-e4d2289bc69e",
+        "a048dd60-182f-5c5c-b670-2aa177d21b5f",
+        "80012f3b-8d00-56ae-9432-042c629545ec",
+        "2305c1f4-fe7b-54c7-b216-907954c7691e",
+        "53c21193-42b5-553f-998b-70bf08a35267",
+        "9e5e669a-4e61-5b27-a557-fbf39f7d60ec",
+        "7616fdcb-9c4c-5976-8a3b-088731b94ab9",
+        "8f76f9c3-48d7-58ec-8346-f2b5d84d56da",
+        "4eb4ad3c-adf3-5f74-b71f-e58323e94b1c",
+        "92a2e1e4-5ad4-5da2-8cf0-fa9f02987ec3",
+        "f2470106-0104-5b8e-8a29-48b2afd46a4f",
+        "e2886cb1-5d86-583d-bd88-75fec488a7d0",
+        "54fa7658-5e81-52d8-8730-531f3622be80",
+        "738fef9d-5ab2-510a-a0b6-026d6806da93",
+        "2558053f-e999-5800-a876-78a7a19904fb",
+        "8da7ca9e-07c6-5a7e-af5a-61754b1a155f",
+        "533a91da-1f40-5f67-bbb8-1b4aec849276",
+        "72522e58-7190-5d95-acc1-663ab45c9f06",
+        "35630eac-cfbc-5a04-9f52-bcac8f5388db",
+        "1362f849-13f1-5184-b18c-881673452d0b",
+        "4be8967e-baf6-554f-a4d4-99796fc0ef6b",
+        "4e835f87-a17b-5d17-99de-26b0d40e6a5a",
+        "c4c1e037-7205-54f3-9a89-c6b19f599a4e",
+        "8b25c8cd-35ab-5cdb-927b-53d9109c2c55",
+        "b83cfb3f-14d2-5783-a1f7-87adb00f6faa",
+        "5f3fb9a5-1511-570c-8444-126f0e27bc75",
+        "a00cc3f4-6f35-5024-a44b-60fd870283ab"
+      ]
+    }
+  },
+  {
+    "id": "layout",
+    "cmd": "component.set_many",
+    "args": {
+      "sets": [
+        {
+          "entity": "a361c275-37a7-542e-9cca-e00bd794488c",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "a361c275-37a7-542e-9cca-e00bd794488c",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "69af342d-841a-51b3-84df-c4b5776b6c76",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "69af342d-841a-51b3-84df-c4b5776b6c76",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "204e451b-2990-509c-808e-fd341f880e0a",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "204e451b-2990-509c-808e-fd341f880e0a",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "d27d98f9-eba1-52e4-8b07-b6da0ab4ebcb",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "d27d98f9-eba1-52e4-8b07-b6da0ab4ebcb",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "d27d98f9-eba1-52e4-8b07-b6da0ab4ebcb",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "e4b1496b-658c-52fc-892a-e55c11d5fb0d",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "e4b1496b-658c-52fc-892a-e55c11d5fb0d",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "af769551-bead-552e-bb6f-5f4acfd767be",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "af769551-bead-552e-bb6f-5f4acfd767be",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "5529fd27-cae6-56ea-bcd8-e63e72a05ccc",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "5529fd27-cae6-56ea-bcd8-e63e72a05ccc",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "992d13ba-ae68-543d-9022-dcd65e29b12d",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            -3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "992d13ba-ae68-543d-9022-dcd65e29b12d",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "d4a2225c-550a-59d4-be8a-f3ce025c8750",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "d4a2225c-550a-59d4-be8a-f3ce025c8750",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "a15898b8-3e10-5834-be2e-71d92168a010",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "a15898b8-3e10-5834-be2e-71d92168a010",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "7dd34b7c-7afb-5693-86f4-911322cb04a9",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "7dd34b7c-7afb-5693-86f4-911322cb04a9",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "784f8809-9bd9-58b9-b4e9-8c4cd5bf1d02",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "784f8809-9bd9-58b9-b4e9-8c4cd5bf1d02",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "ee55dde0-abd1-5ed0-93a2-3ac92c68caff",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "ee55dde0-abd1-5ed0-93a2-3ac92c68caff",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "ee55dde0-abd1-5ed0-93a2-3ac92c68caff",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "e3b06308-739f-5953-8a83-26e1b21e2926",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "e3b06308-739f-5953-8a83-26e1b21e2926",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "1f46da1d-0cf5-5dc9-8645-7680ef28372c",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "1f46da1d-0cf5-5dc9-8645-7680ef28372c",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "ba4f8048-aab5-56cb-a083-9a9b4b1e3cb3",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            -2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "ba4f8048-aab5-56cb-a083-9a9b4b1e3cb3",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "99d7fc9a-31e7-5d27-bef1-f7c9f0f47083",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "99d7fc9a-31e7-5d27-bef1-f7c9f0f47083",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "6f8540c8-38e5-5b47-a151-34e29e3a80ef",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "6f8540c8-38e5-5b47-a151-34e29e3a80ef",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "18698823-c3aa-5dd9-bb8b-f915ec3ed880",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "18698823-c3aa-5dd9-bb8b-f915ec3ed880",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "a00ee891-44c4-55f9-946e-e0e3053a6b54",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "a00ee891-44c4-55f9-946e-e0e3053a6b54",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "905965ce-ecf1-5e3c-944d-5ed2ebe44431",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "905965ce-ecf1-5e3c-944d-5ed2ebe44431",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "50e26bfd-73bc-5f76-8cee-0251672661ad",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "50e26bfd-73bc-5f76-8cee-0251672661ad",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "b2553266-49cb-5e2a-926c-b7b0d4a58ccf",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "b2553266-49cb-5e2a-926c-b7b0d4a58ccf",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "cb66144e-a328-5966-903a-c1e16b828b5e",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            -1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "cb66144e-a328-5966-903a-c1e16b828b5e",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "60689899-1ae6-536a-ab65-84ad9ec89b19",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "e5f02dc8-7900-5af7-8aea-6c82555a274c",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "7d62fad2-682f-5274-b825-5b204ee386b7",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "7d62fad2-682f-5274-b825-5b204ee386b7",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "20a2bf00-6953-5b08-b634-24d5e5df9b38",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "20a2bf00-6953-5b08-b634-24d5e5df9b38",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "431c2556-6ac7-5d2c-b504-06084a936921",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "431c2556-6ac7-5d2c-b504-06084a936921",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "86a04849-0d58-5afb-8511-25fa45da9afe",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "86a04849-0d58-5afb-8511-25fa45da9afe",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "2308b630-f7aa-5b3a-8e16-6d11c396fac0",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "2308b630-f7aa-5b3a-8e16-6d11c396fac0",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "d9fc31b3-9560-55c9-97b5-0e686cec144c",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "d9fc31b3-9560-55c9-97b5-0e686cec144c",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "1f4cd940-0479-55a2-a4c5-7e3df8e651f9",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "f0db7b6f-b97e-5c51-a2b9-5f38d47225e1",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "9ff7b196-64d3-554c-9702-da8d7d7e06b0",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "9ff7b196-64d3-554c-9702-da8d7d7e06b0",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "d21964db-95ee-5a71-bf5a-7b0b5bb88fc3",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "d21964db-95ee-5a71-bf5a-7b0b5bb88fc3",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "7ad1b164-d56b-53a7-8302-dad7046dd370",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "7ad1b164-d56b-53a7-8302-dad7046dd370",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "e8990f2b-612c-5cd0-84cb-e4d2289bc69e",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "e8990f2b-612c-5cd0-84cb-e4d2289bc69e",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "a048dd60-182f-5c5c-b670-2aa177d21b5f",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "a048dd60-182f-5c5c-b670-2aa177d21b5f",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "80012f3b-8d00-56ae-9432-042c629545ec",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            0.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "2305c1f4-fe7b-54c7-b216-907954c7691e",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "53c21193-42b5-553f-998b-70bf08a35267",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "53c21193-42b5-553f-998b-70bf08a35267",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "9e5e669a-4e61-5b27-a557-fbf39f7d60ec",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "9e5e669a-4e61-5b27-a557-fbf39f7d60ec",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "7616fdcb-9c4c-5976-8a3b-088731b94ab9",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "7616fdcb-9c4c-5976-8a3b-088731b94ab9",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "8f76f9c3-48d7-58ec-8346-f2b5d84d56da",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "8f76f9c3-48d7-58ec-8346-f2b5d84d56da",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "4eb4ad3c-adf3-5f74-b71f-e58323e94b1c",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "4eb4ad3c-adf3-5f74-b71f-e58323e94b1c",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "4eb4ad3c-adf3-5f74-b71f-e58323e94b1c",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "92a2e1e4-5ad4-5da2-8cf0-fa9f02987ec3",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "92a2e1e4-5ad4-5da2-8cf0-fa9f02987ec3",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "f2470106-0104-5b8e-8a29-48b2afd46a4f",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            1.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "f2470106-0104-5b8e-8a29-48b2afd46a4f",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "e2886cb1-5d86-583d-bd88-75fec488a7d0",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "e2886cb1-5d86-583d-bd88-75fec488a7d0",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "54fa7658-5e81-52d8-8730-531f3622be80",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "54fa7658-5e81-52d8-8730-531f3622be80",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "738fef9d-5ab2-510a-a0b6-026d6806da93",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "738fef9d-5ab2-510a-a0b6-026d6806da93",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "2558053f-e999-5800-a876-78a7a19904fb",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "2558053f-e999-5800-a876-78a7a19904fb",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "8da7ca9e-07c6-5a7e-af5a-61754b1a155f",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "8da7ca9e-07c6-5a7e-af5a-61754b1a155f",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "533a91da-1f40-5f67-bbb8-1b4aec849276",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "533a91da-1f40-5f67-bbb8-1b4aec849276",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "72522e58-7190-5d95-acc1-663ab45c9f06",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "72522e58-7190-5d95-acc1-663ab45c9f06",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "72522e58-7190-5d95-acc1-663ab45c9f06",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "35630eac-cfbc-5a04-9f52-bcac8f5388db",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            2.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "35630eac-cfbc-5a04-9f52-bcac8f5388db",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "1362f849-13f1-5184-b18c-881673452d0b",
+          "path": "transform.position",
+          "value": [
+            -3.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "1362f849-13f1-5184-b18c-881673452d0b",
+          "path": "script.scripts[0].fields.mine",
+          "value": true
+        },
+        {
+          "entity": "4be8967e-baf6-554f-a4d4-99796fc0ef6b",
+          "path": "transform.position",
+          "value": [
+            -2.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "4be8967e-baf6-554f-a4d4-99796fc0ef6b",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 2
+        },
+        {
+          "entity": "4e835f87-a17b-5d17-99de-26b0d40e6a5a",
+          "path": "transform.position",
+          "value": [
+            -1.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "4e835f87-a17b-5d17-99de-26b0d40e6a5a",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "c4c1e037-7205-54f3-9a89-c6b19f599a4e",
+          "path": "transform.position",
+          "value": [
+            -0.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "c4c1e037-7205-54f3-9a89-c6b19f599a4e",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "8b25c8cd-35ab-5cdb-927b-53d9109c2c55",
+          "path": "transform.position",
+          "value": [
+            0.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "b83cfb3f-14d2-5783-a1f7-87adb00f6faa",
+          "path": "transform.position",
+          "value": [
+            1.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "b83cfb3f-14d2-5783-a1f7-87adb00f6faa",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "5f3fb9a5-1511-570c-8444-126f0e27bc75",
+          "path": "transform.position",
+          "value": [
+            2.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "5f3fb9a5-1511-570c-8444-126f0e27bc75",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        },
+        {
+          "entity": "a00cc3f4-6f35-5024-a44b-60fd870283ab",
+          "path": "transform.position",
+          "value": [
+            3.5,
+            3.5,
+            0.0
+          ]
+        },
+        {
+          "entity": "a00cc3f4-6f35-5024-a44b-60fd870283ab",
+          "path": "script.scripts[0].fields.adjacent",
+          "value": 1
+        }
+      ]
+    }
+  },
+  {
+    "id": "state",
+    "cmd": "entity.create",
+    "args": {
+      "name": "GameState",
+      "guid": "47fd2a92-07ea-5f4f-be63-17f48080db6d"
+    }
+  },
+  {
+    "id": "state-script",
+    "cmd": "script.attach",
+    "args": {
+      "entity": "47fd2a92-07ea-5f4f-be63-17f48080db6d",
+      "className": "Game.GameState",
+      "fields": {
+        "width": 8,
+        "height": 8,
+        "mines": 10,
+        "elapsed": 0.0,
+        "state": "ready"
+      }
+    }
+  },
+  {
+    "id": "camera",
+    "cmd": "entity.create",
+    "args": {
+      "name": "Camera",
+      "guid": "433b4e5a-4d2e-511f-8b6a-eb9ea80c88fe",
+      "components": {
+        "camera": {
+          "cameraData": {
+            "projection": "ORTHOGRAPHIC",
+            "orthographicHeight": 10.0
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "camera-place",
+    "cmd": "entity.set_transform",
+    "args": {
+      "entity": "433b4e5a-4d2e-511f-8b6a-eb9ea80c88fe",
+      "position": [
+        0.0,
+        0.0,
+        10.0
+      ]
+    }
+  },
+  {
+    "id": "view-2d",
+    "cmd": "view.set_mode",
+    "args": {
+      "mode": "2d"
+    }
+  },
+  {
+    "id": "view-focus",
+    "cmd": "view.focus",
+    "args": {
+      "entity": "74fcd624-2d0f-5f74-99c9-c4b8a9ed367d"
+    }
+  },
+  {
+    "id": "selection",
+    "cmd": "selection.set",
+    "args": {
+      "entities": [
+        "74fcd624-2d0f-5f74-99c9-c4b8a9ed367d"
+      ]
+    }
+  },
+  {
+    "id": "query",
+    "cmd": "scene.query",
+    "args": {
+      "with": [
+        "prefab_instance"
+      ],
+      "fields": [
+        "script.scripts[0].fields.mine"
+      ],
+      "limit": 100
+    }
+  },
+  {
+    "id": "play",
+    "cmd": "play.start",
+    "args": {}
+  },
+  {
+    "id": "click",
+    "cmd": "input.inject",
+    "args": {
+      "button": "LEFT",
+      "position": [
+        320.0,
+        240.0
+      ],
+      "action": "tap"
+    }
+  },
+  {
+    "id": "pause",
+    "cmd": "play.pause",
+    "args": {}
+  },
+  {
+    "id": "step",
+    "cmd": "play.step",
+    "args": {
+      "fixedSteps": 3
+    }
+  },
+  {
+    "id": "positions",
+    "cmd": "entity.get",
+    "args": {
+      "entity": "47fd2a92-07ea-5f4f-be63-17f48080db6d"
+    }
+  },
+  {
+    "id": "stop",
+    "cmd": "play.stop",
+    "args": {}
+  },
+  {
+    "id": "save",
+    "cmd": "scene.save",
+    "args": {}
+  },
+  {
+    "id": "startup",
+    "cmd": "project.set_settings",
+    "args": {
+      "settings": {
+        "startup_scene": "scenes/grid_sweeper.scene.json"
+      }
+    }
+  },
+  {
+    "id": "info",
+    "cmd": "scene.info",
+    "args": {}
+  }
+]

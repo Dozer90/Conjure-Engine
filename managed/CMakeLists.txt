@@ -52,6 +52,29 @@ set(CONJURE_MANAGED_SDK_SOURCES
     Conjure.Managed/Api/Dod/ChunkView.cs
     Conjure.Managed/Api/Dod/ComponentQuery.cs
     Conjure.Managed/Api/Dod/ComponentType.cs
+    Conjure.Managed/Interop/AssetRefBinder.cs
+    Conjure.Managed/Interop/BindingStatus.g.cs
+    Conjure.Managed/Interop/ConjureNativeException.cs
+    Conjure.Managed/Interop/NativeCheck.cs
+    Conjure.Managed/Interop/Utf8Marshal.cs
+    Conjure.Managed/Api/AssetId.cs
+    Conjure.Managed/Api/AssetState.cs
+    Conjure.Managed/Api/AssetTypes.cs
+    Conjure.Managed/Api/AudioSource.cs
+    Conjure.Managed/Api/CharacterController.cs
+    Conjure.Managed/Api/Diagnostics.cs
+    Conjure.Managed/Api/Entity.Hierarchy.cs
+    Conjure.Managed/Api/Input.Bindings.cs
+    Conjure.Managed/Api/LayerMask.cs
+    Conjure.Managed/Api/Modules.cs
+    Conjure.Managed/Api/RaycastHit.cs
+    Conjure.Managed/Api/Rigidbody.cs
+    Conjure.Managed/Api/Components/EntityHandle.cs
+    Conjure.Managed/Api/Components/NativeBool.cs
+    Conjure.Managed/Api/Components/StringId.cs
+    Conjure.Managed/Api/Components/Audio/AudioMirrors.cs
+    Conjure.Managed/Api/Components/Physics/PhysicsMirrors.cs
+    Conjure.Managed/Api/Components/Scene/SceneMirrors.cs
 )
 
 # The SDK: building the bootstrap builds Conjure.Managed through its project reference and lays both
@@ -94,6 +117,7 @@ endif()
 
 # The test scripts: one project, three variants, built one after another (they share the SDK project).
 set(CONJURE_TEST_SCRIPT_SOURCES
+    Conjure.TestScripts/BindingProbes.cs
     Conjure.TestScripts/Collider.cs
     Conjure.TestScripts/DestroyProbe.cs
     Conjure.TestScripts/DodScripts.cs
@@ -102,6 +126,7 @@ set(CONJURE_TEST_SCRIPT_SOURCES
     Conjure.TestScripts/LeakyTimer.cs
     Conjure.TestScripts/LifecycleProbe.cs
     Conjure.TestScripts/Mover.cs
+    Conjure.TestScripts/NativeCallProbe.cs
     Conjure.TestScripts/Probes.cs
     Conjure.TestScripts/RegressionProbes.cs
     Conjure.TestScripts/ReloadProbe.cs

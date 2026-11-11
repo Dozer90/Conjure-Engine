@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.gc",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

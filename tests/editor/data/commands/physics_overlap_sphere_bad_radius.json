@@ -1,0 +1,20 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "physics.overlap_sphere",
+    "args": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "radius": -1
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

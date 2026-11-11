@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <compare>
@@ -15,7 +16,7 @@ namespace conjure::core {
     /// 128-bit universally unique identifier (RFC 4122 version 4 when generated). Used for
     /// assets, prefabs and anything that must stay stable across sessions and machines.
     /// </summary>
-    class uuid {
+    class CONJURE_API uuid {
         private:
             u64 mHigh = 0;
             u64 mLow = 0;

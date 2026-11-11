@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.clear",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "cleared": true
+    }
+  }
+}

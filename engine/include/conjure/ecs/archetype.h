@@ -3,6 +3,7 @@
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -54,7 +55,7 @@ namespace conjure::ecs {
     /// Where each column of an archetype lives inside a chunk block. The entity column sits at offset
     /// 0; columns hold the non-tag components only.
     /// </summary>
-    struct chunk_layout {
+    struct CONJURE_API chunk_layout {
         static constexpr u16 NO_COLUMN = 0xFFFF;
 
         u32 capacity = 0;                                                      // rows per chunk
@@ -123,7 +124,7 @@ namespace conjure::ecs {
     /// One component set and the chunks holding its entities. Read-only outside the world; pointers
     /// to archetypes stay valid for the world's lifetime (the world's list is append-only).
     /// </summary>
-    class archetype {
+    class CONJURE_API archetype {
         private:
             friend class world;
             friend class chunk_view;

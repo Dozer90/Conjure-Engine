@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -24,7 +25,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The enumerator name of a renderer error code ("SHADER_NOT_FOUND"), or "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view renderer_error_name(renderer_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view renderer_error_name(renderer_error code) noexcept;
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::renderer::renderer_error, "renderer", conjure::renderer::renderer_error_name);

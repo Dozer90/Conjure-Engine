@@ -1,0 +1,20 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "dirty"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "scene.close",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

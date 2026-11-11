@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.reload",
+    "args": {
+      "name": "conjure.core"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

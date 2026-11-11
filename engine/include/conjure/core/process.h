@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -122,7 +123,7 @@ namespace conjure::core {
     /// thread, including while another thread blocks in wait(). start(), wait() and destruction
     /// belong to one thread at a time.
     /// </summary>
-    class process {
+    class CONJURE_API process {
         private:
             class state;
             std::unique_ptr<state> mState = nullptr;

@@ -7,6 +7,7 @@
 
 #include "conjure/assets/asset_manager.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/event.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/math/aabb.h"
@@ -107,7 +108,7 @@ namespace conjure::scene {
         std::vector<ecs::entity> entities = {};            // every created entity, copy-major, archive order
     };
 
-    class scene {
+    class CONJURE_API scene {
         private:
             /// <summary>
             /// One hierarchy repair scheduled for scene.apply_hierarchy_changes (3.7). A deferred_set_parent
@@ -127,7 +128,7 @@ namespace conjure::scene {
             /// <summary>
             /// Marks a scene operation: observers skip their bookkeeping while one is running.
             /// </summary>
-            class operation_scope {
+            class CONJURE_API operation_scope {
                 private:
                     scene *mOwner = nullptr;
                     bool mPrevious = false;

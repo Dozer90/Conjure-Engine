@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.load",
+    "args": {
+      "name": "nope"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

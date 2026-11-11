@@ -4,6 +4,7 @@
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/serialization.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/event.h"
 #include "conjure/core/reflect/type_id.h"
 #include "conjure/core/reflect/type_info.h"
@@ -61,7 +62,7 @@ namespace conjure::ecs {
     /// mutex except info() and count(), which read the pre-reserved, append-only vector guarded by the
     /// atomic count. Non-copyable and non-movable (worlds and caches hold its address).
     /// </summary>
-    class component_registry {
+    class CONJURE_API component_registry {
         private:
             friend class world;
 

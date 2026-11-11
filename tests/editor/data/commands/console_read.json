@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "console.read",
+    "args": {
+      "limit": 5,
+      "minLevel": "trace"
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -286,8 +286,8 @@ and the pool's live block count, naming the first violation.
 instantiation) and `for_each_job_mode` (SUBCASEs `inline` with `jobs == nullptr` and `parallel` on at least four
 workers). Pool exhaustion is tested through `world_desc::maxChunkSlabs`; death tests use
 `conjure::testing::expect_assert`; the parallel cases assert order independence through `world_hash`. Review
-fixes carry `regression - review <n> ...` cases. Benchmarks live in `tests/benchmarks/bench_ecs.cpp` outside
-CTest (target: 10k transform integrations under 0.1 ms on 4 workers).
+fixes carry `regression - review <n> ...` cases. Benchmarks live in `tests/benchmarks/bench_ecs.cpp`
+(`ecs.iterate_100k`, `ecs.spawn_destroy_10k`, `ecs.query_changed_10k`) under the excluded label `benchmark`.
 
 ```
 python tools/build.py --build-dir build/mod_ecs --target conjure_ecs_tests --test -R ecs

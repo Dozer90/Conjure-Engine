@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/types.h"
 
@@ -51,23 +52,23 @@ namespace conjure::core {
     /// Installs a new assertion handler and returns the previous one. Pass nullptr to restore
     /// the default handler, which logs the failure and breaks.
     /// </summary>
-    assert_handler set_assert_handler(assert_handler handler) noexcept;
+    CONJURE_API assert_handler set_assert_handler(assert_handler handler) noexcept;
 
     /// <summary>
     /// The handler currently in effect.
     /// </summary>
-    [[nodiscard]] assert_handler current_assert_handler() noexcept;
+    [[nodiscard]] CONJURE_API assert_handler current_assert_handler() noexcept;
 
     /// <summary>
     /// The built-in handler: logs the failure and asks to break.
     /// </summary>
-    assert_action default_assert_handler(const assert_info &info);
+    CONJURE_API assert_action default_assert_handler(const assert_info &info);
 
     namespace detail {
         /// <summary>
         /// Reports a failure to the active handler. Returns true when the caller should break.
         /// </summary>
-        bool report_assert_failure(
+        CONJURE_API bool report_assert_failure(
           const char *expression,
           const char *file,
           int line,
@@ -114,8 +115,11 @@ namespace conjure::core {
 #else
     #define CONJURE_ASSERT(condition, ...)                                                                  \
         static_cast<void>(sizeof(!(condition)) + sizeof(::conjure::core::detail::format_assert_message(__VA_ARGS__)))
+    // The condition is evaluated for its side effects and its value discarded explicitly, so a [[nodiscard]]
+    // call as the condition does not warn (MSVC C4834 on the left operand of the comma operator).
     #define CONJURE_VERIFY(condition, ...)                                                                  \
-        static_cast<void>(((condition), sizeof(::conjure::core::detail::format_assert_message(__VA_ARGS__))))
+        static_cast<void>(                                                                                  \
+            (static_cast<void>(condition), sizeof(::conjure::core::detail::format_assert_message(__VA_ARGS__))))
     #define CONJURE_UNREACHABLE() CONJURE_UNREACHABLE_HINT()
 #endif
 

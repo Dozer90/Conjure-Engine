@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "reflection.type",
+    "args": {
+      "name": "camera"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "name": "conjure.renderer.camera"
+    }
+  }
+}

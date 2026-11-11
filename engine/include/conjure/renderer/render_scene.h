@@ -8,6 +8,7 @@
 #include "conjure/renderer/render_settings.h"
 #include "conjure/renderer/sprite_batch.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
@@ -54,7 +55,7 @@ namespace conjure::renderer {
         u32 layerMask = 0xFFFFFFFFu;
     };
 
-    struct render_scene {
+    struct CONJURE_API render_scene {
         u64 frameIndex = 0;
         f32 deltaSeconds = 0.0f;
         std::vector<render_view> views = {};
@@ -83,7 +84,7 @@ namespace conjure::renderer {
     /// <summary>
     /// Two scenes: one being written by extraction, one being read by the renderer.
     /// </summary>
-    class render_scene_pair {
+    class CONJURE_API render_scene_pair {
         private:
             std::array<render_scene, 2> mScenes = {};
             u32 mWriteIndex = 0;

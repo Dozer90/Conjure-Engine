@@ -1,0 +1,17 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "A"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "history.clear",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/process.h"
 #include "conjure/core/result.h"
@@ -35,7 +36,7 @@ namespace conjure::scripting {
         [[nodiscard]] bool operator==(const build_diagnostic &) const = default;
     };
 
-    struct build_report {
+    struct CONJURE_API build_report {
         bool succeeded = false;
         bool timedOut = false;
         i32 exitCode = 0;
@@ -63,7 +64,7 @@ namespace conjure::scripting {
         f64 timeoutSeconds = 600.0;
     };
 
-    class managed_build_runner {
+    class CONJURE_API managed_build_runner {
         private:
             struct shared_state {
                 std::atomic<bool> building = false;

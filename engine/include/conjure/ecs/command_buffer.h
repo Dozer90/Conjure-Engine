@@ -5,6 +5,7 @@
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/memory/arena.h"
 #include "conjure/core/result.h"
@@ -42,7 +43,7 @@ namespace conjure::ecs {
         u32 skipped = 0;      // commands dropped because their entity was dead or stale at flush
     };
 
-    class command_buffer {
+    class CONJURE_API command_buffer {
         public:
             /// <summary>
             /// Ids reserved per refill.

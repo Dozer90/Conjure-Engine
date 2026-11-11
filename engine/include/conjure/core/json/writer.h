@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <concepts>
@@ -31,7 +32,7 @@ namespace conjure::core::json {
     /// <summary>
     /// Builds minified JSON text into a std::string without an intermediate document.
     /// </summary>
-    class writer {
+    class CONJURE_API writer {
         private:
             enum class scope : u8 {
                 OBJECT,

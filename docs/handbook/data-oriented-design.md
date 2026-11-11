@@ -282,8 +282,8 @@ pair, asset slots live in a `stable_vector` so their addresses never move while 
 
 > [!TIP]
 > Measure before and after: `job_system::stats()`, `frame_allocator::high_water_bytes()` and
-> `memory::snapshot().live_count()` exist so a data-layout change is a number, not an opinion; the benchmark
-> harness under `tests/benchmarks` (`08_testing.md` 7.1) is still to come ([Testing](testing.md#11-benchmarks)).
+> `memory::snapshot().live_count()` exist so a data-layout change is a number, not an opinion, and the benchmark
+> harness under `tests/benchmarks` (`08_testing.md` 7.1) turns it into a threshold ([Testing](testing.md#11-benchmarks)).
 
 ## Related
 - design records: [`../design/01_ecs.md`](../design/01_ecs.md) (archetypes, change detection, command buffer,

@@ -16,55 +16,38 @@
 #                              library in the global property CONJURE_STATIC_LIBRARIES, so one copy of
 #                              every engine symbol and global exists in the process. Executables and
 #                              game modules link conjure::shared and nothing else from the engine.
-#                              Compiles with CONJURE_SHARED_EXPORTS; consumers get CONJURE_SHARED_IMPORTS,
-#                              the engine include directories, the interface compile definitions of every
-#                              engine library, conjure::platform_defines and glm (/wd4251 /wd4275 come from
+#                              Consumers get CONJURE_SHARED_IMPORTS, the engine include directories, the
+#                              interface compile definitions of every engine library,
+#                              conjure::platform_defines and glm (/wd4251 /wd4275 come from
 #                              conjure::warnings, which every target already carries).
 #
-#     Symbol export: on MSVC a module definition file listing every external symbol of the whole-
-#     archived objects is generated at build time (the same mechanism as CMake's
-#     WINDOWS_EXPORT_ALL_SYMBOLS, which does not look inside static libraries). Everything the static
-#     libraries define is therefore exported, whether or not it carries CONJURE_API; CONJURE_API on a
-#     class or function (the modules library marks every out-of-line public symbol) adds the dllimport
-#     side so consumers call through the import thunk directly and the exported data symbols resolve.
-#     GCC and Clang export every default-visibility symbol, the compiler default in this tree.
+#     Symbol export (07_modules.md 5, conjure/core/api.h): the static libraries are compiled with
+#     CONJURE_SHARED_EXPORTS and hidden visibility (conjure_apply_export_settings in
+#     cmake/ConjureModule.cmake), so the whole-archived objects export exactly the declarations that
+#     carry CONJURE_API: dllexport on MSVC, visibility("default") on GCC and Clang. Nothing is
+#     generated at build time: there is no module definition file and no WINDOWS_EXPORT_ALL_SYMBOLS.
+#     The third-party static libraries the modules link privately (yyjson, GLFW, miniaudio, Jolt,
+#     cgltf, stb, NVRHI, ImGui) are given hidden visibility as well (conjure_hide_thirdparty_symbols),
+#     because on ELF and Mach-O every default-visibility symbol of an archive pulled into a shared
+#     library is exported from it; MSVC exports nothing without dllexport, so the export table holds
+#     conjure:: plus the IMGUI_API surface on every platform. Excluded from the export table are
+#     therefore: every engine declaration without CONJURE_API, every third-party symbol, and every
+#     ImGui / ImGuizmo symbol not declared IMGUI_API. tools/check_exports.py keeps the annotations
+#     complete (CTest entry exports.check_annotations) and reads the export count of the built library
+#     back from dumpbin or nm (exports.count_shared_library, limit 52428 of the 65535 a Windows DLL
+#     may hold); both are registered in tests/modules/CMakeLists.txt. The modules fixture
+#     module_surface (tests/modules/fixtures) links a slice of the public surface through the import
+#     side, so a missing annotation also fails the build independently of the checker.
 #
-#     A DLL may hold at most 65535 exports. Exporting every symbol of every static library spends
-#     that budget quickly (26,739 with the 17 wave-1/2 libraries), so the .def generation is followed
-#     by a count that fails the build with a message naming the remedy (CONJURE_API-marked exports,
-#     07_modules.md 5) instead of letting the linker fail with LNK1189.
+#     Dear ImGui (R9): when the editor is built, conjure_thirdparty_imgui is compiled with IMGUI_API
+#     set to the export attribute and whole-archived too, so the one ImGui context lives in
+#     conjure_shared; conjure::thirdparty::imgui_interface carries the include directories, ImGui
+#     defines and the import attribute for the editor and for game modules built with EDITOR_UI.
 #
-#   Script mode (cmake -P ConjureSharedLibrary.cmake -D...): writes abi_identity.h, or checks the
-#   export count of a generated .def file. Used only by the custom commands below.
+#   Script mode (cmake -P ConjureSharedLibrary.cmake -D...): writes abi_identity.h. Used only by the
+#   custom command below.
 
 include_guard(GLOBAL)
-
-#------------------------------------------------------------------------------
-# Script mode: check the export count of a module definition file
-#------------------------------------------------------------------------------
-if(CMAKE_SCRIPT_MODE_FILE AND DEFINED CONJURE_EXPORT_COUNT_CHECK)
-    set(exportLimit 65535)
-    file(STRINGS "${CONJURE_EXPORT_COUNT_CHECK}" exportLines REGEX "^[ \t]+")
-    list(LENGTH exportLines exportCount)
-    math(EXPR warningThreshold "${exportLimit} * 4 / 5")
-    if(exportCount GREATER exportLimit)
-        message(FATAL_ERROR
-            "conjure_shared exports ${exportCount} symbols; a Windows DLL may export at most ${exportLimit}. "
-            "The umbrella whole-archives every engine library and exports every symbol they define "
-            "(cmake/ConjureSharedLibrary.cmake, docs/design/07_modules.md D1 and 5): switch to CONJURE_API-marked "
-            "exports (CONJURE_SHARED_EXPORTS on the static libraries, hidden visibility in conjure_add_module) "
-            "or trim the exported surface before adding more libraries."
-        )
-    elseif(exportCount GREATER warningThreshold)
-        message(WARNING
-            "conjure_shared exports ${exportCount} of the ${exportLimit} symbols a Windows DLL may hold; plan the "
-            "switch to CONJURE_API-marked exports (docs/design/07_modules.md 5) before the limit is reached."
-        )
-    else()
-        message(STATUS "conjure_shared exports ${exportCount} symbols (limit ${exportLimit})")
-    endif()
-    return()
-endif()
 
 #------------------------------------------------------------------------------
 # Script mode: generate abi_identity.h
@@ -192,6 +175,135 @@ function(conjure_add_abi_identity libraries)
 endfunction()
 
 
+# Dear ImGui lives once in conjure_shared (R9, 07_modules.md 5): compiled with IMGUI_API as the
+# export attribute and whole-archived, so every ImGui symbol the editor and EDITOR_UI game modules
+# call comes from the umbrella. conjure::thirdparty::imgui_interface is what those consumers link:
+# the include directories and defines of conjure::thirdparty::imgui plus IMGUI_API as the import
+# attribute. Does nothing when the editor (and with it ImGui) is not built.
+function(conjure_export_imgui_from_shared)
+    if(NOT TARGET conjure_thirdparty_imgui OR TARGET conjure::thirdparty::imgui_interface)
+        return()
+    endif()
+
+    if(WIN32)
+        set(exportAttribute "__declspec(dllexport)")
+        set(importAttribute "__declspec(dllimport)")
+    else()
+        set(exportAttribute "__attribute__((visibility(\"default\")))")
+        set(importAttribute "")
+    endif()
+
+    target_compile_definitions(conjure_thirdparty_imgui PRIVATE "IMGUI_API=${exportAttribute}")
+    target_link_libraries(conjure_shared PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,conjure_thirdparty_imgui>")
+    set_property(TARGET conjure_shared PROPERTY "LINK_LIBRARY_OVERRIDE_conjure_thirdparty_imgui" WHOLE_ARCHIVE)
+
+    add_library(conjure_thirdparty_imgui_interface INTERFACE)
+    add_library(conjure::thirdparty::imgui_interface ALIAS conjure_thirdparty_imgui_interface)
+    target_include_directories(conjure_thirdparty_imgui_interface SYSTEM INTERFACE
+        "$<TARGET_PROPERTY:conjure_thirdparty_imgui,INTERFACE_INCLUDE_DIRECTORIES>"
+    )
+    target_compile_definitions(conjure_thirdparty_imgui_interface INTERFACE
+        "$<TARGET_PROPERTY:conjure_thirdparty_imgui,INTERFACE_COMPILE_DEFINITIONS>"
+    )
+    if(importAttribute)
+        target_compile_definitions(conjure_thirdparty_imgui_interface INTERFACE "IMGUI_API=${importAttribute}")
+    endif()
+endfunction()
+
+
+# Gives every third-party static (or object) library reachable from the engine libraries' link
+# closure hidden visibility, so libconjure_shared.so / .dylib exports no symbol of yyjson, GLFW,
+# miniaudio, Jolt, cgltf, stb, NVRHI or the non-IMGUI_API parts of ImGui (07_modules.md D1: plugins
+# reach third-party code only through engine APIs). The linker's --exclude-libs is not an option: GNU
+# ld and lld hide every symbol of the named archives, the CONJURE_API ones of a whole-archived engine
+# library included, and ld64 has no equivalent, while a visibility preset on the archive's own objects
+# works on every ELF and Mach-O toolchain. IMGUI_API carries an explicit visibility("default") there
+# (conjure_export_imgui_from_shared), which the preset does not override. MSVC ignores the visibility
+# properties and exports nothing without dllexport, so the walk runs on every platform and keeps one
+# configure path. Imported libraries cannot be recompiled and are left alone here; the one the engine links
+# statically (libnethost.a, see conjure_hide_imported_thirdparty_symbols) is hidden by the linker instead.
+function(conjure_hide_thirdparty_symbols engineLibraries)
+    set(pending ${engineLibraries})
+    set(visited "")
+    set(hidden "")
+    while(pending)
+        list(POP_FRONT pending item)
+        # A static library's PRIVATE dependencies surface in INTERFACE_LINK_LIBRARIES as $<LINK_ONLY:x>;
+        # any other generator expression (configuration-conditional or feature-wrapped items) is not a
+        # target name and is skipped.
+        string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" item "${item}")
+        if(item MATCHES "^\\$<" OR NOT TARGET "${item}")
+            continue()
+        endif()
+        get_target_property(aliased "${item}" ALIASED_TARGET)
+        if(aliased)
+            set(item "${aliased}")
+        endif()
+        if(item IN_LIST visited)
+            continue()
+        endif()
+        list(APPEND visited "${item}")
+
+        get_target_property(type "${item}" TYPE)
+        get_target_property(imported "${item}" IMPORTED)
+        set(dependencies "")
+        if(type STREQUAL "INTERFACE_LIBRARY")
+            get_target_property(dependencies "${item}" INTERFACE_LINK_LIBRARIES)
+        else()
+            get_target_property(direct "${item}" LINK_LIBRARIES)
+            get_target_property(interface "${item}" INTERFACE_LINK_LIBRARIES)
+            foreach(entry IN LISTS direct interface)
+                if(entry)
+                    list(APPEND dependencies "${entry}")
+                endif()
+            endforeach()
+            set(isEngine FALSE)
+            if(item IN_LIST engineLibraries)
+                set(isEngine TRUE)
+            endif()
+            set(isArchive FALSE)
+            if(type STREQUAL "STATIC_LIBRARY" OR type STREQUAL "OBJECT_LIBRARY")
+                set(isArchive TRUE)
+            endif()
+            if(isArchive AND NOT isEngine AND NOT imported)
+                set_target_properties("${item}" PROPERTIES
+                    C_VISIBILITY_PRESET hidden
+                    CXX_VISIBILITY_PRESET hidden
+                    VISIBILITY_INLINES_HIDDEN ON
+                )
+                list(APPEND hidden "${item}")
+            endif()
+        endif()
+        if(dependencies)
+            list(APPEND pending ${dependencies})
+        endif()
+    endwhile()
+    list(SORT hidden)
+    string(REPLACE ";" " " hiddenText "${hidden}")
+    message(VERBOSE "conjure_shared: third-party libraries compiled with hidden visibility: ${hiddenText}")
+endfunction()
+
+
+# The imported static archive the engine links: libnethost.a, which conjure_scripting takes from the .NET SDK
+# through cmake/FindNetHost.cmake on Linux and macOS (MSVC links an import library and exports nothing without
+# dllexport). Its objects come with Microsoft's default visibility and cannot be recompiled, so without this
+# libconjure_shared.so / .dylib would export get_hostfxr_path and the archive's internals, against the
+# "exactly the CONJURE_API declarations" invariant above. GNU ld and lld honour --exclude-libs for that one
+# archive without touching the whole-archived engine libraries; ld64 has no equivalent and takes the public
+# entry point by name, so any internal libnethost symbol it still exports is the one documented exception
+# (exports.count_shared_library counts it).
+function(conjure_hide_imported_thirdparty_symbols)
+    if(WIN32 OR NOT TARGET conjure::thirdparty::nethost)
+        return()
+    endif()
+    if(APPLE)
+        target_link_options(conjure_shared PRIVATE "LINKER:-unexported_symbol,_get_hostfxr_path")
+    else()
+        target_link_options(conjure_shared PRIVATE "LINKER:--exclude-libs,libnethost.a")
+    endif()
+endfunction()
+
+
 function(conjure_finalize_engine)
     if(TARGET conjure_shared)
         return()
@@ -246,33 +358,20 @@ function(conjure_finalize_engine)
     if(TARGET conjure::thirdparty::glm)
         target_link_libraries(conjure_shared PUBLIC conjure::thirdparty::glm)
     endif()
+    # The stub has nothing to export; the objects of the whole-archived libraries carry their own
+    # CONJURE_API attributes (conjure_apply_export_settings). Consumers see the import side.
     target_compile_definitions(conjure_shared
         PRIVATE CONJURE_SHARED_EXPORTS
         INTERFACE CONJURE_SHARED_IMPORTS
     )
+    set_target_properties(conjure_shared PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
+    conjure_hide_thirdparty_symbols("${libraries}")
+    conjure_hide_imported_thirdparty_symbols()
 
-    if(MSVC)
-        set(definitionFile "${stubDirectory}/exports.def")
-        set(objectList "${stubDirectory}/exports.def.objs")
-        set(objects "")
-        foreach(library IN LISTS libraries)
-            list(APPEND objects "$<TARGET_OBJECTS:${library}>")
-        endforeach()
-        file(GENERATE OUTPUT "${objectList}" CONTENT "$<JOIN:${objects},\n>\n")
-        # The count runs right after the generation (see the header comment): a table past the DLL
-        # limit fails here with the remedy instead of in the linker with LNK1189.
-        add_custom_command(
-            OUTPUT "${definitionFile}"
-            COMMAND "${CMAKE_COMMAND}" -E __create_def "${definitionFile}" "${objectList}"
-            COMMAND "${CMAKE_COMMAND}"
-                -DCONJURE_EXPORT_COUNT_CHECK=${definitionFile}
-                -P "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-            DEPENDS ${objects} "${objectList}" "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
-            COMMENT "Generating and checking the conjure_shared export table"
-            VERBATIM
-        )
-        target_sources(conjure_shared PRIVATE "${definitionFile}")
-    endif()
+    conjure_export_imgui_from_shared()
 
     set_target_properties(conjure_shared PROPERTIES
         FOLDER "Engine"

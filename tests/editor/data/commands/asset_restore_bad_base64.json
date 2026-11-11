@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.restore",
+    "args": {
+      "path": "textures/bad.png",
+      "contentBase64": "***"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

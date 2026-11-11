@@ -1,0 +1,29 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.batch",
+    "args": {
+      "label": "Two",
+      "commands": [
+        {
+          "cmd": "entity.create",
+          "args": {
+            "name": "A"
+          }
+        },
+        {
+          "cmd": "entity.create",
+          "args": {
+            "name": "B"
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "count": 2
+    }
+  }
+}

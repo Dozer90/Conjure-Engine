@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.delete",
+    "args": {
+      "asset": "textures/none.png"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

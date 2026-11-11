@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.debug_draw",
+    "args": {
+      "grid": false
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "NOT_AVAILABLE"
+    }
+  }
+}

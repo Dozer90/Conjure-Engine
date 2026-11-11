@@ -170,8 +170,9 @@ checker reports the headers and module pages of every later-wave module whose co
 self-test `tools/tests/test_check_docs.py` (fixtures under `tools/tests/check_docs/`) as `docs.check_tool`, both
 with label `docs` and a 120 s timeout, next to `style.check` (D9 and section 6 of the record). The default test
 presets run the `docs` label, so every CI test leg runs both ([Continuous integration](ci.md#2-the-matrix),
-[Testing](testing.md#10-labels)). `mkdocs build --strict` has no CI job yet ([planned jobs](ci.md#6-planned-jobs));
-run `python tools/docs.py build` by hand before a documentation change is reported done.
+[Testing](testing.md#10-labels)), and the `style-and-headers` job runs `check_docs.py`, its self-test and
+`mkdocs build --strict` ([Continuous integration](ci.md#2-the-matrix)); run `python tools/docs.py build` by hand
+before a documentation change is reported done.
 
 ## 5. The site
 

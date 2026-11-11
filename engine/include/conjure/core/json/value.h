@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -46,7 +47,7 @@ namespace conjure::core::json {
     /// <summary>
     /// Returns the lower-case name of a type ("object"), used in error messages.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(json_type type) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(json_type type) noexcept;
 
     /// <summary>
     /// Customisation point for value::to&lt;T&gt;(). Specialise it for a type and provide
@@ -73,7 +74,7 @@ namespace conjure::core::json {
     /// <summary>
     /// A non-owning view of one JSON value inside a document.
     /// </summary>
-    class value {
+    class CONJURE_API value {
         private:
             void *mNode = nullptr;              // yyjson node; opaque so yyjson never leaks into public headers
             const document *mOwner = nullptr;   // informational: the document the node belongs to
@@ -88,7 +89,7 @@ namespace conjure::core::json {
             /// <summary>
             /// Forward iterator over the elements of an array. Dereferencing yields a value view.
             /// </summary>
-            class array_iterator {
+            class CONJURE_API array_iterator {
                 private:
                     void *mNode = nullptr;
                     usize mRemaining = 0;
@@ -124,7 +125,7 @@ namespace conjure::core::json {
             /// Forward iterator over the members of an object. Dereferencing yields a member
             /// (key view plus value view).
             /// </summary>
-            class object_iterator {
+            class CONJURE_API object_iterator {
                 private:
                     void *mKey = nullptr;
                     usize mRemaining = 0;
@@ -340,67 +341,67 @@ namespace conjure::core::json {
     // Built-in converters
 
     template <>
-    struct json_converter<bool> {
+    struct CONJURE_API json_converter<bool> {
         [[nodiscard]] static result<bool> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<i8> {
+    struct CONJURE_API json_converter<i8> {
         [[nodiscard]] static result<i8> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<i16> {
+    struct CONJURE_API json_converter<i16> {
         [[nodiscard]] static result<i16> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<i32> {
+    struct CONJURE_API json_converter<i32> {
         [[nodiscard]] static result<i32> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<i64> {
+    struct CONJURE_API json_converter<i64> {
         [[nodiscard]] static result<i64> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<u8> {
+    struct CONJURE_API json_converter<u8> {
         [[nodiscard]] static result<u8> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<u16> {
+    struct CONJURE_API json_converter<u16> {
         [[nodiscard]] static result<u16> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<u32> {
+    struct CONJURE_API json_converter<u32> {
         [[nodiscard]] static result<u32> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<u64> {
+    struct CONJURE_API json_converter<u64> {
         [[nodiscard]] static result<u64> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<f32> {
+    struct CONJURE_API json_converter<f32> {
         [[nodiscard]] static result<f32> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<f64> {
+    struct CONJURE_API json_converter<f64> {
         [[nodiscard]] static result<f64> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<std::string> {
+    struct CONJURE_API json_converter<std::string> {
         [[nodiscard]] static result<std::string> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<uuid> {
+    struct CONJURE_API json_converter<uuid> {
         [[nodiscard]] static result<uuid> from_json(const value &source);
     };
 

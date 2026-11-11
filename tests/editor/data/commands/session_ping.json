@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "session.ping",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

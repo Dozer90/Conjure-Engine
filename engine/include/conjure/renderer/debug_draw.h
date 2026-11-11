@@ -2,6 +2,7 @@
 
 #include "conjure/renderer/limits.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -33,14 +34,14 @@ namespace conjure::renderer {
     /// <summary>
     /// Packs a linear colour with components in [0, 1] into RGBA8 (red in the low byte).
     /// </summary>
-    [[nodiscard]] u32 pack_debug_colour(const math::vec4 &colour) noexcept;
+    [[nodiscard]] CONJURE_API u32 pack_debug_colour(const math::vec4 &colour) noexcept;
 
     /// <summary>
     /// Line primitives collected for one frame. Each shape call appends pairs of vertices to the
     /// depth-tested or the overlay list; the lists are capped at MAX_DEBUG_VERTICES each (excess is
     /// dropped and counted).
     /// </summary>
-    class debug_draw_buffer {
+    class CONJURE_API debug_draw_buffer {
         private:
             std::vector<debug_vertex> mDepthTested = {};
             std::vector<debug_vertex> mOverlay = {};
@@ -136,7 +137,7 @@ namespace conjure::renderer {
     /// The engine-owned facade: immediate shapes (drawn for one frame) and timed shapes (kept for
     /// durationSeconds). Thread-safe; append_to() and tick() run on the main thread each frame.
     /// </summary>
-    class debug_draw {
+    class CONJURE_API debug_draw {
         private:
             struct timed_entry {
                 debug_draw_buffer shape = {};

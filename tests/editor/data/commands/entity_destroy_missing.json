@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.destroy",
+    "args": {
+      "entity": "Nobody"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ENTITY_NOT_FOUND"
+    }
+  }
+}

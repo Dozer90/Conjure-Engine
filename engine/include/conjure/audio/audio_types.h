@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <format>
@@ -112,13 +113,13 @@ namespace conjure::audio {
     /// <summary>
     /// Enumerator names ("F32", "PCM", "PLAYING", ...); "UNKNOWN" for out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(sample_format value) noexcept;
-    [[nodiscard]] std::string_view to_string(clip_storage value) noexcept;
-    [[nodiscard]] std::string_view to_string(clip_encoding value) noexcept;
-    [[nodiscard]] std::string_view to_string(audio_backend_kind value) noexcept;
-    [[nodiscard]] std::string_view to_string(device_state value) noexcept;
-    [[nodiscard]] std::string_view to_string(voice_state value) noexcept;
-    [[nodiscard]] std::string_view to_string(attenuation_model value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(sample_format value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(clip_storage value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(clip_encoding value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(audio_backend_kind value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(device_state value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(voice_state value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(attenuation_model value) noexcept;
 
     /// <summary>
     /// True for PRIMING, PLAYING and PAUSED: the states in which audio_engine::is_playing() holds.

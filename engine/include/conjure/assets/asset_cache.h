@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/cooked_blob.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/file_system.h"
@@ -32,7 +33,7 @@ namespace conjure::assets {
     /// Blob storage for one platform. Safe to call from any thread: the file system does the
     /// synchronisation, and every write is atomic.
     /// </summary>
-    class asset_cache {
+    class CONJURE_API asset_cache {
         private:
             core::vfs::file_system *mFileSystem = nullptr;
             std::string mRoot = {};         // <cacheRoot>/<platform>

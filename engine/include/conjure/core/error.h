@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/hash.h"
 #include "conjure/core/types.h"
 
@@ -52,7 +53,7 @@ namespace conjure::core {
     /// <summary>
     /// Returns the stable, upper-case name of a generic error code (e.g. "NOT_FOUND").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(error_code code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(error_code code) noexcept;
 
     /// <summary>
     /// Function that names a code of one category. Returns "" for unknown values.
@@ -76,7 +77,7 @@ namespace conjure::core {
     /// A recoverable failure: category, code and a human readable message. Engine code returns
     /// these through result<T> instead of throwing. A default-constructed error means "no error".
     /// </summary>
-    class error {
+    class CONJURE_API error {
         private:
             u32 mCategory = 0;
             u32 mCode = 0;
@@ -193,7 +194,7 @@ namespace conjure::core {
     }
 
     namespace detail {
-        [[nodiscard]] std::string_view core_error_code_name(u32 code) noexcept;
+        [[nodiscard]] CONJURE_API std::string_view core_error_code_name(u32 code) noexcept;
     }
 
     template <>

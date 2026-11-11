@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -42,7 +43,7 @@ namespace conjure::assets {
     /// <summary>
     /// Stable upper-case name of a code ("CACHE_MISS"); "" for values outside the enumeration.
     /// </summary>
-    [[nodiscard]] std::string_view asset_error_code_name(asset_error_code code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view asset_error_code_name(asset_error_code code) noexcept;
 
     /// <summary>
     /// Builds an error in the assets category.

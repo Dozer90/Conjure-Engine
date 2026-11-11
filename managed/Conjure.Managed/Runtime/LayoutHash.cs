@@ -14,13 +14,14 @@ namespace Conjure.Runtime;
 /// </summary>
 public readonly struct ComponentFieldLayout
 {
-    public ComponentFieldLayout(string name, string typeName, byte kind, int offset, int size)
+    public ComponentFieldLayout(string name, string typeName, byte kind, int offset, int size, int alignment = 0)
     {
         Name = name;
         TypeName = typeName;
         Kind = kind;
         Offset = offset;
         Size = size;
+        Alignment = alignment > 0 ? alignment : LayoutHash.AlignmentOfKind(kind);
     }
 
     /// <summary>
@@ -41,12 +42,17 @@ public readonly struct ComponentFieldLayout
     public int Offset { get; }
 
     public int Size { get; }
+
+    /// <summary>
+    /// Natural alignment of the field in the managed layout (a nested struct's is its strictest field's).
+    /// </summary>
+    public int Alignment { get; }
 }
 
 /// <summary>
 /// The layout of an unmanaged struct as core::reflect describes it, and its layout hash: FNV-1a 64 over
 /// (name bytes, kind byte, offset u32 LE, size u32 LE) per field in declaration order, exactly as
-/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad* are padding and excluded.
+/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad<digits> are padding and excluded.
 ///
 /// Offsets and sizes are those of the managed (blittable) layout that Span&lt;T&gt;, sizeof(T) and the
 /// component_get/set copies use, never the marshalled one: Marshal.OffsetOf/SizeOf widen bool to 4 bytes
@@ -67,6 +73,7 @@ public static class LayoutHash
     private const byte KindU64 = 8;
     private const byte KindF32 = 9;
     private const byte KindF64 = 10;
+    private const byte KindStringId = 12;
     private const byte KindUuid = 13;
     private const byte KindVec2 = 14;
     private const byte KindVec3 = 15;
@@ -74,12 +81,67 @@ public static class LayoutHash
     private const byte KindQuat = 17;
     private const byte KindMat4 = 18;
     private const byte KindTransform = 19;
+    private const byte KindEnum = 20;
+    private const byte KindStruct = 21;
     private const byte KindEntity = 23;
+    private const byte KindAssetRef = 24;
 
     /// <summary>
     /// The core type name and kind of a field type, or false when the type cannot sit in a mirror.
     /// </summary>
     public static bool TryDescribe(Type type, out string typeName, out byte kind, out int size)
+    {
+        return TryDescribe(type, out typeName, out kind, out size, out _);
+    }
+
+    /// <summary>
+    /// TryDescribe plus the field's natural alignment in the managed layout. Beyond the fixed kinds it
+    /// accepts the mirror primitives of 15_bindings.md 2.6 (NativeBool, StringId, AssetId, EntityHandle,
+    /// AssetRef&lt;T&gt;), enums (their underlying integer) and nested sequential structs of describable fields.
+    /// </summary>
+    public static bool TryDescribe(Type type, out string typeName, out byte kind, out int size, out int alignment)
+    {
+        typeName = "";
+        kind = 0;
+        size = 0;
+        alignment = 1;
+        if (type == typeof(Components.NativeBool)) { typeName = "bool"; kind = KindBool; size = 1; return true; }
+        if (type == typeof(Components.StringId)) { typeName = "string_id"; kind = KindStringId; size = 8; alignment = 8; return true; }
+        if (type == typeof(AssetId)) { typeName = "uuid"; kind = KindUuid; size = 16; alignment = 8; return true; }
+        if (type == typeof(Components.EntityHandle)) { typeName = "conjure.ecs.entity"; kind = KindEntity; size = 8; alignment = 4; return true; }
+        if (type.IsEnum)
+        {
+            if (!TryDescribe(Enum.GetUnderlyingType(type), out _, out _, out size, out alignment))
+            {
+                return false;
+            }
+            typeName = type.FullName ?? type.Name;
+            kind = KindEnum;
+            return true;
+        }
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(AssetRef<>))
+        {
+            typeName = "conjure.assets.asset_ref";
+            kind = KindAssetRef;
+            size = 24;
+            alignment = 8;
+            return true;
+        }
+        if (TryDescribeFixed(type, out typeName, out kind, out size))
+        {
+            alignment = AlignmentOfKind(kind);
+            return true;
+        }
+        if (type.IsValueType && !type.IsPrimitive && TryDescribeNested(type, out size, out alignment))
+        {
+            typeName = type.FullName ?? type.Name;
+            kind = KindStruct;
+            return true;
+        }
+        return false;
+    }
+
+    private static bool TryDescribeFixed(Type type, out string typeName, out byte kind, out int size)
     {
         typeName = "";
         kind = 0;
@@ -107,7 +169,34 @@ public static class LayoutHash
     }
 
     /// <summary>
-    /// The fields of an unmanaged struct in declaration order (Pad* excluded). Throws
+    /// Size and alignment of a nested sequential struct whose fields are all describable (the strictest
+    /// field alignment, capped by Pack); false otherwise.
+    /// </summary>
+    private static bool TryDescribeNested(Type structType, out int size, out int alignment)
+    {
+        size = 0;
+        alignment = 1;
+        StructLayoutAttribute? layoutAttribute = structType.StructLayoutAttribute;
+        if (layoutAttribute != null && layoutAttribute.Value == LayoutKind.Auto)
+        {
+            return false;
+        }
+        int pack = layoutAttribute == null || layoutAttribute.Pack <= 0 ? int.MaxValue : layoutAttribute.Pack;
+        FieldInfo[] fields = structType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (FieldInfo field in fields)
+        {
+            if (!TryDescribe(field.FieldType, out _, out _, out _, out int fieldAlignment))
+            {
+                return false;
+            }
+            alignment = Math.Max(alignment, Math.Min(fieldAlignment, pack));
+        }
+        size = ManagedSizeOf(structType);
+        return true;
+    }
+
+    /// <summary>
+    /// The fields of an unmanaged struct in declaration order (Pad<digits> excluded). Throws
     /// InvalidOperationException for a field type that cannot be described.
     /// </summary>
     public static List<ComponentFieldLayout> Describe(Type structType)
@@ -140,16 +229,22 @@ public static class LayoutHash
         FieldInfo[] fields = structType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Array.Sort(fields, (left, right) => left.MetadataToken.CompareTo(right.MetadataToken));
         List<ComponentFieldLayout> layout = new List<ComponentFieldLayout>(fields.Length);
+        if (fields.Length == 0)
+        {
+            // A tag: no storage natively (size 0, no reflection), whatever the 1-byte managed placeholder says.
+            size = 0;
+            return layout;
+        }
         int cursor = 0;
         int structAlignment = 1;
         foreach (FieldInfo field in fields)
         {
-            if (!TryDescribe(field.FieldType, out string typeName, out byte kind, out int fieldSize))
+            if (!TryDescribe(field.FieldType, out string typeName, out byte kind, out int fieldSize, out int naturalAlignment))
             {
                 throw new InvalidOperationException(
                     structType.FullName + "." + field.Name + " has a type that cannot be mirrored: " + field.FieldType.Name);
             }
-            int alignment = Math.Min(AlignmentOfKind(kind), pack);
+            int alignment = Math.Min(naturalAlignment, pack);
             int offset;
             if (layoutKind == LayoutKind.Explicit)
             {
@@ -166,9 +261,9 @@ public static class LayoutHash
             }
             cursor = Math.Max(cursor, offset + fieldSize);
             structAlignment = Math.Max(structAlignment, alignment);
-            if (!field.Name.StartsWith("Pad", StringComparison.Ordinal))
+            if (!IsPaddingName(field.Name))
             {
-                layout.Add(new ComponentFieldLayout(NativeName(field.Name), typeName, kind, offset, fieldSize));
+                layout.Add(new ComponentFieldLayout(NativeName(field.Name), typeName, kind, offset, fieldSize, alignment));
             }
         }
 
@@ -188,6 +283,26 @@ public static class LayoutHash
     }
 
     /// <summary>
+    /// True for the padding fields excluded from the layout (R61): "Pad" followed by digits only, so a real
+    /// field such as character_controller.padding keeps its place in the hash.
+    /// </summary>
+    public static bool IsPaddingName(string fieldName)
+    {
+        if (fieldName.Length < 4 || !fieldName.StartsWith("Pad", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        for (int index = 3; index < fieldName.Length; ++index)
+        {
+            if (fieldName[index] < '0' || fieldName[index] > '9')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Unsafe.SizeOf&lt;T&gt;() of a struct named at runtime: the size sizeof(T) and Span&lt;T&gt; use.
     /// </summary>
     public static int ManagedSizeOf(Type structType)
@@ -203,7 +318,7 @@ public static class LayoutHash
     {
         return kind switch
         {
-            KindI64 or KindU64 or KindF64 or KindUuid or KindEntity => 8,
+            KindI64 or KindU64 or KindF64 or KindStringId or KindUuid or KindEntity or KindAssetRef => 8,
             KindI16 or KindU16 => 2,
             KindBool or KindI8 or KindU8 => 1,
             _ => 4,
@@ -243,7 +358,7 @@ public static class LayoutHash
         int alignment = 1;
         foreach (ComponentFieldLayout field in layout)
         {
-            int fieldAlignment = AlignmentOfKind(field.Kind);
+            int fieldAlignment = field.Alignment;
             if (fieldAlignment > alignment)
             {
                 alignment = fieldAlignment;

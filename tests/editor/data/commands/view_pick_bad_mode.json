@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.pick",
+    "args": {
+      "x": 0.5,
+      "y": 0.5,
+      "mode": "laser"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

@@ -5,6 +5,7 @@
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -34,7 +35,7 @@ namespace conjure::assets {
     /// <summary>
     /// Imports .bin / .dat / .bytes / .raw files verbatim.
     /// </summary>
-    class binary_importer final : public asset_importer {
+    class CONJURE_API binary_importer final : public asset_importer {
         public:
             static constexpr std::string_view ID = "conjure.assets.binary";
             static constexpr u32 VERSION = 1;
@@ -53,7 +54,7 @@ namespace conjure::assets {
     /// <summary>
     /// Copies the payload bytes; finalise is trivial. The fallback is an empty asset.
     /// </summary>
-    class binary_loader final : public typed_asset_loader<binary_asset, binary_asset> {
+    class CONJURE_API binary_loader final : public typed_asset_loader<binary_asset, binary_asset> {
         public:
             binary_loader();
             ~binary_loader() override;
@@ -73,7 +74,7 @@ namespace conjure::assets {
     /// <summary>
     /// Registers the type and, when a registry is given, the importer.
     /// </summary>
-    [[nodiscard]] core::result<void> register_binary_asset_type(
+    [[nodiscard]] CONJURE_API core::result<void> register_binary_asset_type(
       asset_type_registry &types,
       importer_registry *importers = nullptr
     );

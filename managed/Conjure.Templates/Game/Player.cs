@@ -32,7 +32,9 @@ public sealed class Player : ScriptBehaviour
 
     protected override void OnStart()
     {
-        Transform.Position = Spawn;
+        // Transform is a readonly struct returned by value: copy it to a local before writing a property.
+        Transform transform = Transform;
+        transform.Position = Spawn;
     }
 
     protected override void OnUpdate(float deltaTime)
@@ -59,7 +61,8 @@ public sealed class Player : ScriptBehaviour
             return;
         }
         Vector3 step = Vector3.Normalize(direction) * Speed * deltaTime;
-        Transform.Position += step;
+        Transform transform = Transform;
+        transform.Position += step;
         _distance += step.Length();
     }
 

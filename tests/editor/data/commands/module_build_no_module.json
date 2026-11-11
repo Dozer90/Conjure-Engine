@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.build",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "NOT_AVAILABLE"
+    }
+  }
+}

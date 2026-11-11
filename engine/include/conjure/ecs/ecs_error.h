@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -45,7 +46,7 @@ namespace conjure::ecs {
     /// <summary>
     /// The stable upper-case enumerator name of a code ("ENTITY_NOT_ALIVE"); "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view ecs_error_name(ecs_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view ecs_error_name(ecs_error code) noexcept;
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::ecs::ecs_error, "ecs", conjure::ecs::ecs_error_name);

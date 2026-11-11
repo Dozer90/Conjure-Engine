@@ -2,6 +2,7 @@
 
 #include "conjure/audio/audio_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
 
@@ -70,5 +71,5 @@ namespace conjure::audio {
     /// <summary>
     /// Clamp rule of A15 for group gains: [0, 2], NaN becomes 1.
     /// </summary>
-    [[nodiscard]] f32 clamp_group_gain(f32 gain) noexcept;
+    [[nodiscard]] CONJURE_API f32 clamp_group_gain(f32 gain) noexcept;
 }

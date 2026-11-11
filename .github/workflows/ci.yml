@@ -1,3 +1,7 @@
+# Pull-request matrix (docs/design/08_testing.md 7.3 and D15, docs/handbook/ci.md): five build-and-test legs
+# with the presets developers use locally plus the style-and-headers job. Expensive and noisy checks (TSan,
+# golden images, benchmarks, the Distribution export) run in nightly.yml.
+
 name: CI
 
 on:
@@ -5,14 +9,27 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repository: checkout, the caches and the artefact uploads need read access only.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request supersedes the running check; every push to main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Skips of these labels are expected on pull requests (golden images are nightly only). Skips by case-name
+  # tag are allowed per leg through skip-tags below (08_testing.md D12): [window] and [downloaded] everywhere,
+  # [audio_device] everywhere (the runners have no playback endpoint), [gpu] where the D3D12 WARP adapter does
+  # not exist (Linux, macOS); on Windows a [gpu] skip means WARP is missing and fails the leg.
+  CONJURE_TEST_ALLOWED_SKIPS: golden
 
 jobs:
   build-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -20,36 +37,46 @@ jobs:
           - name: windows-msvc-debug
             os: windows-latest
             preset: windows-msvc-debug
+            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device
           - name: windows-msvc-dev
             os: windows-latest
             preset: windows-msvc-dev
+            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device
+            export-smoke: true
           - name: linux-gcc-debug
             os: ubuntu-24.04
             preset: linux-gcc-debug
+            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
           - name: linux-clang-sanitize
             os: ubuntu-24.04
             preset: linux-clang-sanitize
+            # D13: CoreCLR is not sanitizer-clean; scripting is covered by the other legs.
+            configure-args: -DCONJURE_WITH_SCRIPTING=OFF
+            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
           - name: macos-debug
             os: macos-14
             preset: macos-debug
-          - name: windows-msvc-dist
-            os: windows-latest
-            preset: windows-msvc-dist
-            build-only: true
+            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -67,15 +94,131 @@ jobs:
           path: build/${{ matrix.preset }}/_deps
           key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
 
+      - name: Cache downloaded test assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/.downloaded
+            tests/.assets_ready
+          key: test-assets-${{ hashFiles('tools/test_assets.json') }}
+
+      - name: Download test assets
+        run: python tools/download_test_assets.py
+
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
 
       - name: Test
-        if: ${{ !matrix.build-only }}
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} --output-junit junit.xml
+
+      # --no-tests=error: a label run that matches nothing is a broken registration, not a pass. The report of this
+      # run goes through the skip check as well, so a [process] or [downloaded] case that exits 77 is examined.
+      - name: Downloaded-asset and process tests
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: >
+          ctest --test-dir build/${{ matrix.preset }} --output-on-failure -L "downloaded|process"
+          --no-tests=error --output-junit junit_labels.xml
+
+      - name: Check skips
+        run: >
+          python tools/ctest_check_skips.py --build-dir build/${{ matrix.preset }}
+          --junit build/${{ matrix.preset }}/junit.xml --junit build/${{ matrix.preset }}/junit_labels.xml
+          ${{ matrix.skip-tags }}
+
+      # The Development leg exports a project with the editor and boots the result with the runtime for 120
+      # frames (ARCHITECTURE.md 11 "Wave 4 exit"). tests/assets/projects/minimal stands in for
+      # samples/feature_test until wave 5 lands the sample; the project is copied first because the asset
+      # database writes .meta sidecars and its cache next to the sources.
+      - name: Export smoke
+        if: matrix.export-smoke
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse tests/assets/projects/minimal build/export_smoke_project
+          build/${{ matrix.preset }}/bin/conjure_editor.exe --headless --project build/export_smoke_project `
+            --export build/export_smoke_out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          build/${{ matrix.preset }}/bin/conjure_runtime.exe --project build/export_smoke_out --headless --frames 120
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.name }}
+          path: |
+            build/${{ matrix.preset }}/junit.xml
+            build/${{ matrix.preset }}/junit_labels.xml
+            build/${{ matrix.preset }}/test_output
+          if-no-files-found: ignore
+
+  style-and-headers:
+    name: style-and-headers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev clang-format-18
+
+      - name: Style
+        run: python tools/check_style.py --tests-mirror-headers
+
+      - name: Export annotations
+        run: |
+          python tools/check_exports.py
+          python tools/check_exports.py --self-test
+
+      - name: Tool self-tests
+        run: |
+          python tools/check_distribution_symbols.py --self-test
+          python tools/ctest_check_skips.py --self-test
+
+      - name: Documentation
+        run: |
+          python tools/check_docs.py
+          python tools/tests/test_check_docs.py
+          python -m pip install -r tools/docs_requirements.txt
+          python -m mkdocs build --strict
+
+      # .clang-format approximates docs/CODE_STYLE.cpp (the two-space continuation indent cannot be expressed), so
+      # the formatter is advisory until the tree has been reconciled with it; the step reports, the job stays green.
+      - name: clang-format (advisory)
+        continue-on-error: true
+        run: |
+          git ls-files 'engine/*.cpp' 'engine/*.h' 'editor/*.cpp' 'runtime/*.cpp' 'tests/*.cpp' 'tests/*.h' \
+            | xargs clang-format-18 --dry-run -Werror
+
+      - name: dotnet format (advisory)
+        continue-on-error: true
+        run: dotnet format --verify-no-changes managed/Conjure.Managed/Conjure.Managed.csproj
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/linux-gcc-debug/_deps
+          key: deps-style-and-headers-${{ hashFiles('third_party/CMakeLists.txt') }}
+
+      - name: Header check
+        run: |
+          cmake --preset linux-gcc-debug
+          cmake --build --preset linux-gcc-debug --parallel --target conjure_header_check

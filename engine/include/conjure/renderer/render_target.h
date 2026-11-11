@@ -4,6 +4,7 @@
 
 #include "conjure/rhi/texture_format.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -25,7 +26,7 @@ namespace conjure::renderer {
         [[nodiscard]] bool operator==(const render_target_desc &other) const noexcept = default;
     };
 
-    class render_target {
+    class CONJURE_API render_target {
         public:
             /// <summary>
             /// The private state (engine/src/renderer/render_target_impl.h), reachable through renderer_access.
@@ -73,5 +74,5 @@ namespace conjure::renderer {
     /// True for the colour formats a render target may use: RGBA8_UNORM, RGBA8_SRGB, BGRA8_SRGB,
     /// RGBA16_FLOAT and R11G11B10_FLOAT.
     /// </summary>
-    [[nodiscard]] bool is_render_target_colour_format(rhi::texture_format format) noexcept;
+    [[nodiscard]] CONJURE_API bool is_render_target_colour_format(rhi::texture_format format) noexcept;
 }

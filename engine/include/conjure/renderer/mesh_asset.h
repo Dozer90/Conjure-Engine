@@ -4,6 +4,7 @@
 
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -34,21 +35,21 @@ namespace conjure::renderer {
     /// <summary>
     /// Packs a value in [-1, 1] into a 16-bit signed normalised integer (D3D/Vulkan SNORM rules).
     /// </summary>
-    [[nodiscard]] i16 pack_snorm16(f32 value) noexcept;
-    [[nodiscard]] f32 unpack_snorm16(i16 value) noexcept;
+    [[nodiscard]] CONJURE_API i16 pack_snorm16(f32 value) noexcept;
+    [[nodiscard]] CONJURE_API f32 unpack_snorm16(i16 value) noexcept;
 
     /// <summary>
     /// IEEE 754 half precision conversion (round to nearest even; out-of-range values saturate to
     /// infinity, NaN stays NaN).
     /// </summary>
-    [[nodiscard]] u16 pack_half(f32 value) noexcept;
-    [[nodiscard]] f32 unpack_half(u16 value) noexcept;
+    [[nodiscard]] CONJURE_API u16 pack_half(f32 value) noexcept;
+    [[nodiscard]] CONJURE_API f32 unpack_half(u16 value) noexcept;
 
     /// <summary>
     /// Packs a colour with components in [0, 1] into RGBA8 (red in the low byte).
     /// </summary>
-    [[nodiscard]] u32 pack_rgba8(const math::vec4 &colour) noexcept;
-    [[nodiscard]] math::vec4 unpack_rgba8(u32 packed) noexcept;
+    [[nodiscard]] CONJURE_API u32 pack_rgba8(const math::vec4 &colour) noexcept;
+    [[nodiscard]] CONJURE_API math::vec4 unpack_rgba8(u32 packed) noexcept;
 
     /// <summary>
     /// Stream 1 of a vertex (32 bytes).
@@ -70,7 +71,7 @@ namespace conjure::renderer {
     /// Packs one vertex's attributes. The normal and tangent are normalised first (a zero vector
     /// packs to +Z / +X); 'tangentSign' is the handedness stored in the normal's w.
     /// </summary>
-    [[nodiscard]] packed_vertex_attributes pack_vertex_attributes(
+    [[nodiscard]] CONJURE_API packed_vertex_attributes pack_vertex_attributes(
       const math::vec3 &normal,
       const math::vec3 &tangent,
       f32 tangentSign,
@@ -122,7 +123,7 @@ namespace conjure::renderer {
         std::span<const u32> indices = {};
     };
 
-    class mesh_asset {
+    class CONJURE_API mesh_asset {
         private:
             mesh_streams mStreams = {};
             std::vector<submesh> mSubmeshes = {};
@@ -226,7 +227,7 @@ namespace conjure::renderer {
     /// The conjure.renderer.mesh loader: parses the blob on the load job, finalise is trivial, the
     /// fallback is the unit cube.
     /// </summary>
-    class mesh_loader final : public assets::typed_asset_loader<mesh_asset, mesh_asset> {
+    class CONJURE_API mesh_loader final : public assets::typed_asset_loader<mesh_asset, mesh_asset> {
         public:
             mesh_loader();
             ~mesh_loader() override;

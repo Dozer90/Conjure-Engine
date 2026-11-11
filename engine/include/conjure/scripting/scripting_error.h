@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -35,7 +36,7 @@ namespace conjure::scripting {
     /// <summary>
     /// The enumerator name of a code ("ABI_MISMATCH"); "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view script_error_name(script_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view script_error_name(script_error code) noexcept;
 
     /// <summary>
     /// The negative status a native table entry returns for this error (-code).

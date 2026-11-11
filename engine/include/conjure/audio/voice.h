@@ -3,6 +3,7 @@
 #include "conjure/audio/audio_types.h"
 #include "conjure/audio/mix_groups.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/slot_map.h"
 #include "conjure/core/types.h"
 
@@ -83,14 +84,14 @@ namespace conjure::audio {
     /// minDistance >= 0.01, maxDistance >= minDistance, rolloff [0, 10], startSeconds >= 0; NaN
     /// becomes the field's default.
     /// </summary>
-    [[nodiscard]] play_params clamp_play_params(const play_params &params) noexcept;
+    [[nodiscard]] CONJURE_API play_params clamp_play_params(const play_params &params) noexcept;
 
     /// <summary>
     /// Individual clamp helpers shared by play_params and the engine setters.
     /// </summary>
-    [[nodiscard]] f32 clamp_volume(f32 volume) noexcept;
-    [[nodiscard]] f32 clamp_pitch(f32 pitch) noexcept;
-    [[nodiscard]] f32 clamp_pan(f32 pan) noexcept;
+    [[nodiscard]] CONJURE_API f32 clamp_volume(f32 volume) noexcept;
+    [[nodiscard]] CONJURE_API f32 clamp_pitch(f32 pitch) noexcept;
+    [[nodiscard]] CONJURE_API f32 clamp_pan(f32 pan) noexcept;
 
     /// <summary>
     /// Main-thread mirror of a voice, refreshed by audio_engine::update() and end_frame().

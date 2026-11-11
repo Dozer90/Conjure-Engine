@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.quit",
+    "args": {
+      "exitCode": 0
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "exitCode": 0
+    }
+  }
+}

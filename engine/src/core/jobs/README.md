@@ -40,9 +40,13 @@ message; every consumer of the umbrella header inherits the requirement.
   The pool starts at 16 blocks and doubles up to `maxQueuedJobs`; `stats().poolGrowths` counts the
   growths since `start()`, which lets tests assert that steady-state dispatch allocates nothing.
 - **Workers.** `workerCount` threads named `<prefix>-<index>` (`SetThreadDescription` on Windows,
-  `pthread_setname_np` elsewhere, in `thread_name.cpp`). An idle worker re-checks the queue a
-  bounded number of times with `yield()` and then sleeps on a condition variable. `thread_index()`
-  and `current()` are `thread_local`s set by the worker on entry (0 / `nullptr` everywhere else).
+  `pthread_setname_np` elsewhere, in `thread_name.cpp`). `start()` prepares the names in the OS
+  encoding (`detail::prepared_thread_name`) before creating the threads and returns only after every
+  worker has named itself and entered the queue loop, so a worker allocates nothing once `start()`
+  has returned and an allocation gate opened right after it is never charged a worker prologue. An
+  idle worker re-checks the queue a bounded number of times with `yield()` and then sleeps on a
+  condition variable. `thread_index()` and `current()` are `thread_local`s set by the worker on
+  entry (0 / `nullptr` everywhere else).
 - **Inline execution.** With zero workers, before `start()`, after `stop()`, or when the queue is
   full, the scheduling thread runs the job itself before `schedule` returns; the handle is then
   already complete. Workers of a stopping system may still queue (they drain their own work), so a

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/math/aabb.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/result.h"
@@ -46,7 +47,7 @@ namespace conjure::physics {
     /// Triangle geometry for mesh and convex colliders. Values are validated on construction: every
     /// index is in range, the index count is a multiple of three and degenerate triangles are dropped.
     /// </summary>
-    class collision_mesh_asset {
+    class CONJURE_API collision_mesh_asset {
         private:
             std::vector<math::vec3> mPositions = {};
             std::vector<u32> mIndices = {};

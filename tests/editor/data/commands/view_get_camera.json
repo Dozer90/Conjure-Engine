@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.get_camera",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "mode": "3d"
+    }
+  }
+}

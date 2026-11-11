@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_handle.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -78,7 +79,7 @@ namespace conjure::core::jobs {
     /// executes queued jobs on the waiting thread, so waiting from inside a job never deadlocks.
     /// Not copyable or movable: workers hold the address of the system.
     /// </summary>
-    class job_system {
+    class CONJURE_API job_system {
         private:
             class state;
 
@@ -95,8 +96,11 @@ namespace conjure::core::jobs {
 
         public:
             /// <summary>
-            /// Creates desc.workerCount named worker threads. Fails with INVALID_STATE when already
-            /// running and with INVALID_ARGUMENT for a queue capacity of zero or above
+            /// Creates desc.workerCount named worker threads and returns once every one of them is
+            /// running and waiting for work. The thread names are prepared on the calling thread, so
+            /// a worker allocates nothing from the moment start() returns: an allocation gate opened
+            /// right after start() is never charged a worker's start-up. Fails with INVALID_STATE
+            /// when already running and with INVALID_ARGUMENT for a queue capacity of zero or above
             /// MAX_QUEUED_JOBS, a worker count above MAX_WORKER_COUNT or a null/empty thread name
             /// prefix. Statistics are reset.
             /// </summary>

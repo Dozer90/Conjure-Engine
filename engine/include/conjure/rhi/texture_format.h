@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -152,11 +153,11 @@ namespace conjure::rhi {
     /// <summary>
     /// The enumerator name of a format ("RGBA8_SRGB"); "UNKNOWN" for UNKNOWN and out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(texture_format format) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(texture_format format) noexcept;
 
     /// <summary>
     /// Parses an enumerator name case-insensitively. Fails with core::error_code::INVALID_ARGUMENT
     /// for anything that is not a format name; "UNKNOWN" parses to UNKNOWN.
     /// </summary>
-    [[nodiscard]] core::result<texture_format> parse_texture_format(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API core::result<texture_format> parse_texture_format(std::string_view name) noexcept;
 }

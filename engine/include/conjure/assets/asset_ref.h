@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_slot.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/reflect/field_info.h"
 #include "conjure/core/reflect/type_id.h"
 #include "conjure/core/types.h"
@@ -25,7 +26,7 @@ namespace conjure::assets {
         /// <summary>
         /// Logs the type mismatch of a typed access once per (uuid, requested type) pair.
         /// </summary>
-        void report_type_mismatch(const asset_id &id, asset_type_id requested, asset_type_id actual);
+        CONJURE_API void report_type_mismatch(const asset_id &id, asset_type_id requested, asset_type_id actual);
     }
 
     /// <summary>
@@ -121,7 +122,7 @@ namespace conjure::assets {
     /// slot, which keeps the payload resident across collect(). Copy and move are atomics; the
     /// handle may be copied, moved and destroyed on any thread.
     /// </summary>
-    class asset_handle {
+    class CONJURE_API asset_handle {
         private:
             asset_slot *mSlot = nullptr;
 

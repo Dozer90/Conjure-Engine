@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.save",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

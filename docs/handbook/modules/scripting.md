@@ -138,8 +138,8 @@ python tools/build.py --build-dir build/<dir> --target conjure_scripting_tests -
 
 - `03_scripting.md` section 3 describes `libnethost` as linked statically everywhere; on MSVC the import library
   is linked instead (section 7).
-- `tests/benchmarks` (`10k_scripts_update_phase` < 2 ms) waits for the benchmarks directory.
-- The C# wiki pages (the API as seen from a script) arrive with the wave-4 bindings.
+- `tests/benchmarks/bench_scripts_update_phase.cpp` (`scripting.update_10k`, `scripting.update_10k_dod`) holds
+  the 2 ms scenario; the C# wiki pages are [The C# API](../../api/bindings/csharp-api.md).
 
 ## Related
 

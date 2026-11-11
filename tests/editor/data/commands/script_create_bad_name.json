@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.create",
+    "args": {
+      "name": "1bad"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

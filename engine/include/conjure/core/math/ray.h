@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/aabb.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/math/plane.h"
@@ -15,7 +16,7 @@ namespace conjure::math {
     /// which the ray is on or inside the shape, or nullopt when it misses; a ray starting inside a
     /// closed volume therefore hits at t = 0.
     /// </summary>
-    struct ray {
+    struct CONJURE_API ray {
         vec3 origin = vec3(0.0f);
         vec3 direction = vec3(0.0f, 0.0f, -1.0f);
 

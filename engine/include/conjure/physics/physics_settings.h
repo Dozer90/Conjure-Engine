@@ -2,6 +2,7 @@
 
 #include "conjure/physics/physics_layers.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/result.h"
@@ -13,7 +14,7 @@
 
 namespace conjure::physics {
 
-    struct physics_settings {
+    struct CONJURE_API physics_settings {
         math::vec3 gravity = math::vec3(0.0f, -9.81f, 0.0f);
         u32 maxBodies = 65536;                  // JPH::PhysicsSystem::Init inMaxBodies; also sizes the record table
         u32 numBodyMutexes = 0;                 // 0 = Jolt default

@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/native_api_hash.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -457,27 +458,27 @@ namespace conjure::scripting {
     /// <summary>
     /// The stable upper-case name of a field kind ("VEC3"); "COUNT" for out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(script_field_kind kind) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(script_field_kind kind) noexcept;
 
     /// <summary>
     /// Parses a name produced by to_string(script_field_kind). COUNT when unknown.
     /// </summary>
-    [[nodiscard]] script_field_kind parse_script_field_kind(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API script_field_kind parse_script_field_kind(std::string_view name) noexcept;
 
     /// <summary>
     /// The upper-case name of a callback ("UPDATE"); "COUNT" for out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(script_callback callback) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(script_callback callback) noexcept;
 
     /// <summary>
     /// Parses a name produced by to_string(script_callback). COUNT when unknown.
     /// </summary>
-    [[nodiscard]] script_callback parse_script_callback(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API script_callback parse_script_callback(std::string_view name) noexcept;
 
     /// <summary>
     /// The upper-case name of a phase ("FIXED_UPDATE"); "COUNT" for out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(script_phase phase) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(script_phase phase) noexcept;
 
     /// <summary>
     /// One row of the table as text, as the generator normalised it: signature is "<return> <arguments>"
@@ -494,42 +495,42 @@ namespace conjure::scripting {
     /// Every entry of native_api.inl in table order; the bindings entries start at
     /// NATIVE_API_CORE_ENTRY_COUNT.
     /// </summary>
-    [[nodiscard]] std::span<const native_entry_descriptor> native_entry_descriptors() noexcept;
+    [[nodiscard]] CONJURE_API std::span<const native_entry_descriptor> native_entry_descriptors() noexcept;
 
     /// <summary>
     /// FNV-1a 64 over "<group>_<name> <signature>\n" per descriptor, the generator's algorithm run at
     /// runtime; equals CONJURE_NATIVE_API_HASH, which proves both implementations agree.
     /// </summary>
-    [[nodiscard]] u64 compute_native_api_hash() noexcept;
+    [[nodiscard]] CONJURE_API u64 compute_native_api_hash() noexcept;
 
     /// <summary>
     /// A fresh table: header filled, every entry nullptr, frame pointing at 'frame' (may be null).
     /// </summary>
-    [[nodiscard]] conjure_native_api make_native_api(const conjure_frame_block *frame) noexcept;
+    [[nodiscard]] CONJURE_API conjure_native_api make_native_api(const conjure_frame_block *frame) noexcept;
 
     /// <summary>
     /// Checks the header (size, version, hash) and that every core entry is filled. ABI_MISMATCH or
     /// NOT_INITIALIZED naming the first missing entry.
     /// </summary>
-    [[nodiscard]] core::result<void> validate_native_api(const conjure_native_api &api);
+    [[nodiscard]] CONJURE_API core::result<void> validate_native_api(const conjure_native_api &api);
 
     /// <summary>
     /// Checks a managed table a host received: size, version, hash and that every function is set.
     /// </summary>
-    [[nodiscard]] core::result<void> validate_managed_api(const conjure_managed_api &api);
+    [[nodiscard]] CONJURE_API core::result<void> validate_managed_api(const conjure_managed_api &api);
 
     /// <summary>
     /// The function pointer slots of a table as an array of void pointers (index = descriptor index).
     /// </summary>
-    [[nodiscard]] std::span<void *const> native_api_slots(const conjure_native_api &api) noexcept;
+    [[nodiscard]] CONJURE_API std::span<void *const> native_api_slots(const conjure_native_api &api) noexcept;
 
     /// <summary>
     /// Mutable form of native_api_slots for fillers that address entries by index.
     /// </summary>
-    [[nodiscard]] std::span<void *> native_api_slots(conjure_native_api &api) noexcept;
+    [[nodiscard]] CONJURE_API std::span<void *> native_api_slots(conjure_native_api &api) noexcept;
 
     /// <summary>
     /// Index of the entry named "<group>_<name>", or -1.
     /// </summary>
-    [[nodiscard]] i32 find_native_entry(std::string_view fullName) noexcept;
+    [[nodiscard]] CONJURE_API i32 find_native_entry(std::string_view fullName) noexcept;
 }

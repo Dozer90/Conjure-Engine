@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/script_runtime.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -19,7 +20,7 @@ namespace conjure::scripting {
         RELOADING       // reload_game_assembly in progress (visible only from inside on_reloaded)
     };
 
-    class hot_reload_controller {
+    class CONJURE_API hot_reload_controller {
         private:
             script_runtime *mRuntime = nullptr;
             std::filesystem::path mAssemblyPath = {};
@@ -113,5 +114,5 @@ namespace conjure::scripting {
     /// <summary>
     /// The upper-case name of a state ("PENDING").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(reload_state state) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(reload_state state) noexcept;
 }

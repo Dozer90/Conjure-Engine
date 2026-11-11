@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/event.h"
 #include "conjure/core/types.h"
 
@@ -25,12 +26,12 @@
 
 namespace conjure::core {
 
-    class event_bus {
+    class CONJURE_API event_bus {
         private:
             /// <summary>
             /// Type-erased owner of one event type's subscriber list.
             /// </summary>
-            class channel_base {
+            class CONJURE_API channel_base {
                 public:
                     channel_base();
                     virtual ~channel_base();

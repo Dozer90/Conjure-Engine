@@ -300,7 +300,7 @@ CONJURE_TEST_WINDOW=1 build/mod_platform/bin/conjure_platform_tests -ts="platfor
 - Exclusive fullscreen with mode switching (`video_modes()` exists for a settings UI), cursor images and shapes,
   window icons, clipboard images and file lists, IME composition, touch and pen, gamepad rumble: `11_platform.md` 11.
 - `tests/benchmarks/bench_platform.cpp` (10,000 injected events under 50 us, snapshot copy under 0.2 us) is listed
-  in the design's plan and not yet in the tree.
+  in the design's plan and not yet in the tree; the harness itself exists ([Testing](../testing.md#11-benchmarks)).
 
 ## Related
 

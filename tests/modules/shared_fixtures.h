@@ -36,6 +36,24 @@ namespace conjure::modules::testing {
         return module_binary_path(manifest, fixture_directory(name), host_binary_triplet());
     }
 
+    /// <summary>
+    /// The module_surface fixture (tests/modules/fixtures/module_surface) is built into its own root,
+    /// CONJURE_TEST_SURFACE_MODULE_DIR/module_surface/, so discover() over fixture_root() never sees it.
+    /// </summary>
+    inline std::filesystem::path surface_fixture_directory() {
+        return std::filesystem::path(CONJURE_TEST_SURFACE_MODULE_DIR) / "module_surface";
+    }
+
+    inline std::filesystem::path surface_fixture_manifest() {
+        return surface_fixture_directory() / MODULE_MANIFEST_FILE_NAME;
+    }
+
+    inline std::filesystem::path surface_fixture_binary() {
+        module_manifest manifest = {};
+        manifest.binary = "module_surface";
+        return module_binary_path(manifest, surface_fixture_directory(), host_binary_triplet());
+    }
+
     inline module_manager_desc shared_desc() noexcept {
         module_manager_desc desc = {};
         desc.host = module_host_kind::TEST;

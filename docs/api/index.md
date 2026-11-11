@@ -23,10 +23,12 @@ to where a sibling exists).
 | Rendering | the renderer with 2D and 3D pipelines, render targets, the renderer's asset types and the glTF importer | [Renderer pages](#renderer-pages) |
 | Physics | rigid bodies and colliders, the character controller, layers, contacts and queries over Jolt | [Physics pages](#physics-pages) |
 | Scripting | the .NET host, the script runtime and components, hot reload and the managed build | [Scripting pages](#scripting-pages) |
-| C# API | the API as you see it from a script (`Entity`, `Transform`, `Input`, ...) | wave 4 pages |
-| Editor and AI protocol | the editor, and the command protocol agents use to drive it | wave 5 pages |
+| Engine | the application that owns every module, configuration and `project.json`, the frame, layers, export | [Engine pages](#engine-pages) |
+| C# API | the API as you see it from a script (`Entity`, `Transform`, `Physics`, `Input`, ...) and the native table behind it | [Bindings pages](#bindings-pages) |
+| Editor and AI protocol | the editor, headless mode, and the command protocol agents use to drive it | [Editor pages](#editor-pages) |
+| Runtime | the standalone `conjure_runtime` executable that runs an exported game | [Runtime page](#runtime-page) |
 
-Pages for later waves appear here as their modules land; the pages for waves 1 to 3 below are complete.
+The pages for waves 1 to 4 below are complete; the sample projects of wave 5 add pages here when they land.
 
 ## How the pages are organised
 
@@ -162,6 +164,38 @@ Start with the overview; it gives the mental model in five sentences and a table
 | [Scripting](scripting/index.md) | hosts, the runtime, the script component, modes and phases, the field blob |
 | [Scripts, components and the runtime](scripting/scripts-and-components.md) | `add_script`, fields, play and edit modes, the phases and the six systems, destruction, the class registry, DOD query scopes |
 | [Hosting, the native API and hot reload](scripting/hosting-and-hot-reload.md) | the CLR host and the null host, the managed directory, the two ABI tables and their hash, `hot_reload_controller`, `managed_build_runner` |
+
+## Engine pages
+
+| Page | Covers |
+|---|---|
+| [Engine: the application and the frame](engine/index.md) | the mental model (one `application`, subsystems, phases, layers), the startup order, which page to read for what |
+| [Running the engine](engine/running-the-engine.md) | `engine_config` and the settings structs, `project.json`, the command line, `application_desc::from_command_line`, `application` create / initialise / run / shutdown, `engine_context`, exit codes |
+| [The frame, layers and time](engine/frame-layers-and-time.md) | the frame steps, the fixed step and interpolation, `engine_time`, `frame_stats`, `frame_memory`, `layer` and `layer_stack`, `engine_subsystem`, pause and single-step |
+| [Export and diagnostics](engine/export-and-diagnostics.md) | `export_pipeline`, the exported folder, `check_registry`, render-failure handling, the engine's log category |
+
+## Bindings pages
+
+| Page | Covers |
+|---|---|
+| [Scripting from C#: the bindings](bindings/index.md) | what the bindings add to the scripting module, the status protocol, what a script may call where |
+| [The C# API](bindings/csharp-api.md) | `Entity`, `Transform`, `Scene`, `Prefab`, `Rigidbody`, `CharacterController`, `Physics`, `AudioSource`, `Audio`, `Input`, `AssetRef<T>`, `Diagnostics`, the `[NativeComponent]` mirrors |
+| [The native table](bindings/native-table.md) | `scripting_bindings_subsystem`, `fill_native_table`, `bindings_error`, call counters, structural routing inside query scopes, adding an entry |
+
+## Editor pages
+
+| Page | Covers |
+|---|---|
+| [The editor](editor/index.md) | the two libraries and the executable, the command line, headless and windowed modes, where to go next |
+| [The AI control protocol](editor/ai-protocol.md) | the NDJSON protocol over TCP, stdio and the loopback, requests, responses, events, error codes, the command groups, `editor.schema` |
+| [Headless mode and the command model](editor/headless-and-commands.md) | `editor_application`, `editor_options`, `headless_runner` and `--exec`, `command_dispatcher`, undo, play mode, picking, screenshots, `editor_context` |
+| [The workspace UI](editor/workspace-ui.md) | `editor_layer`, `editor_workspace`, the panels, `editor_panel`, `property_drawer`, gizmos, layouts |
+
+## Runtime page
+
+| Page | Covers |
+|---|---|
+| [The runtime](runtime/index.md) | `conjure_runtime` command line, exit codes, what an exported folder contains, Distribution builds |
 
 ## Cross-cutting
 

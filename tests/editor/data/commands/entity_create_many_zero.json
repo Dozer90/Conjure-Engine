@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.create_many",
+    "args": {
+      "count": 0
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

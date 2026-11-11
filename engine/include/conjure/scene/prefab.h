@@ -6,6 +6,7 @@
 
 #include "conjure/assets/asset_ref.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
@@ -81,7 +82,7 @@ namespace conjure::scene {
         /// <summary>
         /// Captures the subtree as a prefab document (external references become null, single root).
         /// </summary>
-        [[nodiscard]] core::result<prefab_document> build_document(
+        [[nodiscard]] CONJURE_API core::result<prefab_document> build_document(
           const scene &source,
           ecs::entity root,
           std::string_view name
@@ -91,7 +92,7 @@ namespace conjure::scene {
         /// Marks a subtree as an instance of 'asset': prefab_instance on the root, prefab_link with the
         /// current guid on every entity (guids are generated where missing).
         /// </summary>
-        [[nodiscard]] core::result<void> mark_instance(
+        [[nodiscard]] CONJURE_API core::result<void> mark_instance(
           scene &target,
           ecs::entity root,
           assets::asset_ref<prefab_asset> asset
@@ -110,7 +111,7 @@ namespace conjure::scene {
         /// <summary>
         /// 'count' instances in one batch; outRoots receives the roots in order.
         /// </summary>
-        [[nodiscard]] core::result<void> instantiate_many(
+        [[nodiscard]] CONJURE_API core::result<void> instantiate_many(
           scene &target,
           const prefab_asset &asset,
           u32 count,
@@ -121,44 +122,48 @@ namespace conjure::scene {
         /// <summary>
         /// The nearest ancestor (the entity included) carrying prefab_instance, or NULL_ENTITY.
         /// </summary>
-        [[nodiscard]] ecs::entity instance_root_of(const scene &source, ecs::entity entity) noexcept;
+        [[nodiscard]] CONJURE_API ecs::entity instance_root_of(const scene &source, ecs::entity entity) noexcept;
 
         /// <summary>
         /// Compares the instance with its loaded asset entry by entry (matched through prefab_link).
         /// NOT_A_PREFAB_INSTANCE, PREFAB_NOT_LOADED.
         /// </summary>
-        [[nodiscard]] core::result<prefab_diff> diff(const scene &source, ecs::entity root);
+        [[nodiscard]] CONJURE_API core::result<prefab_diff> diff(const scene &source, ecs::entity root);
 
         /// <summary>
         /// Replaces the instance with a fresh one at the same place, keeping the root's guid, name and
         /// local transform. NOT_A_PREFAB_INSTANCE, PREFAB_NOT_LOADED.
         /// </summary>
-        [[nodiscard]] core::result<void> revert(scene &target, ecs::entity root);
+        [[nodiscard]] CONJURE_API core::result<void> revert(scene &target, ecs::entity root);
 
         /// <summary>
         /// The instance as a new prefab document: prefab_link guids become entry guids (fresh ones for
         /// new entities) and the root loses its prefab_instance. NOT_A_PREFAB_INSTANCE.
         /// </summary>
-        [[nodiscard]] core::result<prefab_document> apply(const scene &source, ecs::entity root);
+        [[nodiscard]] CONJURE_API core::result<prefab_document> apply(const scene &source, ecs::entity root);
 
         /// <summary>
         /// Reverts every instance of the prefab (only the unmodified ones by default). Returns how
         /// many were reverted.
         /// </summary>
-        [[nodiscard]] u32 refresh_instances(scene &target, const assets::asset_id &prefab, bool onlyUnmodified = true);
+        [[nodiscard]] CONJURE_API u32 refresh_instances(
+          scene &target,
+          const assets::asset_id &prefab,
+          bool onlyUnmodified = true
+        );
 
         /// <summary>
         /// Removes the prefab markers of the subtree, stopping at nested instance roots unless
         /// recursive. NOT_A_PREFAB_INSTANCE.
         /// </summary>
-        [[nodiscard]] core::result<void> unpack(scene &target, ecs::entity root, bool recursive = false);
+        [[nodiscard]] CONJURE_API core::result<void> unpack(scene &target, ecs::entity root, bool recursive = false);
     }
 
     /// <summary>
     /// Builds a prefab document node by node without naming any component type (3.13): the engine's
     /// model converter adds renderer components by registered name.
     /// </summary>
-    class prefab_builder {
+    class CONJURE_API prefab_builder {
         public:
             static constexpr u32 NO_PARENT = 0xFFFFFFFFu;
 

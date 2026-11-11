@@ -1,0 +1,12 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.wait_frames",
+    "args": {
+      "frames": 2
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

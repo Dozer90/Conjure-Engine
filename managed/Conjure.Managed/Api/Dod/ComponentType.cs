@@ -57,16 +57,19 @@ public static unsafe class ComponentType<T> where T : unmanaged
                 return 0;
             }
             List<ComponentFieldLayout> layout;
+            int size;
             try
             {
-                layout = LayoutHash.Describe(typeof(T));
+                layout = LayoutHash.Describe(typeof(T), out size);
             }
             catch (InvalidOperationException exception)
             {
                 NativeBridge.Log(LogLevel.Error, "[NativeComponent] " + typeof(T).FullName + ": " + exception.Message);
                 return 0;
             }
-            return api->ComponentLookupType(NameHash.Fnv1a64(mirror.RegisteredName), (uint)sizeof(T), LayoutHash.Compute(layout));
+            // A tag mirror (no fields) matches a native tag: size 0 and no reflected layout (hash 0).
+            ulong layoutHash = layout.Count == 0 ? 0UL : LayoutHash.Compute(layout);
+            return api->ComponentLookupType(NameHash.Fnv1a64(mirror.RegisteredName), (uint)size, layoutHash);
         }
         if (typeof(T).GetCustomAttribute<EcsComponentAttribute>() != null)
         {

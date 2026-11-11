@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "reflection.asset_types",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

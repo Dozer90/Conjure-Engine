@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.create",
+    "args": {
+      "path": "${project}",
+      "name": "Dup"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

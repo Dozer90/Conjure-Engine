@@ -2,6 +2,7 @@
 
 #include "conjure/scene/scene.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -20,7 +21,7 @@ namespace conjure::scene {
     /// <summary>
     /// Everything needed to put a scene back the way it was. Move-only; owns its bytes.
     /// </summary>
-    struct scene_snapshot {
+    struct CONJURE_API scene_snapshot {
         ecs::entity_archive archive;                   // no default: bound to the registry in the constructor
         std::vector<u32> rootEntries = {};             // archive indices of the roots, in root order
         std::vector<scene_id> rootOwners = {};         // parallel to rootEntries
@@ -47,11 +48,11 @@ namespace conjure::scene {
     /// <summary>
     /// Captures every entity of the tree, the root order and owners, the settings and the name.
     /// </summary>
-    [[nodiscard]] core::result<scene_snapshot> capture(const scene &source);
+    [[nodiscard]] CONJURE_API core::result<scene_snapshot> capture(const scene &source);
 
     /// <summary>
     /// Clears the scene and instantiates the snapshot with kept guids, restores settings, name, root
     /// order and owners and binds asset references. On failure the scene is left empty.
     /// </summary>
-    [[nodiscard]] core::result<void> restore(scene &target, const scene_snapshot &snapshot);
+    [[nodiscard]] CONJURE_API core::result<void> restore(scene &target, const scene_snapshot &snapshot);
 }

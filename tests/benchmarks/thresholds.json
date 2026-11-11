@@ -1,0 +1,103 @@
+{
+    "version": 1,
+    "scenarios": {
+        "core.job_parallel_for_1m": {
+            "desktop": { "p50_ms": 0.50 },
+            "ci": { "p50_ms": 1.50 },
+            "allocs": 0
+        },
+        "ecs.iterate_100k": {
+            "desktop": { "p50_ms": 0.15 },
+            "ci": { "p50_ms": 0.45 },
+            "allocs": 0
+        },
+        "ecs.spawn_destroy_10k": {
+            "desktop": { "p50_ms": 1.00 },
+            "ci": { "p50_ms": 3.00 },
+            "allocs": 2
+        },
+        "ecs.query_changed_10k": {
+            "desktop": { "p50_ms": 0.05 },
+            "ci": { "p50_ms": 0.15 },
+            "allocs": 0
+        },
+        "scene.transform_propagation_10k": {
+            "desktop": { "p50_ms": 0.40 },
+            "ci": { "p50_ms": 1.20 },
+            "allocs": 0
+        },
+        "scene.transform_propagation_10k_sparse": {
+            "desktop": { "p50_ms": 0.10 },
+            "ci": { "p50_ms": 0.30 },
+            "allocs": 0
+        },
+        "scene.snapshot_capture_restore_10k": {
+            "desktop": { "p50_ms": 50.0 },
+            "ci": { "p50_ms": 150.0 }
+        },
+        "scene.load_10k": {
+            "desktop": { "p50_ms": 250.0 },
+            "ci": { "p50_ms": 750.0 }
+        },
+        "physics.step_10k_active": {
+            "desktop": { "p50_ms": 8.00 },
+            "ci": { "p50_ms": 24.0 },
+            "allocs": 0
+        },
+        "physics.step_10k_sleeping": {
+            "desktop": { "p50_ms": 0.80 },
+            "ci": { "p50_ms": 2.40 },
+            "allocs": 0
+        },
+        "physics.sync_10k": {
+            "desktop": { "p50_ms": 0.30 },
+            "ci": { "p50_ms": 0.90 },
+            "allocs": 0
+        },
+        "physics.step_2k_settling": {
+            "desktop": { "p50_ms": 3.00 },
+            "ci": { "p50_ms": 9.00 },
+            "allocs": 0
+        },
+        "renderer.extract_10k": {
+            "desktop": { "p50_ms": 1.00 },
+            "ci": { "p50_ms": 3.00 },
+            "allocs": 0
+        },
+        "renderer.null_frame_10k": {
+            "desktop": { "p50_ms": 3.00 },
+            "ci": { "p50_ms": 9.00 },
+            "allocs": 0
+        },
+        "scripting.update_10k": {
+            "desktop": { "p50_ms": 2.50 },
+            "ci": { "p50_ms": 7.50 },
+            "allocs": 0
+        },
+        "scripting.update_10k_dod": {
+            "desktop": { "p50_ms": 0.60 },
+            "ci": { "p50_ms": 1.80 },
+            "allocs": 0
+        },
+        "scripting.native_call_100k": {
+            "desktop": { "p50_ms": 10.0 },
+            "ci": { "p50_ms": 30.0 },
+            "allocs": 0
+        },
+        "engine.full_frame_10k_transform_render": {
+            "desktop": { "p50_ms": 4.00, "p99_ms": 8.00 },
+            "ci": { "p50_ms": 12.0 },
+            "allocs": 0
+        },
+        "engine.full_frame_10k_physics": {
+            "desktop": { "p50_ms": 12.0, "p99_ms": 16.0 },
+            "ci": { "p50_ms": 36.0, "p99_ms": 48.0 },
+            "allocs": 0
+        },
+        "engine.full_frame_10k_scripts": {
+            "desktop": { "p50_ms": 5.00, "p99_ms": 10.0 },
+            "ci": { "p50_ms": 15.0 },
+            "allocs": 0
+        }
+    }
+}

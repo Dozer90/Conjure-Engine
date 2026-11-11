@@ -3,8 +3,9 @@
 🛠 **Engineering handbook**
 
 `.github/workflows/ci.yml` builds and tests every push to `main` and every pull request on Windows, Linux
-and macOS with the same presets developers use locally. This chapter lists the matrix, what each leg
-proves, the sanitizer settings, and how to reproduce a red leg on your machine.
+and macOS with the same presets developers use locally, plus one `style-and-headers` job;
+`.github/workflows/nightly.yml` runs the expensive and noisy checks once a night. This chapter lists both
+matrices, what each job proves, the sanitizer settings, and how to reproduce a red leg on your machine.
 
 ## Contents
 
@@ -13,48 +14,64 @@ proves, the sanitizer settings, and how to reproduce a red leg on your machine.
 - [Steps of every job](#3-steps-of-every-job)
 - [Sanitizer options](#4-sanitizer-options)
 - [Reproducing a failure locally](#5-reproducing-a-failure-locally)
-- [Planned jobs](#6-planned-jobs)
+- [The nightly workflow](#6-the-nightly-workflow)
 
 ## 1. Workflow
 
 - Triggers: `push` to `main` and `pull_request`.
-- `concurrency: ci-${{ github.ref }}` with `cancel-in-progress: true`: a new push cancels the previous run of
-  the same branch.
-- One job `build-test` with a matrix and `fail-fast: false`, so every leg reports even when one fails.
-- Secrets, deployments and artefact uploads are not used today.
+- `permissions: contents: read` at workflow level (nightly too): no job needs more than checkout, so the
+  `GITHUB_TOKEN` never carries write access whatever the repository default is.
+- `concurrency: ci-${{ github.ref }}` with `cancel-in-progress` for pull requests only
+  (`github.event_name == 'pull_request'`): a newer push to a pull request supersedes the running check, while
+  every push to `main` keeps its own result.
+- One job `build-test` with a matrix and `fail-fast: false`, so every leg reports even when one fails, and
+  one job `style-and-headers` on `ubuntu-24.04`.
+- `CONJURE_TEST_ALLOWED_SKIPS: golden` at workflow level: the only label a pull request may skip wholesale; the
+  case-name tags a leg may skip (`skip-tags` in the matrix) are `window`, `downloaded` and `audio_device` on
+  every leg plus `gpu` on Linux and macOS (section 3, "Check skips").
+- No secrets or deployments; JUnit reports and `test_output` are uploaded as artefacts when a leg fails.
 
 ## 2. The matrix
 
 | Leg | Runner | Preset | Tests | Proves |
 |---|---|---|---|---|
 | `windows-msvc-debug` | `windows-latest` | `windows-msvc-debug` | yes | the default developer configuration on MSVC: asserts on, `/W4 /WX`, every unit test |
-| `windows-msvc-dev` | `windows-latest` | `windows-msvc-dev` | yes | the optimised Development configuration: nothing depends on unoptimised code order or uninitialised memory that Debug hides |
+| `windows-msvc-dev` | `windows-latest` | `windows-msvc-dev` | yes, plus the export smoke | the optimised Development configuration: nothing depends on unoptimised code order or uninitialised memory that Debug hides; `conjure_editor --headless --export` of `tests/assets/projects/minimal` booted by `conjure_runtime --headless --frames 120` |
 | `linux-gcc-debug` | `ubuntu-24.04` | `linux-gcc-debug` | yes | GCC 13 with `-Wall -Wextra -Wpedantic ... -Werror`, libstdc++, POSIX backends (`*_posix.cpp`) |
-| `linux-clang-sanitize` | `ubuntu-24.04` | `linux-clang-sanitize` | yes | Clang with AddressSanitizer and UndefinedBehaviorSanitizer; leak detection on; any report fails the test |
+| `linux-clang-sanitize` | `ubuntu-24.04` | `linux-clang-sanitize` with `-DCONJURE_WITH_SCRIPTING=OFF` | yes | Clang with AddressSanitizer and UndefinedBehaviorSanitizer; leak detection on; any report fails the test; scripting is off because CoreCLR is not sanitizer-clean (D13) |
 | `macos-debug` | `macos-14` | `macos-debug` | yes | AppleClang, libc++, Darwin-specific paths (`@loader_path` in the dynamic-library tests) |
-| `windows-msvc-dist` | `windows-latest` | `windows-msvc-dist` | build only | the Distribution configuration compiles with asserts and TRACE/DEBUG logging compiled out (`CONJURE_DISTRIBUTION=1`); tests are not run on this leg |
+| `style-and-headers` | `ubuntu-24.04` | `linux-gcc-debug` (header check only) | no | `check_style.py --tests-mirror-headers`, `check_exports.py` and its self-test, the `check_distribution_symbols.py` and `ctest_check_skips.py` self-tests, `check_docs.py`, `tools/tests/test_check_docs.py`, `mkdocs build --strict`, the `conjure_header_check` target; `clang-format-18 --dry-run` and `dotnet format --verify-no-changes` run advisory (`continue-on-error`) until the tree has been reconciled with `.clang-format` |
 
 Together the five test legs cover the fixed matrix of `docs/design/08_testing.md` D15: MSVC, GCC, Clang,
-macOS and sanitizers. The style and documentation checks run inside every test leg because
-`tests/CMakeLists.txt` registers `style.check`, `docs.check` and `docs.check_tool` as CTest entries, and the
-header check runs inside every build because `conjure_header_check` is part of `ALL`. The wave-2 modules keep
-every leg headless: the `rhi`, `audio` and `platform` cases that need a software GPU adapter, an audio device or
-a real window guard themselves with `CONJURE_TEST_REQUIRE` and report *Not Run* on the runners
+macOS and sanitizers; the Distribution configuration is built nightly (section 6). The style and documentation
+checks also run inside every test leg because `tests/CMakeLists.txt` registers `style.check`, `docs.check` and
+`docs.check_tool` as CTest entries, and the header check runs inside every build because
+`conjure_header_check` is part of `ALL`. Every leg stays headless: the `rhi` and `renderer` `[gpu]` cases, the
+`audio` `[audio_device]` cases and the `platform` `[window]` cases guard themselves with `CONJURE_TEST_REQUIRE`
+and report *Not Run* where the runner lacks the software GPU adapter, a playback endpoint or a display, and the
+skip check allows exactly those tags per leg (`[gpu]` on Linux and macOS only: Windows runners have the D3D12
+WARP adapter, so the `[gpu]` cases run there); the `[dotnet]` cases run because `actions/setup-dotnet` installs the SDK
 ([Testing](testing.md#6-preconditions-and-skipping)).
 
 ## 3. Steps of every job
 
 | Step | Action | Notes |
 |---|---|---|
-| Checkout | `actions/checkout@v4` | |
-| .NET | `actions/setup-dotnet@v4` with `8.0.x` | needed by `cmake/FindNetHost.cmake` while `CONJURE_WITH_SCRIPTING` is on |
-| Linux packages | `sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev libasound2-dev libpulse-dev` | GLFW (X11 + Wayland) and miniaudio build dependencies |
+| Checkout | `actions/checkout@v4` with `lfs: true` | the LFS fixtures under `tests/assets` |
+| .NET | `actions/setup-dotnet@v4` with `8.0.x` | `cmake/FindNetHost.cmake`, the managed build and the `[dotnet]` cases |
+| Python | `actions/setup-python@v5` with `3.12` | the `tools/*.py` checks and `download_test_assets.py` |
+| Linux packages | `sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev` | GLFW (X11 + Wayland), miniaudio and the Vulkan loader |
 | macOS packages | `brew install ninja` | |
 | MSVC | `ilammy/msvc-dev-cmd@v1` with `arch: x64` | the equivalent of `vcvars64.bat`, which `tools/build.py` does locally |
 | Dependency cache | `actions/cache@v4` on `build/<preset>/_deps`, key `deps-<leg>-<hash of third_party/CMakeLists.txt>` | changing a pin invalidates the cache; nothing else does |
-| Configure | `cmake --preset <preset>` | |
+| Test asset cache and download | `actions/cache@v4` on `tests/.downloaded` and `tests/.assets_ready`, key from `tools/test_assets.json`; `python tools/download_test_assets.py` | the `downloaded` label runs on every leg; every file is verified against the committed `tools/test_assets.lock` (a mismatch fails the step; a file the lock does not know yet is pinned and reported, and the lock is committed with the change) |
+| Configure | `cmake --preset <preset> <configure-args>` | |
 | Build | `cmake --build --preset <preset> --parallel` | warnings are errors |
-| Test | `ctest --preset <preset>` unless `build-only` | the preset's label filter excludes `benchmark|golden|downloaded|slow|process`; output on failure |
+| Test | `ctest --preset <preset> --output-junit junit.xml` | the preset's label filter excludes `benchmark|golden|downloaded|slow|process`; output on failure |
+| Downloaded-asset and process tests | `ctest --test-dir build/<preset> -L "downloaded|process" --no-tests=error --output-junit junit_labels.xml` | the runtime and editor process tests and the fixtures the download step fetched; a label that matches no test fails the step instead of passing with nothing run |
+| Check skips | `python tools/ctest_check_skips.py --build-dir ... --junit junit.xml --junit junit_labels.xml <skip-tags>` | reads both reports and fails on any *Not Run* outside `CONJURE_TEST_ALLOWED_SKIPS` and the leg's name tags: `window`, `downloaded`, `audio_device` everywhere, plus `gpu` on Linux and macOS (D12) |
+| Export smoke | Development leg only: copy `tests/assets/projects/minimal`, `conjure_editor --headless --export`, `conjure_runtime --headless --frames 120` | the wave-4 exit criterion of `ARCHITECTURE.md` 11; `samples/feature_test` replaces the fixture when wave 5 lands it |
+| Upload test reports | `actions/upload-artifact@v4` on failure: `junit.xml`, `junit_labels.xml`, `test_output/` | golden diffs and the JUnit reports of a red leg |
 
 ## 4. Sanitizer options
 
@@ -75,13 +92,13 @@ exit; because every test process is one case, the leaking case is named.
 
 > [!NOTE]
 > `docs/design/08_testing.md` D13 configures the sanitizer leg with `-DCONJURE_WITH_SCRIPTING=OFF` because
-> CoreCLR is not sanitizer-clean. The preset does not pass it yet; the scripting module does not exist, so
-> nothing is compiled under the sanitizers that would need it. Add the flag to the preset when the module
-> lands. The same note names suppression files under `tests/sanitizers/`; none exist yet.
+> CoreCLR is not sanitizer-clean; the workflow passes the flag as `configure-args` (the preset itself keeps
+> scripting on so the same preset is usable with it locally). The same note names suppression files under
+> `tests/sanitizers/`; none exist yet.
 
 Other sanitizer presets: `windows-msvc-asan` (MSVC `/fsanitize=address`, not in CI) and `linux-clang-tsan`
-(ThreadSanitizer, scripting off, restricted to the labels `core|ecs|scene|engine|integration`; nightly by
-design, no workflow yet).
+(ThreadSanitizer, scripting off, restricted to the labels `core|ecs|scene|engine|integration`), which the
+nightly `linux-clang-tsan` job runs with `TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1`.
 
 ## 5. Reproducing a failure locally
 
@@ -92,10 +109,11 @@ design, no workflow yet).
    |---|---|
    | `windows-msvc-debug` | `python tools/build.py --clean --test` |
    | `windows-msvc-dev` | `python tools/build.py --preset windows-msvc-dev --clean --test` |
-   | `windows-msvc-dist` | `python tools/build.py --preset windows-msvc-dist --clean` (then `--test` with the same preset to go beyond CI) |
    | `linux-gcc-debug` | `python tools/build.py --preset linux-gcc-debug --clean --test` |
-   | `linux-clang-sanitize` | `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 python tools/build.py --preset linux-clang-sanitize --clean --test` |
+   | `linux-clang-sanitize` | `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 python tools/build.py --preset linux-clang-sanitize --clean --test -- -DCONJURE_WITH_SCRIPTING=OFF` |
    | `macos-debug` | `python tools/build.py --preset macos-debug --clean --test` |
+   | `style-and-headers` | `python tools/check_style.py --tests-mirror-headers && python tools/check_exports.py && python tools/check_docs.py && python tools/docs.py build` |
+   | nightly `distribution-export` | `python tools/build.py --preset windows-msvc-dist --clean` then `python tools/check_distribution_symbols.py --build-dir build/windows-msvc-dist` |
 
    Compilers on the runners: MSVC from `windows-latest`, GCC 13 on `ubuntu-24.04` (`g++`), the distribution
    Clang on `ubuntu-24.04` (`clang++`), AppleClang on `macos-14`. A warning that only one compiler emits is
@@ -121,29 +139,42 @@ design, no workflow yet).
    if frames show as addresses. A leak reported at exit in a `memory_guard`-clean test usually comes from a
    process-wide singleton created by the test (a log sink, a job system) that is never destroyed.
 
-5. **Not Run.** An entry marked *Not Run* exited with 77: a precondition was not met. On the PR legs no
-   precondition is expected to hold, so the guarded `rhi` (`SOFTWARE_GPU_ADAPTER`), `audio` (`AUDIO_DEVICE`,
-   `DOWNLOADED_ASSETS`) and `platform` (`REAL_WINDOW`) cases are *Not Run* by design; any other new *Not Run*
-   means a test was added without the matching `downloaded`/`slow` label or its executable.
+5. **Not Run.** An entry marked *Not Run* exited with 77: a precondition was not met. On the PR legs the
+   guarded cases are *Not Run* by design and allowed by their case-name tag: `[gpu]` (`SOFTWARE_GPU_ADAPTER`) on
+   Linux and macOS, `[audio_device]` (`AUDIO_DEVICE`) and `[window]` (`REAL_WINDOW`) everywhere, and
+   `[downloaded]`; `ctest_check_skips.py` fails the leg on any other *Not Run*, which means a test was added
+   without its precondition probe, label or executable, a runner lost something it was set up to have (a
+   `[gpu]` skip on Windows: no WARP adapter; any `[dotnet]` skip), or a `[process]` case did not find its
+   executable (the label run writes `junit_labels.xml`, which the check reads too). Reproduce with
+   `python tools/ctest_check_skips.py --build-dir build/<preset> --junit <file> [--junit <file>]` and the leg's
+   `--allow-tag` list from `ci.yml` after `ctest --output-junit`.
 
-## 6. Planned jobs
+## 6. The nightly workflow
 
-Everything in `.github/workflows/ci.yml` today is the `build-test` matrix above. The design record adds:
+`.github/workflows/nightly.yml` runs at 03:00 UTC (`schedule`) and on `workflow_dispatch`, with
+`CONJURE_TEST_ALLOWED_SKIPS` empty: a nightly may skip nothing by label. Nothing in it gates a pull request; a
+red nightly is a ticket for the module owner ([08_testing.md 7.3](../design/08_testing.md#73-ci-githubworkflowsciyml-push-to-main-and-pull-requests-fail-fast-false-60-min)).
 
-| Job | Where | Purpose |
+| Job | Runner | What it runs |
 |---|---|---|
-| `style-and-headers` | PR, `ubuntu-24.04` | `check_style.py`, `clang-format-18 --dry-run -Werror`, `cmake --build --target conjure_header_check`, `dotnet format --verify-no-changes managed/` ([08_testing.md 7.3](../design/08_testing.md#73-ci-githubworkflowsciyml-push-to-main-and-pull-requests-fail-fast-false-60-min)) |
-| `docs` | PR | `mkdocs build --strict` ([16_documentation.md section 4](../design/16_documentation.md#4-tooling)); `docs.check` already runs as a CTest entry in every test leg |
-| `ctest_check_skips.py` step | every test leg | fail on any *Not Run* whose label is not in `CONJURE_TEST_ALLOWED_SKIPS` (D12) |
-| JUnit and `test_output` upload | every test leg | `ctest --output-junit junit.xml`, golden diffs on failure |
-| `nightly.yml` | cron 03:00 UTC | `full-matrix-nightly` (`*-nightly` presets, `slow` included), `linux-clang-tsan`, `distribution-export`, `golden-d3d12-warp`, `golden-vulkan-lavapipe`, `benchmarks-ci-class` |
+| `full-matrix-nightly` | the five PR legs | the `*-nightly` test presets where one exists (`windows-msvc-debug-nightly`, `linux-gcc-debug-nightly`), otherwise `ctest -LE benchmark`: the `slow`, `process` and `downloaded` cases included; skips checked with `--allow-tag window --allow-tag audio_device`, plus `--allow-tag gpu` on Linux and macOS (the downloaded cases must run) |
+| `linux-clang-tsan` | `ubuntu-24.04` | the `linux-clang-tsan` preset (ThreadSanitizer, scripting off, labels `core|ecs|scene|engine|integration`) |
+| `distribution-export` | `windows-latest`, `ubuntu-24.04` | builds `windows-msvc-dist` / `linux-gcc-dist` and the Development editor and runtime, runs the Distribution `process|runtime` tests with `--no-tests=error` (`runtime.distribution_symbols` among them), exports `tests/assets/projects/minimal` with the Development editor, copies the Distribution runtime and `conjure_shared` into the folder, boots it for 300 frames and runs `check_distribution_symbols.py --binary` on it |
+| `golden-d3d12-warp` | `windows-latest` | `windows-msvc-dev` with `-DCONJURE_TEST_GOLDEN_IMAGES=ON`, `ctest -L golden --no-tests=error` on WARP; diffs uploaded on failure |
+| `golden-vulkan-lavapipe` | `ubuntu-24.04` | `linux-gcc-dev` with golden images on lavapipe (`VK_DRIVER_FILES`), the same `ctest -L golden --no-tests=error`; `continue-on-error` until the references are stable for two weeks (D11) |
+| `benchmarks-ci-class` | `windows-latest`, `ubuntu-24.04` | `conjure_benchmarks --class ci --enforce --out bench.json` on the Development presets; the table goes to the step summary and the JSON to an artefact (D10); nothing is pushed anywhere (`permissions: contents: read`) |
 
 > [!NOTE]
-> Planned, not implemented. Keep this table in step with the workflow files when they land.
+> No CTest entry carries the `golden` label yet: `tests/golden` does not exist and off-screen rendering is not
+> functional (`09_cross_area_resolutions.md` 4 item 15). The golden steps run with `--no-tests=error`, so until
+> the cases land both jobs fail with "No tests were found" rather than passing with zero image comparisons (the
+> lavapipe job stays `continue-on-error`). Every `ctest -L` run in both workflows carries the flag for the same
+> reason: a label that matches nothing is a broken registration, not a pass.
 
 ## Related
 
 - design record: `docs/design/08_testing.md` sections 7.3 (CI), 3.2 (skip discipline), D13 (sanitizers and scripting)
 - `docs/ARCHITECTURE.md` section 9 (CI row of the build matrix)
-- `.github/workflows/ci.yml`, `CMakePresets.json`, `cmake/ConjureSanitizers.cmake`
+- `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`, `CMakePresets.json`, `cmake/ConjureSanitizers.cmake`,
+  `tools/ctest_check_skips.py`, `tools/check_distribution_symbols.py`
 - [Getting started](getting-started.md), [Testing](testing.md), [Build pipeline](build-pipeline.md)

@@ -123,6 +123,21 @@ nav:
           - api/scripting/index.md
           - Scripts, components and the runtime: api/scripting/scripts-and-components.md
           - Hosting, the native API and hot reload: api/scripting/hosting-and-hot-reload.md
+      - Engine:
+          - api/engine/index.md
+          - Running the engine: api/engine/running-the-engine.md
+          - The frame, layers and time: api/engine/frame-layers-and-time.md
+          - Export and diagnostics: api/engine/export-and-diagnostics.md
+      - Bindings (C#):
+          - api/bindings/index.md
+          - The C# API: api/bindings/csharp-api.md
+          - The native table: api/bindings/native-table.md
+      - Editor:
+          - api/editor/index.md
+          - The AI control protocol: api/editor/ai-protocol.md
+          - Headless mode and the command model: api/editor/headless-and-commands.md
+          - The workspace UI: api/editor/workspace-ui.md
+      - Runtime: api/runtime/index.md
       - Glossary: api/glossary.md
   - Engineering handbook:
       - handbook/index.md
@@ -148,6 +163,10 @@ nav:
           - Renderer: handbook/modules/renderer.md
           - Physics: handbook/modules/physics.md
           - Scripting: handbook/modules/scripting.md
+          - Engine: handbook/modules/engine.md
+          - Bindings: handbook/modules/bindings.md
+          - Editor: handbook/modules/editor.md
+          - Runtime: handbook/modules/runtime.md
       - Module system:
           - handbook/module-system/index.md
           - Creating a module: handbook/module-system/creating-a-module.md

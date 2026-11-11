@@ -154,8 +154,8 @@ python tools/build.py --build-dir build/mod_renderer --target conjure_renderer_t
 - Dear ImGui is pinned at 1.91.9b-docking; the `ImTextureData` texture protocol path of `imgui_renderer`
   (`IMGUI_HAS_TEXTURES`) is written but only compiles against >= 1.92, which `ARCHITECTURE.md` 9 names as the
   target version.
-- `tests/benchmarks/bench_render_null_frame.cpp` (< 3 ms for the 10k-instance frame) waits for the benchmarks
-  directory.
+- `tests/benchmarks/bench_render_null_frame.cpp` (`renderer.null_frame_10k`, `engine.full_frame_10k_transform_render`)
+  guards the 10k-instance frame on the null device.
 - The real-device image of the `feature_test` early scene is a local check until the golden pipeline (wave 5)
   exists.
 

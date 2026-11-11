@@ -1,8 +1,18 @@
 # Unit, integration and benchmark tests. Every engine module has a matching directory here; a
 # directory is only built when its module target exists (the directory's own CMakeLists.txt
-# checks that), so disabling a subsystem also disables its tests.
+# checks that), so disabling a subsystem also disables its tests. The root enters this directory for
+# CONJURE_BUILD_TESTS or CONJURE_BUILD_BENCHMARKS: the support library serves both, the test modules and
+# the style and documentation entries need the first, the benchmarks the second.
 
 add_subdirectory(support)
+
+if(CONJURE_BUILD_BENCHMARKS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+    add_subdirectory(benchmarks)
+endif()
+
+if(NOT CONJURE_BUILD_TESTS)
+    return()
+endif()
 
 set(CONJURE_TEST_MODULES
     core
@@ -17,7 +27,9 @@ set(CONJURE_TEST_MODULES
     physics
     scripting
     engine
+    bindings
     editor
+    runtime
 )
 
 foreach(module IN LISTS CONJURE_TEST_MODULES)
@@ -29,10 +41,6 @@ endforeach()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt")
     add_subdirectory(integration)
-endif()
-
-if(CONJURE_BUILD_BENCHMARKS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
-    add_subdirectory(benchmarks)
 endif()
 
 # Style check (docs/design/08_testing.md 7.3 style-and-headers job): tools/check_style.py over every

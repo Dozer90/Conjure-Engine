@@ -50,8 +50,11 @@ Missing directories print a status line and are skipped, so partial trees config
 
 `cmake/ConjureConfigs.cmake`:
 
-- Multi-config generators get `CMAKE_CONFIGURATION_TYPES "Debug;Development;Distribution"`; single-config
-  generators default `CMAKE_BUILD_TYPE` to `Development` and restrict its choices to the three.
+- Multi-config generators get `CMAKE_CONFIGURATION_TYPES "Debug;Development"`, or `"Debug;Development;Distribution"`
+  when the cache holds `CONJURE_BUILD_EDITOR=OFF`: the editor is never part of a Distribution build and a
+  multi-config tree builds every configuration from one set of targets, so the configuration exists there only
+  without the editor. Single-config generators default `CMAKE_BUILD_TYPE` to `Development` and restrict its
+  choices to the three.
 - `conjure_derive_config_flags()` sets `CMAKE_<LANG>_FLAGS_DEVELOPMENT` from `RELWITHDEBINFO` and
   `CMAKE_<LANG>_FLAGS_DISTRIBUTION` from `RELEASE` (same for `EXE/SHARED/MODULE/STATIC` linker flags), and
   maps imported targets that only know the standard configurations with
@@ -60,9 +63,13 @@ Missing directories print a status line and are skipped, so partial trees config
   or `CONJURE_DISTRIBUTION=1` through `$<CONFIG:...>` generator expressions, plus `CONJURE_WITH_*` and
   `CONJURE_RHI_*` for the enabled subsystems. On Windows it also defines `NOMINMAX`, `WIN32_LEAN_AND_MEAN`,
   `UNICODE`, `_UNICODE`, `_CRT_SECURE_NO_WARNINGS`.
-- A single-config `Distribution` build forces `CONJURE_BUILD_EDITOR` off. `conjure_add_executable(... WIN32_GUI)`
-  hides the console window only in Distribution (`WIN32_EXECUTABLE $<CONFIG:Distribution>` and
-  `/ENTRY:mainCRTStartup` on MSVC) so developers keep stdout.
+- A single-config `Distribution` build forces `CONJURE_BUILD_EDITOR` off; a multi-config tree with the editor on
+  has no `Distribution` configuration at all (above), so the `*-dist` presets are the way to build what ships.
+  `conjure_add_executable(... WIN32_GUI)` hides the console window only in Distribution
+  (`WIN32_EXECUTABLE $<CONFIG:Distribution>` and `/ENTRY:mainCRTStartup` on MSVC) so developers keep stdout.
+- `CONJURE_WITH_SCRIPTING` needs the .NET host pack (`cmake/FindNetHost.cmake`). When the root file does not
+  find it, scripting and `CONJURE_BUILD_MANAGED` are turned off for that tree with a CMake warning instead of
+  failing the configure; `-DCONJURE_WITH_SCRIPTING=OFF` makes the choice explicit.
 
 ## 3. Options and consistency rules
 
@@ -158,14 +165,16 @@ after `add_subdirectory(engine)` (idempotent). It creates two targets:
 | Target | What it is |
 |---|---|
 | `conjure_abi_identity` | custom target writing `${PROJECT_BINARY_DIR}/generated/include/conjure/modules/abi_identity.h`: `CONJURE_ABI_HEADER_HASH` (a hash over every public header of every engine module, recomputed at build time), `CONJURE_ABI_COMPILER_MAJOR` and the runtime facts `CONJURE_ABI_RUNTIME_DYNAMIC_CRT` / `_ASAN` / `_UBSAN`; `conjure_modules` and `conjure_shared` depend on it |
-| `conjure_shared` (alias `conjure::shared`) | `SHARED` library whole-archiving every library in `CONJURE_STATIC_LIBRARIES`, so one copy of every engine symbol and global exists in the process; compiled with `CONJURE_SHARED_EXPORTS`, consumers get `CONJURE_SHARED_IMPORTS`, the engine include directories, every engine library's interface definitions, `conjure::platform_defines` and glm |
+| `conjure_shared` (alias `conjure::shared`) | `SHARED` library whole-archiving every library in `CONJURE_STATIC_LIBRARIES` (every engine module of waves 1-4; `editor_core` and `editor_ui` outside Distribution), so one copy of every engine symbol and global exists in the process; consumers get `CONJURE_SHARED_IMPORTS`, the engine include directories, every engine library's interface definitions, `conjure::platform_defines` and glm |
 
-On MSVC a module definition file listing every external symbol of the whole-archived objects is generated at
-build time (CMake's `WINDOWS_EXPORT_ALL_SYMBOLS` does not look inside static libraries), followed by a count
-that fails the build with a remedy before the 65,535-export limit is hit; GCC and Clang export every
-default-visibility symbol. `CONJURE_API` (`conjure/core/api.h`) adds the dllimport side for consumers;
-`tools/check_exports.py` reports public symbols that lack it. [Modules module](modules/modules.md) 7 has the
-export story in detail.
+Every static library is compiled with `CONJURE_SHARED_EXPORTS` and hidden visibility (`conjure_apply_export_settings()`
+in `cmake/ConjureModule.cmake`), so `conjure_shared` exports exactly the declarations that carry `CONJURE_API`
+(`conjure/core/api.h`) on every platform and nothing is generated at build time. `tools/check_exports.py` keeps the
+annotations complete and reads the export count back from the built library; both run as the CTest entries
+`exports.check_annotations` and `exports.count_shared_library` (limit 52,428 of the 65,535 a Windows DLL may hold),
+with `exports.check_tool` as the checker's self-test. [Modules module](modules/modules.md) 7 has the export story in
+detail; `tools/check_distribution_symbols.py` (CTest `runtime.distribution_symbols`, label `process`) proves that the
+Distribution `conjure_runtime` and `conjure_shared` carry no editor or ImGui symbol.
 
 `conjure_add_game_module()` (`cmake/ConjureModule.cmake`) builds a plugin or game module:
 
@@ -328,13 +337,15 @@ specification to implement against.
 
 | Step | Helper | Design record |
 |---|---|---|
-| C# assemblies built with `dotnet build`, stamp files, explicit `<Compile>` items; `managed/CMakeLists.txt` currently returns until `Conjure.Managed.csproj` exists | `conjure_add_managed_project()` in `cmake/ConjureManaged.cmake` | [03_scripting.md section 3.10](../design/03_scripting.md#310-building-managed-projects-managed_buildh-cmakeconjuremanagedcmake) |
-| Export of a project: cook, managed publish, module layout, copy the Distribution runtime and shaders | `engine::export_pipeline::run()` (library call, not CMake) | [06_engine_loop.md section 3.6](../design/06_engine_loop.md#36-export-pipeline-conjureengineexporth-enginesrcengineexport_pipelinecpp-r21) |
-| Golden-image tests and the benchmark executable | `conjure_add_golden_tests()`, `conjure_add_benchmark_sources()` | [08_testing.md section 3.8](../design/08_testing.md#38-cmake-integration-cmakeconjuretestingcmake) |
-| `CONJURE_API`-only exports (hidden visibility in `conjure_add_module`, `.def` from annotations) once the whole-archive export count approaches the limit | `conjure_finalize_engine()` | [07_modules.md section 5](../design/07_modules.md#5-build-system-cmakeconjuremodulecmake-cmakeconjuresharedlibrarycmake) |
+| Golden-image tests (`CONJURE_TEST_GOLDEN_IMAGES`, nightly software rasterisers); `golden_image::render_offscreen` waits for a headless view target in the engine | `conjure_add_golden_tests()` | [08_testing.md section 3.8](../design/08_testing.md#38-cmake-integration-cmakeconjuretestingcmake) |
 
-`conjure_add_test_module()` accepts `ENGINE` and does nothing with it until `conjure::test_support_engine`
-exists in wave 4 (it says so with `message(VERBOSE)`).
+Landed since the first version of this page: the managed build (`conjure_add_managed_project()`,
+`managed/CMakeLists.txt`, wave 3), the export pipeline (`engine::export_pipeline`, a library call the editor's
+`--export` and `project.export` use, wave 4), the benchmark executable (`tests/benchmarks`, one CTest entry per
+scenario under the label `benchmark`, wave 4) and the `CONJURE_API`-only export switch (section 4.4, wave 4).
+`conjure_add_test_module()`'s `ENGINE` option links `conjure::test_support_engine` (or
+`conjure::test_support_engine_shared` with `LINK_ENGINE_SHARED`), the engine-level fixtures of
+[Testing](testing.md#4-the-support-library).
 
 ## Related
 

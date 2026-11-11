@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -66,7 +67,7 @@ namespace conjure::assets {
     /// find() stays valid until that type is unregistered; unregistering one type never moves
     /// another description.
     /// </summary>
-    class asset_type_registry {
+    class CONJURE_API asset_type_registry {
         private:
             std::vector<std::unique_ptr<asset_type_desc>> mTypes = {};   // registration order, never moved
             std::vector<const asset_type_desc *> mView = {};             // the same descriptions, for types()

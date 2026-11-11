@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.create",
+    "args": {
+      "name": "Wall",
+      "guid": "959575f7-a2b1-5494-9e8b-dd157cb0a93e"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "guid": "959575f7-a2b1-5494-9e8b-dd157cb0a93e",
+      "name": "Wall"
+    }
+  }
+}

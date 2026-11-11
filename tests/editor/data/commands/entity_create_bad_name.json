@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.create",
+    "args": {
+      "name": 7
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

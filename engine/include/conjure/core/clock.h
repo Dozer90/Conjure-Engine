@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 // Time sources.
@@ -15,7 +16,7 @@ namespace conjure::core {
     /// A monotonic time source measured in seconds. The epoch is implementation defined: only
     /// differences between two readings of the same clock are meaningful.
     /// </summary>
-    class clock {
+    class CONJURE_API clock {
         public:
             clock();
             virtual ~clock();
@@ -41,7 +42,7 @@ namespace conjure::core {
     /// steady_clock in the process, so readings start near zero and keep full double precision.
     /// Every instance reads the same underlying time.
     /// </summary>
-    class steady_clock final : public clock {
+    class CONJURE_API steady_clock final : public clock {
         public:
             /// <summary>
             /// How close to the deadline the thread stops sleeping and starts spinning.
@@ -70,7 +71,7 @@ namespace conjure::core {
     /// A clock that only moves when told to. Starts at zero. Used by tests and by tools that
     /// step the engine deterministically.
     /// </summary>
-    class manual_clock final : public clock {
+    class CONJURE_API manual_clock final : public clock {
         private:
             f64 mNowSeconds = 0.0;
 
@@ -106,28 +107,28 @@ namespace conjure::core {
     /// <summary>
     /// The process-wide steady clock. Use it when no clock was injected.
     /// </summary>
-    [[nodiscard]] clock &default_clock() noexcept;
+    [[nodiscard]] CONJURE_API clock &default_clock() noexcept;
 
     /// <summary>
     /// Raw steady-clock ticks for profiling. Convert differences with ticks_to_seconds.
     /// </summary>
-    [[nodiscard]] u64 ticks_now() noexcept;
+    [[nodiscard]] CONJURE_API u64 ticks_now() noexcept;
 
     /// <summary>
     /// Converts a tick count (or a difference of two) from ticks_now into seconds.
     /// </summary>
-    [[nodiscard]] f64 ticks_to_seconds(u64 ticks) noexcept;
+    [[nodiscard]] CONJURE_API f64 ticks_to_seconds(u64 ticks) noexcept;
 
     /// <summary>
     /// Number of ticks in one second of the steady clock.
     /// </summary>
-    [[nodiscard]] u64 ticks_per_second() noexcept;
+    [[nodiscard]] CONJURE_API u64 ticks_per_second() noexcept;
 
     /// <summary>
     /// Measures elapsed time on a clock. Runs from construction; start() and restart() reset the
     /// origin. The clock is referenced, not owned, and must outlive the stopwatch.
     /// </summary>
-    class stopwatch {
+    class CONJURE_API stopwatch {
         private:
             const clock *mClock = nullptr;
             f64 mStartSeconds = 0.0;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <atomic>
@@ -44,22 +45,22 @@ namespace conjure::core::memory {
     /// <summary>
     /// The process-wide counters. Safe to call from any thread, including during static initialisation.
     /// </summary>
-    [[nodiscard]] allocation_counters &counters() noexcept;
+    [[nodiscard]] CONJURE_API allocation_counters &counters() noexcept;
 
     /// <summary>
     /// Copies the current counter values. The three loads are not one atomic transaction; callers
     /// comparing snapshots quiesce other threads first (test fixtures) or accept small skews.
     /// </summary>
-    [[nodiscard]] memory_snapshot snapshot() noexcept;
+    [[nodiscard]] CONJURE_API memory_snapshot snapshot() noexcept;
 
     /// <summary>
     /// Records one allocation of 'bytes' bytes. Called by tracked_allocate and by code that acquires
     /// memory through another route (global operator new in tests, physics allocation hooks).
     /// </summary>
-    void record_allocation(usize bytes) noexcept;
+    CONJURE_API void record_allocation(usize bytes) noexcept;
 
     /// <summary>
     /// Records one free. Counterpart of record_allocation.
     /// </summary>
-    void record_free() noexcept;
+    CONJURE_API void record_free() noexcept;
 }

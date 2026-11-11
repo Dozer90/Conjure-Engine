@@ -7,6 +7,7 @@
 #include "conjure/renderer/texture_asset.h"
 
 #include "conjure/assets/asset_importer.h"
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -61,7 +62,7 @@ namespace conjure::renderer {
     /// </summary>
     using gltf_file_reader = std::function<core::result<std::vector<std::byte>>(std::string_view relativePath)>;
 
-    class gltf_importer {
+    class CONJURE_API gltf_importer {
         public:
             gltf_importer();
             ~gltf_importer();
@@ -99,7 +100,7 @@ namespace conjure::renderer {
     /// with stable uuids. Settings mirror gltf_import_options as
     /// { "generateTangents": true, "scale": 1.0, "importCameras": false, "importLights": true }.
     /// </summary>
-    class gltf_asset_importer final : public assets::asset_importer {
+    class CONJURE_API gltf_asset_importer final : public assets::asset_importer {
         public:
             gltf_asset_importer();
             ~gltf_asset_importer() override;
@@ -116,10 +117,12 @@ namespace conjure::renderer {
     /// Reads the options object; missing keys keep their defaults. Fails with INVALID_ARGUMENT for a
     /// non-object or a wrong member type.
     /// </summary>
-    [[nodiscard]] core::result<gltf_import_options> gltf_import_options_from_json(const core::json::value &source);
+    [[nodiscard]] CONJURE_API core::result<gltf_import_options> gltf_import_options_from_json(
+      const core::json::value &source
+    );
 
     /// <summary>
     /// Writes the options object with sorted keys.
     /// </summary>
-    [[nodiscard]] core::json::document gltf_import_options_to_document(const gltf_import_options &options);
+    [[nodiscard]] CONJURE_API core::json::document gltf_import_options_to_document(const gltf_import_options &options);
 }

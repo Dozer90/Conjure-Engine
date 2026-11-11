@@ -7,11 +7,21 @@
 #
 # This file is included before project() so the configuration list is in place when the
 # compiler flags are initialised.
+#
+# The editor is never part of a Distribution build (docs/design/04_editor.md 8). A multi-config generator
+# builds every configuration from one set of targets, so such a tree offers Distribution only when
+# CONJURE_BUILD_EDITOR is OFF; the default (editor on) gives Debug and Development, and the single-config
+# *-dist presets remain the way to build what ships. CONJURE_BUILD_EDITOR is read from the cache here because
+# the option() itself is declared after project(); an entry that is not in the cache yet means the default ON.
 
 get_property(CONJURE_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 if(CONJURE_IS_MULTI_CONFIG)
-    set(CMAKE_CONFIGURATION_TYPES "Debug;Development;Distribution" CACHE STRING "" FORCE)
+    if(DEFINED CONJURE_BUILD_EDITOR AND NOT CONJURE_BUILD_EDITOR)
+        set(CMAKE_CONFIGURATION_TYPES "Debug;Development;Distribution" CACHE STRING "" FORCE)
+    else()
+        set(CMAKE_CONFIGURATION_TYPES "Debug;Development" CACHE STRING "" FORCE)
+    endif()
 else()
     if(NOT CMAKE_BUILD_TYPE)
         set(CMAKE_BUILD_TYPE "Development" CACHE STRING "Build type" FORCE)

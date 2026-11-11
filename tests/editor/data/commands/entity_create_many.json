@@ -1,0 +1,37 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.create_many",
+    "args": {
+      "count": 5,
+      "nameFormat": "Cell_{i}",
+      "components": {
+        "sprite": {}
+      },
+      "overrides": [
+        {
+          "transform": {
+            "position": [
+              1,
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "guids": [
+        "959575f7-a2b1-5494-9e8b-dd157cb0a93e",
+        "4f8caf68-de1f-5cc1-8144-d456769a5ec6",
+        "bd87dcb7-a7b5-5146-b75f-5862c2944596",
+        "0b98a448-d2d0-5e3a-baf8-c093aee0f588",
+        "a8e6b70b-d1bd-568c-b285-262248f760ad"
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "count": 5
+    }
+  }
+}

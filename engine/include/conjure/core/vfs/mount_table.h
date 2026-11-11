@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/vfs/file_system.h"
 
 #include <functional>
@@ -22,7 +23,7 @@ namespace conjure::core::vfs {
     /// backends are held by shared_ptr so an operation in flight keeps its backend alive even
     /// when the scheme is unmounted concurrently.
     /// </summary>
-    class mount_table final : public file_system {
+    class CONJURE_API mount_table final : public file_system {
         private:
             struct route_target {
                 std::shared_ptr<file_system> backend = nullptr;

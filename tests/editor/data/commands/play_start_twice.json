@@ -1,0 +1,18 @@
+{
+  "setup": [
+    {
+      "cmd": "play.start",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "play.start",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "WRONG_PLAY_STATE"
+    }
+  }
+}

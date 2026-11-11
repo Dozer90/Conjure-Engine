@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/types.h"
@@ -31,7 +32,7 @@ namespace conjure::physics {
     /// <summary>
     /// Receives the primitives of physics_world::debug_draw.
     /// </summary>
-    class physics_debug_draw {
+    class CONJURE_API physics_debug_draw {
         public:
             physics_debug_draw();
             virtual ~physics_debug_draw();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -31,13 +32,13 @@ namespace conjure::renderer {
     /// non-positive aspect ratio, near plane or field of view, or a far plane at or before the near
     /// plane, asserts and yields the identity.
     /// </summary>
-    [[nodiscard]] math::mat4 clip_from_view(const camera &camera, f32 aspectRatio) noexcept;
+    [[nodiscard]] CONJURE_API math::mat4 clip_from_view(const camera &camera, f32 aspectRatio) noexcept;
 
     /// <summary>
     /// The inward-facing frustum planes of a clip-from-world matrix (reverse-Z aware: the near plane
     /// is the one at depth 1).
     /// </summary>
-    [[nodiscard]] math::frustum frustum_from_clip(const math::mat4 &clipFromWorld) noexcept;
+    [[nodiscard]] CONJURE_API math::frustum frustum_from_clip(const math::mat4 &clipFromWorld) noexcept;
 
     /// <summary>
     /// The world-space ray through a viewport position given in [0, 1] x [0, 1] (origin top-left, y
@@ -45,7 +46,7 @@ namespace conjure::renderer {
     /// The aspect ratio is the viewport's width over height (the design's signature omitted it, but a
     /// non-square viewport cannot be unprojected without it).
     /// </summary>
-    [[nodiscard]] math::ray ray_from_viewport(
+    [[nodiscard]] CONJURE_API math::ray ray_from_viewport(
       const camera &camera,
       const math::mat4 &worldFromView,
       math::vec2 viewportUv,
@@ -55,5 +56,5 @@ namespace conjure::renderer {
     /// <summary>
     /// The enumerator name of a projection type ("PERSPECTIVE").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(projection_type type) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(projection_type type) noexcept;
 }

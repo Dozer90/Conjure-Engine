@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/slot_map.h"
 
 #include <format>
@@ -19,12 +20,12 @@ namespace conjure::core {
     /// <summary>
     /// "index:generation" in decimal, e.g. "12:3". The null key prints as "0:0".
     /// </summary>
-    [[nodiscard]] std::string to_string(slot_key key);
+    [[nodiscard]] CONJURE_API std::string to_string(slot_key key);
 
     /// <summary>
     /// Parses the to_string() form. Returns nullopt for anything else.
     /// </summary>
-    [[nodiscard]] std::optional<slot_key> parse_slot_key(std::string_view text) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<slot_key> parse_slot_key(std::string_view text) noexcept;
 }
 
 template <>

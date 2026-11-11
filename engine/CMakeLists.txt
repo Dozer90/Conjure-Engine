@@ -1,6 +1,9 @@
 # Engine modules, in dependency order. A module directory that does not exist yet is skipped so
 # the build keeps working while modules are being brought online wave by wave. Each module's own
-# CMakeLists.txt is responsible for honouring its CONJURE_WITH_* option.
+# CMakeLists.txt is responsible for honouring its CONJURE_WITH_* option; engine/src/editor declares
+# conjure_editor_core and conjure_editor_ui and returns early unless CONJURE_BUILD_EDITOR, so the editor
+# libraries join conjure_shared like every other module (docs/design/07_modules.md 5) and are absent from
+# a Distribution build.
 
 set(CONJURE_ENGINE_MODULES
     core
@@ -15,6 +18,8 @@ set(CONJURE_ENGINE_MODULES
     physics
     scripting
     engine
+    bindings
+    editor
 )
 
 foreach(module IN LISTS CONJURE_ENGINE_MODULES)

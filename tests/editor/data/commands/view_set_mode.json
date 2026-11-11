@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.set_mode",
+    "args": {
+      "mode": "2d"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "mode": "2d",
+      "orthographic": true
+    }
+  }
+}

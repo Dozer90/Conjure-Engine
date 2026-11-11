@@ -2,6 +2,7 @@
 
 #include "conjure/scene/components.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/entity.h"
@@ -17,7 +18,7 @@
 
 namespace conjure::scene {
 
-    class hierarchy {
+    class CONJURE_API hierarchy {
         private:
             ecs::world *mWorld = nullptr;
             const scene_component_ids *mIds = nullptr;

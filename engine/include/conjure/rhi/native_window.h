@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <string_view>
@@ -38,5 +39,5 @@ namespace conjure::rhi {
     /// <summary>
     /// The enumerator name of a window kind ("WINDOWS"), "NONE" for NONE and out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(native_window_kind kind) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(native_window_kind kind) noexcept;
 }

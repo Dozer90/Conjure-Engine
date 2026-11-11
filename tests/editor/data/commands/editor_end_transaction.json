@@ -1,0 +1,17 @@
+{
+  "setup": [
+    {
+      "cmd": "editor.begin_transaction",
+      "args": {
+        "label": "T"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "editor.end_transaction",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

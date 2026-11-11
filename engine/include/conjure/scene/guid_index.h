@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
@@ -11,7 +12,7 @@
 
 namespace conjure::scene {
 
-    class guid_index {
+    class CONJURE_API guid_index {
         public:
             /// <summary>
             /// Entries reserved by the constructor so small scenes never rehash.

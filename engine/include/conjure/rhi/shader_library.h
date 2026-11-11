@@ -3,6 +3,7 @@
 #include "conjure/rhi/backend.h"
 #include "conjure/rhi/device.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -31,13 +32,13 @@ namespace conjure::rhi {
     /// <summary>
     /// The index.json spelling of a stage: "vertex", "pixel" or "compute".
     /// </summary>
-    [[nodiscard]] std::string_view to_string(shader_stage stage) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(shader_stage stage) noexcept;
 
     /// <summary>
     /// Parses "vertex" / "pixel" / "compute" (also the dxc profiles "vs", "ps", "cs"), case-insensitively.
     /// Fails with core::error_code::INVALID_ARGUMENT otherwise.
     /// </summary>
-    [[nodiscard]] core::result<shader_stage> parse_shader_stage(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API core::result<shader_stage> parse_shader_stage(std::string_view name) noexcept;
 
     /// <summary>
     /// Identifies one permutation: the source file stem, the entry point and the define string in
@@ -54,7 +55,7 @@ namespace conjure::rhi {
         shader_stage stage = shader_stage::VERTEX;
     };
 
-    class shader_library {
+    class CONJURE_API shader_library {
         private:
             struct impl;
             struct create_tag {};

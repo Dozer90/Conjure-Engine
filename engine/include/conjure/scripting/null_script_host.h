@@ -4,6 +4,7 @@
 #include "conjure/scripting/script_class_registry.h"
 #include "conjure/scripting/script_host.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -27,7 +28,7 @@ namespace conjure::scripting {
     /// <summary>
     /// What the null host recorded. Cleared by null_script_host::reset_recorder().
     /// </summary>
-    class null_host_recorder {
+    class CONJURE_API null_host_recorder {
         public:
             struct create_record {
                 u64 entity = 0;
@@ -157,7 +158,7 @@ namespace conjure::scripting {
             void record_collect_fields();
     };
 
-    class null_script_host final : public script_host {
+    class CONJURE_API null_script_host final : public script_host {
         public:
             /// <summary>
             /// Runs inside create_instances for every request once its slot is assigned: what OnCreate would do.

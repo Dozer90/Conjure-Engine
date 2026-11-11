@@ -2,6 +2,7 @@
 
 #include "conjure/audio/clip.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -31,25 +32,28 @@ namespace conjure::audio {
     /// <summary>
     /// Sniffs the container magic (RIFF/WAVE, OggS, ID3 / MP3 sync, fLaC). UNKNOWN when none matches.
     /// </summary>
-    [[nodiscard]] clip_encoding sniff_encoding(std::span<const byte> encoded) noexcept;
+    [[nodiscard]] CONJURE_API clip_encoding sniff_encoding(std::span<const byte> encoded) noexcept;
 
     /// <summary>
     /// Opens a decoder to read format and length. Errors: INVALID_CLIP (empty), UNSUPPORTED_FORMAT
     /// (unknown magic), DECODE_FAILED (miniaudio refused the data; the message names its result).
     /// </summary>
-    [[nodiscard]] core::result<clip_info> probe(std::span<const byte> encoded);
+    [[nodiscard]] CONJURE_API core::result<clip_info> probe(std::span<const byte> encoded);
 
     /// <summary>
     /// Decodes a whole file to interleaved f32 at its native channel count and rate, then applies
     /// the options in order: forceMono, sampleRate (miniaudio linear resampler), normalize.
     /// Same errors as probe().
     /// </summary>
-    [[nodiscard]] core::result<pcm_buffer> decode_to_pcm(std::span<const byte> encoded, const decode_options &options);
+    [[nodiscard]] CONJURE_API core::result<pcm_buffer> decode_to_pcm(
+      std::span<const byte> encoded,
+      const decode_options &options
+    );
 
     /// <summary>
     /// Incremental decoder over caller-owned encoded bytes, used by streamed voices.
     /// </summary>
-    class streaming_decoder {
+    class CONJURE_API streaming_decoder {
         private:
             struct state;
 

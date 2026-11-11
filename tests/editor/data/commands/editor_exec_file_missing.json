@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.exec_file",
+    "args": {
+      "path": "${project}/missing.json"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "IO_ERROR"
+    }
+  }
+}

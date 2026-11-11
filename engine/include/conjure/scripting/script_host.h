@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/native_api.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -52,7 +53,7 @@ namespace conjure::scripting {
         bool waitForDebugger = false;
     };
 
-    class script_host {
+    class CONJURE_API script_host {
         public:
             script_host();
             virtual ~script_host();
@@ -90,44 +91,46 @@ namespace conjure::scripting {
     /// <summary>
     /// Creates the host for the backend. NULL_HOST never fails to initialize.
     /// </summary>
-    [[nodiscard]] std::unique_ptr<script_host> create_script_host(script_backend backend);
+    [[nodiscard]] CONJURE_API std::unique_ptr<script_host> create_script_host(script_backend backend);
 
     /// <summary>
     /// Static hostfxr probe (R28): true when nethost finds a .NET runtime without starting one. Used as the
     /// DOTNET_RUNTIME test precondition.
     /// </summary>
-    [[nodiscard]] bool is_runtime_available() noexcept;
+    [[nodiscard]] CONJURE_API bool is_runtime_available() noexcept;
 
     /// <summary>
     /// The hosting paths available on this platform and build.
     /// </summary>
-    [[nodiscard]] host_capabilities query_host_capabilities() noexcept;
+    [[nodiscard]] CONJURE_API host_capabilities query_host_capabilities() noexcept;
 
     /// <summary>
     /// Reads Conjure.Bootstrap.runtimeconfig.json in 'managedDirectory': SELF_CONTAINED when
     /// runtimeOptions.includedFrameworks is present, FRAMEWORK_DEPENDENT otherwise. RUNTIME_CONFIG_INVALID
     /// when the file is missing or malformed.
     /// </summary>
-    [[nodiscard]] core::result<host_mode> detect_host_mode(const std::filesystem::path &managedDirectory);
+    [[nodiscard]] CONJURE_API core::result<host_mode> detect_host_mode(const std::filesystem::path &managedDirectory);
 
     /// <summary>
     /// The anchor files a managed directory must hold (D2): Conjure.Bootstrap.dll, its runtime config and
     /// Conjure.Managed.dll. MANAGED_SDK_MISSING naming the first absent file.
     /// </summary>
-    [[nodiscard]] core::result<void> validate_managed_directory(const std::filesystem::path &managedDirectory);
+    [[nodiscard]] CONJURE_API core::result<void> validate_managed_directory(
+      const std::filesystem::path &managedDirectory
+    );
 
     /// <summary>
     /// The upper-case name of a status ("READY").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(script_host_status status) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(script_host_status status) noexcept;
 
     /// <summary>
     /// The upper-case name of a backend ("NULL_HOST").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(script_backend backend) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(script_backend backend) noexcept;
 
     /// <summary>
     /// The upper-case name of a mode ("SELF_CONTAINED").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(host_mode mode) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(host_mode mode) noexcept;
 }

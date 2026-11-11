@@ -1,0 +1,24 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "physics.raycast",
+    "args": {
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "direction": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

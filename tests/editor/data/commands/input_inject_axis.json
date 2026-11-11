@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.inject",
+    "args": {
+      "axis": "LEFT_X",
+      "value": 0.5
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "injected": 1
+    }
+  }
+}

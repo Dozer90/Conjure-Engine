@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/types.h"
 
@@ -16,7 +17,7 @@ namespace conjure::math {
     /// under rotation is an approximation; the documented behaviours below say exactly which
     /// identities hold.
     /// </summary>
-    struct transform {
+    struct CONJURE_API transform {
         vec3 position = vec3(0.0f);
         quat rotation = quat(1.0f, 0.0f, 0.0f, 0.0f);   // identity (w, x, y, z)
         vec3 scale = vec3(1.0f);

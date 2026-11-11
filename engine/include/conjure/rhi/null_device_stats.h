@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <string>
@@ -12,7 +13,7 @@
 
 namespace conjure::rhi {
 
-    struct null_device_stats {
+    struct CONJURE_API null_device_stats {
         // Resource creation, by type.
         u32 heapsCreated = 0;
         u32 texturesCreated = 0;

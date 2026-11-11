@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 
 #include <cstring>
@@ -19,7 +20,7 @@ namespace conjure::core {
     /// RAII handle to a loaded shared library. Move-only; the library is unloaded when the last
     /// owner is destroyed. Symbols looked up through it are invalid after that.
     /// </summary>
-    class dynamic_library {
+    class CONJURE_API dynamic_library {
         private:
             void *mHandle = nullptr;
             std::filesystem::path mPath = {};

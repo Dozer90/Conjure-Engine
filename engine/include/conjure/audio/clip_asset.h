@@ -6,6 +6,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_type_registry.h"
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -78,14 +79,14 @@ namespace conjure::audio {
     /// <summary>
     /// Lower-case JSON spelling ("auto", "pcm", "streamed").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(clip_storage_setting value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(clip_storage_setting value) noexcept;
 
     /// <summary>
     /// Importer settings, mirrored by the JSON object
     /// { "storage": "auto", "streamThresholdSeconds": 10.0, "forceMono": false, "sampleRate": 0, "normalize": false }.
     /// forceMono, sampleRate and normalize apply to PCM storage only; STREAMED keeps the file.
     /// </summary>
-    struct clip_import_settings {
+    struct CONJURE_API clip_import_settings {
         clip_storage_setting storage = clip_storage_setting::AUTO;
         f64 streamThresholdSeconds = 10.0;
         bool forceMono = false;
@@ -115,7 +116,7 @@ namespace conjure::audio {
     /// <summary>
     /// True when the lower-case extension (".wav") is one the importer claims.
     /// </summary>
-    [[nodiscard]] bool is_clip_extension(std::string_view extension) noexcept;
+    [[nodiscard]] CONJURE_API bool is_clip_extension(std::string_view extension) noexcept;
 
     /// <summary>
     /// Imports a source file into a cooked blob (header + payload). PCM storage decodes with
@@ -123,7 +124,7 @@ namespace conjure::audio {
     /// records the probed format. Deterministic for the same input and build. Errors are those of
     /// probe() / decode_to_pcm().
     /// </summary>
-    [[nodiscard]] core::result<std::vector<byte>> cook_clip(
+    [[nodiscard]] CONJURE_API core::result<std::vector<byte>> cook_clip(
       std::span<const byte> encoded,
       const clip_import_settings &settings
     );
@@ -133,20 +134,20 @@ namespace conjure::audio {
     /// channels 1 or 2, sample rate in range, dataBytes equal to the payload size and (PCM) equal to
     /// frameCount * channels * 4. Fails with INVALID_CLIP naming the mismatch.
     /// </summary>
-    [[nodiscard]] core::result<clip_blob_header> read_clip_blob_header(std::span<const byte> blob);
+    [[nodiscard]] CONJURE_API core::result<clip_blob_header> read_clip_blob_header(std::span<const byte> blob);
 
     /// <summary>
     /// Turns a blob into a self-contained clip: PCM samples are copied into a fresh pcm_buffer,
     /// STREAMED bytes are copied and probed so the info is complete. Errors: INVALID_CLIP for a bad
     /// header, DECODE_FAILED / UNSUPPORTED_FORMAT when streamed bytes do not decode.
     /// </summary>
-    [[nodiscard]] core::result<audio_clip> load_clip_blob(std::span<const byte> blob);
+    [[nodiscard]] CONJURE_API core::result<audio_clip> load_clip_blob(std::span<const byte> blob);
 
     /// <summary>
     /// The conjure.audio.clip importer: .wav .ogg .mp3 .flac -> one cooked clip blob (cook_clip).
     /// Deterministic and stateless; runs on a worker thread.
     /// </summary>
-    class audio_clip_importer final : public assets::asset_importer {
+    class CONJURE_API audio_clip_importer final : public assets::asset_importer {
         public:
             audio_clip_importer();
             ~audio_clip_importer() override;
@@ -183,7 +184,7 @@ namespace conjure::audio {
     /// The conjure.audio.clip loader: blob -> audio_clip on the load job; finalise returns the clip
     /// unchanged; the fallback is the silent clip.
     /// </summary>
-    class audio_clip_loader final : public assets::typed_asset_loader<audio_clip, audio_clip> {
+    class CONJURE_API audio_clip_loader final : public assets::typed_asset_loader<audio_clip, audio_clip> {
         public:
             audio_clip_loader();
             ~audio_clip_loader() override;
@@ -209,7 +210,7 @@ namespace conjure::audio {
     /// Registers conjure.audio.clip (with its loader) and the clip importer. Main thread, from
     /// audio_subsystem::startup. Errors are those of the two registries (TYPE_DUPLICATE, ...).
     /// </summary>
-    [[nodiscard]] core::result<void> register_asset_types(
+    [[nodiscard]] CONJURE_API core::result<void> register_asset_types(
       assets::asset_type_registry &types,
       assets::importer_registry &importers
     );

@@ -4,6 +4,7 @@
 #include "conjure/core/reflect/type_id.h"
 #include "conjure/core/reflect/type_info.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/event.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -41,7 +42,7 @@ namespace conjure::core::reflect {
     /// <summary>
     /// Registered struct and enum descriptions with stable addresses and lock-free lookup.
     /// </summary>
-    class type_registry {
+    class CONJURE_API type_registry {
         private:
             struct state;
             std::unique_ptr<state> mState = nullptr;   // storage, indexes, mutexes and events
@@ -144,20 +145,20 @@ namespace conjure::core::reflect {
     /// <summary>
     /// The process-wide registry that type_info_of() and enum_info_of() fill.
     /// </summary>
-    [[nodiscard]] type_registry &registry() noexcept;
+    [[nodiscard]] CONJURE_API type_registry &registry() noexcept;
 
     namespace detail {
         /// <summary>
         /// Registers a macro-built struct description in registry(); logs an ERROR and returns
         /// nullptr when the registry rejects it.
         /// </summary>
-        [[nodiscard]] const type_info *register_described_type(type_info info) noexcept;
+        [[nodiscard]] CONJURE_API const type_info *register_described_type(type_info info) noexcept;
 
         /// <summary>
         /// Registers a macro-built enumeration description in registry(); logs an ERROR and returns
         /// nullptr when the registry rejects it.
         /// </summary>
-        [[nodiscard]] const enum_info *register_described_enum(enum_info info) noexcept;
+        [[nodiscard]] CONJURE_API const enum_info *register_described_enum(enum_info info) noexcept;
     }
 
     /// <summary>

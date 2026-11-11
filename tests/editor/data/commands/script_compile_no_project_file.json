@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.compile",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

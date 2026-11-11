@@ -65,6 +65,31 @@ TEST_SUITE("assets/asset_manager") {
         CHECK_FALSE(fixture.manager->load(asset_id()).is_bound());
     }
 
+    TEST_CASE("asset_manager - find_slot and type_of answer without creating a slot") {
+        pipeline_fixture fixture = {};
+        fixture.manager->swap_source(source_with({{test_id(1), "one"}}));
+        CHECK(fixture.manager->find_slot(test_id(1)) == nullptr);
+        CHECK(fixture.manager->find_slot(test_id(9)) == nullptr);
+        CHECK(fixture.manager->find_slot(asset_id()) == nullptr);
+        // The sources answer the type of a uuid nothing bound yet; an unknown uuid has none.
+        REQUIRE(fixture.manager->type_of(test_id(1)).has_value());
+        CHECK(fixture.manager->type_of(test_id(1)).value() == asset_type_traits<test_asset>::id());
+        CHECK_FALSE(fixture.manager->type_of(test_id(9)).has_value());
+        CHECK_FALSE(fixture.manager->type_of(asset_id()).has_value());
+        CHECK(fixture.manager->stats().slots == 0);
+        // Once bound, find_slot is the slot bind_slot returns and type_of reads the recorded type.
+        const asset_slot *bound = fixture.manager->bind_slot(test_id(1));
+        REQUIRE(bound != nullptr);
+        CHECK(fixture.manager->find_slot(test_id(1)) == bound);
+        CHECK(fixture.manager->type_of(test_id(1)).value() == asset_type_traits<test_asset>::id());
+        // A slot bound for a uuid no source knows records no type, and type_of says so.
+        const asset_slot *orphan = fixture.manager->bind_slot(test_id(9));
+        REQUIRE(orphan != nullptr);
+        CHECK(fixture.manager->find_slot(test_id(9)) == orphan);
+        CHECK_FALSE(fixture.manager->type_of(test_id(9)).has_value());
+        CHECK(fixture.manager->stats().slots == 2);
+    }
+
     TEST_CASE("asset_manager - bind takes the type from the source and reports a mismatch once") {
         pipeline_fixture fixture = {};
         conjure::testing::log_capture logs = {};

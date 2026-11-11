@@ -11,6 +11,7 @@
 #include "conjure/audio/voice.h"
 
 #include "conjure/assets/asset_ref.h"
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/math.h"
@@ -38,7 +39,7 @@ namespace conjure::audio {
     /// <summary>
     /// Construction settings; validate() mirrors the checks construction performs.
     /// </summary>
-    struct audio_settings {
+    struct CONJURE_API audio_settings {
         audio_backend_kind backend = audio_backend_kind::AUTO;
         u32 sampleRate = 48000;                       // Mix rate; MIN_SAMPLE_RATE..MAX_SAMPLE_RATE
         u32 periodFrames = 480;
@@ -90,7 +91,7 @@ namespace conjure::audio {
         device_state deviceState = device_state::STOPPED;
     };
 
-    class audio_engine {
+    class CONJURE_API audio_engine {
         private:
             friend struct detail::audio_engine_helpers;   // the main-thread algorithms of audio_engine.cpp
 

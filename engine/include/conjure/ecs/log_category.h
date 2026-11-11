@@ -7,5 +7,5 @@ namespace conjure::ecs {
     /// <summary>
     /// Log category of the ecs module ("ecs").
     /// </summary>
-    CONJURE_DECLARE_LOG_CATEGORY(LOG_ECS);
+    CONJURE_DECLARE_ENGINE_LOG_CATEGORY(LOG_ECS);
 }

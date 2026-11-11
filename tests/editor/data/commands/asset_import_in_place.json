@@ -1,0 +1,21 @@
+{
+  "files": {
+    "assets/textures/here.png": "@tiny_png"
+  },
+  "setup": [],
+  "request": {
+    "cmd": "asset.import",
+    "args": {
+      "source": "textures/here.png"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://textures/here.png",
+      "status": "OK",
+      "copied": false
+    }
+  },
+  "roundTrip": false
+}

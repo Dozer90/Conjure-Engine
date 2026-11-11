@@ -189,7 +189,7 @@ Enums: `rhi_backend_choice : uint8_t { AUTO, D3D12, VULKAN, NULL_DEVICE }`,
 | `audio_settings` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000`, `std::string device = ""` (empty = default), `float masterGain = 1`, `float dopplerFactor = 0`, `float speedOfSound = 343`, `std::vector<audio_group_setting> groups` (`{ std::string name; std::string parent; float gain; }`); mapped one-to-one onto `audio::audio_settings` by `audio_subsystem` (`12_audio.md` 4.4, 8; `NULL_DEVICE` -> `audio_backend_kind::NULL_BACKEND`) (R52) |
 | `scripting_settings` | `bool enabled = true`, `bool required = true` (false: missing runtime warns and disables), `std::filesystem::path gameAssembly` (relative to project root), `bool hotReload = true` (ignored in Distribution), `script_export_mode exportMode = FRAMEWORK_DEPENDENT` (`FRAMEWORK_DEPENDENT`, `SELF_CONTAINED`), `bool exportDebugSymbols = false` (R39) |
 | `modules_settings` | `std::vector<std::filesystem::path> searchPaths = {"modules"}`, `bool enginePlugins = true` (also discover `<engine>/plugins`), `std::vector<std::string> required = {}` (manifest names that must load) (R20) |
-| `jobs_settings` | `uint32_t workerCount = 0` (0 = `hardware_concurrency - 1` clamped to `[1, 16]`) |
+| `jobs_settings` | `uint32_t workerCount = AUTO_WORKER_COUNT` (`0xFFFFFFFF` = `hardware_concurrency - 1` clamped to `[1, 16]`; `0` = every job runs inline on the calling thread, `08_testing.md` D4) |
 | `memory_settings` | `size_t frameArenaBytes = 32 MiB`, `size_t frameThreadBlockBytes = 256 KiB` |
 
 ```cpp

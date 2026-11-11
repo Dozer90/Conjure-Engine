@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/memory/tracked_allocation.h"
 #include "conjure/core/types.h"
 
@@ -24,7 +25,7 @@ namespace conjure::core::memory {
     ///
     /// Not thread-safe: one arena belongs to one thread (or to a lock held by its owner).
     /// </summary>
-    class arena {
+    class CONJURE_API arena {
         private:
             struct block;
 

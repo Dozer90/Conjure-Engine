@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.info",
+    "args": {
+      "asset": "textures/none.png"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

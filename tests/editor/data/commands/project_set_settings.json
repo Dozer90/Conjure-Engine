@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.set_settings",
+    "args": {
+      "settings": {
+        "startup_scene": "scenes/test.scene.json"
+      }
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "startupScene": "scenes/test.scene.json"
+    }
+  }
+}

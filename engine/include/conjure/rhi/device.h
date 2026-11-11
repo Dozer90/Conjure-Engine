@@ -4,6 +4,7 @@
 #include "conjure/rhi/native_window.h"
 #include "conjure/rhi/null_device_stats.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -43,7 +44,7 @@ namespace conjure::rhi {
         native_window window = {};              // Vulkan: selects the surface instance extensions; NONE = headless
     };
 
-    class device {
+    class CONJURE_API device {
         private:
             struct impl;
             struct create_tag {};

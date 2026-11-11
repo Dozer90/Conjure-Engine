@@ -1,0 +1,24 @@
+{
+  "setup": [
+    {
+      "cmd": "asset.create_material",
+      "args": {
+        "path": "materials/cell"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "asset.set",
+    "args": {
+      "asset": "materials/cell.cmat",
+      "path": "no.such.member",
+      "value": 1
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

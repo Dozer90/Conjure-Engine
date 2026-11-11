@@ -92,8 +92,10 @@ its own so it is complete on its own.
 | `threadNamePrefix` | `"conjure-worker"` | Workers are named `<prefix>-<index>` in debuggers and profilers. |
 
 `start(desc)` returns `result<void>`: `INVALID_STATE` when already running, `INVALID_ARGUMENT` for a zero or oversized
-queue, too many workers or an empty name prefix. `stop()` lets the workers finish everything queued, joins them and
-is safe to call twice; the destructor calls it.
+queue, too many workers or an empty name prefix. It returns only once every worker thread is running and waiting for
+work; the thread names are prepared on the calling thread, so a worker allocates nothing from then on and an
+allocation gate opened right after `start()` is never charged a worker's start-up. `stop()` lets the workers finish
+everything queued, joins them and is safe to call twice; the destructor calls it.
 
 `schedule(job, priority)` queues one `std::function<void()>` and returns a `job_handle`. `schedule(span, priority)`
 queues a batch under a single handle that completes when every job in it has run. `wait(handle)` blocks until the

@@ -5,6 +5,7 @@
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_host.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/delegate.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
@@ -73,7 +74,7 @@ namespace conjure::scripting {
         u32 zombieAssemblies = 0;
     };
 
-    class script_runtime {
+    class CONJURE_API script_runtime {
         private:
             struct pending_create {
                 script_entry_id id = {};
@@ -531,5 +532,5 @@ namespace conjure::scripting {
     /// Fills the core-owned entries (log_*, script_*, the five entity_*, component_*, query_*) of a table
     /// with functions that act on script_runtime::active(). Called by script_runtime::initialize.
     /// </summary>
-    void fill_core_native_entries(conjure_native_api &api) noexcept;
+    CONJURE_API void fill_core_native_entries(conjure_native_api &api) noexcept;
 }

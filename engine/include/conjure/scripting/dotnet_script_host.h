@@ -3,6 +3,7 @@
 #include "conjure/scripting/native_api.h"
 #include "conjure/scripting/script_host.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -14,7 +15,7 @@
 
 namespace conjure::scripting {
 
-    class dotnet_script_host final : public script_host {
+    class CONJURE_API dotnet_script_host final : public script_host {
         private:
             conjure_managed_api mManagedApi = {};
             conjure_native_api *mNativeApi = nullptr;

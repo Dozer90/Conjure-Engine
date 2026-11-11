@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.list",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "pending": 0
+    }
+  }
+}

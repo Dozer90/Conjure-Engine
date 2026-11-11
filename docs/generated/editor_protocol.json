@@ -1,0 +1,3785 @@
+{
+    "protocolVersion": 1,
+    "commands": [
+        {
+            "name": "asset.create_folder",
+            "summary": "Creates a directory under assets://.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "asset.create_material",
+            "summary": "Writes a .cmat material with the given factors and texture references and imports it.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "baseColor": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 4
+                    },
+                    "metallic": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "roughness": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "emissive": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "textures": {
+                        "type": "object",
+                        "properties": {
+                            "albedo": {
+                                "type": "string"
+                            },
+                            "normal": {
+                                "type": "string"
+                            },
+                            "metallicRoughness": {
+                                "type": "string"
+                            },
+                            "occlusion": {
+                                "type": "string"
+                            },
+                            "emissive": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "asset.delete",
+            "summary": "Deletes an asset (source, .meta and cooked blobs) or an empty folder; undo restores it with the same uuid.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "asset": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "asset"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "asset.import",
+            "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. Undo removes a copied file; importing a file already inside the project records nothing.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string"
+                    },
+                    "destination": {
+                        "type": "string"
+                    },
+                    "options": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "required": [
+                    "source"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "asset.info",
+            "summary": "One asset's record, dependencies, sub-assets and importer settings.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "asset": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "asset"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "asset.list",
+            "summary": "Every asset record, optionally filtered by path substring and type name.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "subAssets": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "assets": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "asset.reimport",
+            "summary": "Cooks an asset again and reloads it.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "asset": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "asset"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "asset.restore",
+            "summary": "Writes a source (and its .meta) back from base64 and imports it; the inverse of asset.delete.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "contentBase64": {
+                        "type": "string"
+                    },
+                    "metaBase64": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path",
+                    "contentBase64"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "asset.set",
+            "summary": "Sets a member of a JSON asset (.cmat, .scene.json, .prefab.json) by dotted path and reimports it.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "asset": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "value": {}
+                },
+                "required": [
+                    "asset",
+                    "path",
+                    "value"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "component.add",
+            "summary": "Adds a component (by registered name or alias) with an optional initial value.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "required": [
+                    "entity",
+                    "type"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "component.get",
+            "summary": "Reads a property (or a whole component) by reflection path.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "value": {},
+                    "type": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "component.list",
+            "summary": "The editable component types an entity carries.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "types": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "component.remove",
+            "summary": "Removes a component (undo restores its value).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "type"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "component.set",
+            "summary": "Sets a property by reflection path (\"transform.position.x\"); a bare type name replaces the whole component.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "value": {}
+                },
+                "required": [
+                    "entity",
+                    "path",
+                    "value"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "previous": {},
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "component.set_many",
+            "summary": "Sets several properties at once as one undo entry (all or nothing).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "sets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity": {
+                                    "type": "string",
+                                    "description": "guid or hierarchy path"
+                                },
+                                "path": {
+                                    "type": "string"
+                                },
+                                "value": {}
+                            },
+                            "required": [
+                                "entity",
+                                "path",
+                                "value"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "sets"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "applied": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "console.clear",
+            "summary": "Empties the console ring.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "cleared": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "console.read",
+            "summary": "Log lines after a sequence number, filtered by level and category.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "sinceSeq": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "minLevel": {
+                        "type": "string",
+                        "enum": [
+                            "trace",
+                            "debug",
+                            "info",
+                            "warn",
+                            "error",
+                            "fatal"
+                        ]
+                    },
+                    "category": {
+                        "type": "string"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array"
+                    },
+                    "lastSeq": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.batch",
+            "summary": "Runs several commands as one undo entry; atomic batches roll back on the first failure.",
+            "flags": [
+                "mutates",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "cmd": {
+                                    "type": "string"
+                                },
+                                "args": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }
+                            },
+                            "required": [
+                                "cmd"
+                            ]
+                        }
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "atomic": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "commands"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.begin_transaction",
+            "summary": "Opens an undo transaction for the client; mutating commands until end_transaction form one entry.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.end_transaction",
+            "summary": "Closes the client's undo transaction.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.exec_file",
+            "summary": "Runs a command file (JSON array or NDJSON) and answers with the execution summary.",
+            "flags": [
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "keepGoing": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "executed": {
+                        "type": "integer"
+                    },
+                    "succeeded": {
+                        "type": "integer"
+                    },
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "firstFailedIndex": {
+                        "type": "integer"
+                    },
+                    "exitCode": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.quit",
+            "summary": "Stops the editor process after the current frame, saving the scene first when asked.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "exitCode": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "saveChanges": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "exitCode": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "editor.schema",
+            "summary": "The whole command catalogue with argument and result schemas, or one command's descriptor.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "editor.state",
+            "summary": "Project, scene, play state, revision, selection and transport facts.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "editor.wait_frames",
+            "summary": "Answers once the engine ran the given number of frames.",
+            "flags": [
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "frames": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "frame": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.bounds",
+            "summary": "The world bounds of an entity's subtree (a 1 m box around its position when nothing has render bounds).",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "min": {
+                        "type": "array"
+                    },
+                    "max": {
+                        "type": "array"
+                    },
+                    "fromRenderBounds": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.create",
+            "summary": "Creates an entity (with name, transform and guid) and the given components.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "parent": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "guid": {
+                        "type": "string"
+                    },
+                    "index": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "components": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.create_many",
+            "summary": "Creates count entities sharing the components, named by nameFormat ({i} = index), with per-entity overrides.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "nameFormat": {
+                        "type": "string"
+                    },
+                    "parent": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "components": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "overrides": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "guids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "count"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.destroy",
+            "summary": "Destroys an entity and its subtree (undo restores it exactly).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "destroyed": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.destroy_many",
+            "summary": "Destroys several entities and their subtrees.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "description": "guid or hierarchy path"
+                        }
+                    }
+                },
+                "required": [
+                    "entities"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "destroyed": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.duplicate",
+            "summary": "Copies an entity's subtree count times next to it, each copy offset further.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "offset": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.find",
+            "summary": "Entities matching every given filter (name, tag, layer, component), in hierarchy order.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "tag": {
+                        "type": "string"
+                    },
+                    "layer": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 31
+                    },
+                    "component": {
+                        "type": "string"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.get",
+            "summary": "Everything about an entity: identity, parent, children, enabled state and components as JSON.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "components": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "entity.rename",
+            "summary": "Changes an entity's name.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.restore",
+            "summary": "Re-creates a subtree from a prefab-format archive keeping its guids (the inverse of entity.destroy).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "archive": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "parent": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "index": {
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                },
+                "required": [
+                    "archive"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "entities": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.set_enabled",
+            "summary": "Enables or disables an entity (and thereby its subtree).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "enabled"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.set_parent",
+            "summary": "Moves an entity under another (null = root) at a sibling index, keeping its world transform by default.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "parent": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "keepWorld": {
+                        "type": "boolean"
+                    },
+                    "index": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "localTransform": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "parent": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "entity.set_transform",
+            "summary": "Sets position, rotation ([x,y,z,w] or euler degrees) and scale in local or world space.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        }
+                    },
+                    "rotation": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        }
+                    },
+                    "scale": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        }
+                    },
+                    "space": {
+                        "type": "string",
+                        "enum": [
+                            "local",
+                            "world"
+                        ]
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "local": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "history.clear",
+            "summary": "Forgets every undo entry.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "cleared": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "history.list",
+            "summary": "The undo entries (newest last) and the cursor.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array"
+                    },
+                    "cursor": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "history.redo",
+            "summary": "Redoes the most recently undone entries.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "applied": {
+                        "type": "integer"
+                    },
+                    "labels": {
+                        "type": "array"
+                    }
+                }
+            }
+        },
+        {
+            "name": "history.undo",
+            "summary": "Undoes the most recent entries.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "applied": {
+                        "type": "integer"
+                    },
+                    "labels": {
+                        "type": "array"
+                    }
+                }
+            }
+        },
+        {
+            "name": "input.clear",
+            "summary": "Releases every held key and button.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "cleared": {
+                        "type": "boolean"
+                    },
+                    "frame": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "input.inject",
+            "summary": "Injects synthetic input: a key, mouse button or gamepad button (press, release or tap held for holdFrames), a gamepad axis value, a mouse position, scroll or UTF-8 text (one text event per code point).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "button": {
+                        "type": "string"
+                    },
+                    "gamepadButton": {
+                        "type": "string"
+                    },
+                    "gamepad": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "axis": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "number"
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "press",
+                            "release",
+                            "tap"
+                        ]
+                    },
+                    "holdFrames": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "modifiers": {
+                        "type": "string"
+                    },
+                    "position": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                    },
+                    "scroll": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                    },
+                    "text": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "module.build",
+            "summary": "Runs the project's CMake build (extensions.build preset, or <module>/build) for the editor's configuration with the cmake on the PATH, then reloads the module.",
+            "flags": [
+                "requires_project",
+                "editing_only",
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "config": {
+                        "type": "string"
+                    },
+                    "target": {
+                        "type": "string"
+                    },
+                    "reload": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "succeeded": {
+                        "type": "boolean"
+                    },
+                    "diagnostics": {
+                        "type": "array"
+                    },
+                    "exitCode": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "module.discover",
+            "summary": "Registers every <directory>/*/module.json (relative to the project root when not absolute).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "directory"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string"
+                    },
+                    "added": {
+                        "type": "integer"
+                    },
+                    "warning": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "module.list",
+            "summary": "Every registered module with its state, version, last error, dependencies and command count.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "modules": {
+                        "type": "array"
+                    },
+                    "loadOrder": {
+                        "type": "array"
+                    },
+                    "pending": {
+                        "type": "integer"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "module.load",
+            "summary": "Enqueues a load; the engine applies it at the next frame start and module.state reports the outcome.",
+            "flags": [
+                "mutates",
+                "editing_only",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "module.reload",
+            "summary": "Enqueues a reload of the module and its dependents (play stops and a dirty scene is saved first).",
+            "flags": [
+                "mutates",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": [
+                            "full",
+                            "managed_only"
+                        ]
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "module.unload",
+            "summary": "Enqueues an unload (play stops and a dirty scene is saved first); refused while the module is in use unless policy is remove_instances.",
+            "flags": [
+                "mutates",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "policy": {
+                        "type": "string",
+                        "enum": [
+                            "refuse_if_in_use",
+                            "remove_instances"
+                        ]
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "physics.overlap_sphere",
+            "summary": "The entities whose bodies overlap a sphere.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "center": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "radius": {
+                        "type": "number"
+                    },
+                    "maxResults": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "integer"
+                            ]
+                        }
+                    },
+                    "includeTriggers": {
+                        "type": "boolean"
+                    },
+                    "includeStatic": {
+                        "type": "boolean"
+                    },
+                    "ignore": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "center",
+                    "radius"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "physics.raycast",
+            "summary": "Casts a ray against the physics bodies: the closest hit, or every hit sorted by distance with all:true.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "direction": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "maxDistance": {
+                        "type": "number"
+                    },
+                    "all": {
+                        "type": "boolean"
+                    },
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "integer"
+                            ]
+                        }
+                    },
+                    "includeTriggers": {
+                        "type": "boolean"
+                    },
+                    "includeStatic": {
+                        "type": "boolean"
+                    },
+                    "ignore": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "origin",
+                    "direction"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "play.pause",
+            "summary": "PLAYING -> PAUSED: the fixed loop stops, UPDATE systems flagged RUNS_WHILE_PAUSED still run.",
+            "flags": [
+                "requires_scene",
+                "playing_only"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "play.resume",
+            "summary": "PAUSED -> PLAYING.",
+            "flags": [
+                "requires_scene",
+                "playing_only"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "play.start",
+            "summary": "Snapshots the scene and runs the simulation (EDITING -> PLAYING); the undo stack is frozen until play.stop.",
+            "flags": [
+                "requires_scene",
+                "editing_only",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "play.state",
+            "summary": "The play state, engine frame, simulation frame and time.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "play.step",
+            "summary": "PAUSED only: runs exactly fixedSteps fixed steps on the next frame and answers once they ran.",
+            "flags": [
+                "requires_scene",
+                "playing_only",
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "fixedSteps": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "play.stop",
+            "summary": "Stops the simulation and restores the scene snapshot taken by play.start (guids preserved).",
+            "flags": [
+                "requires_scene",
+                "playing_only",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "editing",
+                            "playing",
+                            "paused"
+                        ]
+                    },
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "simulationFrame": {
+                        "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefab.apply",
+            "summary": "Writes an instance's current state back into its prefab asset.",
+            "flags": [
+                "mutates",
+                "requires_project",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "guid": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefab.create",
+            "summary": "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance.",
+            "flags": [
+                "mutates",
+                "requires_project",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "uuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "entity",
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "guid": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefab.instantiate",
+            "summary": "Instantiates a prefab (uuid or path) count times under a parent, with an optional root name, transform and root guids.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "prefab": {
+                        "type": "string"
+                    },
+                    "parent": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "transform": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "count": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "guids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": [
+                    "prefab"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "prefab": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefab.unpack",
+            "summary": "Removes the prefab markers of an instance so it becomes plain entities.",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "recursive": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "entity"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guid": {
+                        "type": "string"
+                    },
+                    "entities": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "profiler.frame_stats",
+            "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-phase milliseconds, fixed steps, renderer counters and the entity count.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "frames": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "cpuMs": {
+                        "type": "number"
+                    },
+                    "gpuMs": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "systems": {
+                        "type": "array"
+                    },
+                    "drawCalls": {
+                        "type": "integer"
+                    },
+                    "entityCount": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.create",
+            "summary": "Creates a project directory with project.json, assets/ and scripts/.",
+            "flags": [
+                "mutates",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "template": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path",
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.export",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs).",
+            "flags": [
+                "requires_project",
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string"
+                    },
+                    "config": {
+                        "type": "string"
+                    },
+                    "distributionDirectory": {
+                        "type": "string"
+                    },
+                    "copyRuntime": {
+                        "type": "boolean"
+                    },
+                    "buildNativeModule": {
+                        "type": "boolean"
+                    },
+                    "publishManaged": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "directory"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.info",
+            "summary": "The open project's description.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.list_scenes",
+            "summary": "Every .scene.json under assets://.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "scenes": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "project.open",
+            "summary": "Opens a project: the engine restarts over it at the next frame boundary.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.save",
+            "summary": "Writes project.json.",
+            "flags": [
+                "mutates",
+                "requires_project",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "project.set_settings",
+            "summary": "Merges members into project.json (startup_scene, window, time, ...) and saves it.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "replace": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "settings"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "reflection.asset_types",
+            "summary": "The registered asset types with the importers and extensions seen in the project and their settings schema.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "types": {
+                        "type": "array"
+                    },
+                    "importers": {
+                        "type": "array"
+                    }
+                }
+            }
+        },
+        {
+            "name": "reflection.components",
+            "summary": "Every component type with its module, flags, aliases and reflected fields (type, default, attributes).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "includeHidden": {
+                        "type": "boolean"
+                    },
+                    "fields": {
+                        "type": "boolean"
+                    },
+                    "module": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "components": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "reflection.type",
+            "summary": "The field tree of a component (name, alias or suffix), a reflected struct or an enumeration.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "scene.close",
+            "summary": "Closes the open scene (discard: true drops unsaved changes).",
+            "flags": [
+                "editing_only",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "discard": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "closed": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.get_hierarchy",
+            "summary": "The scene tree as nested {guid, name, children} nodes.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "root": {
+                        "type": "string"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "roots": {
+                        "type": "array"
+                    },
+                    "entityCount": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.info",
+            "summary": "Path, name, entity count, structure version, dirty flag and settings of the open scene.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "scene.new",
+            "summary": "Replaces the open scene with an empty one.",
+            "flags": [
+                "mutates",
+                "requires_project",
+                "editing_only",
+                "not_in_batch",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.open",
+            "summary": "Loads a scene file (asset path or path relative to assets://) in place of the open one.",
+            "flags": [
+                "requires_project",
+                "editing_only",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "entityCount": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.query",
+            "summary": "Entities carrying every 'with' type and none of the 'without' types, with the asked field values.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "with": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "without": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "rows": {
+                        "type": "array"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.save",
+            "summary": "Writes the open scene to its path.",
+            "flags": [
+                "mutates",
+                "requires_scene",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.save_as",
+            "summary": "Writes the open scene to a new path, which becomes its path.",
+            "flags": [
+                "mutates",
+                "requires_scene",
+                "no_undo"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "scene.set_settings",
+            "summary": "Merges members into the scene settings (ambient, gravity, ...).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "replace": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "settings"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.attach",
+            "summary": "Attaches a script class to an entity with optional initial fields (sugar over the script component).",
+            "flags": [
+                "mutates",
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "className": {
+                        "type": "string"
+                    },
+                    "fields": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "required": [
+                    "entity",
+                    "className"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "script.compile",
+            "summary": "Runs dotnet build on <project>/scripts/Game.csproj and answers with the diagnostics.",
+            "flags": [
+                "requires_project",
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "configuration": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "succeeded": {
+                        "type": "boolean"
+                    },
+                    "diagnostics": {
+                        "type": "array"
+                    },
+                    "durationMs": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.create",
+            "summary": "Creates <project>/scripts/<Name>.cs from a template (Behaviour or Empty) and the Game.csproj when missing.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "template": {
+                        "type": "string",
+                        "enum": [
+                            "Behaviour",
+                            "Empty"
+                        ]
+                    },
+                    "namespace": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "className": {
+                        "type": "string"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.delete",
+            "summary": "Deletes a script source (undo writes it back); project=true also removes the project file when no source is left.",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "project": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "projectRemoved": {
+                        "type": "boolean"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.gc",
+            "summary": "Asks the managed side to collect garbage and reports zombie assemblies.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "integer"
+                    },
+                    "zombies": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.list",
+            "summary": "The script sources of the project (className as namespace.Class read from the source, with the runtime's reflected fields) and the classes the runtime knows.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "scripts": {
+                        "type": "array"
+                    },
+                    "loadedClasses": {
+                        "type": "array"
+                    },
+                    "project": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.read",
+            "summary": "Reads a script source (path relative to <project>/scripts).",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.reload",
+            "summary": "Reloads the game assembly (hot reload) through the script runtime.",
+            "flags": [
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "assembly": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "assembly": {
+                        "type": "string"
+                    },
+                    "reloadCount": {
+                        "type": "integer"
+                    },
+                    "classes": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "script.write",
+            "summary": "Writes a script source inside <project>/scripts (creating it when new).",
+            "flags": [
+                "mutates",
+                "requires_project"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path",
+                    "source"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "bytes": {
+                        "type": "integer"
+                    },
+                    "created": {
+                        "type": "boolean"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "selection.clear",
+            "summary": "Empties the selection.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "entities": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "primary": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "selection.get",
+            "summary": "The selected entities.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "entities": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "primary": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "selection.set",
+            "summary": "Replaces, extends or reduces the selection.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "description": "guid or hierarchy path"
+                        }
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "replace",
+                            "add",
+                            "remove"
+                        ]
+                    }
+                },
+                "required": [
+                    "entities"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "guids": {
+                        "type": "array"
+                    },
+                    "entities": {
+                        "type": "array"
+                    },
+                    "count": {
+                        "type": "integer"
+                    },
+                    "primary": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        {
+            "name": "session.hello",
+            "summary": "Handshake: reports the protocol and engine versions, the schema hash and the client id.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string"
+                    },
+                    "clientName": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "protocolVersion": {
+                        "type": "integer"
+                    },
+                    "engineVersion": {
+                        "type": "string"
+                    },
+                    "schemaHash": {
+                        "type": "string"
+                    },
+                    "clientId": {
+                        "type": "integer"
+                    },
+                    "headless": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "session.ping",
+            "summary": "The current frame and scene revision.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "frame": {
+                        "type": "integer"
+                    },
+                    "revision": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "session.subscribe",
+            "summary": "Replaces the client's event subscriptions and, optionally, the minimum level of log events.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "events": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "minLogLevel": {
+                        "type": "string",
+                        "enum": [
+                            "trace",
+                            "debug",
+                            "info",
+                            "warn",
+                            "error",
+                            "fatal"
+                        ]
+                    }
+                },
+                "required": [
+                    "events"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "subscribed": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.debug_draw",
+            "summary": "Toggles the viewport's physics shapes, bounds and grid overlays (NOT_AVAILABLE headless).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "physics": {
+                        "type": "boolean"
+                    },
+                    "bounds": {
+                        "type": "boolean"
+                    },
+                    "grid": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "physics": {
+                        "type": "boolean"
+                    },
+                    "bounds": {
+                        "type": "boolean"
+                    },
+                    "grid": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.focus",
+            "summary": "Frames an entity's subtree, several entities, the selection or the whole scene.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "entity": {
+                        "type": "string",
+                        "description": "guid or hierarchy path"
+                    },
+                    "entities": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "description": "guid or hierarchy path"
+                        }
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "view.get_camera",
+            "summary": "The editor camera (fov in degrees).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "position": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "target": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "fov": {
+                        "type": "number"
+                    },
+                    "orthographic": {
+                        "type": "boolean"
+                    },
+                    "orthographicHeight": {
+                        "type": "number"
+                    },
+                    "near": {
+                        "type": "number"
+                    },
+                    "far": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.mode",
+            "summary": "The viewport projection mode (3d or 2d).",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object"
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string"
+                    },
+                    "orthographic": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.pick",
+            "summary": "Picks the entity under a normalised viewport position (x, y with the editor camera) or along a world ray; mode mesh (triangles), bounds or physics.",
+            "flags": [
+                "requires_scene"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "number"
+                    },
+                    "y": {
+                        "type": "number"
+                    },
+                    "aspect": {
+                        "type": "number"
+                    },
+                    "origin": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "direction": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "mesh",
+                            "bounds",
+                            "physics"
+                        ]
+                    },
+                    "maxDistance": {
+                        "type": "number"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "hit": {
+                        "type": "boolean"
+                    },
+                    "guid": {
+                        "type": "string"
+                    },
+                    "point": {
+                        "type": "array"
+                    },
+                    "normal": {
+                        "type": "array"
+                    },
+                    "distance": {
+                        "type": "number"
+                    }
+                },
+                "additionalProperties": true
+            }
+        },
+        {
+            "name": "view.screenshot",
+            "summary": "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG.",
+            "flags": [
+                "async",
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "width": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "height": {
+                        "type": "integer",
+                        "minimum": 1
+                    },
+                    "camera": {
+                        "type": "string"
+                    },
+                    "format": {
+                        "type": "string"
+                    },
+                    "waitFrames": {
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "width": {
+                        "type": "integer"
+                    },
+                    "height": {
+                        "type": "integer"
+                    },
+                    "frame": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.set_camera",
+            "summary": "Moves the editor camera: position, target, vertical fov (degrees, 0 < fov < 180), orthographic mode and planes.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "position": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "target": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "fov": {
+                        "type": "number"
+                    },
+                    "orthographic": {
+                        "type": "boolean"
+                    },
+                    "orthographicHeight": {
+                        "type": "number"
+                    },
+                    "near": {
+                        "type": "number"
+                    },
+                    "far": {
+                        "type": "number"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "position": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "target": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "minItems": 3,
+                        "maxItems": 3
+                    },
+                    "fov": {
+                        "type": "number"
+                    },
+                    "orthographic": {
+                        "type": "boolean"
+                    },
+                    "orthographicHeight": {
+                        "type": "number"
+                    },
+                    "near": {
+                        "type": "number"
+                    },
+                    "far": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        {
+            "name": "view.set_mode",
+            "summary": "Switches the viewport between the 3d orbit camera and the 2d orthographic camera.",
+            "flags": [],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "3d",
+                            "2d"
+                        ]
+                    }
+                },
+                "required": [
+                    "mode"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string"
+                    },
+                    "orthographic": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        }
+    ],
+    "events": [
+        "log",
+        "selection.changed",
+        "play.state",
+        "scene.changed",
+        "scene.loaded",
+        "progress",
+        "script.compiled",
+        "script.reloaded",
+        "asset.imported",
+        "module.state",
+        "command.executed",
+        "client.connected",
+        "client.disconnected",
+        "events.dropped",
+        "warning"
+    ],
+    "errorCodes": [
+        "PARSE_ERROR",
+        "INVALID_REQUEST",
+        "MESSAGE_TOO_LARGE",
+        "UNKNOWN_COMMAND",
+        "INVALID_ARGS",
+        "ENTITY_NOT_FOUND",
+        "COMPONENT_NOT_FOUND",
+        "TYPE_NOT_FOUND",
+        "PATH_NOT_FOUND",
+        "ASSET_NOT_FOUND",
+        "PROJECT_NOT_OPEN",
+        "SCENE_NOT_OPEN",
+        "WRONG_PLAY_STATE",
+        "NOT_AVAILABLE",
+        "IO_ERROR",
+        "COMPILE_FAILED",
+        "BUSY",
+        "TIMEOUT",
+        "CANCELLED",
+        "UNAUTHORISED",
+        "INTERNAL"
+    ],
+    "schemaHash": "2cc7afd190c0e52d"
+}

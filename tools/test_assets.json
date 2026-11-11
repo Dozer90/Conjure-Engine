@@ -1,5 +1,5 @@
 {
-  "description": "Public test assets downloaded by tools/download_test_assets.py into tests/.downloaded. Hashes are pinned in tests/.downloaded/assets.lock on first download and verified afterwards.",
+  "description": "Public test assets downloaded by tools/download_test_assets.py into tests/.downloaded. Every file is verified against the SHA-256 pinned in the committed tools/test_assets.lock; a file the lock does not know is pinned on first download and the lock must be committed with the change (--verify and --locked fail on an unpinned asset).",
   "assets": [
     {
       "name": "models/DamagedHelmet.glb",

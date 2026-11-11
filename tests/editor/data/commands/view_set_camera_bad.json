@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.set_camera",
+    "args": {
+      "position": "nope"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

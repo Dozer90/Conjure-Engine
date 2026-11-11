@@ -1,0 +1,46 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Root",
+        "guid": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Child",
+        "guid": "9d06d521-6097-50e3-84dc-b43f5c44cefc",
+        "parent": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Leaf",
+        "guid": "2c815ab2-a7d1-5a6c-9fbb-f4412b41d0e3",
+        "parent": "9d06d521-6097-50e3-84dc-b43f5c44cefc"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Other",
+        "guid": "d2c05824-ac89-555b-9a97-0c31faa881eb"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "scene.save_as",
+    "args": {
+      "path": "scenes/copy"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://scenes/copy.scene.json"
+    }
+  }
+}

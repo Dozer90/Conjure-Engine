@@ -231,17 +231,30 @@ transitively and are not whole-archived. It compiles with `CONJURE_SHARED_EXPORT
 
 ### 7.2 What is exported
 
-On MSVC a module definition file listing every external symbol of the whole-archived objects is generated at build
-time (`cmake -E __create_def`, the mechanism behind `WINDOWS_EXPORT_ALL_SYMBOLS`, which by itself does not look
-inside static libraries), so everything the static libraries define is exported whether or not it carries
-`CONJURE_API`. A DLL may hold 65535 exports; the 17 wave-1/2 libraries already produce 26,739, so the `.def`
-generation is followed by a `cmake -P` count that warns above 80 % and fails the build with the remedy instead of
-leaving the linker to fail with LNK1189. GCC and Clang export every default-visibility symbol. `CONJURE_API`
-(`conjure/core/api.h`) is therefore mostly an import-side matter today: it makes consumers call through the import
-thunk directly and lets exported data resolve. This module marks every public class with out-of-line members and
-every out-of-line free function; `python tools/check_exports.py modules` verifies that (`--all` checks every
-module, and core carries no annotations yet). The static libraries themselves compile without
-`CONJURE_SHARED_EXPORTS`, so tests linking them directly see an empty `CONJURE_API`.
+Exactly the declarations that carry `CONJURE_API` (`conjure/core/api.h`), on every platform. Every engine static
+library is compiled with `CONJURE_SHARED_EXPORTS`, `CXX_VISIBILITY_PRESET hidden` and `VISIBILITY_INLINES_HIDDEN`
+(`conjure_apply_export_settings()` in `cmake/ConjureModule.cmake`), so the whole-archived objects carry their own
+`dllexport` / `visibility("default")` attributes and nothing is generated at build time (no module definition file,
+no `WINDOWS_EXPORT_ALL_SYMBOLS`). The third-party archives the modules link privately get hidden visibility as well
+(`conjure_hide_thirdparty_symbols()`), so a Linux or macOS build exports no yyjson, GLFW, miniaudio, Jolt, cgltf, stb
+or NVRHI symbol; Dear ImGui is the one exception, exported through `IMGUI_API` for the editor and `EDITOR_UI`
+modules. The annotation rules: every class, struct or free function of a public header whose definition lives in a
+`.cpp`, every `extern` variable (the modules' log categories use `CONJURE_DECLARE_ENGINE_LOG_CATEGORY`, which is
+`extern CONJURE_API`) and every explicit template specialisation with out-of-line members; nested classes carry their
+own macro (MSVC does not export them with the enclosing class) and a friend declaration of an exported free function
+carries it too. Templates, inline and constexpr functions, enums and aggregates without out-of-line methods need
+nothing. Three CTest entries, registered in `tests/modules/CMakeLists.txt` under the labels `exports` and `style`,
+keep this honest:
+
+| Entry | Command | Checks |
+|---|---|---|
+| `exports.check_annotations` | `python tools/check_exports.py` | every header under `engine/include/conjure/<module>/`; a declaration that needs the macro and lacks it is a finding (`python tools/check_exports.py <module>` checks one module) |
+| `exports.count_shared_library` | `python tools/check_exports.py --count-exports <conjure_shared> --limit 52428` | the export count read back from `dumpbin /EXPORTS` or `nm` (5,283 in Debug with every wave-4 library; a Windows DLL holds at most 65,535) |
+| `exports.check_tool` | `python tools/check_exports.py --self-test` | the checker over embedded headers and tool output |
+
+The fixture `module_surface` links a slice of the public surface through the import side as well, so a missing
+annotation also fails the build. Tests that link the static libraries directly define neither macro and see an
+empty `CONJURE_API`.
 
 ### 7.3 `conjure_add_game_module()` and `LINK_ENGINE_SHARED`
 
@@ -312,9 +325,10 @@ python tools/check_exports.py modules
 - Export-everything on MSVC spends the 65535-symbol budget; the switch to `CONJURE_API`-only exports
   (`CONJURE_SHARED_EXPORTS` on the static libraries, hidden visibility in `conjure_add_module`) waits for core to
   carry the annotations.
-- The consumers themselves (`ecs_module_consumer`, assets, scripting, editor) and `builtin_modules.cpp` belong to
-  wave 4; the integration tests `test_module_ecs_roundtrip` and `test_module_asset_importer` and the benchmark
-  `bench_module_reload` come with them.
+- The consumers themselves (`ecs_module_consumer`, assets, scripting, editor) and `builtin_modules.cpp` landed
+  with wave 4 ([Engine module](engine.md) 5, [Editor module](editor.md) 7); `tests/integration/test_module_plugin.cpp`
+  loads the fixture `tests/integration/fixtures/sample_plugin` through a headless application. The benchmark
+  `bench_module_reload` is not written yet.
 
 ## Related
 - design records: [`../../design/07_modules.md`](../../design/07_modules.md) (binding),

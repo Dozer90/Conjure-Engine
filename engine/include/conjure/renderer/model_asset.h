@@ -6,6 +6,7 @@
 
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -27,7 +28,7 @@ namespace conjure::renderer {
     inline constexpr std::string_view MODEL_ASSET_TYPE_NAME = "conjure.renderer.model";
     inline constexpr u32 MODEL_FORMAT_VERSION = 1;
 
-    struct model_node {
+    struct CONJURE_API model_node {
         std::string name = {};
         u32 parent = INVALID_INDEX;                     // index into model_asset::nodes(), INVALID_INDEX = root
         math::transform localTransform = {};
@@ -49,7 +50,7 @@ namespace conjure::renderer {
         [[nodiscard]] bool operator==(const model_node &other) const noexcept;
     };
 
-    class model_asset {
+    class CONJURE_API model_asset {
         private:
             std::vector<model_node> mNodes = {};
             std::vector<assets::asset_id> mMeshes = {};
@@ -143,7 +144,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The conjure.renderer.model loader. No fallback: a missing model instantiates nothing.
     /// </summary>
-    class model_loader final : public assets::typed_asset_loader<model_asset, model_asset> {
+    class CONJURE_API model_loader final : public assets::typed_asset_loader<model_asset, model_asset> {
         public:
             model_loader();
             ~model_loader() override;

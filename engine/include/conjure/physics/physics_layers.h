@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -87,7 +88,7 @@ namespace conjure::physics {
     /// The named layers and their symmetric collision matrix. A value type; immutable once a
     /// physics_world was constructed from it (the world keeps its own copy).
     /// </summary>
-    class physics_layer_table {
+    class CONJURE_API physics_layer_table {
         private:
             core::small_vector<core::string_id, 8> mNames = {};
             std::array<u32, MAX_PHYSICS_LAYERS> mCollides = {};

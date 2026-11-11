@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.set_mode",
+    "args": {
+      "mode": "4d"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

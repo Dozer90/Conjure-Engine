@@ -2,6 +2,7 @@
 
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/hash.h"
@@ -160,7 +161,7 @@ namespace conjure::ecs {
     /// <summary>
     /// A set of component ids: one bit per id. Archetype matching is a handful of 64-bit operations.
     /// </summary>
-    class component_mask {
+    class CONJURE_API component_mask {
         public:
             /// <summary>
             /// Number of 64-bit words.

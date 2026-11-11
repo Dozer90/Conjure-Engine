@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.create",
+    "args": {
+      "name": "CellBehaviour"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "CellBehaviour.cs",
+      "className": "Game.CellBehaviour"
+    }
+  }
+}

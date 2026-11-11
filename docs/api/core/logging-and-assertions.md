@@ -64,6 +64,12 @@ and one category per module (`"renderer"`, `"ecs"`, ...); your game declares its
 > file (`CONJURE_DEFINE_LOG_CATEGORY(NAME, "display name");`). The display name is what appears in log lines and
 > what `find_category` looks up.
 
+> [!NOTE]
+> The engine's own modules declare their categories with `CONJURE_DECLARE_ENGINE_LOG_CATEGORY(NAME);` in their public
+> `log_category.h`. It is `CONJURE_DECLARE_LOG_CATEGORY` plus the `CONJURE_API` export attribute, so a game module or
+> an executable that links the engine's shared library can log to `LOG_ENGINE`, `LOG_SCENE` and the other engine
+> channels. Your own categories, defined in your own binary, use the plain macro.
+
 ## Levels
 
 | Level | Macro | Typical use | In Distribution builds |
@@ -214,6 +220,7 @@ void run_without_breaking() {
 | Signature (short) | Purpose |
 |---|---|
 | `CONJURE_DECLARE_LOG_CATEGORY(name);` / `CONJURE_DEFINE_LOG_CATEGORY(name, "display");` | declare / define a category |
+| `CONJURE_DECLARE_ENGINE_LOG_CATEGORY(name);` | declare an engine module's category (exported from the engine's shared library) |
 | `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR/FATAL(category, fmt, ...)` | log at a level |
 | `CONJURE_LOG(category, level, fmt, ...)` | log at a runtime level |
 | `enum class log_level : u8 { TRACE, DEBUG, INFO, WARN, ERR, FATAL, OFF }` | levels |

@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.schema",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "protocolVersion": 1
+    }
+  }
+}

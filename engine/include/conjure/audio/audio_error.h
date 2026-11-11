@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -34,7 +35,7 @@ namespace conjure::audio {
     /// <summary>
     /// The enumerator name of a code ("DECODE_FAILED"); "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view audio_error_name(audio_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view audio_error_name(audio_error code) noexcept;
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::audio::audio_error, "audio", conjure::audio::audio_error_name);

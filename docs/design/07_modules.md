@@ -678,10 +678,24 @@ Spellings follow the implementation (wave 2 integration, `09_cross_area_resoluti
 umbrella lives in `cmake/ConjureSharedLibrary.cmake`.
 
 - `conjure_add_module()` keeps its signature. Internally it appends the target to the global property
-  `CONJURE_STATIC_LIBRARIES` and records its `PUBLIC_HEADERS` in the target property `CONJURE_PUBLIC_HEADERS`.
-  The intended `PRIVATE CONJURE_SHARED_EXPORTS`, `CXX_VISIBILITY_PRESET hidden` and `VISIBILITY_INLINES_HIDDEN ON`
-  are applied once every public class and function of core carries `CONJURE_API` (`tools/check_exports.py`); until
-  then the generated module definition file below exports everything on Windows and GCC/Clang export by default.
+  `CONJURE_STATIC_LIBRARIES`, records its `PUBLIC_HEADERS` in the target property `CONJURE_PUBLIC_HEADERS` and
+  applies `conjure_apply_export_settings()`: `PRIVATE CONJURE_SHARED_EXPORTS`, `CXX_VISIBILITY_PRESET hidden` and
+  `VISIBILITY_INLINES_HIDDEN ON` (wave 4 integration; the "until then" `.def` generation of waves 2 and 3 is
+  history). `conjure_shared` therefore exports exactly what carries `CONJURE_API` on every platform: 4,213 symbols
+  in Debug and 2,938 in Distribution with the wave 1-3 libraries, 5,283 in Debug with `engine`, `bindings`,
+  `editor_core` and `editor_ui` included (limit 65,535, warning threshold 52,428 in `exports.count_shared_library`).
+  The annotation rules live in `conjure/core/api.h` and are enforced by `tools/check_exports.py` (CTest
+  `exports.check_annotations`): every class, struct or free function of a public header whose definition lives in
+  a `.cpp`, every `extern` variable and every explicit template specialisation with out-of-line members carries
+  `CONJURE_API`; nested classes carry their own (MSVC does not export them with the enclosing class); a friend
+  declaration of an exported free function carries it too (MSVC wants the attribute on the first declaration);
+  the engine modules' log categories are declared with `CONJURE_DECLARE_ENGINE_LOG_CATEGORY(name)`, which is
+  `extern CONJURE_API` (`conjure/core/log.h`). Templates, inline and constexpr functions, enums and aggregates
+  without out-of-line methods need nothing. A class deriving from an engine template base (`typed_asset_loader<T>`)
+  exports the instantiated base members too, which is expected MSVC behaviour. The third-party static libraries the
+  modules link privately get hidden visibility from `conjure_hide_thirdparty_symbols` so ELF and Mach-O builds
+  export no yyjson, GLFW, Jolt, NVRHI or miniaudio symbol either; Dear ImGui is the one exception (`IMGUI_API` is
+  the export attribute, below).
 - `conjure_finalize_engine()`, called by the root `CMakeLists.txt` right after `add_subdirectory(engine)`,
   creates `conjure_shared` (`SHARED`, alias `conjure::shared`) from one generated empty source; links
   `PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,<every CONJURE_STATIC_LIBRARIES>>"` (third-party dependencies
@@ -689,9 +703,11 @@ umbrella lives in `cmake/ConjureSharedLibrary.cmake`.
   when `CONJURE_BUILD_EDITOR`); links `PUBLIC conjure::platform_defines conjure::thirdparty::glm`;
   forwards each engine library's `INTERFACE_COMPILE_DEFINITIONS`; defines `PRIVATE CONJURE_SHARED_EXPORTS` and
   `INTERFACE CONJURE_SHARED_IMPORTS`; sets `BUILD_RPATH`/`INSTALL_RPATH` to `$ORIGIN` / `@loader_path`; creates the
-  `conjure_abi_identity` custom target (3.8) on which `conjure_modules` and `conjure_shared` depend. On MSVC a
-  module definition file listing every external symbol of the whole-archived objects is generated at build time
-  and its export count is checked against the 65535 a DLL may hold.
+  `conjure_abi_identity` custom target (3.8) on which `conjure_modules` and `conjure_shared` depend. Nothing is
+  generated at build time: there is no module definition file and no `WINDOWS_EXPORT_ALL_SYMBOLS`; the
+  whole-archived objects carry their own `dllexport` / `visibility("default")` attributes. `tools/check_exports.py
+  --count-exports <library>` reads the export count back from `dumpbin` or `nm` (CTest `exports.count_shared_library`,
+  limit 52,428); `exports.check_tool` is the checker's self-test.
 - `conjure/core/api.h`: `CONJURE_API` = `dllexport`/`visibility("default")` under `CONJURE_SHARED_EXPORTS`,
   `dllimport`/`visibility("default")` under `CONJURE_SHARED_IMPORTS`, empty otherwise (tests linking
   static libraries). `cmake/ConjureWarnings.cmake` adds `/wd4251 /wd4275` (dll-interface warnings for

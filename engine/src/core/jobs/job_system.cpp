@@ -121,10 +121,13 @@ class job_system::state {
         };
 
         job_system *mOwner = nullptr;              // the facade workers report through current()
-        std::string mThreadNamePrefix = {};        // written by start(), read by the workers it creates
         std::atomic<u32> mWorkerCount = 0;         // a hint for schedulers; relaxed reads are enough
         std::atomic<bool> mRunning = false;
         std::mutex mLifecycleMutex = {};           // serialises start() and stop()
+
+        // Worker names in the OS encoding, one per worker (index - 1), built by start() before it
+        // creates the threads so a worker's prologue allocates nothing.
+        std::vector<detail::prepared_thread_name> mWorkerNames = {};
 
         // Queue and block pool, guarded by mQueueMutex.
         std::mutex mQueueMutex = {};
@@ -135,6 +138,11 @@ class job_system::state {
         bool mStopRequested = false;
         std::vector<std::unique_ptr<job_block[]>> mChunks = {};
         std::vector<job_block *> mFreeBlocks = {};
+
+        // Workers that have finished their prologue (also guarded by mQueueMutex). start() blocks on
+        // mStartCondition until every worker it created is counted.
+        u32 mStartedWorkers = 0;
+        std::condition_variable mStartCondition = {};
 
         // Lock-free mirrors read outside the lock.
         std::atomic<usize> mQueuedCount = 0;
@@ -242,11 +250,18 @@ result<void> job_system::state::start(const job_system_desc &desc) {
         return error(error_code::INVALID_ARGUMENT, "job_system::start: threadNamePrefix must not be empty");
     }
 
-    mThreadNamePrefix = desc.threadNamePrefix;
     mWorkerCount.store(desc.workerCount, std::memory_order_relaxed);
+
+    // Named here, not on the workers: a worker must not allocate once start() has returned.
+    mWorkerNames.clear();
+    mWorkerNames.reserve(desc.workerCount);
+    for (u32 index = 1; index <= desc.workerCount; ++index) {
+        mWorkerNames.push_back(detail::prepare_thread_name(std::format("{}-{}", desc.threadNamePrefix, index)));
+    }
 
     {
         const std::scoped_lock lock(mQueueMutex);
+        mStartedWorkers = 0;
         mMaxQueuedJobs = desc.maxQueuedJobs;
         for (lane &priorityLane : mLanes) {
             priorityLane.slots.assign(mMaxQueuedJobs, nullptr);
@@ -275,6 +290,16 @@ result<void> job_system::state::start(const job_system_desc &desc) {
     for (u32 index = 1; index <= desc.workerCount; ++index) {
         mWorkers.emplace_back([this, index] {
             worker_main(index);
+        });
+    }
+
+    // Return only once every worker has run its prologue and is pulling jobs: from here on the
+    // pool allocates nothing of its own, which callers gating allocations right after start() rely
+    // on, and worker_count() describes threads that exist.
+    {
+        std::unique_lock lock(mQueueMutex);
+        mStartCondition.wait(lock, [this, &desc] {
+            return mStartedWorkers == desc.workerCount;
         });
     }
 
@@ -801,7 +826,14 @@ bool job_system::state::next_job(job_block &out) {
 void job_system::state::worker_main(u32 index) {
     sCurrentSystem = mOwner;
     sThreadIndex = index;
-    detail::set_current_thread_name(mThreadNamePrefix + "-" + std::to_string(index));
+    detail::set_current_thread_name(mWorkerNames[index - 1]);
+
+    // The prologue is over and nothing below allocates; let start() return.
+    {
+        const std::scoped_lock lock(mQueueMutex);
+        ++mStartedWorkers;
+    }
+    mStartCondition.notify_one();
 
     job_block job = {};
     while (next_job(job)) {

@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.set_camera",
+    "args": {
+      "fov": 180
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

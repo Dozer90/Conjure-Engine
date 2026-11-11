@@ -2,6 +2,7 @@
 
 #include "conjure/core/json/value.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -38,8 +39,15 @@
 
 namespace conjure::core::json {
 
+    class document;
     class init_value;
     struct init_member;
+
+    // The builders are friends of document and init_value. Every declaration of them, the friend
+    // ones included, carries CONJURE_API: MSVC rejects a redeclaration that drops the attribute
+    // (C4273, inconsistent dll linkage).
+    [[nodiscard]] CONJURE_API document object(std::initializer_list<init_member> members);
+    [[nodiscard]] CONJURE_API document array(std::initializer_list<init_value> items);
 
     /// <summary>
     /// Deepest container nesting a parsed document may have: "[]" is depth 1, "[[]]" depth 2, a
@@ -65,7 +73,7 @@ namespace conjure::core::json {
     /// <summary>
     /// An owning, mutable JSON document.
     /// </summary>
-    class document {
+    class CONJURE_API document {
         private:
             void *mHandle = nullptr;    // yyjson mutable document; opaque so yyjson stays out of public headers
 
@@ -281,8 +289,8 @@ namespace conjure::core::json {
 
         private:
             friend class init_value;
-            friend document object(std::initializer_list<init_member> members);
-            friend document array(std::initializer_list<init_value> items);
+            friend CONJURE_API document object(std::initializer_list<init_member> members);
+            friend CONJURE_API document array(std::initializer_list<init_value> items);
 
             explicit document(void *handle) noexcept;
 
@@ -300,7 +308,7 @@ namespace conjure::core::json {
     /// A null C string becomes JSON null, as in the mutation API. Intended only as a builder
     /// argument; do not store it.
     /// </summary>
-    class init_value {
+    class CONJURE_API init_value {
         private:
             using storage = std::variant<std::nullptr_t, bool, i64, u64, f64, std::string, document, value>;
 
@@ -341,8 +349,8 @@ namespace conjure::core::json {
             [[nodiscard]] document to_document() const;
 
         private:
-            friend document object(std::initializer_list<init_member> members);
-            friend document array(std::initializer_list<init_value> items);
+            friend CONJURE_API document object(std::initializer_list<init_member> members);
+            friend CONJURE_API document array(std::initializer_list<init_value> items);
 
             // Creates the node straight inside 'target' (an opaque yyjson document) so the builders
             // allocate once per element; only document and value alternatives are deep-copied.
@@ -360,10 +368,10 @@ namespace conjure::core::json {
     /// <summary>
     /// Builds an object document: `json::object({{"a", 1}, {"b", "x"}, {"c", json::array({1, 2})}})`.
     /// </summary>
-    [[nodiscard]] document object(std::initializer_list<init_member> members);
+    [[nodiscard]] CONJURE_API document object(std::initializer_list<init_member> members);
 
     /// <summary>
     /// Builds an array document: `json::array({1, 2.5, "three", nullptr})`.
     /// </summary>
-    [[nodiscard]] document array(std::initializer_list<init_value> items);
+    [[nodiscard]] CONJURE_API document array(std::initializer_list<init_value> items);
 }

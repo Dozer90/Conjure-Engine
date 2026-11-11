@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.open",
+    "args": {
+      "path": "${project}/nowhere"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

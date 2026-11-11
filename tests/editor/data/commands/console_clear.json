@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "console.clear",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "cleared": true
+    }
+  }
+}

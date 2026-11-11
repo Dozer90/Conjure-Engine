@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/types.h"
 
@@ -42,7 +43,7 @@ namespace conjure::core::random {
     /// Every thread starts from the same seed, so two threads doing the same work produce the same
     /// numbers.
     /// </summary>
-    [[nodiscard]] engine &default_engine() noexcept;
+    [[nodiscard]] CONJURE_API engine &default_engine() noexcept;
 
     /// <summary>
     /// Sets the seed that every thread's default engine receives on first use and reseeds the
@@ -50,12 +51,12 @@ namespace conjure::core::random {
     /// Engines already created on other threads keep running until they call seed() themselves.
     /// Thread-safe.
     /// </summary>
-    void seed(u64 value) noexcept;
+    CONJURE_API void seed(u64 value) noexcept;
 
     /// <summary>
     /// The seed new default engines are created with.
     /// </summary>
-    [[nodiscard]] u64 current_seed() noexcept;
+    [[nodiscard]] CONJURE_API u64 current_seed() noexcept;
 
     namespace detail {
         /// <summary>
@@ -217,7 +218,7 @@ namespace conjure::core::random {
     /// An owned, independently seeded engine with the helpers above as members. Satisfies
     /// std::uniform_random_bit_generator so it can also feed the standard algorithms.
     /// </summary>
-    class random_engine {
+    class CONJURE_API random_engine {
         private:
             engine mEngine = engine(DEFAULT_SEED);
             u64 mSeed = DEFAULT_SEED;

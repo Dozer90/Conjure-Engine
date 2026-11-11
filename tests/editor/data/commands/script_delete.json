@@ -1,0 +1,19 @@
+{
+  "setup": [
+    {
+      "cmd": "script.create",
+      "args": {
+        "name": "CellBehaviour"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "script.delete",
+    "args": {
+      "path": "CellBehaviour.cs"
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

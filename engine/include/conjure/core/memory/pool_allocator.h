@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/memory/tracked_allocation.h"
 #include "conjure/core/types.h"
 
@@ -20,7 +21,7 @@ namespace conjure::core::memory {
     /// pool holds, the slab table included, comes from tracked_allocate: the pool is fully counted and
     /// never throws. Not thread-safe: the ECS wraps a pool under its own lock.
     /// </summary>
-    class pool_allocator {
+    class CONJURE_API pool_allocator {
         private:
             struct slab {
                 byte *blocks = nullptr;     // first block; the free bitmap follows the last block

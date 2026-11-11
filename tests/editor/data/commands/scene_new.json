@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "scene.new",
+    "args": {
+      "name": "fresh"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "name": "fresh"
+    }
+  }
+}

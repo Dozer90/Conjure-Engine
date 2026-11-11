@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "console.read",
+    "args": {
+      "minLevel": "loud"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

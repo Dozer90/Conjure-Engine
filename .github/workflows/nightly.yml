@@ -1,0 +1,344 @@
+# Nightly matrix (docs/design/08_testing.md 7.3, D11, D13, D15; docs/handbook/ci.md): the five build legs with
+# the slow and scripting-hot-reload cases, TSan over the job-system users, the Distribution export round trip,
+# the golden images on software rasterisers and the benchmarks at the ci machine class. Nothing here gates a
+# pull request; a red nightly is a ticket for the module owner.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+# Nothing here writes to the repository: the benchmark results leave as artefacts and step summaries.
+permissions:
+  contents: read
+
+env:
+  # Nightly allows no label-based skips: the golden jobs enable the images, the others never register them.
+  # Skips by case-name tag follow the same per-leg policy as ci.yml (skip-tags): [window] and [audio_device]
+  # everywhere, [gpu] where no D3D12 WARP adapter exists; the downloaded cases must run here.
+  CONJURE_TEST_ALLOWED_SKIPS: ""
+
+jobs:
+  full-matrix-nightly:
+    name: nightly-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-msvc-debug
+            os: windows-latest
+            preset: windows-msvc-debug
+            test-preset: windows-msvc-debug-nightly
+            skip-tags: --allow-tag window --allow-tag audio_device
+          - name: windows-msvc-dev
+            os: windows-latest
+            preset: windows-msvc-dev
+            test-preset: ""
+            skip-tags: --allow-tag window --allow-tag audio_device
+          - name: linux-gcc-debug
+            os: ubuntu-24.04
+            preset: linux-gcc-debug
+            test-preset: linux-gcc-debug-nightly
+            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
+          - name: linux-clang-sanitize
+            os: ubuntu-24.04
+            preset: linux-clang-sanitize
+            configure-args: -DCONJURE_WITH_SCRIPTING=OFF
+            test-preset: ""
+            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
+          - name: macos-debug
+            os: macos-14
+            preset: macos-debug
+            test-preset: ""
+            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.preset }}/_deps
+          key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+      - name: Download test assets
+        run: python tools/download_test_assets.py
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+      # The *-nightly test presets exclude only the benchmark label (slow, process and downloaded cases run);
+      # legs without one run the same filter through --test-dir.
+      - name: Test (nightly preset)
+        if: matrix.test-preset != ''
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: ctest --preset ${{ matrix.test-preset }} --output-junit junit.xml
+      - name: Test (benchmark label excluded)
+        if: matrix.test-preset == ''
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: >
+          ctest --test-dir build/${{ matrix.preset }} --output-on-failure -j 4 -LE benchmark
+          --output-junit junit.xml
+      - name: Check skips
+        run: >
+          python tools/ctest_check_skips.py --build-dir build/${{ matrix.preset }}
+          --junit build/${{ matrix.preset }}/junit.xml ${{ matrix.skip-tags }}
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-reports-${{ matrix.name }}
+          path: |
+            build/${{ matrix.preset }}/junit.xml
+            build/${{ matrix.preset }}/test_output
+          if-no-files-found: ignore
+
+  linux-clang-tsan:
+    name: linux-clang-tsan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/linux-clang-tsan/_deps
+          key: deps-linux-clang-tsan-${{ hashFiles('third_party/CMakeLists.txt') }}
+      - name: Configure
+        run: cmake --preset linux-clang-tsan
+      - name: Build
+        run: cmake --build --preset linux-clang-tsan --parallel
+      # The preset filters to the job-system users (core, ecs, scene, engine, integration) with scripting off.
+      - name: Test
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: ctest --preset linux-clang-tsan
+
+  distribution-export:
+    name: distribution-export-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            dist-preset: windows-msvc-dist
+            dev-preset: windows-msvc-dev
+            exe: .exe
+          - name: linux
+            os: ubuntu-24.04
+            dist-preset: linux-gcc-dist
+            dev-preset: linux-gcc-dev
+            exe: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      # The Distribution runtime and the Development editor that exports with it (the editor is never part of
+      # a Distribution build, 04_editor.md 8).
+      - name: Configure and build Distribution
+        run: |
+          cmake --preset ${{ matrix.dist-preset }}
+          cmake --build --preset ${{ matrix.dist-preset }} --parallel
+      - name: Configure and build Development
+        run: |
+          cmake --preset ${{ matrix.dev-preset }}
+          cmake --build --preset ${{ matrix.dev-preset }} --parallel --target conjure_editor conjure_runtime
+      - name: Distribution symbol check and process tests
+        run: ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error
+      # Export tests/assets/projects/minimal (samples/feature_test once wave 5 lands it) with the Development
+      # editor, copying the Distribution runtime and shared library into the folder, then run that runtime
+      # headless for 300 frames (08_testing.md 7.3 nightly table).
+      - name: Export and run
+        shell: bash
+        run: |
+          cp -r tests/assets/projects/minimal build/export_project
+          build/${{ matrix.dev-preset }}/bin/conjure_editor${{ matrix.exe }} --headless --project build/export_project \
+            --export build/export_out
+          cp build/${{ matrix.dist-preset }}/bin/conjure_runtime${{ matrix.exe }} build/export_out/
+          cp build/${{ matrix.dist-preset }}/bin/*conjure_shared* build/export_out/
+          build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
+          python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
+
+  golden-d3d12-warp:
+    name: golden-d3d12-warp
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset windows-msvc-dev -DCONJURE_TEST_GOLDEN_IMAGES=ON
+      - name: Build
+        run: cmake --build --preset windows-msvc-dev --parallel
+      # --no-tests=error: until tests/golden registers its cases (09_cross_area_resolutions.md 4 item 15) this
+      # step fails with "No tests were found" instead of passing with zero image comparisons.
+      - name: Golden images
+        run: ctest --test-dir build/windows-msvc-dev --output-on-failure -L golden --no-tests=error
+      - name: Upload golden diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-d3d12-warp
+          path: build/windows-msvc-dev/test_output
+          if-no-files-found: ignore
+
+  golden-vulkan-lavapipe:
+    name: golden-vulkan-lavapipe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # The lavapipe references are per backend and the rasteriser still drifts; the job reports until it has
+    # been stable for two weeks (08_testing.md D11).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev mesa-vulkan-drivers
+      - name: Configure
+        run: cmake --preset linux-gcc-dev -DCONJURE_TEST_GOLDEN_IMAGES=ON
+      - name: Build
+        run: cmake --build --preset linux-gcc-dev --parallel
+      - name: Golden images
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ctest --test-dir build/linux-gcc-dev --output-on-failure -L golden --no-tests=error
+      - name: Upload golden diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-vulkan-lavapipe
+          path: build/linux-gcc-dev/test_output
+          if-no-files-found: ignore
+
+  benchmarks-ci-class:
+    name: benchmarks-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            preset: windows-msvc-dev
+            exe: .exe
+          - name: linux
+            os: ubuntu-24.04
+            preset: linux-gcc-dev
+            exe: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel --target conjure_benchmarks
+      # The ci machine class is 3x desktop; a breach or a missing threshold fails the job (08_testing.md D10).
+      - name: Benchmarks
+        shell: bash
+        run: |
+          build/${{ matrix.preset }}/bin/conjure_benchmarks${{ matrix.exe }} --class ci --enforce \
+            --out build/bench-${{ matrix.name }}.json | tee build/bench-${{ matrix.name }}.txt
+          {
+            echo '### Benchmarks (${{ matrix.name }}, class ci)'
+            echo '```'
+            cat build/bench-${{ matrix.name }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.name }}
+          path: |
+            build/bench-${{ matrix.name }}.json
+            build/bench-${{ matrix.name }}.txt

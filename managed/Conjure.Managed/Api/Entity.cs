@@ -11,7 +11,7 @@ namespace Conjure;
 /// An entity handle: the packed 64-bit id (index | generation &lt;&lt; 32) and nothing else. Every member
 /// calls native on the main thread; a dead entity answers false / default.
 /// </summary>
-public readonly struct Entity : IEquatable<Entity>
+public readonly partial struct Entity : IEquatable<Entity>
 {
     public static readonly Entity Null = default;
 
@@ -162,19 +162,17 @@ public readonly struct Entity : IEquatable<Entity>
     public unsafe bool AddComponent<T>(in T value) where T : unmanaged
     {
         NativeApi* api = NativeBridge.RequireApi();
-        fixed (T* pinned = &value)
-        {
-            return api->ComponentAdd(Id, ComponentType<T>.RequireId(), pinned) != 0;
-        }
+        T bound = value;
+        AssetRefBinder<T>.Bind(ref bound);
+        return api->ComponentAdd(Id, ComponentType<T>.RequireId(), &bound) != 0;
     }
 
     public unsafe bool SetComponent<T>(in T value) where T : unmanaged
     {
         NativeApi* api = NativeBridge.RequireApi();
-        fixed (T* pinned = &value)
-        {
-            return api->ComponentSet(Id, ComponentType<T>.RequireId(), pinned) != 0;
-        }
+        T bound = value;
+        AssetRefBinder<T>.Bind(ref bound);
+        return api->ComponentSet(Id, ComponentType<T>.RequireId(), &bound) != 0;
     }
 
     public unsafe bool RemoveComponent<T>() where T : unmanaged

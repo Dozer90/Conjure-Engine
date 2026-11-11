@@ -4,6 +4,7 @@
 #include "conjure/core/reflect/type_info.h"
 #include "conjure/core/reflect/type_registry.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -45,7 +46,7 @@
 namespace conjure::core::json {
 
     template <>
-    struct json_converter<string_id> {
+    struct CONJURE_API json_converter<string_id> {
         /// <summary>
         /// A string is the name ("#" + 16 hex digits is a raw hash); an unsigned number is the hash.
         /// </summary>
@@ -53,22 +54,22 @@ namespace conjure::core::json {
     };
 
     template <>
-    struct json_converter<math::vec2> {
+    struct CONJURE_API json_converter<math::vec2> {
         [[nodiscard]] static result<math::vec2> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<math::vec3> {
+    struct CONJURE_API json_converter<math::vec3> {
         [[nodiscard]] static result<math::vec3> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<math::vec4> {
+    struct CONJURE_API json_converter<math::vec4> {
         [[nodiscard]] static result<math::vec4> from_json(const value &source);
     };
 
     template <>
-    struct json_converter<math::quat> {
+    struct CONJURE_API json_converter<math::quat> {
         /// <summary>
         /// Reads [x, y, z, w].
         /// </summary>
@@ -76,7 +77,7 @@ namespace conjure::core::json {
     };
 
     template <>
-    struct json_converter<math::mat4> {
+    struct CONJURE_API json_converter<math::mat4> {
         /// <summary>
         /// Reads 16 column-major numbers.
         /// </summary>
@@ -84,7 +85,7 @@ namespace conjure::core::json {
     };
 
     template <>
-    struct json_converter<math::transform> {
+    struct CONJURE_API json_converter<math::transform> {
         /// <summary>
         /// Reads {"position", "rotation", "scale"}; absent members keep the identity.
         /// </summary>
@@ -97,27 +98,27 @@ namespace conjure::core::reflect {
     /// <summary>
     /// Writes one math value in the representation documented above.
     /// </summary>
-    void write_json(const math::vec2 &value, json::writer &out);
-    void write_json(const math::vec3 &value, json::writer &out);
-    void write_json(const math::vec4 &value, json::writer &out);
-    void write_json(const math::quat &value, json::writer &out);
-    void write_json(const math::mat4 &value, json::writer &out);
-    void write_json(const math::transform &value, json::writer &out);
-    void write_json(const string_id &value, json::writer &out);
+    CONJURE_API void write_json(const math::vec2 &value, json::writer &out);
+    CONJURE_API void write_json(const math::vec3 &value, json::writer &out);
+    CONJURE_API void write_json(const math::vec4 &value, json::writer &out);
+    CONJURE_API void write_json(const math::quat &value, json::writer &out);
+    CONJURE_API void write_json(const math::mat4 &value, json::writer &out);
+    CONJURE_API void write_json(const math::transform &value, json::writer &out);
+    CONJURE_API void write_json(const string_id &value, json::writer &out);
 
     /// <summary>
     /// Serialises 'object' (an instance of 'type') as a JSON object into 'out', fields in
     /// declaration order. Fails with INVALID_STATE for a STRUCT/ENUM field without its description
     /// and UNSUPPORTED for a custom kind of unsupported size; the writer may then be left mid-object.
     /// </summary>
-    [[nodiscard]] result<void> to_json(const type_info &type, const void *object, json::writer &out);
+    [[nodiscard]] CONJURE_API result<void> to_json(const type_info &type, const void *object, json::writer &out);
 
     /// <summary>
     /// Updates 'object' from a JSON object. Missing members keep their current value; unknown
     /// members are appended to 'unknownFields' (dotted paths) when it is not null. Stops at the
     /// first failing field.
     /// </summary>
-    [[nodiscard]] result<void> from_json(
+    [[nodiscard]] CONJURE_API result<void> from_json(
       const type_info &type,
       void *object,
       const json::value &in,
@@ -127,7 +128,7 @@ namespace conjure::core::reflect {
     /// <summary>
     /// to_json() into a new document.
     /// </summary>
-    [[nodiscard]] result<json::document> to_json_document(const type_info &type, const void *object);
+    [[nodiscard]] CONJURE_API result<json::document> to_json_document(const type_info &type, const void *object);
 
     /// <summary>
     /// to_json() for a CONJURE_REFLECT_STRUCT type. INVALID_STATE when the type has no registered
@@ -220,22 +221,26 @@ namespace conjure::core::reflect {
     /// INVALID_ARGUMENT for a malformed path (including a signed index such as "[+1]"), an index on a
     /// non-array or a '.' into a non-struct. The returned reference carries the normalised path.
     /// </summary>
-    [[nodiscard]] result<field_ref> resolve_path(const type_info &type, void *object, std::string_view path);
+    [[nodiscard]] CONJURE_API result<field_ref> resolve_path(
+      const type_info &type,
+      void *object,
+      std::string_view path
+    );
 
     /// <summary>
     /// Writes the referenced value (one field, or one array element) into 'out'. Errors name the
     /// reference's path ("field 'counts[1]'").
     /// </summary>
-    [[nodiscard]] result<void> write_json(field_ref ref, json::writer &out);
+    [[nodiscard]] CONJURE_API result<void> write_json(field_ref ref, json::writer &out);
 
     /// <summary>
     /// Replaces the referenced value from JSON with the same rules as from_json(). Errors name the
     /// reference's path.
     /// </summary>
-    [[nodiscard]] result<void> set_from_json(field_ref ref, const json::value &in);
+    [[nodiscard]] CONJURE_API result<void> set_from_json(field_ref ref, const json::value &in);
 
     /// <summary>
     /// The referenced value as a new document.
     /// </summary>
-    [[nodiscard]] result<json::document> get_as_json(field_ref ref);
+    [[nodiscard]] CONJURE_API result<json::document> get_as_json(field_ref ref);
 }

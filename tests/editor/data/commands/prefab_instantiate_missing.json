@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "prefab.instantiate",
+    "args": {
+      "prefab": "prefabs/none"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.set_settings",
+    "args": {
+      "settings": {
+        "schema_version": 99
+      }
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

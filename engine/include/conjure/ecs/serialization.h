@@ -3,6 +3,7 @@
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
 #include "conjure/core/reflect/type_info.h"
@@ -63,7 +64,7 @@ namespace conjure::ecs {
         /// Writes a reflected component as a JSON object using the archive encoding for entity and
         /// asset reference fields.
         /// </summary>
-        [[nodiscard]] core::result<void> write_reflected_component(
+        [[nodiscard]] CONJURE_API core::result<void> write_reflected_component(
           const core::reflect::type_info &type,
           const void *component,
           core::json::writer &out
@@ -73,7 +74,7 @@ namespace conjure::ecs {
         /// Reads a reflected component from a JSON object; missing members keep their value. Errors
         /// name the field path.
         /// </summary>
-        [[nodiscard]] core::result<void> read_reflected_component(
+        [[nodiscard]] CONJURE_API core::result<void> read_reflected_component(
           const core::reflect::type_info &type,
           void *component,
           const core::json::value &in
@@ -82,14 +83,24 @@ namespace conjure::ecs {
         /// <summary>
         /// Rewrites every entity field a reflected type contains through the remap table.
         /// </summary>
-        void remap_reflected_entities(const core::reflect::type_info &type, void *component, const entity_remap &map);
+        CONJURE_API void remap_reflected_entities(
+          const core::reflect::type_info &type,
+          void *component,
+          const entity_remap &map
+        );
 
         /// <summary>
         /// Serializer hooks of the unresolved_components component: an object mapping each preserved
         /// name to its verbatim JSON.
         /// </summary>
-        [[nodiscard]] core::result<void> write_unresolved_components(const void *component, core::json::writer &out);
-        [[nodiscard]] core::result<void> read_unresolved_components(void *component, const core::json::value &in);
+        [[nodiscard]] CONJURE_API core::result<void> write_unresolved_components(
+          const void *component,
+          core::json::writer &out
+        );
+        [[nodiscard]] CONJURE_API core::result<void> read_unresolved_components(
+          void *component,
+          const core::json::value &in
+        );
 
         template <typename ComponentType>
         [[nodiscard]] core::result<void> write_typed_component(const void *component, core::json::writer &out) {
@@ -137,7 +148,7 @@ namespace conjure::ecs {
     /// walker, else the unresolved_components encoding). SERIALIZATION_FAILED when the type cannot be
     /// serialised; TRANSIENT types write an empty object.
     /// </summary>
-    [[nodiscard]] core::result<void> write_component_json(
+    [[nodiscard]] CONJURE_API core::result<void> write_component_json(
       const component_info &info,
       const void *component,
       core::json::writer &out
@@ -147,7 +158,7 @@ namespace conjure::ecs {
     /// Reads one component instance through the type's serializer. SERIALIZATION_FAILED with the
     /// failing field path when the JSON does not match the type.
     /// </summary>
-    [[nodiscard]] core::result<void> read_component_json(
+    [[nodiscard]] CONJURE_API core::result<void> read_component_json(
       const component_info &info,
       void *component,
       const core::json::value &in
@@ -157,7 +168,10 @@ namespace conjure::ecs {
     /// Emits {"entities":[{"components":{"<name>":{...}}}]} for the archive. Unresolved components are
     /// re-emitted verbatim under their original names.
     /// </summary>
-    [[nodiscard]] core::result<void> write_archive_json(const entity_archive &archive, core::json::writer &out);
+    [[nodiscard]] CONJURE_API core::result<void> write_archive_json(
+      const entity_archive &archive,
+      core::json::writer &out
+    );
 
     /// <summary>
     /// Parses an archive written by write_archive_json. Unknown component names are preserved in an
@@ -165,7 +179,7 @@ namespace conjure::ecs {
     /// load with SERIALIZATION_FAILED and an "<entity index>/<component>/<field>" path; an entity
     /// reference outside the archive fails with ARCHIVE_CORRUPT.
     /// </summary>
-    [[nodiscard]] core::result<entity_archive> read_archive_json(
+    [[nodiscard]] CONJURE_API core::result<entity_archive> read_archive_json(
       const core::json::value &in,
       const component_registry &registry
     );
@@ -175,7 +189,7 @@ namespace conjure::ecs {
     /// protocol, R40). Entity references are written as {"external":"<index>:<generation>"}.
     /// ENTITY_NOT_ALIVE / COMPONENT_NOT_PRESENT / UNKNOWN_COMPONENT when the component cannot be found.
     /// </summary>
-    [[nodiscard]] core::result<void> component_to_json(
+    [[nodiscard]] CONJURE_API core::result<void> component_to_json(
       const world &source,
       entity target,
       component_id id,
@@ -187,7 +201,7 @@ namespace conjure::ecs {
     /// stamps its column version. Same lookup errors as component_to_json; SERIALIZATION_FAILED with
     /// the field path for malformed input.
     /// </summary>
-    [[nodiscard]] core::result<void> component_from_json(
+    [[nodiscard]] CONJURE_API core::result<void> component_from_json(
       world &target,
       entity owner,
       component_id id,

@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/cooked_blob.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -27,7 +28,7 @@ namespace conjure::assets {
     /// <summary>
     /// A provider of validated cooked blobs. read() may be called from any thread.
     /// </summary>
-    class asset_source {
+    class CONJURE_API asset_source {
         public:
             asset_source();
             virtual ~asset_source();
@@ -50,7 +51,7 @@ namespace conjure::assets {
     /// <summary>
     /// Blobs held in memory. Tests add blobs directly; reads copy.
     /// </summary>
-    class memory_asset_source final : public asset_source {
+    class CONJURE_API memory_asset_source final : public asset_source {
         private:
             struct entry {
                 cooked_blob blob = {};
@@ -89,7 +90,7 @@ namespace conjure::assets {
     /// status prevents loading (META_INVALID, NO_IMPORTER, CYCLIC_DEPENDENCY, MISSING_SOURCE)
     /// fails read() with that code; a missing blob is CACHE_MISS.
     /// </summary>
-    class cache_asset_source final : public asset_source {
+    class CONJURE_API cache_asset_source final : public asset_source {
         private:
             const asset_cache *mCache = nullptr;
             const asset_database *mDatabase = nullptr;
@@ -108,7 +109,7 @@ namespace conjure::assets {
     /// <summary>
     /// Runtime source over an opened pack.
     /// </summary>
-    class pack_asset_source final : public asset_source {
+    class CONJURE_API pack_asset_source final : public asset_source {
         private:
             const pack_reader *mReader = nullptr;
 
@@ -127,7 +128,7 @@ namespace conjure::assets {
     /// Resolves through several sources in insertion order (the project pack first, then plugin
     /// packs). Sources are added on the main thread before loads start.
     /// </summary>
-    class composite_asset_source final : public asset_source {
+    class CONJURE_API composite_asset_source final : public asset_source {
         private:
             std::vector<std::unique_ptr<asset_source>> mSources = {};
 

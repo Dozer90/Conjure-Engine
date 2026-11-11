@@ -7,7 +7,7 @@ namespace Conjure;
 /// The input snapshot of the frame, read straight from the shared frame block (D4): no native call per
 /// query. Key codes follow GLFW numbering (platform::key).
 /// </summary>
-public static unsafe class Input
+public static unsafe partial class Input
 {
     public const int GamepadCount = 4;
 

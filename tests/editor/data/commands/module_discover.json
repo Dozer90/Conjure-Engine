@@ -1,0 +1,18 @@
+{
+  "files": {
+    "modules/.keep": ""
+  },
+  "setup": [],
+  "request": {
+    "cmd": "module.discover",
+    "args": {
+      "directory": "modules"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "added": 0
+    }
+  }
+}

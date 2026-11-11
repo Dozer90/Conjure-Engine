@@ -1,0 +1,20 @@
+{
+  "setup": [
+    {
+      "cmd": "script.create",
+      "args": {
+        "name": "CellBehaviour"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "script.compile",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "NOT_AVAILABLE"
+    }
+  }
+}

@@ -6,6 +6,7 @@
 #include "conjure/core/reflect/type_info.h"
 #include "conjure/core/reflect/type_registry.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/string_utils.h"
 #include "conjure/core/types.h"
@@ -93,13 +94,13 @@ namespace conjure::core::reflect::detail {
     /// <summary>
     /// Validates a macro-built description; an inconsistent layout is a programming error and asserts.
     /// </summary>
-    void finish_struct_description(type_info &info);
+    CONJURE_API void finish_struct_description(type_info &info);
 
     /// <summary>
     /// Serialises every field of 'defaults' (an instance of the described type) into
     /// field_info::defaultValueJson.
     /// </summary>
-    void fill_default_values(type_info &info, const void *defaults);
+    CONJURE_API void fill_default_values(type_info &info, const void *defaults);
 
     /// <summary>
     /// Assembles the type_info of a macro-described struct.

@@ -1,0 +1,26 @@
+{
+  "files": {
+    "incoming/cell.png": "@tiny_png"
+  },
+  "setup": [
+    {
+      "cmd": "asset.import",
+      "args": {
+        "source": "${project}/incoming/cell.png",
+        "destination": "textures/cell.png"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "asset.delete",
+    "args": {
+      "asset": "textures/cell.png"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://textures/cell.png"
+    }
+  }
+}

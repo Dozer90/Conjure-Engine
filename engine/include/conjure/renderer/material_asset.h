@@ -7,6 +7,7 @@
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_ref.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -53,7 +54,7 @@ namespace conjure::renderer {
         EMISSIVE
     };
 
-    struct material_desc {
+    struct CONJURE_API material_desc {
         math::vec4 baseColourFactor = math::vec4(1.0f);
         math::vec3 emissiveFactor = math::vec3(0.0f);
         f32 emissiveStrength = 1.0f;
@@ -71,7 +72,7 @@ namespace conjure::renderer {
         [[nodiscard]] bool operator==(const material_desc &other) const noexcept;
     };
 
-    class material_asset {
+    class CONJURE_API material_asset {
         private:
             material_desc mDesc = {};
             std::string mName = {};
@@ -147,7 +148,7 @@ namespace conjure::renderer {
     /// The .cmat importer: validates the JSON and cooks it canonically; texture uuids become
     /// dependencies.
     /// </summary>
-    class material_importer final : public assets::asset_importer {
+    class CONJURE_API material_importer final : public assets::asset_importer {
         public:
             material_importer();
             ~material_importer() override;
@@ -162,7 +163,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The conjure.renderer.material loader; the fallback is the magenta material.
     /// </summary>
-    class material_loader final : public assets::typed_asset_loader<material_asset, material_asset> {
+    class CONJURE_API material_loader final : public assets::typed_asset_loader<material_asset, material_asset> {
         public:
             material_loader();
             ~material_loader() override;
@@ -181,6 +182,6 @@ namespace conjure::renderer {
             [[nodiscard]] std::optional<material_asset> create_fallback_typed() const override;
     };
 
-    [[nodiscard]] std::string_view to_string(alpha_mode value) noexcept;
-    [[nodiscard]] std::string_view to_string(material_texture slot) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(alpha_mode value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(material_texture slot) noexcept;
 }

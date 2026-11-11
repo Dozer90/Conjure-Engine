@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/image.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
@@ -62,9 +63,9 @@ namespace conjure::renderer {
     /// <summary>
     /// Number of mip levels of a full chain down to 1x1.
     /// </summary>
-    [[nodiscard]] u32 mip_count_for(u32 width, u32 height) noexcept;
+    [[nodiscard]] CONJURE_API u32 mip_count_for(u32 width, u32 height) noexcept;
 
-    class texture_asset {
+    class CONJURE_API texture_asset {
         private:
             rhi::texture_format mFormat = rhi::texture_format::RGBA8_SRGB;
             texture_colour_space mColourSpace = texture_colour_space::SRGB;
@@ -226,7 +227,7 @@ namespace conjure::renderer {
     /// { "colourSpace": "srgb" | "linear", "filter": "linear" | "point", "wrap": "repeat" | "clamp" | "mirror",
     /// "generateMips": true }.
     /// </summary>
-    struct texture_import_settings {
+    struct CONJURE_API texture_import_settings {
         texture_colour_space colourSpace = texture_colour_space::SRGB;
         sampler_filter filter = sampler_filter::LINEAR;
         texture_wrap wrap = texture_wrap::REPEAT;
@@ -253,7 +254,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The texture importer: .png .jpg .jpeg .tga .bmp -> one .ctex blob (decode + CPU mips).
     /// </summary>
-    class texture_importer final : public assets::asset_importer {
+    class CONJURE_API texture_importer final : public assets::asset_importer {
         public:
             texture_importer();
             ~texture_importer() override;
@@ -269,7 +270,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The conjure.renderer.texture loader; the fallback is a 1x1 white texture.
     /// </summary>
-    class texture_loader final : public assets::typed_asset_loader<texture_asset, texture_asset> {
+    class CONJURE_API texture_loader final : public assets::typed_asset_loader<texture_asset, texture_asset> {
         public:
             texture_loader();
             ~texture_loader() override;
@@ -288,7 +289,7 @@ namespace conjure::renderer {
             [[nodiscard]] std::optional<texture_asset> create_fallback_typed() const override;
     };
 
-    [[nodiscard]] std::string_view to_string(texture_colour_space value) noexcept;
-    [[nodiscard]] std::string_view to_string(sampler_filter value) noexcept;
-    [[nodiscard]] std::string_view to_string(texture_wrap value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(texture_colour_space value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(sampler_filter value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(texture_wrap value) noexcept;
 }

@@ -4,6 +4,7 @@
 #include "conjure/rhi/native_window.h"
 #include "conjure/rhi/texture_format.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -29,7 +30,7 @@ namespace conjure::rhi {
         bool vsync = true;
     };
 
-    class swapchain {
+    class CONJURE_API swapchain {
         private:
             struct impl;
             struct create_tag {};

@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "history.undo",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "applied": 0
+    }
+  }
+}

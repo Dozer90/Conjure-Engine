@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <atomic>
@@ -25,7 +26,7 @@ namespace conjure::core::jobs {
     /// Handles are cheap to copy; every copy observes the same counter. A default-constructed
     /// handle is invalid and reports itself complete, so waiting on it is a no-op.
     /// </summary>
-    class job_handle {
+    class CONJURE_API job_handle {
         private:
             friend class job_system;
 

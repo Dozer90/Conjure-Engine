@@ -48,6 +48,10 @@ One line per chapter, in reading order for a new contributor.
 | [Modules: renderer](modules/renderer.md) | the frame and the render graph, the resource cache and uploads, assets and importers, threading, deviations from the design, failure model, engine wiring, tests |
 | [Modules: physics](modules/physics.md) | Jolt encapsulation, bodies following components, the fixed step and change detection, the job adapter, contacts, commands and queries, characters, collision meshes, settings and build options, tests |
 | [Modules: scripting](modules/scripting.md) | the two ABI tables and the handshake, the runtime's re-entrancy rules, the component registration, hot reload, the managed side, nethost on MSVC, threading, tests |
+| [Modules: engine](modules/engine.md) | startup and shutdown order, the frame loop, the subsystem adapters, module consumers and services, configuration and `project.json`, the export pipeline, threading, failure handling, tests |
+| [Modules: bindings](modules/bindings.md) | filling the native table, the status protocol, structural routing, call counters, the managed facades and mirrors, threading, adding an entry, tests |
+| [Modules: editor](modules/editor.md) | `editor_core` and `editor_ui`, how a command runs, undo and play mode, the protocol server and transports, frame integration and headless mode, the workspace, module records, threading, tests |
+| [Runtime](modules/runtime.md) | `conjure_runtime`'s `main.cpp`, exit codes, linkage against `conjure_shared`, the Distribution stripping check, tests |
 | [Module system](module-system/index.md) | engine modules versus plugin and game modules, how a plugin fits the engine (one engine copy, the C front door, registration as data, consumers), and the two chapters below |
 | [Module system: creating a module](module-system/creating-a-module.md) | directory layout, the manifest, the CMake target, the entry point, registering components, systems and importers, building, testing with a static test host |
 | [Module system: importing and distributing](module-system/importing-and-distributing.md) | declaring modules in a project, the binary layout `bin/<platform>-<arch>-<config>`, loading at start-up, the export layout, versioning and compatibility, C# assemblies in modules |
@@ -64,8 +68,12 @@ the reference.
 
 | Chapter | Planned file | Reference until written |
 |---|---|---|
-| Modules: engine, bindings, editor | `handbook/modules/<module>.md` | the module's design note under `docs/design/` |
-| Editor internals, AI protocol internals, scripting pipeline, renderer pipeline, asset pipeline, export and distribution | `handbook/<chapter>.md` | `docs/design/04_editor.md`, `03_scripting.md`, `02_renderer.md`, `05_assets.md`, `06_engine_loop.md` 3.6 |
+| Scripting pipeline, renderer pipeline, asset pipeline (end-to-end chapters across modules) | `handbook/<chapter>.md` | `docs/design/03_scripting.md`, `02_renderer.md`, `05_assets.md`; the per-module chapters above cover each module's half |
+| Sample projects (`samples/feature_test`, `samples/stress_test`, the demo games) | `handbook/samples.md` | `docs/design/08_testing.md` 7.2, `17_demo_games.md` |
+
+Editor internals, the AI protocol internals and export and distribution, once listed here, are covered by
+[Modules: editor](modules/editor.md), [Modules: engine](modules/engine.md) section 7 and
+[Runtime](modules/runtime.md).
 
 > [!NOTE]
 > `tools/check_docs.py` (run as `python tools/docs.py check`) fails when an engine module under

@@ -77,7 +77,8 @@ namespace conjure::editor {
         PLAYING_ONLY = 1 << 4,               // Refused while EDITING.
         ASYNC = 1 << 5,                      // Handler answers later through async_reply.
         UI_ONLY = 1 << 6,                    // Hidden from editor.schema (panel focus etc.).
-        NOT_IN_BATCH = 1 << 7                // Implied by ASYNC; also play.*, project.open.
+        NOT_IN_BATCH = 1 << 7,               // Implied by ASYNC; also play.*, project.open.
+        NO_UNDO = 1 << 8                     // MUTATES without an inverse (module commands, command_desc); not recorded.
     };
     CONJURE_ENUM_FLAGS(command_flags);
 
@@ -177,7 +178,7 @@ struct protocol_event {
 Wire form:
 
 ```
--> {"id":12,"cmd":"entity.create","args":{"name":"Pacman","components":{"transform":{"position":[1,0,1]}}}}
+-> {"id":12,"cmd":"entity.create","args":{"name":"Player","components":{"transform":{"position":[1,0,1]}}}}
 <- {"id":12,"ok":true,"result":{"guid":"a9e2c0d4-...","revision":42}}
 <- {"id":13,"ok":false,"error":{"code":"ENTITY_NOT_FOUND","message":"No entity 'Maze/Wall_99'","details":{}}}
 <- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["a9e2c0d4-..."]}}
@@ -674,9 +675,10 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `scene.query` | S | `{with?:[types], without?:[types], fields?:[paths], limit?, offset?}` -> `{rows:[{guid, name, fields}], total}` |
 | `scene.get_hierarchy` | S | `{root?, depth?}` -> nested `{guid, name, children}` |
 | `scene.set_settings` | M S | `{settings}` (ambient, skybox HDRI, gravity, physics layers) |
-| `entity.create` | M S | `{name?, parent?, guid?, components?:{type:json}}` -> `{guid}` |
-| `entity.create_many` | M S | `{count, nameFormat?, parent?, components?, overrides?:[json]}` -> `{guids}` |
+| `entity.create` | M S | `{name?, parent?, guid?, components?:{type:json}}` -> `{guid}` (`guid` is a uuid string; omitted = generated; `DUPLICATE_GUID` when taken) |
+| `entity.create_many` | M S | `{count, nameFormat?, parent?, components?, overrides?:[json], guids?:[uuid]}` -> `{guids}` (`guids` must hold `count` uuids when given) |
 | `entity.destroy` / `entity.destroy_many` | M S | `{entity}` / `{entities}` (subtrees) |
+| `entity.restore` | M S | `{archive, parent?, index?}` -> `{guid, entities}`: the inverse of `entity.destroy`, reinstates a captured subtree with its guids (undo payload, also accepted from clients) |
 | `entity.duplicate` | M S | `{entity, count?, offset?}` -> `{guids}` |
 | `entity.rename` / `entity.set_parent` / `entity.set_enabled` | M S | `{entity, name}` / `{entity, parent, keepWorld?, index?}` / `{entity, enabled}` |
 | `entity.set_transform` | M S | `{entity, position?, rotation?, scale?, space?:"local"\|"world"}` |
@@ -684,17 +686,19 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `entity.find` | S | `{name?, tag?, layer?, component?, limit?}` -> `{guids}` |
 | `entity.bounds` | S | `{entity}` -> `{min, max}` |
 | `component.add` / `component.remove` | M S | `{entity, type, value?}` / `{entity, type}` |
-| `component.set` | M S | `{entity, path, value}` -> `{previous}` (`path` = type name replaces whole component) |
+| `component.set` | M S | `{entity, path, value}` -> `{previous}` (`path` = type name replaces whole component; a qualified path `<type>.<field>.<subfield>` or `<type>.<array>[i]` sets one field; `<type>` is the registered name `conjure.scene.local_transform`, one of the aliases `editor.schema` lists (`transform`, `name`, `script`, `sprite_renderer`, `camera`, ...) or a unique registered-name suffix) |
 | `component.set_many` | M S | `{sets:[{entity, path, value}]}` |
 | `component.get` / `component.list` | S | `{entity, path}` -> `{value}` / `{entity}` -> `{types}` |
 | `asset.import` | M P | `{source, destination?, options?}` -> `{uuid, path, type, subAssets:[{uuid, name, type}]}` (synchronous in v1: `asset_database::add_file` + `import`; database mutations are main-thread only, R35) |
 | `asset.list` / `asset.info` / `asset.create_folder` / `asset.delete` / `asset.reimport` | P (M where it writes) | uuid-or-path based |
+| `asset.restore` | M P | `{path, contentBase64, metaBase64?}` -> `{uuid, path}`: the inverse of `asset.delete`, writes the source (and its `.meta`) back from base64 and imports it (undo payload) |
 | `asset.create_material` | M P | `{path, baseColor?, metallic?, roughness?, emissive?, textures?:{albedo, normal, metallicRoughness, occlusion, emissive}}` -> `{uuid}` |
 | `asset.set` | M P | `{asset, path, value}` (reflection path on any asset type) |
 | `prefab.create` | M P S | `{entity, path}` -> `{uuid}` |
 | `prefab.instantiate` | M S | `{prefab, parent?, name?, transform?, count?}` -> `{guids}` |
 | `prefab.apply` / `prefab.unpack` | M S | `{entity}` |
 | `script.create` | M P | `{name, template?:"Behaviour"\|"Empty", namespace?}` -> `{path}` |
+| `script.delete` | M P | `{path, project?}` -> `{path, projectRemoved}`: deletes a script source under `<project>/scripts/` (undo writes it back); `project: true` also removes the project file when no source is left |
 | `script.read` / `script.write` / `script.list` | P (write M) | `{path}` / `{path, source}` (inside `<project>/scripts/`) / -> `{scripts:[{className, path, fields}]}` |
 | `script.compile` | P A | `{}` -> `{succeeded, diagnostics:[{file, line, column, severity, code, message}], durationMs}` (`scripting::managed_build_runner`) |
 | `script.reload` / `script.gc` | P / P | `{}` (`hot_reload_controller::request(immediate = true)`, applied before the next frame's first script phase) / `{}` -> `{zombies}` (`collect_garbage`); names per R15 |
@@ -706,7 +710,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `view.screenshot` | A | `{path, width?, height?, camera?, format?, waitFrames?}` -> `{path, width, height, frame}` |
 | `view.set_camera` / `view.get_camera` / `view.focus` | | `{position, target, fov?}` / -> same / `{entity}` |
 | `view.pick` | S | `{x?, y?}` (normalised viewport) or `{origin, direction}`, `mode?` -> `pick_result` |
-| `view.set_mode` / `view.debug_draw` | | `{"3d"\|"2d"}` / `{physics?, bounds?, grid?}` |
+| `view.set_mode` / `view.mode` / `view.debug_draw` | | `{mode:"3d"\|"2d"}` / -> `{mode}` / `{physics?, bounds?, grid?}` |
 | `physics.raycast` / `physics.overlap_sphere` | S | `{origin, direction, maxDistance?, layers?}` / `{center, radius}` |
 | `selection.get` / `selection.set` / `selection.clear` | | `{entities, mode?:"replace"\|"add"\|"remove"}` |
 | `reflection.components` | | -> `{components:[{name, module, fields:[{name, type, default, attributes}]}]}` |
@@ -808,11 +812,16 @@ camera] -> `prefab.create` cell/mine -> `prefab.instantiate {count}` ->
 **Offers**: `command_registry` (module-prefixed commands), `panel_registry` / `property_drawer_registry`
 for module tooling; `headless_runner` as a CI tool; `.claude/skills/editor-ai-control` generated from
 `editor.schema`; `conjure_editor` CLI (`--project`, `--headless`, `--exec`, `--out`, `--keep-going`,
-`--offscreen`, `--ai-port`, `--ai-stdio`, `--ai-token`, `--timeout-seconds`, `--export`).
+`--offscreen`, `--ai-port`, `--ai-stdio`, `--ai-token`, `--timeout-seconds`, `--export`, `--no-scripting`,
+`--dotnet`: a headless session keeps the real .NET script host instead of the null host, for play tests that
+run C#).
 
-**Distribution stripping**: root CMake forces `CONJURE_BUILD_EDITOR OFF` in Distribution; `engine/` and
-`editor/` CMake guard on it; only `conjure_editor` links the editor libraries;
-`tools/check_distribution_symbols.py` fails CI if the Distribution `conjure_runtime` references
+**Distribution stripping**: the editor is never part of a Distribution build. Root CMake forces
+`CONJURE_BUILD_EDITOR OFF` in a single-config Distribution tree; a multi-config generator (the `windows-vs`
+preset) builds every configuration from one set of targets, so `cmake/ConjureConfigs.cmake` offers its
+Distribution configuration only when `CONJURE_BUILD_EDITOR` is OFF (with the editor on, the tree has `Debug` and
+`Development`). `engine/` and `editor/` CMake guard on the option; only `conjure_editor` links the editor
+libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `conjure_runtime` references
 `conjure::editor` or `ImGui`; `grep -r CONJURE_EDITOR engine/` must be empty.
 
 ## 9. Implementation plan

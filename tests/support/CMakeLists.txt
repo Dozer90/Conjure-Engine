@@ -60,4 +60,8 @@ if(TARGET conjure::shared)
     conjure_add_test_support_library(conjure_test_support_shared conjure::test_support_shared conjure::shared)
 endif()
 
+# The engine-level support library (08_testing.md D2, wave 4) lives in engine/ and skips itself when the
+# engine module is not built.
+add_subdirectory(engine)
+
 add_subdirectory(tests)

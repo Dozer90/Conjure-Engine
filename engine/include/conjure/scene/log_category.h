@@ -7,5 +7,5 @@ namespace conjure::scene {
     /// <summary>
     /// Log category of the scene module (display name "scene").
     /// </summary>
-    CONJURE_DECLARE_LOG_CATEGORY(LOG_SCENE);
+    CONJURE_DECLARE_ENGINE_LOG_CATEGORY(LOG_SCENE);
 }

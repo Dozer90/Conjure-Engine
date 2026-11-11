@@ -6,6 +6,7 @@
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -74,7 +75,7 @@ namespace conjure::assets {
     /// <summary>
     /// The handles of one load_batch() call.
     /// </summary>
-    class asset_load_batch {
+    class CONJURE_API asset_load_batch {
         private:
             std::vector<asset_handle> mHandles = {};
 
@@ -130,7 +131,7 @@ namespace conjure::assets {
     /// <summary>
     /// Owns every slot, payload and the load pipeline. Outlives every handle.
     /// </summary>
-    class asset_manager {
+    class CONJURE_API asset_manager {
         private:
             struct state;
 
@@ -185,6 +186,19 @@ namespace conjure::assets {
             /// Untyped bind for the scene bind pass (R25). Null for the null uuid.
             /// </summary>
             [[nodiscard]] const asset_slot *bind_slot(const asset_id &id);
+
+            /// <summary>
+            /// The slot of a uuid without creating one: nullptr until something binds it. Read-only
+            /// callers (the scripting bindings' state queries) use it so a uuid a script merely asks
+            /// about never costs a permanent slot.
+            /// </summary>
+            [[nodiscard]] const asset_slot *find_slot(const asset_id &id) const noexcept;
+
+            /// <summary>
+            /// The asset type of a uuid: the bound slot's recorded type, else the first source that
+            /// contains it; nullopt when no slot records it and no source knows it. Never binds.
+            /// </summary>
+            [[nodiscard]] std::optional<asset_type_id> type_of(const asset_id &id) const;
 
             /// <summary>
             /// An owning handle on the slot; binds, never loads. Unbound for the null uuid.

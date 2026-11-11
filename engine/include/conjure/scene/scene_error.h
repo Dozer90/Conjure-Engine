@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
@@ -41,7 +42,7 @@ namespace conjure::scene {
     /// <summary>
     /// The stable upper-case enumerator name of a code ("HIERARCHY_CYCLE"); "" for unknown values.
     /// </summary>
-    [[nodiscard]] std::string_view scene_error_name(scene_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view scene_error_name(scene_error code) noexcept;
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::scene::scene_error, "scene", conjure::scene::scene_error_name);

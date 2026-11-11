@@ -1,0 +1,22 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.batch",
+    "args": {
+      "commands": [
+        {
+          "cmd": "editor.wait_frames",
+          "args": {
+            "frames": 1
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

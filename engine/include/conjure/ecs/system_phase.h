@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <string_view>
@@ -35,7 +36,7 @@ namespace conjure::ecs {
     /// <summary>
     /// The upper-case enumerator name of a phase ("UPDATE"); "COUNT" for COUNT and out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(system_phase phase) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(system_phase phase) noexcept;
 
     /// <summary>
     /// Per-frame timing filled by the engine before every scheduler::run_phase call (R2).

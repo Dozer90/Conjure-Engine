@@ -2,6 +2,7 @@
 
 #include "conjure/audio/audio_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -51,32 +52,32 @@ namespace conjure::audio {
     /// Clamp rules of A15: minDistance >= 0.01, maxDistance >= minDistance, rolloff [0, 10]; NaN
     /// becomes the default.
     /// </summary>
-    [[nodiscard]] attenuation_params clamp_attenuation(const attenuation_params &params) noexcept;
+    [[nodiscard]] CONJURE_API attenuation_params clamp_attenuation(const attenuation_params &params) noexcept;
 
     /// <summary>
     /// Sanitises a listener: non-finite components become the defaults, forward and up are
     /// normalised (and up made perpendicular to forward), gain clamped to [0, 2].
     /// </summary>
-    [[nodiscard]] listener_state clamp_listener(const listener_state &listener) noexcept;
+    [[nodiscard]] CONJURE_API listener_state clamp_listener(const listener_state &listener) noexcept;
 
     /// <summary>
     /// Gain in [0, 1] for a distance, with d = clamp(distance, minDistance, maxDistance):
     /// INVERSE min / (min + rolloff * (d - min)), LINEAR 1 - rolloff * (d - min) / (max - min)
     /// clamped to [0, 1], EXPONENTIAL (d / min) ^ -rolloff, NONE 1.
     /// </summary>
-    [[nodiscard]] f32 compute_attenuation(const attenuation_params &params, f32 distance) noexcept;
+    [[nodiscard]] CONJURE_API f32 compute_attenuation(const attenuation_params &params, f32 distance) noexcept;
 
     /// <summary>
     /// Stereo pan in [-1, 1]: the listener-right component of the normalised direction to the
     /// source (+1 right, -1 left, 0 ahead, behind or coincident).
     /// </summary>
-    [[nodiscard]] f32 compute_pan(const listener_state &listener, math::vec3 sourcePosition) noexcept;
+    [[nodiscard]] CONJURE_API f32 compute_pan(const listener_state &listener, math::vec3 sourcePosition) noexcept;
 
     /// <summary>
     /// Doppler pitch ratio ((c - v_listener . dir) / (c - v_source . dir)) ^ dopplerFactor,
     /// clamped to [0.5, 2]; 1 when dopplerFactor is 0 or the source is at the listener.
     /// </summary>
-    [[nodiscard]] f32 compute_doppler_ratio(
+    [[nodiscard]] CONJURE_API f32 compute_doppler_ratio(
       const listener_state &listener,
       math::vec3 sourcePosition,
       math::vec3 sourceVelocity,
@@ -87,7 +88,7 @@ namespace conjure::audio {
     /// <summary>
     /// Attenuation, pan and Doppler ratio of a source relative to the listener in one call.
     /// </summary>
-    [[nodiscard]] spatial_result compute_spatial(
+    [[nodiscard]] CONJURE_API spatial_result compute_spatial(
       const listener_state &listener,
       math::vec3 sourcePosition,
       math::vec3 sourceVelocity,

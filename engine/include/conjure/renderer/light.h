@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -57,15 +58,15 @@ namespace conjure::renderer {
     /// <summary>
     /// Rounds a requested tile size to the nearest allowed size (256, 512 or 1024).
     /// </summary>
-    [[nodiscard]] u16 clamp_shadow_resolution(u16 requested) noexcept;
+    [[nodiscard]] CONJURE_API u16 clamp_shadow_resolution(u16 requested) noexcept;
 
     /// <summary>
     /// The enumerator name of a light type ("POINT").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(light_type type) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(light_type type) noexcept;
 
     /// <summary>
     /// The enumerator name of a shadow filter ("PCF").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(shadow_filter filter) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(shadow_filter filter) noexcept;
 }

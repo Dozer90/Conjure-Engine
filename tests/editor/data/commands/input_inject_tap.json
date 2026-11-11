@@ -1,0 +1,18 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.inject",
+    "args": {
+      "key": "SPACE",
+      "action": "tap",
+      "holdFrames": 2
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "injected": 1,
+      "releasePending": true
+    }
+  }
+}

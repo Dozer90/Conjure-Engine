@@ -1,0 +1,22 @@
+{
+  "setup": [
+    {
+      "cmd": "play.start",
+      "args": {}
+    },
+    {
+      "cmd": "play.pause",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "play.resume",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "state": "playing"
+    }
+  }
+}

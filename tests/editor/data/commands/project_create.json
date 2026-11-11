@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.create",
+    "args": {
+      "path": "${project}/created",
+      "name": "Created"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "name": "Created"
+    }
+  }
+}

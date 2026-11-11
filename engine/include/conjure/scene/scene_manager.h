@@ -6,6 +6,7 @@
 
 #include "conjure/assets/asset_manager.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/event.h"
 #include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
@@ -63,7 +64,7 @@ namespace conjure::scene {
     /// <summary>
     /// Names of the 32 layers, filled by the engine from project.json.
     /// </summary>
-    class layer_table {
+    class CONJURE_API layer_table {
         public:
             static constexpr u32 LAYER_COUNT = 32;
 
@@ -95,7 +96,7 @@ namespace conjure::scene {
             }
     };
 
-    class scene_manager {
+    class CONJURE_API scene_manager {
         private:
             struct loaded_record {
                 loaded_scene_info info = {};

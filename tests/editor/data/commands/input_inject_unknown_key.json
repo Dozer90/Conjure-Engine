@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.inject",
+    "args": {
+      "key": "NOPE"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

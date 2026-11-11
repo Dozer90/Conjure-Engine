@@ -5,6 +5,7 @@
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/entity.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/types.h"
 
@@ -26,15 +27,15 @@ namespace conjure::ecs {
         /// <summary>
         /// True when the system behind 'context' declared 'id' as written.
         /// </summary>
-        [[nodiscard]] bool context_declares_write(const system_context &context, component_id id) noexcept;
+        [[nodiscard]] CONJURE_API bool context_declares_write(const system_context &context, component_id id) noexcept;
 
         /// <summary>
         /// Asserts (naming the system and component) about an undeclared write.
         /// </summary>
-        void report_undeclared_write(const system_context &context, component_id id);
+        CONJURE_API void report_undeclared_write(const system_context &context, component_id id);
     }
 
-    class chunk_view {
+    class CONJURE_API chunk_view {
         private:
             archetype *mArchetype = nullptr;
             chunk *mChunk = nullptr;

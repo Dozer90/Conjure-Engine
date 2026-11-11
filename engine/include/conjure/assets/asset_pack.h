@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/cooked_blob.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/file_system.h"
@@ -72,7 +73,7 @@ namespace conjure::assets {
     /// <summary>
     /// Collects blobs and writes a pack. Not thread-safe; used by the cooker on the main thread.
     /// </summary>
-    class pack_writer {
+    class CONJURE_API pack_writer {
         private:
             struct entry {
                 cooked_blob blob = {};
@@ -134,7 +135,7 @@ namespace conjure::assets {
     /// Reads a pack: the header, TOC, dependency and string tables are loaded and validated at
     /// open(); payloads are read positionally on demand from any thread.
     /// </summary>
-    class pack_reader {
+    class CONJURE_API pack_reader {
         private:
             std::unique_ptr<core::vfs::file> mFile = nullptr;   // positional reads when opened from a file system
             std::vector<std::byte> mBuffer = {};                 // the whole pack when opened from memory

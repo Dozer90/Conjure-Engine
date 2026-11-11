@@ -1,0 +1,14 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.state",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "playState": "editing",
+      "headless": true
+    }
+  }
+}

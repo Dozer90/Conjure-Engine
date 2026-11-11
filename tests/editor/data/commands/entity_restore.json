@@ -1,0 +1,21 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "entity.restore",
+    "args": {
+      "archive": {
+        "format": "conjure.prefab",
+        "version": 1,
+        "name": "x",
+        "entries": []
+      }
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  },
+  "roundTrip": false
+}

@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.info",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "name": "editor_test"
+    }
+  }
+}

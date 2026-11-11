@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.create_folder",
+    "args": {
+      "path": "scenes"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

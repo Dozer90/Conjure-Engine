@@ -18,6 +18,14 @@
 # Every target gets the shared warning, sanitizer and platform-define interface targets. Library
 # targets record their PUBLIC_HEADERS in the target property CONJURE_PUBLIC_HEADERS, which
 # conjure_header_check() (ConjureTesting.cmake) compiles one translation unit at a time.
+#
+# Symbol export (docs/design/07_modules.md 5, conjure/core/api.h): every engine static library is
+# compiled with CONJURE_SHARED_EXPORTS, CXX_VISIBILITY_PRESET hidden and VISIBILITY_INLINES_HIDDEN, so
+# the umbrella conjure_shared (cmake/ConjureSharedLibrary.cmake) exports exactly the declarations that
+# carry CONJURE_API: dllexport on MSVC, visibility("default") on GCC and Clang, nothing else (the
+# third-party static libraries the modules link privately get hidden visibility from
+# conjure_hide_thirdparty_symbols in ConjureSharedLibrary.cmake for the same reason). Code that links
+# the static libraries directly (the unit tests) sees an empty CONJURE_API and is unaffected.
 
 function(conjure_add_module name)
     set(options "")
@@ -66,6 +74,7 @@ function(conjure_add_module name)
 
     set_property(TARGET ${target} PROPERTY CONJURE_PUBLIC_HEADERS "${ARG_PUBLIC_HEADERS}")
 
+    conjure_apply_export_settings(${target})
     conjure_register_static_library(${target})
     source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
 endfunction()
@@ -75,6 +84,19 @@ endfunction()
 # (conjure_shared whole-archives every entry) and by header checks.
 function(conjure_register_static_library target)
     set_property(GLOBAL APPEND PROPERTY CONJURE_STATIC_LIBRARIES "${target}")
+endfunction()
+
+
+# Applies the CONJURE_API-only export settings described in the header comment to one engine static
+# library: the objects define their exported symbols (CONJURE_SHARED_EXPORTS) and everything without
+# the macro stays hidden. conjure_shared itself adds nothing: an archive whole-archived into it
+# exports exactly what its objects marked.
+function(conjure_apply_export_settings target)
+    target_compile_definitions(${target} PRIVATE CONJURE_SHARED_EXPORTS)
+    set_target_properties(${target} PROPERTIES
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+    )
 endfunction()
 
 
@@ -129,6 +151,7 @@ function(conjure_add_core_area area)
 
     set_property(TARGET ${target} PROPERTY CONJURE_PUBLIC_HEADERS "${ARG_PUBLIC_HEADERS}")
 
+    conjure_apply_export_settings(${target})
     conjure_register_static_library(${target})
     source_group(TREE "${PROJECT_SOURCE_DIR}/engine" FILES ${ARG_SOURCES} ${ARG_PUBLIC_HEADERS})
 endfunction()

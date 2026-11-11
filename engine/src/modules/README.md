@@ -139,38 +139,37 @@ refusals in `last_error()`.
 `conjure_finalize_engine()`, which the root `CMakeLists.txt` calls right after `add_subdirectory(engine)`
 so every static library registered through `conjure_register_static_library` (every
 `conjure_add_module` / `conjure_add_core_area` target, in the global property
-`CONJURE_STATIC_LIBRARIES`: the 17 wave-1/2 libraries today) is whole-archived
+`CONJURE_STATIC_LIBRARIES`: every engine library of waves 1-4, the editor libraries outside Distribution) is whole-archived
 (`$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` with a `LINK_LIBRARY_OVERRIDE_<lib>` per library so the transitive
-plain links agree). Third-party static libraries follow transitively and are not whole-archived.
-`conjure_shared` compiles with `CONJURE_SHARED_EXPORTS`; its consumers get `CONJURE_SHARED_IMPORTS`, the
-engine include directories, every engine library's interface compile definitions,
-`conjure::platform_defines` (which carries `CONJURE_BUILD_EDITOR=1` outside Distribution, mirrored by
-`host_feature_flags()`) and glm; the MSVC dll-interface noise `/wd4251 /wd4275` is part of
-`conjure::warnings` for every target.
+plain links agree). Third-party static libraries follow transitively and are not whole-archived (Dear ImGui is the one
+exception, `conjure_export_imgui_from_shared`). Consumers get `CONJURE_SHARED_IMPORTS`, the engine
+include directories, every engine library's interface compile definitions, `conjure::platform_defines`
+(which carries `CONJURE_BUILD_EDITOR=1` outside Distribution, mirrored by `host_feature_flags()`) and
+glm; the MSVC dll-interface noise `/wd4251 /wd4275` is part of `conjure::warnings` for every target.
 
-What is exported today:
+What is exported (07_modules.md 5, `conjure/core/api.h`): exactly the declarations that carry
+`CONJURE_API`, on every platform. Every static library is compiled with `CONJURE_SHARED_EXPORTS`,
+`CXX_VISIBILITY_PRESET hidden` and `VISIBILITY_INLINES_HIDDEN` (`conjure_apply_export_settings` in
+`cmake/ConjureModule.cmake`), so the whole-archived objects carry their own `dllexport` /
+`visibility("default")` attributes and nothing is generated at build time: no module definition file,
+no `WINDOWS_EXPORT_ALL_SYMBOLS`. The third-party archives the modules link privately get hidden
+visibility too (`conjure_hide_thirdparty_symbols`), so ELF and Mach-O builds export no yyjson, GLFW,
+miniaudio, Jolt, cgltf, stb or NVRHI symbol. `CONJURE_API` goes on every class, struct or free
+function of a public header whose definition lives in a `.cpp`, every `extern` variable (the engine
+modules' log categories use `CONJURE_DECLARE_ENGINE_LOG_CATEGORY`, which is `extern CONJURE_API`) and
+every explicit template specialisation with out-of-line members; nested classes carry their own and a
+friend declaration of an exported free function carries it too. Three CTest entries keep this honest:
 
-- **MSVC.** A module definition file listing every external symbol of the whole-archived objects is
-  generated at build time (`cmake -E __create_def`, the mechanism behind CMake's
-  `WINDOWS_EXPORT_ALL_SYMBOLS`, which by itself does not look inside static libraries). Everything
-  the engine's static libraries define is therefore exported, whether or not it is marked. The one
-  limit is the 65535 exports a DLL may have: the 17 wave-1/2 libraries already produce 26,739 and
-  `scene`, `renderer`, `physics`, `scripting` and `engine` are still to come, so the `.def`
-  generation is followed by a `cmake -P` count that warns above 80 % of the limit and fails the
-  build with the remedy instead of leaving the linker to fail with LNK1189. The remedy is the
-  design's own (07_modules.md 5): `CONJURE_API`-marked exports only, with `CONJURE_SHARED_EXPORTS`
-  on the static libraries and hidden visibility in `conjure_add_module`, once the core owner adds
-  the defines.
-- **GCC / Clang.** Every default-visibility symbol, the compiler default in this tree (the hidden
-  visibility preset the design asks `conjure_add_module` to set is not in place yet).
-- **`CONJURE_API`** is applied to every public class with out-of-line members and every out-of-line
-  free function of *this* module (`tools/check_exports.py` verifies that); core carries none yet.
-  Since the exported side needs nothing extra, the macro matters on the import side: it makes
-  consumers call the module system through the import thunk directly and lets exported data resolve.
-  No public data symbol is exported by `conjure_modules` (`LOG_MODULES` is private).
+| Entry | Checks |
+|---|---|
+| `exports.check_annotations` | `tools/check_exports.py` over every header under `engine/include/conjure/<module>/`: a public declaration that needs the macro and lacks it is a finding |
+| `exports.count_shared_library` | `tools/check_exports.py --count-exports $<TARGET_FILE:conjure_shared> --limit 52428` reads the export count back from `dumpbin /EXPORTS` or `nm` (5,283 in Debug with every wave-4 library; a Windows DLL holds at most 65,535) |
+| `exports.check_tool` | the checker's self-test over embedded headers and tool output |
 
-The static libraries themselves are compiled without `CONJURE_SHARED_EXPORTS`, so tests that link
-them directly see an empty `CONJURE_API`, exactly as before.
+`python tools/check_exports.py <module>` checks one module's headers (the default checks all of them).
+The fixture `module_surface` links a slice of the public surface through the import side as well, so a
+missing annotation fails the build independently of the checker. Tests that link the static libraries
+directly define neither macro and see an empty `CONJURE_API`.
 
 `conjure_add_game_module(<target> MANIFEST module.json SOURCES ... [NAME <name>] [OUTPUT_ROOT <dir>]
 [DEPS ...] [DEFINES ...] [EDITOR_UI])` builds a plugin: a SHARED library linking `conjure::shared`

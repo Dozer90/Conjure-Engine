@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.mode",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "mode": "3d"
+    }
+  }
+}

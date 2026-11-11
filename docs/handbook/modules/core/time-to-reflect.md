@@ -69,9 +69,13 @@ Purpose: the engine's threading primitives, and the only area that creates `std:
 - **Queue.** `job_system` is a facade over a private `state`. One mutex-guarded queue holds three fixed-capacity
   ring lanes (one per priority) of `job_block` pointers taken from a pool that starts at 16 blocks and doubles
   up to `maxQueuedJobs`; popping moves the block onto the executing thread's stack inside the same critical
-  section. Workers are named `<prefix>-<index>`, re-check the queue a bounded number of times with `yield()`
-  and then sleep on a condition variable. With zero workers, before `start()`, after `stop()` or when the queue
-  is full the scheduling thread runs the job itself before `schedule` returns.
+  section. Workers are named `<prefix>-<index>` from names `start()` prepares in the OS encoding before it
+  creates the threads, re-check the queue a bounded number of times with `yield()` and then sleep on a
+  condition variable. `start()` returns only after every worker has named itself and entered the queue loop
+  (a counter under the queue mutex plus a condition variable), so a worker allocates nothing after `start()`
+  returns and an allocation gate opened right after it is never charged a worker prologue. With zero workers,
+  before `start()`, after `stop()` or when the queue is full the scheduling thread runs the job itself before
+  `schedule` returns.
 - **Waiting helps.** `wait()` and `wait_idle()` pop and execute queued jobs until the counter reaches zero and
   only then sleep on a process-wide completion monitor that is signalled only when somebody is blocked, so the
   hot path never locks it; waiting from a worker never deadlocks, even on a single worker. `wait_idle()`

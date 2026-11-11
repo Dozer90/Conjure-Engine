@@ -56,11 +56,30 @@ if(CONJURE_WITH_RENDERER AND NOT CONJURE_RHI_D3D12 AND NOT CONJURE_RHI_VULKAN)
     message(FATAL_ERROR "CONJURE_WITH_RENDERER requires at least one of CONJURE_RHI_D3D12 / CONJURE_RHI_VULKAN")
 endif()
 
-# The editor is never part of a Distribution build. With a multi-config generator the editor
-# target still exists; it is excluded from the Distribution configuration per target instead.
+# The editor is never part of a Distribution build (docs/design/04_editor.md 8). A single-config Distribution
+# tree forces the option off. A multi-config tree builds every configuration from one set of targets, so
+# cmake/ConjureConfigs.cmake offers the Distribution configuration there only when CONJURE_BUILD_EDITOR is OFF:
+# no configuration of any tree links editor code or ImGui into conjure_shared.
 if(NOT CONJURE_IS_MULTI_CONFIG AND CMAKE_BUILD_TYPE STREQUAL "Distribution" AND CONJURE_BUILD_EDITOR)
     message(STATUS "Distribution build: editor disabled")
     set(CONJURE_BUILD_EDITOR OFF)
+endif()
+if(CONJURE_IS_MULTI_CONFIG AND CONJURE_BUILD_EDITOR)
+    message(STATUS "Multi-config generator with the editor: configurations are ${CMAKE_CONFIGURATION_TYPES} "
+        "(Distribution needs -DCONJURE_BUILD_EDITOR=OFF or a single-config *-dist preset)")
+endif()
+
+# Scripting needs the .NET host pack (nethost.h and libnethost, cmake/FindNetHost.cmake). A machine without
+# the SDK configures with scripting and the managed build off instead of failing every preset; the configure
+# summary shows the result, and -DCONJURE_WITH_SCRIPTING=OFF makes the choice explicit and silent.
+if(CONJURE_WITH_SCRIPTING)
+    find_package(NetHost QUIET)
+    if(NOT NetHost_FOUND)
+        message(WARNING "CONJURE_WITH_SCRIPTING is ON but no .NET ${CONJURE_DOTNET_MIN_MAJOR}+ host pack was found "
+            "(install the .NET SDK or set DOTNET_ROOT): scripting and the managed build are disabled for this tree")
+        set(CONJURE_WITH_SCRIPTING OFF)
+        set(CONJURE_BUILD_MANAGED OFF)
+    endif()
 endif()
 
 #------------------------------------------------------------------------------
@@ -119,7 +138,9 @@ if(CONJURE_BUILD_RUNTIME)
     add_subdirectory(runtime)
 endif()
 
-if(CONJURE_BUILD_TESTS)
+# The benchmarks live in the test tree (they share the support library and doctest), so the directory is
+# entered for either option; tests/CMakeLists.txt gates the test modules on CONJURE_BUILD_TESTS.
+if(CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS)
     enable_testing()
     add_subdirectory(tests)
 endif()

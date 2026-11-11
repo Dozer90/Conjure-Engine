@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <concepts>
@@ -82,22 +83,22 @@ namespace conjure::core::str {
     /// <summary>
     /// Copy of 'text' with ASCII letters lower-cased. Other bytes (including UTF-8) are untouched.
     /// </summary>
-    [[nodiscard]] std::string to_lower(std::string_view text);
+    [[nodiscard]] CONJURE_API std::string to_lower(std::string_view text);
 
     /// <summary>
     /// Copy of 'text' with ASCII letters upper-cased. Other bytes (including UTF-8) are untouched.
     /// </summary>
-    [[nodiscard]] std::string to_upper(std::string_view text);
+    [[nodiscard]] CONJURE_API std::string to_upper(std::string_view text);
 
     /// <summary>
     /// Lower-cases the ASCII letters of 'text' in place.
     /// </summary>
-    void to_lower_in_place(std::string &text) noexcept;
+    CONJURE_API void to_lower_in_place(std::string &text) noexcept;
 
     /// <summary>
     /// Upper-cases the ASCII letters of 'text' in place.
     /// </summary>
-    void to_upper_in_place(std::string &text) noexcept;
+    CONJURE_API void to_upper_in_place(std::string &text) noexcept;
 
     /*-----------------------------------------------------------------------*/
     // Trimming
@@ -213,13 +214,17 @@ namespace conjure::core::str {
     /// the result has exactly one more piece than there are delimiters (so "" yields [""] and
     /// "a,,b" yields ["a", "", "b"]); without it empty pieces are dropped.
     /// </summary>
-    [[nodiscard]] std::vector<std::string_view> split(std::string_view text, char delimiter, bool keepEmpty = true);
+    [[nodiscard]] CONJURE_API std::vector<std::string_view> split(
+      std::string_view text,
+      char delimiter,
+      bool keepEmpty = true
+    );
 
     /// <summary>
     /// Splits 'text' at every occurrence of the multi-character 'delimiter'. An empty delimiter
     /// yields the whole text as a single piece. Same 'keepEmpty' rules as the char overload.
     /// </summary>
-    [[nodiscard]] std::vector<std::string_view> split(
+    [[nodiscard]] CONJURE_API std::vector<std::string_view> split(
       std::string_view text,
       std::string_view delimiter,
       bool keepEmpty = true
@@ -229,7 +234,7 @@ namespace conjure::core::str {
     /// Splits 'text' into lines at "\n", "\r\n" or a lone "\r". Line terminators are not part of
     /// the pieces; a trailing terminator does not produce an extra empty line.
     /// </summary>
-    [[nodiscard]] std::vector<std::string_view> split_lines(std::string_view text);
+    [[nodiscard]] CONJURE_API std::vector<std::string_view> split_lines(std::string_view text);
 
     /// <summary>
     /// Concatenates the pieces with 'separator' between them. Accepts any range whose elements
@@ -254,7 +259,11 @@ namespace conjure::core::str {
     /// Copy of 'text' with every non-overlapping occurrence of 'from' replaced by 'to', scanning
     /// left to right. An empty 'from' returns 'text' unchanged.
     /// </summary>
-    [[nodiscard]] std::string replace_all(std::string_view text, std::string_view from, std::string_view to);
+    [[nodiscard]] CONJURE_API std::string replace_all(
+      std::string_view text,
+      std::string_view from,
+      std::string_view to
+    );
 
     /*-----------------------------------------------------------------------*/
     // Parsing
@@ -271,29 +280,29 @@ namespace conjure::core::str {
     /// <summary>
     /// parse_integer<i64>.
     /// </summary>
-    [[nodiscard]] std::optional<i64> parse_int(std::string_view text, int base = 10) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<i64> parse_int(std::string_view text, int base = 10) noexcept;
 
     /// <summary>
     /// parse_integer<u64>. A leading '-' is rejected.
     /// </summary>
-    [[nodiscard]] std::optional<u64> parse_uint(std::string_view text, int base = 10) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<u64> parse_uint(std::string_view text, int base = 10) noexcept;
 
     /// <summary>
     /// Parses the whole of 'text' as a decimal floating-point number: optional sign, digits,
     /// optional fraction and exponent ("1", "-2.5", "1e-3", ".5", "7."), plus "inf"/"nan" in any
     /// case. Hexadecimal floats, whitespace and trailing characters are rejected.
     /// </summary>
-    [[nodiscard]] std::optional<f64> parse_double(std::string_view text) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<f64> parse_double(std::string_view text) noexcept;
 
     /// <summary>
     /// parse_double() narrowed to f32. Finite values that overflow f32 are rejected.
     /// </summary>
-    [[nodiscard]] std::optional<f32> parse_float(std::string_view text) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<f32> parse_float(std::string_view text) noexcept;
 
     /// <summary>
     /// Parses "true"/"false", "yes"/"no", "on"/"off" and "1"/"0", ignoring ASCII case.
     /// </summary>
-    [[nodiscard]] std::optional<bool> parse_bool(std::string_view text) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<bool> parse_bool(std::string_view text) noexcept;
 
     /*-----------------------------------------------------------------------*/
     // Formatting
@@ -302,7 +311,7 @@ namespace conjure::core::str {
     /// Human readable byte count with binary units: "512 B", "1.0 KiB", "1.5 MiB", "2.0 GiB".
     /// Values below 1 KiB print as whole bytes; larger values print one decimal.
     /// </summary>
-    [[nodiscard]] std::string format_bytes(u64 bytes);
+    [[nodiscard]] CONJURE_API std::string format_bytes(u64 bytes);
 
     /*-----------------------------------------------------------------------*/
     // Unicode
@@ -316,41 +325,41 @@ namespace conjure::core::str {
     /// Decodes UTF-8 to UTF-16. Malformed bytes (truncated sequences, overlong forms, encoded
     /// surrogates, code points above U+10FFFF) each become U+FFFD; the function never fails.
     /// </summary>
-    [[nodiscard]] std::u16string to_utf16(std::string_view utf8);
+    [[nodiscard]] CONJURE_API std::u16string to_utf16(std::string_view utf8);
 
     /// <summary>
     /// Encodes UTF-16 as UTF-8. Unpaired surrogates become U+FFFD; the function never fails.
     /// </summary>
-    [[nodiscard]] std::string from_utf16(std::u16string_view utf16);
+    [[nodiscard]] CONJURE_API std::string from_utf16(std::u16string_view utf16);
 
     /// <summary>
     /// Decodes UTF-8 to UTF-32 (one code point per element). Same error handling as to_utf16().
     /// </summary>
-    [[nodiscard]] std::u32string to_utf32(std::string_view utf8);
+    [[nodiscard]] CONJURE_API std::u32string to_utf32(std::string_view utf8);
 
     /// <summary>
     /// Encodes UTF-32 as UTF-8. Surrogate code points and values above U+10FFFF become U+FFFD;
     /// the function never fails.
     /// </summary>
-    [[nodiscard]] std::string from_utf32(std::u32string_view utf32);
+    [[nodiscard]] CONJURE_API std::string from_utf32(std::u32string_view utf32);
 
     /// <summary>
     /// UTF-8 to the platform wide string: UTF-16 where wchar_t is 16 bits (Windows paths and
     /// Win32 calls), UTF-32 where it is 32 bits. Same error handling as to_utf16()/to_utf32().
     /// </summary>
-    [[nodiscard]] std::wstring to_wide(std::string_view utf8);
+    [[nodiscard]] CONJURE_API std::wstring to_wide(std::string_view utf8);
 
     /// <summary>
     /// Platform wide string to UTF-8. Inverse of to_wide(); unpaired surrogates and invalid
     /// UTF-32 code points become U+FFFD, as in from_utf16()/from_utf32().
     /// </summary>
-    [[nodiscard]] std::string from_wide(std::wstring_view wide);
+    [[nodiscard]] CONJURE_API std::string from_wide(std::wstring_view wide);
 
     /// <summary>
     /// True when 'text' is a valid UTF-8 byte sequence (no overlong forms, surrogates or code
     /// points above U+10FFFF). The empty string is valid.
     /// </summary>
-    [[nodiscard]] bool is_valid_utf8(std::string_view text) noexcept;
+    [[nodiscard]] CONJURE_API bool is_valid_utf8(std::string_view text) noexcept;
 
     /*-----------------------------------------------------------------------*/
     // Identifiers
@@ -382,7 +391,7 @@ namespace conjure::core::str {
         /// Shared body of parse_integer: strips the sign and prefix, then converts the digits.
         /// 'negative' is only accepted when 'allowNegative' is set. Returns false on any error.
         /// </summary>
-        [[nodiscard]] bool parse_unsigned_digits(
+        [[nodiscard]] CONJURE_API bool parse_unsigned_digits(
           std::string_view text,
           int base,
           bool allowNegative,

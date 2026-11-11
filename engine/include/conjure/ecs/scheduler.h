@@ -7,6 +7,7 @@
 #include "conjure/ecs/system_phase.h"
 #include "conjure/ecs/world.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
@@ -75,7 +76,7 @@ namespace conjure::ecs {
         u32 minEntitiesPerJob = 1024;          // grain of parallel_for_chunks in entities
     };
 
-    class scheduler {
+    class CONJURE_API scheduler {
         private:
             struct system_record;
             struct phase_state;

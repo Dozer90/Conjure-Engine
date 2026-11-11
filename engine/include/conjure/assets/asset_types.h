@@ -2,6 +2,7 @@
 
 #include "conjure/assets/assets_error.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
@@ -80,7 +81,7 @@ namespace conjure::assets {
     /// <summary>
     /// Upper-case name of a state ("LOADING").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(asset_state state) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(asset_state state) noexcept;
 
     /// <summary>
     /// Dispatch order of queued loads; FIFO within a level.

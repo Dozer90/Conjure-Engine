@@ -5,6 +5,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_loader.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
@@ -44,7 +45,7 @@ namespace conjure::renderer {
     /// A cubemap with a mip chain, RGBA16F texels stored as packed halves. Faces follow the +X, -X,
     /// +Y, -Y, +Z, -Z convention; texels are stored mip-major then face-major, rows top to bottom.
     /// </summary>
-    struct cubemap_data {
+    struct CONJURE_API cubemap_data {
         u32 size = 0;                                   // edge of mip 0
         u32 mipCount = 0;
         std::vector<u16> texels = {};                   // 4 halves per texel
@@ -80,7 +81,7 @@ namespace conjure::renderer {
     /// <summary>
     /// A linear RGB equirectangular image (the decoded .hdr).
     /// </summary>
-    struct equirect_image {
+    struct CONJURE_API equirect_image {
         u32 width = 0;
         u32 height = 0;
         std::vector<f32> rgb = {};                      // 3 floats per pixel, rows top to bottom
@@ -109,7 +110,7 @@ namespace conjure::renderer {
     /// <summary>
     /// Bake sizes; the defaults are the design's (R13). Tests use small sizes.
     /// </summary>
-    struct environment_bake_options {
+    struct CONJURE_API environment_bake_options {
         u32 skySize = 512;                              // power of two, >= 8
         u32 prefilteredSize = 128;                      // power of two, >= 8
         u32 sampleCount = 128;                          // GGX importance samples per texel
@@ -121,7 +122,7 @@ namespace conjure::renderer {
         [[nodiscard]] bool operator==(const environment_bake_options &other) const noexcept = default;
     };
 
-    class environment_asset {
+    class CONJURE_API environment_asset {
         private:
             cubemap_data mSky = {};
             cubemap_data mPrefiltered = {};
@@ -186,7 +187,7 @@ namespace conjure::renderer {
     /// either way. Fails with INVALID_ARGUMENT for an invalid image or options (sizes not powers of two
     /// or below 8, zero samples).
     /// </summary>
-    [[nodiscard]] core::result<environment_asset> bake_environment(
+    [[nodiscard]] CONJURE_API core::result<environment_asset> bake_environment(
       const equirect_image &source,
       const environment_bake_options &options,
       core::jobs::job_system *jobs
@@ -195,13 +196,16 @@ namespace conjure::renderer {
     /// <summary>
     /// Evaluates SH9 irradiance (already convolved with the cosine lobe) in a direction.
     /// </summary>
-    [[nodiscard]] math::vec3 evaluate_sh9_irradiance(const sh9 &coefficients, const math::vec3 &normal) noexcept;
+    [[nodiscard]] CONJURE_API math::vec3 evaluate_sh9_irradiance(
+      const sh9 &coefficients,
+      const math::vec3 &normal
+    ) noexcept;
 
     /// <summary>
     /// The direction through the centre of a cubemap texel, for a face index in the +X..-Z order
     /// and texel coordinates in [0, size).
     /// </summary>
-    [[nodiscard]] math::vec3 cubemap_texel_direction(u32 face, u32 x, u32 y, u32 size) noexcept;
+    [[nodiscard]] CONJURE_API math::vec3 cubemap_texel_direction(u32 face, u32 x, u32 y, u32 size) noexcept;
 
 }
 
@@ -212,7 +216,7 @@ namespace conjure::renderer {
     /// <summary>
     /// The .hdr importer: decodes the equirect image and bakes it (settings: environment_bake_options).
     /// </summary>
-    class environment_importer final : public assets::asset_importer {
+    class CONJURE_API environment_importer final : public assets::asset_importer {
         private:
             core::jobs::job_system *mJobs = nullptr;    // optional; faces bake inline without it
 
@@ -231,7 +235,8 @@ namespace conjure::renderer {
     /// <summary>
     /// The conjure.renderer.environment loader; the fallback is the uniform grey environment.
     /// </summary>
-    class environment_loader final : public assets::typed_asset_loader<environment_asset, environment_asset> {
+    class CONJURE_API environment_loader final :
+        public assets::typed_asset_loader<environment_asset, environment_asset> {
         public:
             environment_loader();
             ~environment_loader() override;

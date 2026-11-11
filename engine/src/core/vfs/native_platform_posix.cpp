@@ -109,6 +109,11 @@ void internal::close_read_handle(std::intptr_t value) noexcept {
 /*===========================================================================*/
 // Replacing
 
+std::filesystem::path internal::extend_native_path(const std::filesystem::path &path) {
+    // No classic path limit here: PATH_MAX applies to single calls and is far above what the engine builds.
+    return path;
+}
+
 result<void> internal::replace_file(const std::filesystem::path &source, const std::filesystem::path &target) {
     // POSIX rename(2) replaces an existing destination file atomically.
     std::error_code code = {};

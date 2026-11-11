@@ -316,6 +316,31 @@ TEST_SUITE("modules/module_manager_shared") {
         CONJURE_REQUIRE_OK(host.manager.load(managed));
     }
 
+    TEST_CASE("regression - exports review 6: a plugin links a representative slice of the public surface") {
+        // module_surface (tests/modules/fixtures/module_surface) touches JSON iteration, the bit_vector
+        // operators, slot_map, CONJURE_ASSERT, string_id, reflection, chunk_view and material_desc
+        // through the import side of conjure_shared. Linking it already proves the annotations; the
+        // checksum proves the exported code behaves the same as in the static-library tests. Each area
+        // occupies two decimal digits (see the fixture for the breakdown).
+        using checksum_fn = std::uint64_t (*)(void);
+        shared_host host = {};
+        conjure::testing::log_capture logs = {};
+        const result<module_id> surface = host.manager.add_manifest(surface_fixture_manifest());
+        INFO("add_manifest: ", conjure::testing::describe_error(surface));
+        REQUIRE(surface.has_value());
+        CONJURE_REQUIRE_OK(host.manager.load(*surface));
+        CHECK(logs.contains(log_level::INFO, "module_surface entry running"));
+
+        result<dynamic_library> library = dynamic_library::load(surface_fixture_binary());
+        REQUIRE(library.has_value());
+        const checksum_fn checksum = library->symbol_as<checksum_fn>("conjure_surface_checksum");
+        REQUIRE(checksum != nullptr);
+        constexpr std::uint64_t MATERIAL_TERM = CONJURE_TEST_SURFACE_RENDERER ? 1'000'000'000'000ull : 0ull;
+        constexpr std::uint64_t EXPECTED = 100'520'081'211ull + MATERIAL_TERM;
+        CHECK(checksum() == EXPECTED);
+        CONJURE_REQUIRE_OK(host.manager.unload(*surface));
+    }
+
     TEST_CASE("module_manager - events accompany shared loads and unloads") {
         discovered_host fixture = {};
         std::vector<std::string> events = {};

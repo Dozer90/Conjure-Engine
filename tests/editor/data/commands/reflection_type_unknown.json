@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "reflection.type",
+    "args": {
+      "name": "nope"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "TYPE_NOT_FOUND"
+    }
+  }
+}

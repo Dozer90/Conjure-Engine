@@ -72,8 +72,10 @@ TEST_SUITE("physics/physics_world") {
 
     TEST_CASE("physics_world - 600 empty steps allocate nothing after the first") {
         for_each_job_mode([](core::jobs::job_system &jobs) {
+            // The pool is started by for_each_job_mode and job_system::start() returns with every
+            // worker running, so the only warm-up the gate needs is Jolt's own first step.
             physics_fixture fixture(jobs);
-            fixture.run_steps(2);
+            fixture.run_steps(1);
             testing::allocation_scope scope = {};
             fixture.run_steps(600);
             const u64 allocations = scope.allocation_count();

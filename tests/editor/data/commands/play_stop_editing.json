@@ -1,0 +1,13 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "play.stop",
+    "args": {}
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "WRONG_PLAY_STATE"
+    }
+  }
+}

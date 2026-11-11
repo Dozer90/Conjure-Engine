@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.discover",
+    "args": {
+      "directory": "no_such_modules"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

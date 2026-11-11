@@ -4,6 +4,7 @@
 #include "conjure/ecs/chunk_view.h"
 #include "conjure/ecs/component.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <span>
@@ -25,7 +26,7 @@ namespace conjure::ecs {
         /// <summary>
         /// The registry a world was created on; lets headers that cannot include world.h build masks.
         /// </summary>
-        [[nodiscard]] const component_registry &registry_of(const world &target) noexcept;
+        [[nodiscard]] CONJURE_API const component_registry &registry_of(const world &target) noexcept;
     }
 
     /// <summary>
@@ -43,7 +44,7 @@ namespace conjure::ecs {
         u64 sinceVersion = 0;
     };
 
-    class query {
+    class CONJURE_API query {
         private:
             world *mWorld = nullptr;
             const component_registry *mRegistry = nullptr;

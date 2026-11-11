@@ -3,6 +3,7 @@
 #include "conjure/renderer/gpu_ids.h"
 #include "conjure/renderer/limits.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
@@ -71,7 +72,7 @@ namespace conjure::renderer {
     /// dropped (in sorted order, the last ones) and counted, with a WARN logged once per change of
     /// the dropped count.
     /// </summary>
-    class sprite_batcher {
+    class CONJURE_API sprite_batcher {
         private:
             std::vector<sprite_vertex> mVertices = {};
             std::vector<u32> mIndices = {};
@@ -136,5 +137,5 @@ namespace conjure::renderer {
     /// <summary>
     /// The enumerator name of a sprite space ("WORLD").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(sprite_space space) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(sprite_space space) noexcept;
 }

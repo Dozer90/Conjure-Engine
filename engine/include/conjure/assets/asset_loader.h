@@ -4,6 +4,7 @@
 #include "conjure/assets/asset_ref.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -42,7 +43,7 @@ namespace conjure::assets {
     /// Type-erased loader interface. One instance per registered type, owned by the registry,
     /// stateless with respect to individual loads.
     /// </summary>
-    class asset_loader {
+    class CONJURE_API asset_loader {
         public:
             asset_loader();
             virtual ~asset_loader();

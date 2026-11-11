@@ -1,0 +1,17 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "scene.query",
+    "args": {
+      "with": [
+        "nope"
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "TYPE_NOT_FOUND"
+    }
+  }
+}

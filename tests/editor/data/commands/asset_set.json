@@ -1,0 +1,22 @@
+{
+  "setup": [
+    {
+      "cmd": "scene.save",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "asset.set",
+    "args": {
+      "asset": "scenes/test.scene.json",
+      "path": "name",
+      "value": "renamed"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "name"
+    }
+  }
+}

@@ -3,6 +3,7 @@
 #include "conjure/audio/audio_types.h"
 
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <cstddef>
@@ -21,7 +22,7 @@ namespace conjure::audio {
     /// <summary>
     /// Interleaved f32 frames. Immutable after construction; shared by the clip and its voices.
     /// </summary>
-    class pcm_buffer {
+    class CONJURE_API pcm_buffer {
         private:
             audio_format mFormat = {};
             u64 mFrameCount = 0;
@@ -74,7 +75,7 @@ namespace conjure::audio {
     /// <summary>
     /// What is known about a clip without touching its samples.
     /// </summary>
-    struct clip_info {
+    struct CONJURE_API clip_info {
         audio_format format = {};
         u64 frameCount = 0;
         clip_encoding encoding = clip_encoding::UNKNOWN;
@@ -92,7 +93,7 @@ namespace conjure::audio {
     /// The conjure.audio.clip payload: info plus one of two shared buffers (PCM samples, or the
     /// original encoded file for STREAMED storage).
     /// </summary>
-    struct audio_clip {
+    struct CONJURE_API audio_clip {
         clip_info info = {};
         std::shared_ptr<const pcm_buffer> pcm = nullptr;                   // PCM storage.
         std::shared_ptr<const std::vector<byte>> encoded = nullptr;         // STREAMED storage (original file).
@@ -120,7 +121,7 @@ namespace conjure::audio {
     /// <summary>
     /// Builds a clip around a PCM buffer, filling info from the buffer (encoding WAV, storage PCM).
     /// </summary>
-    [[nodiscard]] audio_clip make_pcm_clip(
+    [[nodiscard]] CONJURE_API audio_clip make_pcm_clip(
       std::shared_ptr<const pcm_buffer> pcm,
       clip_encoding encoding = clip_encoding::WAV
     );
@@ -128,7 +129,7 @@ namespace conjure::audio {
     /// <summary>
     /// The silent fallback clip: 0.1 s of mono 48 kHz zeros (docs/design/05_assets.md D14).
     /// </summary>
-    [[nodiscard]] audio_clip make_fallback_clip();
+    [[nodiscard]] CONJURE_API audio_clip make_fallback_clip();
 
     /// <summary>
     /// Registered name of the clip asset type.

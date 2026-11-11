@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/vfs/file_system.h"
 
 #include <atomic>
@@ -15,7 +16,7 @@ namespace conjure::core::vfs {
     /// safe to share between threads; write times come from a counter that increases with every
     /// mutation, which keeps them deterministic.
     /// </summary>
-    class memory_file_system final : public file_system {
+    class CONJURE_API memory_file_system final : public file_system {
         private:
             struct node;
 

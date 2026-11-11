@@ -169,9 +169,11 @@ std::filesystem::path native_file_system::to_native(std::string_view path) const
         normalized.erase(0, 1);
     }
     if (normalized.empty()) {
-        return mRoot;
+        return internal::extend_native_path(mRoot);
     }
-    return mRoot / internal::path_from_utf8(normalized);
+    // A project in a deep directory (or a cache under a test's temporary root) can pass the classic
+    // Windows path limit; the extended form keeps every call below working (wave 4 integration).
+    return internal::extend_native_path(mRoot / internal::path_from_utf8(normalized));
 }
 
 result<std::vector<std::byte>> native_file_system::read_file(std::string_view path) {
@@ -198,7 +200,7 @@ result<std::vector<std::byte>> native_file_system::read_file(std::string_view pa
 
 result<void> native_file_system::write_file(std::string_view path, std::span<const std::byte> data) {
     CONJURE_TRY_ASSIGN(const std::filesystem::path nativePath, resolve_writable(path));
-    return write_bytes(nativePath, data);
+    return write_bytes(nativePath, path, data);
 }
 
 result<void> native_file_system::write_file_atomic(std::string_view path, std::span<const std::byte> data) {
@@ -219,7 +221,7 @@ result<void> native_file_system::write_file_atomic(std::string_view path, std::s
         return is_a_directory(path);
     }
 
-    const result<void> written = write_bytes(temporary, data);
+    const result<void> written = write_bytes(temporary, path, data);
     if (!written.has_value()) {
         std::filesystem::remove(temporary, ignored);
         return written.get_error();
@@ -456,10 +458,11 @@ result<std::filesystem::path> native_file_system::resolve_writable(std::string_v
 
 result<void> native_file_system::write_bytes(
   const std::filesystem::path &nativePath,
+  std::string_view displayPath,
   std::span<const std::byte> data
 ) const {
-    const std::string displayPath = internal::path_to_utf8(nativePath.lexically_relative(mRoot));
-
+    // The display path is the caller's VFS path: the native one may carry the extended-length prefix on
+    // Windows, whose root name differs from mRoot's, so lexically_relative would yield nothing (review 4).
     std::error_code code = {};
     const std::filesystem::file_status status = std::filesystem::status(nativePath, code);
     if (std::filesystem::is_directory(status)) {

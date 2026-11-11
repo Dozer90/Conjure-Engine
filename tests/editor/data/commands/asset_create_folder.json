@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.create_folder",
+    "args": {
+      "path": "props"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://props"
+    }
+  }
+}

@@ -159,7 +159,7 @@ gameplay_module`. The fixtures show the pattern for a module whose binary should
 `tests/modules/CMakeLists.txt` calls `conjure_add_game_module(conjure_fixture_<name> MANIFEST ... OUTPUT_ROOT
 "${PROJECT_BINARY_DIR}/test_modules/<name>" ...)` and copies the manifest beside the output with
 `configure_file(... COPYONLY)`, so the build tree holds a complete module directory. Against an installed SDK,
-`find_package(conjure CONFIG)` provides the same function. The editor's `module.build` protocol command (wave 4)
+`find_package(conjure CONFIG)` provides the same function. The editor's `module.build` protocol command
 runs the project's CMake build for the editor's configuration and then requests a reload.
 
 > [!WARNING]
@@ -213,7 +213,8 @@ TEST_CASE("gameplay module - loads in a static test host") {
 ```
 
 Add a `module_consumer` (a recording one like `tests/modules/fake_consumer.h`, or the real `ecs_module_consumer`
-once wave 4 lands) with `manager.add_consumer()` to check what the entry registered reaches the subsystem, and
+from `engine/src/engine/module_consumers/`) with `manager.add_consumer()` to check what the entry registered
+reaches the subsystem, and
 `manager.provide_service()` to hand the module the services it asks for. To test the real binary, build it with
 `conjure_add_game_module(... OUTPUT_ROOT <build tree>)`, point `discover()` or `add_manifest()` at the output and
 link the test executable with `conjure_add_test_module(... LINK_ENGINE_SHARED)`, as `tests/modules/` does; without

@@ -6,6 +6,7 @@
 #include "conjure/audio/mix_groups.h"
 #include "conjure/audio/spatialisation.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
@@ -68,7 +69,7 @@ namespace conjure::audio {
         std::vector<null_group_stats> groups = {};
     };
 
-    class null_backend final : public audio_backend {
+    class CONJURE_API null_backend final : public audio_backend {
         private:
             friend class audio_engine;                     // owns the backend
             friend struct detail::audio_engine_helpers;   // writes the voice / group / listener snapshot

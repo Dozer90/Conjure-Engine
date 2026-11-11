@@ -100,4 +100,14 @@ namespace conjure::core::vfs::internal {
     /// caller holds it open through open_read_handle.
     /// </summary>
     [[nodiscard]] result<void> replace_file(const std::filesystem::path &source, const std::filesystem::path &target);
+
+    /// <summary>
+    /// The form of a native path the operating system accepts whatever its length. On Windows a path
+    /// at or beyond the classic MAX_PATH limit is returned absolute, normalised and prefixed with the
+    /// extended-length marker (`\\?\`, `\\?\UNC\` for shares), which every Win32 file call honours;
+    /// shorter paths are returned unchanged, and a path already carrying the marker (or the `\\.\` device
+    /// form) is normalised to backslashes, because Win32 takes those forms literally. POSIX has no such
+    /// limit and returns the path as given.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path extend_native_path(const std::filesystem::path &path);
 }

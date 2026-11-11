@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Windows application manifest of conjure_runtime, merged into the executable by the linker (CMake passes
+    .manifest sources to the manifest tool). activeCodePage makes UTF-8 the process code page (Windows 10
+    1903+), so every narrow string the engine turns into a std::filesystem::path (a project directory,
+    - -scene, - -log-file) decodes the UTF-8 argument vector runtime_platform_windows.cpp builds from the wide
+    command line.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

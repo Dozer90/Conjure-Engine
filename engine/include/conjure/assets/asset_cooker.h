@@ -4,6 +4,7 @@
 #include "conjure/assets/asset_database.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -45,7 +46,7 @@ namespace conjure::assets {
     /// <summary>
     /// Produces the export pack from the database and the cache. Main thread.
     /// </summary>
-    class asset_cooker {
+    class CONJURE_API asset_cooker {
         private:
             asset_database *mDatabase = nullptr;
             const asset_cache *mCache = nullptr;

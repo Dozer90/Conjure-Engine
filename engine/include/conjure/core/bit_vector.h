@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/types.h"
 
@@ -16,7 +17,7 @@ namespace conjure::core {
     /// operations (count, any, equality, bitwise ops) need no masking at the call site.
     /// Not thread-safe.
     /// </summary>
-    class bit_vector {
+    class CONJURE_API bit_vector {
         public:
             /// <summary>
             /// Returned by the find_* functions when no matching bit exists.
@@ -341,10 +342,10 @@ namespace conjure::core {
             void clear_trailing_bits() noexcept;
     };
 
-    [[nodiscard]] bit_vector operator&(const bit_vector &left, const bit_vector &right);
-    [[nodiscard]] bit_vector operator|(const bit_vector &left, const bit_vector &right);
-    [[nodiscard]] bit_vector operator^(const bit_vector &left, const bit_vector &right);
-    [[nodiscard]] bit_vector operator~(const bit_vector &value);
+    [[nodiscard]] CONJURE_API bit_vector operator&(const bit_vector &left, const bit_vector &right);
+    [[nodiscard]] CONJURE_API bit_vector operator|(const bit_vector &left, const bit_vector &right);
+    [[nodiscard]] CONJURE_API bit_vector operator^(const bit_vector &left, const bit_vector &right);
+    [[nodiscard]] CONJURE_API bit_vector operator~(const bit_vector &value);
 }
 
 // set_bit_range only carries a pointer to its bit_vector; iterators outlive the range object safely.

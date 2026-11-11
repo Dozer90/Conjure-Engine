@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/hash.h"
 #include "conjure/core/types.h"
 
@@ -44,25 +45,25 @@ namespace conjure::core {
         /// is already registered is a collision: it asserts, logs an ERROR on LOG_CORE and keeps
         /// the first name. Thread-safe. Exposed so tests and tooling can exercise the table directly.
         /// </summary>
-        void register_string_id_name(u64 hash, std::string_view name);
+        CONJURE_API void register_string_id_name(u64 hash, std::string_view name);
 
         /// <summary>
         /// The registered spelling of 'hash', or an empty, null-terminated view when unknown.
         /// The returned view stays valid for the lifetime of the process. Thread-safe.
         /// </summary>
-        [[nodiscard]] std::string_view find_string_id_name(u64 hash) noexcept;
+        [[nodiscard]] CONJURE_API std::string_view find_string_id_name(u64 hash) noexcept;
 
         /// <summary>
         /// Number of distinct hashes with a registered name. Thread-safe.
         /// </summary>
-        [[nodiscard]] usize string_id_name_count() noexcept;
+        [[nodiscard]] CONJURE_API usize string_id_name_count() noexcept;
     }
 
     /// <summary>
     /// A string reduced to its 64-bit FNV-1a hash. Trivially copyable and comparable by hash;
     /// the original spelling is available through view()/c_str() once the id has been interned.
     /// </summary>
-    class string_id {
+    class CONJURE_API string_id {
         private:
             u64 mHash = 0;
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <compare>
@@ -16,7 +17,7 @@ namespace conjure::core::detail {
     /// programmer error. It asserts, then terminates even when the assertion handler continues.
     /// Defined in containers.cpp.
     /// </summary>
-    [[noreturn]] void fatal_container_access(const char *message);
+    [[noreturn]] CONJURE_API void fatal_container_access(const char *message);
 
     /// <summary>
     /// Comparators that opt into heterogeneous lookup, e.g. std::less<>.

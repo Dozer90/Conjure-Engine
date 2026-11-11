@@ -3,6 +3,7 @@
 #include "conjure/audio/audio_device.h"
 #include "conjure/audio/audio_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -15,7 +16,7 @@
 
 namespace conjure::audio {
 
-    class audio_backend {
+    class CONJURE_API audio_backend {
         public:
             audio_backend();
             virtual ~audio_backend();
@@ -68,11 +69,11 @@ namespace conjure::audio {
     /// <summary>
     /// True when a backend of this kind is compiled into the library (AUTO and NULL_BACKEND always).
     /// </summary>
-    [[nodiscard]] bool is_backend_compiled(audio_backend_kind kind) noexcept;
+    [[nodiscard]] CONJURE_API bool is_backend_compiled(audio_backend_kind kind) noexcept;
 
     /// <summary>
     /// Creates a stopped backend. AUTO = MINIAUDIO when a device backend is compiled in, else
     /// NULL_BACKEND. Fails with UNSUPPORTED (core) when the requested kind is not compiled in.
     /// </summary>
-    [[nodiscard]] core::result<std::unique_ptr<audio_backend>> create_backend(audio_backend_kind kind);
+    [[nodiscard]] CONJURE_API core::result<std::unique_ptr<audio_backend>> create_backend(audio_backend_kind kind);
 }

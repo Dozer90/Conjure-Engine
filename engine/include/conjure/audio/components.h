@@ -6,6 +6,7 @@
 #include "conjure/audio/voice.h"
 
 #include "conjure/assets/asset_ref.h"
+#include "conjure/core/api.h"
 #include "conjure/core/containers/slot_map.h"
 #include "conjure/core/reflect/reflect.h"
 #include "conjure/core/string_id.h"
@@ -96,7 +97,7 @@ namespace conjure::audio {
     /// as resolved by the caller (audio_engine::find_group(source.group)), retain = true because
     /// component voices are released by engine.audio_sync, pan 0 and the default priority.
     /// </summary>
-    [[nodiscard]] play_params play_params_from(const audio_source &source, group_id group) noexcept;
+    [[nodiscard]] CONJURE_API play_params play_params_from(const audio_source &source, group_id group) noexcept;
 
     /// <summary>
     /// The listener component. The first active one in iteration order drives

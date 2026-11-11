@@ -11,6 +11,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/image.h"
 #include "conjure/core/jobs/job_system.h"
@@ -60,7 +61,7 @@ namespace conjure::renderer {
     /// What the last render() did. Fully populated on the null device too, which is how the tests
     /// observe the renderer.
     /// </summary>
-    struct render_stats {
+    struct CONJURE_API render_stats {
         u32 viewsRendered = 0;
         u32 viewsSkipped = 0;
         u32 passesExecuted = 0;
@@ -104,7 +105,7 @@ namespace conjure::renderer {
         [[nodiscard]] u32 count(std::string_view passName) const noexcept;
     };
 
-    class renderer {
+    class CONJURE_API renderer {
         private:
             struct impl;
             struct create_tag {};

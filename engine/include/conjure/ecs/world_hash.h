@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 // Deterministic state hash (docs/design/08_testing.md 3.4, 01_ecs.md R32).
@@ -20,5 +21,5 @@ namespace conjure::ecs {
     /// same bytes) hash equal regardless of archetype creation order; one flipped float bit changes it.
     /// Reads the world without locking it: call it while no structural change is in flight.
     /// </summary>
-    [[nodiscard]] u64 world_hash(const world &source);
+    [[nodiscard]] CONJURE_API u64 world_hash(const world &source);
 }

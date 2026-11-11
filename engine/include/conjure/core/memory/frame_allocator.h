@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/memory/tracked_allocation.h"
 #include "conjure/core/types.h"
 
@@ -32,7 +33,7 @@ namespace conjure::core::memory {
     /// Epochs are process-unique, so a slot left over from a destroyed allocator never matches a new
     /// one that happens to live at the same address.
     /// </summary>
-    class frame_allocator {
+    class CONJURE_API frame_allocator {
         private:
             struct overflow_block;
 

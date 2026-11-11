@@ -33,7 +33,7 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CONJURE_ENABLE_ASAN": "ON" } },
     {
       "name": "windows-vs",
-      "displayName": "Windows Visual Studio (multi-config)",
+      "displayName": "Windows Visual Studio (multi-config: Debug and Development; Distribution only with -DCONJURE_BUILD_EDITOR=OFF)",
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",

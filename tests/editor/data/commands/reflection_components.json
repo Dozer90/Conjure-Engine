@@ -1,0 +1,10 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "reflection.components",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

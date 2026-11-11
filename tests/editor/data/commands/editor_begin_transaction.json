@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.begin_transaction",
+    "args": {
+      "label": "T"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "label": "T"
+    }
+  }
+}

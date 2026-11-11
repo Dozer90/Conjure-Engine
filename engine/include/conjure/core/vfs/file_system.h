@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -65,7 +66,7 @@ namespace conjure::core::vfs {
     /// called from several threads at once. An open handle never blocks other callers: the file
     /// can be rewritten, replaced, renamed over or removed meanwhile on every backend.
     /// </summary>
-    class file {
+    class CONJURE_API file {
         public:
             file();
             virtual ~file();
@@ -90,7 +91,7 @@ namespace conjure::core::vfs {
     /// <summary>
     /// One storage backend. See the header comment for the path and error contract.
     /// </summary>
-    class file_system {
+    class CONJURE_API file_system {
         public:
             file_system();
             virtual ~file_system();

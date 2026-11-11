@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "sample_plugin",
+  "displayName": "Sample plugin",
+  "description": "Integration fixture: the plugin_counter component and the system that increments it every frame",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "engine": "*",
+  "binary": "sample_plugin"
+}

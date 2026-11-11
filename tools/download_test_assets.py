@@ -7,10 +7,13 @@ The engine's test suites never require these files: tests that need them are gua
 
     python tools/download_test_assets.py            # download what is missing, verify the rest
     python tools/download_test_assets.py --verify   # only verify existing files against the lock
+    python tools/download_test_assets.py --locked   # like the default, but an asset the lock does not pin fails
     python tools/download_test_assets.py --force    # re-download everything
 
-The first download of each file pins its SHA-256 into tests/.downloaded/assets.lock; later runs
-verify against the lock so a changed upstream file is noticed instead of silently used.
+The SHA-256 of every file is pinned in tools/test_assets.lock, which is committed: a downloaded file is
+verified against it, a mismatch fails, and a file the lock does not know yet is pinned with a reminder to
+commit the lock (so the pins come from a reviewed change, not from whatever upstream served a CI runner on a
+cache miss). --verify and --locked treat an unpinned asset as a failure.
 """
 
 from __future__ import annotations
@@ -25,8 +28,8 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "tools" / "test_assets.json"
+LOCK = ROOT / "tools" / "test_assets.lock"       # committed: asset name -> sha256
 TARGET = ROOT / "tests" / ".downloaded"
-LOCK = TARGET / "assets.lock"
 STAMP = TARGET.parent / ".assets_ready"   # tests/.assets_ready: where conjure::testing looks (precondition::DOWNLOADED_ASSETS)
 USER_AGENT = "conjure-test-assets/1.0"
 
@@ -65,6 +68,8 @@ def download(url: str, destination: pathlib.Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--verify", action="store_true", help="verify existing files only; download nothing")
+    parser.add_argument("--locked", action="store_true",
+                        help="fail on an asset tools/test_assets.lock does not pin instead of pinning it")
     parser.add_argument("--force", action="store_true", help="re-download every asset")
     parser.add_argument("--include-optional", action="store_true", help="also fetch assets marked optional")
     args = parser.parse_args()
@@ -73,6 +78,7 @@ def main() -> int:
     lock = load_lock()
     failures: list[str] = []
     required_present = True
+    newly_pinned: list[str] = []
 
     for asset in manifest["assets"]:
         if asset.get("disabled"):
@@ -102,17 +108,25 @@ def main() -> int:
         digest = sha256_of(destination)
         pinned = lock.get(name)
         if pinned is None:
-            lock[name] = digest
-            print(f"pinned    {name} {digest[:16]}")
+            if args.verify or args.locked:
+                failures.append(f"{name}: not pinned in {LOCK.relative_to(ROOT).as_posix()} (run without --verify/--locked and commit the lock)")
+                if not optional:
+                    required_present = False
+            else:
+                lock[name] = digest
+                newly_pinned.append(name)
+                print(f"pinned    {name} {digest[:16]}")
         elif pinned != digest:
-            failures.append(f"{name}: sha256 {digest[:16]} does not match the lock {pinned[:16]} (delete the file or the lock entry to accept)")
+            failures.append(f"{name}: sha256 {digest[:16]} does not match the lock {pinned[:16]} (a changed upstream file; re-pin by removing the lock entry only if the change is intended)")
             if not optional:
                 required_present = False
         else:
             print(f"ok        {name}")
 
     TARGET.mkdir(parents=True, exist_ok=True)
-    save_lock(lock)
+    if newly_pinned:
+        save_lock(lock)
+        print(f"NOTE      {len(newly_pinned)} asset(s) pinned for the first time: commit {LOCK.relative_to(ROOT).as_posix()}")
 
     if failures:
         print("\n".join(f"FAILED    {failure}" for failure in failures), file=sys.stderr)

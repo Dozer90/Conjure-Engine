@@ -3,6 +3,7 @@
 #include "conjure/assets/asset_meta.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/result.h"
@@ -30,7 +31,7 @@ namespace conjure::assets {
     /// Thread-safe table of sub-asset uuids for one source: ids already in the .meta are returned
     /// as recorded, new sub paths are allocated under a mutex and merged back on the main thread.
     /// </summary>
-    class sub_asset_table {
+    class CONJURE_API sub_asset_table {
         private:
             mutable std::mutex mMutex = {};
             std::vector<sub_asset_entry> mEntries = {};
@@ -69,7 +70,7 @@ namespace conjure::assets {
     /// <summary>
     /// Everything an importer may read or ask for during one import.
     /// </summary>
-    class import_context {
+    class CONJURE_API import_context {
         private:
             core::vfs::file_system *mFileSystem = nullptr;
             std::string mAssetPath = {};                   // "assets://models/robot.gltf"
@@ -192,7 +193,7 @@ namespace conjure::assets {
     /// Converts source bytes into cooked payloads. Called on worker threads; must be deterministic
     /// (no clocks, no hash-map iteration order in the output) and touch no state beyond the context.
     /// </summary>
-    class asset_importer {
+    class CONJURE_API asset_importer {
         public:
             asset_importer();
             virtual ~asset_importer();
@@ -231,7 +232,7 @@ namespace conjure::assets {
     /// The registered importers. Registration on the main thread; find* from any thread between
     /// registrations. Pointers stay valid until the importer is unregistered.
     /// </summary>
-    class importer_registry {
+    class CONJURE_API importer_registry {
         private:
             std::vector<std::unique_ptr<asset_importer>> mImporters = {};
             std::vector<const asset_importer *> mView = {};

@@ -345,8 +345,8 @@ python tools/build.py --build-dir build/mod_audio --target conjure_audio_tests -
 
 The design specifies three benchmarks for `tests/benchmarks/bench_audio.cpp` (Development, outside ctest):
 `audio.update_256_voices` (< 0.1 ms including `end_frame`), `audio.render_256_voices_480_frames` (< 0.5 ms,
-allocation-free) and `audio.decode_wav_10s` (< 20 ms). The `tests/benchmarks/` directory is not in the tree yet
-(see [Open items](#14-open-items)).
+allocation-free) and `audio.decode_wav_10s` (< 20 ms). The harness exists ([Testing](../testing.md#11-benchmarks));
+`bench_audio.cpp` is not written yet (see [Open items](#14-open-items)).
 
 > [!TIP]
 > When a change touches the mixer, run `test_mixer` and `test_null_backend` first: they fail fast and point at
@@ -362,7 +362,8 @@ allocation-free) and `audio.decode_wav_10s` (< 20 ms). The `tests/benchmarks/` d
    at the ECS level: the engine registers `handle` as `TRANSIENT` and resets the three on load (`12_audio.md` 2.6,
    8). The module reports this as a documented deviation rather than hiding it.
 3. The ECS integration (`audio_subsystem`, `engine.audio_sync`, `engine.audio_finish_one_shots`, the `audio_*`
-   script bindings) belongs to wave 4; `test_source_listener.cpp` drives the engine the way the sync will.
+   script bindings) landed with wave 4 ([Engine module](engine.md) 4, [Bindings module](bindings.md));
+   `test_source_listener.cpp` still drives the engine the way the sync does.
 4. `tests/benchmarks/bench_audio.cpp` (`12_audio.md` 10) has not been written; the A16 timing targets are
    unverified until it lands.
 

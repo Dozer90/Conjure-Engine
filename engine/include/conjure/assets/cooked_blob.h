@@ -2,6 +2,7 @@
 
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -67,13 +68,13 @@ namespace conjure::assets {
     /// <summary>
     /// 64-bit content hash used for payloads, source files and pack contents.
     /// </summary>
-    [[nodiscard]] u64 hash_bytes(std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] CONJURE_API u64 hash_bytes(std::span<const std::byte> bytes) noexcept;
 
     /// <summary>
     /// Builds a consistent blob from its parts: payloadHash, payloadSize and dependencyCount are
     /// derived from the payload and the dependency list.
     /// </summary>
-    [[nodiscard]] cooked_blob make_cooked_blob(
+    [[nodiscard]] CONJURE_API cooked_blob make_cooked_blob(
       cooked_blob_header header,
       std::vector<asset_id> dependencies,
       std::vector<std::byte> payload
@@ -83,16 +84,18 @@ namespace conjure::assets {
     /// Serialises a blob. The header's derived fields are recomputed first so the output is
     /// always self-consistent.
     /// </summary>
-    [[nodiscard]] std::vector<std::byte> write_cooked_blob(const cooked_blob &blob);
+    [[nodiscard]] CONJURE_API std::vector<std::byte> write_cooked_blob(const cooked_blob &blob);
 
     /// <summary>
     /// Parses only the header. CACHE_CORRUPT for a short buffer, bad magic or unknown format.
     /// </summary>
-    [[nodiscard]] core::result<cooked_blob_header> parse_cooked_blob_header(std::span<const std::byte> bytes);
+    [[nodiscard]] CONJURE_API core::result<cooked_blob_header> parse_cooked_blob_header(
+      std::span<const std::byte> bytes
+    );
 
     /// <summary>
     /// Parses and validates a blob: magic, format version, declared sizes against the buffer and
     /// the payload hash. Anything wrong is CACHE_CORRUPT.
     /// </summary>
-    [[nodiscard]] core::result<cooked_blob> parse_cooked_blob(std::span<const std::byte> bytes);
+    [[nodiscard]] CONJURE_API core::result<cooked_blob> parse_cooked_blob(std::span<const std::byte> bytes);
 }

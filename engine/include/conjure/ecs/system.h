@@ -11,6 +11,7 @@
 #include "conjure/ecs/view.h"
 #include "conjure/ecs/world.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/enum_flags.h"
@@ -100,7 +101,7 @@ namespace conjure::ecs {
     /// <summary>
     /// The arguments of one system run.
     /// </summary>
-    class system_context {
+    class CONJURE_API system_context {
         private:
             ecs::world *mWorld = nullptr;
             const frame_info *mFrame = nullptr;

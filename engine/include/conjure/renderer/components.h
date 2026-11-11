@@ -10,6 +10,7 @@
 #include "conjure/renderer/texture_asset.h"
 
 #include "conjure/assets/asset_ref.h"
+#include "conjure/core/api.h"
 #include "conjure/core/math.h"
 #include "conjure/core/reflect/reflect.h"
 #include "conjure/core/reflect/type_registry.h"
@@ -89,7 +90,7 @@ namespace conjure::renderer {
     /// reflection registry. Registering twice is harmless (ALREADY_EXISTS is skipped); any other
     /// registry error is returned.
     /// </summary>
-    [[nodiscard]] core::result<void> register_components(core::reflect::type_registry &registry);
+    [[nodiscard]] CONJURE_API core::result<void> register_components(core::reflect::type_registry &registry);
 }
 
 CONJURE_REFLECT_ENUM(conjure::renderer::projection_type, "conjure.renderer.projection_type", PERSPECTIVE, ORTHOGRAPHIC);

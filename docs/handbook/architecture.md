@@ -60,22 +60,24 @@ whole-archives every library registered through `conjure_register_static_library
 | 2 | [`assets`](modules/assets.md) | `conjure::assets` | `05_assets.md` | uuid database, importers, cooked cache, async loading, hot reload, packs |
 | 2 | [`audio`](modules/audio.md) | `conjure::audio` | `12_audio.md` | mixer and voices, `conjure.audio.clip` asset type, groups, spatialisation; backends `miniaudio`, `null` |
 | 2 | [`modules`](modules/modules.md) | `conjure::modules` | `07_modules.md` | manifests, ABI check, load/unload/reload, registration records, consumers |
-| 3a | `scene` | `conjure::scene` | `13_scene.md` | hierarchy and transforms, name/tag/layer/guid, prefabs, scene files, snapshots, scene manager |
-| 3b | `renderer` | `conjure::renderer` | `02_renderer.md` | render graph over rhi, `render_scene` contract, PBR/IBL/shadows/SSAO/HDR, 2D, ImGui backend, glTF import |
-| 3b | `physics` | `conjure::physics` | `14_physics.md` | Jolt world, body/collider/character components, layers, queries, contact events |
-| 3b | `scripting` | `conjure::scripting` | `03_scripting.md` | .NET host, native/managed tables, script components, hot reload |
-| 4 | `engine` | `conjure::engine` | `06_engine_loop.md` | application, frame loop, subsystems, `project.json`, export pipeline, layers |
-| 4 | `bindings` | `conjure::bindings` | `15_bindings.md` | the non-core native table entries, C# facades, `[NativeComponent]` mirrors, call counters |
-| 4 | `editor_core`, `editor_ui` | `conjure::editor` | `04_editor.md` | commands, undo, protocol, headless runner; ImGui workspace |
-| 4 | `conjure_editor`, `conjure_runtime` | - | `04_editor.md` 3.1, `06_engine_loop.md` 4.2 | thin `main.cpp` executables |
+| 3a | [`scene`](modules/scene.md) | `conjure::scene` | `13_scene.md` | hierarchy and transforms, name/tag/layer/guid, prefabs, scene files, snapshots, scene manager |
+| 3b | [`renderer`](modules/renderer.md) | `conjure::renderer` | `02_renderer.md` | render graph over rhi, `render_scene` contract, PBR/IBL/shadows/SSAO/HDR, 2D, ImGui backend, glTF import |
+| 3b | [`physics`](modules/physics.md) | `conjure::physics` | `14_physics.md` | Jolt world, body/collider/character components, layers, queries, contact events |
+| 3b | [`scripting`](modules/scripting.md) | `conjure::scripting` | `03_scripting.md` | .NET host, native/managed tables, script components, hot reload |
+| 4 | [`engine`](modules/engine.md) | `conjure::engine` | `06_engine_loop.md` | application, frame loop, subsystems, `project.json`, export pipeline, layers |
+| 4 | [`bindings`](modules/bindings.md) | `conjure::bindings` | `15_bindings.md` | the non-core native table entries, C# facades, `[NativeComponent]` mirrors, call counters |
+| 4 | [`editor_core`, `editor_ui`](modules/editor.md) | `conjure::editor` | `04_editor.md` | commands, undo, protocol, headless runner; ImGui workspace |
+| 4 | `conjure_editor`, [`conjure_runtime`](modules/runtime.md) | - | `04_editor.md` 3.1, `06_engine_loop.md` 4.2 | thin `main.cpp` executables |
 | 4 | `conjure_shared` | - | `07_modules.md` 5 | SHARED umbrella that whole-archives every enabled module (R17) |
 | 5 | `samples/feature_test`, `samples/stress_test` | - | `08_testing.md` 7.2 | the "everything" scene generated from an AI command file; 10,000 dynamic entities |
 
 Each wave is implementable in parallel across its modules once the previous wave's public headers exist. The
-linked rows are implemented (waves 1 and 2); `conjure_shared` is built today by `conjure_finalize_engine()`
-even though the executables that link it are wave 4, and the `tests/modules` suite already links it
-(`LINK_ENGINE_SHARED`). Rows from wave 3a on are design only. The per-wave definition of done lives in
-`docs/ARCHITECTURE.md` 11; the generic one is `08_testing.md` 7.4.
+linked rows are implemented (waves 1 to 4); `conjure_shared` is built by `conjure_finalize_engine()` and is what
+`conjure_editor`, `conjure_runtime`, the game modules and the `LINK_ENGINE_SHARED` test executables link. The
+editor libraries are part of the umbrella outside Distribution (`engine/CMakeLists.txt` lists `editor` last in
+`CONJURE_ENGINE_MODULES`); `tools/check_distribution_symbols.py` proves a Distribution runtime carries none of
+them. The wave-5 row is design only. The per-wave definition of done lives in `docs/ARCHITECTURE.md` 11; the
+generic one is `08_testing.md` 7.4.
 
 ## 3. Dependency rules
 

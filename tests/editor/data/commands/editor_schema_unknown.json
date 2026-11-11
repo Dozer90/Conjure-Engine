@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.schema",
+    "args": {
+      "command": "entity.nope"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "UNKNOWN_COMMAND"
+    }
+  }
+}

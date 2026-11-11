@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.write",
+    "args": {
+      "path": "Sub/New.cs",
+      "source": "// new"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "created": true
+    }
+  }
+}

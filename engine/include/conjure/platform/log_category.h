@@ -7,5 +7,5 @@
 // GLFW error callback.
 
 namespace conjure::platform {
-    CONJURE_DECLARE_LOG_CATEGORY(LOG_PLATFORM);
+    CONJURE_DECLARE_ENGINE_LOG_CATEGORY(LOG_PLATFORM);
 }

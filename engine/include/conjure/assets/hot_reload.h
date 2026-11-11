@@ -5,6 +5,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/file_watcher.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/types.h"
 
@@ -29,7 +30,7 @@ namespace conjure::assets {
     /// <summary>
     /// Drives re-import and reload from file changes. Main thread, after asset_manager::update().
     /// </summary>
-    class hot_reload_controller {
+    class CONJURE_API hot_reload_controller {
         private:
             asset_database *mDatabase = nullptr;
             asset_manager *mManager = nullptr;

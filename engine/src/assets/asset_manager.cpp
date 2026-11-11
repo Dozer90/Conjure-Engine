@@ -1081,6 +1081,28 @@ asset_handle asset_manager::make_handle(const asset_id &id) {
     return asset_handle(mState->find_or_create(id));
 }
 
+const asset_slot *asset_manager::find_slot(const asset_id &id) const noexcept {
+    return mState->slots.find(id);
+}
+
+std::optional<asset_type_id> asset_manager::type_of(const asset_id &id) const {
+    const asset_slot *slot = mState->slots.find(id);
+    if (slot != nullptr) {
+        const asset_type_id recorded = slot->type.load(std::memory_order_acquire);
+        if (recorded != asset_type_id::INVALID) {
+            return recorded;
+        }
+    }
+    const std::shared_lock lock(mState->sourcesMutex);
+    for (const auto &source : mState->sources) {
+        const std::optional<asset_type_id> type = source->type_of(id);
+        if (type.has_value()) {
+            return type;
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<asset_id> asset_manager::find(std::string_view assetPath) const {
     const std::shared_lock lock(mState->sourcesMutex);
     for (const auto &source : mState->sources) {

@@ -3,6 +3,7 @@
 #include "conjure/scene/components.h"
 #include "conjure/scene/scene.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/transform.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/entity.h"
@@ -34,7 +35,7 @@ namespace conjure::scene {
         u8 levels = 0;                // hierarchy levels processed (roots count as one)
     };
 
-    class transform_system {
+    class CONJURE_API transform_system {
         public:
             /// <summary>
             /// Registered system name.
@@ -118,5 +119,5 @@ namespace conjure::scene {
     /// local_transform contributes the identity and the walk continues upwards, so a transformless
     /// entity yields its nearest transformed ancestor's world (the identity when there is none).
     /// </summary>
-    [[nodiscard]] math::transform compute_world_transform(const scene &target, ecs::entity entity);
+    [[nodiscard]] CONJURE_API math::transform compute_world_transform(const scene &target, ecs::entity entity);
 }

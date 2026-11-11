@@ -32,3 +32,7 @@ add_dependencies(conjure_support_tests conjure_support_child)
 target_compile_definitions(conjure_support_tests PRIVATE
     CONJURE_SUPPORT_CHILD_PATH="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_support_child>>"
 )
+
+# Self-tests of the engine-level support library (conjure_support_engine_tests); the directory skips
+# itself when conjure::test_support_engine was not built.
+add_subdirectory(engine)

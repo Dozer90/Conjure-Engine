@@ -1,0 +1,24 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "A"
+      }
+    },
+    {
+      "cmd": "history.undo",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "history.redo",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "applied": 1
+    }
+  }
+}

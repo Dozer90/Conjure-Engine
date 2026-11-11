@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "module.load",
+    "args": {
+      "name": "conjure.core"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "requested": false
+    }
+  }
+}

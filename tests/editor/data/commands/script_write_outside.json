@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.write",
+    "args": {
+      "path": "../escape.cs",
+      "source": "x"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

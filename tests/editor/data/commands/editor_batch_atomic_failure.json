@@ -1,0 +1,28 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "editor.batch",
+    "args": {
+      "commands": [
+        {
+          "cmd": "entity.create",
+          "args": {
+            "name": "A"
+          }
+        },
+        {
+          "cmd": "entity.destroy",
+          "args": {
+            "entity": "Nobody"
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ENTITY_NOT_FOUND"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.inject",
+    "args": {
+      "button": "LEFT",
+      "action": "press",
+      "position": [
+        10,
+        20
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "injected": 2
+    }
+  }
+}

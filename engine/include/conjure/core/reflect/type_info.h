@@ -3,6 +3,7 @@
 #include "conjure/core/reflect/field_info.h"
 #include "conjure/core/reflect/type_id.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -26,7 +27,7 @@ namespace conjure::core::reflect {
     /// <summary>
     /// Layout and fields of a reflected struct.
     /// </summary>
-    struct type_info {
+    struct CONJURE_API type_info {
         std::string name = {};
         type_id type = {};
         u32 size = 0;
@@ -61,14 +62,14 @@ namespace conjure::core::reflect {
     /// field ids matching the pointed-to description, and enum widths of 1, 2, 4 or 8 bytes. Fails
     /// with INVALID_ARGUMENT naming the offending field.
     /// </summary>
-    [[nodiscard]] result<void> validate_layout(const type_info &info);
+    [[nodiscard]] CONJURE_API result<void> validate_layout(const type_info &info);
 
     /// <summary>
     /// Builds and validates a description at runtime (dynamic C# components). The type id is
     /// derived from the name, isTriviallyCopyable from the fields. Fails with INVALID_ARGUMENT when
     /// the layout is inconsistent (see validate_layout).
     /// </summary>
-    [[nodiscard]] result<type_info> build_type_info(
+    [[nodiscard]] CONJURE_API result<type_info> build_type_info(
       std::string name,
       u32 size,
       u32 alignment,

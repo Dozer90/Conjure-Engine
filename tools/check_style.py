@@ -33,8 +33,9 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
   file-name             file names are snake_case
 
 With --tests-mirror-headers it also verifies that every engine/include/conjure/<module>/**/<name>.h
-and every tests/support/include/conjure/testing/<name>.h has a tests/<module>/**/test_<name>.cpp (or
-tests/support/tests/test_<name>.cpp). Known exceptions live in tools/style_exceptions.json.
+has a tests/<module>/**/test_<name>.cpp, every tests/support/include/conjure/testing/<name>.h a
+tests/support/tests/test_<name>.cpp and every tests/support/engine/include/conjure/testing/<name>.h a
+tests/support/tests/engine/test_<name>.cpp. Known exceptions live in tools/style_exceptions.json.
 
 Exit code 0 when clean, 1 when a finding was reported, 2 on usage errors. Output is one
 `path:line: rule: message` per finding so editors and CI can link to it.
@@ -489,6 +490,14 @@ def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -
         for header in sorted(support_root.glob("*.h")):
             pairs.append((header, root / "tests" / "support" / "tests",
                           header.relative_to(root / "tests" / "support" / "include").as_posix()))
+
+    # The engine-level support library (tests/support/engine) mirrors its headers into its own self-test
+    # directory; the key carries the "engine/" prefix so an exception can name either library's header.
+    engine_support_root = root / "tests" / "support" / "engine" / "include" / "conjure" / "testing"
+    if engine_support_root.is_dir():
+        for header in sorted(engine_support_root.glob("*.h")):
+            pairs.append((header, root / "tests" / "support" / "tests" / "engine",
+                          "engine/" + header.relative_to(root / "tests" / "support" / "engine" / "include").as_posix()))
 
     used_exceptions: set[str] = set()
     for header, test_root, key in pairs:

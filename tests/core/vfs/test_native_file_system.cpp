@@ -4,6 +4,7 @@
 
 #include "vfs_test_helpers.h"
 
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/vfs/native_file_system.h"
 
 #include <array>
@@ -138,6 +139,96 @@ TEST_SUITE("core/native_file_system") {
           reinterpret_cast<const char8_t *>(name.data()),
           name.size()
         ))) == "unicode");
+    }
+
+    TEST_CASE("regression - wave4-integration: paths beyond the classic Windows limit are read and written") {
+        // A project cache under a deep temporary root crossed 260 characters on Windows and every write
+        // failed with "open for writing failed" (MAX_PATH); the native backend now takes the extended-length
+        // form for such paths. The directories below stay under the classic directory limit (248, so the
+        // recursive enumeration and the fixture's clean-up still walk them) while the file names push the
+        // full path past 260 characters wherever the temporary root lives.
+        testing::temp_directory directory("core_vfs_native");
+        native_file_system fileSystem(directory.path());
+        std::string deep = {};
+        const usize rootLength = directory.path().native().size();
+        while (rootLength + deep.size() < 200) {
+            deep += "a_directory_name_that_is_long_enough_to_matter/";
+        }
+        const std::string file = deep + "payload_with_a_file_name_long_enough_to_pass_the_classic_limit.bin";
+        CHECK(rootLength + deep.size() < 248);
+        CHECK(rootLength + file.size() > 262);
+
+        REQUIRE(fileSystem.write_file(file, to_bytes("deep")));
+        CHECK(fileSystem.exists(file));
+        const result<std::string> read = fileSystem.read_text_file(file);
+        REQUIRE(read);
+        CHECK(*read == "deep");
+        REQUIRE(fileSystem.write_file_atomic(file, to_bytes("deeper")));
+        const result<std::string> replaced = fileSystem.read_text_file(file);
+        REQUIRE(replaced);
+        CHECK(*replaced == "deeper");
+        const result<file_stat> info = fileSystem.stat(file);
+        REQUIRE(info);
+        CHECK(info->size == 6);
+
+        const enumerate_flags allFiles = enumerate_flags::RECURSIVE | enumerate_flags::FILES;
+        const result<enumeration> files = enumerate_all(fileSystem, "", allFiles);
+        REQUIRE(files);
+        CHECK(files->paths.size() == 1);
+        REQUIRE(fileSystem.remove(file));
+        CHECK_FALSE(fileSystem.exists(file));
+    }
+
+    TEST_CASE("regression - review4: a root already in extended-length form serves nested paths") {
+        // On Windows extend_native_path returned a path carrying the \\?\ prefix unchanged, so the forward
+        // slashes of the VFS-relative part reached Win32, which takes the extended form literally: every stat,
+        // read and write under such a root failed with not-found, however short the path. Elsewhere the prefix
+        // does not exist and the case is a plain nested round trip.
+        testing::temp_directory directory("core_vfs_native");
+        (void) directory.write_file("nested/inner/file.txt", "payload");
+        std::filesystem::path root = std::filesystem::absolute(directory.path()).lexically_normal().make_preferred();
+#if CONJURE_PLATFORM_WINDOWS
+        root = std::filesystem::path(L"\\\\?\\" + root.native());
+#endif
+        native_file_system fileSystem(root);
+        CHECK(fileSystem.exists("nested/inner/file.txt"));
+        const result<std::string> read = fileSystem.read_text_file("nested/inner/file.txt");
+        REQUIRE(read);
+        CHECK(*read == "payload");
+        const result<file_stat> info = fileSystem.stat("nested/inner");
+        REQUIRE(info);
+        CHECK(info->isDirectory);
+        REQUIRE(fileSystem.write_file("nested/inner/other.txt", to_bytes("other")));
+        CHECK(read_native(directory.path() / "nested" / "inner" / "other.txt") == "other");
+        REQUIRE(fileSystem.write_file_atomic("nested/inner/other.txt", to_bytes("replaced")));
+        CHECK(read_native(directory.path() / "nested" / "inner" / "other.txt") == "replaced");
+    }
+
+    TEST_CASE("regression - review4: a failed write beyond the classic Windows limit names the VFS path") {
+        // write_bytes derived its display path with lexically_relative(root); for a native path in extended-length
+        // form the root names differ and the result was empty, so every error of the long-path branch read
+        // "write '': ...". The display path is now the caller's VFS path on every platform.
+        testing::temp_directory directory("core_vfs_native");
+        native_file_system fileSystem(directory.path());
+        std::string deep = {};
+        const usize rootLength = directory.path().native().size();
+        while (rootLength + deep.size() < 200) {
+            deep += "a_directory_name_that_is_long_enough_to_matter/";
+        }
+        const std::string blocker = deep + "a_file_standing_where_a_directory_is_needed_and_long_enough_to_pass.bin";
+        CHECK(rootLength + blocker.size() > 262);
+        REQUIRE(fileSystem.write_file(blocker, to_bytes("x")));
+
+        const std::string child = blocker + "/child.bin";
+        const result<void> written = fileSystem.write_file(child, to_bytes("y"));
+        REQUIRE_FALSE(written);
+        const std::string &message = written.get_error().message();
+        CHECK_MESSAGE(message.find(child) != std::string::npos, message);
+        CHECK_MESSAGE(message.find("''") == std::string::npos, message);
+        const result<void> atomic = fileSystem.write_file_atomic(child, to_bytes("y"));
+        REQUIRE_FALSE(atomic);
+        CHECK_MESSAGE(atomic.get_error().message().find(child) != std::string::npos, atomic.get_error().message());
+        REQUIRE(fileSystem.remove(blocker));
     }
 
     TEST_CASE("native_file_system - write_file_atomic leaves exactly the target behind") {

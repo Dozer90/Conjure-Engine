@@ -1,0 +1,19 @@
+{
+  "files": {
+    "nested.json": "[{\"cmd\":\"entity.create\",\"args\":{\"name\":\"from file\"}},{\"cmd\":\"session.ping\"}]"
+  },
+  "setup": [],
+  "request": {
+    "cmd": "editor.exec_file",
+    "args": {
+      "path": "${project}/nested.json"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "executed": 2,
+      "failed": 0
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "setup": [
+    {
+      "cmd": "asset.create_material",
+      "args": {
+        "path": "materials/cell"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "asset.create_material",
+    "args": {
+      "path": "materials/cell"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

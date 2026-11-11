@@ -15,6 +15,7 @@
 
 #include "conjure/renderer/gpu_ids.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/rhi/device.h"
@@ -52,7 +53,7 @@ namespace conjure::renderer {
         u32 commandsClipped = 0;        // draw commands whose scissor was empty after clamping
     };
 
-    class imgui_renderer {
+    class CONJURE_API imgui_renderer {
         private:
             struct impl;
             struct create_tag {};

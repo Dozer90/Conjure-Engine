@@ -8,5 +8,5 @@
 //   CONJURE_LOG_INFO(LOG_RHI, "created {} device on {}", to_string(backend), adapterName);
 
 namespace conjure::rhi {
-    CONJURE_DECLARE_LOG_CATEGORY(LOG_RHI);
+    CONJURE_DECLARE_ENGINE_LOG_CATEGORY(LOG_RHI);
 }

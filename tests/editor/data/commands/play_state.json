@@ -1,0 +1,14 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "play.state",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "state": "editing",
+      "simulationFrame": 0
+    }
+  }
+}

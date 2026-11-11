@@ -1,9 +1,6 @@
 #include "core/jobs/thread_name.h"
 
-#include "conjure/core/platform_detect.h"
-
 #include <algorithm>
-#include <array>
 
 #if CONJURE_PLATFORM_WINDOWS
     #include <Windows.h>
@@ -21,17 +18,26 @@ using namespace conjure::core::jobs::detail;
 #if CONJURE_PLATFORM_WINDOWS
 
 namespace {
-    std::wstring to_wide(std::string_view text) {
-        if (text.empty()) {
-            return {};
+    // UTF-16 units the first 'bytes' bytes of 'text' convert to, or 0 when they are not valid UTF-8.
+    int wide_length(std::string_view text, usize bytes) noexcept {
+        if (bytes == 0) {
+            return 0;
         }
-        const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-        if (length <= 0) {
-            return {};
+        return MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(bytes), nullptr, 0);
+    }
+
+    // Longest prefix of 'text' that converts into at most MAX_WINDOWS_THREAD_NAME_LENGTH units; the
+    // cut never splits a code point because continuation bytes (10xxxxxx) are stepped over.
+    usize fitting_prefix(std::string_view text, int &length) noexcept {
+        usize bytes = text.size();
+        length = wide_length(text, bytes);
+        while (length > static_cast<int>(MAX_WINDOWS_THREAD_NAME_LENGTH) && bytes > 0) {
+            do {
+                --bytes;
+            } while (bytes > 0 && (static_cast<unsigned char>(text[bytes]) & 0xC0) == 0x80);
+            length = wide_length(text, bytes);
         }
-        std::wstring wide(static_cast<usize>(length), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
-        return wide;
+        return bytes;
     }
 
     std::string to_utf8(const wchar_t *text) {
@@ -49,9 +55,23 @@ namespace {
     }
 }
 
-void conjure::core::jobs::detail::set_current_thread_name(std::string_view name) noexcept {
-    const std::wstring wide = to_wide(name);
-    static_cast<void>(SetThreadDescription(GetCurrentThread(), wide.c_str()));
+prepared_thread_name conjure::core::jobs::detail::prepare_thread_name(std::string_view name) noexcept {
+    prepared_thread_name prepared = {};
+    if (name.empty()) {
+        return prepared;
+    }
+
+    int length = 0;
+    const usize bytes = fitting_prefix(name, length);
+    if (length <= 0) {
+        return prepared;
+    }
+    MultiByteToWideChar(CP_UTF8, 0, name.data(), static_cast<int>(bytes), prepared.characters.data(), length);
+    return prepared;
+}
+
+void conjure::core::jobs::detail::set_current_thread_name(const prepared_thread_name &name) noexcept {
+    static_cast<void>(SetThreadDescription(GetCurrentThread(), name.characters.data()));
 }
 
 std::string conjure::core::jobs::detail::current_thread_name() {
@@ -70,20 +90,20 @@ std::string conjure::core::jobs::detail::current_thread_name() {
 
 #else
 
-namespace {
+prepared_thread_name conjure::core::jobs::detail::prepare_thread_name(std::string_view name) noexcept {
     // Linux limits names to 15 bytes; macOS allows 63. Both accept the shorter buffer, and a
     // single limit keeps the behaviour predictable across the two.
-    constexpr usize NAME_BUFFER_SIZE = MAX_POSIX_THREAD_NAME_LENGTH + 1;
+    prepared_thread_name prepared = {};
+    const usize length = std::min(name.size(), MAX_POSIX_THREAD_NAME_LENGTH);
+    std::copy_n(name.data(), length, prepared.characters.data());
+    return prepared;
 }
 
-void conjure::core::jobs::detail::set_current_thread_name(std::string_view name) noexcept {
-    std::array<char, NAME_BUFFER_SIZE> buffer = {};
-    const usize length = std::min(name.size(), MAX_POSIX_THREAD_NAME_LENGTH);
-    std::copy_n(name.data(), length, buffer.data());
+void conjure::core::jobs::detail::set_current_thread_name(const prepared_thread_name &name) noexcept {
     #if CONJURE_PLATFORM_MACOS
-        static_cast<void>(pthread_setname_np(buffer.data()));
+        static_cast<void>(pthread_setname_np(name.characters.data()));
     #else
-        static_cast<void>(pthread_setname_np(pthread_self(), buffer.data()));
+        static_cast<void>(pthread_setname_np(pthread_self(), name.characters.data()));
     #endif
 }
 
@@ -96,3 +116,11 @@ std::string conjure::core::jobs::detail::current_thread_name() {
 }
 
 #endif
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Shared
+
+void conjure::core::jobs::detail::set_current_thread_name(std::string_view name) noexcept {
+    set_current_thread_name(prepare_thread_name(name));
+}

@@ -45,7 +45,7 @@ conjure_add_test_module(<module>
     [LABELS <labels...>]            # appended to "unit;<module>"
     [TIMEOUT <seconds>]             # default 120
     [LINK_ENGINE_SHARED]            # link the umbrella conjure::shared instead of the static libraries (below)
-    [ENGINE]                        # accepted, no effect until wave 4 adds conjure::test_support_engine
+    [ENGINE]                        # also link conjure::test_support_engine (the engine fixtures, section 4)
 )
 conjure_header_check(conjure_<module>)
 ```
@@ -61,12 +61,20 @@ include directory (tests may reach private module headers), and defines per exec
 `SKIP_RETURN_CODE 77`; the label list is applied by a generated `<target>_labels.cmake` because doctest's
 script flattens nested lists.
 
+`ENGINE` links `conjure::test_support_engine` (or `conjure::test_support_engine_shared` together with
+`LINK_ENGINE_SHARED`), the engine-level fixtures of section 4; `tests/integration/CMakeLists.txt` and the
+engine, bindings and editor suites use it. The option is a no-op with a notice when `conjure::engine` is not
+built.
+
 `conjure_add_test_executable(<name> SOURCES ... [DEPS ...] [FOLDER ...])` is the executable half without
 CTest registration, used for helper programs such as `conjure_support_child`. `tests/CMakeLists.txt` adds
 every `tests/<module>/` that has a `CMakeLists.txt`; `tests/core/CMakeLists.txt` adds an area directory only
 when `TARGET conjure::core_<area>` exists (`conjure_add_test_module(core_<area> ...)` in
 `tests/core/<area>/CMakeLists.txt`). Every module test directory guards itself the same way, so disabling a
-subsystem disables its tests: `tests/{core,ecs,platform,rhi,assets,audio,modules}` are in the tree.
+subsystem disables its tests. Every module directory is in the tree; `tests/integration/` adds the cross-module
+scenarios of `08_testing.md` 6.1 (`conjure_integration_tests`, plus `conjure_integration_plugin_tests` with
+`LINK_ENGINE_SHARED` for the sample plugin scenario), `tests/runtime/` the process tests of the runtime, and
+`tests/benchmarks/` the benchmark harness (section 11).
 
 `LINK_ENGINE_SHARED` (used by `tests/modules/`) links the umbrella `conjure::shared` and
 `conjure::test_support_shared` (the support library compiled against it) instead of the static libraries, so
@@ -122,6 +130,23 @@ a self-test in `tests/support/tests/` (`conjure_support_tests`, label `support`)
 | `conjure/testing/temp_directory.h` | `temp_directory` (optional name prefix): `path()`, `file(name)`, `write_text(name, text) -> result<void>`, `write_file(path, contents)` | the only place tests may do file I/O; unique per instance under `environment().temporaryRoot`, removed on destruction |
 | `conjure/testing/test_assets.h` | `repo_asset(relativePath)`, `downloaded_asset(relativePath)` | fixtures under `tests/assets` (always present) and `tests/.downloaded` (behind `precondition::DOWNLOADED_ASSETS`) |
 
+### 4.1 The engine support library
+
+`tests/support/engine/` builds `conjure_test_support_engine` (`conjure::test_support_engine`; the `_shared`
+twin for `LINK_ENGINE_SHARED` executables) on top of the core library and `conjure::engine`, with the optional
+renderer, physics, audio and scripting libraries when they are compiled. Headers are under
+`tests/support/engine/include/conjure/testing/`, self-tests in `tests/support/tests/engine/`
+(`conjure_support_engine_tests`), and `check_style.py --tests-mirror-headers` pairs the two like a module.
+
+| Header | Provides | Use it for |
+|---|---|---|
+| `conjure/testing/headless_engine.h` | `headless_engine_options` (`workerCount`, `fixedDeltaSeconds`, `enableRenderer`, `enablePhysics`, `enableAudio`, `enableScripting`, `useNullScriptHost`, `allowErrors`, `checkMemory`, `project`, `gameAssembly`, `registerSystems`), `headless_engine`: `load_scene`, `load_scene_json`, `step_frames`, `step_seconds`, `application()`, `context()`, `world()`, `scenes()`, `active_scene()`, `window()`, `input()`, `rhi_stats()`, `audio_stats()`, `checks()`, `logs()`, `frame_index()`, `fixed_update_count()`, `world_hash()`, `find_entity()` | a whole `engine::application` on the null window, device and audio backend with `log_capture` and `memory_guard` built in; `workerCount` 0 runs the jobs inline; a one-time warm-up process absorbs the process-wide first-use allocations (D6) |
+| `conjure/testing/input_script.h` | `input_script`: `key`, `tap_key`, `text`, `mouse_move`, `mouse_button`, `mouse_scroll`, `gamepad_*`, `push`, `events_for(frame)` | scripted input replayed into the null window frame by frame |
+| `conjure/testing/world_builder.h` | `spawn_many`, `spawn_hierarchy(scene, hierarchy_shape)`, `hierarchy_entity_count`, `spawn_box_body`, `spawn_script_entity`, `mark_dirty_fraction` | populating a world or scene with 10,000 entities in one call |
+| `conjure/testing/protocol_client.h` | `protocol_channel`, `scripted_protocol_channel`, `protocol_client`: `send(command, args)`, `send_raw`, `receive`, `events()`, `response_ok`, `error_code_of` | driving the editor protocol from a test without sockets |
+| `conjure/testing/golden_image.h` | `golden_options`, `golden_result`, `golden_image::render_headless`, `compare`, `compare_images`, `make_diff`, `reference_path`, `output_directory` | the golden-image scenarios behind `CONJURE_TEST_GOLDEN_IMAGES` (`render_offscreen` waits for off-screen rendering) |
+| `conjure/testing/log_category.h` | `LOG_TEST_ENGINE` | the library's own messages |
+
 > [!WARNING]
 > `memory_guard` sees doctest's own bookkeeping. Create the guard after the `SUBCASE` selection (or call
 > `reset_baseline()` once the variant is chosen) and never enclose a `SUBCASE` boundary or a message macro
@@ -165,11 +190,15 @@ turns into *Not Run*; in a direct run it emits a doctest `MESSAGE` and returns f
 | `REAL_WINDOW` | `CONJURE_TEST_WINDOW=1`; used by `tests/platform/test_backend_conformance.cpp` to run the GLFW backend through the same cases as the null backend |
 | `SOFTWARE_GPU_ADAPTER` | the probe `tests/rhi/rhi_test_support.cpp` installs with `set_precondition_probe()` can create a device with `preferSoftwareAdapter` (WARP on Windows); guards the D3D12 and Vulkan cases of `test_device`, `test_swapchain` and `test_shader_library` ([RHI module](modules/rhi.md#9-tests)) |
 | `AUDIO_DEVICE` | the probe `tests/audio/audio_test_support.cpp` installs finds a miniaudio playback device; guards `test_miniaudio_backend` ([Audio module](modules/audio.md#13-tests)) |
-| `DOTNET_RUNTIME`, `LOOPBACK_TCP` | a probe installed by the scripting or editor test libraries (wave 3-4) returns true; without a probe they never hold |
+| `DOTNET_RUNTIME` | the probe the scripting, bindings and engine support libraries install finds the managed SDK this tree built (`Conjure.Managed.dll` under the `CONJURE_TEST_MANAGED_DIR` definition) and a .NET 8 runtime; guards every `[dotnet]` and `[scripting]` case |
+| `LOOPBACK_TCP` | the probe `tests/editor/editor_test_support.cpp` installs can open and connect a loopback socket; guards the TCP transport cases |
 
 The default test presets exclude the labels `benchmark|golden|downloaded|slow|process`, so a fresh clone
-without network is green. `docs/design/08_testing.md` D12 adds `tools/ctest_check_skips.py`, which will fail
-CI on any skip outside an allow-list; it is not in the tree yet.
+without network is green. `tools/ctest_check_skips.py` (`08_testing.md` D12) reads the JUnit reports of a job's
+`ctest` runs (`--junit`, repeatable) and the labels from `ctest --show-only=json-v1` and fails on any *Not Run*
+whose labels are not in `CONJURE_TEST_ALLOWED_SKIPS` (or `--allow-label`) and whose name carries no `--allow-tag`
+tag; CI runs it over both reports of a leg with `--allow-tag window --allow-tag downloaded --allow-tag audio_device`,
+plus `--allow-tag gpu` on Linux and macOS where no D3D12 WARP adapter exists ([Continuous integration](ci.md)).
 
 ## 7. Writing a test
 
@@ -302,7 +331,10 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 | extra `LABELS` | e.g. `support` on the self-tests | run |
 | `style` | `style.check` | run |
 | `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
-| `benchmark`, `golden`, `downloaded`, `slow`, `process` | later waves' executables and process-level tests | excluded; `nightly-test` excludes only `benchmark` |
+| `integration`, `engine`, `bindings`, `editor`, `runtime`, `benchmarks` | the wave-4 suites (`benchmarks` is the harness self-test, not the scenarios) | run |
+| `dotnet` | cases that start the real CLR (`tests/scripting`, `tests/bindings`, the `[scripting]` integration scenarios, the scripting benchmarks) | run; *Not Run* without the SDK |
+| `benchmark` | one entry per scenario of `conjure_benchmarks` (`benchmark.<module>.<scenario>`, plus the module label) | excluded; nightly `benchmarks-ci-class` |
+| `golden`, `downloaded`, `slow`, `process` | golden images, downloaded fixtures, > 1 s cases, tests that spawn an executable (`tests/runtime`, `test_editor_process`, the export round trip) | excluded; `nightly-test` excludes only `benchmark`; CI runs `downloaded|process` in a second step |
 
 Filter with `ctest -L <label>` or `python tools/build.py --test -L <label>`; `-R` filters by entry name.
 
@@ -313,16 +345,31 @@ Filter with `ctest -L <label>` or `python tools/build.py --test -L <label>`; `-R
 
 ## 11. Benchmarks
 
-`CONJURE_BUILD_BENCHMARKS` (ON) and the `tests/benchmarks/` hook in `tests/CMakeLists.txt` exist; the
-harness does not yet.
+`tests/benchmarks/` (`CONJURE_BUILD_BENCHMARKS`, ON) holds the harness of `docs/design/08_testing.md` D10 and
+7.1: the library `conjure::bench_harness` (`conjure/bench/benchmark.h`: `CONJURE_BENCHMARK(name)`,
+`bench_context::measure`, fixed warm-up and measured iterations, min / p50 / p95 / p99 and the exact
+allocation count of the worst iteration; `conjure/bench/bench_runner.h`: the command line, thresholds, JSON
+output and exit codes), the executable `conjure_benchmarks` with one scenario file per module (`bench_core`,
+`bench_ecs`, `bench_scene`, `bench_physics`, `bench_render_null_frame`, `bench_scripts_update_phase`,
+`bench_full_frame_10k`; every row of 08 7.1 has a scenario), `thresholds.json` with the `desktop` and `ci`
+machine classes (`ci` is 3x looser), and the self-tests `conjure_benchmarks_tests` (label `benchmarks`). Every
+scenario is one CTest entry `benchmark.<module>.<scenario>` under the label `benchmark` (plus the module name;
+the scripting scenarios add `scripting` and `dotnet`), excluded from the default presets. Thresholds are
+enforced in Development and Distribution and only reported in Debug; `--enforce` / `--no-enforce` override. A
+scenario that returns without `measure()` or `skip()`, or that calls `bench_context::fail`, is `FAILED` with a
+reason rather than passing over zero samples. `--threads` means what `jobs_settings.workerCount` means: `0`
+is inline jobs (the determinism tests' mode), `auto` (default) is `hardware_concurrency - 1` clamped to 1..16.
 
-> [!NOTE]
-> Planned by `docs/design/08_testing.md` D10 and 7.1: one executable `conjure_benchmarks` on an in-house
-> harness (`conjure/bench/benchmark.h`, `CONJURE_BENCHMARK(name)`, fixed warm-up and measured iterations,
-> min/p50/p95/p99 and an exact allocation count), thresholds in `tests/benchmarks/thresholds.json` for two
-> machine classes (`desktop`, part of the definition of done; `ci`, 3x looser, nightly), registered as a
-> single CTest entry with label `benchmark`. Until it lands, allocation-free steady state is asserted in
-> unit tests (`CONJURE_CHECK_NO_ALLOCATIONS`, `job_system::stats().poolGrowths`).
+```
+python tools/build.py --preset windows-msvc-dev --build-dir build/bench --target conjure_benchmarks --test -L benchmark
+build/bench/bin/conjure_benchmarks --list
+build/bench/bin/conjure_benchmarks --filter "scene.*" --threads 8
+build/bench/bin/conjure_benchmarks --filter "ecs.*" --threads 0
+```
+
+`tests/benchmarks/README.md` documents the layout, the command line and how to add a scenario. The nightly
+`benchmarks-ci-class` job runs the executable with `--class ci --enforce` and publishes the table. Allocation-free
+steady state is still asserted in unit tests as well (`CONJURE_CHECK_NO_ALLOCATIONS`, `job_system::stats().poolGrowths`).
 
 ## Related
 
@@ -332,6 +379,9 @@ harness does not yet.
 - `tests/support/CMakeLists.txt`, `cmake/ConjureTesting.cmake`, `tools/check_style.py`, `tools/check_exports.py`,
   `tools/check_docs.py`, `tools/download_test_assets.py`
 - module test suites: [ECS](modules/ecs.md#8-tests), [Platform](modules/platform.md#10-tests), [RHI](modules/rhi.md#9-tests),
-  [Assets](modules/assets.md#12-tests), [Audio](modules/audio.md#13-tests), [Modules](modules/modules.md#9-tests-and-fixtures)
+  [Assets](modules/assets.md#12-tests), [Audio](modules/audio.md#13-tests), [Modules](modules/modules.md#9-tests-and-fixtures),
+  [Engine](modules/engine.md#11-tests), [Bindings](modules/bindings.md#9-tests), [Editor](modules/editor.md#10-tests),
+  [Runtime](modules/runtime.md#5-tests)
+- `tests/integration/CMakeLists.txt` (the scenario list), `tests/benchmarks/README.md`, `tests/support/engine/README.md`
 - `.claude/skills/build-and-test/SKILL.md` (reading failures, single-test runs)
 - [Getting started](getting-started.md), [Build pipeline](build-pipeline.md), [Continuous integration](ci.md)

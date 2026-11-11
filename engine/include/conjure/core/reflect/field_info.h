@@ -2,6 +2,7 @@
 
 #include "conjure/core/reflect/type_id.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/math/transform.h"
 #include "conjure/core/string_id.h"
@@ -66,12 +67,12 @@ namespace conjure::core::reflect {
     /// Returns the stable upper-case enumerator name of a kind ("VEC3"); "UNKNOWN" for COUNT and
     /// out-of-range values.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(field_kind kind) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(field_kind kind) noexcept;
 
     /// <summary>
     /// Parses an enumerator name produced by to_string() (exact match). Returns nullopt otherwise.
     /// </summary>
-    [[nodiscard]] std::optional<field_kind> parse_field_kind(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<field_kind> parse_field_kind(std::string_view name) noexcept;
 
     /// <summary>
     /// Size in bytes of a fixed-size kind; 0 for ENUM, STRUCT, ARRAY, ENTITY and ASSET_REF whose
@@ -216,7 +217,7 @@ namespace conjure::core::reflect {
     /// <summary>
     /// A reflected enumeration: its enumerators by name and value plus the storage width.
     /// </summary>
-    struct enum_info {
+    struct CONJURE_API enum_info {
         std::string name = {};
         type_id type = {};
         u32 underlyingSize = 4;

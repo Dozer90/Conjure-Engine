@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/types.h"
 
@@ -13,7 +14,7 @@ namespace conjure::math {
     /// that expanding it with the first point makes it valid; is_valid() is false until then.
     /// Containment and intersection tests are inclusive: touching counts.
     /// </summary>
-    struct aabb {
+    struct CONJURE_API aabb {
         vec3 min = vec3(F32_MAX);
         vec3 max = vec3(-F32_MAX);
 

@@ -26,22 +26,25 @@ generated or downloaded and therefore never committed.
 | `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake` |
 | `third_party/` | `CMakeLists.txt` with every pinned dependency and `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) |
 | `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `shaders/` the engine's HLSL sources and their `CMakeLists.txt` (`conjure_add_shaders`), `CMakeLists.txt` with the module list |
-| `editor/` | the `conjure_editor` executable (wave 4; its `CMakeLists.txt` returns until `src/main.cpp` exists) |
-| `runtime/` | the `conjure_runtime` executable (wave 4; same skip) |
-| `managed/` | the C# SDK and templates built with `dotnet` (waves 3-4; skipped until `Conjure.Managed/Conjure.Managed.csproj` exists) |
+| `editor/` | the `conjure_editor` executable: `src/main.cpp` over `conjure::shared` ([Editor module](modules/editor.md)) |
+| `runtime/` | the `conjure_runtime` executable: `src/main.cpp` over `conjure::shared` ([Runtime](modules/runtime.md)) |
+| `managed/` | the C# SDK (`Conjure.Managed`), the test scripts and the project templates built with `dotnet` |
 | `samples/` | sample projects, first `feature_test` (wave 5; skipped until `feature_test/CMakeLists.txt` exists) |
 | `tests/` | the test support library, one test directory per module, the style check registration |
 | `tools/` | Python scripts: build driver, style, export and documentation checks, asset download; `tests/` holds the documentation checker's self-test |
 | `docs/` | requirements, architecture, conventions, style, design record, both documentation sets |
-| `.claude/skills/` | agent skills: `build-and-test`, `add-engine-module`, `code-review-checklist`, `write-docs`; `add-component/` and `editor-ai-control/` are empty placeholders for later waves (`AGENTS.md` already names their `SKILL.md` files) |
+| `.claude/skills/` | agent skills: `build-and-test`, `add-engine-module`, `add-component`, `code-review-checklist`, `write-docs`, `editor-ai-control` (driving the editor over its AI protocol, generated from `editor.schema`; `AGENTS.md` 1 names every `SKILL.md`) |
 | `.github/workflows/` | `ci.yml`, the pull-request matrix (see [Continuous integration](ci.md)) |
 | `mkdocs.yml` | the documentation site (navigation, theme, plugins) |
 | `.clang-format`, `.editorconfig`, `.gitattributes`, `.gitignore` | editor and git configuration: LF everywhere, binary extensions marked, build outputs ignored |
 
 Engine modules in dependency order, as listed in `engine/CMakeLists.txt` (`CONJURE_ENGINE_MODULES`):
 `core`, `ecs`, `platform`, `rhi`, `assets`, `audio`, `modules`, `scene`, `renderer`, `physics`,
-`scripting`, `engine`. The first seven (waves 1 and 2) are in the tree; a module directory that does not
-exist yet is skipped with a status message so the build keeps working while waves land. Modules that talk to
+`scripting`, `engine`, `bindings`, `editor` (the last declares `conjure_editor_core` and `conjure_editor_ui`
+and returns early unless `CONJURE_BUILD_EDITOR`). All of them are in the tree since wave 4; a module directory
+that does not exist is still skipped with a status message. `editor/` and `runtime/` hold the two executables'
+`main.cpp`, `tests/integration/` the cross-module scenarios, `tests/benchmarks/` the benchmark harness and
+scenarios, `tests/support/engine/` the engine-level test fixtures. Modules that talk to
 hardware keep each backend's files together: `rhi` under `src/rhi/backends/{d3d12,vulkan,null}/`, `platform`
 under `src/platform/glfw/` next to a flat `null_backend.cpp`, `audio` as flat `miniaudio_backend.{h,cpp}` and
 `null_backend.cpp`.
@@ -145,7 +148,7 @@ Conventions worth knowing when looking for something:
 | `tools/tests/test_check_docs.py`, `tools/tests/check_docs/` | the checker's self-test and its fixture tree; CTest entry `docs.check_tool` |
 | `tools/docs.py` | `install`, `serve`, `build`, `check` for the documentation site |
 | `tools/docs_requirements.txt` | pinned MkDocs toolchain |
-| `tools/download_test_assets.py`, `tools/test_assets.json` | downloads the public fixtures listed in the manifest into `tests/.downloaded/`, pins SHA-256 hashes in `assets.lock`, writes the `.assets_ready` stamp |
+| `tools/download_test_assets.py`, `tools/test_assets.json`, `tools/test_assets.lock` | downloads the public fixtures listed in the manifest into `tests/.downloaded/`, verifies every file against the SHA-256 pinned in the committed lock (a file the lock does not know is pinned on first download and the lock is committed with the change; `--verify` and `--locked` fail on an unpinned asset), writes the `.assets_ready` stamp |
 
 ## 5. Documentation
 
@@ -177,7 +180,7 @@ is not ignored yet.
 | `build/<preset>/tests/.../<target>_labels.cmake`, `<target>_tests-*.cmake` | `conjure_add_test_module()`, doctest discovery | the CTest entries and their labels |
 | `build/<preset>/test_output/<executable>/`, `test_tmp/<executable>/` | test executables | `temp_directory` lives under `test_tmp`; per executable so parallel CTest processes never share a directory |
 | `CMakeUserPresets.json` | you | personal presets, ignored |
-| `tests/.downloaded/` (`assets.lock`) and `tests/.assets_ready` | `tools/download_test_assets.py` | ignored by `.gitignore` |
+| `tests/.downloaded/` and `tests/.assets_ready` | `tools/download_test_assets.py` | ignored by `.gitignore`; the hash lock `tools/test_assets.lock` is committed |
 | `**/bin/`, `**/obj/`, `*.nupkg` | `dotnet` | managed build outputs |
 | `*.dxil`, `*.spv`, `*.cso` | `dxc`, glslang | compiled shaders, wherever they land |
 | `.venv-docs/`, `site/` | `tools/docs.py install` / `build` | documentation toolchain and site output |

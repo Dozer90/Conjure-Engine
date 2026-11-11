@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/native_api.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -28,7 +29,7 @@ namespace conjure::scripting {
         core::json::document meta = {};                 // tooltip, min, max, enumNames, assetType, hidden
     };
 
-    struct script_class_info {
+    struct CONJURE_API script_class_info {
         u64 hash = 0;                                                   // fnv1a64 of the full C# type name
         std::string fullName = {};
         u16 callbackMask = 0;                                           // bits of script_callback
@@ -60,9 +61,9 @@ namespace conjure::scripting {
     /// <summary>
     /// Hash of a C# type or field name as the managed side computes it (core::hash::fnv1a64 of UTF-8).
     /// </summary>
-    [[nodiscard]] u64 script_name_hash(std::string_view fullName) noexcept;
+    [[nodiscard]] CONJURE_API u64 script_name_hash(std::string_view fullName) noexcept;
 
-    class script_class_registry {
+    class CONJURE_API script_class_registry {
         private:
             struct table {
                 std::vector<script_class_info> classes = {};

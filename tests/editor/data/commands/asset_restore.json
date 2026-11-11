@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.restore",
+    "args": {
+      "path": "textures/restored.png",
+      "contentBase64": "@tiny_png_base64"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://textures/restored.png"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/types.h"
 
@@ -41,18 +42,18 @@ namespace conjure::core {
     /// <summary>
     /// Returns the upper-case name of a level ("INFO").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(log_level level) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(log_level level) noexcept;
 
     /// <summary>
     /// Parses a level name case-insensitively. Returns OFF for unknown names.
     /// </summary>
-    [[nodiscard]] log_level parse_log_level(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API log_level parse_log_level(std::string_view name) noexcept;
 
     /// <summary>
     /// A named channel with its own minimum level. Instances are global and register themselves
     /// so tools can list and adjust categories at runtime.
     /// </summary>
-    class log_category {
+    class CONJURE_API log_category {
         private:
             const char *mName = "";
             std::atomic<log_level> mLevel = log_level::TRACE;   // read by every logging thread
@@ -112,7 +113,7 @@ namespace conjure::core {
     /// concurrently, and without holding its own lock, so a sink must synchronise itself and
     /// may safely log or add/remove sinks from inside write().
     /// </summary>
-    class log_sink {
+    class CONJURE_API log_sink {
         public:
             log_sink();
             virtual ~log_sink();
@@ -129,7 +130,7 @@ namespace conjure::core {
     /// <summary>
     /// Writes to stdout (below WARN) and stderr (WARN and above) with optional ANSI colours.
     /// </summary>
-    class console_log_sink final : public log_sink {
+    class CONJURE_API console_log_sink final : public log_sink {
         private:
             bool mUseColour = true;
 
@@ -145,7 +146,7 @@ namespace conjure::core {
     /// <summary>
     /// Appends to a file. The file is created (with parent directories) on construction.
     /// </summary>
-    class file_log_sink final : public log_sink {
+    class CONJURE_API file_log_sink final : public log_sink {
         private:
             struct state;
             std::unique_ptr<state> mState = nullptr;   // owns the stream and its mutex
@@ -168,7 +169,7 @@ namespace conjure::core {
     /// Forwards every message to a callable. Used by the editor console and by tests. The
     /// callable is invoked from the logging thread and must be thread-safe.
     /// </summary>
-    class callback_log_sink final : public log_sink {
+    class CONJURE_API callback_log_sink final : public log_sink {
         private:
             std::function<void(const log_message &)> mCallback = {};
 
@@ -184,75 +185,85 @@ namespace conjure::core {
     /// Formats a message the way the console and file sinks do:
     /// "HH:MM:SS.mmm [LEVEL] [category] text".
     /// </summary>
-    [[nodiscard]] std::string format_log_line(const log_message &message);
+    [[nodiscard]] CONJURE_API std::string format_log_line(const log_message &message);
 
     namespace log {
         /// <summary>
         /// Adds a sink. Sinks are shared so the caller may keep a reference for later removal.
         /// </summary>
-        void add_sink(std::shared_ptr<log_sink> sink);
+        CONJURE_API void add_sink(std::shared_ptr<log_sink> sink);
 
         /// <summary>
         /// Removes a previously added sink. Unknown sinks are ignored.
         /// </summary>
-        void remove_sink(const std::shared_ptr<log_sink> &sink);
+        CONJURE_API void remove_sink(const std::shared_ptr<log_sink> &sink);
 
         /// <summary>
         /// Removes every sink.
         /// </summary>
-        void clear_sinks();
+        CONJURE_API void clear_sinks();
 
         /// <summary>
         /// The console sink that exists until disabled. On by default so early messages are
         /// never lost; tests turn it off.
         /// </summary>
-        void set_console_enabled(bool enabled);
-        [[nodiscard]] bool console_enabled() noexcept;
+        CONJURE_API void set_console_enabled(bool enabled);
+        [[nodiscard]] CONJURE_API bool console_enabled() noexcept;
 
         /// <summary>
         /// Messages below this level are dropped regardless of category.
         /// </summary>
-        void set_global_level(log_level level) noexcept;
-        [[nodiscard]] log_level global_level() noexcept;
+        CONJURE_API void set_global_level(log_level level) noexcept;
+        [[nodiscard]] CONJURE_API log_level global_level() noexcept;
 
         /// <summary>
         /// True when a message at 'level' for 'category' would reach the sinks.
         /// </summary>
-        [[nodiscard]] bool is_enabled(const log_category &category, log_level level) noexcept;
+        [[nodiscard]] CONJURE_API bool is_enabled(const log_category &category, log_level level) noexcept;
 
         /// <summary>
         /// Delivers an already formatted message to every sink.
         /// </summary>
-        void write(const log_category &category, log_level level, const char *file, int line, std::string_view text);
+        CONJURE_API void write(
+          const log_category &category,
+          log_level level,
+          const char *file,
+          int line,
+          std::string_view text
+        );
 
         /// <summary>
         /// Flushes every sink.
         /// </summary>
-        void flush();
+        CONJURE_API void flush();
 
         /// <summary>
         /// Every registered category, in registration order.
         /// </summary>
-        [[nodiscard]] std::vector<log_category *> categories();
+        [[nodiscard]] CONJURE_API std::vector<log_category *> categories();
 
         /// <summary>
         /// Finds a category by name, or nullptr.
         /// </summary>
-        [[nodiscard]] log_category *find_category(std::string_view name);
+        [[nodiscard]] CONJURE_API log_category *find_category(std::string_view name);
 
         /// <summary>
         /// Sets a category's level by name. Returns false when the category does not exist.
         /// </summary>
-        bool set_category_level(std::string_view name, log_level level);
+        CONJURE_API bool set_category_level(std::string_view name, log_level level);
     }
 
     /// <summary>
     /// Category used by core itself and by code that has no better home.
     /// </summary>
-    extern log_category LOG_CORE;
+    extern CONJURE_API log_category LOG_CORE;
 }
 
+// CONJURE_DECLARE_LOG_CATEGORY declares a category defined by the same binary (a game module, a
+// test). CONJURE_DECLARE_ENGINE_LOG_CATEGORY is for the engine modules' public log_category.h headers:
+// their categories live in conjure_shared and carry CONJURE_API so plugins can log through them.
 #define CONJURE_DECLARE_LOG_CATEGORY(name) extern ::conjure::core::log_category name
+#define CONJURE_DECLARE_ENGINE_LOG_CATEGORY(name) extern CONJURE_API ::conjure::core::log_category name
 #define CONJURE_DEFINE_LOG_CATEGORY(name, displayName) ::conjure::core::log_category name(displayName)
 
 #define CONJURE_LOG(category, level, ...)                                                                   \

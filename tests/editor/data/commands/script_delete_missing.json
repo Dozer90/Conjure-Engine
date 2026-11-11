@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "script.delete",
+    "args": {
+      "path": "Missing.cs"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

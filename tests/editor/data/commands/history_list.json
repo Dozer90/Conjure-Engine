@@ -1,0 +1,25 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "A"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "B"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "history.list",
+    "args": {
+      "limit": 10
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

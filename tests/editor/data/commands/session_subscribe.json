@@ -1,0 +1,22 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "session.subscribe",
+    "args": {
+      "events": [
+        "play.state",
+        "scene.changed"
+      ],
+      "minLogLevel": "warn"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "subscribed": [
+        "play.state",
+        "scene.changed"
+      ]
+    }
+  }
+}

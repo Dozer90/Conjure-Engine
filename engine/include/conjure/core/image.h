@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -29,7 +30,7 @@ namespace conjure::core {
     /// A row-major RGBA8 image, 4 bytes per pixel, rows top to bottom and no row padding. Value
     /// type: copies are deep.
     /// </summary>
-    class image {
+    class CONJURE_API image {
         private:
             u32 mWidth = 0;
             u32 mHeight = 0;

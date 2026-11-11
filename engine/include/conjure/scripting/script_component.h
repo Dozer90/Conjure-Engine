@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/native_api.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/json/document.h"
@@ -108,7 +109,7 @@ namespace conjure::scripting {
     /// Generational storage of script sets plus the managed slot -> entry reverse map. Handles pack a
     /// 20-bit index and a 12-bit generation (1..4095, 0 never issued) into the component's 32 bits.
     /// </summary>
-    class script_store {
+    class CONJURE_API script_store {
         public:
             static constexpr u32 INDEX_BITS = 20;
             static constexpr u32 MAX_SETS = 1u << INDEX_BITS;
@@ -234,19 +235,21 @@ namespace conjure::scripting {
     /// The lifecycle hooks the component registers: copy deep-copies the set, destruct frees it; both go
     /// through script_runtime::active() and do nothing when no runtime is alive.
     /// </summary>
-    [[nodiscard]] ecs::component_ops script_component_ops() noexcept;
+    [[nodiscard]] CONJURE_API ecs::component_ops script_component_ops() noexcept;
 
     /// <summary>
     /// The serializer hooks of the component: {"scripts":[{"class","hash","fields"}]} through the active
     /// runtime; remapEntities rewrites ENTITY fields of every entry with the class schema.
     /// </summary>
-    [[nodiscard]] ecs::component_serializer script_component_serializer() noexcept;
+    [[nodiscard]] CONJURE_API ecs::component_serializer script_component_serializer() noexcept;
 
     /// <summary>
     /// Registers script_component (name SCRIPT_COMPONENT_NAME, 4 bytes, custom copy/destruct, memcpy
     /// relocate) and returns its id. Re-registration returns the existing id.
     /// </summary>
-    [[nodiscard]] core::result<ecs::component_id> register_script_component(ecs::component_registry &registry);
+    [[nodiscard]] CONJURE_API core::result<ecs::component_id> register_script_component(
+      ecs::component_registry &registry
+    );
 }
 
 CONJURE_COMPONENT(conjure::scripting::script_component, "conjure.scripting.script_component");

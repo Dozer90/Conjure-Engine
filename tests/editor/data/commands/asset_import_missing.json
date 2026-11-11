@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "asset.import",
+    "args": {
+      "source": "${project}/incoming/missing.png"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

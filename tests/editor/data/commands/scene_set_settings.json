@@ -1,0 +1,19 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "scene.set_settings",
+    "args": {
+      "settings": {
+        "gravity": -9.8
+      }
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "settings": {
+        "gravity": -9.8
+      }
+    }
+  }
+}

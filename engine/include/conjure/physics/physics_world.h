@@ -8,6 +8,7 @@
 #include "conjure/physics/queries.h"
 
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/api.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/math/aabb.h"
 #include "conjure/core/math/glm_types.h"
@@ -64,7 +65,7 @@ namespace conjure::physics {
     /// its address. Owner-thread calls (the thread that constructed the world) are attach, detach, the
     /// step pipeline and the queued body API; queries run from any thread while no step runs.
     /// </summary>
-    class physics_world {
+    class CONJURE_API physics_world {
         private:
             struct state;
 

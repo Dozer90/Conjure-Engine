@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/math/aabb.h"
 #include "conjure/core/math/glm_types.h"
 #include "conjure/core/math/plane.h"
@@ -30,7 +31,7 @@ namespace conjure::math {
     /// signed distance to every plane are inside. Built from a view-projection matrix with the
     /// engine's 0..1 depth convention.
     /// </summary>
-    struct frustum {
+    struct CONJURE_API frustum {
         std::array<plane, FRUSTUM_PLANE_COUNT> planes = {};
 
         /// <summary>

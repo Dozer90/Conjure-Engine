@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/script_runtime.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/scheduler.h"
@@ -30,7 +31,7 @@ namespace conjure::scripting {
     /// null; when set, frame_begin ticks it with the frame time. The runtime and controller must outlive
     /// the scheduler.
     /// </summary>
-    [[nodiscard]] core::result<void> register_script_systems(
+    [[nodiscard]] CONJURE_API core::result<void> register_script_systems(
       ecs::scheduler &scheduler,
       script_runtime &runtime,
       hot_reload_controller *reload = nullptr

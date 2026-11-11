@@ -10,6 +10,7 @@
 #include "conjure/ecs/query.h"
 #include "conjure/ecs/view.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -73,7 +74,7 @@ namespace conjure::ecs {
     /// scope is alive. Movable; the moved-from scope releases nothing. Scopes may be taken from any
     /// thread (an atomic depth counter).
     /// </summary>
-    class iteration_scope {
+    class CONJURE_API iteration_scope {
         private:
             world *mWorld = nullptr;
 
@@ -110,7 +111,7 @@ namespace conjure::ecs {
             }
     };
 
-    class world {
+    class CONJURE_API world {
         private:
             friend class command_buffer;
             friend class component_registry;

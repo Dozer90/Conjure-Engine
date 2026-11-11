@@ -48,5 +48,28 @@
     <Compile Include="Api/Dod/ChunkView.cs" />
     <Compile Include="Api/Dod/ComponentQuery.cs" />
     <Compile Include="Api/Dod/ComponentType.cs" />
+    <Compile Include="Interop/AssetRefBinder.cs" />
+    <Compile Include="Interop/BindingStatus.g.cs" />
+    <Compile Include="Interop/ConjureNativeException.cs" />
+    <Compile Include="Interop/NativeCheck.cs" />
+    <Compile Include="Interop/Utf8Marshal.cs" />
+    <Compile Include="Api/AssetId.cs" />
+    <Compile Include="Api/AssetState.cs" />
+    <Compile Include="Api/AssetTypes.cs" />
+    <Compile Include="Api/AudioSource.cs" />
+    <Compile Include="Api/CharacterController.cs" />
+    <Compile Include="Api/Diagnostics.cs" />
+    <Compile Include="Api/Entity.Hierarchy.cs" />
+    <Compile Include="Api/Input.Bindings.cs" />
+    <Compile Include="Api/LayerMask.cs" />
+    <Compile Include="Api/Modules.cs" />
+    <Compile Include="Api/RaycastHit.cs" />
+    <Compile Include="Api/Rigidbody.cs" />
+    <Compile Include="Api/Components/EntityHandle.cs" />
+    <Compile Include="Api/Components/NativeBool.cs" />
+    <Compile Include="Api/Components/StringId.cs" />
+    <Compile Include="Api/Components/Audio/AudioMirrors.cs" />
+    <Compile Include="Api/Components/Physics/PhysicsMirrors.cs" />
+    <Compile Include="Api/Components/Scene/SceneMirrors.cs" />
   </ItemGroup>
 </Project>

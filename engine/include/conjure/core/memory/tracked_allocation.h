@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <cstddef>
@@ -57,7 +58,7 @@ namespace conjure::core::memory {
     /// True when the address of 'pointer' is a multiple of 'alignment' (a power of two). nullptr is
     /// aligned to everything.
     /// </summary>
-    [[nodiscard]] bool is_aligned(const void *pointer, usize alignment) noexcept;
+    [[nodiscard]] CONJURE_API bool is_aligned(const void *pointer, usize alignment) noexcept;
 
     /// <summary>
     /// Allocates 'bytes' bytes whose address is a multiple of 'alignment' (a power of two; values
@@ -66,14 +67,14 @@ namespace conjure::core::memory {
     /// exceeds MAX_ALLOCATION_BYTES, or when the alignment is not a power of two (the latter also
     /// asserts). Nothing is counted on failure.
     /// </summary>
-    [[nodiscard]] void *tracked_allocate(usize bytes, usize alignment = DEFAULT_ALIGNMENT) noexcept;
+    [[nodiscard]] CONJURE_API void *tracked_allocate(usize bytes, usize alignment = DEFAULT_ALIGNMENT) noexcept;
 
     /// <summary>
     /// Releases memory obtained from tracked_allocate or tracked_reallocate. 'bytes' is the size that
     /// was requested; it is kept for symmetry with the allocation call and for future per-size
     /// statistics, the counters themselves only count calls. nullptr is ignored and not counted.
     /// </summary>
-    void tracked_free(void *pointer, usize bytes) noexcept;
+    CONJURE_API void tracked_free(void *pointer, usize bytes) noexcept;
 
     /// <summary>
     /// Resizes an allocation, preserving the first min(oldBytes, newBytes) bytes. 'alignment' must be
@@ -86,7 +87,7 @@ namespace conjure::core::memory {
     /// no aligned realloc, so the block is always allocated anew and the preserved bytes copied.
     /// Callers that resize often should grow geometrically so the copy stays amortised O(1).
     /// </summary>
-    [[nodiscard]] void *tracked_reallocate(
+    [[nodiscard]] CONJURE_API void *tracked_reallocate(
       void *pointer,
       usize oldBytes,
       usize newBytes,

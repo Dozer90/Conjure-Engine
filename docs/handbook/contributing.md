@@ -122,10 +122,8 @@ steps every time:
 | `code-review-checklist` | before every commit, when reviewing another agent's work | section 5 |
 | `write-docs` | writing or updating a wiki page or a handbook page, before `python tools/docs.py check` | the page templates, badge and link prefixes, alert meanings, the header coverage rule, the build and check commands ([Documentation](documentation.md)) |
 
-Planned by the design record and referenced from `AGENTS.md`: `add-component` and `editor-ai-control`
-(generated from `editor.schema`, `docs/design/04_editor.md`). Both directories exist but have no `SKILL.md`
-yet, so the `AGENTS.md` pointers currently fail rather than being absent. They are filled by the waves that
-need them.
+| `add-component` | adding a component type to a module | the `CONJURE_COMPONENT` / `CONJURE_REFLECT_STRUCT` pair, registration, the C# mirror and the test the pair needs |
+| `editor-ai-control` | building, editing, inspecting or play-testing a scene through `conjure_editor`, scripting the editor in CI, looking up a command's arguments | starting the editor headless or with a window, the wire format, the command catalogue summarised from `docs/generated/editor_protocol.json` (`editor.schema`), exit codes of `--exec` |
 
 ## 8. Definition of done
 

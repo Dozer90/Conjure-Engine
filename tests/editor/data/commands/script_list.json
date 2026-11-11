@@ -1,0 +1,17 @@
+{
+  "setup": [
+    {
+      "cmd": "script.create",
+      "args": {
+        "name": "CellBehaviour"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "script.list",
+    "args": {}
+  },
+  "expect": {
+    "ok": true
+  }
+}

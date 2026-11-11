@@ -2,6 +2,7 @@
 
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/result.h"
@@ -39,7 +40,7 @@ namespace conjure::assets {
     /// <summary>
     /// Produces debounced file changes. Main-thread API.
     /// </summary>
-    class file_watcher {
+    class CONJURE_API file_watcher {
         public:
             file_watcher();
             virtual ~file_watcher();
@@ -69,7 +70,7 @@ namespace conjure::assets {
     /// collects the pass's results; scan_now() runs a pass synchronously (tests, tools).
     /// Atomic-write temporaries ("*.tmp", "*.tmp-<uuid>") are never tracked or reported.
     /// </summary>
-    class polling_file_watcher final : public file_watcher {
+    class CONJURE_API polling_file_watcher final : public file_watcher {
         private:
             struct file_state {
                 u64 size = 0;

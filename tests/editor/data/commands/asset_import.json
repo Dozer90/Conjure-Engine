@@ -1,0 +1,21 @@
+{
+  "files": {
+    "incoming/cell.png": "@tiny_png"
+  },
+  "setup": [],
+  "request": {
+    "cmd": "asset.import",
+    "args": {
+      "source": "${project}/incoming/cell.png",
+      "destination": "textures/cell.png"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "path": "assets://textures/cell.png",
+      "type": "conjure.renderer.texture",
+      "status": "OK"
+    }
+  }
+}

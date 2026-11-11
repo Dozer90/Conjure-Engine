@@ -1,0 +1,25 @@
+{
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "A"
+      }
+    },
+    {
+      "cmd": "scene.save",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "project.export",
+    "args": {
+      "directory": "${project}/exported",
+      "copyRuntime": false,
+      "publishManaged": false
+    }
+  },
+  "expect": {
+    "ok": true
+  }
+}

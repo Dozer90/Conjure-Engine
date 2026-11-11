@@ -2,6 +2,7 @@
 
 #include "conjure/rhi/shader_library.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
@@ -26,7 +27,7 @@ namespace conjure::renderer {
         [[nodiscard]] bool operator==(const shader_program_desc &other) const noexcept = default;
     };
 
-    class shader_asset {
+    class CONJURE_API shader_asset {
         private:
             shader_program_desc mDesc = {};
 

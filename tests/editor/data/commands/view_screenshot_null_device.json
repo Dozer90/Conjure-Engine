@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "view.screenshot",
+    "args": {
+      "path": "${project}/shot.png"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "NOT_AVAILABLE"
+    }
+  }
+}

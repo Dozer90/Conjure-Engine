@@ -183,9 +183,10 @@ python tools/build.py --build-dir build/mod_scene --target conjure_scene_tests -
 
 ## 11. Open items
 
-- `tests/benchmarks/bench_scene.cpp` (`propagate_10k_flat`, `propagate_10k_depth8`, `set_parent_subtree_1k`,
-  `instantiate_prefab_100`, `snapshot_capture_restore_10k`, `destroy_cascade_10k`) guards the 0.3 ms propagation
-  and 50 ms snapshot budgets; the benchmarks directory does not exist yet.
+- `tests/benchmarks/bench_scene.cpp` (`scene.transform_propagation_10k`, `scene.transform_propagation_10k_sparse`,
+  `scene.snapshot_capture_restore_10k`, `scene.load_10k`) guards the propagation and snapshot budgets; the
+  `set_parent_subtree_1k`, `instantiate_prefab_100` and `destroy_cascade_10k` scenarios of the design are not
+  written yet.
 - A "physics wrote this" flag on `transform_state` would let the pass skip the redundant dirtying of bodies the
   physics pull just posed; deferred until measured.
 

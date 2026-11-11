@@ -4,6 +4,7 @@
 #include "conjure/renderer/light.h"
 #include "conjure/renderer/limits.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/types.h"
 
 #include <string_view>
@@ -87,10 +88,10 @@ namespace conjure::renderer {
     /// <summary>
     /// The enumerator name of an operator ("ACES_FITTED").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(tonemap_operator value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(tonemap_operator value) noexcept;
 
     /// <summary>
     /// The enumerator name of an exposure mode ("AUTOMATIC").
     /// </summary>
-    [[nodiscard]] std::string_view to_string(exposure_mode value) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(exposure_mode value) noexcept;
 }

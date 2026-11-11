@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "scene.open",
+    "args": {
+      "path": "scenes/missing"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "ASSET_NOT_FOUND"
+    }
+  }
+}

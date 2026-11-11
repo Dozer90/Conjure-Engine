@@ -6,6 +6,7 @@
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/asset_types.h"
 
+#include "conjure/core/api.h"
 #include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/result.h"
@@ -44,7 +45,7 @@ namespace conjure::assets {
     /// <summary>
     /// Upper-case name of a status.
     /// </summary>
-    [[nodiscard]] std::string_view to_string(asset_record_status status) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view to_string(asset_record_status status) noexcept;
 
     /// <summary>
     /// One asset or sub-asset known to the database.
@@ -94,7 +95,7 @@ namespace conjure::assets {
     /// <summary>
     /// Splits an asset path. nullopt when there is no "://" or the mount or path is empty.
     /// </summary>
-    [[nodiscard]] std::optional<asset_path_parts> split_asset_path(std::string_view assetPath) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<asset_path_parts> split_asset_path(std::string_view assetPath) noexcept;
 
     /// <summary>
     /// Builds "mount://relative#sub" (the '#' part only when subPath is not empty).
@@ -145,7 +146,7 @@ namespace conjure::assets {
     /// <summary>
     /// The project's sources, their identities and their cooked state.
     /// </summary>
-    class asset_database {
+    class CONJURE_API asset_database {
         private:
             struct entry {
                 asset_record record = {};

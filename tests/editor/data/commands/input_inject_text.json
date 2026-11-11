@@ -1,0 +1,16 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "input.inject",
+    "args": {
+      "text": "héllo"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "injected": 5,
+      "releasePending": false
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "profiler.frame_stats",
+    "args": {
+      "frames": 10
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "drawCalls": 0
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "setup": [
+    {
+      "cmd": "asset.create_folder",
+      "args": {
+        "path": "props"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "asset.delete",
+    "args": {
+      "asset": "props"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "folder": true
+    }
+  }
+}

@@ -8,6 +8,14 @@ engine/include/conjure/scripting/native_api.inl (an invocation may continue over
   managed/Conjure.Managed/Generated/NativeApi.g.cs       struct NativeApi (delegate* unmanaged fields in table
                                                          order), the NativeFunction enum and the entry names
   docs/generated/native_api_manifest.json                { hash, version, coreEntryCount, entries[...] }
+  managed/Conjure.Managed/Interop/BindingStatus.g.cs     enum BindingStatus from the CONJURE_BINDINGS_STATUS
+                                                         lines of conjure/bindings/bindings_error.inl
+                                                         (15_bindings.md 3.6; skipped when that file is absent)
+
+The hash header also carries CONJURE_NATIVE_API_FOR_EACH_ENTRY_TYPED(X) (X(group, name, return, (arguments))
+per entry) and CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X) (the same for the entries after the bindings
+marker only): the filtered X-macro conjure/bindings/native_api_entries.h declares and fills the owned
+entries with (15_bindings.md B2).
 
 The layout hash is FNV-1a 64 over one line per entry, "<group>_<name> <return> <arguments>\\n", after the
 signature normalisation native_entry_descriptors() applies on the C++ side (whitespace collapsed to single
@@ -35,6 +43,8 @@ DEFAULT_HEADER = ROOT / "engine" / "include" / "conjure" / "scripting" / "native
 DEFAULT_OUT_HASH = ROOT / "engine" / "include" / "conjure" / "scripting" / "native_api_hash.h"
 DEFAULT_OUT_CS = ROOT / "managed" / "Conjure.Managed" / "Generated" / "NativeApi.g.cs"
 DEFAULT_OUT_MANIFEST = ROOT / "docs" / "generated" / "native_api_manifest.json"
+DEFAULT_STATUS_INL = ROOT / "engine" / "include" / "conjure" / "bindings" / "bindings_error.inl"
+DEFAULT_OUT_STATUS = ROOT / "managed" / "Conjure.Managed" / "Interop" / "BindingStatus.g.cs"
 
 BINDINGS_MARKER = "// --- bindings (R26) ---"
 
@@ -47,6 +57,7 @@ ENTRY_PATTERN = re.compile(
     re.DOTALL,
 )
 VERSION_PATTERN = re.compile(r"#define\s+CONJURE_NATIVE_API_VERSION\s+(\d+)")
+STATUS_PATTERN = re.compile(r"CONJURE_BINDINGS_STATUS\(\s*([A-Z][A-Z0-9_]*)\s*\)")
 
 # C scalar types -> C# (blittable) types.
 SCALAR_TYPES = {
@@ -234,9 +245,58 @@ def generate_hash_header(entries: list[entry], core_count: int, hash_value: int)
             lines.append(f'      "{piece}" \\')
         lines.append(f'      "{pieces[-1]}") \\')
     lines.append("    /* end of table */")
+    lines.append("")
+    lines.append("// X(group, name, return, (arguments)) per entry in table order: the typed form the bindings' filtered")
+    lines.append("// X-macro declares and fills the owned entries with (15_bindings.md B2).")
+    lines.append("#define CONJURE_NATIVE_API_FOR_EACH_ENTRY_TYPED(X) \\")
+    lines.extend(typed_macro_lines(entries))
+    lines.append("    /* end of table */")
+    lines.append("")
+    lines.append("// The same for the entries after the bindings marker only (the ten bindings groups, R26/R64).")
+    lines.append("#define CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X) \\")
+    lines.extend(typed_macro_lines(entries[core_count:]))
+    lines.append("    /* end of table */")
     lines.append("// clang-format on")
     lines.append("")
     return "\n".join(lines)
+
+
+def typed_macro_lines(entries: list[entry]) -> list[str]:
+    """One `X(group, name, return, (arguments)) \\` line per entry; an argument list that would pass 120
+    columns continues on the next line (whitespace inside a macro argument is insignificant)."""
+    lines: list[str] = []
+    for item in entries:
+        prefix = f"    X({item.group}, {item.name}, {item.returns}, "
+        single = f"{prefix}{item.arguments}) \\"
+        if len(single) <= 120:
+            lines.append(single)
+            continue
+        lines.append(f"{prefix}\\")
+        # Long argument lists wrap after a comma; the inner pieces end with ", \\" so a comma never
+        # starts a continuation line.
+        pieces = split_arguments(item.arguments, 110)
+        for piece in pieces[:-1]:
+            lines.append(f"      {piece} \\")
+        lines.append(f"      {pieces[-1]})) \\")
+    return lines
+
+
+def split_arguments(arguments: str, width: int) -> list[str]:
+    """Splits "(a, b, c)" at ", " boundaries into pieces of at most 'width' characters, each piece but the
+    last keeping its trailing comma."""
+    parameters = arguments[1:-1].split(", ")
+    pieces: list[str] = []
+    current = "("
+    for index, parameter in enumerate(parameters):
+        candidate = parameter + ("," if index + 1 < len(parameters) else "")
+        separator = "" if current == "(" else " "
+        if len(current) + len(separator) + len(candidate) > width and current != "(":
+            pieces.append(current)
+            current = candidate
+        else:
+            current = current + separator + candidate
+    pieces.append(current)
+    return pieces
 
 
 def generate_cs(entries: list[entry], core_count: int, hash_value: int, version: int) -> str:
@@ -323,6 +383,58 @@ def generate_cs(entries: list[entry], core_count: int, hash_value: int, version:
     return "\n".join(lines)
 
 
+def parse_statuses(inl_text: str) -> list[str]:
+    """The CONJURE_BINDINGS_STATUS names in order; the first must be NONE and the names must be unique."""
+    code = re.sub(r"//[^\n]*", "", inl_text)
+    names = STATUS_PATTERN.findall(code)
+    if not names or names[0] != "NONE":
+        raise SystemExit("bindings_error.inl must start with CONJURE_BINDINGS_STATUS(NONE)")
+    if len(set(names)) != len(names):
+        raise SystemExit("bindings_error.inl lists a status twice")
+    return names
+
+
+def generate_status_cs(statuses: list[str]) -> str:
+    lines: list[str] = []
+    lines.append("// <auto-generated>")
+    lines.append("// Generated by tools/generate_native_api.py --status from engine/include/conjure/bindings/bindings_error.inl.")
+    lines.append("// Do not edit; regenerate instead. The CTest entry conjure_scripting_api_generated_up_to_date diffs it.")
+    lines.append("// </auto-generated>")
+    lines.append("#nullable enable")
+    lines.append("")
+    lines.append("namespace Conjure.Interop;")
+    lines.append("")
+    lines.append("/// <summary>")
+    lines.append("/// conjure::bindings::bindings_error: the code behind a negative status of a bindings entry (the status")
+    lines.append("/// is -(int)code, 15_bindings.md B4). Append-only; not part of the ABI layout hash.")
+    lines.append("/// </summary>")
+    lines.append("public enum BindingStatus : ushort")
+    lines.append("{")
+    for index, name in enumerate(statuses):
+        lines.append(f"    {pascal(name.lower())} = {index},")
+    lines.append("}")
+    lines.append("")
+    lines.append("/// <summary>")
+    lines.append("/// The enumerator names, indexed by BindingStatus; used in exception messages.")
+    lines.append("/// </summary>")
+    lines.append("public static class BindingStatusNames")
+    lines.append("{")
+    lines.append("    public static readonly string[] Names =")
+    lines.append("    {")
+    for name in statuses:
+        lines.append(f'        "{name}",')
+    lines.append("    };")
+    lines.append("")
+    lines.append("    public static string Of(BindingStatus status)")
+    lines.append("    {")
+    lines.append("        int index = (int)status;")
+    lines.append('        return index >= 0 && index < Names.Length ? Names[index] : $"status#{index}";')
+    lines.append("    }")
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def generate_manifest(entries: list[entry], core_count: int, hash_value: int, version: int) -> str:
     manifest = {
         "hash": f"0x{hash_value:016X}",
@@ -360,6 +472,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--out-hash", default=str(DEFAULT_OUT_HASH), help="generated native_api_hash.h")
     parser.add_argument("--out-cs", default=str(DEFAULT_OUT_CS), help="generated NativeApi.g.cs")
     parser.add_argument("--out-manifest", default=str(DEFAULT_OUT_MANIFEST), help="generated manifest JSON")
+    parser.add_argument(
+        "--status", default=str(DEFAULT_STATUS_INL), help="bindings_error.inl to read (skipped when absent)"
+    )
+    parser.add_argument("--out-status", default=str(DEFAULT_OUT_STATUS), help="generated BindingStatus.g.cs")
     parser.add_argument("--check", action="store_true", help="compare the outputs instead of writing them")
     args = parser.parse_args(argv)
 
@@ -374,6 +490,10 @@ def main(argv: list[str]) -> int:
         pathlib.Path(args.out_cs): generate_cs(entries, core_count, hash_value, version),
         pathlib.Path(args.out_manifest): generate_manifest(entries, core_count, hash_value, version),
     }
+    status_path = pathlib.Path(args.status)
+    if status_path.exists():
+        statuses = parse_statuses(status_path.read_text(encoding="utf-8"))
+        outputs[pathlib.Path(args.out_status)] = generate_status_cs(statuses)
 
     if args.check:
         stale = []

@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 
 #include "jobs_test_support.h"
@@ -8,6 +9,7 @@
 #include "conjure/core/jobs/job_system.h"
 #include "core/jobs/thread_name.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -36,6 +38,35 @@ namespace {
             };
         }
     };
+
+    // Ranges of the dispatch the allocation gates measure: start() pre-allocates a pool of 16 blocks,
+    // enough for the 15 queued ranges plus the caller's own, so nothing of the dispatch allocates.
+    constexpr usize GATED_RANGES = 16;
+    constexpr usize GATED_GRAIN = 4;
+    constexpr usize GATED_COUNT = GATED_RANGES * GATED_GRAIN;
+
+    // Starts a pool and immediately gates its first dispatch and wait_idle() on zero allocations.
+    // Without the start() handshake a worker whose prologue still allocated would be charged here.
+    void check_first_dispatch_allocates_nothing(u32 workers) {
+        std::atomic<usize> visited = 0;
+        const std::function<void(usize, usize)> body = [&visited](usize begin, usize end) {
+            visited.fetch_add(end - begin, std::memory_order_relaxed);
+        };
+
+        job_system system = {};
+        job_system_desc desc = {};
+        desc.workerCount = workers;
+        REQUIRE(system.start(desc).has_value());
+
+        const auto dispatch = [&system, &body] {
+            system.parallel_for(GATED_COUNT, GATED_GRAIN, body);
+            system.wait_idle();
+        };
+        CONJURE_CHECK_NO_ALLOCATIONS(dispatch());
+        CHECK(visited.load() == GATED_COUNT);
+        CHECK(system.stats().poolGrowths == 0);
+        system.stop();
+    }
 }
 
 TEST_SUITE("core/job_system") {
@@ -60,6 +91,30 @@ TEST_SUITE("core/job_system") {
         CHECK(stats.queuedNow == 0);
         CHECK(stats.poolGrowths == 0);
         CHECK(stats.poolCapacity == 0);
+    }
+
+    TEST_CASE("job_system - start returns with its workers running: the first dispatch allocates nothing [parallel]") {
+        u32 workers = 0;
+        SUBCASE("1 worker") {
+            workers = 1;
+        }
+        SUBCASE("4 workers") {
+            workers = 4;
+        }
+        SUBCASE("8 workers") {
+            workers = 8;
+        }
+        check_first_dispatch_allocates_nothing(workers);
+    }
+
+    TEST_CASE("job_system - 50 fresh starts on 1, 4 and 8 workers never charge a dispatch [parallel]") {
+        constexpr u32 REPETITIONS = 50;
+        constexpr std::array<u32, 3> WORKER_COUNTS = {1, 4, 8};
+        for (u32 repetition = 0; repetition < REPETITIONS; ++repetition) {
+            for (const u32 workers : WORKER_COUNTS) {
+                check_first_dispatch_allocates_nothing(workers);
+            }
+        }
     }
 
     TEST_CASE("job_system - start creates the requested workers and stop joins them [parallel]") {
@@ -352,9 +407,11 @@ TEST_SUITE("core/job_system") {
         testing::scoped_job_system fixture(1);
         job_system &system = fixture.system();
         std::atomic<int> innerRan = 0;
+        std::atomic<bool> outerEntered = false;
 
         // The only worker runs the outer job; waiting inside it must execute the inner jobs itself.
         const job_handle outer = system.schedule([&] {
+            outerEntered.store(true, std::memory_order_release);
             for (int index = 0; index < 4; ++index) {
                 const job_handle inner = system.schedule([&innerRan] {
                     innerRan.fetch_add(1);
@@ -362,6 +419,11 @@ TEST_SUITE("core/job_system") {
                 system.wait(inner);
             }
         });
+        // Wait for the worker to be inside the outer job first, otherwise this thread's wait() could
+        // pop the outer job itself and the inner jobs would be stolen by the worker, not helped.
+        REQUIRE(testing::spin_until([&outerEntered] {
+            return outerEntered.load(std::memory_order_acquire);
+        }));
         system.wait(outer);
 
         CHECK(innerRan.load() == 4);

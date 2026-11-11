@@ -1,5 +1,7 @@
 #pragma once
 
+#include "conjure/core/api.h"
+
 #include <functional>
 #include <stop_token>
 #include <string>
@@ -12,7 +14,7 @@ namespace conjure::core::jobs {
     /// audio streaming). The body receives a stop token; destruction requests a stop and joins.
     /// Move-only.
     /// </summary>
-    class dedicated_thread {
+    class CONJURE_API dedicated_thread {
         private:
             std::string mName = {};
             std::jthread mThread = {};

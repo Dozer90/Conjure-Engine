@@ -4,6 +4,7 @@
 
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_type_registry.h"
+#include "conjure/core/api.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/component_registry.h"
@@ -27,13 +28,13 @@ namespace conjure::scene {
     /// Registers every scene component in a fixed order (idempotent per registry) and verifies the
     /// asset_ref layout contract of the bind pass. Errors are the registry's (NAME_CONFLICT, ...).
     /// </summary>
-    [[nodiscard]] core::result<void> register_components(ecs::component_registry &registry);
+    [[nodiscard]] CONJURE_API core::result<void> register_components(ecs::component_registry &registry);
 
     /// <summary>
     /// Registers conjure.scene.scene and conjure.scene.prefab (version 1) with loaders that parse on the
     /// worker against 'registry', and the .scene.json / .prefab.json importers.
     /// </summary>
-    [[nodiscard]] core::result<void> register_asset_types(
+    [[nodiscard]] CONJURE_API core::result<void> register_asset_types(
       assets::asset_type_registry &types,
       assets::importer_registry &importers,
       const ecs::component_registry &registry
@@ -44,5 +45,5 @@ namespace conjure::scene {
     /// scene.propagate_transforms (TRANSFORM) and scene.destroy_pending (FRAME_END, after
     /// scripting.frame_end), all RUNS_WHILE_PAUSED. The manager must outlive the scheduler.
     /// </summary>
-    [[nodiscard]] core::result<void> register_systems(ecs::scheduler &scheduler, scene_manager &scenes);
+    [[nodiscard]] CONJURE_API core::result<void> register_systems(ecs::scheduler &scheduler, scene_manager &scenes);
 }

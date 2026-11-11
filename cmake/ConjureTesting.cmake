@@ -23,8 +23,11 @@
 #     therefore count nothing in a LINK_ENGINE_SHARED executable. The option requires
 #     conjure_finalize_engine() to have run (the root CMakeLists.txt does that before tests/).
 #
-#     ENGINE is accepted today and does nothing: it will add conjure::test_support_engine (wave 4)
-#     once that target exists.
+#     ENGINE (08_testing.md D2, 3.8) additionally links conjure::test_support_engine (tests/support/engine:
+#     headless_engine, input_script, world_builder, protocol_client, golden_image), or
+#     conjure::test_support_engine_shared together with LINK_ENGINE_SHARED. The library exists only when
+#     conjure::engine does, so a test module that asks for ENGINE in a configuration without the engine
+#     is a configuration error (the module's own CMakeLists.txt is expected to return early in that case).
 #
 #     Multi-config generators (the windows-vs preset): doctest 2.4.11's discovery writes one
 #     configuration-independent <target>_tests-<hash>.cmake per target from a POST_BUILD step, and
@@ -41,13 +44,15 @@
 #     support library's precondition child) and by conjure_add_test_module itself.
 #     LINK_ENGINE_SHARED has the meaning described above.
 #
-#   conjure_header_check(<target>)
+#   conjure_header_check(<target> [INCLUDE_ROOT <dir>])
 #
 #     Compiles every header listed in the target's CONJURE_PUBLIC_HEADERS property (set by
-#     conjure_add_module / conjure_add_core_area) in its own translation unit with the target's
-#     usage requirements and the project warning set, proving each public header stands alone. The
-#     object library <target>_header_check hangs off the aggregate target conjure_header_check,
-#     which is part of ALL, so a header that does not compile alone breaks the build.
+#     conjure_add_module / conjure_add_core_area, or by hand for the test support libraries) in its
+#     own translation unit with the target's usage requirements and the project warning set, proving
+#     each public header stands alone. Headers are included by their path relative to INCLUDE_ROOT,
+#     engine/include by default (the support libraries pass their own include/ directory). The object
+#     library <target>_header_check hangs off the aggregate target conjure_header_check, which is part
+#     of ALL, so a header that does not compile alone breaks the build.
 #
 # Options: CONJURE_TEST_GOLDEN_IMAGES (OFF) gates the golden-image tests of later waves; the test
 # executables see it as the compile definition CONJURE_TEST_GOLDEN_IMAGES=1.
@@ -161,10 +166,6 @@ function(conjure_add_test_module module)
     if(NOT ARG_TIMEOUT)
         set(ARG_TIMEOUT ${CONJURE_TEST_DEFAULT_TIMEOUT})
     endif()
-    if(ARG_ENGINE)
-        message(VERBOSE "conjure_add_test_module(${module}): ENGINE accepted; conjure::test_support_engine does not exist yet")
-    endif()
-
     set(target "conjure_${module}_tests")
     set(moduleDeps "")
     set(linkOption "")
@@ -175,6 +176,22 @@ function(conjure_add_test_module module)
         set(linkOption LINK_ENGINE_SHARED)
     elseif(TARGET conjure::${module})
         set(moduleDeps conjure::${module})
+    endif()
+
+    # ENGINE: the engine-level support library in the flavour that matches the engine linkage, so the
+    # executable never holds two copies of the engine (one static, one inside conjure_shared).
+    if(ARG_ENGINE)
+        set(engineSupport conjure::test_support_engine)
+        if(ARG_LINK_ENGINE_SHARED)
+            set(engineSupport conjure::test_support_engine_shared)
+        endif()
+        if(NOT TARGET ${engineSupport})
+            message(FATAL_ERROR
+                "conjure_add_test_module(${module}): ENGINE needs ${engineSupport}, which exists only when "
+                "conjure::engine is built and tests/support/engine was added before this test module"
+            )
+        endif()
+        list(APPEND moduleDeps ${engineSupport})
     endif()
 
     conjure_add_test_executable(${target}
@@ -212,6 +229,14 @@ endfunction()
 
 
 function(conjure_header_check target)
+    set(options "")
+    set(oneValueArgs INCLUDE_ROOT)
+    set(multiValueArgs "")
+    cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(ARG_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "conjure_header_check(${target}): unknown arguments: ${ARG_UNPARSED_ARGUMENTS}")
+    endif()
     if(NOT TARGET ${target})
         message(FATAL_ERROR "conjure_header_check(${target}): no such target")
     endif()
@@ -223,6 +248,9 @@ function(conjure_header_check target)
     endif()
 
     set(includeRoot "${PROJECT_SOURCE_DIR}/engine/include")
+    if(ARG_INCLUDE_ROOT)
+        set(includeRoot "${ARG_INCLUDE_ROOT}")
+    endif()
     set(checkDir "${CMAKE_CURRENT_BINARY_DIR}/header_check/${target}")
     set(sources "")
     set(index 0)
