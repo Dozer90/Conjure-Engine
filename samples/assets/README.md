@@ -21,8 +21,8 @@ The `FBX format`, `OBJ format`, `.svg` and `.swf` variants are not used.
 | Demo | Kenney kits | Environment |
 |---|---|---|
 | Grid Sweeper | `2D assets/Puzzle Pack 2`, `UI assets/UI Pack`, `Audio/Interface Sounds` | - |
-| Tap Tycoon | `2D assets/Generic Items`, `UI assets/UI Pack`, `Audio/UI Audio`, `Audio/Music Loops` | - |
-| Vault Runner | `2D assets/New Platformer Pack` (tiles, characters, enemies, backgrounds spritesheets + its `Sounds/`) | - |
+| Barrage | `2D assets/Particle Pack` (bullets), `2D assets/Simple Space` (ship, boss, pips, backdrop), `Audio/Digital Audio` (optional one-shots) | - |
+| Colony | `2D assets/Micro Roguelike` (ants, queen, raiders, food; fallback `2D assets/Shape Characters`), `2D assets/Particle Pack` (eggs, larvae), `2D assets/Pattern Pack` (soil, surface, tunnels), `UI assets/UI Pack` (sliders, bars) | - |
 | Rolling Course | `3D assets/Marble Kit`, `3D assets/Platformer Kit` (props), `Audio/Impact Sounds` | `HDR Skyboxes/kloofendal_48d_partly_cloudy_puresky_4k.hdr` |
 | Corridor Strike | `3D assets/Space Station Kit`, `3D assets/Blaster Kit`, `3D assets/Blocky Characters`, `2D assets/Crosshair Pack`, `Audio/Sci-Fi Sounds` | `HDR Skyboxes/overcast_soil_puresky_4k.hdr` |
 

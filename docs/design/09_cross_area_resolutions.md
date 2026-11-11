@@ -290,6 +290,42 @@ from a note in detail, the note is right.
   scenario at `--threads 4`; or 7.1's "10 % dirty" read as 10 % of the rows. The patterns the round settled on
   (persistent frame state, caller-owned job counters, cached queries, opt-in background work) are
   `docs/handbook/data-oriented-design.md` section 8; `tests/benchmarks/README.md` has the full table.
+- **Demo lineup revision (2026-11-12; wave 6 design, `17_demo_games.md`)**: at the owner's request the 2D demos
+  showcase the data-oriented design: Barrage (bullet hell, all gameplay in C# over `ComponentQuery` spans) and Colony
+  (ant colony, native plugin module plus a C# director, the flagship) replace the two earlier small 2D demos; Grid
+  Sweeper, Rolling Course and Corridor Strike are unchanged. 17 gains G7 (entity targets and enforced budgets), a G3
+  that admits a project-owned native module built through the public module API while still forbidding engine changes
+  for a demo, and a G5 whose recorded hash is a per-configuration data file. The two designs were checked against the
+  headers; the engine gaps they found, each a follow-up owed before or during wave 6. **Prerequisites** (engine
+  changes with their own tests, 17 4.1): (P1) `ecs::world_hash` hashes all 24 bytes of an `ASSET_REF` field, slot
+  pointer included (`world_hash.cpp` `hash_fields`), so no world with a bound sprite hashes equal across processes;
+  hash the leading 16 uuid bytes only, before any demo (Grid Sweeper included) records a hash; (P2)
+  `entry_component_add` rejects an id that `Entity.Create` reserved inside a query scope, so C# cannot spawn with
+  components through the deferred buffer; accept `add_raw` for ids reserved by the runtime's deferred buffer, before
+  Barrage; (P3) no benchmark row contains a sprite; add `renderer.sprites_10k` (extraction, `sprite_batcher::build`,
+  upload), which confirms both demos' frame gates; (P4) the renderer components' `CONJURE_COMPONENT` name bindings are
+  in the private `engine/src/engine/subsystems/renderer_components.h`; move them to a public header, before Colony.
+  **Follow-ups with a way around in the demo** (17 2.3.11, 2.4.12): `world_hash` depends on component registration
+  order and hashes TRANSIENT components (`transform_state::lastUpdateRun`); no world resource or singleton storage and
+  no user data on `system_extension_desc::run` (Colony's grids are module-static memory behind a hashed stand-in
+  component); `parallel_for_chunks` passes no grain index; `world::FLUSH_INLINE_PAYLOADS = 4` (a fifth payload on one
+  entity in one flush allocates); stages are packed by component mask rather than archetype and
+  `scheduler_desc::minEntitiesPerJob` cannot be set per system or project; sprite extraction takes a mutex and a hash
+  lookup per sprite (`gpu_resource_cache::find_texture`); no shipped C# `Sprite` or `Camera` mirror; no C# window size
+  or screen-to-world conversion (Grid Sweeper's picking needs it too); `ComponentQuery` has no `without` / `changed`
+  filter and C# has no multi-component or batch spawn; run-time scene entities get random guids that are hashed (no
+  seedable generator, no guid setter in the bindings); `docs/api/bindings/csharp-api.md` describes `Entity.Create` as
+  making a scene entity with a transform and a guid while the entry creates a bare entity; `Entity.Create` allocates
+  for a non-empty name; the frame statistics carry no managed allocation figure; a shared-engine executable cannot
+  count allocations and `conjure::bench_harness` exports no `main`; no floating-point contraction policy in the CMake
+  files. **Unverified, settled by the first stage of each demo**: `[NativeComponent]` mirrors of plugin-registered and
+  of game-declared engine components resolve; the real plugin and the real CLR share one shared-engine test process;
+  scene unload, snapshot, picker and serializer over raw entities that carry only a sprite and a matrix. **Plumbing
+  owed by wave 6 outside `engine/`**: `samples/CMakeLists.txt` adds `games/<demo>` ahead of its early return;
+  `docs/api/tutorials/`; `samples/tools/use_packs.py` and the `samples/games_packed/` ignore entry (17 G4); the
+  nightly `benchmarks-ci-class` job builds and runs `barrage_benchmarks` and `colony_benchmarks`. Four Colony choices
+  await the owner's confirmation (17 2.4.13), first among them a per-row intent column in place of the preferred
+  per-worker deposit buffers.
 - **core** (R30, R16, R31): `result<T>`/`error` model, `jobs::job_system` API, `reflect` namespace with
   `type_id`, `type_info`, `field_info` (kinds incl. `ENTITY` by type id and `ASSET_REF`), `set_assert_handler`,
   `memory::counters()`/`snapshot()`, `hash::fnv1a64`, `dynamic_library`, `process`, `clock`/`manual_clock`,

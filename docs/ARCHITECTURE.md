@@ -498,7 +498,7 @@ item 15 of `09_cross_area_resolutions.md` 4.
 
 | Deliverable | Inputs | Definition of done |
 |---|---|---|
-| `samples/games/grid_sweeper`, `tap_tycoon`, `vault_runner` (2D) | `17_demo_games.md` 2.1, `04_editor.md` 4.4, `03_scripting.md` | each boots headless 600 frames with scripted input, all `Diagnostics.Check` pass, recorded `world_hash` matches, wiki tutorial written; Grid Sweeper is authored entirely through the AI protocol command file |
+| `samples/games/grid_sweeper`, `barrage`, `colony` (2D) | `17_demo_games.md` 2.1, 2.3, 2.4, `04_editor.md` 4.4, `03_scripting.md`, `07_modules.md` | each boots headless 600 frames with scripted input, all `Diagnostics.Check` pass, recorded `world_hash` matches, wiki tutorial written; Grid Sweeper is authored entirely through the AI protocol command file; Barrage (C#, 4,096 bullets) and Colony (native plugin module, 5,000 ants) pass their frame-budget and zero-allocation scenarios (`17_demo_games.md` G7, 4.3) after the engine prerequisites of 4.1 |
 | `samples/games/rolling_course`, `corridor_strike` (3D) | `17_demo_games.md` 2.2, `14_physics.md`, `02_renderer.md` | same gates plus an exported standalone build that runs 120 frames; placeholders swap to the customer's licensed assets by file replacement |
 
 ### Cross-wave gates
