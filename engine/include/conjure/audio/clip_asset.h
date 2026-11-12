@@ -84,7 +84,8 @@ namespace conjure::audio {
     /// <summary>
     /// Importer settings, mirrored by the JSON object
     /// { "storage": "auto", "streamThresholdSeconds": 10.0, "forceMono": false, "sampleRate": 0, "normalize": false }.
-    /// forceMono, sampleRate and normalize apply to PCM storage only; STREAMED keeps the file.
+    /// forceMono, sampleRate and normalize apply to PCM storage only; STREAMED keeps the file, and
+    /// the importer reports a warning when one of them is set on a clip it streams.
     /// </summary>
     struct CONJURE_API clip_import_settings {
         clip_storage_setting storage = clip_storage_setting::AUTO;
@@ -138,8 +139,10 @@ namespace conjure::audio {
 
     /// <summary>
     /// Turns a blob into a self-contained clip: PCM samples are copied into a fresh pcm_buffer,
-    /// STREAMED bytes are copied and probed so the info is complete. Errors: INVALID_CLIP for a bad
-    /// header, DECODE_FAILED / UNSUPPORTED_FORMAT when streamed bytes do not decode.
+    /// STREAMED bytes are copied and opened with the header's frameCount (no full decode) to check
+    /// that their format matches the header. Errors: INVALID_CLIP for a bad header or a streamed
+    /// payload whose format disagrees with it, DECODE_FAILED / UNSUPPORTED_FORMAT when streamed
+    /// bytes do not decode.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<audio_clip> load_clip_blob(std::span<const byte> blob);
 
@@ -175,7 +178,9 @@ namespace conjure::audio {
 
             /// <summary>
             /// Reads the settings, cooks the source bytes and returns the primary asset. Decode or
-            /// settings failures come back as IMPORT_FAILED with the audio error's message.
+            /// settings failures come back as IMPORT_FAILED with the audio error's message. A clip
+            /// cooked as STREAMED while forceMono, sampleRate or normalize is set adds an import
+            /// warning, since those settings apply to PCM storage only.
             /// </summary>
             [[nodiscard]] core::result<assets::import_output> import(assets::import_context &context) const override;
     };

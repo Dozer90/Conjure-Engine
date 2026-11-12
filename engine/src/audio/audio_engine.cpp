@@ -557,7 +557,9 @@ struct conjure::audio::detail::audio_engine_helpers {
         play.step = step_of(state, slot);
         play.clipFrames = slot.clipFrames;
         play.loop = slot.params.loop;
-        play.startPaused = slot.params.startPaused || slot.userPaused;
+        // Seeded from params.startPaused by play(), then follows pause() / resume() while the voice
+        // waits for its slot.
+        play.startPaused = slot.userPaused;
         play.downmix = slot.params.spatial && slot.channels == 2;
         play.channels = slot.channels;
 
@@ -762,9 +764,18 @@ struct conjure::audio::detail::audio_engine_helpers {
                 // No job writes and nothing pops: both ring ends are ours for the reset.
                 stream.ring.reset(stream.channels);
                 const u64 lastFrame = stream.clipFrames > 0 ? stream.clipFrames - 1 : 0;
-                if (!stream.decoder.seek(std::min(slot.seekFrame, lastFrame)).has_value()) {
-                    CONJURE_LOG_WARN(LOG_AUDIO, "streamed voice seek failed; continuing from the current position");
+                const u64 requestedFrame = slot.seekFrame;
+                if (!stream.decoder.seek(std::min(requestedFrame, lastFrame)).has_value()) {
+                    CONJURE_LOG_WARN(
+                      LOG_AUDIO,
+                      "streamed voice seek to frame {} failed; continuing from frame {}",
+                      requestedFrame,
+                      stream.decoder.position()
+                    );
                 }
+                // Where the next decoded chunk starts, whether or not the seek landed: the SEEK sent
+                // once the ring is primed and the reported cursor must match the audio.
+                slot.seekFrame = stream.decoder.position();
                 if (slot.hasMixerSlot) {
                     slot.seekPhase = seek_phase::WAIT_PRIME;
                 } else {
@@ -1243,6 +1254,7 @@ core::result<void> audio_engine::select_device(std::string_view deviceName) {
     const core::result<void> restored = engine.backend->start(engine.desc);
     if (!restored.has_value()) {
         CONJURE_LOG_WARN(LOG_AUDIO, "previous audio device could not be restored either: {}", restored.get_error());
+        engine.backendError = restored.get_error();
         engine.fellBackToNull.store(true, std::memory_order_relaxed);
         helpers::adopt_null_backend(engine);
     }
@@ -1382,7 +1394,7 @@ core::result<voice_id> audio_engine::play(const audio_clip &clip, const play_par
         stream->clipFrames = clip.info.frameCount;
         stream->loop.store(clamped.loop, std::memory_order_release);
         stream->ring.reset(stream->channels);
-        // The loader probed the clip, so its length is known: a Vorbis stream is not decoded
+        // The cooked header carries the length the importer probed, so a Vorbis stream is not decoded
         // once more just to count it on the main thread.
         const core::result<void> opened = stream->decoder.open(*stream->encoded, clip.info.frameCount);
         if (!opened.has_value()) {
@@ -1460,6 +1472,7 @@ core::result<voice_id> audio_engine::play(std::shared_ptr<const pcm_buffer> pcm,
 }
 
 void audio_engine::stop(voice_id voice, f32 fadeSeconds) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::stop is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1483,6 +1496,7 @@ void audio_engine::stop(voice_id voice, f32 fadeSeconds) {
 }
 
 void audio_engine::stop_all(f32 fadeSeconds) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::stop_all is main-thread only");
     state &engine = *mState;
     for (u32 entryIndex = 0; entryIndex < VOICE_TABLE_CAPACITY; ++entryIndex) {
         if (engine.voices[entryIndex].live) {
@@ -1492,6 +1506,7 @@ void audio_engine::stop_all(f32 fadeSeconds) {
 }
 
 void audio_engine::pause(voice_id voice) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::pause is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1510,6 +1525,7 @@ void audio_engine::pause(voice_id voice) {
 }
 
 void audio_engine::resume(voice_id voice) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::resume is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1528,6 +1544,7 @@ void audio_engine::resume(voice_id voice) {
 }
 
 void audio_engine::release(voice_id voice) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::release is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1543,6 +1560,7 @@ void audio_engine::release(voice_id voice) {
 }
 
 void audio_engine::set_volume(voice_id voice, f32 volume) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_volume is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1560,6 +1578,7 @@ void audio_engine::set_volume(voice_id voice, f32 volume) {
 }
 
 void audio_engine::set_pitch(voice_id voice, f32 pitch) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_pitch is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1576,6 +1595,7 @@ void audio_engine::set_pitch(voice_id voice, f32 pitch) {
 }
 
 void audio_engine::set_pan(voice_id voice, f32 pan) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_pan is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1590,6 +1610,7 @@ void audio_engine::set_pan(voice_id voice, f32 pan) {
 }
 
 void audio_engine::set_loop(voice_id voice, bool loop) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_loop is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1610,6 +1631,7 @@ void audio_engine::set_loop(voice_id voice, bool loop) {
 }
 
 void audio_engine::set_spatial(voice_id voice, bool spatial) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_spatial is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1632,6 +1654,7 @@ void audio_engine::set_spatial(voice_id voice, bool spatial) {
 }
 
 void audio_engine::set_priority(voice_id voice, u8 priority) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_priority is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1642,6 +1665,7 @@ void audio_engine::set_priority(voice_id voice, u8 priority) {
 }
 
 void audio_engine::set_group(voice_id voice, group_id group) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_group is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1664,6 +1688,7 @@ void audio_engine::set_group(voice_id voice, group_id group) {
 }
 
 void audio_engine::set_position(voice_id voice, math::vec3 position, math::vec3 velocity) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_position is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1682,12 +1707,14 @@ void audio_engine::set_position(voice_id voice, math::vec3 position, math::vec3 
 }
 
 void audio_engine::set_positions(std::span<const voice_transform> transforms) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_positions is main-thread only");
     for (const voice_transform &transform : transforms) {
         set_position(transform.voice, transform.position, transform.velocity);
     }
 }
 
 void audio_engine::set_attenuation(voice_id voice, const attenuation_params &params) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_attenuation is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1702,6 +1729,7 @@ void audio_engine::set_attenuation(voice_id voice, const attenuation_params &par
 }
 
 void audio_engine::apply_params(voice_id voice, const play_params &params) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::apply_params is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1727,10 +1755,12 @@ void audio_engine::apply_params(voice_id voice, const play_params &params) {
 }
 
 void audio_engine::apply_source(voice_id voice, const audio_source &source, group_id group) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::apply_source is main-thread only");
     apply_params(voice, play_params_from(source, group));
 }
 
 void audio_engine::seek(voice_id voice, f64 seconds) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::seek is main-thread only");
     state &engine = *mState;
     voice_entry *entry = helpers::resolve(engine, voice);
     if (entry == nullptr) {
@@ -1754,6 +1784,12 @@ void audio_engine::seek(voice_id voice, f64 seconds) {
         // once no decode job is in flight and nothing pops from the ring (3.7). A seek issued
         // while one is pending simply retargets it.
         slot.seekFrame = frame;
+        if (slot.seekPhase == seek_phase::WAIT_PRIME) {
+            // The ring is already refilling from the previous target: reset it again. The mixer
+            // voice is still PAUSED in this phase, so the reader stays idle for the reset.
+            slot.seekPhase = seek_phase::WAIT_RESET;
+            return;
+        }
         if (slot.seekPhase != seek_phase::NONE) {
             return;
         }
@@ -1838,6 +1874,7 @@ u32 audio_engine::active_voice_count() const noexcept {
 // Public methods: listener
 
 void audio_engine::set_listener(const listener_state &listener) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_listener is main-thread only");
     state &engine = *mState;
     engine.listener = clamp_listener(listener);
 }
@@ -1852,6 +1889,7 @@ const listener_state &audio_engine::listener() const noexcept {
 // Public methods: groups
 
 core::result<group_id> audio_engine::create_group(const group_desc &desc) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::create_group is main-thread only");
     state &engine = *mState;
     CONJURE_TRY_ASSIGN(const group_id created, engine.groups.create(desc));
     voice_command command = {};
@@ -1868,6 +1906,7 @@ core::result<group_id> audio_engine::create_group(const group_desc &desc) {
 }
 
 core::result<void> audio_engine::remove_group(group_id group) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::remove_group is main-thread only");
     state &engine = *mState;
     CONJURE_TRY_ASSIGN(const group_removal removal, engine.groups.remove(group));
     const group_id parent = engine.groups.id_of(removal.parentIndex);
@@ -1907,6 +1946,7 @@ group_id audio_engine::find_group(core::string_id name) const noexcept {
 }
 
 void audio_engine::set_group_gain(group_id group, f32 gain) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_group_gain is main-thread only");
     state &engine = *mState;
     CONJURE_ASSERT(std::isfinite(gain), "set_group_gain: gain must be finite");
     if (!engine.groups.is_valid(group)) {
@@ -1930,6 +1970,7 @@ void audio_engine::set_group_gain(group_id group, f32 gain) {
 }
 
 void audio_engine::set_group_paused(group_id group, bool paused) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_group_paused is main-thread only");
     state &engine = *mState;
     if (!engine.groups.is_valid(group)) {
         CONJURE_LOG_TRACE(LOG_AUDIO, "set_group_paused() with an invalid group id");
@@ -1952,10 +1993,12 @@ std::span<const group_info> audio_engine::groups() const noexcept {
 }
 
 void audio_engine::set_master_gain(f32 gain) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_master_gain is main-thread only");
     set_group_gain(MASTER_GROUP, gain);
 }
 
 void audio_engine::set_paused(bool paused) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "audio_engine::set_paused is main-thread only");
     state &engine = *mState;
     engine.masterPaused = paused;
     voice_command command = {};

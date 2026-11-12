@@ -303,6 +303,72 @@ TEST_SUITE("audio/mixer") {
         CHECK(count_events(events, event_kind::RESUMED) == 0);
     }
 
+    TEST_CASE("regression - code sweep F022 STOP under a paused group or master ends the voice at once") {
+        voice_command freeze = {};
+        freeze.payload.flag = true;
+        SUBCASE("a paused group") {
+            freeze.kind = command_kind::SET_GROUP_PAUSED;
+            freeze.groupIndex = 3;
+        }
+        SUBCASE("the master pause") {
+            freeze.kind = command_kind::SET_MASTER_PAUSED;
+        }
+
+        mixer mix(48000);
+        const std::shared_ptr<const pcm_buffer> pcm = testing::make_sine_pcm(440.0, 1.0, 1.0f);
+        voice_command play = play_command(*pcm, 0, 1);
+        play.groupIndex = 3;
+        REQUIRE(mix.commands().try_push(play));
+        static_cast<void>(render(mix, 256));
+        REQUIRE(mix.commands().try_push(freeze));
+        static_cast<void>(render(mix, 256));
+        CHECK(mix.slot_state(0) == voice_state::PLAYING);
+        static_cast<void>(drain(mix));
+
+        voice_command stop = simple_command(command_kind::STOP, 0, 1);
+        stop.fadeFrames = 240;
+        REQUIRE(mix.commands().try_push(stop));
+        const std::vector<f32> out = render(mix, 256);
+        CHECK(testing::peak_of(out) == doctest::Approx(0.0));
+        CHECK(mix.slot_state(0) == voice_state::STOPPED);
+        CHECK(mix.active_voices() == 0);
+        const std::vector<voice_event> events = drain(mix);
+        CHECK(count_events(events, event_kind::STOPPED) == 1);
+    }
+
+    TEST_CASE("regression - code sweep F022 a group pause during a STOP fade ends the voice at once") {
+        mixer mix(48000);
+        const std::shared_ptr<const pcm_buffer> pcm = testing::make_sine_pcm(440.0, 1.0, 1.0f);
+        voice_command play = play_command(*pcm, 0, 1);
+        play.groupIndex = 3;
+        REQUIRE(mix.commands().try_push(play));
+        static_cast<void>(render(mix, 256));
+
+        voice_command stop = simple_command(command_kind::STOP, 0, 1);
+        stop.fadeFrames = 4800;
+        REQUIRE(mix.commands().try_push(stop));
+        static_cast<void>(render(mix, 256));
+        CHECK(mix.slot_state(0) == voice_state::STOPPING);
+        static_cast<void>(drain(mix));
+
+        voice_command groupPause = {};
+        groupPause.kind = command_kind::SET_GROUP_PAUSED;
+        groupPause.groupIndex = 3;
+        groupPause.payload.flag = true;
+        REQUIRE(mix.commands().try_push(groupPause));
+        const std::vector<f32> out = render(mix, 256);
+        CHECK(testing::peak_of(out) == doctest::Approx(0.0));
+        CHECK(mix.slot_state(0) == voice_state::STOPPED);
+        CHECK(mix.active_voices() == 0);
+        CHECK(count_events(drain(mix), event_kind::STOPPED) == 1);
+
+        // Unpausing the group brings nothing back: the slot is free for the next PLAY.
+        groupPause.payload.flag = false;
+        REQUIRE(mix.commands().try_push(groupPause));
+        CHECK(testing::peak_of(render(mix, 256)) == doctest::Approx(0.0));
+        CHECK(mix.slot_state(0) == voice_state::STOPPED);
+    }
+
     TEST_CASE("regression - audio review 9 SET_DOWNMIX switches a stereo voice between the two pan laws") {
         mixer mix(48000);
         audio_format format = {};

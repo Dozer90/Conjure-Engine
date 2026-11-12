@@ -27,8 +27,9 @@
 #include <vector>
 
 // The audio engine (docs/design/12_audio.md 4.4): voices, groups, listener and backend behind one
-// object owned by engine::application. Every member is main-thread only except is_valid(),
-// is_playing(), voice(), stats() and output_format(), which read atomics refreshed by update().
+// object owned by engine::application. Every member is main-thread only (every mutating one asserts
+// core::jobs::is_main_thread()) except is_valid(), is_playing(), voice(), stats() and output_format(),
+// which read atomics refreshed by update().
 
 namespace conjure::audio {
 
@@ -145,7 +146,11 @@ namespace conjure::audio {
 
             /// <summary>
             /// Restarts the backend on the named device (empty = default). Voices are frozen during
-            /// the restart and continue afterwards. On failure the previous device is kept.
+            /// the restart and continue afterwards. On failure the previous device is kept. An
+            /// unknown non-empty name falls back to the default device with a WARN (12_audio.md 3.9)
+            /// and counts as success. If neither the new nor the previous device starts, the engine
+            /// continues on the null backend with last_backend_error() set and stats().fellBackToNull
+            /// true; the error of the new device is returned.
             /// </summary>
             [[nodiscard]] core::result<void> select_device(std::string_view deviceName);
 
@@ -211,7 +216,8 @@ namespace conjure::audio {
 
             /// <summary>
             /// Fades the voice out over fadeSeconds, then it reports STOPPED. No-op for an invalid id
-            /// or an already ended voice.
+            /// or an already ended voice. A voice that is paused, or whose group or the master is
+            /// paused, ends at once without a fade.
             /// </summary>
             void stop(voice_id voice, f32 fadeSeconds = DEFAULT_RAMP_SECONDS);
 
@@ -228,7 +234,9 @@ namespace conjure::audio {
 
             /// <summary>
             /// Continues a paused voice from its cursor; no-op on an invalid id or a voice that is
-            /// not PAUSED. During a pending streamed seek the resume takes effect once it lands.
+            /// not PAUSED. During a pending streamed seek the resume takes effect once it lands. On a
+            /// voice still PRIMING it cancels startPaused or an earlier pause(): the voice starts
+            /// playing.
             /// </summary>
             void resume(voice_id voice);
 
@@ -314,7 +322,9 @@ namespace conjure::audio {
             /// <summary>
             /// Moves the cursor to 'seconds' (clamped to the clip length). A PCM voice jumps at the
             /// next block; a streamed voice pauses, refills its ring from the new position and
-            /// resumes a few frames later. No-op on a stale or ended voice.
+            /// resumes a few frames later (a later seek before that lands retargets it). When the
+            /// decoder cannot reach the position, the voice continues from where its decoder stands
+            /// and voice() reports that frame. No-op on a stale or ended voice.
             /// </summary>
             void seek(voice_id voice, f64 seconds);
 

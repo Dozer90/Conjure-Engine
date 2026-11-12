@@ -178,7 +178,10 @@ core::result<void> miniaudio_backend::start(const backend_desc &desc) {
         return backend_error(audio_error::DEVICE_START_FAILED, "ma_device_start", started);
     }
 
-    mDeviceState.store(device_state::RUNNING, std::memory_order_release);
+    // The device thread may already have reported LOST (stopped, interruption) or RUNNING (started).
+    // Only a state still STARTING becomes RUNNING here, so a loss in this window reaches recover_device.
+    device_state expected = device_state::STARTING;
+    static_cast<void>(mDeviceState.compare_exchange_strong(expected, device_state::RUNNING, std::memory_order_acq_rel));
     CONJURE_LOG_INFO(
       LOG_AUDIO,
       "audio device '{}' started at {} Hz, {} channels, period {} frames",

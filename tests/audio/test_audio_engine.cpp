@@ -12,15 +12,22 @@
 #include "conjure/audio/clip_asset.h"
 #include "conjure/audio/decoder.h"
 
+#include "conjure/core/jobs/dedicated_thread.h"
 #include "conjure/core/jobs/job_system.h"
+#include "conjure/core/jobs/main_thread.h"
 #include "conjure/core/math.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace conjure;
@@ -107,6 +114,43 @@ namespace {
         clip.info.format.channels = 1;
         clip.encoded = std::make_shared<const std::vector<byte>>(std::move(bytes));
         return clip;
+    }
+
+    // RIFF + fmt + data chunk headers of the canonical WAV that wav_builder writes.
+    constexpr usize WAV_HEADER_BYTES = 44;
+
+    /// <summary>
+    /// A STREAMED mono float WAV whose header declares 1 s but whose bytes stop after 0.25 s: it
+    /// opens and plays, but dr_wav refuses a seek past the data that exists.
+    /// </summary>
+    audio_clip truncated_streamed_clip() {
+        testing::wav_spec spec = {};
+        spec.frameCount = 48000;
+        std::vector<byte> bytes = testing::build_wav(spec);
+        bytes.resize(WAV_HEADER_BYTES + 12000 * sizeof(f32));
+        audio_clip clip = {};
+        clip.info.storage = clip_storage::STREAMED;
+        clip.info.encoding = clip_encoding::WAV;
+        clip.info.frameCount = 48000;
+        clip.info.format.channels = 1;
+        clip.info.format.sampleRate = 48000;
+        clip.encoded = std::make_shared<const std::vector<byte>>(std::move(bytes));
+        return clip;
+    }
+
+    /// <summary>
+    /// Occupies every mixer slot with a stealable voice (a looping one-shot), so the next play()
+    /// waits in PRIMING for a stolen slot.
+    /// </summary>
+    void fill_mixer_with_stealable_voices(audio_engine &engine) {
+        const std::shared_ptr<const pcm_buffer> filler = testing::make_sine_pcm(440.0, 2.0, 0.01f);
+        play_params fillerParams = {};
+        fillerParams.loop = true;
+        for (u32 index = 0; index < MAX_VOICES; ++index) {
+            CAPTURE(index);
+            CONJURE_REQUIRE_OK(engine.play(filler, fillerParams));
+        }
+        testing::step_frames(engine, 1);
     }
 }
 
@@ -230,6 +274,52 @@ TEST_SUITE("audio/audio_engine") {
         CHECK(engine.stats().deviceRestarts == 1);
         testing::step_frames(engine, 2);
         CHECK(engine.is_playing(voice.value()));
+        CHECK(engine.stats().deviceState == device_state::RUNNING);
+    }
+
+    TEST_CASE("audio_engine - select_device keeps the previous device when the new one fails to start") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0), retained(true));
+        CONJURE_REQUIRE_OK(voice);
+        testing::step_frames(engine, 2);
+        null_backend *const backend = engine.null_backend_instance();
+        backend->fail_next_starts(1);
+
+        CONJURE_CHECK_ERROR(engine.select_device("Other"), audio_error::DEVICE_START_FAILED);
+        CHECK(engine.settings().deviceName.empty());
+        CHECK(engine.last_backend_error() == nullptr);
+        CHECK_FALSE(engine.stats().fellBackToNull);
+        CHECK(engine.stats().deviceRestarts == 0);
+        CHECK(engine.null_backend_instance() == backend);
+
+        const u64 cursor = engine.voice(voice.value())->cursorFrames;
+        testing::step_frames(engine, 2);
+        CHECK(engine.is_playing(voice.value()));
+        CHECK(engine.voice(voice.value())->cursorFrames == cursor + 2 * testing::FRAME_FRAMES);
+        CHECK(engine.stats().deviceState == device_state::RUNNING);
+    }
+
+    TEST_CASE("audio_engine - select_device falls back to null with last_backend_error when no device starts") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0), retained(true));
+        CONJURE_REQUIRE_OK(voice);
+        testing::step_frames(engine, 2);
+        engine.null_backend_instance()->fail_next_starts(2);
+
+        CONJURE_CHECK_ERROR(engine.select_device("Other"), audio_error::DEVICE_START_FAILED);
+        CHECK(engine.backend_kind() == audio_backend_kind::NULL_BACKEND);
+        CHECK(engine.stats().fellBackToNull);
+        REQUIRE(engine.last_backend_error() != nullptr);
+        CHECK(engine.last_backend_error()->is(audio_error::DEVICE_START_FAILED));
+        REQUIRE(engine.null_backend_instance() != nullptr);
+        CHECK(logs.contains(core::log_level::WARN, "could not be restored"));
+
+        const u64 cursor = engine.voice(voice.value())->cursorFrames;
+        testing::step_frames(engine, 2);
+        CHECK(engine.is_playing(voice.value()));
+        CHECK(engine.voice(voice.value())->cursorFrames == cursor + 2 * testing::FRAME_FRAMES);
         CHECK(engine.stats().deviceState == device_state::RUNNING);
     }
 
@@ -866,6 +956,48 @@ TEST_SUITE("audio/audio_engine") {
         CHECK(engine.group(MASTER_GROUP)->gain == doctest::Approx(1.0));
     }
 
+    TEST_CASE("audio_engine - mutators called off the main thread assert") {
+        testing::log_capture logs = {};
+        REQUIRE(core::jobs::is_main_thread());
+        audio_engine engine(testing::null_settings());
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0), retained(true));
+        CONJURE_REQUIRE_OK(voice);
+        testing::step_frames(engine, 1);
+        const voice_id id = voice.value();
+
+        std::function<void()> call = {};
+        SUBCASE("set_volume") {
+            call = [&engine, id]() {
+                engine.set_volume(id, 0.5f);
+            };
+        }
+        SUBCASE("stop") {
+            call = [&engine, id]() {
+                engine.stop(id);
+            };
+        }
+        SUBCASE("set_group_gain") {
+            call = [&engine]() {
+                engine.set_group_gain(MASTER_GROUP, 0.5f);
+            };
+        }
+
+        // A dedicated thread is never the main thread. The call still goes through (the assert
+        // only reports), and the join orders it before everything the main thread does next.
+        testing::expect_assert guard = {};
+        {
+            core::jobs::dedicated_thread caller("audio-off-main", [&call](std::stop_token) {
+                call();
+            });
+            caller.join();
+        }
+#if CONJURE_ASSERTS_ENABLED
+        CHECK(guard.count() == 1);
+        CHECK(guard.last_message().find("main-thread only") != std::string::npos);
+#endif
+        testing::step_frames(engine, 1);
+    }
+
     TEST_CASE("audio_engine - 10000 set_volume calls in one frame are all applied and spill") {
         testing::log_capture logs = {};
         audio_engine engine(testing::null_settings());
@@ -1375,5 +1507,176 @@ TEST_SUITE("audio/audio_engine") {
         flat = peaks_of(backend.captured());
         CHECK(flat.left == doctest::Approx(0.8).epsilon(0.01));
         CHECK(flat.right == doctest::Approx(0.2).epsilon(0.01));
+    }
+
+    /*-----------------------------------------------------------------------*/
+    // Regressions from the code sweep
+
+    TEST_CASE("regression - code sweep F022 a voice released while frozen is erased and makes no sound later") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        group_desc musicDesc = {};
+        musicDesc.name = core::string_id("Music");
+        const core::result<group_id> music = engine.create_group(musicDesc);
+        CONJURE_REQUIRE_OK(music);
+        play_params params = retained(true);
+        params.group = music.value();
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0, 1.0f), params);
+        CONJURE_REQUIRE_OK(voice);
+        testing::step_frames(engine, 2);
+
+        bool masterPause = false;
+        SUBCASE("under the master pause") {
+            masterPause = true;
+        }
+        SUBCASE("in a paused group") {
+            masterPause = false;
+        }
+        if (masterPause) {
+            engine.set_paused(true);
+        } else {
+            engine.set_group_paused(music.value(), true);
+        }
+        engine.release(voice.value());
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(engine.is_valid(voice.value()));
+        CHECK(engine.active_voice_count() == 0);
+        CHECK(engine.stats().activeVoices == 0);
+        CHECK(testing::slot_stats(engine, 0).state == voice_state::STOPPED);
+
+        null_backend &backend = *engine.null_backend_instance();
+        if (masterPause) {
+            engine.set_paused(false);
+        } else {
+            engine.set_group_paused(music.value(), false);
+        }
+        backend.set_capture_frames(2 * testing::FRAME_FRAMES);
+        testing::step_frames(engine, 2);
+        CHECK(testing::peak_of(backend.captured()) == doctest::Approx(0.0));
+        CHECK(testing::slot_stats(engine, 0).state == voice_state::STOPPED);
+    }
+
+    TEST_CASE("regression - code sweep F022 a voice stolen under the master pause frees its slot for the new voice") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        fill_mixer_with_stealable_voices(engine);
+        engine.set_paused(true);
+
+        play_params params = retained();
+        params.priority = 200;
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0), params);
+        CONJURE_REQUIRE_OK(voice);
+        CHECK(engine.voice(voice.value())->state == voice_state::PRIMING);
+        testing::step_frames(engine, 2);
+        CHECK(engine.voice(voice.value())->state == voice_state::PLAYING);
+        CHECK(engine.voice(voice.value())->cursorFrames == 0);   // frozen with everything else
+
+        engine.set_paused(false);
+        testing::step_frames(engine, 1);
+        CHECK(engine.voice(voice.value())->cursorFrames == testing::FRAME_FRAMES);
+    }
+
+    TEST_CASE("regression - code sweep F023 resume before a startPaused voice reaches the mixer starts it playing") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        fill_mixer_with_stealable_voices(engine);
+
+        // Both voices wait in PRIMING for a stolen slot; only the first is resumed meanwhile.
+        play_params params = retained();
+        params.priority = 200;
+        params.startPaused = true;
+        const core::result<voice_id> resumed = engine.play(testing::make_sine_pcm(440.0, 1.0), params);
+        const core::result<voice_id> paused = engine.play(testing::make_sine_pcm(440.0, 1.0), params);
+        CONJURE_REQUIRE_OK(resumed);
+        CONJURE_REQUIRE_OK(paused);
+        CHECK(engine.voice(resumed.value())->state == voice_state::PRIMING);
+        CHECK(engine.voice(paused.value())->state == voice_state::PRIMING);
+        engine.resume(resumed.value());
+
+        testing::step_frames(engine, 2);   // the victims fade out, then both voices take their slots
+        CHECK(engine.voice(resumed.value())->state == voice_state::PLAYING);
+        CHECK(engine.voice(paused.value())->state == voice_state::PAUSED);
+        const u64 resumedCursor = engine.voice(resumed.value())->cursorFrames;
+        testing::step_frames(engine, 1);
+        CHECK(engine.voice(resumed.value())->cursorFrames == resumedCursor + testing::FRAME_FRAMES);
+        CHECK(engine.voice(paused.value())->cursorFrames == 0);
+        CHECK(engine.voice(paused.value())->state == voice_state::PAUSED);
+    }
+
+    TEST_CASE("regression - code sweep F325 a failed streamed seek reports the frame audio resumes from") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const audio_clip clip = truncated_streamed_clip();
+        REQUIRE(clip.is_valid());
+        const core::result<voice_id> voice = engine.play(clip, retained());
+        CONJURE_REQUIRE_OK(voice);
+        testing::step_frames(engine, 2);
+        CHECK(engine.voice(voice.value())->cursorFrames == 2 * testing::FRAME_FRAMES);
+
+        // 0.9 s lies past the bytes that exist; the decoder already read all 12000 frames there are.
+        engine.seek(voice.value(), 0.9);
+        testing::step_frames(engine, 3);
+        CHECK(logs.contains(core::log_level::WARN, "seek to frame 43200 failed; continuing from frame 12000"));
+        const std::optional<voice_info> info = engine.voice(voice.value());
+        REQUIRE(info.has_value());
+        CHECK(info->state == voice_state::FINISHED);
+        CHECK(info->cursorFrames == 12000);
+    }
+
+    TEST_CASE("regression - code sweep F325 a second streamed seek during the first refill lands at its target") {
+        testing::log_capture logs = {};
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc desc = {};
+        desc.workerCount = 1;
+        CONJURE_REQUIRE_OK(jobs.start(desc));
+        {
+            audio_settings settings = testing::null_settings();
+            settings.jobs = &jobs;
+            audio_engine engine(settings);
+            const core::result<voice_id> voice = engine.play(streamed_clip(0.5), retained());
+            CONJURE_REQUIRE_OK(voice);
+            u32 frames = 0;
+            while (engine.voice(voice.value())->state == voice_state::PRIMING && frames < 2000) {
+                testing::step_frames(engine, 1);
+                ++frames;
+            }
+            REQUIRE(engine.voice(voice.value())->state == voice_state::PLAYING);
+
+            // Hold the only worker so the refill that follows the first seek stays queued: the voice
+            // is then waiting for its primed chunk when the second seek arrives.
+            jobs.wait_idle();
+            std::atomic<bool> workerHeld = false;
+            std::atomic<bool> workerReleased = false;
+            const core::jobs::job_handle holder = jobs.schedule([&workerHeld, &workerReleased]() {
+                workerHeld.store(true, std::memory_order_release);
+                while (!workerReleased.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+            });
+            while (!workerHeld.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            engine.seek(voice.value(), 0.1);
+            testing::step_frames(engine, 1);   // PAUSE acknowledged, ring reset to 4800, refill queued
+            engine.seek(voice.value(), 0.4);
+            workerReleased.store(true, std::memory_order_release);
+            jobs.wait(holder);
+            jobs.wait_idle();   // the refill from 0.1 is now in the ring
+
+            // Each refill lands before the next block renders, so a late worker cannot drain the ring.
+            frames = 0;
+            while (engine.is_playing(voice.value()) && frames < 2000) {
+                jobs.wait_idle();
+                testing::step_frames(engine, 1);
+                ++frames;
+            }
+            CHECK(frames < 2000);
+            CHECK(engine.voice(voice.value())->state == voice_state::FINISHED);
+            // From 0.4 s the clip has 4800 frames left; audio refilled from 0.1 s would run 14400 past the end.
+            CHECK(engine.voice(voice.value())->cursorFrames == 24000);
+            CHECK(engine.stats().underruns == 0);
+        }
+        jobs.stop();
     }
 }

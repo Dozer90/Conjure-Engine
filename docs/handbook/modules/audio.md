@@ -79,6 +79,7 @@ render(out, frameCount):
     for block in split(frameCount, MIX_BLOCK_FRAMES):           256 frames: the ramp granularity
         apply_commands()                                         drain the command ring; drop generation mismatches
         zero mMixBlock
+        STOPPING slot while its group or the master is paused: STOPPED at once (no fade)
         for slot in PLAYING | PAUSED | STOPPING, group and master not paused:
             advance gain ramp (per frame) and pan ramp (per block)
             PCM:    s = lerp(samples, cursor); STREAMED: s = stream.pop_frame() (empty -> 0, one UNDERRUN per block)
@@ -94,7 +95,8 @@ Pan laws (`mixer.h` header comment): a mono or downmixed spatial voice uses cons
 balance law (`left = min(1, 1 - pan)`, `right = min(1, 1 + pan)`) so a stereo clip at gain `g` renders at
 amplitude `g`. `SET_DOWNMIX` switches the law when `set_spatial()` flips a stereo voice. Pitch is the per-voice
 `step = pitch * clipRate / mixRate * dopplerRatio` through a linear interpolator; cooked PCM keeps its source
-rate (A9). A `STOP` on a `PAUSED` voice ends it at once instead of fading a silent voice back in.
+rate (A9). A `STOP` on a `PAUSED` voice, or on a voice whose group or the master is paused, ends it at once: a
+frozen voice cannot run its fade, and its slot (wanted by a voice waiting to steal it) must not wait for an unpause.
 
 ### 2.2 Rules inside `render`
 
@@ -151,6 +153,7 @@ every setter that changes it and after every `update()`; `read_mirror()` is the 
    the slot. No candidate: `VOICE_LIMIT_REACHED`, `voicesDropped++`, TRACE.
 5. PCM with a slot: push `PLAY { samples, step, gain, pan, loop, startFrame, downmix, channels }`; the voice is
    `PLAYING` (or `PAUSED` with `startPaused`). `is_playing()` is true from here, including during `PRIMING`.
+   `PLAY` starts paused from `userPaused` alone (seeded from `startPaused`), so `resume()` in `PRIMING` cancels it.
 
 ### 4.3 End of life
 
@@ -175,7 +178,8 @@ only then destroys rings, slots and streams.
 7. flush spill, stats, null snapshot
 ```
 
-Both `update()` and `end_frame()` assert `core::jobs::is_main_thread()`.
+Every mutating member (`update()`, `end_frame()`, `play()`, `select_device()`, setters, groups) asserts
+`core::jobs::is_main_thread()`; only the any-thread readers of section 11 may be called elsewhere.
 
 ## 5. Group gain tree
 
@@ -188,7 +192,7 @@ the tree. `remove()` reparents children, reports where voices must move (the eng
 and bumps the slot generation so stale `group_id`s are rejected; `remove(MASTER_GROUP)` is `INVALID_GROUP`.
 `group_desc::parentName` resolves parents by name because settings groups are declared before any id exists;
 construction creates them in dependency order. Paused flags live beside the gains (`SET_GROUP_PAUSED`,
-`SET_MASTER_PAUSED`): a paused group's voices are skipped without advancing their cursors.
+`SET_MASTER_PAUSED`): a paused group's voices are skipped without advancing their cursors (a stopping one ends).
 
 ## 6. Spatialisation
 
@@ -227,7 +231,9 @@ Every streamed `seek()` goes through the `seek_phase` state machine in `streamin
 are reset only once no decode job is in flight and nothing reads the ring (the voice has no mixer slot yet, or the
 mixer has *published* `PAUSED` for this occupant; the main-thread mirror alone is not enough while a `PAUSE` is
 still in the command ring), then the voice re-primes and resumes. A voice waiting for a stolen slot restarts
-from the new decoder position (`streamStartFrame`).
+from the new decoder position (`streamStartFrame`). After the reset `seekFrame` is the decoder's `position()`,
+so a seek the decoder refuses (WARN) reports the frame the audio really continues from. A `seek()` arriving in
+`WAIT_PRIME` (ring refilling from the old target, mixer voice still paused) goes back to `WAIT_RESET`.
 
 ## 8. Null backend and the virtual clock
 
@@ -244,9 +250,10 @@ callback would, and `fail_next_starts(count)` makes the next `count` starts fail
 
 The miniaudio backend (`miniaudio_backend.{h,cpp}`) owns an `ma_context` and `ma_device` behind a `unique_ptr
 impl`; the data callback runs the mix callback on the device thread, the notification callback stores
-`device_state` into an atomic and nothing else, and `update()` has nothing to poll. `enumerate_devices()`
-creates the context lazily. `is_compiled()` is true when the library was built with miniaudio
-(`CONJURE_WITH_AUDIO`).
+`device_state` into an atomic and nothing else, and `update()` has nothing to poll. `start()` turns `STARTING`
+into `RUNNING` with a compare-exchange, so a `LOST` the callback stored meanwhile survives for
+`recover_device()`. `enumerate_devices()` creates the context lazily. `is_compiled()` is true when the library
+was built with miniaudio (`CONJURE_WITH_AUDIO`).
 
 ## 9. Device loss and recovery
 
@@ -264,9 +271,12 @@ creates the context lazily. `is_compiled()` is true when the library was built w
    so voices keep finishing and `is_playing()` stays truthful (A14).
 
 `select_device(name)` reuses the restart path deliberately: stop, restart on the named device, keep the previous
-device on failure; voices freeze for the restart and continue afterwards. Construction follows the same rule: an
-invalid `audio_settings` (`INVALID_SETTINGS`, ERROR log) or a backend that cannot start falls back to null with
-`last_backend_error()` set, so `audio_engine` never fails to construct (A1).
+device on failure; voices freeze for the restart and continue afterwards. An unknown non-empty name falls back to
+the default device with a WARN (`12_audio.md` 3.9) and counts as success. If neither the new nor the previous
+device starts, the engine continues on a fresh null backend with `last_backend_error()` set (the previous
+device's failure) and `fellBackToNull = true`, and returns the new device's error. Construction follows the
+same rule: an invalid `audio_settings` (`INVALID_SETTINGS`, ERROR log) or a backend that cannot start falls back
+to null with `last_backend_error()` set, so `audio_engine` never fails to construct (A1).
 
 ## 10. Failure handling
 
@@ -274,6 +284,7 @@ invalid `audio_settings` (`INVALID_SETTINGS`, ERROR log) or a backend that canno
 |---|---|
 | invalid settings or backend start failure at construction | null backend, `last_backend_error()`, `fellBackToNull` |
 | unknown `deviceName` | WARN, default device |
+| `select_device()`: neither the new nor the previous device starts | null backend, `last_backend_error()`, `fellBackToNull`; the new device's error returned |
 | clip not resident (`asset_ref::get()` null) | `CLIP_NOT_LOADED`; the sync retries next frame |
 | clip without its buffer or info mismatch | `INVALID_CLIP` |
 | 33rd streamed voice / streamed clip that does not open | `STREAM_SLOT_LIMIT` / `DECODE_FAILED` (slot released), `voicesDropped++` |
@@ -282,9 +293,12 @@ invalid `audio_settings` (`INVALID_SETTINGS`, ERROR log) or a backend that canno
 | stale or invalid `voice_id` / `group_id` | setters no-op with TRACE; `result` functions return `INVALID_VOICE` / `INVALID_GROUP` |
 | NaN or infinity in a setter | sanitised at the API boundary (A15); `CONJURE_ASSERT` in Debug |
 | forged WAV header (declares more frames than the file holds) | `DECODE_FAILED`; `decode_to_pcm` caps its reserve by the file size |
-| blob header mismatch (magic, version, size, channels, storage) | `INVALID_CLIP` naming the field |
+| blob header mismatch (magic, version, size, channels, storage, a PCM frame count its data does not hold) | `INVALID_CLIP` naming the field; the PCM check divides, so a forged frame count cannot wrap into a huge allocation |
+| streamed payload whose format disagrees with its header | `INVALID_CLIP`; `load_clip_blob` opens the payload with the header's `frameCount`, so a Vorbis stream is not decoded to check it |
+| PCM-only import settings on a streamed clip | the import succeeds with a warning |
+| streamed seek the decoder refuses | WARN; the voice continues, and reports, from the decoder's position |
 | stream underrun | silence for the block, `UNDERRUN`, `underruns++` |
-| `update()` / `end_frame()` off the main thread | `CONJURE_ASSERT(core::jobs::is_main_thread())` |
+| any `audio_engine` mutator (`update()`, `end_frame()`, `play()`, setters, groups) off the main thread | `CONJURE_ASSERT(core::jobs::is_main_thread())` |
 | destruction with live retained voices | stopped and released; INFO count |
 
 The callback itself cannot fail: every path above runs on the main thread or on a job.
@@ -332,6 +346,10 @@ and expects `tests/.downloaded/audio/tone.{ogg,mp3,flac}`.
 | 60 updates of 1/60 s render exactly 48000 frames; fractional carry; `MIX_BLOCK_FRAMES` blocks; capture; 256 voices render allocation-free | `test_null_backend.cpp` |
 | a 0.5 s clip finishes after 0.5 s and appears in `finished_voices()` once; one-shot slot FREE after `end_frame`; retained stays FINISHED; 5 ms stop ramp without a sample jump; pitch 2 halves the time; 24 kHz clip steps at 0.5; hard-left pan; attenuation floor at `maxDistance`; 256 voices and the 257th steals priority 10; `VOICE_LIMIT_REACHED`; 10000 `set_volume` calls spill and all apply; streamed == PCM sample for sample; 2-worker streaming; `STREAM_SLOT_LIMIT` at 33; hot reload keeps the old buffer; destruction with 100 voices is leak-free | `test_audio_engine.cpp` |
 | `regression - audio review N`: recovery keeps retrying after a failed restart; fallback to null after `maxRecoveryAttempts`; a streamed clip that fails to open releases its slot; streamed seeks racing a decode job or a pending PAUSE; STOP on a paused voice; `set_spatial` on a stereo voice | `test_audio_engine.cpp` |
+| `regression - code sweep Fnnn`: release or steal under a group or master pause (F022); `resume()` of a `startPaused` voice waiting for a slot (F023); a streamed seek the decoder refuses, and a second seek while the first refills (F325) | `test_audio_engine.cpp` |
+| `select_device` keeps the previous device, or falls back to null with `last_backend_error()` when no device starts; mutators called off the main thread assert | `test_audio_engine.cpp` |
+| STOP under a paused group or master, and a group pause during a STOP fade (F022) | `test_mixer.cpp` |
+| a PCM `frameCount` that wraps the size check (F183); a streamed payload whose format disagrees with its header; the import warning for PCM-only settings on a streamed clip (F321) | `test_clip_asset.cpp` |
 | effective gain product; 0.5 in Music (0.5) under master (0.5) renders at 0.125; limits, duplicates, cycles; `remove_group` moves voices and children; paused group freezes cursors; settings groups by `parentName` | `test_mix_groups.cpp` |
 | every attenuation model at `minDistance`, LINEAR reaches 0, monotonic curves; pan right / left / ahead / behind / rotated; Doppler approaching / receding / clamp | `test_spatialisation.cpp` |
 | ramp step bounded; fractional-cursor interpolation; downmix; output clamp; generation mismatch drops a command; event overflow keeps FINISHED | `test_mixer.cpp` |

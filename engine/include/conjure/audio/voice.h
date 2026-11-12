@@ -65,7 +65,9 @@ namespace conjure::audio {
         f32 pitch = 1.0f;                   // [0.25, 4]
         f32 pan = 0.0f;                     // [-1, 1]; used only when spatial == false
         bool loop = false;
-        bool spatial = false;               // 3D: attenuation + pan from position (set_position)
+        // 3D: attenuation + pan from position (set_position). Defaults to false (flat, unity gain),
+        // unlike audio_source::spatial, which defaults to true.
+        bool spatial = false;
         bool retain = false;                // false = one-shot, released automatically when finished (A5)
         bool startPaused = false;
         u8 priority = 128;                  // Voice stealing: lower is stolen first

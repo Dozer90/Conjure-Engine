@@ -88,7 +88,7 @@ mapping below is what the systems will do, and `play_params_from()` already turn
 | `volume` | `1` | `[0, 2]` |
 | `pitch` | `1` | `[0.25, 4]`; `2` plays twice as fast and an octave higher |
 | `loop` | `false` | restart at the end |
-| `spatial` | `true` | 3D: attenuate and pan from the entity's world position |
+| `spatial` | `true` | 3D: attenuate and pan from the entity's world position; `play_params::spatial` defaults to `false` instead |
 | `playOnStart` | `true` | start the first time the sync sees the entity |
 | `oneShot` | `false` | destroy the entity when the voice finishes |
 | `group` | null (`MASTER_GROUP`) | `string_id` of a mix group, resolved with `find_group()` |

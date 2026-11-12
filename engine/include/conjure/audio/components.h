@@ -73,7 +73,9 @@ namespace conjure::audio {
         f32 volume = 1.0f;                  // 0..2
         f32 pitch = 1.0f;                   // 0.25..4
         bool loop = false;
-        bool spatial = true;                // The "3D flag"
+        // The "3D flag". Defaults to true (a component is an emitter in the world), unlike
+        // play_params::spatial, which defaults to false.
+        bool spatial = true;
         bool playOnStart = true;
         bool oneShot = false;               // Destroy the entity when the voice finishes
         core::string_id group = {};         // Null = MASTER

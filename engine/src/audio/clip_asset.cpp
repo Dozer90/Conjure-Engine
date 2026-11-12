@@ -276,15 +276,19 @@ core::result<clip_blob_header> conjure::audio::read_clip_blob_header(std::span<c
         );
     }
     if (header.storage == static_cast<u8>(clip_storage::PCM)) {
-        const u64 expected = header.frameCount * header.channels * sizeof(f32);
-        if (expected != header.dataBytes) {
+        // Division instead of frameCount * channels * 4: a forged frameCount must not wrap the product
+        // around to dataBytes, because it sizes the sample allocation in load_clip_blob. Channels are
+        // 1 or 2 here, so frameBytes is never 0.
+        const u64 frameBytes = static_cast<u64>(header.channels) * sizeof(f32);
+        const u64 payloadFrames = header.dataBytes / frameBytes;
+        if (header.dataBytes % frameBytes != 0 || header.frameCount != payloadFrames) {
             return core::make_error(
               audio_error::INVALID_CLIP,
-              "clip blob PCM payload is {} bytes; {} frames of {} channels need {}",
+              "clip blob PCM payload of {} bytes holds {} frames of {} channels, not the {} its header declares",
               header.dataBytes,
-              header.frameCount,
+              payloadFrames,
               header.channels,
-              expected
+              header.frameCount
             );
         }
     }
@@ -307,7 +311,12 @@ core::result<audio_clip> conjure::audio::load_clip_blob(std::span<const byte> bl
     clip.info.storage = static_cast<clip_storage>(header.storage);
 
     if (clip.info.storage == clip_storage::STREAMED) {
-        CONJURE_TRY_ASSIGN(const clip_info probed, probe(payload));
+        // The header knows the length (read_clip_blob_header rejects 0), so the open skips counting:
+        // a Vorbis stream is not decoded in full just to check its format.
+        streaming_decoder check = {};
+        CONJURE_TRY(check.open(payload, header.frameCount));
+        const clip_info probed = check.info();
+        check.close();
         if (probed.format.channels != header.channels || probed.format.sampleRate != header.sampleRate) {
             return core::make_error(
               audio_error::INVALID_CLIP,
@@ -365,6 +374,20 @@ core::result<assets::import_output> audio_clip_importer::import(assets::import_c
           assets::asset_error_code::IMPORT_FAILED,
           std::format("{}: {}", context.source_path(), blob.get_error().to_string())
         );
+    }
+
+    // The PCM-only settings are ignored for a streamed clip; "auto" storage can pick STREAMED without the
+    // author noticing, so say so instead of dropping them silently.
+    const clip_import_settings &requested = settings.value();
+    if (requested.forceMono || requested.sampleRate != 0 || requested.normalize) {
+        const core::result<clip_blob_header> header = read_clip_blob_header(blob.value());
+        if (header.has_value() && header.value().storage == static_cast<u8>(clip_storage::STREAMED)) {
+            // The asset database prefixes every importer warning with the asset path.
+            context.add_warning(
+              "forceMono, sampleRate and normalize apply to PCM storage only; this clip is streamed and "
+              "keeps its file untouched (set \"storage\": \"pcm\" or raise streamThresholdSeconds)"
+            );
+        }
     }
 
     assets::imported_asset primary = {};

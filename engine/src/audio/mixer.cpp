@@ -264,8 +264,15 @@ void mixer::render_block(u32 frameCount) noexcept {
         if (state != voice_state::PLAYING && state != voice_state::PAUSED && state != voice_state::STOPPING) {
             continue;
         }
+        const bool frozen = mMasterPaused || mGroupPaused[voice.groupIndex];
+        if (state == voice_state::STOPPING && frozen) {
+            // A frozen voice cannot run its fade and is silent already: it ends where it stands, as a
+            // paused voice does on STOP (audio review 8).
+            finish_voice(voice, index, event_kind::STOPPED);
+            continue;
+        }
         ++active;
-        if (state == voice_state::PAUSED || mMasterPaused || mGroupPaused[voice.groupIndex]) {
+        if (state == voice_state::PAUSED || frozen) {
             continue;
         }
         render_voice(voice, index, frameCount);

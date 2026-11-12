@@ -431,7 +431,7 @@ core::result<void> streaming_decoder::open(std::span<const byte> encoded, u64 kn
     std::unique_ptr<state> opened = std::make_unique<state>();
     CONJURE_TRY_ASSIGN(const clip_encoding encoding, open_decoder(encoded, opened->decoder));
 
-    // A caller that already knows the length (the loader probed the clip) spares the full decode
+    // A caller that already knows the length (a cooked clip's header carries it) spares the full decode
     // that counting a Vorbis stream costs; play() runs this on the main thread (A16).
     core::result<clip_info> info = info_of(opened->decoder, encoding, encoded, knownFrameCount == 0);
     if (!info.has_value()) {

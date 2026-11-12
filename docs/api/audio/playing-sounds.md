@@ -105,7 +105,7 @@ Other errors: `INVALID_CLIP` (empty or inconsistent clip), `INVALID_GROUP` (stal
 | `pitch` | `1` | `[0.25, 4]` | playback speed; also shifts pitch |
 | `pan` | `0` | `[-1, 1]` | left to right; ignored when `spatial` |
 | `loop` | `false` | | restart at the end |
-| `spatial` | `false` | | 3D: gain and pan come from `set_position()` |
+| `spatial` | `false` | | 3D: gain and pan come from `set_position()`; an `audio_source` component defaults to `true` |
 | `retain` | `false` | | `false` = one-shot (auto-released), `true` = you call `release()` |
 | `startPaused` | `false` | | begin in `PAUSED`; `resume()` starts it |
 | `priority` | `128` | `0..255` | voice stealing: lower is stolen first |
@@ -114,7 +114,9 @@ Other errors: `INVALID_CLIP` (empty or inconsistent clip), `INVALID_GROUP` (stal
 | `attenuation`, `minDistance`, `maxDistance`, `rolloff` | `INVERSE`, `1`, `100`, `1` | see below | the distance curve of a spatial voice |
 
 Values outside the ranges are clamped at the call and NaN becomes the default; `clamp_play_params()`,
-`clamp_volume()`, `clamp_pitch()` and `clamp_pan()` expose the same rules.
+`clamp_volume()`, `clamp_pitch()` and `clamp_pan()` expose the same rules. `volume` (per voice) and gain (groups,
+master, listener) are the same linear multiplier in `[0, 2]`; the final level is volume x group gain x
+attenuation x listener gain.
 
 ## One-shots and retained voices
 
@@ -157,9 +159,9 @@ bool poll_intro(audio_engine &engine, voice_id intro) {
 
 | Call | Effect |
 |---|---|
-| `stop(voice, fadeSeconds = 0.005)` | fade to silence, then `STOPPED`; `stop_all(fade)` for every voice |
-| `pause(voice)` / `resume(voice)` | hold and continue the cursor; a paused voice still counts as `is_playing()` |
-| `seek(voice, seconds)` | jump (clamped to the clip length); a streamed voice resumes a few frames later |
+| `stop(voice, fadeSeconds = 0.005)` | fade to silence, then `STOPPED`; `stop_all(fade)` for every voice. A paused voice, or one whose group or the master is paused, ends at once without a fade |
+| `pause(voice)` / `resume(voice)` | hold and continue the cursor; a paused voice still counts as `is_playing()`. `resume()` on a voice still `PRIMING` cancels `startPaused`: it starts playing |
+| `seek(voice, seconds)` | jump (clamped to the clip length); a streamed voice resumes a few frames later, and a seek its decoder cannot reach continues from where the decoder stands (`voice()` reports that frame, WARN) |
 | `set_volume`, `set_pitch`, `set_pan`, `set_loop`, `set_priority`, `set_group` | one field each; volume ramps over 5 ms so it never clicks |
 | `set_spatial(voice, bool)` | switch between flat and 3D; a stereo clip is downmixed to mono while 3D |
 | `apply_params(voice, params)` | volume, pitch, pan, loop, spatial, priority, group and attenuation at once |
@@ -174,7 +176,8 @@ stolen slot), `PLAYING`, `PAUSED`, `STOPPING`, `FINISHED`, `STOPPED`; `is_active
 > [!WARNING]
 > Setters take effect at the **next `update()`** for spatial values and at the next 256-frame mixer block for
 > the rest, so reading `voice()` straight after a setter shows the old mixer-side state. Everything except the
-> thread-safe queries must be called from the main thread.
+> thread-safe queries must be called from the main thread; every call that changes something asserts it in
+> Debug and Development builds.
 
 ## Mix groups
 
@@ -303,8 +306,11 @@ format }`, the enumerations `sample_format` (`F32` only), `clip_storage` (`PCM`,
 
 `enumerate_devices()` lists playback devices as `audio_device_info { name, isDefault, sampleRates, minChannels,
 maxChannels }` (`conjure/audio/audio_device.h`); `select_device(name)` restarts the backend on that device,
-freezing voices for the restart and continuing them afterwards (the previous device is kept on failure). The null
-backend reports one device, `NULL_DEVICE_NAME` (`"Null Output"`). `output_format()` is the mixer's format;
+freezing voices for the restart and continuing them afterwards (the previous device is kept on failure). An
+unknown non-empty name falls back to the default device with a WARN and counts as success. If neither the new
+nor the previous device starts, the engine continues on the null backend with `last_backend_error()` set and
+`stats().fellBackToNull` true, and `select_device()` returns the new device's error. The null backend reports
+one device, `NULL_DEVICE_NAME` (`"Null Output"`). `output_format()` is the mixer's format;
 `backend_kind()` the backend in use; `stats()` an `audio_engine_stats` with `activeVoices`, `peakVoices`,
 `streamingVoices`, `voicesDropped`, `underruns`, `loops`, `deviceRestarts`, `fellBackToNull`, `deviceState` and
 ring counters, readable from any thread.

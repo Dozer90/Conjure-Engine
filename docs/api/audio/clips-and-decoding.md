@@ -75,7 +75,9 @@ loads through `audio_clip_loader` into an `audio_clip`. The engine registers bot
 The cooked payload is a 32-byte `clip_blob_header` (`CJAC`, version, storage, channels, encoding, sample rate,
 frame count, data size) followed by the data. `cook_clip(bytes, settings)` and `load_clip_blob(blob)` are the
 pure functions behind the importer and loader, and `read_clip_blob_header(blob)` validates a header; tools can
-call them directly, as the example shows.
+call them directly, as the example shows. A PCM header must declare exactly the frames its data holds, and a
+streamed payload must open with the channels and sample rate its header names (the load opens it with the
+header's frame count, so an Ogg Vorbis file is not decoded just to check it); anything else is `INVALID_CLIP`.
 
 ```cpp
 #include "conjure/audio/clip_asset.h"
@@ -118,8 +120,10 @@ The importer reads a JSON object (`clip_import_settings`, round-tripped by `from
 | `"normalize"` | `false` | scale the peak to 1.0 (PCM only) |
 
 > [!NOTE]
-> `forceMono`, `sampleRate` and `normalize` do not apply to streamed clips, which keep the file untouched.
-> Cooked PCM keeps the source sample rate unless you set one; the engine resamples while playing.
+> `forceMono`, `sampleRate` and `normalize` do not apply to streamed clips, which keep the file untouched; the
+> importer reports a warning when one of them is set on a clip it streams (with `"auto"` storage that happens to
+> every clip above `streamThresholdSeconds`). Cooked PCM keeps the source sample rate unless you set one; the
+> engine resamples while playing.
 
 ## Decoding
 

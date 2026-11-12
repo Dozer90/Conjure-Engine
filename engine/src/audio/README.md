@@ -63,8 +63,11 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   use a balance law so a stereo clip at gain `g` renders at amplitude `g`; `set_spatial()` on a
   stereo voice sends `SET_DOWNMIX` so the law follows the flag (A10). Pitch is a per-voice step
   `pitch * clipRate / mixRate * dopplerRatio` through a linear interpolator; cooked PCM keeps its
-  source rate (A9). `STOP` on a PAUSED voice ends it at once (it is silent already) instead of
-  fading it back in.
+  source rate (A9). `STOP` on a PAUSED voice, or on a voice of a paused group or under the master
+  pause, ends it at once (it is silent already) instead of fading it back in; a frozen voice could
+  not run its fade, so it would otherwise keep its slot until the unpause. `PLAY` starts paused
+  from the voice's `userPaused` flag alone (seeded from `startPaused`), so `resume()` while a voice
+  waits in PRIMING starts it playing.
 - **Streaming.** STREAMED clips keep the encoded file; `play()` opens a `streaming_decoder` on one of
   32 stream slots (attached to the voice before the open so a clip that fails to decode releases
   the slot again), each with a 16384-frame SPSC `stream_ring`. The open passes the clip's probed
@@ -76,7 +79,9 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   decode job is in flight and nothing reads the ring (the voice has no mixer slot yet, or the mixer
   has *published* PAUSED for this occupant; the main-thread mirror alone is not enough while a
   PAUSE is still in the command ring), then the voice re-primes and resumes. A voice without a
-  mixer slot restarts from the new decoder position (`streamStartFrame`).
+  mixer slot restarts from the new decoder position (`streamStartFrame`). After the reset the
+  target becomes the decoder's `position()`, so a seek the decoder refuses (WARN) continues and
+  reports from where the decoder stands; a second seek during `WAIT_PRIME` resets the ring again.
 - **Groups.** `group_table` keeps the tree (depth <= 8), recomputes effective gains depth-first on
   every change and reports the changed slots; `remove_group` reparents children and voices and bumps
   the slot generation. Settings groups name their parents (`group_desc::parentName`) because ids do
@@ -89,7 +94,9 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   failures swap in a `null_backend` (`fellBackToNull`, WARN) so voices keep finishing (A14).
   `null_backend::simulate_device_loss()` / `fail_next_starts()` exercise the path headlessly.
   Construction never fails: invalid settings or a backend that cannot start fall back to null with
-  `last_backend_error()` set.
+  `last_backend_error()` set; so does `select_device()` when neither the new nor the previous
+  device starts. The miniaudio `start()` turns `STARTING` into `RUNNING` with a compare-exchange,
+  so a LOST the notification callback stored meanwhile is not overwritten.
 - **Decoding.** miniaudio's decoders (WAV, MP3, FLAC built in; Ogg Vorbis through `stb_vorbis`
   compiled into `third_party/src/miniaudio_impl.c`). Vorbis in push mode reports no length, so
   `probe` counts the frames once when the container does not say; `streaming_decoder::open(bytes,
@@ -99,15 +106,18 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   size instead of trusting the declared length.
 - **Clip asset.** `cook_clip` produces the 32-byte `CJAC` header plus f32 samples (PCM) or the
   original file (STREAMED; `auto` switches above `streamThresholdSeconds`). `load_clip_blob` validates
-  every header field against the payload and probes streamed bytes. `audio_clip_importer` and
-  `audio_clip_loader` are thin adapters; the loader needs no engine (A6, R43) and its fallback is the
-  0.1 s silent clip.
+  every header field against the payload (the PCM frame count by division, so a forged count cannot
+  wrap into a huge allocation) and opens streamed bytes to check their format against the header
+  (with the header's frame count, so a Vorbis stream is not counted). `audio_clip_importer` and
+  `audio_clip_loader` are thin adapters; the importer warns when `forceMono`, `sampleRate` or
+  `normalize` is set on a clip it cooks as STREAMED. The loader needs no engine (A6, R43) and its
+  fallback is the 0.1 s silent clip.
 
 ## Threading model
 
 | Thread | Does |
 |---|---|
-| Main | every `audio_engine` call except the lock-free readers; `update()` / `end_frame()` assert `core::jobs::is_main_thread()`; the only writer of the `voice_mirror` seqlocks |
+| Main | every `audio_engine` call except the lock-free readers; every mutating member asserts `core::jobs::is_main_thread()`; the only writer of the `voice_mirror` seqlocks |
 | Device (miniaudio data callback) | `mixer::render` only: no allocation, lock, log, asset access or decoding; publishes a slot's generation last |
 | miniaudio notification callback | one atomic store of `device_state` |
 | Job workers | `decode_chunk` (one job per stream slot at a time, `jobInFlight` acquire/release), importer `import`, loader `load_cpu` |
@@ -147,7 +157,9 @@ decode runs behind `precondition::DOWNLOADED_ASSETS` and expects
 `simulate_device_loss()` / `fail_next_starts()` hooks cover device-loss recovery and the null
 fallback. The `regression - audio review N ...` cases pin the bugs the module review found
 (recovery stall, stream slot leak, forged WAV length, STOP on a paused voice, stereo `set_spatial`,
-streamed seeks racing a decode job or a pending PAUSE).
+streamed seeks racing a decode job or a pending PAUSE); the `regression - code sweep Fnnn ...`
+cases pin the code sweep fixes (STOP under a paused group or master, `resume()` of a waiting
+`startPaused` voice, a wrapping PCM frame count, a refused or retargeted streamed seek).
 
 ```
 python tools/build.py --build-dir build/mod_audio --target conjure_audio_tests --test -R audio

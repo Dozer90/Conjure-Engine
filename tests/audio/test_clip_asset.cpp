@@ -21,6 +21,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,32 @@ namespace {
         clip_blob_header header = {};
         std::memcpy(&header, blob.data(), sizeof(header));
         return header;
+    }
+
+    /// <summary>
+    /// Imports 'wav' with the given settings JSON through audio_clip_importer and returns the
+    /// warnings the import reported.
+    /// </summary>
+    std::vector<std::string> import_warnings(std::span<const byte> wav, const char *settingsText) {
+        const core::result<core::json::document> settings = core::json::document::parse(settingsText);
+        REQUIRE(settings.has_value());
+        core::vfs::memory_file_system fileSystem = {};
+        assets::sub_asset_table subAssets = {};
+        assets::import_context context(
+          fileSystem,
+          "assets://music/theme.wav",
+          "music/theme.wav",
+          wav,
+          settings.value().root(),
+          "windows",
+          core::uuid::generate(),
+          subAssets,
+          {}
+        );
+        const audio_clip_importer importer = {};
+        const core::result<assets::import_output> output = importer.import(context);
+        REQUIRE(output.has_value());
+        return std::vector<std::string>(context.warnings().begin(), context.warnings().end());
     }
 
     assets::cooked_blob wrap_blob(const core::uuid &id, std::vector<byte> payload) {
@@ -337,6 +364,53 @@ TEST_SUITE("audio/clip_asset") {
         CHECK_FALSE(load_clip_blob(scrambled).has_value());
     }
 
+    TEST_CASE("load_clip_blob - a streamed payload whose format disagrees with the header is INVALID_CLIP") {
+        clip_import_settings settings = {};
+        settings.storage = clip_storage_setting::STREAMED;
+        const core::result<std::vector<byte>> cooked = cook_clip(tone_wav(0.05), settings);
+        CONJURE_REQUIRE_OK(cooked);
+        CONJURE_REQUIRE_OK(load_clip_blob(cooked.value()));
+
+        std::vector<byte> mismatched = cooked.value();
+        clip_blob_header header = header_of(mismatched);
+        header.sampleRate = 44100;
+        std::memcpy(mismatched.data(), &header, sizeof(header));
+        CONJURE_REQUIRE_OK(read_clip_blob_header(mismatched));
+        const core::result<audio_clip> loaded = load_clip_blob(mismatched);
+        CONJURE_CHECK_ERROR(loaded, audio_error::INVALID_CLIP);
+        CHECK(loaded.get_error().message().find("disagrees with its payload") != std::string::npos);
+
+        header = header_of(cooked.value());
+        header.channels = 2;
+        std::memcpy(mismatched.data(), &header, sizeof(header));
+        CONJURE_CHECK_ERROR(load_clip_blob(mismatched), audio_error::INVALID_CLIP);
+    }
+
+    TEST_CASE("regression - code sweep F183 a PCM frameCount that wraps the size check fails with INVALID_CLIP") {
+        // frameCount * channels * 4 overflows to exactly the real payload size for these offsets.
+        u16 channels = 1;
+        u64 wrappingOffset = 0;
+        SUBCASE("mono") {
+            channels = 1;
+            wrappingOffset = 1ull << 62;
+        }
+        SUBCASE("stereo") {
+            channels = 2;
+            wrappingOffset = 1ull << 61;
+        }
+        const core::result<std::vector<byte>> cooked = cook_clip(tone_wav(0.1, channels), clip_import_settings{});
+        CONJURE_REQUIRE_OK(cooked);
+        std::vector<byte> forged = cooked.value();
+        clip_blob_header header = header_of(forged);
+        REQUIRE(header.storage == static_cast<u8>(clip_storage::PCM));
+        header.frameCount += wrappingOffset;
+        std::memcpy(forged.data(), &header, sizeof(header));
+
+        CONJURE_CHECK_ERROR(read_clip_blob_header(forged), audio_error::INVALID_CLIP);
+        CONJURE_CHECK_ERROR(load_clip_blob(forged), audio_error::INVALID_CLIP);
+        CONJURE_REQUIRE_OK(load_clip_blob(cooked.value()));
+    }
+
     TEST_CASE("audio_clip_importer - identity, extensions and default settings") {
         const audio_clip_importer importer = {};
         CHECK(importer.id() == CLIP_IMPORTER_ID);
@@ -396,6 +470,24 @@ TEST_SUITE("audio/clip_asset") {
         CONJURE_CHECK_ERROR(failed, assets::asset_error_code::IMPORT_FAILED);
         CHECK(failed.get_error().message().find("UNSUPPORTED_FORMAT") != std::string::npos);
         CHECK(failed.get_error().message().find("bad.wav") != std::string::npos);
+    }
+
+    TEST_CASE("audio_clip_importer - PCM-only settings on a streamed clip report an import warning") {
+        const std::vector<byte> wav = tone_wav(0.1, 2);
+
+        const std::vector<std::string> forcedMono = import_warnings(wav, R"({"storage":"streamed","forceMono":true})");
+        REQUIRE(forcedMono.size() == 1);
+        CHECK(forcedMono[0].find("PCM storage only") != std::string::npos);
+
+        // "auto" picks STREAMED above the threshold, which is the case the author is least likely to notice.
+        const char *autoStreamed = R"({"storage":"auto","streamThresholdSeconds":0.05,"sampleRate":24000})";
+        CHECK(import_warnings(wav, autoStreamed).size() == 1);
+        CHECK(import_warnings(wav, R"({"storage":"streamed","normalize":true})").size() == 1);
+
+        // PCM storage applies the settings, and a streamed clip without them has nothing to report.
+        CHECK(import_warnings(wav, R"({"storage":"pcm","forceMono":true})").empty());
+        CHECK(import_warnings(wav, R"({"storage":"auto","forceMono":true,"normalize":true})").empty());
+        CHECK(import_warnings(wav, R"({"storage":"streamed"})").empty());
     }
 
     TEST_CASE("register_asset_types - registers the clip type and importer once") {
