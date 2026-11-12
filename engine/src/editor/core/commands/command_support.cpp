@@ -6,12 +6,17 @@
 #include "conjure/core/assert.h"
 #include "conjure/core/json/writer.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/core/vfs/path_utils.h"
+#include "conjure/scene/components.h"
+#include "conjure/scene/hierarchy.h"
 #include "conjure/scene/scene_serializer.h"
 
 #include <array>
 #include <cmath>
 #include <format>
 #include <initializer_list>
+#include <limits>
+#include <unordered_set>
 #include <utility>
 
 namespace conjure::editor::support {
@@ -70,7 +75,9 @@ namespace conjure::editor::support {
         if (!value.is_valid()) {
             return fallback;
         }
-        if (!value.is_integer() || value.as_i64(-1) < 0 || value.as_u64() > 0xFFFFFFFFull) {
+        // A whole real such as 2.0 counts, as the schema's "integer" does; as_i64 answers -1 for 2.5 and for
+        // anything outside i64.
+        if (!value.is_number() || value.as_i64(-1) < 0 || value.as_u64() > 0xFFFFFFFFull) {
             return invalid_args(std::format("args.{}: expected a non-negative integer", key));
         }
         return static_cast<u32>(value.as_u64());
@@ -81,10 +88,13 @@ namespace conjure::editor::support {
         if (!value.is_valid()) {
             return fallback;
         }
-        if (!value.is_number() || !std::isfinite(value.as_f32())) {
-            return invalid_args(std::format("args.{}: expected a finite number", key));
+        // as_f32 answers its fallback for a non-number and for a number outside the f32 range, so a NaN fallback
+        // turns both into a refusal instead of a silent 0.
+        const f32 number = value.as_f32(std::numeric_limits<f32>::quiet_NaN());
+        if (!std::isfinite(number)) {
+            return invalid_args(std::format("args.{}: expected a finite number within the f32 range", key));
         }
-        return value.as_f32();
+        return number;
     }
 
     core::result<math::vec3> read_vec3(const core::json::value &value, std::string_view name) {
@@ -93,11 +103,11 @@ namespace conjure::editor::support {
         }
         math::vec3 result = math::vec3(0.0f);
         for (usize index = 0; index < 3; ++index) {
-            const core::json::value component = value[index];
-            if (!component.is_number() || !std::isfinite(component.as_f32())) {
-                return invalid_args(std::format("{}: expected finite numbers", name));
+            const f32 component = value[index].as_f32(std::numeric_limits<f32>::quiet_NaN());
+            if (!std::isfinite(component)) {
+                return invalid_args(std::format("{}: expected finite numbers within the f32 range", name));
             }
-            result[static_cast<glm::length_t>(index)] = component.as_f32();
+            result[static_cast<glm::length_t>(index)] = component;
         }
         return result;
     }
@@ -108,11 +118,11 @@ namespace conjure::editor::support {
         }
         std::array<f32, 4> components = {0.0f, 0.0f, 0.0f, 1.0f};
         for (usize index = 0; index < value.size(); ++index) {
-            const core::json::value component = value[index];
-            if (!component.is_number() || !std::isfinite(component.as_f32())) {
-                return invalid_args(std::format("{}: expected finite numbers", name));
+            const f32 component = value[index].as_f32(std::numeric_limits<f32>::quiet_NaN());
+            if (!std::isfinite(component)) {
+                return invalid_args(std::format("{}: expected finite numbers within the f32 range", name));
             }
-            components[index] = component.as_f32();
+            components[index] = component;
         }
         if (value.size() == 3) {
             const math::vec3 radians = math::vec3(
@@ -191,6 +201,19 @@ namespace conjure::editor::support {
     /*===========================================================================*/
     // Entities
 
+    core::result<void> check_entity_name(std::string_view name, std::string_view argument) {
+        if (name.empty()) {
+            return invalid_args(std::format("{}: an entity name must not be empty", argument));
+        }
+        if (name.find('/') != std::string_view::npos) {
+            return invalid_args(std::format(
+              "{}: an entity name must not contain '/' (hierarchy paths use it as the separator)",
+              argument
+            ));
+        }
+        return core::result<void>::success();
+    }
+
     core::result<ecs::entity> resolve_entity(command_invocation &invocation, const core::json::value &reference) {
         return entity_ref::resolve(reference, invocation.context.scene(), &invocation.errorDetails);
     }
@@ -252,23 +275,26 @@ namespace conjure::editor::support {
     }
 
     std::vector<ecs::entity> outermost(const scene::scene &scene, std::span<const ecs::entity> entities) {
+        // Undo of a bulk create sends every created entity through here: look ancestors up in a set while
+        // walking upwards (bounded by the hierarchy depth) instead of testing every pair.
+        const std::unordered_set<ecs::entity> requested(entities.begin(), entities.end());
+        std::unordered_set<ecs::entity> seen = {};
+        seen.reserve(entities.size());
         std::vector<ecs::entity> result = {};
         for (const ecs::entity entity : entities) {
+            if (!seen.insert(entity).second) {
+                continue;
+            }
             bool nested = false;
-            for (const ecs::entity other : entities) {
-                if (other != entity && scene.tree().is_ancestor_of(other, entity)) {
+            ecs::entity ancestor = scene.tree().parent_of(entity);
+            for (u32 depth = 0; !ancestor.is_null() && depth < scene::MAX_HIERARCHY_DEPTH; ++depth) {
+                if (requested.contains(ancestor)) {
                     nested = true;
                     break;
                 }
+                ancestor = scene.tree().parent_of(ancestor);
             }
-            bool duplicate = false;
-            for (const ecs::entity kept : result) {
-                if (kept == entity) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!nested && !duplicate) {
+            if (!nested) {
                 result.push_back(entity);
             }
         }
@@ -292,6 +318,10 @@ namespace conjure::editor::support {
     }
 
     core::result<command_inverse> restore_inverse(scene::scene &scene, ecs::entity root) {
+        return restore_inverse(scene, root, tree_position(scene, root));
+    }
+
+    core::result<command_inverse> restore_inverse(scene::scene &scene, ecs::entity root, u32 position) {
         CONJURE_TRY_ASSIGN(core::json::document archive, capture_subtree(scene, root));
         const ecs::entity parent = scene.tree().parent_of(root);
         command_inverse inverse = {};
@@ -301,8 +331,23 @@ namespace conjure::editor::support {
         if (!parent.is_null()) {
             inverse.args.set("parent", guid_or_empty(scene, parent));
         }
-        inverse.args.set("index", tree_position(scene, root));
+        inverse.args.set("index", position);
         return inverse;
+    }
+
+    subtree_box subtree_bounds_or_boxes(const scene::scene &scene, ecs::entity root) {
+        subtree_box result = {};
+        const std::optional<math::aabb> rendered = scene.subtree_bounds(root);
+        if (rendered.has_value() && rendered->is_valid()) {
+            result.bounds = *rendered;
+            result.fromRenderBounds = true;
+            return result;
+        }
+        scene.tree().for_each_in_subtree(root, [&scene, &result](ecs::entity member) {
+            const math::vec3 position = scene.world_transform_of(member).value_or(math::transform()).position;
+            result.bounds.expand(math::aabb::from_center_extents(position, math::vec3(0.5f)));
+        });
+        return result;
     }
 
     core::json::document batch_args(std::span<const command_inverse> children, std::string_view label) {
@@ -337,6 +382,64 @@ namespace conjure::editor::support {
         const core::json::value indexValue = args["index"];
         const u32 index = indexValue.is_integer() ? static_cast<u32>(indexValue.as_u64()) : scene::APPEND_CHILD;
         return restore_subtree(scene, args["archive"], parent, index);
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
+    // Assets
+
+    core::result<std::string> contained_relative_path(std::string_view text, const assets::asset_path_parts &parts) {
+        const std::string relative = core::vfs::path_utils::normalize(parts.relativePath);
+        const bool leavesMount = relative == ".." || core::str::starts_with(relative, "../") ||
+          core::vfs::path_utils::is_absolute(relative);
+        if (leavesMount) {
+            return invalid_args(std::format("'{}' leaves the {}:// root", text, parts.mount));
+        }
+        if (relative.empty()) {
+            return invalid_args(std::format("'{}' names no path inside the {}:// root", text, parts.mount));
+        }
+        return relative;
+    }
+
+    core::result<std::string> file_path_for(assets::asset_database &database, std::string_view assetPath) {
+        const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(assetPath);
+        if (!parts.has_value()) {
+            return invalid_args(std::format("'{}' is not an asset path (mount://relative)", assetPath));
+        }
+        CONJURE_TRY_ASSIGN(const std::string relative, contained_relative_path(assetPath, *parts));
+        for (const assets::asset_mount &mount : database.mounts()) {
+            if (mount.name == parts->mount) {
+                if (mount.rootPath.empty()) {
+                    return relative;
+                }
+                return mount.rootPath + "/" + relative;
+            }
+        }
+        return make_editor_error(
+          protocol_error_code::ASSET_NOT_FOUND,
+          std::format("unknown asset mount '{}'", parts->mount)
+        );
+    }
+
+    core::result<void> import_now(
+      editor_context &context,
+      assets::asset_database &database,
+      const assets::asset_id &id
+    ) {
+        if (context.engine_context().jobs == nullptr) {
+            return not_available("no job system to import with");
+        }
+        const std::array<assets::asset_id, 1> ids = {id};
+        const core::result<assets::import_report> imported = database.import(ids, *context.engine_context().jobs);
+        if (!imported.has_value()) {
+            return wrap(imported.get_error());
+        }
+        for (const assets::import_failure &failure : imported.value().failures) {
+            if (failure.id == id) {
+                return invalid_args(std::format("import of '{}' failed: {}", failure.assetPath, failure.message));
+            }
+        }
+        return core::result<void>::success();
     }
 
     /*===========================================================================*/
@@ -450,9 +553,22 @@ namespace conjure::editor::support {
         out.reserve(text.size() / 4 * 3);
         u32 buffer = 0;
         u32 bits = 0;
+        usize symbols = 0;
+        u32 padding = 0;
         for (const char character : text) {
-            if (character == '=' || core::str::is_space(character)) {
+            if (core::str::is_space(character)) {
                 continue;
+            }
+            ++symbols;
+            if (character == '=') {
+                ++padding;
+                if (padding > 2) {
+                    return invalid_args("base64: more than two padding characters");
+                }
+                continue;
+            }
+            if (padding > 0) {
+                return invalid_args("base64: '=' is only allowed at the end");
             }
             const usize value = BASE64_CHARACTERS.find(character);
             if (value == std::string_view::npos) {
@@ -464,6 +580,14 @@ namespace conjure::editor::support {
                 bits -= 8;
                 out.push_back(static_cast<std::byte>((buffer >> bits) & 0xFFu));
             }
+        }
+        if (symbols % 4 != 0) {
+            return invalid_args("base64: the length is not a multiple of 4");
+        }
+        // A canonical encoder leaves the bits after the last whole byte zero; anything else is a corrupted or
+        // truncated payload.
+        if (bits >= 6 || (buffer & ((1u << bits) - 1u)) != 0) {
+            return invalid_args("base64: non-zero bits after the last byte");
         }
         return out;
     }

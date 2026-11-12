@@ -1,5 +1,7 @@
 #include "editor/core/net/socket.h"
 
+#include "conjure/core/platform_detect.h"
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -18,7 +20,7 @@ namespace conjure::editor::net {
     namespace {
         [[nodiscard]] core::error socket_error(std::string_view what, int code) {
             return core::error(
-              code == EADDRINUSE ? core::error_code::ALREADY_EXISTS : core::error_code::IO_FAILURE,
+              is_port_unavailable_error(code) ? core::error_code::ALREADY_EXISTS : core::error_code::IO_FAILURE,
               std::format("{}: {} ({})", what, std::strerror(code), code)
             );
         }
@@ -30,6 +32,27 @@ namespace conjure::editor::net {
             }
             return fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0;
         }
+
+        /// <summary>
+        /// Keeps the descriptor out of every process the editor spawns (script.compile runs dotnet, module.build
+        /// runs cmake): an inherited listener would keep the port bound after the editor exits. Where the socket
+        /// was created with SOCK_CLOEXEC this repeats the flag; on macOS, which has no SOCK_CLOEXEC, it sets it.
+        /// </summary>
+        [[nodiscard]] bool set_close_on_exec(int descriptor) noexcept {
+            const int flags = fcntl(descriptor, F_GETFD, 0);
+            if (flags < 0) {
+                return false;
+            }
+            return fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0;
+        }
+
+        // Atomic close-on-exec at creation closes the window in which another thread could spawn a child
+        // between socket() and fcntl().
+#if defined(SOCK_CLOEXEC)
+        constexpr int SOCKET_TYPE_FLAGS = SOCK_CLOEXEC;
+#else
+        constexpr int SOCKET_TYPE_FLAGS = 0;
+#endif
 
         /// <summary>
         /// A peer that went away must not raise SIGPIPE on our next send: Linux passes MSG_NOSIGNAL per call,
@@ -52,6 +75,10 @@ namespace conjure::editor::net {
 #endif
     }
 
+    bool is_port_unavailable_error(int nativeCode) noexcept {
+        return nativeCode == EADDRINUSE;
+    }
+
     socket_handle::~socket_handle() {
         close();
     }
@@ -70,11 +97,14 @@ namespace conjure::editor::net {
     void shutdown_sockets() noexcept {}
 
     core::result<socket_handle> listen_loopback(u16 port, u16 &outBoundPort) {
-        const int raw = ::socket(AF_INET, SOCK_STREAM, 0);
+        const int raw = ::socket(AF_INET, SOCK_STREAM | SOCKET_TYPE_FLAGS, 0);
         if (raw < 0) {
             return socket_error("socket", errno);
         }
         socket_handle handle(raw);
+        if (!set_close_on_exec(raw)) {
+            return socket_error("fcntl(FD_CLOEXEC)", errno);
+        }
         int reuse = 1;
         setsockopt(raw, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         sockaddr_in address = {};
@@ -100,7 +130,11 @@ namespace conjure::editor::net {
     }
 
     core::result<socket_handle> accept(const socket_handle &listener) {
+#if CONJURE_PLATFORM_LINUX
+        const int raw = ::accept4(static_cast<int>(listener.get()), nullptr, nullptr, SOCK_CLOEXEC);
+#else
         const int raw = ::accept(static_cast<int>(listener.get()), nullptr, nullptr);
+#endif
         if (raw < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return socket_handle();
@@ -108,6 +142,9 @@ namespace conjure::editor::net {
             return socket_error("accept", errno);
         }
         socket_handle handle(raw);
+        if (!set_close_on_exec(raw)) {
+            return socket_error("fcntl(FD_CLOEXEC)", errno);
+        }
         suppress_sigpipe(raw);
         if (!set_non_blocking(raw)) {
             return socket_error("fcntl(O_NONBLOCK)", errno);
@@ -157,11 +194,14 @@ namespace conjure::editor::net {
     }
 
     core::result<socket_handle> connect_loopback(u16 port) {
-        const int raw = ::socket(AF_INET, SOCK_STREAM, 0);
+        const int raw = ::socket(AF_INET, SOCK_STREAM | SOCKET_TYPE_FLAGS, 0);
         if (raw < 0) {
             return socket_error("socket", errno);
         }
         socket_handle handle(raw);
+        if (!set_close_on_exec(raw)) {
+            return socket_error("fcntl(FD_CLOEXEC)", errno);
+        }
         sockaddr_in address = {};
         address.sin_family = AF_INET;
         address.sin_port = htons(port);

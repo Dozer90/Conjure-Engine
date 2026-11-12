@@ -1,11 +1,18 @@
 #include "conjure/testing/doctest.h"
 
+#include "editor_test_support.h"
+
 #include "conjure/core/json/document.h"
+#include "conjure/ecs/scheduler.h"
+#include "conjure/ecs/system_phase.h"
 #include "conjure/editor/builtin_commands.h"
 #include "conjure/editor/command_registry.h"
+#include "conjure/engine/engine_context.h"
 
 #include <array>
+#include <string>
 #include <string_view>
+#include <vector>
 
 // builtin_commands.h: the catalogue of docs/design/04_editor.md 4.4 is registered completely and consistently.
 
@@ -107,5 +114,41 @@ TEST_SUITE("editor/builtin_commands") {
         command_registry registry = {};
         register_builtin_commands(registry);
         CHECK(registry.size() == builtin_command_count());
+    }
+
+    TEST_CASE("profiler.frame_stats - systems lists the scheduler's systems and phases the per-phase times, gpuMs null "
+      "on the null device") {
+        editor_test::headless_editor editor = {};
+        editor.pump(2);
+        const core::json::document stats = editor.ok("profiler.frame_stats");
+        const core::json::value root = stats.root();
+        CHECK(root["gpuMs"].is_null());
+
+        const core::json::value phases = root["phases"];
+        REQUIRE(phases.size() == ecs::SYSTEM_PHASE_COUNT);
+        for (u32 phase = 0; phase < ecs::SYSTEM_PHASE_COUNT; ++phase) {
+            CAPTURE(phase);
+            CHECK(phases[phase]["name"].as_string() == ecs::to_string(static_cast<ecs::system_phase>(phase)));
+            CHECK(phases[phase]["ms"].is_number());
+            CHECK(phases[phase]["averageMs"].is_number());
+        }
+
+        const ecs::scheduler *scheduler = editor.context().engine_context().scheduler;
+        REQUIRE(scheduler != nullptr);
+        std::vector<std::string> expected = {};
+        for (u32 phase = 0; phase < ecs::SYSTEM_PHASE_COUNT; ++phase) {
+            for (const ecs::system_timing &timing : scheduler->last_timings(static_cast<ecs::system_phase>(phase))) {
+                expected.push_back(timing.name.to_string());
+            }
+        }
+        REQUIRE_FALSE(expected.empty());
+        const core::json::value systems = root["systems"];
+        REQUIRE(systems.size() == expected.size());
+        for (usize index = 0; index < expected.size(); ++index) {
+            CAPTURE(index);
+            CHECK(systems[index]["name"].as_string() == expected[index]);
+            CHECK_FALSE(systems[index]["phase"].as_string().empty());
+            CHECK(systems[index]["ms"].as_f64(-1.0) >= 0.0);
+        }
     }
 }

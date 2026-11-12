@@ -27,7 +27,8 @@ namespace conjure::editor {
 
     struct screenshot_request {
         std::filesystem::path path = {};
-        std::string camera = "editor";                      // "editor", "game" or a guid
+        // "editor", "game" or an entity guid (view.screenshot resolves a path or name to it).
+        std::string camera = "editor";
         std::string format = "png";
         u32 width = 1280;
         u32 height = 720;
@@ -109,9 +110,8 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Validates and parks a request: INVALID_ARGS for an empty path, a zero size, a format other than
-            /// "png" or a camera that is neither "editor", "game" nor a uuid; NOT_AVAILABLE without a backend.
-            /// On failure the reply is completed with that error.
+            /// Validates and parks a request: INVALID_ARGS for an empty path, a zero size or a format other than
+            /// "png"; NOT_AVAILABLE without a backend. On failure the reply is completed with that error.
             /// </summary>
             void request(const screenshot_request &value, async_reply reply);
 
@@ -147,7 +147,9 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Parses the view.screenshot arguments. INVALID_ARGS as request() describes.
+            /// Parses the view.screenshot arguments: INVALID_ARGS for an empty path, a zero or oversized size
+            /// (above 16384), a format other than "png", an empty camera or a waitFrames outside 0..100000; any
+            /// camera other than "editor" / "game" names an entity, which view.screenshot resolves to its guid.
             /// </summary>
             [[nodiscard]] static core::result<screenshot_request> parse_request(const core::json::value &args);
 

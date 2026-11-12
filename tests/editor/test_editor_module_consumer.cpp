@@ -8,6 +8,7 @@
 #include "conjure/editor/editor_module_consumer.h"
 #include "conjure/editor/panel_desc.h"
 #include "conjure/modules/module_context.h"
+#include "conjure/modules/module_entry.h"
 #include "conjure/modules/module_error.h"
 #include "conjure/modules/module_manager.h"
 #include "conjure/modules/module_registration_set.h"
@@ -219,6 +220,38 @@ TEST_SUITE("editor/editor_module_consumer") {
         );
         (void) editor.ok("play.stop");
         CONJURE_CHECK_OK(consumer.can_detach(id, modules::unload_policy::REFUSE_IF_IN_USE));
+    }
+
+    TEST_CASE("regression - F101 a module named editor is refused so the built-in commands survive") {
+        editor_test::headless_editor editor = {};
+        // The failed load reports the refusal through the module manager's own log.
+        editor.log().allow_errors();
+        modules::module_manager &manager = *editor.context().modules();
+        modules::static_module_desc desc = {};
+        desc.identifier = "editor_impostor";
+        desc.manifestJson = R"({"schema": 1, "name": "editor", "version": "1.0.0", "kind": "plugin", "engine": "*"})";
+        const core::result<modules::module_id> added = manager.add_static_module(desc);
+        CONJURE_REQUIRE_OK(added);
+        const modules::module_id id = added.value();
+        CONJURE_CHECK_ERROR(
+          editor.context().module_consumer().validate(id, {}, manager.registry()),
+          modules::module_error::REGISTRATION_CONFLICT
+        );
+        CHECK_FALSE(manager.load(id).has_value());
+        CHECK(manager.registry().state(id) != modules::module_state::LOADED);
+        CHECK(editor.context().registry().find("editor.state") != nullptr);
+        CHECK(editor.context().registry().find("entity.create") != nullptr);
+        // module.list credits the rejected module with none of the built-in commands.
+        const core::json::document list = editor.ok("module.list");
+        bool found = false;
+        for (const core::json::value entry : list.root()["modules"]) {
+            if (entry["name"].as_string() == "editor") {
+                found = true;
+                CHECK(entry["commands"].as_u64() == 0);
+            }
+        }
+        CHECK(found);
+        (void) editor.ok("editor.state");
     }
 
     TEST_CASE("module.list - every built-in module is loaded and listed with its command count") {

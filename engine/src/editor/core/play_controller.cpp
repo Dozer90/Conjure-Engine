@@ -49,6 +49,12 @@ namespace conjure::editor {
         mSnapshot.emplace(std::move(snapshot).value());
         const std::span<const core::uuid> selected = mContext->selection().guids();
         mSelectionBackup.assign(selected.begin(), selected.end());
+        // Named last, the primary is the primary again when stop() hands the backup to set() (set() drops the
+        // duplicate).
+        const core::uuid primary = mContext->selection().primary();
+        if (!primary.is_null()) {
+            mSelectionBackup.push_back(primary);
+        }
         mContext->undo().set_frozen(true);
         set_script_mode(true);
         mContext->engine().set_simulation_mode(engine::simulation_mode::RUNNING);
@@ -89,11 +95,7 @@ namespace conjure::editor {
         mState = play_state::EDITING;
         mSimulationFrames = 0;
         emit_state();
-        core::json::document guids = core::json::document::array();
-        for (const core::uuid &guid : mContext->selection().guids()) {
-            guids.push_back(guid.to_string());
-        }
-        mContext->events().emit(editor_event::SELECTION_CHANGED, core::json::object({{"guids", guids}}));
+        mContext->emit_selection_changed();
         return core::result<void>::success();
     }
 

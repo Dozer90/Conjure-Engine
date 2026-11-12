@@ -173,11 +173,11 @@ TEST_SUITE("editor/reflection_commands") {
         CHECK(hello.root()["schemaHash"].as_string() == editor.ok("editor.schema").root()["schemaHash"].as_string());
         CHECK(hello.root()["clientId"].as_u64() == editor.client_id());
         CHECK(hello.root()["headless"].as_bool());
+        // The headless editor's client is in process (like an --exec file): --ai-token gates only the transports,
+        // so a wrong or missing token does not fail its hello (F477).
         editor.context().set_token("secret");
-        CHECK(editor.fail(
-          "session.hello",
-          core::json::object({{"token", "wrong"}})
-        ) == protocol_error_code::UNAUTHORISED);
+        (void) editor.ok("session.hello", core::json::object({{"token", "wrong"}}));
+        (void) editor.ok("session.hello");
         (void) editor.ok("session.hello", core::json::object({{"token", "secret"}}));
         const core::json::document pong = editor.ok("session.ping");
         CHECK(pong.root().contains("frame"));

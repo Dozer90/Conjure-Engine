@@ -153,6 +153,20 @@ TEST_SUITE("editor/ai_protocol_e2e") {
         CHECK(waited.root().contains("frame"));
     }
 
+    TEST_CASE("regression - F477 a loopback client's session.hello with a wrong token is UNAUTHORISED") {
+        editor_test::headless_editor editor = {};
+        // Connected before the token exists, so the server's handshake let the client in: only the handler checks.
+        loopback_session session(editor);
+        editor.context().set_token("secret");
+        const protocol_response wrong = session.request("session.hello", core::json::object({{"token", "wrong"}}));
+        CHECK_FALSE(wrong.ok);
+        CHECK(wrong.errorCode == protocol_error_code::UNAUTHORISED);
+        const core::json::document hello = session.ok("session.hello", core::json::object({{"token", "secret"}}));
+        CHECK(hello.root()["clientId"].as_u64() == session.client().client_id());
+        // The in-process client of the same editor is trusted whatever token it sends.
+        (void) editor.ok("session.hello", core::json::object({{"token", "wrong"}}));
+    }
+
     TEST_CASE(
       "ai_protocol_e2e - the Grid Sweeper command file builds the game over loopback and the saved scene reloads"
     ) {

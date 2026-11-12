@@ -28,6 +28,16 @@ namespace {
         request.clientId = clientId;
         return request;
     }
+
+    usize scene_changed_count(const editor_test::headless_editor &editor) {
+        usize count = 0;
+        for (const protocol_event &event : editor.events()) {
+            if (event.name == "scene.changed") {
+                ++count;
+            }
+        }
+        return count;
+    }
 }
 
 TEST_SUITE("editor/command_dispatcher") {
@@ -42,6 +52,42 @@ TEST_SUITE("editor/command_dispatcher") {
         REQUIRE(suggestions.size() >= 1);
         CHECK(suggestions[0].as_string() == "entity.create");
         CHECK(response.id.root().as_i64() > 0);
+    }
+
+    TEST_CASE("regression - F102 an unknown command with a 1 MiB name answers at once with a truncated message") {
+        editor_test::headless_editor editor = {};
+        // U+65E5 is three bytes in UTF-8, so byte 128, where the echo is cut, falls inside a character.
+        const std::string character = "\xE6\x97\xA5";
+        std::string name = {};
+        name.reserve(1024 * 1024 + character.size());
+        while (name.size() < 1024 * 1024) {
+            name += character;
+        }
+        const protocol_response response = editor.send(name, core::json::document::object());
+        REQUIRE_FALSE(response.ok);
+        CHECK(response.errorCode == protocol_error_code::UNKNOWN_COMMAND);
+        const core::json::value suggestions = response.errorDetails.root()["didYouMean"];
+        REQUIRE(suggestions.is_array());
+        CHECK(suggestions.size() == 0);
+        CHECK(response.errorMessage.size() < 200);
+        CHECK(response.errorMessage.find(character + character) != std::string::npos);
+        CHECK(response.errorMessage.find("...") != std::string::npos);
+        // The cut lands on a character boundary: the response is still valid UTF-8 on the wire.
+        const core::result<protocol_response> parsed = parse_response(serialise(response));
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value().errorMessage == response.errorMessage);
+    }
+
+    TEST_CASE("command_dispatcher - an unknown child of editor.batch is named with a bounded echo") {
+        editor_test::headless_editor editor = {};
+        const std::string name(4096, 'z');
+        const protocol_response response = editor.send(
+          "editor.batch",
+          core::json::object({{"commands", core::json::array({core::json::object({{"cmd", name}})})}})
+        );
+        REQUIRE_FALSE(response.ok);
+        CHECK(response.errorCode == protocol_error_code::UNKNOWN_COMMAND);
+        CHECK(response.errorMessage.size() < 250);
     }
 
     TEST_CASE("command_dispatcher - schema violations are INVALID_ARGS before the handler runs") {
@@ -99,6 +145,41 @@ TEST_SUITE("editor/command_dispatcher") {
         editor.clear_events();
         (void) editor.ok("editor.state");
         CHECK(editor.saw_event("command.executed"));
+    }
+
+    TEST_CASE("regression - F508 one history step bumps the revision once and emits one scene.changed, also for "
+      "an editor.batch inverse") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("entity.create_many", core::json::object({{"count", 3}}));
+        u64 before = editor.context().revision();
+        editor.clear_events();
+        const core::json::document undone = editor.ok("history.undo");
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(editor.context().revision() == before + 1);
+        CHECK(undone.root()["revision"].as_u64() == before + 1);
+        CHECK(scene_changed_count(editor) == 1);
+        for (const protocol_event &event : editor.events()) {
+            if (event.name == "scene.changed") {
+                CHECK(event.data.root()["label"].as_string() == "Undo Create 3 entities");
+                CHECK(event.data.root()["revision"].as_u64() == before + 1);
+            }
+        }
+        editor.clear_events();
+        (void) editor.ok("history.redo");
+        CHECK(editor.scene().world().entity_count() == 3);
+        CHECK(editor.context().revision() == before + 2);
+        CHECK(scene_changed_count(editor) == 1);
+
+        // entity.destroy_many's inverse is an editor.batch of restores: still one step, one revision, one event.
+        const std::string first = editor.create_entity("first");
+        const std::string second = editor.create_entity("second");
+        (void) editor.ok("entity.destroy_many", core::json::object({{"entities", core::json::array({first, second})}}));
+        before = editor.context().revision();
+        editor.clear_events();
+        (void) editor.ok("history.undo");
+        CHECK(editor.scene().world().entity_count() == 5);
+        CHECK(editor.context().revision() == before + 1);
+        CHECK(scene_changed_count(editor) == 1);
     }
 
     TEST_CASE("command_dispatcher - a read-only command does not touch the undo stack or the revision") {

@@ -18,6 +18,22 @@ namespace conjure::editor {
     namespace {
         constexpr std::string_view PORT_FILE_DIRECTORY = ".conjure";
         constexpr std::string_view PORT_FILE_NAME = "ai_port";
+
+        /// <summary>
+        /// The id an INVALID_REQUEST answer echoes (docs/design/04_editor.md D7): the integer or string "id" of a
+        /// line that is a JSON object, null otherwise. Only failed lines reach this, so the second parse is rare.
+        /// </summary>
+        [[nodiscard]] core::json::document usable_id_of(std::string_view line) {
+            const core::result<core::json::document> parsed = core::json::document::parse(line);
+            if (!parsed.has_value() || !parsed.value().root().is_object()) {
+                return null_id();
+            }
+            const core::json::value id = parsed.value().root()["id"];
+            if (!id.is_integer() && !id.is_string()) {
+                return null_id();
+            }
+            return core::json::document::from_value(id);
+        }
     }
 
     protocol_server::protocol_server(event_broadcaster &events) :
@@ -42,19 +58,7 @@ namespace conjure::editor {
             mBoundPort = tcp->bound_port();
             CONJURE_LOG_INFO(LOG_EDITOR, "ai protocol: listening on 127.0.0.1:{}", mBoundPort);
             mTransports.push_back(std::move(tcp));
-            if (!projectRoot.empty()) {
-                std::error_code ignored = {};
-                const std::filesystem::path directory = projectRoot / std::filesystem::path(PORT_FILE_DIRECTORY);
-                std::filesystem::create_directories(directory, ignored);
-                mPortFile = directory / std::filesystem::path(PORT_FILE_NAME);
-                std::ofstream stream(mPortFile, std::ios::binary | std::ios::trunc);
-                if (stream.is_open()) {
-                    stream << mBoundPort << '\n';
-                } else {
-                    CONJURE_LOG_WARN(LOG_EDITOR, "ai protocol: cannot write {}", mPortFile.generic_string());
-                    mPortFile.clear();
-                }
-            }
+            write_port_file(projectRoot);
         }
         if (options.aiStdio) {
             std::unique_ptr<stdio_transport> stdio = std::make_unique<stdio_transport>(std::cin, std::cout, true);
@@ -128,9 +132,12 @@ namespace conjure::editor {
                 core::result<protocol_request> parsed = parse_request(line.text);
                 if (!parsed.has_value()) {
                     const protocol_error_code code = classify_error(parsed.get_error());
+                    // A line that is not JSON (or too long) has no id to echo; a malformed request may have one.
+                    const core::json::document id =
+                      code == protocol_error_code::INVALID_REQUEST ? usable_id_of(line.text) : null_id();
                     send_line(
                       line.clientId,
-                      serialise(make_error_response(null_id().root(), code, parsed.get_error().message()))
+                      serialise(make_error_response(id.root(), code, parsed.get_error().message()))
                     );
                     if (code == protocol_error_code::MESSAGE_TOO_LARGE) {
                         disconnect(line.clientId);
@@ -146,6 +153,9 @@ namespace conjure::editor {
             }
             for (const u32 id : closed) {
                 on_client_closed(id);
+            }
+            if (!closed.empty() && mTransports[index]->kind() == transport_kind::STDIO) {
+                mStdioClosed = true;
             }
         }
         const usize count = std::min(maxRequests, mBacklog.size());
@@ -207,13 +217,15 @@ namespace conjure::editor {
         }
         mTransports.clear();
         mLocalLoopback = nullptr;
-        if (!mPortFile.empty()) {
-            std::error_code ignored = {};
-            std::filesystem::remove(mPortFile, ignored);
-            mPortFile.clear();
-        }
+        remove_port_file();
         mBoundPort = 0;
         mRunning = false;
+        mStdioClosed = false;
+    }
+
+    void protocol_server::set_project_root(const std::filesystem::path &projectRoot) {
+        remove_port_file();
+        write_port_file(projectRoot);
     }
 
     void protocol_server::disconnect(u32 clientId) {
@@ -335,6 +347,10 @@ namespace conjure::editor {
         if (client == nullptr || !client->connected) {
             return;
         }
+        if (!client->authenticated) {
+            // With --ai-token nothing, not even an event, reaches a client before its valid session.hello.
+            return;
+        }
         protocol_transport *transport = transport_of(*client);
         if (transport == nullptr) {
             return;
@@ -366,5 +382,31 @@ namespace conjure::editor {
         );
         disconnect(client.id);
         return false;
+    }
+
+    void protocol_server::write_port_file(const std::filesystem::path &projectRoot) {
+        if (projectRoot.empty() || mBoundPort == 0) {
+            return;
+        }
+        std::error_code ignored = {};
+        const std::filesystem::path directory = projectRoot / std::filesystem::path(PORT_FILE_DIRECTORY);
+        std::filesystem::create_directories(directory, ignored);
+        mPortFile = directory / std::filesystem::path(PORT_FILE_NAME);
+        std::ofstream stream(mPortFile, std::ios::binary | std::ios::trunc);
+        if (!stream.is_open()) {
+            CONJURE_LOG_WARN(LOG_EDITOR, "ai protocol: cannot write {}", mPortFile.generic_string());
+            mPortFile.clear();
+            return;
+        }
+        stream << mBoundPort << '\n';
+    }
+
+    void protocol_server::remove_port_file() {
+        if (mPortFile.empty()) {
+            return;
+        }
+        std::error_code ignored = {};
+        std::filesystem::remove(mPortFile, ignored);
+        mPortFile.clear();
     }
 }

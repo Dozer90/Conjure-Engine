@@ -1,12 +1,18 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "editor_test_support.h"
 
+#include "conjure/core/clock.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/log.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/headless_runner.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/engine/project.h"
 
 #include <filesystem>
 #include <fstream>
@@ -60,6 +66,39 @@ TEST_SUITE("editor/headless_runner") {
           protocol_error_code::INVALID_ARGS
         );
         CONJURE_CHECK_ERROR(headless_runner::parse_command_file("[1, 2"), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE(
+      "headless_runner::parse_command_file - a leading UTF-8 byte order mark is ignored for arrays and NDJSON"
+    ) {
+        // What Windows PowerShell 5.1 writes for Set-Content -Encoding utf8 and Out-File.
+        const core::result<std::vector<protocol_request>> array = headless_runner::parse_command_file(
+          "\xEF\xBB\xBF[{\"cmd\":\"a\"},{\"id\":\"x\",\"cmd\":\"b\"}]"
+        );
+        CONJURE_REQUIRE_OK(array);
+        REQUIRE(array.value().size() == 2);
+        CHECK(array.value()[0].command == "a");
+        CHECK(array.value()[1].id.root().as_string() == "x");
+
+        const core::result<std::vector<protocol_request>> ndjson = headless_runner::parse_command_file(
+          "\xEF\xBB\xBF{\"cmd\":\"a\"}\r\n{\"id\":7,\"cmd\":\"b\"}\r\n"
+        );
+        CONJURE_REQUIRE_OK(ndjson);
+        REQUIRE(ndjson.value().size() == 2);
+        CHECK(ndjson.value()[0].command == "a");
+        CHECK(ndjson.value()[0].id.root().as_i64() == 0);
+        CHECK(ndjson.value()[1].id.root().as_i64() == 7);
+
+        const core::result<std::vector<protocol_request>> onlyMark = headless_runner::parse_command_file(
+          "\xEF\xBB\xBF\n"
+        );
+        CONJURE_REQUIRE_OK(onlyMark);
+        CHECK(onlyMark.value().empty());
+        // Only a leading mark is skipped: one in the middle of a line is still malformed JSON.
+        CONJURE_CHECK_ERROR(
+          headless_runner::parse_command_file("{\"cmd\":\"a\"}\n\xEF\xBB\xBF{\"cmd\":\"b\"}\n"),
+          protocol_error_code::INVALID_ARGS
+        );
     }
 
     TEST_CASE("headless_runner::expand_placeholders - replaces ${project} in every string argument") {
@@ -125,6 +164,41 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(editor.scene().world().entity_count() == 2);
     }
 
+    TEST_CASE("regression - F505 run_requests ends with RUNTIME_FAILURE when the output stream fails") {
+        editor_test::headless_editor editor = {};
+        editor.log().allow_errors();
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"entity.create","args":{"name":"a"}},{"cmd":"entity.create","args":{"name":"b"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        out.setstate(std::ios::badbit);
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, true);
+        // The first request ran and is counted; nothing after it could report its answer, so the run stopped.
+        CHECK(summary.executed == 1);
+        CHECK(summary.succeeded == 1);
+        CHECK(summary.exitCode == 2);
+        CHECK(editor.scene().world().entity_count() == 1);
+        CHECK(editor.log().contains(core::log_level::ERR, "could not be written"));
+    }
+
+    TEST_CASE("exec_summary - record counts results and keeps the first failed index") {
+        exec_summary summary = {};
+        summary.record(true, 0);
+        CHECK(summary.executed == 1);
+        CHECK(summary.succeeded == 1);
+        CHECK(summary.failed == 0);
+        CHECK(summary.firstFailedIndex == -1);
+        summary.record(false, 1);
+        summary.record(true, 2);
+        summary.record(false, 3);
+        CHECK(summary.executed == 4);
+        CHECK(summary.succeeded == 2);
+        CHECK(summary.failed == 2);
+        CHECK(summary.firstFailedIndex == 1);
+    }
+
     TEST_CASE("headless_runner::run_requests - the output carries events and asynchronous replies are pumped") {
         editor_test::headless_editor editor = {};
         const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
@@ -154,6 +228,145 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(sawWait);
     }
 
+    TEST_CASE("headless_runner::run_requests - editor.quit stops the run and its exit code becomes the summary's") {
+        {
+            editor_test::headless_editor editor = {};
+            const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+              R"([{"cmd":"entity.create","args":{"name":"a"}},{"cmd":"editor.quit","args":{"exitCode":7}},)"
+              R"({"cmd":"entity.create","args":{"name":"c"}}])"
+            );
+            CONJURE_REQUIRE_OK(requests);
+            std::ostringstream out = {};
+            headless_runner runner = {};
+            const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+            CHECK(summary.executed == 2);
+            CHECK(summary.failed == 0);
+            CHECK(summary.exitCode == 7);
+            CHECK(editor.scene().world().entity_count() == 1);
+        }
+        // The default exit code 0 does not hide an earlier failure under --keep-going.
+        editor_test::headless_editor editor = {};
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"entity.destroy","args":{"entity":"Nobody"}},{"cmd":"editor.quit"},)"
+          R"({"cmd":"entity.create","args":{"name":"c"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, true);
+        CHECK(summary.executed == 2);
+        CHECK(summary.failed == 1);
+        CHECK(summary.exitCode == 1);
+        CHECK(editor.scene().world().entity_count() == 0);
+    }
+
+    TEST_CASE(
+      "headless_runner::run_requests - an asynchronous request is bounded by the dispatcher timeout in seconds"
+    ) {
+        editor_test::headless_editor editor = {};
+        editor.context().dispatcher().set_async_timeout_seconds(0.2);
+        // Two million frames would outlast a frame-count bound; the dispatcher answers after 0.2 s of wall time.
+        // Its TIMEOUT frees the request, so --keep-going carries on with the next one.
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"id":"w","cmd":"editor.wait_frames","args":{"frames":2000000}},)"
+          R"({"id":"e","cmd":"entity.create","args":{"name":"after"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, true);
+        editor.context().dispatcher().set_async_timeout_seconds(30.0);
+        CHECK(summary.executed == 2);
+        CHECK(summary.failed == 1);
+        CHECK(summary.firstFailedIndex == 0);
+        CHECK(editor.scene().world().entity_count() == 1);
+        bool sawTimeout = false;
+        for (const std::string &line : lines_of(out.str())) {
+            const core::result<protocol_response> response = parse_response(line);
+            if (response.has_value() && response.value().id.root().as_string() == "w") {
+                sawTimeout = true;
+                CHECK(response.value().errorCode == protocol_error_code::TIMEOUT);
+                CHECK(response.value().errorMessage.find("did not complete within") != std::string::npos);
+            }
+        }
+        CHECK(sawTimeout);
+    }
+
+    TEST_CASE(
+      "headless_runner::run_requests - a request that is never answered ends the run after the runner's bound [slow]"
+    ) {
+        // Declared first so it outlives the editor whose dispatcher reads it.
+        core::manual_clock frozen = {};
+        editor_test::headless_editor editor = {};
+        // A frozen dispatcher clock never reaches the deadline, so only the runner's own bound (twice the
+        // timeout plus five seconds) can end the wait; a frame-count bound would run a million frames instead.
+        editor.context().dispatcher().set_clock(&frozen);
+        editor.context().dispatcher().set_async_timeout_seconds(0.001);
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"id":"w","cmd":"editor.wait_frames","args":{"frames":2000000}},)"
+          R"({"id":"e","cmd":"entity.create","args":{"name":"after"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, true);
+        editor.context().dispatcher().set_clock(nullptr);
+        editor.context().dispatcher().set_async_timeout_seconds(30.0);
+        // The request is still pending, so a later request could take its late reply: the run ends even with
+        // --keep-going.
+        CHECK(summary.executed == 1);
+        CHECK(summary.failed == 1);
+        CHECK(summary.exitCode == 1);
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(runner.frames_pumped() < 2000000);
+        bool sawTimeout = false;
+        for (const std::string &line : lines_of(out.str())) {
+            const core::result<protocol_response> response = parse_response(line);
+            if (response.has_value() && response.value().id.root().as_string() == "w") {
+                sawTimeout = true;
+                CHECK(response.value().errorCode == protocol_error_code::TIMEOUT);
+                CHECK(response.value().errorMessage.find("seconds") != std::string::npos);
+            }
+        }
+        CHECK(sawTimeout);
+    }
+
+    TEST_CASE("headless_runner::run_requests - ${project} expands to the project open when the request runs") {
+        editor_test::headless_editor editor = {};
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"project.create","args":{"path":"${project}/second","name":"Second"}},)"
+          R"({"cmd":"project.open","args":{"path":"${project}/second"}},)"
+          R"({"cmd":"scene.new","args":{"name":"s"}},)"
+          R"({"cmd":"scene.set_settings","args":{"settings":{"root":"${project}"}}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+        CHECK_MESSAGE(summary.failed == 0, out.str());
+        REQUIRE(editor.context().project() != nullptr);
+        CHECK(editor.context().project()->description().name == "Second");
+        // A string argument carries the expansion (an entity name may not hold the path's '/').
+        const std::string secondRoot = editor.context().project()->root_directory().generic_string();
+        const core::json::document info = editor.ok("scene.info");
+        CHECK(info.root()["settings"]["root"].as_string() == secondRoot);
+    }
+
+    TEST_CASE("headless_runner::run_requests - the failure warning names the request id and its 1-based position") {
+        testing::log_capture logs = {};
+        editor_test::headless_editor editor = {};
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"entity.create","args":{"name":"a"}},{"id":12,"cmd":"entity.destroy","args":{"entity":"Nobody"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+        CHECK(summary.failed == 1);
+        CHECK(summary.firstFailedIndex == 1);
+        CHECK(logs.contains(core::log_level::WARN, "exec: request #2 (id 12) 'entity.destroy' failed"));
+    }
+
     TEST_CASE(
       "headless_runner::run - a missing or malformed file is INVALID_ARGS (exit 3) and output goes to the file"
     ) {
@@ -178,7 +391,7 @@ TEST_SUITE("editor/headless_runner") {
         const std::filesystem::path good = editor.project_directory() / "good.json";
         {
             std::ofstream stream(good, std::ios::binary | std::ios::trunc);
-            stream << R"({"cmd":"entity.create","args":{"name":"from ${project}"}})";
+            stream << R"({"cmd":"scene.set_settings","args":{"settings":{"origin":"from ${project}"}}})";
         }
         editor_options withOutput = editor.application().options();
         withOutput.execFile = good;
@@ -188,10 +401,7 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(summary.value().exitCode == 0);
         const std::string output = editor_test::read_text_file(withOutput.outputFile);
         CHECK(output.find("\"ok\":true") != std::string::npos);
-        const core::json::document found = editor.ok(
-          "entity.find",
-          core::json::object({{"name", "from " + editor.project_directory().generic_string()}})
-        );
-        CHECK(found.root()["total"].as_i64() == 1);
+        const core::json::document info = editor.ok("scene.info");
+        CHECK(info.root()["settings"]["origin"].as_string() == "from " + editor.project_directory().generic_string());
     }
 }

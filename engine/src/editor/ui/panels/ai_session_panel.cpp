@@ -76,6 +76,10 @@ namespace conjure::editor::ui {
           &mInput,
           ImGuiInputTextFlags_EnterReturnsTrue
         );
+        // Enter deactivates the field; take the focus back so the next request can be typed straight away.
+        if (entered) {
+            ImGui::SetKeyboardFocusHere(-1);
+        }
         ImGui::SameLine();
         const bool clicked = ImGui::Button("Send");
         if ((entered || clicked) && !mInput.empty() && server != nullptr) {
@@ -120,6 +124,18 @@ namespace conjure::editor::ui {
         mClient = server->local_loopback().connect();
         mConnected = true;
         append("[connected through the in-process loopback transport]");
+        if (server->token().empty()) {
+            return;
+        }
+        // With --ai-token the first request must be session.hello or the server disconnects. The panel runs in
+        // the editor's process, so it presents the token itself; it is never echoed to the transcript.
+        const core::json::document hello = core::json::object({
+          {"id", "ai_session_panel.hello"},
+          {"cmd", "session.hello"},
+          {"args", core::json::object({{"token", server->token()}, {"clientName", "AI Session panel"}})},
+        });
+        mClient.send(hello.to_string());
+        append("> session.hello (token hidden)");
     }
 
     void ai_session_panel::append(std::string line) {

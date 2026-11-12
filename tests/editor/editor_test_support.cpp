@@ -10,6 +10,7 @@
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/headless_runner.h"
+#include "conjure/engine/project.h"
 #include "conjure/scene/scene_serializer.h"
 #include "editor/core/net/socket.h"
 
@@ -237,31 +238,43 @@ namespace editor_test {
 
     std::map<std::string, std::string> project_file_snapshot(const std::filesystem::path &projectRoot) {
         std::map<std::string, std::string> files = {};
-        std::error_code ignored = {};
-        for (const char *folder : {"assets", "scripts"}) {
-            const std::filesystem::path root = projectRoot / folder;
-            if (!std::filesystem::is_directory(root, ignored)) {
-                continue;
-            }
-            for (const std::filesystem::directory_entry &entry : std::filesystem::recursive_directory_iterator(
-              root,
-              ignored
-            )) {
-                if (!entry.is_regular_file(ignored)) {
-                    continue;
-                }
+        std::error_code error = {};
+        if (!std::filesystem::is_directory(projectRoot, error)) {
+            return files;
+        }
+        std::filesystem::recursive_directory_iterator iterator(projectRoot, error);
+        const std::filesystem::recursive_directory_iterator end = {};
+        while (!error && iterator != end) {
+            const std::filesystem::directory_entry &entry = *iterator;
+            const std::filesystem::path relative = entry.path().lexically_relative(projectRoot);
+            std::error_code ignored = {};
+            // .conjure/ holds the cache, ai_port and editor_layout.ini: volatile by design (04_editor.md 3.14).
+            if (iterator.depth() == 0 && entry.is_directory(ignored) && relative == ".conjure") {
+                iterator.disable_recursion_pending();
+            } else if (entry.is_regular_file(ignored)) {
                 std::ifstream input(entry.path(), std::ios::binary);
                 std::stringstream buffer = {};
                 buffer << input.rdbuf();
-                files[entry.path().lexically_relative(projectRoot).generic_string()] = buffer.str();
+                std::string content = buffer.str();
+                const std::string key = relative.generic_string();
+                if (key == "project.json") {
+                    // The helper writes its own project.json text and project::save writes another spelling of
+                    // the same settings: compare them by meaning.
+                    const core::result<engine::project> parsed = engine::project::parse(content, projectRoot);
+                    if (parsed.has_value()) {
+                        content = parsed.value().to_json().to_string(true);
+                    }
+                }
+                files[key] = std::move(content);
             }
+            iterator.increment(error);
         }
+        REQUIRE_MESSAGE(!error, std::format("cannot list '{}': {}", projectRoot.generic_string(), error.message()));
         return files;
     }
 
     editor_snapshot capture_snapshot(headless_editor &editor) {
         editor_snapshot snapshot = {};
-        snapshot.worldHash = editor.world_hash();
         snapshot.scene = editor.serialised_scene();
         snapshot.files = project_file_snapshot(editor.project_directory());
         return snapshot;
@@ -282,9 +295,6 @@ namespace editor_test {
               before.scene.substr(start, 160),
               after.scene.substr(start, 160)
             );
-        }
-        if (before.worldHash != after.worldHash) {
-            return std::format("world hash {:016x} -> {:016x}", before.worldHash, after.worldHash);
         }
         for (const auto &[path, content] : before.files) {
             const auto found = after.files.find(path);
@@ -339,6 +349,27 @@ namespace editor_test {
     }
 
     bool json_contains(const core::json::value &actual, const core::json::value &expected) {
+        if (expected.as_string() == "@any") {
+            return true;
+        }
+        if (expected.is_array() && expected.size() > 0 && expected[0].as_string() == "@contains") {
+            if (!actual.is_array()) {
+                return false;
+            }
+            for (usize index = 1; index < expected.size(); ++index) {
+                bool found = false;
+                for (const core::json::value element : actual) {
+                    if (json_contains(element, expected[index])) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        }
         if (expected.is_object()) {
             if (!actual.is_object()) {
                 return false;

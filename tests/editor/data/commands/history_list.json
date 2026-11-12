@@ -20,6 +20,20 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "entries": [
+        {
+          "label": "Create 'A'"
+        },
+        {
+          "label": "Create 'B'"
+        }
+      ],
+      "cursor": 2,
+      "total": 2,
+      "canUndo": true,
+      "canRedo": false
+    }
   }
 }

@@ -17,6 +17,10 @@
 namespace conjure::editor {
 
     namespace {
+        // The owner of the built-in commands (support::add_command) and panels (editor_workspace): a module of that
+        // name would take them with it when it unloads.
+        constexpr std::string_view BUILTIN_OWNER = "editor";
+
         [[nodiscard]] std::string_view text_or(const char *text, std::string_view fallback) noexcept {
             return text == nullptr ? fallback : std::string_view(text);
         }
@@ -71,6 +75,12 @@ namespace conjure::editor {
       const modules::module_registry &registry
     ) {
         const std::string_view moduleName = registry.manifest(id).name;
+        if (moduleName == BUILTIN_OWNER) {
+            return modules::make_module_error(
+              modules::module_error::REGISTRATION_CONFLICT,
+              "editor: the module name 'editor' is reserved for the editor's built-in commands and panels"
+            );
+        }
         const core::small_vector<const command_desc *, 8> commands = modules::extensions_of<command_desc>(set);
         for (const command_desc *desc : commands) {
             const std::string_view commandName = text_or(desc->name, "");
@@ -161,7 +171,10 @@ namespace conjure::editor {
         }
         const usize index = static_cast<usize>(position - mAttached.begin());
         const std::string owner = mModuleNames[index];
-        mRegistry->remove_owned_by(owner);
+        // validate() refuses the reserved name; the check here keeps the built-ins even if that ever changes.
+        if (owner != BUILTIN_OWNER) {
+            mRegistry->remove_owned_by(owner);
+        }
         const usize before = mPanels.size();
         std::erase_if(mPanels, [id](const module_panel_entry &entry) {
             return entry.module == id;

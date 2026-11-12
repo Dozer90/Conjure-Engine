@@ -199,7 +199,7 @@ namespace conjure::editor {
                 return path_error(text, std::format("segment '{}' has no name", segment));
             }
             for (const char character : name) {
-                if (!is_identifier_char(character) && character != '.') {
+                if (!is_identifier_char(character)) {
                     return path_error(text, std::format("invalid character '{}' in '{}'", character, segment));
                 }
             }

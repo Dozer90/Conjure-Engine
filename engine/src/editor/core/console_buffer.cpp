@@ -77,14 +77,22 @@ namespace conjure::editor {
         const std::lock_guard<std::mutex> lock(mMutex);
         const usize capacity = mEntries.size();
         const usize first = (mEntryHead + capacity - mEntryCount) % capacity;
-        for (usize index = 0; index < mEntryCount && records.size() < query.limit; ++index) {
-            const entry &item = mEntries[(first + index) % capacity];
+        // Sequence numbers in the ring are contiguous (push numbers every entry, eviction drops only the oldest,
+        // clear() empties), so the entries up to sinceSeq are skipped without walking them under the lock the
+        // log sink's push needs.
+        const u64 firstSeq = mNextSeq - mEntryCount;
+        usize skip = 0;
+        if (query.sinceSeq >= firstSeq) {
+            skip = static_cast<usize>(std::min<u64>(query.sinceSeq - firstSeq + 1, mEntryCount));
+        }
+        // Copies one entry into the result when it passes the filter.
+        const auto take = [this, &query, &records](const entry &item) {
             if (item.seq <= query.sinceSeq || item.level < query.minLevel) {
-                continue;
+                return;
             }
             const std::string_view category = text_at(item.textOffset, item.categoryLength);
             if (!query.category.empty() && category != query.category) {
-                continue;
+                return;
             }
             console_record record = {};
             record.seq = item.seq;
@@ -93,7 +101,18 @@ namespace conjure::editor {
             record.category = std::string(category);
             record.text = std::string(text_at(item.textOffset + item.categoryLength, item.textLength));
             records.push_back(std::move(record));
+        };
+        if (!query.newest) {
+            for (usize index = skip; index < mEntryCount && records.size() < query.limit; ++index) {
+                take(mEntries[(first + index) % capacity]);
+            }
+            return records;
         }
+        // Newest first from the head back to sinceSeq, then reversed so the caller still reads oldest first.
+        for (usize index = mEntryCount; index > skip && records.size() < query.limit; --index) {
+            take(mEntries[(first + index - 1) % capacity]);
+        }
+        std::reverse(records.begin(), records.end());
         return records;
     }
 
@@ -127,8 +146,23 @@ namespace conjure::editor {
             ++mDropped;
         }
         const usize total = category.size() + text.size();
-        if (mTextHead + total > capacity) {
-            mTextHead = 0;              // wrap: the stale records past the head are invalidated below
+        // Every record advances the head by at least one byte, so no two held records share an offset and the
+        // offset alone tells which records a write covers (an empty record would otherwise sit on the start of
+        // the next one).
+        const usize footprint = std::max<usize>(total, 1);
+        const usize entryCapacity = mEntries.size();
+        const auto oldestIndex = [this, entryCapacity]() {
+            return (mEntryHead + entryCapacity - mEntryCount) % entryCapacity;
+        };
+        if (mTextHead + footprint > capacity) {
+            // Wrap. A record still held at or past the head is a leftover of the lap before the one that just
+            // ended, older than every record of that lap, which the new lap starts overwriting at offset 0; the
+            // oldest go first, so the leftovers are dropped before the overlap test below.
+            const usize lapEnd = mTextHead;
+            while (mEntryCount > 0 && mEntries[oldestIndex()].textOffset >= lapEnd) {
+                --mEntryCount;
+            }
+            mTextHead = 0;
         }
         const usize offset = mTextHead;
         if (!category.empty()) {
@@ -137,16 +171,14 @@ namespace conjure::editor {
         if (!text.empty()) {
             std::memcpy(mText.data() + offset + category.size(), text.data(), text.size());
         }
-        mTextHead = offset + total;
+        mTextHead = offset + footprint;
 
-        // Drop entries whose text range the new record overwrote (they are the oldest, in ring order).
-        const usize entryCapacity = mEntries.size();
+        // Drop the entries whose text the new record overwrote: the oldest are the previous lap's records at or
+        // after the write position, in offset order; an oldest record before it belongs to the current lap and,
+        // like every newer one, was not touched.
         while (mEntryCount > 0) {
-            const usize oldestIndex = (mEntryHead + entryCapacity - mEntryCount) % entryCapacity;
-            const entry &oldest = mEntries[oldestIndex];
-            const usize oldestEnd = oldest.textOffset + oldest.categoryLength + oldest.textLength;
-            const bool overlaps = oldest.textOffset < mTextHead && oldestEnd > offset;
-            if (!overlaps) {
+            const entry &oldest = mEntries[oldestIndex()];
+            if (oldest.textOffset < offset || oldest.textOffset >= mTextHead) {
                 break;
             }
             --mEntryCount;

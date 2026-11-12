@@ -21,12 +21,12 @@ namespace conjure::editor::support {
                     entities.push_back(entity_summary(scene, entity));
                 }
             }
-            return core::json::object({
-              {"guids", guid_array(context.selection().guids())},
-              {"entities", entities},
-              {"count", context.selection().size()},
-              {"primary", context.selection().empty() ? std::string("") : context.selection().primary().to_string()},
-            });
+            // The {guids, primary} the selection.changed event carries (primary null when nothing is selected),
+            // plus the summaries and the count.
+            core::json::document result = context.selection_payload();
+            result.set("entities", entities);
+            result.set("count", context.selection().size());
+            return result;
         }
 
         core::result<command_outcome> selection_get(command_invocation &invocation) {
@@ -80,7 +80,7 @@ namespace conjure::editor::support {
         const std::string entityRef = std::string(ENTITY_REF_SCHEMA);
         const std::string resultSchema =
           R"({"type":"object","properties":{"guids":{"type":"array"},"entities":{"type":"array"},)"
-          R"("count":{"type":"integer"},"primary":{"type":"string"}}})";
+          R"("count":{"type":"integer"},"primary":{"type":["string","null"]}}})";
         add_command(
           registry,
           make_command(

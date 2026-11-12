@@ -54,8 +54,13 @@ Native types live in `namespace conjure::editor` (the UI in `conjure::editor::ui
 ```
 conjure_editor --project C:/games/grid_sweeper                     # the window, AI server on 127.0.0.1
 conjure_editor --project C:/games/grid_sweeper --headless --exec build.json --out replies.ndjson
-conjure_editor --project C:/games/grid_sweeper --headless --export C:/builds/grid_sweeper
+conjure_editor --project C:/games/grid_sweeper --headless --export C:/builds/grid_sweeper \
+  --distribution C:/conjure/bin                                     # also copy conjure_runtime, conjure_shared, shaders/
 ```
+
+Without `--distribution` the export holds the cooked pack and the project files only, and its reply carries a
+warning that the runtime executable, library and shaders were not copied. A client that sends `project.export`
+with `copyRuntime` set made that choice itself and gets no such warning.
 
 ```
 -> {"id":1,"cmd":"session.hello","args":{"clientName":"my-agent"}}

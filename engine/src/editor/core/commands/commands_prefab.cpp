@@ -16,7 +16,6 @@
 #include "conjure/scene/scene_serializer.h"
 
 #include <algorithm>
-#include <array>
 #include <format>
 #include <utility>
 
@@ -70,27 +69,6 @@ namespace conjure::editor::support {
             return *found;
         }
 
-        core::result<void> import_now(
-          editor_context &context,
-          assets::asset_database &database,
-          const assets::asset_id &id
-        ) {
-            if (context.engine_context().jobs == nullptr) {
-                return not_available("no job system to import with");
-            }
-            const std::array<assets::asset_id, 1> ids = {id};
-            const core::result<assets::import_report> imported = database.import(ids, *context.engine_context().jobs);
-            if (!imported.has_value()) {
-                return wrap(imported.get_error());
-            }
-            for (const assets::import_failure &failure : imported.value().failures) {
-                if (failure.id == id) {
-                    return invalid_args(std::format("import of '{}' failed: {}", failure.assetPath, failure.message));
-                }
-            }
-            return core::result<void>::success();
-        }
-
         /// <summary>
         /// Loads the prefab asset synchronously and returns its payload.
         /// </summary>
@@ -119,22 +97,32 @@ namespace conjure::editor::support {
             return out.finish();
         }
 
-        core::result<std::string> file_path_for(assets::asset_database &database, std::string_view assetPath) {
-            const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(assetPath);
-            if (!parts.has_value()) {
-                return invalid_args(std::format("'{}' is not an asset path", assetPath));
-            }
-            for (const assets::asset_mount &mount : database.mounts()) {
-                if (mount.name == parts->mount) {
-                    return mount.rootPath.empty() ? std::string(
-                      parts->relativePath
-                    ) : mount.rootPath + "/" + std::string(parts->relativePath);
+        /// <summary>
+        /// INVALID_ARGS unless the relative part of a prefab asset path stays inside its mount: no "." or ".."
+        /// segment, no backslash (the path utilities treat it as a separator) and not absolute. Checked before
+        /// anything is written.
+        /// </summary>
+        core::result<void> check_prefab_path(std::string_view pathText, std::string_view path) {
+            const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(path);
+            bool contained = parts.has_value() && !parts->relativePath.empty() &&
+              parts->relativePath.find('\\') == std::string_view::npos &&
+              !core::vfs::path_utils::is_absolute(parts->relativePath);
+            if (contained) {
+                for (const std::string_view segment : core::str::split(parts->relativePath, '/', false)) {
+                    if (segment == ".." || segment == ".") {
+                        contained = false;
+                        break;
+                    }
                 }
             }
-            return make_editor_error(
-              protocol_error_code::ASSET_NOT_FOUND,
-              std::format("unknown asset mount '{}'", parts->mount)
-            );
+            if (!contained) {
+                return invalid_args(std::format(
+                  "args.path: '{}' must stay inside its mount (no '..' or '.' segments, no backslash, no absolute "
+                  "path)",
+                  pathText
+                ));
+            }
+            return core::result<void>::success();
         }
 
         core::result<command_outcome> prefab_create(command_invocation &invocation) {
@@ -144,6 +132,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const ecs::entity root, resolve_entity(invocation, invocation.args["entity"]));
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const std::string path = normalise_prefab_path(pathText);
+            CONJURE_TRY(check_prefab_path(pathText, path));
             if (database->find_by_path(path).has_value()) {
                 return invalid_args(std::format("'{}' already exists", path));
             }
@@ -248,7 +237,9 @@ namespace conjure::editor::support {
                 CONJURE_TRY_ASSIGN(options.parent, resolve_entity(invocation, invocation.args["parent"]));
             }
             if (invocation.args.contains("name")) {
-                options.rootName = core::string_id(string_or(invocation.args, "name", ""));
+                const std::string_view rootName = string_or(invocation.args, "name", "");
+                CONJURE_TRY(check_entity_name(rootName, "args.name"));
+                options.rootName = core::string_id(rootName);
             }
             if (invocation.args.contains("transform")) {
                 CONJURE_TRY_ASSIGN(

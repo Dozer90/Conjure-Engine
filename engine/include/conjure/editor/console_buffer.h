@@ -37,6 +37,7 @@ namespace conjure::editor {
         core::log_level minLevel = core::log_level::TRACE;
         std::string category = "";                          // "" = every category
         usize limit = 1000;
+        bool newest = false;                                // more than limit match: keep the newest, not the oldest
     };
 
     class CONJURE_API console_buffer {
@@ -105,7 +106,8 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Entries matching the query, oldest first, at most query.limit.
+            /// Entries matching the query, oldest first, at most query.limit: the oldest matches by default (a
+            /// reader paging forwards with sinceSeq), the newest ones with query.newest (a view of the tail).
             /// </summary>
             [[nodiscard]] std::vector<console_record> read(const console_query &query) const;
 

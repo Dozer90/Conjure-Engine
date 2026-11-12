@@ -7,8 +7,11 @@
 #include "conjure/editor/console_buffer.h"
 #include "conjure/editor/log_category.h"
 
+#include <algorithm>
 #include <atomic>
+#include <format>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // console_buffer.h: the fixed ring the console panel and the log event read from.
@@ -65,6 +68,75 @@ TEST_SUITE("editor/console_buffer") {
         CHECK(buffer.text_capacity() >= 64);
     }
 
+    TEST_CASE("regression - F095 console_buffer laps of mixed-size records never return text that is not theirs") {
+        // Uneven records leave the previous lap's leftovers at the end of the text ring when it wraps; a second
+        // wrap must drop them before the records the new lap overwrites at the start. Every seventh record is
+        // empty, which must neither stop the eviction nor lose its own place.
+        console_buffer buffer(4096, 4096);
+        constexpr usize PUSHES = 5000;
+        const auto expectedText = [](usize index) {
+            if (index % 7 == 0) {
+                return std::string();
+            }
+            const char letter = static_cast<char>('a' + index % 26);
+            return std::format("{}:", index) + std::string(10 + index * 37 % 190, letter);
+        };
+        usize largest = 0;
+        for (usize index = 0; index < PUSHES; ++index) {
+            const std::string text = expectedText(index);
+            const std::string_view category = index % 7 == 0 ? "" : "c";
+            largest = std::max<usize>(largest, std::max<usize>(category.size() + text.size(), 1));
+            buffer.push(core::log_level::INFO, category, text);
+        }
+        console_query everything = {};
+        everything.limit = PUSHES;
+        const std::vector<console_record> records = buffer.read(everything);
+        REQUIRE_FALSE(records.empty());
+        CHECK(records.back().seq == PUSHES);
+        usize held = 0;
+        for (usize position = 0; position < records.size(); ++position) {
+            const console_record &record = records[position];
+            CAPTURE(record.seq);
+            const usize index = static_cast<usize>(record.seq - 1);
+            CHECK(record.text == expectedText(index));
+            CHECK(record.category == (index % 7 == 0 ? "" : "c"));
+            if (position > 0) {
+                CHECK(record.seq == records[position - 1].seq + 1);
+            }
+            held += std::max<usize>(record.category.size() + record.text.size(), 1);
+        }
+        // Nor may it drop more than it overwrote: the current lap plus the previous lap's survivors span the ring
+        // but for the record that did not fit at the end of that lap and the one cut at the write position.
+        CHECK(held > buffer.text_capacity() - 2 * largest);
+    }
+
+    TEST_CASE("console_buffer - read with sinceSeq after the ring wrapped returns exactly the newer entries") {
+        console_buffer buffer(4, 4096);
+        for (int index = 0; index < 10; ++index) {
+            buffer.push(core::log_level::INFO, "t", std::to_string(index));
+        }
+        const auto seqsSince = [&buffer](u64 sinceSeq) {
+            console_query query = {};
+            query.sinceSeq = sinceSeq;
+            std::vector<u64> seqs = {};
+            for (const console_record &record : buffer.read(query)) {
+                seqs.push_back(record.seq);
+            }
+            return seqs;
+        };
+        CHECK(seqsSince(7) == std::vector<u64>{8, 9, 10});
+        CHECK(seqsSince(2) == std::vector<u64>{7, 8, 9, 10});
+        CHECK(seqsSince(0) == std::vector<u64>{7, 8, 9, 10});
+        CHECK(seqsSince(10).empty());
+        CHECK(seqsSince(100).empty());
+        buffer.clear();
+        CHECK(seqsSince(0).empty());
+        buffer.push(core::log_level::INFO, "t", "after");
+        buffer.push(core::log_level::INFO, "t", "clear");
+        CHECK(seqsSince(0) == std::vector<u64>{11, 12});
+        CHECK(seqsSince(11) == std::vector<u64>{12});
+    }
+
     TEST_CASE("console_buffer - read filters by sequence, level and category, and honours the limit") {
         console_buffer buffer{};
         buffer.push(core::log_level::DEBUG, "a", "debug a");
@@ -86,6 +158,38 @@ TEST_SUITE("editor/console_buffer") {
         limit.limit = 1;
         REQUIRE(buffer.read(limit).size() == 1);
         CHECK(buffer.read(limit)[0].text == "debug a");
+    }
+
+    TEST_CASE("regression - F110 console_buffer a newest read keeps the latest matching entries oldest first") {
+        console_buffer buffer{};
+        for (int index = 1; index <= 10; ++index) {
+            buffer.push(index % 2 == 0 ? core::log_level::WARN : core::log_level::INFO, "t", std::to_string(index));
+        }
+        const auto seqsOf = [&buffer](const console_query &query) {
+            std::vector<u64> seqs = {};
+            for (const console_record &record : buffer.read(query)) {
+                seqs.push_back(record.seq);
+            }
+            return seqs;
+        };
+        console_query oldest = {};
+        oldest.limit = 3;
+        CHECK(seqsOf(oldest) == std::vector<u64>{1, 2, 3});
+        console_query newest = oldest;
+        newest.newest = true;
+        CHECK(seqsOf(newest) == std::vector<u64>{8, 9, 10});
+        // The filters and sinceSeq still apply: the newest three warnings, then only those after seq 7.
+        newest.minLevel = core::log_level::WARN;
+        CHECK(seqsOf(newest) == std::vector<u64>{6, 8, 10});
+        newest.sinceSeq = 7;
+        CHECK(seqsOf(newest) == std::vector<u64>{8, 10});
+        newest.sinceSeq = 10;
+        CHECK(seqsOf(newest).empty());
+        // A limit above the matches returns every match.
+        console_query all = {};
+        all.newest = true;
+        CHECK(seqsOf(all).size() == 10);
+        CHECK(buffer.read(all).back().text == "10");
     }
 
     TEST_CASE("console_buffer - clear empties the ring and keeps sequence numbers increasing") {

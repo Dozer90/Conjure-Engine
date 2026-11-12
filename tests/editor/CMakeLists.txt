@@ -4,7 +4,8 @@
 # robustness and golden cases, the loopback end-to-end session, the headless runner and the Grid Sweeper
 # command file. Everything runs headless over the null platform, rhi and audio backends; the UI cases build
 # an ImGui frame without a renderer backend (imgui_frame_scope). test_editor_process (label process) spawns
-# the real conjure_editor executable and is excluded from the default test presets.
+# the real conjure_editor executable and the [slow] cases (label slow) take seconds each; both are excluded
+# from the default test presets.
 
 if(NOT TARGET conjure::editor_core)
     return()
@@ -158,20 +159,23 @@ if(TARGET conjure_shaders)
     )
 endif()
 
-# The process cases spawn conjure_editor: label them so the default presets (which exclude "process") skip
-# them while CI runs them. doctest's discovery already registered every case; the side file adds the label
-# to the cases whose name carries the [process] tag.
-set(processLabelsFile "${CMAKE_CURRENT_BINARY_DIR}/conjure_editor_tests_process_labels.cmake")
-file(WRITE "${processLabelsFile}"
+# The process cases spawn conjure_editor and the [slow] cases take seconds each (docs/handbook/testing.md):
+# label them so the default presets (which exclude "process" and "slow") skip them; CI's label step runs the
+# process cases and the nightly presets run both. doctest's discovery already registered every case; the side
+# file adds the label to the cases whose name carries the [process] or [slow] tag.
+set(tagLabelsFile "${CMAKE_CURRENT_BINARY_DIR}/conjure_editor_tests_tag_labels.cmake")
+file(WRITE "${tagLabelsFile}"
     "if(DEFINED conjure_editor_tests_TESTS)\n"
     "    foreach(entry IN LISTS conjure_editor_tests_TESTS)\n"
     "        if(entry MATCHES \"\\\\[process\\\\]\")\n"
     "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;editor;process\")\n"
+    "        elseif(entry MATCHES \"\\\\[slow\\\\]\")\n"
+    "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;editor;slow\")\n"
     "        endif()\n"
     "    endforeach()\n"
     "endif()\n"
 )
-set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${processLabelsFile}")
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${tagLabelsFile}")
 
 # Every public header of both libraries must compile on its own (build-only check, part of ALL).
 conjure_header_check(conjure_editor_core)

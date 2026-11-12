@@ -46,7 +46,8 @@
   "expect": {
     "ok": true,
     "result": {
-      "count": 0
+      "count": 0,
+      "primary": null
     }
   }
 }

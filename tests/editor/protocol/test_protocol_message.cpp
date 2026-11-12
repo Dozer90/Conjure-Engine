@@ -1,10 +1,14 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "conjure/core/json/document.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/protocol/protocol_message.h"
 
 #include <string>
+#include <string_view>
+#include <utility>
 
 // protocol_message.h: the newline-delimited JSON wire format (docs/design/04_editor.md 2.3).
 
@@ -118,6 +122,55 @@ TEST_SUITE("editor/protocol/protocol_message") {
         CHECK(parsedEvent.value().seq == 3);
         CHECK(parsedEvent.value().data.root()["level"].as_string() == "warn");
         CONJURE_CHECK_ERROR(parse_event(R"({"seq":1})"), protocol_error_code::INVALID_REQUEST);
+    }
+
+    TEST_CASE("regression - F188 strings that are not UTF-8 reach the wire as U+FFFD instead of asserting") {
+        // The JSON serialiser refuses the bytes and logs a warning before the sanitised copy is written.
+        testing::log_capture log = {};
+        const std::string replaced = "Jos\xEF\xBF\xBD";
+        core::json::document result = core::json::object({
+          {"name", std::string_view("Jos\xE9")},
+          {"list", core::json::array({std::string_view("Jos\xE9"), 3})},
+          {"nested", core::json::object({{"deep", std::string_view("Jos\xE9")}, {"flag", true}})},
+        });
+        result.set(std::string_view("bad\xFFkey"), 1);
+        const protocol_response ok = make_ok_response(make_id(4).root(), std::move(result));
+        const core::result<protocol_response> parsedOk = parse_response(serialise(ok));
+        CONJURE_REQUIRE_OK(parsedOk);
+        const core::json::value root = parsedOk.value().result.root();
+        CHECK(root["name"].as_string() == replaced);
+        REQUIRE(root["list"].size() == 2);
+        CHECK(root["list"][0].as_string() == replaced);
+        CHECK(root["list"][1].as_i64() == 3);
+        CHECK(root["nested"]["deep"].as_string() == replaced);
+        CHECK(root["nested"]["flag"].as_bool());
+        CHECK(root["bad\xEF\xBF\xBDkey"].as_i64() == 1);
+
+        const protocol_response failed = make_error_response(
+          make_id(5).root(),
+          protocol_error_code::IO_ERROR,
+          "cannot read 'Jos\xE9.cs'",
+          core::json::object({{"path", std::string_view("Jos\xE9.cs")}})
+        );
+        const core::result<protocol_response> parsedFailed = parse_response(serialise(failed));
+        CONJURE_REQUIRE_OK(parsedFailed);
+        CHECK(parsedFailed.value().errorMessage == "cannot read '" + replaced + ".cs'");
+        CHECK(parsedFailed.value().errorDetails.root()["path"].as_string() == replaced + ".cs");
+
+        protocol_event event = {};
+        event.name = "log";
+        event.data = core::json::object({{"message", std::string_view("Jos\xE9")}});
+        const core::result<protocol_event> parsedEvent = parse_event(serialise(event));
+        CONJURE_REQUIRE_OK(parsedEvent);
+        CHECK(parsedEvent.value().data.root()["message"].as_string() == replaced);
+
+        protocol_request request = {};
+        request.id = make_id(6);
+        request.command = "script.read";
+        request.args = core::json::object({{"path", std::string_view("Jos\xE9.cs")}});
+        const core::result<protocol_request> parsedRequest = parse_request(serialise(request));
+        CONJURE_REQUIRE_OK(parsedRequest);
+        CHECK(parsedRequest.value().args.root()["path"].as_string() == replaced + ".cs");
     }
 
     TEST_CASE("protocol_error_code - every code round trips through the wire name") {

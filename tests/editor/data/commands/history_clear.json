@@ -12,6 +12,9 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "cleared": 1
+    }
   }
 }

@@ -63,4 +63,8 @@ namespace conjure::editor::ui::support {
     void hint_text(std::string_view text) {
         ImGui::TextDisabled("%.*s", static_cast<int>(text.size()), text.data());
     }
+
+    void vertical_separator() {
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    }
 }

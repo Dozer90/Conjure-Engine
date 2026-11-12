@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <optional>
 #include <utility>
 
 namespace conjure::editor::ui {
@@ -50,6 +51,21 @@ namespace conjure::editor::ui {
             }
             return true;
         }
+
+        /// <summary>
+        /// True when an ancestor of the entity is selected: the entity then follows that ancestor and must not
+        /// receive the delta a second time.
+        /// </summary>
+        [[nodiscard]] bool has_selected_ancestor(editor_context &context, ecs::entity entity) {
+            const scene::scene &scene = context.scene();
+            for (ecs::entity up = scene.tree().parent_of(entity); !up.is_null(); up = scene.tree().parent_of(up)) {
+                const std::optional<core::uuid> guid = scene.guid_of(up);
+                if (guid.has_value() && context.selection().contains(*guid)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     std::string_view to_string(gizmo_operation operation) noexcept {
@@ -77,6 +93,8 @@ namespace conjure::editor::ui {
     }
 
     bool gizmo_controller::draw(editor_context &context, const math::vec2 &rectMin, const math::vec2 &rectSize) {
+        // ImGuizmo's own hover flag is refreshed only by a frame that draws the gizmo, so it would go stale here.
+        mOverHandle = false;
         if (!support::frame_is_open() || rectSize.x <= 1.0f || rectSize.y <= 1.0f) {
             return false;
         }
@@ -113,6 +131,7 @@ namespace conjure::editor::ui {
           &delta[0][0],
           mUseSnap ? snap.data() : nullptr
         );
+        mOverHandle = ImGuizmo::IsOver();
         const bool inUse = ImGuizmo::IsUsing();
         if (inUse && !mDragging) {
             begin_drag(context);
@@ -205,7 +224,7 @@ namespace conjure::editor::ui {
         math::quat rotation = math::quat(1.0f, 0.0f, 0.0f, 0.0f);
         for (const core::uuid &guid : context.selection().guids()) {
             const ecs::entity entity = scene.find_guid(guid);
-            if (entity.is_null()) {
+            if (entity.is_null() || has_selected_ancestor(context, entity)) {
                 continue;
             }
             const std::optional<math::transform> world = scene.world_transform_of(entity);

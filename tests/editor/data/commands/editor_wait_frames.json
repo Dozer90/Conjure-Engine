@@ -7,6 +7,9 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "frame": 2
+    }
   }
 }

@@ -15,6 +15,7 @@
 #include "conjure/assets/asset_database.h"
 #include "conjure/assets/asset_manager.h"
 #include "conjure/core/api.h"
+#include "conjure/core/json/document.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/file_system.h"
@@ -113,6 +114,12 @@ namespace conjure::editor {
     class CONJURE_API editor_context {
         public:
             /// <summary>
+            /// The width / height a view command assumes until a viewport panel reports its own (headless
+            /// sessions keep it).
+            /// </summary>
+            static constexpr f32 DEFAULT_VIEWPORT_ASPECT = 16.0f / 9.0f;
+
+            /// <summary>
             /// Receives the responses of one in-process client (the headless runner, tests).
             /// </summary>
             using response_sink = std::function<void(const protocol_response &response)>;
@@ -151,11 +158,14 @@ namespace conjure::editor {
             std::vector<protocol_response> mResponses = {};
             std::vector<std::pair<u32, response_sink>> mResponseSinks = {};
             std::vector<std::unique_ptr<frame_task>> mFrameTasks = {};
+            std::weak_ptr<void> mScriptCompileToken = {};   // held by the running script.compile task
             std::string mScenePath = "";
             std::string mToken = "";
             std::string mDotnetExecutable = "dotnet";
+            std::string mLastScriptConfiguration = "Debug"; // of the last script.compile that succeeded
             debug_draw_flags mDebugDraw = {};
             view_mode mViewMode = view_mode::THREE_D;
+            f32 mViewportAspect = DEFAULT_VIEWPORT_ASPECT;
             u64 mRevision = 0;
             u64 mLastLogSeq = 0;
             usize mRequestsPerFrame = protocol_server::DEFAULT_REQUESTS_PER_FRAME;
@@ -256,6 +266,19 @@ namespace conjure::editor {
                 return mSelection;
             }
 
+            /// <summary>
+            /// The current selection as {guids, primary}: the sorted guids and the primary guid, null when nothing
+            /// is selected. The one builder of that shape: selection.changed carries exactly this, and the
+            /// selection.* answers add "entities" and "count" to it.
+            /// </summary>
+            [[nodiscard]] core::json::document selection_payload() const;
+
+            /// <summary>
+            /// Emits selection.changed with selection_payload(). The selection's on_changed and play.stop both emit
+            /// through it, so every selection.changed has the same shape.
+            /// </summary>
+            void emit_selection_changed();
+
             [[nodiscard]] editor_camera &camera() noexcept {
                 return mCamera;
             }
@@ -326,8 +349,11 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Resolves a scene argument to an asset path: a "scheme://" path is kept, anything else is
-            /// relative to assets://; ".scene.json" is appended when missing.
+            /// Resolves a scene argument to the canonical asset path the database registers: a "scheme://" path
+            /// keeps its scheme, anything else is relative to assets://; the relative part gets forward slashes
+            /// and loses empty, "." and resolvable ".." segments and any leading separator; ".scene.json" is
+            /// appended when missing (compared without case; a bare ".json" is replaced). "" for a blank path
+            /// and for one that leaves its mount ("..", "../x", a drive-letter path).
             /// </summary>
             [[nodiscard]] static std::string normalise_scene_path(std::string_view path);
 
@@ -378,6 +404,48 @@ namespace conjure::editor {
             }
 
             void set_dotnet_executable(std::string executable);
+
+            /// <summary>
+            /// True while a script.compile runs: its task holds the token registered with
+            /// set_script_compile_token, and the token expires when the task finishes or is dropped.
+            /// </summary>
+            [[nodiscard]] bool script_compile_pending() const noexcept {
+                return !mScriptCompileToken.expired();
+            }
+
+            /// <summary>
+            /// Registers the token the running script.compile task owns (see script_compile_pending).
+            /// </summary>
+            void set_script_compile_token(const std::shared_ptr<void> &token) noexcept {
+                mScriptCompileToken = token;
+            }
+
+            /// <summary>
+            /// The build configuration of the last script.compile that succeeded ("Debug" until one did, and again
+            /// after a project.open): script.reload loads scripts/bin/<configuration>/Game.dll by default.
+            /// </summary>
+            [[nodiscard]] const std::string &last_script_configuration() const noexcept {
+                return mLastScriptConfiguration;
+            }
+
+            /// <summary>
+            /// Records the configuration of a script.compile that succeeded (compile_task calls it); rebind() resets
+            /// it to "Debug".
+            /// </summary>
+            void set_last_script_configuration(std::string configuration);
+
+            /// <summary>
+            /// The width / height of the viewport the UI draws (DEFAULT_VIEWPORT_ASPECT until a viewport panel
+            /// reports one): view.pick builds its ray with it when the request names no aspect.
+            /// </summary>
+            [[nodiscard]] f32 viewport_aspect() const noexcept {
+                return mViewportAspect;
+            }
+
+            /// <summary>
+            /// Records the viewport's width / height; a value that is not finite or not positive is ignored.
+            /// </summary>
+            void set_viewport_aspect(f32 aspect) noexcept;
 
             void set_requests_per_frame(usize count) noexcept {
                 mRequestsPerFrame = count;

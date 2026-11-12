@@ -23,6 +23,16 @@ namespace conjure::editor::support {
                   "the undo stack is frozen while playing"
                 );
             }
+            const std::string_view verb = undo ? "Undo" : "Redo";
+            const std::string_view command = undo ? "history.undo" : "history.redo";
+            if (stack.has_open_transaction()) {
+                // Ending any client's transaction pushes its entry at the cursor, which would drop what this
+                // step moves into the redo tail (D4).
+                return make_editor_error(
+                  protocol_error_code::INVALID_REQUEST,
+                  std::format("{} is refused while a transaction is open; end it first", command)
+                );
+            }
             core::json::document labels = core::json::document::array();
             u32 applied = 0;
             for (u32 step = 0; step < count; ++step) {
@@ -36,8 +46,17 @@ namespace conjure::editor::support {
                 if (!done.has_value()) {
                     stack.discard_at_cursor(undo);
                     CONJURE_LOG_ERROR(LOG_EDITOR, "history.{}: {}", undo ? "undo" : "redo", done.get_error().message());
-                    context.bump_revision();
+                    // The commands applied before the failure changed the scene and announced nothing.
+                    const u64 failedRevision = context.bump_revision();
                     context.set_scene_dirty(true);
+                    context.events().emit(
+                      editor_event::SCENE_CHANGED,
+                      core::json::object({
+                        {"revision", failedRevision},
+                        {"label", std::format("{} {} (failed)", verb, entry->label)},
+                        {"cmd", command},
+                      })
+                    );
                     return make_editor_error(protocol_error_code::INTERNAL, done.get_error().message());
                 }
                 labels.push_back(std::string_view(entry->label));
@@ -48,8 +67,8 @@ namespace conjure::editor::support {
                   editor_event::SCENE_CHANGED,
                   core::json::object({
                     {"revision", revision},
-                    {"label", std::format("{} {}", undo ? "Undo" : "Redo", entry->label)},
-                    {"cmd", undo ? "history.undo" : "history.redo"},
+                    {"label", std::format("{} {}", verb, entry->label)},
+                    {"cmd", command},
                   })
                 );
             }
@@ -100,6 +119,12 @@ namespace conjure::editor::support {
 
         core::result<command_outcome> history_clear(command_invocation &invocation) {
             undo_stack &stack = invocation.context.undo();
+            if (stack.has_open_transaction()) {
+                return make_editor_error(
+                  protocol_error_code::INVALID_REQUEST,
+                  "history.clear is refused while a transaction is open; end it first"
+                );
+            }
             const usize cleared = stack.size();
             stack.clear();
             command_outcome outcome = {};

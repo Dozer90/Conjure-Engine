@@ -74,7 +74,11 @@ namespace conjure::editor::ui {
         query.minLevel = mMinLevel;
         query.category = mCategoryFilter;
         query.limit = MAX_LINES_DRAWN;
+        // The tail: with more matches than the panel draws, the oldest would otherwise fill it and new lines
+        // would never appear.
+        query.newest = true;
         const std::vector<console_record> records = context.console().read(query);
+        mNewestSeqShown = records.empty() ? 0 : records.back().seq;
         ImGuiListClipper clipper = {};
         clipper.Begin(static_cast<int>(records.size()));
         while (clipper.Step()) {

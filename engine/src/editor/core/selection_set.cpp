@@ -10,32 +10,41 @@ namespace conjure::editor {
     void selection_set::set(std::span<const core::uuid> guids) {
         std::vector<core::uuid> next = {};
         next.reserve(guids.size());
+        core::uuid lastNamed = core::uuid::null();
         for (const core::uuid &guid : guids) {
             if (!guid.is_null()) {
                 next.push_back(guid);
+                lastNamed = guid;
             }
         }
         std::sort(next.begin(), next.end());
         next.erase(std::unique(next.begin(), next.end()), next.end());
-        if (next == mGuids) {
+        if (next == mGuids && lastNamed == mPrimary) {
             return;
         }
         mGuids = std::move(next);
+        mPrimary = lastNamed;
         mByEntity.clear();
         mOnChanged.emit();
     }
 
     void selection_set::add(std::span<const core::uuid> guids) {
         bool changed = false;
+        core::uuid lastNamed = core::uuid::null();
         for (const core::uuid &guid : guids) {
             if (guid.is_null()) {
                 continue;
             }
+            lastNamed = guid;
             const auto position = std::lower_bound(mGuids.begin(), mGuids.end(), guid);
             if (position != mGuids.end() && *position == guid) {
                 continue;
             }
             mGuids.insert(position, guid);
+            changed = true;
+        }
+        if (!lastNamed.is_null() && lastNamed != mPrimary) {
+            mPrimary = lastNamed;
             changed = true;
         }
         if (changed) {
@@ -55,6 +64,7 @@ namespace conjure::editor {
             changed = true;
         }
         if (changed) {
+            refresh_primary();
             mByEntity.clear();
             mOnChanged.emit();
         }
@@ -65,6 +75,7 @@ namespace conjure::editor {
             return;
         }
         mGuids.clear();
+        mPrimary = core::uuid::null();
         mByEntity.clear();
         mOnChanged.emit();
     }
@@ -86,6 +97,7 @@ namespace conjure::editor {
             ++index;
         }
         if (dropped) {
+            refresh_primary();
             mOnChanged.emit();
         }
     }
@@ -102,9 +114,13 @@ namespace conjure::editor {
     }
 
     core::uuid selection_set::primary() const noexcept {
-        if (mGuids.empty()) {
-            return core::uuid::null();
+        return mPrimary;
+    }
+
+    void selection_set::refresh_primary() noexcept {
+        if (contains(mPrimary)) {
+            return;
         }
-        return mGuids.front();
+        mPrimary = mGuids.empty() ? core::uuid::null() : mGuids.front();
     }
 }

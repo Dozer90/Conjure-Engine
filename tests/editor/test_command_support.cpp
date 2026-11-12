@@ -1,7 +1,13 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/approx.h"
+
+#include "editor_test_support.h"
+
 #include "editor/core/commands/command_support.h"
 
+#include "conjure/core/json/document.h"
+#include "conjure/core/uuid.h"
 #include "conjure/editor/editor_error.h"
 
 #include <array>
@@ -9,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // command_support.h (private): the helpers every command group shares; the codec and the build-tool output
@@ -25,6 +32,20 @@ namespace {
             bytes.push_back(static_cast<std::byte>(character));
         }
         return bytes;
+    }
+
+    ecs::entity entity_of(editor_test::headless_editor &editor, const std::string &guid) {
+        const std::optional<core::uuid> parsed = core::uuid::parse(guid);
+        REQUIRE(parsed.has_value());
+        const ecs::entity entity = editor.scene().find_guid(*parsed);
+        REQUIRE_FALSE(entity.is_null());
+        return entity;
+    }
+
+    core::json::document parsed_json(std::string_view text) {
+        core::result<core::json::document> parsed = core::json::document::parse(text);
+        REQUIRE(parsed.has_value());
+        return std::move(parsed).value();
     }
 }
 
@@ -49,6 +70,90 @@ TEST_SUITE("editor/command_support") {
         CONJURE_REQUIRE_OK(spaced);
         CHECK(spaced.value() == bytes_of("foobar"));
         CONJURE_CHECK_ERROR(base64_decode("Zm9v*"), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - base64_decode refuses misplaced padding, truncated quads and non-zero trailing bits") {
+        CONJURE_CHECK_ERROR(base64_decode("QQ=QQ"), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(base64_decode("Zm9"), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(base64_decode("Zh=="), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(base64_decode("Zg==="), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(base64_decode("Zg==Zg=="), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(base64_decode("Zm9vY"), protocol_error_code::INVALID_ARGS);
+        const std::array<std::pair<std::string_view, std::string_view>, 4> valid = {
+            std::pair{"Zg==", "f"},
+            std::pair{"Zm8=", "fo"},
+            std::pair{"", ""},
+            std::pair{"Zm9v\nYmFy ", "foobar"},
+        };
+        for (const auto &[encoded, expected] : valid) {
+            CAPTURE(encoded);
+            const core::result<std::vector<std::byte>> decoded = base64_decode(encoded);
+            CONJURE_REQUIRE_OK(decoded);
+            CHECK(decoded.value() == bytes_of(expected));
+        }
+    }
+
+    TEST_CASE("regression - read_vec3, read_rotation and f32_or refuse a number outside the f32 range") {
+        const core::json::document huge = parsed_json(R"({"x":1e39,"vector":[1e39,0,0],"fine":[1,2,3],"y":2.5})");
+        const core::json::value root = huge.root();
+        CONJURE_CHECK_ERROR(read_vec3(root["vector"], "args.vector"), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(read_rotation(root["vector"], "args.rotation"), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(f32_or(root, "x", 0.0f), protocol_error_code::INVALID_ARGS);
+        const core::result<math::vec3> fine = read_vec3(root["fine"], "args.fine");
+        CONJURE_REQUIRE_OK(fine);
+        CONJURE_CHECK_APPROX(fine.value(), math::vec3(1.0f, 2.0f, 3.0f));
+        CONJURE_CHECK_OK(read_rotation(root["fine"], "args.fine"));
+        const core::result<f32> y = f32_or(root, "y", 0.0f);
+        CONJURE_REQUIRE_OK(y);
+        CHECK(y.value() == doctest::Approx(2.5f));
+        const core::result<f32> absent = f32_or(root, "missing", 7.0f);
+        CONJURE_REQUIRE_OK(absent);
+        CHECK(absent.value() == doctest::Approx(7.0f));
+        CONJURE_CHECK_ERROR(f32_or(root, "fine", 0.0f), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - F485 u32_or reads a whole real such as 2.0 and refuses 2.5, -1 and 4294967296") {
+        const core::json::document args = parsed_json(
+          R"({"whole":2.0,"plain":7,"fraction":2.5,"negative":-1,"wide":4294967296,"huge":1e20,"text":"3",)"
+          R"("top":4294967295.0})"
+        );
+        const core::json::value root = args.root();
+        const core::result<u32> whole = u32_or(root, "whole", 0);
+        CONJURE_REQUIRE_OK(whole);
+        CHECK(whole.value() == 2);
+        const core::result<u32> plain = u32_or(root, "plain", 0);
+        CONJURE_REQUIRE_OK(plain);
+        CHECK(plain.value() == 7);
+        const core::result<u32> top = u32_or(root, "top", 0);
+        CONJURE_REQUIRE_OK(top);
+        CHECK(top.value() == 4294967295u);
+        const core::result<u32> absent = u32_or(root, "missing", 9);
+        CONJURE_REQUIRE_OK(absent);
+        CHECK(absent.value() == 9);
+        CONJURE_CHECK_ERROR(u32_or(root, "fraction", 0), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(u32_or(root, "negative", 0), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(u32_or(root, "wide", 0), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(u32_or(root, "huge", 0), protocol_error_code::INVALID_ARGS);
+        CONJURE_CHECK_ERROR(u32_or(root, "text", 0), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("outermost - keeps the first occurrence of each outermost subtree in input order and drops duplicates "
+      "and descendants") {
+        editor_test::headless_editor editor = {};
+        const ecs::entity a = entity_of(editor, editor.create_entity("A"));
+        const ecs::entity b = entity_of(editor, editor.create_entity("B"));
+        const std::string cGuid = editor.create_entity("C", "A");
+        const ecs::entity c = entity_of(editor, cGuid);
+        const ecs::entity d = entity_of(editor, editor.create_entity("D", cGuid));
+        const ecs::entity e = entity_of(editor, editor.create_entity("E"));
+        const std::vector<ecs::entity> mixed = {d, b, a, b, c, e, a};
+        CHECK(outermost(editor.scene(), mixed) == std::vector<ecs::entity>{b, a, e});
+        // A grandparent in the list hides a grandchild whose parent is not listed.
+        const std::vector<ecs::entity> skipped = {d, a};
+        CHECK(outermost(editor.scene(), skipped) == std::vector<ecs::entity>{a});
+        const std::vector<ecs::entity> alone = {d, d};
+        CHECK(outermost(editor.scene(), alone) == std::vector<ecs::entity>{d});
+        CHECK(outermost(editor.scene(), std::vector<ecs::entity>{}).empty());
     }
 
     TEST_CASE("parse_tool_diagnostic - MSVC, linker, GCC/Clang and CMake formats are recognised") {

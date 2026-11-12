@@ -20,14 +20,22 @@ namespace conjure::editor::net {
         std::atomic<int> sInitialiseCount = 0;
 
         [[nodiscard]] core::error socket_error(std::string_view what, int code) {
-            return core::error(code == WSAEADDRINUSE ? core::error_code::ALREADY_EXISTS : core::error_code::IO_FAILURE,
-              std::format("{}: winsock error {}", what, code));
+            return core::error(
+              is_port_unavailable_error(code) ? core::error_code::ALREADY_EXISTS : core::error_code::IO_FAILURE,
+              std::format("{}: winsock error {}", what, code)
+            );
         }
 
         [[nodiscard]] bool set_non_blocking(SOCKET socket) noexcept {
             u_long mode = 1;
             return ioctlsocket(socket, FIONBIO, &mode) == 0;
         }
+    }
+
+    bool is_port_unavailable_error(int nativeCode) noexcept {
+        // bind reports a port in an excluded range (Hyper-V, WSL, Docker), or one another process holds with
+        // SO_EXCLUSIVEADDRUSE, as WSAEACCES rather than WSAEADDRINUSE.
+        return nativeCode == WSAEADDRINUSE || nativeCode == WSAEACCES;
     }
 
     socket_handle::~socket_handle() {

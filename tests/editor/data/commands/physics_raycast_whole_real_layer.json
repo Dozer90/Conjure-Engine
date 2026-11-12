@@ -1,0 +1,28 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "physics.raycast",
+    "args": {
+      "origin": [
+        0,
+        10,
+        0
+      ],
+      "direction": [
+        0,
+        -1,
+        0
+      ],
+      "maxDistance": 50,
+      "layers": [
+        3.0
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "hit": false
+    }
+  }
+}

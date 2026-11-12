@@ -237,6 +237,10 @@ namespace conjure::editor {
         }
         candidates.reserve(entities.size());
         for (const ecs::entity entity : entities) {
+            // A disabled entity, or one under a disabled ancestor, is not drawn, so it cannot be clicked either.
+            if (!scene.is_active(entity)) {
+                continue;
+            }
             const std::optional<math::transform> worldTransform = scene.world_transform_of(entity);
             if (!worldTransform.has_value()) {
                 continue;
@@ -364,6 +368,10 @@ namespace conjure::editor {
                     distance = hit.entry;
                     normal = math::vec3(0.0f, 1.0f, 0.0f);
                 }
+            }
+            // The bounds may start within reach while the surface itself lies beyond it.
+            if (distance > context.maxDistance) {
+                continue;
             }
             const bool closer = !bestDistance.has_value() || distance < *bestDistance ||
               (distance == *bestDistance && hit.volume < bestVolume);

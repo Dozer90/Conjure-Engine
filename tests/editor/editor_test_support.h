@@ -151,16 +151,19 @@ namespace editor_test {
     };
 
     /// <summary>
-    /// Every file under <project>/assets and <project>/scripts as path -> bytes, for the inverse round trips of
-    /// asset and script commands.
+    /// Every file under the project root except .conjure/ as path -> bytes, with project.json normalised through
+    /// engine::project, for the inverse round trips of asset, script and project commands. Directories are not
+    /// listed, so an empty folder is invisible here (asset_create_folder.json and asset_delete_folder.json opt out of
+    /// the change check). Known gap, not a rule: undo of asset.create_material, asset.import, asset.restore and
+    /// script.write keeps the folders those commands created.
     /// </summary>
     [[nodiscard]] std::map<std::string, std::string> project_file_snapshot(const std::filesystem::path &projectRoot);
 
     /// <summary>
-    /// A complete editing-state snapshot: world hash, serialised scene and the project files.
+    /// A complete editing-state snapshot: the serialised scene and the project files. (headless_editor::world_hash
+    /// is a hash of the same scene text, so it would add nothing here.)
     /// </summary>
     struct editor_snapshot {
-        conjure::u64 worldHash = 0;
         std::string scene = "";
         std::map<std::string, std::string> files = {};
 
@@ -177,7 +180,11 @@ namespace editor_test {
     /// <summary>
     /// One fixture of tests/editor/data/commands/<name>.json:
     /// { "setup": [{"cmd","args"}...], "request": {"cmd","args"}, "expect": {"ok": bool, "result": {subset},
-    ///   "error": {"code"}} , "expectAnyOf": [expect...], "roundTrip": bool, "editor": {"withScene": bool} }
+    ///   "error": {"code"}} , "expectAnyOf": [expect...], "roundTrip": bool, "expectChange": bool,
+    ///   "editor": {"withScene": bool} }
+    /// ${project} expands in the arguments and in the expected result; the subset is matched with json_contains.
+    /// An undoable command must change the snapshot unless "expectChange" is false (then a "_comment" says why
+    /// its effect lies outside the snapshot).
     /// </summary>
     struct command_fixture {
         std::string name = "";
@@ -194,6 +201,9 @@ namespace editor_test {
 
     /// <summary>
     /// True when 'actual' contains every member of 'expected' (recursively; arrays element-wise, scalars equal).
+    /// Two markers loosen it: the string "@any" matches any value (the member exists, as for a generated guid),
+    /// and an array whose first element is "@contains" matches when each of its other elements matches some
+    /// element of 'actual', in any order and whatever else 'actual' holds (for registry listings).
     /// </summary>
     [[nodiscard]] bool json_contains(
       const conjure::core::json::value &actual,

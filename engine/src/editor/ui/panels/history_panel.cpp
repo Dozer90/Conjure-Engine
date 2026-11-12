@@ -7,6 +7,8 @@
 #include <imgui.h>
 
 #include <format>
+#include <string>
+#include <vector>
 
 namespace conjure::editor::ui {
 

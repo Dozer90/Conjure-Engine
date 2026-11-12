@@ -28,7 +28,8 @@ namespace conjure::editor {
             };
 
             std::vector<entry> mEntries = {};               // sorted by name
-            u64 mSchemaHash = 0;
+            mutable u64 mSchemaHash = 0;                    // valid while !mSchemaHashStale
+            mutable bool mSchemaHashStale = true;           // set by every change, cleared by schema_hash()
 
         public:
             command_registry();
@@ -75,7 +76,9 @@ namespace conjure::editor {
             [[nodiscard]] std::vector<std::string> names() const;
 
             /// <summary>
-            /// The names closest to 'name' by Levenshtein distance (ties by name), at most 'count'.
+            /// The names closest to 'name' by Levenshtein distance (ties by name), at most 'count'. Empty for a
+            /// name longer than 128 bytes: no command is spelt like that, and the distance would cost its length
+            /// times every command's.
             /// </summary>
             [[nodiscard]] std::vector<std::string> closest_names(std::string_view name, usize count) const;
 
@@ -92,11 +95,10 @@ namespace conjure::editor {
 
             /// <summary>
             /// FNV-1a 64 of the canonical catalogue text (UI_ONLY excluded): identical for identical catalogues,
-            /// different when any name, schema or flag changes.
+            /// different when any name, schema or flag changes. Computed on the first call after a change, so
+            /// registering the whole catalogue command by command stays linear.
             /// </summary>
-            [[nodiscard]] u64 schema_hash() const noexcept {
-                return mSchemaHash;
-            }
+            [[nodiscard]] u64 schema_hash() const;
 
             [[nodiscard]] usize size() const noexcept {
                 return mEntries.size();
@@ -104,7 +106,7 @@ namespace conjure::editor {
 
         private:
             [[nodiscard]] const entry *find_entry(std::string_view name) const noexcept;
-            void recompute_hash();
+            void recompute_hash() const;
     };
 
     /// <summary>

@@ -19,10 +19,12 @@
 #include <algorithm>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 // script.* (docs/design/04_editor.md 4.4, R15): C# sources under <project>/scripts, the managed build through
 // scripting::managed_build_runner, hot reload and the script component.
@@ -57,7 +59,7 @@ namespace conjure::editor::support {
           "'$(ConjureManagedDir)'.\" />\n"
           "  </Target>\n"
           "  <ItemGroup>\n"
-          "    <Compile Include=\"**/*.cs\" />\n"
+          "    <Compile Include=\"**/*.cs\" Exclude=\"bin/**;obj/**\" />\n"
           "  </ItemGroup>\n"
           "  <ItemGroup>\n"
           "    <Reference Include=\"Conjure.Managed\">\n"
@@ -89,9 +91,8 @@ namespace conjure::editor::support {
           "\n"
           "    protected override void OnUpdate(float deltaTime)\n"
           "    {\n"
-          "        Vector3 position = Transform.Position;\n"
-          "        position.Z += Speed * deltaTime * 0.0f;\n"
-          "        Transform.Position = position;\n"
+          "        Vector3 step = Transform.Forward * (Speed * deltaTime);\n"
+          "        Transform.Translate(step);\n"
           "    }\n"
           "}\n";
 
@@ -113,27 +114,53 @@ namespace conjure::editor::support {
 
         /// <summary>
         /// A path inside <project>/scripts: relative to it, or absolute and inside it. Anything that escapes
-        /// the directory is INVALID_ARGS.
+        /// the directory, also through a symbolic link or junction, is INVALID_ARGS. The answer is spelled
+        /// under the lexical scripts root so relative_script_path() applies to it.
         /// </summary>
         core::result<std::filesystem::path> script_file(editor_context &context, std::string_view text) {
             CONJURE_TRY_ASSIGN(const std::filesystem::path root, scripts_root(context));
             if (text.empty()) {
                 return invalid_args("args.path: a script path is required");
             }
-            std::filesystem::path given = std::filesystem::path(std::string(text));
-            std::filesystem::path full = given.is_absolute() ? given : root / given;
-            full = full.lexically_normal();
-            const std::filesystem::path normalRoot = root.lexically_normal();
-            const std::string fullText = full.generic_string();
-            const std::string rootText = normalRoot.generic_string();
-            if (fullText.size() <= rootText.size() || fullText.compare(0, rootText.size(), rootText) != 0 ||
-              fullText[rootText.size()] != '/') {
+            const std::filesystem::path given = std::filesystem::path(std::string(text));
+            const std::filesystem::path full = given.is_absolute() ? given : root / given;
+            // weakly_canonical treats a link to a missing target as a name still to be created and keeps it as
+            // written, yet writing through it creates the target, wherever that is.
+            std::error_code linkError = {};
+            const std::filesystem::file_status linkStatus = std::filesystem::symlink_status(full, linkError);
+            if (!linkError && std::filesystem::is_symlink(linkStatus) && !std::filesystem::exists(full, linkError)) {
+                return invalid_args(std::format("'{}' is a link to a missing file", text));
+            }
+            // weakly_canonical resolves links in the existing part of both paths and answers the on-disk
+            // spelling, so a drive letter or directory written in another case still compares equal, and the
+            // containment test runs on whole components rather than on a byte prefix.
+            std::error_code error = {};
+            const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(root, error);
+            if (error) {
+                return io_error(std::format("cannot resolve '{}': {}", root.generic_string(), error.message()));
+            }
+            const std::filesystem::path canonicalFull = std::filesystem::weakly_canonical(full, error);
+            if (error) {
+                return invalid_args(std::format("'{}' is not a usable path: {}", text, error.message()));
+            }
+            const std::filesystem::path relative = canonicalFull.lexically_relative(canonicalRoot);
+            if (relative.empty() || relative == "." || relative.is_absolute() || *relative.begin() == "..") {
                 return invalid_args(std::format("'{}' is outside the project's scripts directory", text));
             }
-            if (full.extension() != ".cs") {
-                return invalid_args("scripts are .cs files");
+            // The top-level bin/ and obj/ hold MSBuild's output: the compile glob and script.list skip them, so a
+            // source written there would never build or show.
+            const std::filesystem::path first = *relative.begin();
+            if (std::distance(relative.begin(), relative.end()) > 1 && (first == "bin" || first == "obj")) {
+                return invalid_args(std::format(
+                  "'{}' is inside MSBuild's output directory (scripts/bin or scripts/obj)",
+                  text
+                ));
             }
-            return full;
+            // Lower case only on purpose: script.list and MSBuild's **/*.cs glob (on Linux) match it exactly.
+            if (relative.extension() != ".cs") {
+                return invalid_args("scripts are .cs files (lower-case extension)");
+            }
+            return root.lexically_normal() / relative;
         }
 
         std::string relative_script_path(const std::filesystem::path &root, const std::filesystem::path &file) {
@@ -161,6 +188,11 @@ namespace conjure::editor::support {
                 return io_error(std::format("cannot write '{}'", file.generic_string()));
             }
             output.write(text.data(), static_cast<std::streamsize>(text.size()));
+            // A full disk or a lost handle shows up only once the buffer is flushed by close().
+            output.close();
+            if (output.fail()) {
+                return io_error(std::format("cannot write '{}'", file.generic_string()));
+            }
             return core::result<void>::success();
         }
 
@@ -178,22 +210,45 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
-        /// True when no .cs file is left anywhere under the scripts root.
+        /// Every .cs source under the scripts root, unsorted. The top-level bin/ and obj/ directories hold
+        /// MSBuild's output (generated AssemblyInfo and the like), which the project file leaves out of its
+        /// compile glob too, so they are not scripts. IO_ERROR when a directory cannot be listed: a partial list
+        /// would hide scripts and could let script.delete remove the project file.
+        /// </summary>
+        core::result<std::vector<std::filesystem::path>> script_sources(const std::filesystem::path &root) {
+            std::vector<std::filesystem::path> files = {};
+            std::error_code error = {};
+            if (!std::filesystem::is_directory(root, error)) {
+                return files;
+            }
+            std::filesystem::recursive_directory_iterator iterator(root, error);
+            const std::filesystem::recursive_directory_iterator end = {};
+            while (!error && iterator != end) {
+                const std::filesystem::directory_entry &entry = *iterator;
+                std::error_code ignored = {};
+                if (entry.is_directory(ignored)) {
+                    const std::filesystem::path name = entry.path().filename();
+                    if (iterator.depth() == 0 && (name == "bin" || name == "obj")) {
+                        iterator.disable_recursion_pending();
+                    }
+                } else if (entry.is_regular_file(ignored) && entry.path().extension() == ".cs") {
+                    files.push_back(entry.path());
+                }
+                iterator.increment(error);
+            }
+            if (error) {
+                return io_error(std::format("cannot list '{}': {}", root.generic_string(), error.message()));
+            }
+            return files;
+        }
+
+        /// <summary>
+        /// True when no script source (script_sources) is left under the scripts root; false when the scan
+        /// fails, so the project file is kept.
         /// </summary>
         bool scripts_root_empty(const std::filesystem::path &root) {
-            std::error_code ignored = {};
-            if (!std::filesystem::is_directory(root, ignored)) {
-                return true;
-            }
-            for (const std::filesystem::directory_entry &entry : std::filesystem::recursive_directory_iterator(
-              root,
-              ignored
-            )) {
-                if (entry.is_regular_file(ignored) && entry.path().extension() == ".cs") {
-                    return false;
-                }
-            }
-            return true;
+            const core::result<std::vector<std::filesystem::path>> sources = script_sources(root);
+            return sources.has_value() && sources.value().empty();
         }
 
         /// <summary>
@@ -427,18 +482,7 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::filesystem::path root, scripts_root(context));
             core::json::document scripts = core::json::document::array();
-            std::error_code ignored = {};
-            std::vector<std::filesystem::path> files = {};
-            if (std::filesystem::is_directory(root, ignored)) {
-                for (const std::filesystem::directory_entry &entry : std::filesystem::recursive_directory_iterator(
-                  root,
-                  ignored
-                )) {
-                    if (entry.is_regular_file(ignored) && entry.path().extension() == ".cs") {
-                        files.push_back(entry.path());
-                    }
-                }
-            }
+            CONJURE_TRY_ASSIGN(std::vector<std::filesystem::path> files, script_sources(root));
             std::sort(files.begin(), files.end());
             for (const std::filesystem::path &file : files) {
                 // The namespace and class come from the source: script.create accepts any namespace.
@@ -468,22 +512,30 @@ namespace conjure::editor::support {
 
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
         /// <summary>
-        /// Owns the build runner until the report arrived on the main thread, then answers the reply.
+        /// Owns the build runner until the report arrived on the main thread, then answers the reply. The busy
+        /// token it holds keeps editor_context::script_compile_pending() true for exactly its lifetime (the
+        /// runner's destructor waits for the build, so no build outlives the token).
         /// </summary>
         class compile_task final : public frame_task {
             private:
                 std::unique_ptr<scripting::managed_build_runner> mRunner = nullptr;
                 std::shared_ptr<std::optional<scripting::build_report>> mReport = nullptr;
+                std::shared_ptr<void> mBusyToken = nullptr;
+                std::string mConfiguration = "";
                 async_reply mReply = {};
 
             public:
                 compile_task(
                   std::unique_ptr<scripting::managed_build_runner> runner,
                   std::shared_ptr<std::optional<scripting::build_report>> report,
+                  std::shared_ptr<void> busyToken,
+                  std::string configuration,
                   async_reply reply
                 ) :
                     mRunner(std::move(runner)),
                     mReport(std::move(report)),
+                    mBusyToken(std::move(busyToken)),
+                    mConfiguration(std::move(configuration)),
                     mReply(reply) {}
 
                 ~compile_task() override {
@@ -498,6 +550,10 @@ namespace conjure::editor::support {
                         return false;
                     }
                     const scripting::build_report &report = **mReport;
+                    if (report.succeeded) {
+                        // script.reload's default assembly is the output of this build.
+                        context.set_last_script_configuration(mConfiguration);
+                    }
                     if (!mReply.valid()) {
                         return true;
                     }
@@ -554,6 +610,17 @@ namespace conjure::editor::support {
         core::result<command_outcome> script_compile(command_invocation &invocation) {
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
             editor_context &context = invocation.context;
+            // The configuration reaches dotnet's command line: like module.build's arguments it may never read
+            // as an option ("-p:X=1") or hold a path.
+            const std::string_view configuration = string_or(invocation.args, "configuration", "Debug");
+            if (!is_safe_tool_argument(configuration)) {
+                return invalid_args(
+                  "args.configuration: expected a configuration name (letters, digits, '_', '-', '.')"
+                );
+            }
+            if (context.script_compile_pending()) {
+                return make_editor_error(protocol_error_code::BUSY, "a script.compile is still running");
+            }
             CONJURE_TRY_ASSIGN(const std::filesystem::path root, scripts_root(context));
             const std::filesystem::path project = root / std::filesystem::path(PROJECT_FILE_NAME);
             std::error_code ignored = {};
@@ -568,7 +635,7 @@ namespace conjure::editor::support {
             runner->set_dotnet_executable(context.dotnet_executable());
             scripting::build_request request = {};
             request.projectPath = project;
-            request.configuration = std::string(string_or(invocation.args, "configuration", "Debug"));
+            request.configuration = std::string(configuration);
             request.properties.emplace_back("ConjureManagedDir", managed_directory(context).generic_string());
             request.timeoutSeconds = std::max(1.0, context.dispatcher().async_timeout_seconds() * 0.9);
             using report_slot = std::optional<scripting::build_report>;
@@ -576,7 +643,15 @@ namespace conjure::editor::support {
             runner->build(request, [report](const scripting::build_report &finished) {
                 *report = finished;
             });
-            context.add_frame_task(std::make_unique<compile_task>(std::move(runner), report, invocation.reply));
+            std::shared_ptr<void> busyToken = std::make_shared<int>(0);
+            context.set_script_compile_token(busyToken);
+            context.add_frame_task(std::make_unique<compile_task>(
+              std::move(runner),
+              report,
+              std::move(busyToken),
+              std::string(configuration),
+              invocation.reply
+            ));
             return command_outcome{};
 #else
             (void) invocation;
@@ -596,14 +671,23 @@ namespace conjure::editor::support {
                 assembly = std::filesystem::path(std::string(string_or(invocation.args, "assembly", "")));
             }
             if (assembly.empty()) {
+                // The output of the last successful script.compile (bin/<configuration>/Game.dll).
                 CONJURE_TRY_ASSIGN(const std::filesystem::path root, scripts_root(context));
-                assembly = root / "bin" / "Debug" / "Game.dll";
+                assembly = root / "bin" / std::filesystem::path(context.last_script_configuration()) / "Game.dll";
+            }
+            std::error_code probe = {};
+            if (!std::filesystem::is_regular_file(assembly, probe)) {
+                return make_editor_error(
+                  protocol_error_code::PATH_NOT_FOUND,
+                  std::format("no game assembly at '{}': run script.compile first", assembly.generic_string())
+                );
             }
             const core::result<void> reloaded = runtime->is_assembly_loaded()
               ? runtime->reload_game_assembly(assembly)
               : runtime->load_game_assembly(assembly);
             if (!reloaded.has_value()) {
-                return make_editor_error(protocol_error_code::COMPILE_FAILED, reloaded.get_error().message());
+                // The file exists, so the build did its part: the runtime could not load what it produced.
+                return make_editor_error(protocol_error_code::IO_ERROR, reloaded.get_error().message());
             }
             const scripting::script_runtime_stats stats = runtime->stats();
             core::json::document result = core::json::object({

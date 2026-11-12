@@ -16,6 +16,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The real executable (docs/design/08_testing.md 6.3 item 8, label process): conjure_editor --headless --exec runs
@@ -37,14 +38,43 @@ namespace {
         stream << "{\n  \"schema_version\": 1,\n  \"name\": \"process_test\",\n  \"assets_root\": \"assets\"\n}\n";
     }
 
-    core::process_result run_editor(const std::vector<std::string> &arguments) {
+    core::process_result run_editor(const std::vector<std::string> &arguments, f64 timeoutSeconds = 600.0) {
         core::process_desc desc = {};
         desc.executable = CONJURE_EDITOR_EXECUTABLE;
         desc.arguments = arguments;
-        desc.timeoutSeconds = 600.0;
+        desc.timeoutSeconds = timeoutSeconds;
         core::result<core::process_result> result = core::process::run(desc);
         REQUIRE_MESSAGE(result.has_value(), testing::describe_error(result));
         return std::move(result).value();
+    }
+
+    void write_text(const std::filesystem::path &path, std::string_view text) {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.is_open());
+        stream << text;
+    }
+
+    /// <summary>
+    /// The path as UTF-8 bytes, the way the editor's command line expects it on every platform.
+    /// </summary>
+    std::string path_argument(const std::filesystem::path &path) {
+        const std::u8string generic = path.generic_u8string();
+        return std::string(generic.begin(), generic.end());
+    }
+
+    /// <summary>
+    /// The lines of standard output that are neither a protocol response nor a protocol event (empty = clean).
+    /// </summary>
+    std::string non_protocol_lines(const std::string &output) {
+        std::string stray = {};
+        for (const std::string_view line : core::str::split_lines(output)) {
+            if (line.empty() || parse_response(line).has_value() || parse_event(line).has_value()) {
+                continue;
+            }
+            stray += line;
+            stray += '\n';
+        }
+        return stray;
     }
 }
 
@@ -108,10 +138,135 @@ TEST_SUITE("editor/editor_process") {
             directory.path() / "nowhere"
           ).generic_string(), "--ai-port", "0", "--exec", "none.json",
         });
-        CHECK(missingProject.exitCode == static_cast<int>(engine::exit_code::INIT_FAILURE));
+        // 04_editor.md 3.1, 3.11: a startup or project failure is 2 (engine::exit_code has no value of its own
+        // for it; INIT_FAILURE is 1, which the editor uses for a failed command).
+        CHECK_MESSAGE(missingProject.exitCode == 2, missingProject.standardError);
+        CHECK(missingProject.standardError.find("PROJECT_NOT_FOUND") != std::string::npos);
         const core::process_result help = run_editor({"--help"});
         CHECK(help.exitCode == 0);
         CHECK(help.standardOutput.find("--ai-port") != std::string::npos);
+    }
+
+    TEST_CASE("regression - F079 editor_process bad arguments exit 3 and project settings that do not validate exit 2 "
+      "[process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        constexpr int BAD_ARGUMENTS_EXIT = static_cast<int>(engine::exit_code::BAD_ARGUMENTS);
+        constexpr std::string_view HELP_HINT = "'conjure_editor --help'";
+        // Every run names a command file that does not exist: startup fails before it is read, and a regression
+        // that let startup pass ends at the unreadable file instead of looping frames until the timeout.
+        SUBCASE("an option neither the editor nor the engine knows") {
+            const core::process_result result = run_editor({
+              "--headless", "--bogus-flag", "--ai-port", "0", "--exec", "x.json",
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("--bogus-flag") != std::string::npos);
+            CHECK(result.standardError.find(HELP_HINT) != std::string::npos);
+        }
+        SUBCASE("an unknown option is named before a missing project is noticed") {
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(directory.path() / "nowhere"), "--bogus-flag", "--ai-port", "0",
+              "--exec", "x.json",
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("--bogus-flag") != std::string::npos);
+            CHECK(result.standardError.find("PROJECT_NOT_FOUND") == std::string::npos);
+        }
+        SUBCASE("an engine flag value that does not parse") {
+            const core::process_result result = run_editor({
+              "--headless", "--frames", "abc", "--ai-port", "0", "--exec", "x.json",
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("--frames") != std::string::npos);
+        }
+        SUBCASE("an engine flag that makes the merged configuration invalid") {
+            // Above core::jobs::MAX_WORKER_COUNT; the project alone validates.
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(project), "--jobs", "100000", "--ai-port", "0", "--exec",
+              "x.json",
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("INVALID_CONFIG") != std::string::npos);
+            CHECK(result.standardError.find(HELP_HINT) != std::string::npos);
+        }
+        SUBCASE("project settings that do not validate are the project's fault") {
+            // A frame delta cap below the fixed step fails validate() with or without any flag.
+            write_text(
+              project / "project.json",
+              "{\n  \"schema_version\": 1,\n  \"name\": \"process_test\",\n  \"assets_root\": \"assets\",\n"
+              "  \"time\": { \"fixed_hz\": 60, \"max_frame_delta_seconds\": 0.001 }\n}\n"
+            );
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(project), "--ai-port", "0", "--exec", "x.json",
+            });
+            CHECK_MESSAGE(result.exitCode == 2, result.standardError);
+            CHECK(result.standardError.find("INVALID_CONFIG") != std::string::npos);
+            CHECK(result.standardError.find("maxFrameDeltaSeconds") != std::string::npos);
+            CHECK(result.standardError.find(HELP_HINT) == std::string::npos);
+        }
+    }
+
+    TEST_CASE("regression - F037 editor_process a project path outside the active code page opens [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        // Latin-1 (ü), Greek (λ) and CJK (日本) characters: no single legacy code page holds them all.
+        const std::filesystem::path project =
+          directory.path() / std::filesystem::path(std::u8string_view(u8"projekt_ü_λ_日本"));
+        write_project(project);
+        const std::filesystem::path commands = directory.path() / "commands.json";
+        write_text(
+          commands,
+          R"([{"cmd":"scene.new","args":{"name":"s","path":"scenes/utf8"}},{"cmd":"scene.save"}])"
+        );
+        const core::process_result result = run_editor({
+          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
+          "--log-level", "warn",
+        });
+        CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+        CHECK(result.standardError.find("PROJECT_NOT_FOUND") == std::string::npos);
+        CHECK(std::filesystem::is_regular_file(project / "assets" / "scenes" / "utf8.scene.json"));
+    }
+
+    TEST_CASE("regression - F083 editor_process a bare --exec writes only protocol lines to stdout [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        const std::filesystem::path commands = directory.path() / "state.json";
+        write_text(commands, R"([{"cmd":"editor.state"},{"cmd":"scene.new","args":{"name":"s"}}])");
+        // No --log-level: the engine's INFO lines are produced and must all reach standard error.
+        const core::process_result result = run_editor({
+          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
+        });
+        CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+        CHECK(result.standardOutput.find("\"ok\":true") != std::string::npos);
+        const std::string stray = non_protocol_lines(result.standardOutput);
+        CHECK_MESSAGE(stray.empty(), stray);
+        CHECK(result.standardError.find("[INFO ]") != std::string::npos);
+    }
+
+    TEST_CASE("regression - F158 editor_process a headless --ai-stdio session exits 0 once stdin ends [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        // The child's standard input is the null device, so the input ends at once. Before the fix the editor
+        // kept running until the timeout killed it.
+        const core::process_result result = run_editor(
+          {"--headless", "--project", path_argument(project), "--ai-stdio"},
+          120.0
+        );
+        CHECK_FALSE(result.timedOut);
+        CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+        const std::string stray = non_protocol_lines(result.standardOutput);
+        CHECK_MESSAGE(stray.empty(), stray);
+        CHECK(result.standardError.find("standard input closed") != std::string::npos);
     }
 
     TEST_CASE("editor_process - a failing command file exits 1 and names the failing index [process]") {

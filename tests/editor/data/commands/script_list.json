@@ -12,6 +12,15 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "scripts": [
+        {
+          "className": "Game.CellBehaviour",
+          "path": "CellBehaviour.cs"
+        }
+      ],
+      "project": "${project}/scripts/Game.csproj"
+    }
   }
 }

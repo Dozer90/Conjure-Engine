@@ -1,4 +1,6 @@
 {
+  "_comment": "Only removes an empty folder, which the file snapshot cannot see; test_commands_asset_prefab checks it.",
+  "expectChange": false,
   "setup": [
     {
       "cmd": "asset.create_folder",

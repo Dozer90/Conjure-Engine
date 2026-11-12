@@ -6,16 +6,20 @@
 #include "conjure/core/bit_vector.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
+#include "conjure/core/uuid.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/scene/scene.h"
 
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 // The hierarchy panel's flat row list (docs/design/04_editor.md D11, 2.5): one pre-order walk per structural
-// change, expansion state and name filter, drawn with a list clipper so 10,000 entities cost O(visible rows).
+// change, expansion state (by scene guid) and name filter, drawn with a list clipper so 10,000 entities cost
+// O(visible rows). Names and enabled state, which change without a structural change, are refreshed for the
+// visible rows only (refresh_labels).
 
 namespace conjure::editor::ui {
 
@@ -42,7 +46,8 @@ namespace conjure::editor::ui {
     class CONJURE_API hierarchy_cache {
         private:
             std::vector<hierarchy_row> mRows = {};
-            core::bit_vector mExpanded = {};                // by entity index
+            std::unordered_set<core::uuid> mExpanded = {};  // by scene guid (D5): survives a play/stop restore
+                                                            // and never leaks onto a recycled entity index
             core::bit_vector mMatches = {};                 // filter matches by entity index
             std::string mFilter = "";
             u64 mStructureVersion = 0;
@@ -79,13 +84,29 @@ namespace conjure::editor::ui {
                 return mFilter;
             }
 
-            void set_expanded(ecs::entity entity, bool expanded);
-            [[nodiscard]] bool is_expanded(ecs::entity entity) const noexcept;
+            /// <summary>
+            /// Expands or collapses an entity's row. The state is keyed by the entity's guid, so it follows the
+            /// entity through a snapshot restore and is never inherited by an entity that reuses the index. A
+            /// null entity or one without a guid is ignored.
+            /// </summary>
+            void set_expanded(const scene::scene &target, ecs::entity entity, bool expanded);
+
+            /// <summary>
+            /// True when the entity's guid is marked expanded (false for a null entity).
+            /// </summary>
+            [[nodiscard]] bool is_expanded(const scene::scene &target, ecs::entity entity) const;
 
             /// <summary>
             /// Expands every ancestor of the entity so its row is visible.
             /// </summary>
             void reveal(const scene::scene &target, ecs::entity entity);
+
+            /// <summary>
+            /// Re-reads the names and enabled state of the rows already built in [first, last) (O(range), no
+            /// rebuild): renames and enable toggles do not change the structure version. Rows of entities that
+            /// no longer exist are left as they are; 'last' is clamped to the row count.
+            /// </summary>
+            void refresh_labels(const scene::scene &target, usize first, usize last) noexcept;
 
             [[nodiscard]] std::span<const hierarchy_row> rows() const noexcept {
                 return mRows;

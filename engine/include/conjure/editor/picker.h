@@ -71,13 +71,13 @@ namespace conjure::editor {
         const scene::scene *scene = nullptr;
         physics::physics_world *physics = nullptr;
         core::jobs::job_system *jobs = nullptr;
-        f32 maxDistance = 1.0e6f;
+        f32 maxDistance = 1.0e6f;       // bounds both the bounds entry and the narrow-phase (triangle) hit
     };
 
     /// <summary>
-    /// Every entity with renderable or framing bounds: mesh renderers and sprites use scene::world_bounds
-    /// (their local_bounds), lights and cameras a fixed 0.5 m box around their position. Entities without a
-    /// transform are skipped.
+    /// Every active entity (scene::is_active: it and every ancestor enabled) with renderable or framing bounds:
+    /// mesh renderers and sprites use scene::world_bounds (their local_bounds), lights and cameras a fixed 0.5 m
+    /// box around their position. Entities without a transform are skipped.
     /// </summary>
     [[nodiscard]] CONJURE_API std::vector<pick_candidate> gather_pick_candidates(const scene::scene &scene);
 

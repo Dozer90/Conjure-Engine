@@ -52,8 +52,10 @@ namespace conjure::editor::support {
                 physics::physics_layer_mask mask = physics::physics_layer_mask::none();
                 for (usize index = 0; index < layers.size(); ++index) {
                     const core::json::value entry = layers[index];
-                    if (entry.is_integer()) {
-                        const i64 layer = entry.as_i64();
+                    if (entry.is_number()) {
+                        // A whole real such as 3.0 names layer 3, as the schema's "integer" allows; as_i64
+                        // answers -1 for a fraction.
+                        const i64 layer = entry.as_i64(-1);
                         if (layer < 0 || layer >= static_cast<i64>(physics::MAX_PHYSICS_LAYERS)) {
                             return invalid_args(std::format("args.layers[{}]: expected 0..31", index));
                         }

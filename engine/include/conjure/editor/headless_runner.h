@@ -16,8 +16,10 @@
 // `conjure_editor --headless --exec commands.json` (docs/design/04_editor.md 3.11): a JSON array of requests
 // or NDJSON, one request per line; a missing id becomes the zero-based index. Every request is dispatched,
 // frames are pumped until an asynchronous response exists, responses and events are written as NDJSON to the
-// output; the run stops at the first failure unless --keep-going. Exit codes: 0 all ok, 1 a command failed,
-// 2 startup or project failure, 3 bad arguments (a missing or unparseable file).
+// output; the run stops at the first failure unless --keep-going. editor.quit ends the run after its reply, and
+// its non-zero exitCode becomes the run's exit code. Exit codes: 0 all ok, 1 a command failed, 2 startup or
+// project failure (also a project.open in the file whose restart failed for both projects) or responses that
+// could not be written, 3 bad arguments (a missing or unparseable file).
 
 namespace conjure::editor {
 
@@ -34,16 +36,16 @@ namespace conjure::editor {
         /// {executed, succeeded, failed, firstFailedIndex, exitCode}.
         /// </summary>
         [[nodiscard]] core::json::document to_json() const;
+
+        /// <summary>
+        /// Counts one answered request: executed, then succeeded or failed; the first failure keeps its index in
+        /// firstFailedIndex.
+        /// </summary>
+        void record(bool ok, u32 index) noexcept;
     };
 
     class CONJURE_API headless_runner {
         public:
-            /// <summary>
-            /// Frames pumped for one asynchronous response before it counts as TIMEOUT (the dispatcher's own
-            /// timeout usually fires first).
-            /// </summary>
-            static constexpr u32 MAX_FRAMES_PER_REQUEST = 1'000'000;
-
             /// <summary>
             /// The placeholder command files may use for the project root in string arguments.
             /// </summary>
@@ -71,7 +73,13 @@ namespace conjure::editor {
             );
 
             /// <summary>
-            /// Runs already parsed requests, writing NDJSON lines to 'out'.
+            /// Runs already parsed requests, writing NDJSON lines to 'out'. ${project} expands to the root of the
+            /// project open when each request runs. An asynchronous request is waited for until it answers; the
+            /// dispatcher's --timeout-seconds answers it with TIMEOUT, and should it never answer, the runner gives
+            /// up after twice that plus five seconds and ends the run. editor.quit ends the run after its reply. A
+            /// response that cannot be written (the stream failed) ends the run after that request, which is still
+            /// counted, with exitCode RUNTIME_FAILURE (2). A non-zero quit code the application holds at the end
+            /// (editor.quit's exitCode, or INIT_FAILURE from a failed project restart) becomes exitCode.
             /// </summary>
             [[nodiscard]] exec_summary run_requests(
               editor_application &application,
@@ -81,8 +89,9 @@ namespace conjure::editor {
             );
 
             /// <summary>
-            /// Parses a command file: a JSON array of request objects, or NDJSON. Blank lines are skipped;
-            /// a missing id becomes the index. INVALID_ARGS names the offending line.
+            /// Parses a command file: a JSON array of request objects, or NDJSON. A leading UTF-8 byte order
+            /// mark is skipped, as are blank lines; a missing id becomes the index. INVALID_ARGS names the
+            /// offending line.
             /// </summary>
             [[nodiscard]] static core::result<std::vector<protocol_request>> parse_command_file(std::string_view text);
 

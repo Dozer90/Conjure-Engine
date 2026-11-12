@@ -50,18 +50,21 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             resolved_path resolved = {};
             CONJURE_TRY_ASSIGN(resolved.path, reflection_path::parse(pathText));
-            core::json::document details = core::json::document::object();
-            core::result<ecs::component_id> component =
-              access::resolve_component_type(context.components(), resolved.path.component(), &details);
-            if (!component.has_value()) {
-                const ecs::component_id qualified = qualified_component(context.components(), resolved.path);
-                if (qualified.is_valid()) {
-                    component = qualified;
-                } else {
+            // A full registered name wins over an alias, short-name or suffix reading of its first segment, as in
+            // resolve_component_type's exact-first rule: "transform.rig.weight" with a registered "transform.rig"
+            // is that type's field, not a field of the transform alias.
+            const ecs::component_id qualified = qualified_component(context.components(), resolved.path);
+            if (qualified.is_valid()) {
+                resolved.component = qualified;
+            } else {
+                core::json::document details = core::json::document::object();
+                core::result<ecs::component_id> component =
+                  access::resolve_component_type(context.components(), resolved.path.component(), &details);
+                if (!component.has_value()) {
                     invocation.errorDetails = std::move(details);
                 }
+                CONJURE_TRY_ASSIGN(resolved.component, std::move(component));
             }
-            CONJURE_TRY_ASSIGN(resolved.component, std::move(component));
             CONJURE_TRY_ASSIGN(
               resolved.reference,
               resolved.path.resolve(access::reflection_of(context.components(), resolved.component))
@@ -77,13 +80,15 @@ namespace conjure::editor::support {
         };
 
         /// <summary>
-        /// Reads the current value at the path, writes the new one and returns the previous value.
+        /// Reads the current value at the path, writes the new one and returns the previous value. 'restoring'
+        /// marks a write that puts back a value the entity held before (a rollback), which skips the name rule.
         /// </summary>
         core::result<applied_set> apply_set(
           command_invocation &invocation,
           ecs::entity entity,
           const resolved_path &resolved,
-          const core::json::value &value
+          const core::json::value &value,
+          bool restoring
         ) {
             scene::scene &scene = invocation.context.scene();
             if (!scene.world().has_raw(entity, resolved.component)) {
@@ -101,6 +106,13 @@ namespace conjure::editor::support {
                 ));
             }
             CONJURE_TRY(write_at(current, resolved.reference, value));
+            // Setting the name component renames the entity: entity.rename's rule applies, except while undo puts
+            // back a name the entity already had.
+            const core::json::value written = current.root()["value"];
+            const bool renames = resolved.component == scene.ids().name && written.is_string();
+            if (renames && !restoring && !invocation.context.dispatcher().replaying()) {
+                CONJURE_TRY(check_entity_name(written.as_string(), "args.value"));
+            }
             CONJURE_TRY(access::write_component(scene, entity, resolved.component, current.root()));
             applied_set result = {};
             CONJURE_TRY_ASSIGN(result.guid, guid_string(scene, entity));
@@ -176,7 +188,7 @@ namespace conjure::editor::support {
                 return invalid_args("args.value: a value is required");
             }
             CONJURE_TRY_ASSIGN(const resolved_path resolved, resolve_path(invocation, pathText));
-            CONJURE_TRY_ASSIGN(applied_set applied, apply_set(invocation, entity, resolved, value));
+            CONJURE_TRY_ASSIGN(applied_set applied, apply_set(invocation, entity, resolved, value, false));
             command_outcome outcome = {};
             outcome.label = std::format("Set {}", applied.path);
             outcome.result = core::json::object({
@@ -222,7 +234,8 @@ namespace conjure::editor::support {
             }
             std::vector<applied_set> applied = {};
             for (const planned &item : plan) {
-                core::result<applied_set> result = apply_set(invocation, item.entity, item.resolved, item.value.root());
+                core::result<applied_set> result =
+                  apply_set(invocation, item.entity, item.resolved, item.value.root(), false);
                 if (!result.has_value()) {
                     // Roll back the sets already applied, newest first.
                     scene::scene &scene = invocation.context.scene();
@@ -232,7 +245,7 @@ namespace conjure::editor::support {
                         const ecs::entity entity = guid.has_value() ? scene.find_guid(*guid) : ecs::NULL_ENTITY;
                         core::result<resolved_path> resolved = resolve_path(invocation, undo.path);
                         if (!entity.is_null() && resolved.has_value()) {
-                            (void) apply_set(invocation, entity, resolved.value(), undo.previous.root());
+                            (void) apply_set(invocation, entity, resolved.value(), undo.previous.root(), true);
                         }
                     }
                     return core::error(result.get_error());

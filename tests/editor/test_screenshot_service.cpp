@@ -2,10 +2,15 @@
 
 #include "editor_test_support.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "conjure/core/image.h"
 #include "conjure/core/json/document.h"
+#include "conjure/editor/editor_context.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/screenshot_service.h"
+#include "conjure/engine/application.h"
+#include "conjure/engine/engine_config.h"
 
 #include <filesystem>
 #include <fstream>
@@ -13,6 +18,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 // screenshot_service.h (docs/design/04_editor.md 3.10, 7).
@@ -166,10 +172,16 @@ TEST_SUITE("editor/screenshot_service") {
           screenshot_service::parse_request(core::json::object({{"path", "a.png"}, {"height", 100000}}).root()),
           protocol_error_code::INVALID_ARGS
         );
+        // Any other camera names an entity (guid, path or name) that view.screenshot resolves; only "" is refused.
         CONJURE_CHECK_ERROR(
-          screenshot_service::parse_request(core::json::object({{"path", "a.png"}, {"camera", "left"}}).root()),
+          screenshot_service::parse_request(core::json::object({{"path", "a.png"}, {"camera", ""}}).root()),
           protocol_error_code::INVALID_ARGS
         );
+        const core::result<screenshot_request> named = screenshot_service::parse_request(
+          core::json::object({{"path", "a.png"}, {"camera", "left"}}).root()
+        );
+        CONJURE_REQUIRE_OK(named);
+        CHECK(named.value().camera == "left");
         CONJURE_CHECK_ERROR(
           screenshot_service::parse_request(core::json::object({{"path", "a.png"}, {"format", "bmp"}}).root()),
           protocol_error_code::INVALID_ARGS
@@ -200,6 +212,60 @@ TEST_SUITE("editor/screenshot_service") {
           "view.screenshot",
           core::json::object({{"path", path.generic_string()}, {"camera", missing}})
         ) == protocol_error_code::ENTITY_NOT_FOUND);
+    }
+
+    TEST_CASE("regression - F653 view.screenshot resolves a camera named by path and needs a camera component") {
+        editor_test::headless_editor editor = {};
+        editor.context().screenshots().set_backend(std::make_unique<memory_screenshot_backend>());
+        const std::string guid = editor.create_entity("Cam");
+        (void) editor.ok("component.add", core::json::object({{"entity", guid}, {"type", "camera"}}));
+        (void) editor.create_entity("Plain");
+        const std::filesystem::path path = editor.project_directory() / "by_path.png";
+        (void) editor.ok(
+          "view.screenshot",
+          core::json::object({{"path", path.generic_string()}, {"camera", "Cam"}, {"width", 4}, {"height", 4}})
+        );
+        CHECK(std::filesystem::is_regular_file(path));
+        CHECK(editor.fail(
+          "view.screenshot",
+          core::json::object({{"path", path.generic_string()}, {"camera", "Plain"}})
+        ) == protocol_error_code::COMPONENT_NOT_FOUND);
+        CHECK(editor.fail(
+          "view.screenshot",
+          core::json::object({{"path", path.generic_string()}, {"camera", "Nobody"}})
+        ) == protocol_error_code::ENTITY_NOT_FOUND);
+        CHECK(editor.fail(
+          "view.screenshot",
+          core::json::object({{"path", path.generic_string()}, {"camera", ""}})
+        ) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - F653 view.screenshot under --offscreen without a device does not suggest --offscreen") {
+        testing::log_capture log = {};
+        // An --offscreen session whose engine fell back to the null device: a context marked offscreen over an
+        // engine without a renderer (the editor's own --offscreen start-up needs the shader library next to the
+        // executable, which a unit test cannot rely on).
+        engine::application_desc desc = {};
+        desc.config = engine::engine_config::headless_defaults();
+        desc.config.scripting.enabled = false;
+        engine::application application(std::move(desc));
+        CONJURE_REQUIRE_OK(application.initialise());
+        // Declared after the application so it is destroyed first; the engine shuts down while the context's module
+        // consumer is still alive, as editor_application::shutdown does it.
+        editor_context context(application, nullptr, true, true);
+        CHECK(context.offscreen());
+        CHECK_FALSE(context.screenshots().available());
+        protocol_request request = {};
+        request.id = make_id(1);
+        request.command = "view.screenshot";
+        request.args = core::json::object({{"path", "shot.png"}});
+        const std::optional<protocol_response> response = context.dispatcher().dispatch(request);
+        application.shutdown();
+        REQUIRE(response.has_value());
+        REQUIRE_FALSE(response->ok);
+        CHECK(response->errorCode == protocol_error_code::NOT_AVAILABLE);
+        CHECK(response->errorMessage.find("--offscreen") == std::string::npos);
+        CHECK(response->errorMessage.find("window") != std::string::npos);
     }
 
     TEST_CASE("memory_screenshot_backend - counts begins and captures") {

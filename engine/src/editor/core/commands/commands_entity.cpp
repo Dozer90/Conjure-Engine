@@ -9,7 +9,10 @@
 
 #include <algorithm>
 #include <format>
+#include <span>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 // entity.* (docs/design/04_editor.md 3.6, 4.4): creation (single and bulk), destruction with subtree
 // restore as inverse, duplication, renaming, reparenting, enabling, transforms and the queries.
@@ -42,6 +45,10 @@ namespace conjure::editor::support {
                 );
                 const core::json::document emptyObject = core::json::document::object();
                 const core::json::value value = entry.item.is_object() ? entry.item : emptyObject.root();
+                // The name component is another way to name the entity: the same rule as args.name applies.
+                if (id == scene.ids().name && value["value"].is_string() && !context.dispatcher().replaying()) {
+                    CONJURE_TRY(check_entity_name(value["value"].as_string(), "args.components.name.value"));
+                }
                 if (scene.world().has_raw(entity, id)) {
                     CONJURE_TRY(access::write_component(scene, entity, id, value));
                 } else {
@@ -84,6 +91,7 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             scene::scene &scene = context.scene();
             const std::string_view name = string_or(invocation.args, "name", "Entity");
+            CONJURE_TRY(check_entity_name(name, "args.name"));
             CONJURE_TRY_ASSIGN(const ecs::entity parent, optional_parent(invocation, invocation.args["parent"]));
             CONJURE_TRY_ASSIGN(
               const std::optional<core::uuid> wantedGuid,
@@ -134,6 +142,8 @@ namespace conjure::editor::support {
                 return invalid_args(std::format("args.count: expected 1..{}", MAX_CREATE_MANY));
             }
             const std::string_view nameFormat = string_or(invocation.args, "nameFormat", "Entity_{i}");
+            // {i} becomes digits, so the format decides whether every name is addressable.
+            CONJURE_TRY(check_entity_name(nameFormat, "args.nameFormat"));
             CONJURE_TRY_ASSIGN(const ecs::entity parent, optional_parent(invocation, invocation.args["parent"]));
             const core::json::value overrides = invocation.args["overrides"];
             if (overrides.is_valid() && (!overrides.is_array() || overrides.size() > count)) {
@@ -275,18 +285,42 @@ namespace conjure::editor::support {
               const std::vector<ecs::entity> requested,
               entity_ref::resolve_many(invocation.args["entities"], scene, &invocation.errorDetails)
             );
-            std::vector<ecs::entity> roots = outermost(scene, requested);
+            const std::vector<ecs::entity> outermostRoots = outermost(scene, requested);
             // The inverse is one editor.batch whose children run forwards: sorted by ascending sibling index,
             // every restore finds its lower siblings already in place and lands at its original position
-            // even when surviving siblings sit between the destroyed ones.
-            std::sort(roots.begin(), roots.end(), [&scene](ecs::entity left, ecs::entity right) {
-                return tree_position(scene, left) < tree_position(scene, right);
+            // even when surviving siblings sit between the destroyed ones. The positions of scene roots come
+            // from one pass over scene.roots(), not one scan per root (undo of a bulk create lands here).
+            const std::span<const scene::root_entry> sceneRoots = scene.roots();
+            std::unordered_map<ecs::entity, u32> rootIndex = {};
+            rootIndex.reserve(sceneRoots.size());
+            for (usize index = 0; index < sceneRoots.size(); ++index) {
+                rootIndex.emplace(sceneRoots[index].entity, static_cast<u32>(index));
+            }
+            std::vector<std::pair<u32, ecs::entity>> positioned = {};
+            positioned.reserve(outermostRoots.size());
+            for (const ecs::entity root : outermostRoots) {
+                u32 position = scene::APPEND_CHILD;
+                if (!scene.tree().parent_of(root).is_null()) {
+                    position = scene.tree().sibling_index(root);
+                } else {
+                    const auto found = rootIndex.find(root);
+                    if (found != rootIndex.end()) {
+                        position = found->second;
+                    }
+                }
+                positioned.emplace_back(position, root);
+            }
+            std::stable_sort(positioned.begin(), positioned.end(), [](const auto &left, const auto &right) {
+                return left.first < right.first;
             });
+            std::vector<ecs::entity> roots = {};
+            roots.reserve(positioned.size());
             std::vector<command_inverse> inverses = {};
-            inverses.reserve(roots.size());
-            for (const ecs::entity root : roots) {
-                CONJURE_TRY_ASSIGN(command_inverse inverse, restore_inverse(scene, root));
+            inverses.reserve(positioned.size());
+            for (const auto &[position, root] : positioned) {
+                CONJURE_TRY_ASSIGN(command_inverse inverse, restore_inverse(scene, root, position));
                 inverses.push_back(std::move(inverse));
+                roots.push_back(root);
             }
             std::vector<core::uuid> removed = {};
             u32 destroyed = 0;
@@ -399,6 +433,11 @@ namespace conjure::editor::support {
             scene::scene &scene = invocation.context.scene();
             CONJURE_TRY_ASSIGN(const ecs::entity entity, resolve_entity(invocation, invocation.args["entity"]));
             CONJURE_TRY_ASSIGN(const std::string_view name, require_string(invocation.args, "name"));
+            // Undo restores whatever name the entity had, also one a scene file or an import gave it that a
+            // client could not send.
+            if (!invocation.context.dispatcher().replaying()) {
+                CONJURE_TRY(check_entity_name(name, "args.name"));
+            }
             const std::string previous = scene.name_of(entity).to_string();
             const core::result<void> renamed = scene.set_name(entity, core::string_id(name));
             if (!renamed.has_value()) {
@@ -454,7 +493,13 @@ namespace conjure::editor::support {
             }
             command_outcome outcome = {};
             outcome.label = std::format("Reparent '{}'", scene.name_of(entity).to_string());
-            outcome.result = core::json::object({{"guid", guid}, {"parent", guid_or_empty(scene, parent)}});
+            outcome.result = core::json::object({{"guid", guid}});
+            // A root answers parent null, as entity.get does.
+            if (parent.is_null()) {
+                outcome.result.set_null("parent");
+            } else {
+                outcome.result.set("parent", guid_or_empty(scene, parent));
+            }
             outcome.inverse = command_inverse{"entity.set_parent", std::move(inverseArgs)};
             return outcome;
         }
@@ -552,7 +597,9 @@ namespace conjure::editor::support {
             result.set("children", children);
             result.set("enabled", scene.is_enabled(entity));
             result.set("active", scene.is_active(entity));
-            result.set("tag", scene.tag_of(entity).to_string());
+            // An untagged entity has the null id, whose to_string() is a hash spelling, not a tag name.
+            const core::string_id tag = scene.tag_of(entity);
+            result.set("tag", tag.is_null() ? std::string() : tag.to_string());
             result.set("layer", scene.layer_of(entity));
             result.set("components", components);
             const std::optional<math::transform> world = scene.world_transform_of(entity);
@@ -584,7 +631,9 @@ namespace conjure::editor::support {
             const bool byTag = invocation.args.contains("tag");
             const bool byLayer = invocation.args.contains("layer");
             const core::string_id name(string_or(invocation.args, "name", ""));
-            const core::string_id tag(string_or(invocation.args, "tag", ""));
+            // {tag: ""} means untagged, which is the null id (entity.get reports it as ""), not the hash of "".
+            const std::string_view tagText = string_or(invocation.args, "tag", "");
+            const core::string_id tag = tagText.empty() ? core::string_id() : core::string_id(tagText);
             CONJURE_TRY_ASSIGN(const u32 layer, u32_or(invocation.args, "layer", 0));
             if (byLayer && layer > 31) {
                 return invalid_args("args.layer: expected 0..31");
@@ -620,23 +669,17 @@ namespace conjure::editor::support {
         core::result<command_outcome> entity_bounds(command_invocation &invocation) {
             scene::scene &scene = invocation.context.scene();
             CONJURE_TRY_ASSIGN(const ecs::entity entity, resolve_entity(invocation, invocation.args["entity"]));
-            std::optional<math::aabb> bounds = scene.subtree_bounds(entity);
-            bool fromBounds = true;
-            if (!bounds.has_value() || !bounds->is_valid()) {
-                fromBounds = false;
-                const std::optional<math::transform> world = scene.world_transform_of(entity);
-                const math::vec3 position = world.has_value() ? world->position : math::vec3(0.0f);
-                bounds = math::aabb::from_center_extents(position, math::vec3(0.5f));
-            }
+            const subtree_box box = subtree_bounds_or_boxes(scene, entity);
             command_outcome outcome = {};
-            outcome.result = aabb_json(*bounds);
-            outcome.result.set("fromRenderBounds", fromBounds);
+            outcome.result = aabb_json(box.bounds);
+            outcome.result.set("fromRenderBounds", box.fromRenderBounds);
             return outcome;
         }
     }
 
     void register_entity_commands(command_registry &registry) {
         const std::string entityRef = std::string(ENTITY_REF_SCHEMA);
+        const std::string parentRef = std::string(OPTIONAL_ENTITY_REF_SCHEMA);
         add_command(
           registry,
           make_command(
@@ -646,7 +689,7 @@ namespace conjure::editor::support {
               R"({{"type":"object","properties":{{"name":{{"type":"string"}},"parent":{},"guid":{{"type":"string"}},)"
               R"("index":{{"type":"integer","minimum":0}},"components":{{"type":"object",)"
               R"("additionalProperties":true}}}}}})",
-              entityRef
+              parentRef
             ),
             R"({"type":"object","properties":{"guid":{"type":"string"},"name":{"type":"string"},)"
             R"("revision":{"type":"integer"}}})",
@@ -666,7 +709,7 @@ namespace conjure::editor::support {
               R"("parent":{},"components":{{"type":"object","additionalProperties":true}},)"
               R"("overrides":{{"type":"array","items":{{"type":"object","additionalProperties":true}}}},)"
               R"("guids":{{"type":"array","items":{{"type":"string"}}}}}},"required":["count"]}})",
-              entityRef
+              parentRef
             ),
             R"({"type":"object","properties":{"guids":{"type":"array"},"count":{"type":"integer"},)"
             R"("revision":{"type":"integer"}}})",
@@ -709,7 +752,7 @@ namespace conjure::editor::support {
               R"({{"type":"object","properties":{{"archive":{{"type":"object","additionalProperties":true}},)"
               R"("parent":{},)"
               R"("index":{{"type":"integer","minimum":0}}}},"required":["archive"]}})",
-              entityRef
+              parentRef
             ),
             R"({"type":"object","properties":{"guid":{"type":"string"},"entities":{"type":"integer"},)"
             R"("revision":{"type":"integer"}}})",
@@ -752,14 +795,15 @@ namespace conjure::editor::support {
             "entity.set_parent",
             "Moves an entity under another (null = root) at a sibling index, keeping its world transform by default.",
             std::format(
-              R"({{"type":"object","properties":{{"entity":{},"parent":{{"type":["string","null"]}},)"
+              R"({{"type":"object","properties":{{"entity":{},"parent":{},)"
               R"("keepWorld":{{"type":"boolean"}},)"
               R"("index":{{"type":"integer","minimum":0}},"localTransform":{{"type":"object",)"
               R"("additionalProperties":true}}}},)"
               R"("required":["entity"]}})",
-              entityRef
+              entityRef,
+              parentRef
             ),
-            R"({"type":"object","properties":{"guid":{"type":"string"},"parent":{"type":"string"},)"
+            R"({"type":"object","properties":{"guid":{"type":"string"},"parent":{"type":["string","null"]},)"
             R"("revision":{"type":"integer"}}})",
             command_flags::MUTATES | command_flags::REQUIRES_SCENE,
             &entity_set_parent
@@ -829,7 +873,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "entity.bounds",
-            "The world bounds of an entity's subtree (a 1 m box around its position when nothing has render bounds).",
+            "The world bounds of an entity's subtree (a 1 m box around every entity of the subtree when nothing has "
+            "render bounds).",
             std::format(R"({{"type":"object","properties":{{"entity":{}}},"required":["entity"]}})", entityRef),
             R"({"type":"object","properties":{"min":{"type":"array"},"max":{"type":"array"},)"
             R"("fromRenderBounds":{"type":"boolean"}}})",

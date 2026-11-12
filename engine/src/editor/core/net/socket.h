@@ -87,8 +87,17 @@ namespace conjure::editor::net {
     void shutdown_sockets() noexcept;
 
     /// <summary>
+    /// True when a native socket error code means the port is taken or reserved, so the fallback port search
+    /// moves on: EADDRINUSE, and on Windows also WSAEACCES (a port in a Hyper-V or WSL excluded range, or one
+    /// another process holds with SO_EXCLUSIVEADDRUSE).
+    /// </summary>
+    [[nodiscard]] bool is_port_unavailable_error(int nativeCode) noexcept;
+
+    /// <summary>
     /// Binds a non-blocking listening socket to 127.0.0.1:port (0 = ephemeral) with a backlog of 8 and
-    /// reports the bound port. ALREADY_EXISTS when the port is in use, IO_FAILURE otherwise.
+    /// reports the bound port. ALREADY_EXISTS when the port is in use or reserved (is_port_unavailable_error),
+    /// IO_FAILURE otherwise. On POSIX every socket this layer creates (listening, accepted, connected) is
+    /// close-on-exec, so a tool the editor spawns (dotnet, cmake) never inherits it.
     /// </summary>
     [[nodiscard]] core::result<socket_handle> listen_loopback(u16 port, u16 &outBoundPort);
 

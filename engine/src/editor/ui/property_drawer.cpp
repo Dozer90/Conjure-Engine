@@ -11,7 +11,10 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <limits>
+#include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -39,18 +42,39 @@ namespace conjure::editor::ui {
             return 0.05f;
         }
 
-        [[nodiscard]] std::pair<f64, f64> range_of(
-          const property_draw_context &context,
-          f64 fallbackMin,
-          f64 fallbackMax
-        ) noexcept {
-            if (context.field == nullptr) {
-                return {fallbackMin, fallbackMax};
+        [[nodiscard]] std::optional<f64> minimum_of(const property_draw_context &context) noexcept {
+            return context.field != nullptr ? context.field->attributes.min : std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<f64> maximum_of(const property_draw_context &context) noexcept {
+            return context.field != nullptr ? context.field->attributes.max : std::nullopt;
+        }
+
+        /// <summary>
+        /// A double converted to an integer type without undefined behaviour: NaN becomes zero and values outside
+        /// the type saturate. The type's limits convert to doubles exactly (powers of two), so the comparisons are
+        /// exact at the edges.
+        /// </summary>
+        template <typename Integer>
+        [[nodiscard]] Integer saturate_to(f64 value) noexcept {
+            if (std::isnan(value)) {
+                return Integer{0};
             }
-            return {
-              context.field->attributes.min.value_or(fallbackMin),
-              context.field->attributes.max.value_or(fallbackMax),
-            };
+            if (value <= static_cast<f64>(std::numeric_limits<Integer>::lowest())) {
+                return std::numeric_limits<Integer>::lowest();
+            }
+            if (value >= static_cast<f64>(std::numeric_limits<Integer>::max())) {
+                return std::numeric_limits<Integer>::max();
+            }
+            return static_cast<Integer>(value);
+        }
+
+        /// <summary>
+        /// A float bound from a double attribute, saturated to the float range.
+        /// </summary>
+        [[nodiscard]] f32 float_bound(f64 value) noexcept {
+            const f64 largest = static_cast<f64>(std::numeric_limits<f32>::max());
+            return static_cast<f32>(std::clamp(value, -largest, largest));
         }
 
         void show_tooltip(const property_draw_context &context) {
@@ -71,76 +95,132 @@ namespace conjure::editor::ui {
             return changed;
         }
 
-        bool draw_integer(
+        /// <summary>
+        /// An integer field edited in its own domain (Integer is i64 for signed kinds, u64 for unsigned ones;
+        /// [typeMin, typeMax] is the field kind's range). A slider only when both bounds are set and within
+        /// ImGui's slider limits (half the 64-bit range), otherwise a drag clamped to whatever bounds exist, so
+        /// a field with one bound stays usable and typed values outside the range are clamped.
+        /// </summary>
+        template <typename Integer>
+        bool draw_integer_as(
           const property_draw_context &context,
           core::json::document &value,
-          bool isSigned,
-          f64 minimum,
-          f64 maximum
+          ImGuiDataType dataType,
+          Integer typeMin,
+          Integer typeMax
         ) {
-            const std::pair<f64, f64> range = range_of(context, minimum, maximum);
-            i64 current = value.root().as_i64(0);
-            if (!isSigned) {
-                current = static_cast<i64>(value.root().as_u64(0));
+            const std::optional<f64> minimum = minimum_of(context);
+            const std::optional<f64> maximum = maximum_of(context);
+            Integer lower = typeMin;
+            Integer upper = typeMax;
+            if (minimum.has_value()) {
+                lower = std::clamp(saturate_to<Integer>(*minimum), typeMin, typeMax);
+            }
+            if (maximum.has_value()) {
+                upper = std::clamp(saturate_to<Integer>(*maximum), typeMin, typeMax);
+            }
+            if (lower > upper) {
+                lower = typeMin;
+                upper = typeMax;
+            }
+            Integer current = Integer{0};
+            if constexpr (std::is_signed_v<Integer>) {
+                current = value.root().as_i64(0);
+            } else {
+                current = value.root().as_u64(0);
+            }
+            current = std::clamp(current, lower, upper);
+            bool sliderFits = upper <= std::numeric_limits<Integer>::max() / 2;
+            if constexpr (std::is_signed_v<Integer>) {
+                sliderFits = sliderFits && lower >= std::numeric_limits<Integer>::lowest() / 2;
             }
             ImGui::BeginDisabled(context.readOnly);
             bool changed = false;
-            if (range.first > minimum || range.second < maximum) {
-                i32 clamped = static_cast<i32>(std::clamp<i64>(
-                  current,
-                  static_cast<i64>(range.first),
-                  static_cast<i64>(range.second)
-                ));
-                changed = ImGui::SliderInt(
-                  label_of(context),
-                  &clamped,
-                  static_cast<i32>(range.first),
-                  static_cast<i32>(range.second)
-                );
-                current = clamped;
+            if (minimum.has_value() && maximum.has_value() && sliderFits) {
+                changed = ImGui::SliderScalar(label_of(context), dataType, &current, &lower, &upper);
             } else {
-                const ImGuiDataType type = isSigned ? ImGuiDataType_S64 : ImGuiDataType_U64;
-                changed = ImGui::InputScalar(
+                const f32 speed = context.field != nullptr && context.field->attributes.step > 0.0 ?
+                  static_cast<f32>(context.field->attributes.step) :
+                  1.0f;
+                changed = ImGui::DragScalar(
                   label_of(context),
-                  type,
+                  dataType,
                   &current,
+                  speed,
+                  &lower,
+                  &upper,
                   nullptr,
-                  nullptr,
-                  nullptr,
-                  input_flags(context)
+                  ImGuiSliderFlags_AlwaysClamp
                 );
             }
             ImGui::EndDisabled();
             show_tooltip(context);
-            if (changed) {
-                current = std::clamp<i64>(current, static_cast<i64>(minimum), static_cast<i64>(maximum));
-                if (isSigned) {
-                    value = core::json::document::from_value(core::json::object({{"v", current}}).root()["v"]);
-                } else {
-                    value = core::json::document::from_value(
-                      core::json::object({{"v", static_cast<u64>(current)}}).root()["v"]
-                    );
-                }
+            if (!changed) {
+                return false;
             }
-            return changed;
+            current = std::clamp(current, lower, upper);
+            value = core::json::document::from_value(core::json::object({{"v", current}}).root()["v"]);
+            return true;
+        }
+
+        /// <summary>
+        /// A signed field of storage type Field, edited as i64 within Field's range.
+        /// </summary>
+        template <typename Field>
+        bool draw_signed(const property_draw_context &context, core::json::document &value) {
+            return draw_integer_as<i64>(
+              context,
+              value,
+              ImGuiDataType_S64,
+              static_cast<i64>(std::numeric_limits<Field>::min()),
+              static_cast<i64>(std::numeric_limits<Field>::max())
+            );
+        }
+
+        /// <summary>
+        /// An unsigned field of storage type Field, edited as u64 within Field's range.
+        /// </summary>
+        template <typename Field>
+        bool draw_unsigned(const property_draw_context &context, core::json::document &value) {
+            return draw_integer_as<u64>(
+              context,
+              value,
+              ImGuiDataType_U64,
+              u64{0},
+              static_cast<u64>(std::numeric_limits<Field>::max())
+            );
         }
 
         bool draw_number(const property_draw_context &context, core::json::document &value, bool singlePrecision) {
-            const std::pair<f64, f64> range = range_of(context, 0.0, 0.0);
+            // Each bound applies on its own; a missing or inverted one is open.
+            f64 lower = minimum_of(context).value_or(-std::numeric_limits<f64>::infinity());
+            f64 upper = maximum_of(context).value_or(std::numeric_limits<f64>::infinity());
+            if (lower > upper) {
+                lower = -std::numeric_limits<f64>::infinity();
+                upper = std::numeric_limits<f64>::infinity();
+            }
+            // A slider needs both bounds within ImGui's float slider limits (half the float range); otherwise the
+            // clamped drag takes the saturated bounds.
+            const f64 sliderLimit = static_cast<f64>(std::numeric_limits<f32>::max()) / 2.0;
+            const bool sliderFits = std::isfinite(lower) && std::isfinite(upper) && lower < upper &&
+              lower >= -sliderLimit && upper <= sliderLimit;
             ImGui::BeginDisabled(context.readOnly);
             bool changed = false;
             f64 current = value.root().as_f64(0.0);
             if (singlePrecision) {
                 f32 single = static_cast<f32>(current);
-                if (range.first < range.second) {
-                    changed = ImGui::SliderFloat(
+                if (sliderFits) {
+                    changed = ImGui::SliderFloat(label_of(context), &single, float_bound(lower), float_bound(upper));
+                } else {
+                    changed = ImGui::DragFloat(
                       label_of(context),
                       &single,
-                      static_cast<f32>(range.first),
-                      static_cast<f32>(range.second)
+                      drag_speed(context),
+                      float_bound(lower),
+                      float_bound(upper),
+                      "%.3f",
+                      ImGuiSliderFlags_AlwaysClamp
                     );
-                } else {
-                    changed = ImGui::DragFloat(label_of(context), &single, drag_speed(context));
                 }
                 current = single;
             } else {
@@ -149,6 +229,7 @@ namespace conjure::editor::ui {
             ImGui::EndDisabled();
             show_tooltip(context);
             if (changed && std::isfinite(current)) {
+                current = std::clamp(current, lower, upper);
                 value = core::json::document::from_value(core::json::object({{"v", current}}).root()["v"]);
                 return true;
             }
@@ -247,6 +328,39 @@ namespace conjure::editor::ui {
               name.find("tint") != std::string::npos;
         }
 
+        /// <summary>
+        /// Where a rotation widget keeps the Euler angles it shows, in the window's ImGui state storage: the
+        /// degrees and the quaternion they produced, so the angles are derived from the quaternion only when it
+        /// changed elsewhere (an Euler decomposition folds yaw past 90 degrees into (180, 180 - yaw, 180)).
+        /// </summary>
+        struct euler_cache_keys {
+            std::array<ImGuiID, 3> degrees = {};
+            std::array<ImGuiID, 4> quaternion = {};
+            ImGuiID valid = 0;
+        };
+
+        [[nodiscard]] euler_cache_keys euler_cache_keys_of(const property_draw_context &context) {
+            euler_cache_keys keys = {};
+            ImGui::PushID(label_of(context));
+            keys.degrees = {ImGui::GetID("##ex"), ImGui::GetID("##ey"), ImGui::GetID("##ez")};
+            keys.quaternion = {ImGui::GetID("##qx"), ImGui::GetID("##qy"), ImGui::GetID("##qz"), ImGui::GetID("##qw")};
+            keys.valid = ImGui::GetID("##euler_valid");
+            ImGui::PopID();
+            return keys;
+        }
+
+        void store_euler(const euler_cache_keys &keys, const std::array<f32, 3> &degrees, const math::quat &rotation) {
+            ImGuiStorage *storage = ImGui::GetStateStorage();
+            for (usize axis = 0; axis < degrees.size(); ++axis) {
+                storage->SetFloat(keys.degrees[axis], degrees[axis]);
+            }
+            storage->SetFloat(keys.quaternion[0], rotation.x);
+            storage->SetFloat(keys.quaternion[1], rotation.y);
+            storage->SetFloat(keys.quaternion[2], rotation.z);
+            storage->SetFloat(keys.quaternion[3], rotation.w);
+            storage->SetBool(keys.valid, true);
+        }
+
         bool draw_quat(const property_draw_context &context, core::json::document &value) {
             std::array<f32, 4> components = {0.0f, 0.0f, 0.0f, 1.0f};
             (void) read_floats(value.root(), components);
@@ -256,8 +370,25 @@ namespace conjure::editor::ui {
               components[1],
               components[2]
             ));
-            const math::vec3 euler = glm::degrees(glm::eulerAngles(rotation));
-            std::array<f32, 3> degrees = {euler.x, euler.y, euler.z};
+            const euler_cache_keys keys = euler_cache_keys_of(context);
+            const ImGuiStorage *storage = ImGui::GetStateStorage();
+            const math::quat cached = math::quat(
+              storage->GetFloat(keys.quaternion[3], 1.0f),
+              storage->GetFloat(keys.quaternion[0]),
+              storage->GetFloat(keys.quaternion[1]),
+              storage->GetFloat(keys.quaternion[2])
+            );
+            std::array<f32, 3> degrees = {};
+            // q and -q are the same rotation, hence the absolute value.
+            if (storage->GetBool(keys.valid) && std::abs(glm::dot(cached, rotation)) >= 1.0f - 1.0e-6f) {
+                for (usize axis = 0; axis < degrees.size(); ++axis) {
+                    degrees[axis] = storage->GetFloat(keys.degrees[axis]);
+                }
+            } else {
+                const math::vec3 euler = glm::degrees(glm::eulerAngles(rotation));
+                degrees = {euler.x, euler.y, euler.z};
+                store_euler(keys, degrees, rotation);
+            }
             ImGui::BeginDisabled(context.readOnly);
             const bool changed = ImGui::DragFloat3(label_of(context), degrees.data(), 0.5f, 0.0f, 0.0f, "%.1f deg");
             ImGui::EndDisabled();
@@ -270,6 +401,7 @@ namespace conjure::editor::ui {
               degrees[1],
               degrees[2]
             ))));
+            store_euler(keys, degrees, updated);
             const std::array<f32, 4> out = {updated.x, updated.y, updated.z, updated.w};
             value = floats_to_json(out);
             return true;
@@ -281,11 +413,14 @@ namespace conjure::editor::ui {
             bool changed = false;
             ImGui::TextUnformatted(label_of(context));
             ImGui::BeginDisabled(context.readOnly);
+            // Scoped by the field label: two matrices of one component must not share the rows' IDs.
+            ImGui::PushID(label_of(context));
             for (usize row = 0; row < 4; ++row) {
                 ImGui::PushID(static_cast<int>(row));
                 changed = ImGui::DragFloat4("##row", cells.data() + row * 4, drag_speed(context)) || changed;
                 ImGui::PopID();
             }
+            ImGui::PopID();
             ImGui::EndDisabled();
             if (changed) {
                 value = floats_to_json(cells);
@@ -304,6 +439,8 @@ namespace conjure::editor::ui {
             bool changed = false;
             ImGui::TextUnformatted(label_of(context));
             ImGui::Indent();
+            // The children's labels are fixed, so the field label scopes them for a second transform field.
+            ImGui::PushID(label_of(context));
             core::json::document position = core::json::document::from_value(value.root()["position"]);
             core::json::document rotation = core::json::document::from_value(value.root()["rotation"]);
             core::json::document scale = core::json::document::from_value(value.root()["scale"]);
@@ -324,6 +461,7 @@ namespace conjure::editor::ui {
                 value.set("scale", scale);
                 changed = true;
             }
+            ImGui::PopID();
             ImGui::Unindent();
             return changed;
         }
@@ -342,6 +480,8 @@ namespace conjure::editor::ui {
             if (info->isFlags) {
                 ImGui::TextUnformatted(label_of(context));
                 ImGui::Indent();
+                // The checkboxes are labelled by enumerator, so the field label scopes them for a second field.
+                ImGui::PushID(label_of(context));
                 const i64 bits = info->parse_value(current).value_or(0);
                 i64 updated = bits;
                 for (const auto &[name, bit] : info->values) {
@@ -354,6 +494,7 @@ namespace conjure::editor::ui {
                         changed = true;
                     }
                 }
+                ImGui::PopID();
                 ImGui::Unindent();
                 if (changed) {
                     value = core::json::document::from_value(
@@ -585,28 +726,28 @@ namespace conjure::editor::ui {
     void property_drawer_registry::install_defaults() {
         set(field_kind::BOOL, &draw_bool);
         set(field_kind::I8, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, true, -128.0, 127.0);
+            return draw_signed<i8>(context, value);
         });
         set(field_kind::U8, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, false, 0.0, 255.0);
+            return draw_unsigned<u8>(context, value);
         });
         set(field_kind::I16, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, true, -32768.0, 32767.0);
+            return draw_signed<i16>(context, value);
         });
         set(field_kind::U16, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, false, 0.0, 65535.0);
+            return draw_unsigned<u16>(context, value);
         });
         set(field_kind::I32, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, true, -2147483648.0, 2147483647.0);
+            return draw_signed<i32>(context, value);
         });
         set(field_kind::U32, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, false, 0.0, 4294967295.0);
+            return draw_unsigned<u32>(context, value);
         });
         set(field_kind::I64, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, true, -9.2e18, 9.2e18);
+            return draw_signed<i64>(context, value);
         });
         set(field_kind::U64, [](const property_draw_context &context, core::json::document &value) {
-            return draw_integer(context, value, false, 0.0, 1.8e19);
+            return draw_unsigned<u64>(context, value);
         });
         set(field_kind::F32, [](const property_draw_context &context, core::json::document &value) {
             return draw_number(context, value, true);

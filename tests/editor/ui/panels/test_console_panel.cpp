@@ -3,9 +3,12 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/log.h"
+#include "conjure/editor/console_buffer.h"
 #include "conjure/editor/log_category.h"
 #include "conjure/editor/ui/imgui_frame_scope.h"
 #include "conjure/editor/ui/panels/console_panel.h"
+
+#include <string>
 
 // console_panel.h: the console ring with a level filter.
 
@@ -41,5 +44,25 @@ TEST_SUITE("editor/ui/panels/console_panel") {
         panel.draw(editor.context());
         scope.end_frame();
         CHECK(panel.lines_drawn() == 0);
+    }
+
+    TEST_CASE("regression - F110 the console keeps showing new lines past 5,000 records") {
+        editor_test::headless_editor editor = {};
+        console_buffer &console = editor.context().console();
+        console.clear();
+        for (int index = 0; index < 5100; ++index) {
+            console.push(core::log_level::WARN, "test", std::to_string(index));
+        }
+        console_panel panel = {};
+        imgui_frame_scope scope{};
+        scope.begin_frame();
+        panel.draw(editor.context());
+        scope.end_frame();
+        CHECK(panel.newest_seq_shown() == console.last_seq());
+        console.push(core::log_level::WARN, "test", "one more");
+        scope.begin_frame();
+        panel.draw(editor.context());
+        scope.end_frame();
+        CHECK(panel.newest_seq_shown() == console.last_seq());
     }
 }

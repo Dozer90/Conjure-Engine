@@ -15,10 +15,14 @@
 #include "conjure/editor/ui/panels/profiler_panel.h"
 #include "conjure/editor/ui/panels/toolbar_panel.h"
 #include "conjure/editor/ui/panels/viewport_panel.h"
+#include "conjure/editor/undo_stack.h"
 
 #include <imgui.h>
+#include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
+#include <array>
+#include <format>
 #include <system_error>
 #include <utility>
 
@@ -26,6 +30,7 @@ namespace conjure::editor::ui {
 
     namespace {
         constexpr const char *DOCKSPACE_ID = "conjure_editor_dockspace";
+        constexpr const char *SAVE_AS_POPUP = "Save Scene As";
 
         struct builtin_panel {
             const char *name = "";
@@ -218,9 +223,11 @@ namespace conjure::editor::ui {
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         ImGui::DockSpaceOverViewport(ImGui::GetID(DOCKSPACE_ID), viewport, ImGuiDockNodeFlags_PassthruCentralNode);
         draw_menu_bar(context);
+        handle_global_shortcuts(context);
         for (panel_instance &entry : mInstances) {
             entry.panel->draw(context);
         }
+        draw_save_as_modal(context);
         if (mShowDemo) {
             ImGui::ShowDemoWindow(&mShowDemo);
         }
@@ -251,8 +258,11 @@ namespace conjure::editor::ui {
             if (ImGui::MenuItem("New Scene", nullptr, false, hasProject && context.play().is_editing())) {
                 fire_menu_item(context, NEW_SCENE_ITEM);
             }
-            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, context.has_scene() && !context.scene_path().empty())) {
-                fire_menu_item(context, SAVE_SCENE_ITEM);
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, context.has_scene())) {
+                request_save_scene(context);
+            }
+            if (ImGui::MenuItem("Save Scene As...", nullptr, false, context.has_scene())) {
+                request_save_scene_as(context);
             }
             if (ImGui::MenuItem("Save Project", nullptr, false, hasProject)) {
                 fire_menu_item(context, SAVE_PROJECT_ITEM);
@@ -337,6 +347,125 @@ namespace conjure::editor::ui {
             requests.push_back(std::move(request));
         }
         return requests;
+    }
+
+    void editor_workspace::request_save_scene(editor_context &context) {
+        if (!context.has_scene()) {
+            return;
+        }
+        if (context.scene_path().empty()) {
+            request_save_scene_as(context);
+            return;
+        }
+        fire_menu_item(context, SAVE_SCENE_ITEM);
+    }
+
+    void editor_workspace::request_save_scene_as(editor_context &context) {
+        // A second request while the dialog is up (Ctrl+S in the dialog) must not reset what the user typed.
+        if (!context.has_scene() || mSaveAsPending) {
+            return;
+        }
+        const std::string_view name = context.scene().name();
+        if (!context.scene_path().empty()) {
+            mSaveAsPath = context.scene_path();
+        } else if (name.empty()) {
+            mSaveAsPath = "scenes/untitled";
+        } else {
+            mSaveAsPath = std::format("scenes/{}", name);
+        }
+        mSaveAsError.clear();
+        mSaveAsPending = true;
+        mSaveAsOpenRequested = true;
+    }
+
+    bool editor_workspace::save_scene_as(editor_context &context, std::string_view path) {
+        const core::result<core::json::document> saved = support::run_command(
+          context,
+          "scene.save_as",
+          core::json::object({{"path", path}})
+        );
+        if (!saved.has_value()) {
+            mSaveAsError = support::error_text(saved.get_error());
+            return false;
+        }
+        mSaveAsError.clear();
+        mSaveAsPending = false;
+        mSaveAsOpenRequested = false;
+        return true;
+    }
+
+    void editor_workspace::handle_global_shortcuts(editor_context &context) {
+        const play_state state = context.play().state();
+        const bool hasScene = context.has_scene();
+        const bool undoFrozen = context.undo().frozen();
+        // Every shortcut is submitted each frame, pressed or not: ImGui honours a route the frame after it is claimed.
+        const bool undoPressed = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, ImGuiInputFlags_RouteGlobal);
+        const bool redoPressed = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, ImGuiInputFlags_RouteGlobal);
+        const bool savePressed = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteGlobal);
+        const bool playPressed = ImGui::Shortcut(ImGuiKey_F5, ImGuiInputFlags_RouteGlobal);
+        const bool stopPressed = ImGui::Shortcut(ImGuiMod_Shift | ImGuiKey_F5, ImGuiInputFlags_RouteGlobal);
+        if (undoPressed && context.undo().can_undo() && !undoFrozen) {
+            fire_menu_item(context, UNDO_ITEM);
+        }
+        if (redoPressed && context.undo().can_redo() && !undoFrozen) {
+            fire_menu_item(context, REDO_ITEM);
+        }
+        if (savePressed && hasScene) {
+            request_save_scene(context);
+        }
+        if (playPressed && hasScene && state == play_state::EDITING) {
+            fire_menu_item(context, PLAY_ITEM);
+        }
+        if (stopPressed && state != play_state::EDITING) {
+            fire_menu_item(context, STOP_ITEM);
+        }
+    }
+
+    void editor_workspace::draw_save_as_modal(editor_context &context) {
+        // The menu item that asks for the dialog runs inside the File menu's popup, so the modal opens here, at the
+        // workspace's own ID stack level, on the next draw.
+        if (mSaveAsOpenRequested) {
+            ImGui::OpenPopup(SAVE_AS_POPUP);
+            mSaveAsOpenRequested = false;
+        }
+        if (!ImGui::BeginPopupModal(SAVE_AS_POPUP, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (!ImGui::IsPopupOpen(SAVE_AS_POPUP)) {
+                mSaveAsPending = false;
+            }
+            return;
+        }
+        // Saved through save_scene_as() from elsewhere, or the scene went away while the dialog was up.
+        if (!mSaveAsPending || !context.has_scene()) {
+            mSaveAsPending = false;
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+        support::hint_text("Relative to assets://; .scene.json is added.");
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::SetNextItemWidth(360.0f);
+        const bool entered = ImGui::InputText(
+          "Path",
+          &mSaveAsPath,
+          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
+        );
+        const bool clicked = ImGui::Button("Save");
+        if ((entered || clicked) && save_scene_as(context, mSaveAsPath)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            mSaveAsPending = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if (!mSaveAsError.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            ImGui::TextWrapped("%s", mSaveAsError.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndPopup();
     }
 
     void editor_workspace::load_layout_once() {

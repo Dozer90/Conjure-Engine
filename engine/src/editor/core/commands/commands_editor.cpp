@@ -36,12 +36,15 @@ namespace conjure::editor::support {
 
             public:
                 bool tick(editor_context &context) override {
+                    if (!mReply.valid()) {
+                        // The request was cancelled (its client disconnected) or timed out: nobody reads the
+                        // answer, so the task leaves now instead of ticking until the target frame.
+                        return true;
+                    }
                     if (context.frame_index() < mTargetFrame) {
                         return false;
                     }
-                    if (mReply.valid()) {
-                        mReply.succeed(core::json::object({{"frame", context.frame_index()}}));
-                    }
+                    mReply.succeed(core::json::object({{"frame", context.frame_index()}}));
                     return true;
                 }
         };
@@ -50,7 +53,9 @@ namespace conjure::editor::support {
         /// editor.exec_file: dispatches one request per tick (waiting for asynchronous ones) and answers with
         /// the summary. The file's requests run as a private in-process client whose response sink lives
         /// exactly as long as the task: destroyed early (the engine restarted under project.open, shutdown),
-        /// the task unregisters the sink and fails its reply with CANCELLED.
+        /// the task unregisters the sink and fails its reply with CANCELLED. Releasing the client cancels it in
+        /// the dispatcher, which commits a transaction the file left open and drops its pending requests. A
+        /// request that was cancelled (the issuer disconnected) or timed out stops the task on its next tick.
         /// </summary>
         class exec_file_task final : public frame_task {
             private:
@@ -60,22 +65,15 @@ namespace conjure::editor::support {
                 exec_summary mSummary = {};
                 editor_context *mContext = nullptr;         // set with the sink; the context outlives its tasks
                 usize mNext = 0;
-                u32 mClientId = 0;
-                u32 mWaitingFrames = 0;
+                u32 mClientId = 0;                          // the private client, registered on the first tick
                 bool mKeepGoing = false;
                 bool mWaiting = false;
                 bool mSinkInstalled = false;
 
             public:
-                exec_file_task(
-                  std::vector<protocol_request> requests,
-                  async_reply reply,
-                  u32 clientId,
-                  bool keepGoing
-                ) :
+                exec_file_task(std::vector<protocol_request> requests, async_reply reply, bool keepGoing) :
                     mRequests(std::move(requests)),
                     mReply(reply),
-                    mClientId(clientId),
                     mKeepGoing(keepGoing) {}
 
                 ~exec_file_task() override {
@@ -87,6 +85,11 @@ namespace conjure::editor::support {
 
             public:
                 bool tick(editor_context &context) override {
+                    if (!mReply.valid()) {
+                        // Cancelled or timed out: nobody reads the summary, so the rest of the file must not run.
+                        release_client();
+                        return true;
+                    }
                     if (!mSinkInstalled) {
                         // The exec client is a fresh in-process client so its asynchronous replies can be
                         // observed here without touching the issuing client's stream.
@@ -100,7 +103,6 @@ namespace conjure::editor::support {
                     for (u32 budget = 0; budget < 64; ++budget) {
                         if (mWaiting) {
                             if (!mCaptured.has_value()) {
-                                ++mWaitingFrames;
                                 return false;
                             }
                             record(*mCaptured);
@@ -135,15 +137,7 @@ namespace conjure::editor::support {
 
             private:
                 void record(const protocol_response &response) {
-                    ++mSummary.executed;
-                    if (response.ok) {
-                        ++mSummary.succeeded;
-                    } else {
-                        ++mSummary.failed;
-                        if (mSummary.firstFailedIndex < 0) {
-                            mSummary.firstFailedIndex = static_cast<i32>(mSummary.executed - 1);
-                        }
-                    }
+                    mSummary.record(response.ok, mSummary.executed);
                 }
 
                 bool finish(editor_context &context) {
@@ -160,6 +154,7 @@ namespace conjure::editor::support {
                     if (!mSinkInstalled || mContext == nullptr) {
                         return;
                     }
+                    mContext->dispatcher().cancel_client(mClientId);
                     mContext->unregister_response_sink(mClientId);
                     mContext->events().unregister_client(mClientId);
                     mSinkInstalled = false;
@@ -262,7 +257,7 @@ namespace conjure::editor::support {
               headless_runner::parse_command_file(buffer.str())
             );
             invocation.context.add_frame_task(
-              std::make_unique<exec_file_task>(std::move(requests), invocation.reply, invocation.clientId, keepGoing)
+              std::make_unique<exec_file_task>(std::move(requests), invocation.reply, keepGoing)
             );
             return command_outcome{};
         }

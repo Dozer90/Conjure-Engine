@@ -62,6 +62,7 @@ namespace conjure::editor {
             u64 mNextTicket = 1;
             u32 mMaxPendingPerClient = DEFAULT_MAX_PENDING_PER_CLIENT;
             u32 mSuppressRecording = 0;
+            u32 mSuppressRevision = 0;                      // > 0 while history.undo / redo apply a step
             f64 mAsyncTimeoutSeconds = DEFAULT_ASYNC_TIMEOUT_SECONDS;
 
         public:
@@ -130,7 +131,9 @@ namespace conjure::editor {
             );
 
             /// <summary>
-            /// Dispatches recorded inverses or replays with undo recording suppressed (history.undo/redo).
+            /// Dispatches recorded inverses or replays with undo recording suppressed (history.undo/redo). The
+            /// commands neither bump the revision nor emit scene.changed: the history command does both once per
+            /// step.
             /// </summary>
             [[nodiscard]] core::result<void> dispatch_inverses(std::span<const command_inverse> inverses, u32 clientId);
             [[nodiscard]] core::result<void> dispatch_replays(std::span<const command_request> replays, u32 clientId);
@@ -159,6 +162,15 @@ namespace conjure::editor {
             /// </summary>
             [[nodiscard]] bool in_batch() const noexcept {
                 return mBatch != nullptr;
+            }
+
+            /// <summary>
+            /// True while history.undo / redo or a batch rollback dispatch recorded inverses and replays. Handlers
+            /// use it to accept values a client may not send but an earlier state legitimately held (a legacy
+            /// entity name restored by undo).
+            /// </summary>
+            [[nodiscard]] bool replaying() const noexcept {
+                return mSuppressRecording > 0;
             }
 
             /// <summary>

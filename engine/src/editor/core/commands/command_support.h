@@ -5,6 +5,8 @@
 #include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_error.h"
 
+#include "conjure/assets/asset_database.h"
+#include "conjure/assets/asset_types.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/math.h"
@@ -51,15 +53,21 @@ namespace conjure::editor::support {
     );
     [[nodiscard]] bool bool_or(const core::json::value &args, std::string_view key, bool fallback);
     [[nodiscard]] core::result<u32> u32_or(const core::json::value &args, std::string_view key, u32 fallback);
+
+    /// <summary>
+    /// The number at args[key], or the fallback when the key is absent; INVALID_ARGS for anything that is not a
+    /// finite number within the f32 range (1e39 is refused rather than read as 0).
+    /// </summary>
     [[nodiscard]] core::result<f32> f32_or(const core::json::value &args, std::string_view key, f32 fallback);
 
     /// <summary>
-    /// [x, y, z] of finite numbers.
+    /// [x, y, z] of finite numbers within the f32 range.
     /// </summary>
     [[nodiscard]] core::result<math::vec3> read_vec3(const core::json::value &value, std::string_view name);
 
     /// <summary>
-    /// [x, y, z, w] as a quaternion or [pitch, yaw, roll] in degrees.
+    /// [x, y, z, w] as a quaternion or [pitch, yaw, roll] in degrees, every component a finite number within the
+    /// f32 range.
     /// </summary>
     [[nodiscard]] core::result<math::quat> read_rotation(const core::json::value &value, std::string_view name);
 
@@ -89,6 +97,13 @@ namespace conjure::editor::support {
       command_invocation &invocation,
       const core::json::value &reference
     );
+
+    /// <summary>
+    /// INVALID_ARGS (naming 'argument') for an entity name a hierarchy path cannot address: the empty name, or one
+    /// holding '/', the path separator. Identical sibling names stay allowed (an ambiguous path answers with
+    /// details.candidates).
+    /// </summary>
+    [[nodiscard]] core::result<void> check_entity_name(std::string_view name, std::string_view argument);
 
     /// <summary>
     /// The guid of a live entity as a string (generated when missing).
@@ -122,7 +137,7 @@ namespace conjure::editor::support {
 
     /// <summary>
     /// Keeps the entities none of whose ancestors are also in the list (outermost subtrees), in the order
-    /// given.
+    /// given, each once. Linear in the list times the hierarchy depth.
     /// </summary>
     [[nodiscard]] std::vector<ecs::entity> outermost(const scene::scene &scene, std::span<const ecs::entity> entities);
 
@@ -133,9 +148,30 @@ namespace conjure::editor::support {
     [[nodiscard]] u32 tree_position(const scene::scene &scene, ecs::entity entity) noexcept;
 
     /// <summary>
-    /// An entity.restore request for the subtree, the inverse of destroying it.
+    /// An entity.restore request for the subtree, the inverse of destroying it, at its current tree_position().
     /// </summary>
     [[nodiscard]] core::result<command_inverse> restore_inverse(scene::scene &scene, ecs::entity root);
+
+    /// <summary>
+    /// restore_inverse() at a sibling position the caller already knows (a bulk destroy computes every root's
+    /// position in one pass instead of one scene-roots scan per root).
+    /// </summary>
+    [[nodiscard]] core::result<command_inverse> restore_inverse(scene::scene &scene, ecs::entity root, u32 position);
+
+    /// <summary>
+    /// The world box of a subtree and where it came from.
+    /// </summary>
+    struct subtree_box {
+        math::aabb bounds = {};
+        bool fromRenderBounds = false;                      // false: the 1 m boxes around the members
+    };
+
+    /// <summary>
+    /// The world bounds of a subtree: its render bounds when any member has them, otherwise the union of a 1 m
+    /// box around every member's world position (so a parent without render bounds still covers its children).
+    /// Invalid bounds for a dead entity.
+    /// </summary>
+    [[nodiscard]] subtree_box subtree_bounds_or_boxes(const scene::scene &scene, ecs::entity root);
 
     /// <summary>
     /// An editor.batch request of the given children.
@@ -149,6 +185,36 @@ namespace conjure::editor::support {
     [[nodiscard]] core::result<ecs::entity> apply_restore_inverse(scene::scene &scene, const command_inverse &inverse);
 
     /*-----------------------------------------------------------------------*/
+    // Assets
+
+    /// <summary>
+    /// The relative part of an asset path in canonical spelling (forward slashes, no "." or resolvable ".."
+    /// segments). INVALID_ARGS when it leaves its mount ("..", "../x", an absolute path) or names the mount root
+    /// itself: the file system below would otherwise write next to project.json or outside the project. 'text' is
+    /// the spelling the messages quote.
+    /// </summary>
+    [[nodiscard]] core::result<std::string> contained_relative_path(
+      std::string_view text,
+      const assets::asset_path_parts &parts
+    );
+
+    /// <summary>
+    /// The database-relative file path of an asset path ("assets://a/b.png" -> "<mount root>/a/b.png");
+    /// INVALID_ARGS when the path leaves its mount, ASSET_NOT_FOUND for an unknown mount.
+    /// </summary>
+    [[nodiscard]] core::result<std::string> file_path_for(assets::asset_database &database, std::string_view assetPath);
+
+    /// <summary>
+    /// Imports one asset synchronously on the engine's job system. NOT_AVAILABLE without a job system,
+    /// INVALID_ARGS naming the importer's message when the import of that asset failed.
+    /// </summary>
+    [[nodiscard]] core::result<void> import_now(
+      editor_context &context,
+      assets::asset_database &database,
+      const assets::asset_id &id
+    );
+
+    /*-----------------------------------------------------------------------*/
     // Encodings and tool output
 
     /// <summary>
@@ -157,7 +223,9 @@ namespace conjure::editor::support {
     [[nodiscard]] std::string base64_encode(std::span<const std::byte> bytes);
 
     /// <summary>
-    /// Decodes standard base64; padding and whitespace are skipped, any other foreign character is INVALID_ARGS.
+    /// Decodes standard padded base64; whitespace is skipped. INVALID_ARGS for a foreign character, '=' anywhere
+    /// but at the end or more than two of them, a length that is not a multiple of 4 and non-zero bits after the
+    /// last byte, so a truncated or corrupted payload never decodes silently.
     /// </summary>
     [[nodiscard]] core::result<std::vector<std::byte>> base64_decode(std::string_view text);
 
@@ -227,6 +295,8 @@ namespace conjure::editor::support {
     // Schema fragments shared by several commands
 
     inline constexpr std::string_view ENTITY_REF_SCHEMA = R"({"type":"string","description":"guid or hierarchy path"})";
+    inline constexpr std::string_view OPTIONAL_ENTITY_REF_SCHEMA =
+      R"({"type":["string","null"],"description":"guid or hierarchy path; null = scene root"})";
     inline constexpr std::string_view EMPTY_SCHEMA = "{\"type\":\"object\"}";
     inline constexpr std::string_view ANY_OBJECT_SCHEMA = "{\"type\":\"object\",\"additionalProperties\":true}";
 }

@@ -55,6 +55,8 @@ TEST_SUITE("editor/schema_validator") {
         CONJURE_REQUIRE_OK(schema);
         CONJURE_CHECK_OK(schema.value().validate(parse(R"({"n":3,"p":null})").root()));
         CONJURE_CHECK_OK(schema.value().validate(parse(R"({"p":"root"})").root()));
+        // JSON Schema: an integer is any number with a zero fraction, so 2.0 is one (the handlers read it as 2).
+        CONJURE_CHECK_OK(schema.value().validate(parse(R"({"n":2.0})").root()));
         CONJURE_CHECK_ERROR(schema.value().validate(parse(R"({"n":3.5})").root()), protocol_error_code::INVALID_ARGS);
         CONJURE_CHECK_ERROR(schema.value().validate(parse(R"({"p":7})").root()), protocol_error_code::INVALID_ARGS);
     }

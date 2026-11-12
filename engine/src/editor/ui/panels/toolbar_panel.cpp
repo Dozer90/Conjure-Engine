@@ -21,31 +21,8 @@ namespace conjure::editor::ui {
         const play_state state = context.play().state();
         const bool hasScene = context.has_scene();
 
-        // Global shortcuts live here because the toolbar is always open.
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, ImGuiInputFlags_RouteGlobal) && context.undo().can_undo() &&
-          !context.undo().frozen()) {
-            support::fire_command(context, "history.undo", core::json::document::object());
-        }
-        if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, ImGuiInputFlags_RouteGlobal) && context.undo().can_redo() &&
-          !context.undo().frozen()) {
-            support::fire_command(context, "history.redo", core::json::document::object());
-        }
-        if (ImGui::Shortcut(
-          ImGuiMod_Ctrl | ImGuiKey_S,
-          ImGuiInputFlags_RouteGlobal
-        ) && hasScene && !context.scene_path().empty()) {
-            support::fire_command(context, "scene.save", core::json::document::object());
-        }
-        if (ImGui::Shortcut(ImGuiKey_F5, ImGuiInputFlags_RouteGlobal) && hasScene && state == play_state::EDITING) {
-            support::fire_command(context, "play.start", core::json::document::object());
-        }
-        if (ImGui::Shortcut(
-          ImGuiMod_Shift | ImGuiKey_F5,
-          ImGuiInputFlags_RouteGlobal
-        ) && state != play_state::EDITING) {
-            support::fire_command(context, "play.stop", core::json::document::object());
-        }
-
+        // The global shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S, F5, Shift+F5) live in editor_workspace::draw, so they work
+        // while this panel is closed, collapsed or an unselected dock tab.
         ImGui::BeginDisabled(!hasScene || state != play_state::EDITING);
         if (ImGui::Button("Play")) {
             support::fire_command(context, "play.start", core::json::document::object());
@@ -80,7 +57,7 @@ namespace conjure::editor::ui {
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        ImGui::Separator();
+        support::vertical_separator();
         ImGui::SameLine();
         ImGui::BeginDisabled(!context.undo().can_undo() || context.undo().frozen());
         if (ImGui::Button("Undo")) {
@@ -95,7 +72,7 @@ namespace conjure::editor::ui {
         ImGui::EndDisabled();
 
         ImGui::SameLine();
-        ImGui::Separator();
+        support::vertical_separator();
         ImGui::SameLine();
         const std::string status = std::format(
           "{} | frame {} | sim {}",

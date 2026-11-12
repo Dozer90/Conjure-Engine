@@ -19,7 +19,7 @@
 //   -> {"id":12,"cmd":"entity.create","args":{"name":"Player"}}
 //   <- {"id":12,"ok":true,"result":{"guid":"...","revision":42}}
 //   <- {"id":13,"ok":false,"error":{"code":"ENTITY_NOT_FOUND","message":"...","details":{}}}
-//   <- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["..."]}}
+//   <- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["..."],"primary":"..."}}
 
 namespace conjure::editor {
 

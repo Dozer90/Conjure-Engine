@@ -15,7 +15,8 @@
 
 // Shared helpers of the panels (engine/src/editor/ui): every edit a panel makes goes through the dispatcher as
 // a command_request from client 0 (the local UI), so it is validated, recorded for undo and announced exactly
-// like a protocol request. Failures are logged as warnings and shown in the panel's status line.
+// like a protocol request. Failures are logged as warnings (the Console panel shows them); selection, camera and
+// view toggles are UI state written directly, not commands.
 
 namespace conjure::editor::ui::support {
 
@@ -66,4 +67,10 @@ namespace conjure::editor::ui::support {
     /// A disabled-looking text row ("none selected").
     /// </summary>
     void hint_text(std::string_view text);
+
+    /// <summary>
+    /// A vertical bar the height of the current line, between ImGui::SameLine() calls in a button row
+    /// (ImGui::Separator() there draws a horizontal rule across the row instead).
+    /// </summary>
+    void vertical_separator();
 }

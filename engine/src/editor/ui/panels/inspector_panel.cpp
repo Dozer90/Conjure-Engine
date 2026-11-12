@@ -21,8 +21,8 @@ namespace conjure::editor::ui {
 
     namespace {
         /// <summary>
-        /// The short protocol name of a registered component ("local_transform" of "conjure.scene.local_transform"):
-        /// the unique-suffix form the type resolver accepts.
+        /// The short name of a registered component ("local_transform" of "conjure.scene.local_transform"), for the
+        /// header only: the commands get the registered name, which an alias or another type's suffix cannot shadow.
         /// </summary>
         [[nodiscard]] std::string short_name(std::string_view registered) {
             const usize dot = registered.rfind('.');
@@ -129,10 +129,12 @@ namespace conjure::editor::ui {
         const bool removable = id.value() != scene.ids().localTransform;
         if (ImGui::BeginPopupContextItem("component_menu")) {
             if (ImGui::MenuItem("Remove", nullptr, false, removable)) {
+                // The registered name, never the short one: "camera" of a module's mygame.camera is an alias of
+                // another type.
                 support::fire_command(
                   context,
                   "component.remove",
-                  core::json::object({{"entity", guid.to_string()}, {"type", shortName}})
+                  core::json::object({{"entity", guid.to_string()}, {"type", std::string(typeName)}})
                 );
             }
             if (ImGui::MenuItem("Copy as JSON")) {
@@ -152,14 +154,13 @@ namespace conjure::editor::ui {
             return;
         }
         const ecs::component_info &info = context.components().info(id.value());
+        bool changed = false;
         // Edits during play are allowed on purpose: the dispatcher executes them against the live scene without
         // recording them (play.stop restores the snapshot) and warns once with UNRECORDED_PLAY_EDIT.
-        const bool readOnly = false;
-        bool changed = false;
         if (info.reflection != nullptr) {
-            changed = mDrawers->draw_object(*info.reflection, value.value(), readOnly);
+            changed = mDrawers->draw_object(*info.reflection, value.value(), false);
         } else if (value.value().root().is_object() && value.value().root().size() > 0) {
-            changed = mDrawers->draw_json(shortName, value.value(), readOnly);
+            changed = mDrawers->draw_json(shortName, value.value(), false);
         } else {
             ImGui::TextDisabled("(no editable data)");
         }
@@ -168,18 +169,14 @@ namespace conjure::editor::ui {
             (void) support::run_command(
               context,
               "component.set",
-              core::json::object({{"entity", guidText}, {"path", shortName}, {"value", value.value()}}),
-              support::coalesce_key(guidText, shortName)
+              core::json::object({{"entity", guidText}, {"path", std::string(typeName)}, {"value", value.value()}}),
+              support::coalesce_key(guidText, typeName)
             );
         }
     }
 
     void inspector_panel::draw_add_component(editor_context &context, const core::uuid &guid) {
-        if (!ImGui::Button("Add Component")) {
-            if (ImGui::BeginPopup("add_component")) {
-                ImGui::EndPopup();
-            }
-        } else {
+        if (ImGui::Button("Add Component")) {
             ImGui::OpenPopup("add_component");
             mAddComponentFilter.clear();
         }

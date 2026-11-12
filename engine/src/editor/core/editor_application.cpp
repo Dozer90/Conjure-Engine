@@ -5,7 +5,9 @@
 #include "conjure/editor/log_category.h"
 
 #include "conjure/core/platform_detect.h"
+#include "conjure/engine/command_line.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/engine_error.h"
 #include "conjure/engine/exit_code.h"
 #include "conjure/engine/project.h"
 
@@ -72,7 +74,23 @@ namespace conjure::editor {
         for (const std::string &argument : storage) {
             arguments.emplace_back(argument);
         }
-        CONJURE_TRY_ASSIGN(engine::application_desc desc, engine::application_desc::from_command_line(arguments, base));
+        CONJURE_TRY_ASSIGN(const engine::command_line_options parsed, engine::parse_command_line(arguments));
+        if (!parsed.unrecognisedArguments.empty()) {
+            // The editor took its own flags first, so what the engine does not know either is a mistake. It is
+            // refused before the merge loads the project, so a missing project does not hide the bad option.
+            std::string unknown = {};
+            for (const std::string &argument : parsed.unrecognisedArguments) {
+                if (!unknown.empty()) {
+                    unknown += ' ';
+                }
+                unknown += argument;
+            }
+            return engine::make_error(
+              engine::engine_error::BAD_ARGUMENTS,
+              std::format("unknown option(s): {}", unknown)
+            );
+        }
+        CONJURE_TRY_ASSIGN(engine::application_desc desc, engine::application_desc::from_options(parsed, base));
         desc.config.editor = true;
 
         if (options.headless) {
@@ -151,6 +169,15 @@ namespace conjure::editor {
                 CONJURE_LOG_ERROR(LOG_EDITOR, "frame failed: {}", stepped.get_error().to_string());
                 mExitCode = static_cast<int>(engine::exit_code::RUNTIME_FAILURE);
                 break;
+            }
+            // A headless session whose only transport is stdio has nobody left to serve once standard input
+            // ended; a windowed editor, or one with a TCP server, keeps running for its other clients. A quit
+            // asked for in the same frame keeps its own exit code.
+            const bool stdioOnly = mOptions.headless && mOptions.aiStdio && !mOptions.wants_tcp_server();
+            const bool quitPending = mQuitRequested || mEngine->is_quit_requested();
+            if (stdioOnly && !quitPending && mServer != nullptr && mServer->stdio_closed()) {
+                CONJURE_LOG_INFO(LOG_EDITOR, "ai protocol: standard input closed; quitting");
+                request_quit(static_cast<int>(engine::exit_code::OK));
             }
         }
         if (!mQuitRequested && mEngine->is_quit_requested()) {
@@ -272,6 +299,13 @@ namespace conjure::editor {
             mOptions.projectPath = next;
         }
         old.reset();
+        if (mServer != nullptr && mContext != nullptr) {
+            // <project>/.conjure/ai_port follows the open project: the previous project's file is removed and the
+            // new one names the port.
+            mServer->set_project_root(
+              mContext->project() != nullptr ? mContext->project()->root_directory() : std::filesystem::path()
+            );
+        }
         if (mContext != nullptr) {
             mContext->events().emit(
               editor_event::SCENE_LOADED,
@@ -289,6 +323,9 @@ namespace conjure::editor {
         request.id = make_id(0);
         request.command = "project.export";
         request.args = core::json::object({{"directory", mOptions.exportDirectory.generic_string()}});
+        if (!mOptions.exportDistribution.empty()) {
+            request.args.set("distributionDirectory", mOptions.exportDistribution.generic_string());
+        }
         std::optional<protocol_response> captured = std::nullopt;
         const u32 clientId = mContext->events().register_client({});
         mContext->register_response_sink(clientId, [&captured](const protocol_response &response) {

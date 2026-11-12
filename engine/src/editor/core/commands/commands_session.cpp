@@ -17,11 +17,15 @@ namespace conjure::editor::support {
         core::result<command_outcome> session_hello(command_invocation &invocation) {
             editor_context &context = invocation.context;
             const std::string_view token = string_or(invocation.args, "token", "");
-            if (!context.token().empty() && token != context.token()) {
+            // --ai-token gates the transports (TCP, stdio, loopback). In-process clients (an --exec file, an
+            // editor.exec_file task, the UI) have no transport entry and are trusted.
+            protocol_server *server = context.server();
+            const bool transportClient = server != nullptr && server->client(invocation.clientId) != nullptr;
+            if (transportClient && !context.token().empty() && token != context.token()) {
                 return make_editor_error(protocol_error_code::UNAUTHORISED, "session.hello: the token does not match");
             }
-            if (context.server() != nullptr) {
-                context.server()->mark_authenticated(invocation.clientId);
+            if (server != nullptr) {
+                server->mark_authenticated(invocation.clientId);
             }
             const std::string_view clientName = string_or(invocation.args, "clientName", "");
             if (!clientName.empty()) {

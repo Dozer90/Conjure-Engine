@@ -40,6 +40,10 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "guid": "d2c05824-ac89-555b-9a97-0c31faa881eb",
+      "parent": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+    }
   }
 }

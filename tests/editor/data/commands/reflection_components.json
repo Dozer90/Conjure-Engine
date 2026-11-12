@@ -5,6 +5,26 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "components": [
+        "@contains",
+        {
+          "name": "conjure.scene.local_transform",
+          "module": "engine",
+          "aliases": [
+            "transform",
+            "local_transform"
+          ],
+          "fields": [
+            "@contains",
+            {
+              "name": "position",
+              "type": "VEC3"
+            }
+          ]
+        }
+      ]
+    }
   }
 }

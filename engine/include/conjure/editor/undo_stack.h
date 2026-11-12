@@ -94,6 +94,14 @@ namespace conjure::editor {
             [[nodiscard]] bool has_transaction(u32 clientId) const noexcept;
 
             /// <summary>
+            /// True while any client has an open transaction (history.undo, redo and clear are refused then:
+            /// ending the transaction would push past the cursor and drop the redo tail).
+            /// </summary>
+            [[nodiscard]] bool has_open_transaction() const noexcept {
+                return !mTransactions.empty();
+            }
+
+            /// <summary>
             /// The entry to undo next (the cursor moves down); nullopt when nothing can be undone.
             /// </summary>
             [[nodiscard]] std::optional<undo_entry> pop_for_undo();

@@ -20,6 +20,12 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "directory": "${project}/exported",
+      "assetCount": 1,
+      "warnings": [],
+      "runtimePath": null
+    }
   }
 }

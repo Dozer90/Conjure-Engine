@@ -9,6 +9,7 @@
 #include "conjure/core/math/ray.h"
 #include "conjure/editor/picker.h"
 
+#include <string>
 #include <vector>
 
 // picker.h: broad phase ordering, ties, misses and the narrow phase over scene geometry.
@@ -151,6 +152,46 @@ TEST_SUITE("editor/picker") {
         CONJURE_CHECK_APPROX(centre.distance, 10.0f);
     }
 
+    TEST_CASE("pick - disabled entities are not candidates and maxDistance also bounds narrow-phase hits") {
+        editor_test::headless_editor editor = {};
+        const std::string front = editor.create_entity("front");
+        const std::string child = editor.create_entity("child", front);
+        const std::string other = editor.create_entity("other");
+        for (const std::string &guid : {front, child, other}) {
+            (void) editor.ok(
+              "component.add",
+              core::json::object({
+                {"entity", guid},
+                {"type", "sprite"},
+                {"value", core::json::object({{"size", core::json::array({1.0f, 1.0f})}})},
+              })
+            );
+        }
+        editor.pump(2);
+        CHECK(gather_pick_candidates(editor.scene()).size() == 3);
+        // Disabling 'front' also makes its child inactive: neither is drawn, so neither can be picked.
+        (void) editor.ok("entity.set_enabled", core::json::object({{"entity", front}, {"enabled", false}}));
+        std::vector<pick_candidate> candidates = gather_pick_candidates(editor.scene());
+        REQUIRE(candidates.size() == 1);
+        CHECK(candidates[0].guid.to_string() == other);
+
+        // The quad lies 10 units down the ray, but its broad-phase box is widened by hand to start at 5: within a
+        // reach of 7 the box is entered while the surface itself is out of reach.
+        candidates[0].worldBounds.min = math::vec3(-0.5f, -0.5f, -0.01f);
+        candidates[0].worldBounds.max = math::vec3(0.5f, 0.5f, 5.0f);
+        pick_context context = {};
+        context.scene = &editor.scene();
+        context.maxDistance = 7.0f;
+        CHECK_FALSE(pick(forward_ray(), candidates, pick_mode::MESH, context).hit);
+        const pick_result bounds = pick(forward_ray(), candidates, pick_mode::BOUNDS, context);
+        REQUIRE(bounds.hit);
+        CONJURE_CHECK_APPROX(bounds.distance, 5.0f);
+        context.maxDistance = 20.0f;
+        const pick_result mesh = pick(forward_ray(), candidates, pick_mode::MESH, context);
+        REQUIRE(mesh.hit);
+        CONJURE_CHECK_APPROX(mesh.distance, 10.0f);
+    }
+
     TEST_CASE("pick - physics mode delegates to the physics world and misses without bodies") {
         editor_test::headless_editor editor = {};
         pick_context context = {};
@@ -162,5 +203,34 @@ TEST_SUITE("editor/picker") {
         pick_context noPhysics = {};
         noPhysics.scene = &editor.scene();
         CHECK_FALSE(pick(forward_ray(), candidates, pick_mode::PHYSICS, noPhysics).hit);
+    }
+
+    TEST_CASE("regression - F514 view.pick without an aspect builds its ray with the viewport's aspect") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok(
+          "view.set_camera",
+          core::json::object({
+            {"position", core::json::array({0.0f, 0.0f, 10.0f})},
+            {"target", core::json::array({0.0f, 0.0f, 0.0f})},
+          })
+        );
+        // Headless sessions keep 16:9 until a viewport reports its shape.
+        const core::json::document headless = editor.ok("view.pick", core::json::object({{"x", 0.9f}, {"y", 0.5f}}));
+        const math::ray wide = editor.context().camera().screen_ray(math::vec2(0.9f, 0.5f), 16.0f / 9.0f);
+        CHECK(headless.root()["ray"]["direction"][0].as_f32() == doctest::Approx(wide.direction.x).epsilon(1.0e-4));
+        editor.context().set_viewport_aspect(1.0f);
+        const core::json::document square = editor.ok("view.pick", core::json::object({{"x", 0.9f}, {"y", 0.5f}}));
+        const math::ray expected = editor.context().camera().screen_ray(math::vec2(0.9f, 0.5f), 1.0f);
+        const core::json::value direction = square.root()["ray"]["direction"];
+        CHECK(direction[0].as_f32() == doctest::Approx(expected.direction.x).epsilon(1.0e-4));
+        CHECK(direction[1].as_f32() == doctest::Approx(expected.direction.y).epsilon(1.0e-4));
+        CHECK(direction[2].as_f32() == doctest::Approx(expected.direction.z).epsilon(1.0e-4));
+        CHECK(direction[0].as_f32() != doctest::Approx(wide.direction.x).epsilon(1.0e-4));
+        // An explicit aspect still wins.
+        const core::json::document given = editor.ok(
+          "view.pick",
+          core::json::object({{"x", 0.9f}, {"y", 0.5f}, {"aspect", 16.0f / 9.0f}})
+        );
+        CHECK(given.root()["ray"]["direction"][0].as_f32() == doctest::Approx(wide.direction.x).epsilon(1.0e-4));
     }
 }

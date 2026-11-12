@@ -29,6 +29,17 @@
         "name": "Other",
         "guid": "d2c05824-ac89-555b-9a97-0c31faa881eb"
       }
+    },
+    {
+      "cmd": "entity.set_transform",
+      "args": {
+        "entity": "09474d6c-1194-5bfd-8b59-6973cf69e781",
+        "position": [
+          2,
+          0,
+          0
+        ]
+      }
     }
   ],
   "request": {
@@ -44,6 +55,16 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "guid": "9d06d521-6097-50e3-84dc-b43f5c44cefc",
+      "local": {
+        "position": [
+          -2,
+          0,
+          0
+        ]
+      }
+    }
   }
 }

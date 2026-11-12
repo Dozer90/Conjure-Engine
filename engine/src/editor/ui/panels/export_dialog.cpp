@@ -20,43 +20,39 @@
 
 namespace conjure::editor::ui {
 
-    namespace {
-        /// <summary>
-        /// Shared between the dialog and the callbacks it registers: survives the dialog so a late response
-        /// never touches a dead panel.
-        /// </summary>
-        struct export_state {
-            std::optional<protocol_response> response = std::nullopt;
-            std::string message = "";
-            f32 fraction = 0.0f;
-            u32 clientId = 0;
-            bool registered = false;
-        };
-
-        std::shared_ptr<export_state> &state_slot() {
-            static std::shared_ptr<export_state> slot = nullptr;
-            return slot;
-        }
-    }
+    /// <summary>
+    /// Shared between the dialog and the callbacks it registers: survives the dialog so a late response
+    /// never touches a dead panel.
+    /// </summary>
+    struct export_dialog::export_state {
+        std::optional<protocol_response> response = std::nullopt;
+        std::string message = "";
+        f32 fraction = 0.0f;
+        u32 clientId = 0;
+        bool registered = false;
+    };
 
     export_dialog::export_dialog() :
         editor_panel("Export", false) {}
 
-    export_dialog::~export_dialog() = default;
+    export_dialog::~export_dialog() {
+        // Destroyed mid-export (a project.open restart): nothing would ever release the callbacks otherwise.
+        release_callbacks();
+    }
 
     void export_dialog::update(editor_context &context) {
-        std::shared_ptr<export_state> &state = state_slot();
-        if (!mRunning || state == nullptr) {
+        (void) context;
+        if (!mRunning || mState == nullptr) {
             return;
         }
-        if (!state->message.empty()) {
-            mStatus = state->message;
-            mProgress = state->fraction;
+        if (!mState->message.empty()) {
+            mStatus = mState->message;
+            mProgress = mState->fraction;
         }
-        if (!state->response.has_value()) {
+        if (!mState->response.has_value()) {
             return;
         }
-        const protocol_response &response = *state->response;
+        const protocol_response &response = *mState->response;
         if (response.ok) {
             mStatus = std::format(
               "exported {} asset(s), {} byte(s) to {}",
@@ -68,13 +64,10 @@ namespace conjure::editor::ui {
         } else {
             mStatus = std::format("export failed: {} {}", to_string(response.errorCode), response.errorMessage);
         }
-        if (state->registered) {
-            context.unregister_response_sink(state->clientId);
-            context.events().unregister_client(state->clientId);
-            state->registered = false;
-        }
+        release_callbacks();
         mRunning = false;
-        state.reset();
+        mState.reset();
+        mContext = nullptr;
     }
 
     void export_dialog::draw_contents(editor_context &context) {
@@ -129,10 +122,20 @@ namespace conjure::editor::ui {
         mRunning = true;
         mProgress = 0.0f;
         mStatus = "exporting...";
-        state_slot() = state;
+        mState = state;
+        mContext = &context;
         std::optional<protocol_response> immediate = context.dispatcher().dispatch(request);
         if (immediate.has_value()) {
             state->response = std::move(immediate);
         }
+    }
+
+    void export_dialog::release_callbacks() {
+        if (mState == nullptr || !mState->registered || mContext == nullptr) {
+            return;
+        }
+        mContext->unregister_response_sink(mState->clientId);
+        mContext->events().unregister_client(mState->clientId);
+        mState->registered = false;
     }
 }

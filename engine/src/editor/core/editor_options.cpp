@@ -3,7 +3,10 @@
 #include "conjure/editor/editor_error.h"
 
 #include "conjure/core/string_utils.h"
+#include "conjure/engine/command_line.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -21,16 +24,21 @@ namespace conjure::editor {
           "  --out <file.ndjson>      write the responses and events of --exec to a file (default stdout)\n"
           "  --keep-going             continue --exec after a failed command\n"
           "  --ai-port <n>            TCP port of the AI control protocol (0 disables; default 47820 + fallback)\n"
-          "  --ai-stdio               speak the protocol over stdin/stdout (logging goes to stderr)\n"
+          "  --ai-stdio               speak the protocol over stdin/stdout (logging goes to stderr); a headless\n"
+          "                           session without --ai-port exits with 0 when stdin ends\n"
           "  --ai-token <t>           clients must present the token in session.hello\n"
-          "  --timeout-seconds <s>    asynchronous replies time out after <s> seconds (default 120)\n"
+          "  --timeout-seconds <s>    asynchronous replies time out after <s> seconds (> 0, default 120)\n"
           "  --export <dir>           export the project to <dir> and exit\n"
+          "  --distribution <dir>     with --export: copy conjure_runtime, conjure_shared and shaders/ from <dir>\n"
           "  --no-scripting           run without the scripting runtime\n"
           "  --dotnet                 with --headless: the real .NET script host instead of the null host\n"
           "  --help                   print this text\n"
           "\n"
-          "Every other flag is handed to the engine (--rhi, --log-level, --frames, --fixed-hz, ...).\n"
-          "Exit codes: 0 ok, 1 a command failed, 2 startup or project failure, 3 bad arguments.\n";
+          "Every other flag is handed to the engine (its options follow); an option neither knows is a bad\n"
+          "argument. Whenever stdout carries protocol lines (--ai-stdio, --exec without --out, --export) the\n"
+          "log goes to stderr.\n"
+          "Exit codes: 0 ok, 1 a command failed, 2 startup or project failure, 3 bad arguments,\n"
+          "4 graphics device lost.\n";
 
         [[nodiscard]] core::error bad_argument(std::string message) {
             return make_editor_error(protocol_error_code::INVALID_ARGS, std::move(message));
@@ -57,6 +65,10 @@ namespace conjure::editor {
             return false;
         }
         return !headless || !aiStdio;
+    }
+
+    bool editor_options::stdout_carries_protocol() const noexcept {
+        return aiStdio || (!execFile.empty() && outputFile.empty()) || !exportDirectory.empty();
     }
 
     u16 editor_options::first_port() const noexcept {
@@ -100,13 +112,17 @@ namespace conjure::editor {
             } else if (token == "--timeout-seconds") {
                 CONJURE_TRY_ASSIGN(const std::string_view value, take_value(args, index, token));
                 const std::optional<f64> seconds = core::str::parse_double(value);
-                if (!seconds.has_value() || !std::isfinite(*seconds) || *seconds < 0.0) {
-                    return bad_argument(std::format("--timeout-seconds: '{}' is not a non-negative number", value));
+                // Zero would make every asynchronous reply time out the moment it is queued.
+                if (!seconds.has_value() || !std::isfinite(*seconds) || *seconds <= 0.0) {
+                    return bad_argument(std::format("--timeout-seconds: '{}' is not a positive number", value));
                 }
                 options.timeoutSeconds = *seconds;
             } else if (token == "--export") {
                 CONJURE_TRY_ASSIGN(const std::string_view value, take_value(args, index, token));
                 options.exportDirectory = std::filesystem::path(value);
+            } else if (token == "--distribution") {
+                CONJURE_TRY_ASSIGN(const std::string_view value, take_value(args, index, token));
+                options.exportDistribution = std::filesystem::path(value);
             } else if (token == "--no-scripting") {
                 options.noScripting = true;
                 options.engineArguments.emplace_back(token);
@@ -131,10 +147,30 @@ namespace conjure::editor {
         if (!options.exportDirectory.empty() && options.projectPath.empty()) {
             return bad_argument("--export needs --project");
         }
+        if (!options.exportDistribution.empty() && options.exportDirectory.empty()) {
+            return bad_argument("--distribution needs --export");
+        }
         return options;
     }
 
-    std::string_view editor_options_help() noexcept {
-        return HELP_TEXT;
+    std::string editor_options_help() {
+        // The engine's own text lists the flags the editor hands on, so a mistyped one can be checked by eye. The
+        // lines of flags the editor owns are dropped (the editor's own line says what they do here), and so is the
+        // engine's note on unknown options: the editor refuses those.
+        constexpr std::array<std::string_view, 5> DROPPED_PREFIXES = {
+            "  --project", "  --headless", "  --no-scripting", "  --help", "Unknown options",
+        };
+        std::string text = std::string(HELP_TEXT);
+        text += '\n';
+        for (const std::string_view line : core::str::split_lines(engine::command_line_help())) {
+            const bool dropped = std::ranges::any_of(DROPPED_PREFIXES, [line](std::string_view prefix) {
+                return core::str::starts_with(line, prefix);
+            });
+            if (!dropped) {
+                text += line;
+                text += '\n';
+            }
+        }
+        return text;
     }
 }

@@ -35,18 +35,17 @@ namespace conjure::editor::ui {
         );
         ImGui::TextUnformatted(summary.c_str());
 
-        // Chronological frame times, oldest first.
-        static std::array<f32, engine::frame_stats::HISTORY_SIZE> history = {};
+        // Kept per panel, so a paused plot holds this panel's last frames.
         if (!mPaused) {
-            const usize count = std::min<usize>(stats.sample_count(), history.size());
+            const usize count = std::min<usize>(stats.sample_count(), mHistory.size());
             for (usize index = 0; index < count; ++index) {
-                history[index] = stats.sample_at(count - 1 - index).frameMilliseconds;
+                mHistory[index] = stats.sample_at(count - 1 - index).frameMilliseconds;
             }
             mSamplesPlotted = static_cast<u32>(count);
         }
         ImGui::PlotLines(
           "##frame_ms",
-          history.data(),
+          mHistory.data(),
           static_cast<int>(mSamplesPlotted),
           0,
           "frame ms",

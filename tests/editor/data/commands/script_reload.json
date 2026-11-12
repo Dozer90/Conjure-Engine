@@ -1,7 +1,4 @@
 {
-  "editor": {
-    "allowErrors": true
-  },
   "setup": [],
   "request": {
     "cmd": "script.reload",
@@ -9,15 +6,10 @@
       "assembly": "${project}/scripts/bin/Game.dll"
     }
   },
-  "expectAnyOf": [
-    {
-      "ok": true
-    },
-    {
-      "ok": false,
-      "error": {
-        "code": "COMPILE_FAILED"
-      }
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
     }
-  ]
+  }
 }

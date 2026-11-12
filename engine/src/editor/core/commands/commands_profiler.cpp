@@ -1,9 +1,11 @@
 #include "editor/core/commands/command_support.h"
 
 #include "conjure/core/platform_detect.h"
+#include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system_phase.h"
 #include "conjure/ecs/world.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/engine_context.h"
 #include "conjure/engine/engine_time.h"
 #include "conjure/engine/frame_stats.h"
 
@@ -16,8 +18,9 @@
 #include <utility>
 
 // profiler.* (docs/design/04_editor.md 4.4, 7): the engine's frame_stats ring averaged over the last n frames,
-// the per-phase breakdown of the latest sample and the renderer's counters when a renderer exists. gpuMs is
-// null without a device that reports GPU timings.
+// the per-system timings of the scheduler's last run (systems), the per-phase breakdown of the latest sample
+// (phases) and the renderer's counters when a renderer exists. gpuMs sums the renderer's per-pass GPU timings and
+// is null without a device that reports them.
 
 namespace conjure::editor::support {
 
@@ -35,7 +38,7 @@ namespace conjure::editor::support {
             const engine::frame_sample &latest = stats.latest();
             const usize available = std::min<usize>(frames, stats.sample_count());
 
-            core::json::document systems = core::json::document::array();
+            core::json::document phases = core::json::document::array();
             std::array<f32, ecs::SYSTEM_PHASE_COUNT> phaseAverages = {};
             f32 fixedStepsTotal = 0.0f;
             u32 droppedFixedTime = 0;
@@ -49,11 +52,26 @@ namespace conjure::editor::support {
             }
             const f32 divisor = available == 0 ? 1.0f : static_cast<f32>(available);
             for (u32 phase = 0; phase < ecs::SYSTEM_PHASE_COUNT; ++phase) {
-                systems.push_back(core::json::object({
+                phases.push_back(core::json::object({
                   {"name", ecs::to_string(static_cast<ecs::system_phase>(phase))},
                   {"ms", latest.phaseMilliseconds[phase]},
                   {"averageMs", phaseAverages[phase] / divisor},
                 }));
+            }
+            // The design's systems: [{name, ms}] are the scheduler's systems, in phase and stage order.
+            core::json::document systems = core::json::document::array();
+            const ecs::scheduler *scheduler = context.engine_context().scheduler;
+            if (scheduler != nullptr) {
+                for (u32 phase = 0; phase < ecs::SYSTEM_PHASE_COUNT; ++phase) {
+                    const ecs::system_phase systemPhase = static_cast<ecs::system_phase>(phase);
+                    for (const ecs::system_timing &timing : scheduler->last_timings(systemPhase)) {
+                        systems.push_back(core::json::object({
+                          {"name", timing.name.to_string()},
+                          {"phase", ecs::to_string(systemPhase)},
+                          {"ms", static_cast<f64>(timing.microseconds) / 1000.0},
+                        }));
+                    }
+                }
             }
             core::json::document history = core::json::document::array();
             for (usize age = available; age > 0; --age) {
@@ -73,6 +91,7 @@ namespace conjure::editor::support {
               {"jobsExecuted", latest.jobsExecuted},
               {"frameMemoryHighWater", latest.frameMemoryHighWater},
               {"systems", systems},
+              {"phases", phases},
               {"history", history},
               {"entityCount", context.world().entity_count()},
               {"simulationTime", context.engine().time().time},
@@ -83,6 +102,13 @@ namespace conjure::editor::support {
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
             if (context.renderer() != nullptr) {
                 const renderer::render_stats &render = context.renderer()->stats();
+                if (!render.passTimings.empty()) {
+                    f64 gpuMilliseconds = 0.0;
+                    for (const renderer::pass_timing &timing : render.passTimings) {
+                        gpuMilliseconds += static_cast<f64>(timing.gpuMilliseconds);
+                    }
+                    result.set("gpuMs", gpuMilliseconds);
+                }
                 result.set("drawCalls", render.drawCalls);
                 result.set(
                   "renderer",
@@ -110,12 +136,12 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "profiler.frame_stats",
-            "Frame timings: the latest CPU frame, the average over the last n frames, per-phase milliseconds, fixed "
-            "steps, "
-            "renderer counters and the entity count.",
+            "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) "
+            "and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and "
+            "the entity count.",
             R"({"type":"object","properties":{"frames":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"cpuMs":{"type":"number"},"gpuMs":{"type":["number","null"]},)"
-            R"("systems":{"type":"array"},)"
+            R"("systems":{"type":"array"},"phases":{"type":"array"},)"
             R"("drawCalls":{"type":"integer"},"entityCount":{"type":"integer"}},"additionalProperties":true})",
             command_flags::NONE,
             &profiler_frame_stats

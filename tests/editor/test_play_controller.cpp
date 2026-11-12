@@ -3,10 +3,12 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/uuid.h"
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 
+#include <optional>
 #include <string>
 
 // play_controller.h (docs/design/04_editor.md D9, 3.7).
@@ -84,6 +86,30 @@ TEST_SUITE("editor/play_controller") {
         REQUIRE(selection.root()["guids"].size() == 2);
         CHECK(editor.saw_event("selection.changed"));
         (void) editor.ok("entity.get", core::json::object({{"entity", gone}}));
+    }
+
+    TEST_CASE("regression - F657 play.stop keeps the primary selection of before the play session") {
+        editor_test::headless_editor editor = {};
+        const std::string firstText = editor.create_entity("First");
+        const std::string secondText = editor.create_entity("Second");
+        const std::optional<core::uuid> first = core::uuid::parse(firstText);
+        const std::optional<core::uuid> second = core::uuid::parse(secondText);
+        REQUIRE(first.has_value());
+        REQUIRE(second.has_value());
+        // Name the lower guid last: the sorted backup alone would hand the primary to the higher one.
+        const bool firstIsLower = *first < *second;
+        const std::string &lower = firstIsLower ? firstText : secondText;
+        const std::string &higher = firstIsLower ? secondText : firstText;
+        const core::uuid lowerGuid = firstIsLower ? *first : *second;
+        (void) editor.ok("selection.set", core::json::object({{"entities", core::json::array({higher, lower})}}));
+        const core::json::document before = editor.ok("selection.get");
+        CHECK(core::uuid::parse(before.root()["primary"].as_string()) == lowerGuid);
+        (void) editor.ok("play.start");
+        (void) editor.ok("selection.set", core::json::object({{"entities", core::json::array({higher})}}));
+        (void) editor.ok("play.stop");
+        const core::json::document after = editor.ok("selection.get");
+        CHECK(after.root()["guids"].size() == 2);
+        CHECK(core::uuid::parse(after.root()["primary"].as_string()) == lowerGuid);
     }
 
     TEST_CASE("play.pause / resume / step - run exactly n fixed updates") {

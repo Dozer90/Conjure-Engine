@@ -6,6 +6,7 @@
 #include "conjure/core/assert.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/core/vfs/path_utils.h"
 #include "conjure/modules/module_manager.h"
 
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
@@ -18,6 +19,7 @@
     #include "conjure/scripting/script_runtime.h"
 #endif
 
+#include <cmath>
 #include <format>
 #include <utility>
 
@@ -54,11 +56,7 @@ namespace conjure::editor {
         mModuleConsumer = std::make_unique<editor_module_consumer>(mRegistry, mPlay.get());
         mEvents.register_client(0, {});
         mSelectionSubscription = mSelection.on_changed().subscribe([this]() {
-            core::json::document guids = core::json::document::array();
-            for (const core::uuid &guid : mSelection.guids()) {
-                guids.push_back(guid.to_string());
-            }
-            mEvents.emit(editor_event::SELECTION_CHANGED, core::json::object({{"guids", guids}}));
+            emit_selection_changed();
         });
         bind_engine(engine);
     }
@@ -151,8 +149,27 @@ namespace conjure::editor {
         mDispatcher->cancel_all(protocol_error_code::CANCELLED, "the engine restarted (project.open)");
         mFrameTasks.clear();
         mScreenshots->cancel_pending();
+        mLastScriptConfiguration = "Debug";
         mConsumerInstalled = false;
         bind_engine(engine);
+    }
+
+    core::json::document editor_context::selection_payload() const {
+        core::json::document guids = core::json::document::array();
+        for (const core::uuid &guid : mSelection.guids()) {
+            guids.push_back(guid.to_string());
+        }
+        core::json::document payload = core::json::object({{"guids", std::move(guids)}});
+        if (mSelection.empty()) {
+            payload.set_null("primary");
+        } else {
+            payload.set("primary", mSelection.primary().to_string());
+        }
+        return payload;
+    }
+
+    void editor_context::emit_selection_changed() {
+        mEvents.emit(editor_event::SELECTION_CHANGED, selection_payload());
     }
 
     void editor_context::install_module_consumer() {
@@ -191,18 +208,32 @@ namespace conjure::editor {
     }
 
     std::string editor_context::normalise_scene_path(std::string_view path) {
-        std::string result = std::string(core::str::trim(path));
-        if (result.empty()) {
-            return result;
+        const std::string_view trimmed = core::str::trim(path);
+        if (trimmed.empty()) {
+            return "";
         }
-        if (result.find("://") == std::string::npos) {
-            while (!result.empty() && (result.front() == '/' || result.front() == '\\')) {
-                result.erase(result.begin());
-            }
-            result = "assets://" + result;
+        std::string_view scheme = "assets";
+        std::string_view rest = trimmed;
+        const usize separator = trimmed.find("://");
+        if (separator != std::string_view::npos) {
+            scheme = trimmed.substr(0, separator);
+            rest = trimmed.substr(separator + 3);
         }
-        if (!core::str::ends_with(result, ".scene.json")) {
-            if (core::str::ends_with(result, ".json")) {
+        // The canonical spelling the asset database registers: forward slashes, no empty, "." or resolvable ".."
+        // segments. A leading separator still means the mount root ("/scenes/x" is assets://scenes/x), so it is
+        // stripped.
+        std::string relative = core::vfs::path_utils::normalize(rest);
+        while (!relative.empty() && relative.front() == '/') {
+            relative.erase(relative.begin());
+        }
+        const bool leavesMount = relative == ".." || core::str::starts_with(relative, "../") ||
+          core::vfs::path_utils::is_absolute(relative);
+        if (relative.empty() || leavesMount) {
+            return "";
+        }
+        std::string result = std::format("{}://{}", scheme, relative);
+        if (!core::str::iends_with(result, ".scene.json")) {
+            if (core::str::iends_with(result, ".json")) {
                 result.erase(result.size() - 5);
             }
             result += ".scene.json";
@@ -224,6 +255,17 @@ namespace conjure::editor {
 
     void editor_context::set_dotnet_executable(std::string executable) {
         mDotnetExecutable = std::move(executable);
+    }
+
+    void editor_context::set_last_script_configuration(std::string configuration) {
+        mLastScriptConfiguration = std::move(configuration);
+    }
+
+    void editor_context::set_viewport_aspect(f32 aspect) noexcept {
+        if (!std::isfinite(aspect) || aspect <= 0.0f) {
+            return;
+        }
+        mViewportAspect = aspect;
     }
 
     /*---------------------------------------------------------------*/

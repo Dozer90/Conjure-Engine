@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,6 +45,19 @@ namespace {
                 return mRemaining <= 0;
             }
     };
+
+    /// <summary>
+    /// The payloads of the selection.changed events the editor's client received since its last clear_events().
+    /// </summary>
+    std::vector<core::json::document> selection_payloads(const editor_test::headless_editor &editor) {
+        std::vector<core::json::document> payloads = {};
+        for (const protocol_event &event : editor.events()) {
+            if (event.name == "selection.changed") {
+                payloads.push_back(event.data);
+            }
+        }
+        return payloads;
+    }
 }
 
 TEST_SUITE("editor/editor_context") {
@@ -94,6 +108,132 @@ TEST_SUITE("editor/editor_context") {
         CHECK(editor_context::normalise_scene_path("assets://a.scene.json") == "assets://a.scene.json");
         CHECK(editor_context::normalise_scene_path("project://x/y") == "project://x/y.scene.json");
         CHECK(editor_context::normalise_scene_path("  ").empty());
+    }
+
+    TEST_CASE("regression - F754 normalise_scene_path canonicalises separators, dot segments and the suffix case") {
+        CHECK(editor_context::normalise_scene_path("scenes\\back") == "assets://scenes/back.scene.json");
+        CHECK(editor_context::normalise_scene_path("scenes//d") == "assets://scenes/d.scene.json");
+        CHECK(
+          editor_context::normalise_scene_path("./scenes/../scenes/x.scene.json") == "assets://scenes/x.scene.json"
+        );
+        CHECK(editor_context::normalise_scene_path("scenes/MAIN.SCENE.JSON") == "assets://scenes/MAIN.SCENE.JSON");
+        CHECK(editor_context::normalise_scene_path("scenes/level.JSON") == "assets://scenes/level.scene.json");
+        CHECK(editor_context::normalise_scene_path("assets://scenes\\a//b") == "assets://scenes/a/b.scene.json");
+        CHECK(editor_context::normalise_scene_path("\\scenes\\level") == "assets://scenes/level.scene.json");
+        CHECK(editor_context::normalise_scene_path("../out").empty());
+        CHECK(editor_context::normalise_scene_path("..").empty());
+        CHECK(editor_context::normalise_scene_path("scenes/../../out").empty());
+        CHECK(editor_context::normalise_scene_path("assets://../out").empty());
+        CHECK(editor_context::normalise_scene_path("./").empty());
+        // A drive-letter path names a place outside every mount; a rooted ".." stays at the mount root.
+        CHECK(editor_context::normalise_scene_path("C:/elsewhere/x").empty());
+        CHECK(editor_context::normalise_scene_path("assets://C:/elsewhere/x").empty());
+        CHECK(editor_context::normalise_scene_path("/../x") == "assets://x.scene.json");
+    }
+
+    TEST_CASE("editor_context - the viewport aspect starts at 16:9 and ignores values that are not positive") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        CHECK(context.viewport_aspect() == doctest::Approx(16.0f / 9.0f));
+        context.set_viewport_aspect(1.5f);
+        CHECK(context.viewport_aspect() == doctest::Approx(1.5f));
+        context.set_viewport_aspect(0.0f);
+        context.set_viewport_aspect(-2.0f);
+        context.set_viewport_aspect(std::numeric_limits<f32>::infinity());
+        context.set_viewport_aspect(std::numeric_limits<f32>::quiet_NaN());
+        CHECK(context.viewport_aspect() == doctest::Approx(1.5f));
+    }
+
+    TEST_CASE("regression - F727 an editor.wait_frames whose client disconnected leaves the frame tasks at once") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        command_dispatcher &dispatcher = context.dispatcher();
+        const u32 client = context.events().register_client({});
+        const usize tasksBefore = context.frame_task_count();
+        protocol_request request = {};
+        request.id = make_id(1);
+        request.command = "editor.wait_frames";
+        request.args = core::json::object({{"frames", 100000000}});
+        request.clientId = client;
+
+        SUBCASE("the client disconnected") {
+            CHECK_FALSE(dispatcher.dispatch(request).has_value());
+            CHECK(context.frame_task_count() == tasksBefore + 1);
+            dispatcher.cancel_client(client);
+            editor.pump(1);
+            CHECK(context.frame_task_count() == tasksBefore);
+        }
+        SUBCASE("the request timed out") {
+            dispatcher.set_async_timeout_seconds(0.0);
+            CHECK_FALSE(dispatcher.dispatch(request).has_value());
+            CHECK(context.frame_task_count() == tasksBefore + 1);
+            editor.pump(1);
+            dispatcher.set_async_timeout_seconds(30.0);
+            CHECK(dispatcher.pending_count() == 0);
+            CHECK(context.frame_task_count() == tasksBefore);
+        }
+        context.events().unregister_client(client);
+    }
+
+    TEST_CASE("regression - F481 editor.exec_file whose file leaves a transaction open records one entry") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path file = editor.project_directory() / "open_transaction.json";
+        {
+            std::ofstream output(file, std::ios::binary | std::ios::trunc);
+            REQUIRE(output.is_open());
+            output << R"([{"cmd":"editor.begin_transaction","args":{"label":"Left open"}},)"
+                      R"({"cmd":"entity.create","args":{"name":"a"}},{"cmd":"entity.create","args":{"name":"b"}}])";
+        }
+        const usize clientsBefore = editor.context().events().client_count();
+        const core::json::document summary = editor.ok(
+          "editor.exec_file",
+          core::json::object({{"path", file.generic_string()}})
+        );
+        CHECK(summary.root()["succeeded"].as_u64() == 3);
+        CHECK_FALSE(editor.context().undo().has_open_transaction());
+        REQUIRE(editor.context().undo().size() == 1);
+        CHECK(editor.context().undo().entries().front()->label == "Left open");
+        CHECK(editor.context().undo().entries().front()->undo.size() == 2);
+        CHECK(editor.context().events().client_count() == clientsBefore);
+        (void) editor.ok("history.undo");
+        CHECK(editor.scene().world().entity_count() == 0);
+    }
+
+    TEST_CASE("regression - F481 editor.exec_file stops dispatching when its issuing client disconnects") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        const std::filesystem::path file = editor.project_directory() / "wait_then_create.json";
+        {
+            std::ofstream output(file, std::ios::binary | std::ios::trunc);
+            REQUIRE(output.is_open());
+            output << R"([{"cmd":"entity.create","args":{"name":"First"}},)"
+                      R"({"cmd":"editor.wait_frames","args":{"frames":5}},)"
+                      R"({"cmd":"entity.create","args":{"name":"Later"}}])";
+        }
+        const usize clientsBefore = context.events().client_count();
+        int responses = 0;
+        const u32 client = context.events().register_client({});
+        context.register_response_sink(client, [&responses](const protocol_response &) {
+            ++responses;
+        });
+        protocol_request request = {};
+        request.id = make_id(3);
+        request.command = "editor.exec_file";
+        request.args = core::json::object({{"path", file.generic_string()}});
+        request.clientId = client;
+        CHECK_FALSE(context.dispatcher().dispatch(request).has_value());
+        // The first frame runs the first request and parks on the wait; then the issuer goes away.
+        editor.pump(1);
+        CHECK(editor.ok("entity.find", core::json::object({{"name", "First"}})).root()["total"].as_u64() == 1);
+        context.dispatcher().cancel_client(client);
+        editor.pump(10);
+        CHECK(editor.ok("entity.find", core::json::object({{"name", "Later"}})).root()["total"].as_u64() == 0);
+        CHECK(context.frame_task_count() == 0);
+        CHECK(context.dispatcher().pending_count() == 0);
+        CHECK(responses == 0);
+        context.unregister_response_sink(client);
+        context.events().unregister_client(client);
+        CHECK(context.events().client_count() == clientsBefore);
     }
 
     TEST_CASE("editor_context - describe_state carries project, scene, play state, selection and clients") {
@@ -238,6 +378,93 @@ TEST_SUITE("editor/editor_context") {
         editor.clear_events();
         (void) editor.ok("selection.set", core::json::object({{"entities", core::json::array({guid})}}));
         CHECK(editor.saw_event("selection.changed"));
+    }
+
+    TEST_CASE("regression - F657 every selection.changed carries guids and primary, null when nothing is selected") {
+        editor_test::headless_editor editor = {};
+        const std::string first = editor.create_entity("first");
+        const std::string second = editor.create_entity("second");
+
+        // A selection change: the primary is the guid named last.
+        editor.clear_events();
+        (void) editor.ok("selection.set", core::json::object({{"entities", core::json::array({first, second})}}));
+        std::vector<core::json::document> payloads = selection_payloads(editor);
+        REQUIRE(payloads.size() == 1);
+        CHECK(payloads[0].root()["guids"].size() == 2);
+        CHECK(payloads[0].root()["primary"].as_string() == second);
+
+        // A primary-only change carries the new primary.
+        editor.clear_events();
+        (void) editor.ok(
+          "selection.set",
+          core::json::object({{"entities", core::json::array({first})}, {"mode", "add"}})
+        );
+        payloads = selection_payloads(editor);
+        REQUIRE(payloads.size() == 1);
+        CHECK(payloads[0].root()["primary"].as_string() == first);
+
+        // play.stop emits too, with the same shape.
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.ok("play.stop");
+        payloads = selection_payloads(editor);
+        REQUIRE_FALSE(payloads.empty());
+        for (const core::json::document &payload : payloads) {
+            CHECK(payload.root()["guids"].size() == 2);
+            REQUIRE(payload.root().contains("primary"));
+            CHECK(payload.root()["primary"].as_string() == first);
+        }
+
+        // Nothing selected: primary null, as selection.get answers.
+        editor.clear_events();
+        (void) editor.ok("selection.clear");
+        payloads = selection_payloads(editor);
+        REQUIRE(payloads.size() == 1);
+        CHECK(payloads[0].root()["guids"].size() == 0);
+        REQUIRE(payloads[0].root().contains("primary"));
+        CHECK(payloads[0].root()["primary"].is_null());
+        CHECK(editor.ok("selection.get").root()["primary"].is_null());
+
+        // The emitter itself, called directly, sends the same shape.
+        editor.clear_events();
+        editor.context().emit_selection_changed();
+        payloads = selection_payloads(editor);
+        REQUIRE(payloads.size() == 1);
+        CHECK(payloads[0].root()["guids"].size() == 0);
+        CHECK(payloads[0].root()["primary"].is_null());
+    }
+
+    TEST_CASE("editor_context - selection_payload is the guids and primary of selection.get and selection.changed") {
+        editor_test::headless_editor editor = {};
+        const editor_context &context = editor.context();
+
+        // Nothing selected: an empty guid list and primary null, nothing else.
+        const core::json::document empty = context.selection_payload();
+        CHECK(empty.root()["guids"].size() == 0);
+        REQUIRE(empty.root().contains("primary"));
+        CHECK(empty.root()["primary"].is_null());
+        CHECK(empty.root().size() == 2);
+
+        const std::string first = editor.create_entity("first");
+        const std::string second = editor.create_entity("second");
+        editor.clear_events();
+        const core::json::document answer = editor.ok(
+          "selection.set",
+          core::json::object({{"entities", core::json::array({second, first})}})
+        );
+        const core::json::document payload = context.selection_payload();
+        CHECK(payload.root()["guids"].size() == 2);
+        CHECK(payload.root()["primary"].as_string() == first);
+        CHECK(payload.root().size() == 2);
+
+        // The answer is the payload plus "entities" and "count"; the event carries the payload as it is.
+        CHECK(answer.root()["guids"] == payload.root()["guids"]);
+        CHECK(answer.root()["primary"] == payload.root()["primary"]);
+        CHECK(answer.root()["count"].as_u64() == 2);
+        CHECK(answer.root()["entities"].size() == 2);
+        const std::vector<core::json::document> events = selection_payloads(editor);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0] == payload);
     }
 
     TEST_CASE("editor_context - without a project the context still works and commands report PROJECT_NOT_OPEN") {

@@ -16,8 +16,9 @@
 #include <vector>
 
 // The docking workspace (docs/design/04_editor.md 4.2, D12): the full-window dockspace with a pass-through
-// central node (the scene renders underneath), the main menu bar, the panel instances and the layout file
-// <project>/.conjure/editor_layout.ini.
+// central node (the scene renders underneath), the main menu bar, the global shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S,
+// F5, Shift+F5, handled here so they work whichever panels are open), the Save Scene As dialog, the panel
+// instances and the layout file <project>/.conjure/editor_layout.ini.
 
 namespace conjure::editor::ui {
 
@@ -40,9 +41,13 @@ namespace conjure::editor::ui {
             property_drawer_registry mDrawers = {};
             std::vector<panel_instance> mInstances = {};
             std::filesystem::path mLayoutFile = {};
+            std::string mSaveAsPath = "";
+            std::string mSaveAsError = "";
             u32 mFramesDrawn = 0;
             bool mLayoutLoaded = false;
             bool mShowDemo = false;
+            bool mSaveAsPending = false;                // the Save Scene As dialog is requested or open
+            bool mSaveAsOpenRequested = false;          // open the dialog's popup on the next draw
 
         public:
             editor_workspace();
@@ -116,13 +121,56 @@ namespace conjure::editor::ui {
 
             /// <summary>
             /// Every request the File, Edit and Play menus fire with fixed arguments, as the menu sends them
-            /// (Delete Selection builds its entity list at click time and is not listed). Tests validate them
-            /// against the command registry's schemas.
+            /// (Delete Selection builds its entity list at click time and Save Scene As takes the path typed in
+            /// its dialog, so neither is listed). Tests validate them against the command registry's schemas.
             /// </summary>
             [[nodiscard]] static std::vector<menu_request> menu_requests();
 
+            /// <summary>
+            /// What File > Save Scene and Ctrl+S do: scene.save when the scene has a path, otherwise the Save
+            /// Scene As dialog (a scene made with New Scene has no path yet). No-op without a scene.
+            /// </summary>
+            void request_save_scene(editor_context &context);
+
+            /// <summary>
+            /// Opens the Save Scene As dialog on the next draw, its path field set to the scene's path, or to
+            /// "scenes/<scene name>" ("scenes/untitled" for an unnamed scene) when it has none. No-op without a
+            /// scene or while the dialog is already pending.
+            /// </summary>
+            void request_save_scene_as(editor_context &context);
+
+            /// <summary>
+            /// Saves the scene through scene.save_as (the path is relative to assets:// unless it names a
+            /// scheme; .scene.json is added). True on success, which also closes the dialog; on failure the
+            /// error text is kept for the dialog (save_as_error()) and false is returned.
+            /// </summary>
+            bool save_scene_as(editor_context &context, std::string_view path);
+
+            /// <summary>
+            /// True from request_save_scene_as() until the dialog saves, is cancelled or loses its scene.
+            /// </summary>
+            [[nodiscard]] bool save_as_pending() const noexcept {
+                return mSaveAsPending;
+            }
+
+            /// <summary>
+            /// The path in the Save Scene As dialog's field.
+            /// </summary>
+            [[nodiscard]] const std::string &save_as_path() const noexcept {
+                return mSaveAsPath;
+            }
+
+            /// <summary>
+            /// The error of the last failed save_scene_as() ("" after a success or a new request).
+            /// </summary>
+            [[nodiscard]] const std::string &save_as_error() const noexcept {
+                return mSaveAsError;
+            }
+
         private:
             void draw_menu_bar(editor_context &context);
+            void handle_global_shortcuts(editor_context &context);
+            void draw_save_as_modal(editor_context &context);
             void load_layout_once();
     };
 }

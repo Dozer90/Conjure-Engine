@@ -15,10 +15,14 @@
 #endif
 
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <format>
 #include <fstream>
-#include <sstream>
+#include <limits>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -41,25 +45,17 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
-        /// The database-relative file path of an asset path ("assets://a/b.png" -> "<mount root>/a/b.png").
+        /// normalise_asset_path() for a path a command writes or registers: the relative part is canonical and
+        /// must stay inside its mount (contained_relative_path). Lookups keep normalise_asset_path().
         /// </summary>
-        core::result<std::string> file_path_for(assets::asset_database &database, std::string_view assetPath) {
-            const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(assetPath);
+        core::result<std::string> checked_asset_path(std::string_view text) {
+            const std::string path = normalise_asset_path(text);
+            const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(path);
             if (!parts.has_value()) {
-                return invalid_args(std::format("'{}' is not an asset path (mount://relative)", assetPath));
+                return invalid_args(std::format("'{}' is not an asset path (mount://relative)", text));
             }
-            for (const assets::asset_mount &mount : database.mounts()) {
-                if (mount.name == parts->mount) {
-                    if (mount.rootPath.empty()) {
-                        return std::string(parts->relativePath);
-                    }
-                    return mount.rootPath + "/" + std::string(parts->relativePath);
-                }
-            }
-            return make_editor_error(
-              protocol_error_code::ASSET_NOT_FOUND,
-              std::format("unknown asset mount '{}'", parts->mount)
-            );
+            CONJURE_TRY_ASSIGN(const std::string relative, contained_relative_path(text, *parts));
+            return assets::make_asset_path(parts->mount, relative, parts->subPath);
         }
 
         core::result<assets::asset_database *> require_database(editor_context &context) {
@@ -132,27 +128,6 @@ namespace conjure::editor::support {
             return list;
         }
 
-        core::result<void> import_now(
-          editor_context &context,
-          assets::asset_database &database,
-          const assets::asset_id &id
-        ) {
-            if (context.engine_context().jobs == nullptr) {
-                return not_available("no job system to import with");
-            }
-            const std::array<assets::asset_id, 1> ids = {id};
-            const core::result<assets::import_report> imported = database.import(ids, *context.engine_context().jobs);
-            if (!imported.has_value()) {
-                return wrap(imported.get_error());
-            }
-            for (const assets::import_failure &failure : imported.value().failures) {
-                if (failure.id == id) {
-                    return invalid_args(std::format("import of '{}' failed: {}", failure.assetPath, failure.message));
-                }
-            }
-            return core::result<void>::success();
-        }
-
         /// <summary>
         /// The source bytes and .meta text of a primary asset, for asset.restore.
         /// </summary>
@@ -204,6 +179,74 @@ namespace conjure::editor::support {
             return *id;
         }
 
+        /// <summary>
+        /// "assets://<relative>" when an absolute path names an existing file under the project's assets
+        /// directory, "" otherwise. Both sides go through weakly_canonical, which resolves links and answers the
+        /// on-disk spelling (drive letter and directory case on Windows), and containment is tested per component.
+        /// </summary>
+        std::string in_project_asset_path(editor_context &context, const std::filesystem::path &source) {
+            if (context.project() == nullptr) {
+                return "";
+            }
+            std::error_code sourceError = {};
+            const std::filesystem::path canonicalSource = std::filesystem::weakly_canonical(source, sourceError);
+            std::error_code assetsError = {};
+            const std::filesystem::path canonicalAssets =
+              std::filesystem::weakly_canonical(context.project()->assets_directory(), assetsError);
+            if (sourceError || assetsError) {
+                return "";
+            }
+            const std::filesystem::path relative = canonicalSource.lexically_relative(canonicalAssets);
+            if (relative.empty() || relative == "." || relative.is_absolute() || *relative.begin() == "..") {
+                return "";
+            }
+            const std::string candidate = "assets://" + relative.generic_string();
+            return context.filesystem().exists(candidate) ? candidate : std::string();
+        }
+
+        /// <summary>
+        /// The whole content of a source file outside the project. ASSET_NOT_FOUND when it is missing or not a
+        /// readable regular file (a directory opens on POSIX), IO_ERROR when the read comes up short.
+        /// </summary>
+        core::result<std::string> read_source_file(const std::filesystem::path &source) {
+            std::error_code error = {};
+            if (!std::filesystem::exists(source, error)) {
+                // exists() sets the error only for a failure other than "not found", such as a denied access.
+                return make_editor_error(
+                  protocol_error_code::ASSET_NOT_FOUND,
+                  std::format(
+                    "cannot read '{}': {}",
+                    source.generic_string(),
+                    error ? error.message() : std::string("no such file")
+                  )
+                );
+            }
+            if (!std::filesystem::is_regular_file(source, error)) {
+                return make_editor_error(
+                  protocol_error_code::ASSET_NOT_FOUND,
+                  std::format("cannot read '{}': not a regular file", source.generic_string())
+                );
+            }
+            const std::uintmax_t size = std::filesystem::file_size(source, error);
+            if (error) {
+                return io_error(std::format("cannot read '{}': {}", source.generic_string(), error.message()));
+            }
+            std::ifstream input(source, std::ios::binary);
+            if (!input.is_open()) {
+                return make_editor_error(
+                  protocol_error_code::ASSET_NOT_FOUND,
+                  std::format("cannot read '{}'", source.generic_string())
+                );
+            }
+            // A sized, checked read: streaming rdbuf() into a stringstream reports a read error as end of file.
+            std::string content(static_cast<usize>(size), '\0');
+            input.read(content.data(), static_cast<std::streamsize>(size));
+            if (input.gcount() != static_cast<std::streamsize>(size)) {
+                return io_error(std::format("cannot read '{}': the read stopped early", source.generic_string()));
+            }
+            return content;
+        }
+
         /*-------------------------------------------------------------------*/
         // Handlers
 
@@ -214,37 +257,32 @@ namespace conjure::editor::support {
             if (sourceText.empty()) {
                 return invalid_args("args.source: a file or asset path is required");
             }
+            const std::string_view destination = string_or(invocation.args, "destination", "");
             std::string assetPath = "";
             bool copiedIn = false;
-            if (
-              sourceText.find(
-                "://"
-              ) != std::string_view::npos || !std::filesystem::path(std::string(sourceText)).is_absolute()
-            ) {
+            const bool absoluteSource = sourceText.find("://") == std::string_view::npos &&
+              std::filesystem::path(std::string(sourceText)).is_absolute();
+            if (absoluteSource) {
+                // An absolute path that already lies under the project's assets directory is that asset, not a
+                // file to copy in as a duplicate, unless the caller asked for a copy at args.destination.
+                if (destination.empty()) {
+                    assetPath = in_project_asset_path(context, std::filesystem::path(std::string(sourceText)));
+                }
+            } else {
                 // Already inside the project: an asset path, or a path relative to assets://.
-                const std::string candidate = normalise_asset_path(sourceText);
+                CONJURE_TRY_ASSIGN(const std::string candidate, checked_asset_path(sourceText));
                 if (context.filesystem().exists(candidate)) {
                     assetPath = candidate;
                 }
             }
             if (assetPath.empty()) {
                 copiedIn = true;
-                // A file outside the assets root: copy it in.
+                // A file outside the assets root: copy it in. The destination is checked before anything is read
+                // or written.
                 const std::filesystem::path source = std::filesystem::path(std::string(sourceText));
-                std::ifstream input(source, std::ios::binary);
-                if (!input.is_open()) {
-                    return make_editor_error(
-                      protocol_error_code::ASSET_NOT_FOUND,
-                      std::format("cannot read '{}'", source.generic_string())
-                    );
-                }
-                std::stringstream buffer = {};
-                buffer << input.rdbuf();
-                const std::string content = buffer.str();
-                const std::string_view destination = string_or(invocation.args, "destination", "");
-                assetPath = destination.empty() ? normalise_asset_path(
-                  source.filename().generic_string()
-                ) : normalise_asset_path(destination);
+                const std::string fileName = source.filename().generic_string();
+                CONJURE_TRY_ASSIGN(assetPath, checked_asset_path(destination.empty() ? fileName : destination));
+                CONJURE_TRY_ASSIGN(const std::string content, read_source_file(source));
                 const core::result<void> written = context.filesystem().write_file(
                   assetPath,
                   std::span<const std::byte>(reinterpret_cast<const std::byte *>(content.data()), content.size())
@@ -363,7 +401,7 @@ namespace conjure::editor::support {
         core::result<command_outcome> asset_create_folder(command_invocation &invocation) {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
-            const std::string path = normalise_asset_path(pathText);
+            CONJURE_TRY_ASSIGN(const std::string path, checked_asset_path(pathText));
             if (context.filesystem().exists(path)) {
                 return invalid_args(std::format("'{}' already exists", path));
             }
@@ -384,8 +422,8 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const std::string_view reference, require_string(invocation.args, "asset"));
             const core::result<assets::asset_id> resolved = resolve_asset(*database, reference);
             if (!resolved.has_value()) {
-                // Not an asset: an empty folder may be deleted.
-                const std::string path = normalise_asset_path(reference);
+                // Not an asset: an empty folder inside the mount may be deleted.
+                CONJURE_TRY_ASSIGN(const std::string path, checked_asset_path(reference));
                 const core::result<core::vfs::file_stat> stat = context.filesystem().stat(path);
                 if (!stat.has_value() || !stat.value().isDirectory) {
                     return core::error(resolved.get_error());
@@ -438,7 +476,7 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(assets::asset_database *database, require_database(context));
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
-            std::string path = normalise_asset_path(pathText);
+            CONJURE_TRY_ASSIGN(std::string path, checked_asset_path(pathText));
             if (!core::str::ends_with(path, ".cmat")) {
                 path += ".cmat";
             }
@@ -451,8 +489,17 @@ namespace conjure::editor::support {
                 if (!colour.is_array() || (colour.size() != 3 && colour.size() != 4)) {
                     return invalid_args("args.baseColor: expected [r, g, b] or [r, g, b, a]");
                 }
-                desc.baseColourFactor = math::vec4(colour[0].as_f32(), colour[1].as_f32(), colour[2].as_f32(),
-                  colour.size() == 4 ? colour[3].as_f32() : 1.0f);
+                // as_f32 answers its fallback for a number outside the f32 range: a NaN fallback refuses it
+                // instead of storing 0.
+                math::vec4 factor = math::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                for (usize index = 0; index < colour.size(); ++index) {
+                    const f32 component = colour[index].as_f32(std::numeric_limits<f32>::quiet_NaN());
+                    if (!std::isfinite(component)) {
+                        return invalid_args("args.baseColor: expected finite numbers within the f32 range");
+                    }
+                    factor[static_cast<glm::length_t>(index)] = component;
+                }
+                desc.baseColourFactor = factor;
             }
             CONJURE_TRY_ASSIGN(desc.metallicFactor, f32_or(invocation.args, "metallic", desc.metallicFactor));
             CONJURE_TRY_ASSIGN(desc.roughnessFactor, f32_or(invocation.args, "roughness", desc.roughnessFactor));
@@ -586,7 +633,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(assets::asset_database *database, require_database(context));
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             CONJURE_TRY_ASSIGN(const std::string_view contentText, require_string(invocation.args, "contentBase64"));
-            const std::string assetPath = normalise_asset_path(pathText);
+            CONJURE_TRY_ASSIGN(const std::string assetPath, checked_asset_path(pathText));
             CONJURE_TRY_ASSIGN(const std::string filePath, file_path_for(*database, assetPath));
             CONJURE_TRY_ASSIGN(const std::vector<std::byte> content, base64_decode(contentText));
             const core::result<void> written = database->vfs().write_file(filePath, content);

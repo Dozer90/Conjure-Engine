@@ -5,6 +5,7 @@
 #include "conjure/core/clock.h"
 #include "conjure/core/string_utils.h"
 #include "conjure/core/vfs/file_system.h"
+#include "conjure/core/vfs/path_utils.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/export.h"
 #include "conjure/engine/project.h"
@@ -233,15 +234,32 @@ namespace conjure::editor::support {
             for (const std::string &warning : report.value().warnings) {
                 warnings.push_back(std::string_view(warning));
             }
-            reply.succeed(core::json::object({
+            // A plain export is the pack and the project files only: say so, or the folder looks runnable.
+            if (distribution.empty() && !invocation.args.contains("copyRuntime")) {
+                warnings.push_back(
+                  "no distribution directory given; the runtime executable, library and shaders were not copied "
+                  "(pass distributionDirectory, or --distribution with --export)"
+                );
+            }
+            core::json::document result = core::json::object({
               {"directory", settings.outputDirectory.generic_string()},
-              {"runtimePath", (settings.outputDirectory / "conjure_runtime").generic_string()},
               {"bytes", report.value().packBytes},
               {"durationMs", watch.elapsed_seconds() * 1000.0},
               {"assetCount", report.value().assetCount},
               {"steps", steps},
               {"warnings", warnings},
-            }));
+            });
+            // The runtime executable the pipeline actually copied (its name carries the platform suffix), or
+            // null when the runtime was not copied: a path that does not exist would mislead a client.
+            result.set_null("runtimePath");
+            for (const std::string &copied : report.value().copiedFiles) {
+                const bool topLevel = copied.find('/') == std::string::npos;
+                if (topLevel && core::vfs::path_utils::stem(copied) == "conjure_runtime") {
+                    result.set("runtimePath", (settings.outputDirectory / copied).generic_string());
+                    break;
+                }
+            }
+            reply.succeed(std::move(result));
             return command_outcome{};
         }
     }
@@ -320,11 +338,14 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "project.export",
-            "Runs the export pipeline into a directory (progress events while it runs).",
+            "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied "
+            "runtime executable, null when the runtime was not copied.",
             R"({"type":"object","properties":{"directory":{"type":"string"},"config":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",
-            ANY_OBJECT_SCHEMA.data(),
+            R"({"type":"object","properties":{"directory":{"type":"string"},"runtimePath":{"type":["string","null"]},)"
+            R"("bytes":{"type":"integer"},"durationMs":{"type":"number"},"assetCount":{"type":"integer"},)"
+            R"("steps":{"type":"array"},"warnings":{"type":"array"}},"additionalProperties":true})",
             command_flags::ASYNC | command_flags::REQUIRES_PROJECT,
             &project_export
           )

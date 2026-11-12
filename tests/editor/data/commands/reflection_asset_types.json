@@ -5,6 +5,17 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "types": [
+        "@contains",
+        {
+          "name": "conjure.scene.scene"
+        },
+        {
+          "name": "conjure.scene.prefab"
+        }
+      ]
+    }
   }
 }

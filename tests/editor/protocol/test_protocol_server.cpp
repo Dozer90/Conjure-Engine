@@ -11,10 +11,13 @@
 #include "conjure/editor/protocol/loopback_transport.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/protocol/protocol_server.h"
+#include "editor/core/protocol/stdio_transport.h"
+#include "editor/core/protocol/tcp_transport.h"
 
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -122,6 +125,52 @@ TEST_SUITE("editor/protocol/protocol_server") {
         response.clientId = 0;
         fixture.server.send(response);
         CHECK(client.receive_all().empty());
+    }
+
+    TEST_CASE("protocol_server - an INVALID_REQUEST answer echoes an integer or string id") {
+        server_fixture fixture = {};
+        loopback_client client = fixture.connect();
+        client.send(R"({"id":7,"cmd":5})");
+        client.send(R"({"id":"a","cmd":"x","args":3})");
+        client.send(R"({"id":[1],"cmd":"x"})");
+        client.send("[1, 2]");
+        client.send("not json");
+        CHECK(fixture.poll().empty());
+        const std::vector<std::string> replies = responses_of(client.receive_all());
+        REQUIRE(replies.size() == 5);
+        CHECK(replies[0].find(R"("id":7,"ok":false)") != std::string::npos);
+        CHECK(replies[0].find("INVALID_REQUEST") != std::string::npos);
+        CHECK(replies[1].find(R"("id":"a","ok":false)") != std::string::npos);
+        CHECK(replies[1].find("INVALID_REQUEST") != std::string::npos);
+        // An id that is neither an integer nor a string, a message that is not an object and a line that is not
+        // JSON have nothing to echo.
+        CHECK(replies[2].find(R"("id":null)") != std::string::npos);
+        CHECK(replies[2].find("INVALID_REQUEST") != std::string::npos);
+        CHECK(replies[3].find(R"("id":null)") != std::string::npos);
+        CHECK(replies[3].find("INVALID_REQUEST") != std::string::npos);
+        CHECK(replies[4].find(R"("id":null)") != std::string::npos);
+        CHECK(replies[4].find("PARSE_ERROR") != std::string::npos);
+        CHECK(client.is_connected());
+    }
+
+    TEST_CASE("protocol_server - with a token no event reaches a client before its session.hello") {
+        server_fixture fixture = {};
+        fixture.server.set_token("secret");
+        loopback_client client = fixture.connect();
+        (void) fixture.events.emit(editor_event::SCENE_CHANGED, core::json::object({{"revision", 1}}));
+        (void) fixture.events.emit(editor_event::SELECTION_CHANGED, core::json::object({{"guids", "none"}}));
+        CHECK(client.receive_all().empty());
+
+        client.send(R"({"id":1,"cmd":"session.hello","args":{"token":"secret"}})");
+        const std::vector<protocol_request> requests = fixture.poll();
+        REQUIRE(requests.size() == 1);
+        CHECK(requests[0].command == "session.hello");
+        (void) fixture.events.emit(editor_event::SCENE_CHANGED, core::json::object({{"revision", 2}}));
+        const std::vector<std::string> lines = events_of(client.receive_all(), "scene.changed");
+        REQUIRE(lines.size() == 1);
+        const core::result<protocol_event> event = parse_event(lines[0]);
+        CONJURE_REQUIRE_OK(event);
+        CHECK(event.value().data.root()["revision"].as_i64() == 2);
     }
 
     TEST_CASE("protocol_server - an oversized line answers MESSAGE_TOO_LARGE and disconnects") {
@@ -377,5 +426,63 @@ TEST_SUITE("editor/protocol/protocol_server") {
         CHECK_FALSE(third.start(busy, {}).has_value());
         second.stop();
         first.stop();
+    }
+
+    TEST_CASE("regression - F092 protocol_server set_project_root moves the port file to the new project") {
+        CONJURE_TEST_REQUIRE(testing::precondition::LOOPBACK_TCP);
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        const std::filesystem::path projectA = directory.path() / "a";
+        const std::filesystem::path projectB = directory.path() / "b";
+        event_broadcaster events = {};
+        protocol_server server(events);
+        CONJURE_REQUIRE_OK(server.add_transport(std::make_unique<tcp_transport>(u16{0}, u16{0})));
+        REQUIRE(server.bound_port() != 0);
+        const std::string expected = std::format("{}\n", server.bound_port());
+
+        server.set_project_root(projectA);
+        const std::filesystem::path portFileA = projectA / ".conjure" / "ai_port";
+        CHECK(server.port_file() == portFileA);
+        REQUIRE(std::filesystem::is_regular_file(portFileA));
+        CHECK(editor_test::read_text_file(portFileA) == expected);
+
+        server.set_project_root(projectB);
+        const std::filesystem::path portFileB = projectB / ".conjure" / "ai_port";
+        CHECK_FALSE(std::filesystem::exists(portFileA));
+        CHECK(server.port_file() == portFileB);
+        REQUIRE(std::filesystem::is_regular_file(portFileB));
+        CHECK(editor_test::read_text_file(portFileB) == expected);
+
+        server.set_project_root({});
+        CHECK_FALSE(std::filesystem::exists(portFileB));
+        CHECK(server.port_file().empty());
+        server.stop();
+    }
+
+    TEST_CASE("protocol_server - set_project_root writes no port file without a TCP transport") {
+        server_fixture fixture = {};
+        testing::temp_directory project = {};
+        fixture.server.set_project_root(project.path());
+        CHECK(fixture.server.port_file().empty());
+        CHECK_FALSE(std::filesystem::exists(project.path() / ".conjure" / "ai_port"));
+    }
+
+    TEST_CASE("regression - F158 protocol_server stdio_closed turns true once the stdio client's input ended") {
+        server_fixture fixture = {};
+        // A loopback client leaving is not the stdio client leaving.
+        loopback_client client = fixture.connect();
+        client.disconnect();
+        std::istringstream input(R"({"id":1,"cmd":"session.hello"})" "\n");
+        std::ostringstream output = {};
+        CONJURE_REQUIRE_OK(fixture.server.add_transport(std::make_unique<stdio_transport>(input, output, false)));
+        const std::vector<protocol_request> first = fixture.poll();
+        REQUIRE(first.size() == 1);
+        CHECK(first[0].command == "session.hello");
+        CHECK_FALSE(fixture.server.stdio_closed());
+        // The end of input is reported one poll later, after the last line's response could still go out.
+        (void) fixture.poll();
+        CHECK(fixture.server.stdio_closed());
+        fixture.server.stop();
+        CHECK_FALSE(fixture.server.stdio_closed());
     }
 }

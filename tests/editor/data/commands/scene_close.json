@@ -10,6 +10,9 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "closed": true
+    }
   }
 }

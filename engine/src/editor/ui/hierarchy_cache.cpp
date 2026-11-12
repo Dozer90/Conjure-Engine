@@ -4,6 +4,7 @@
 #include "conjure/scene/hierarchy.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace conjure::editor::ui {
@@ -49,37 +50,54 @@ namespace conjure::editor::ui {
         mDirty = true;
     }
 
-    void hierarchy_cache::set_expanded(ecs::entity entity, bool expanded) {
+    void hierarchy_cache::set_expanded(const scene::scene &target, ecs::entity entity, bool expanded) {
         if (entity.is_null()) {
             return;
         }
-        const usize index = entity.index;
-        if (index >= mExpanded.size()) {
-            if (!expanded) {
-                return;
-            }
-            mExpanded.resize(index + 1, false);
-        }
-        if (mExpanded.test(index) == expanded) {
+        const std::optional<core::uuid> guid = target.guid_of(entity);
+        if (!guid.has_value()) {
             return;
         }
-        mExpanded.set(index, expanded);
-        mDirty = true;
+        if (expanded) {
+            if (mExpanded.insert(*guid).second) {
+                mDirty = true;
+            }
+            return;
+        }
+        if (mExpanded.erase(*guid) > 0) {
+            mDirty = true;
+        }
     }
 
-    bool hierarchy_cache::is_expanded(ecs::entity entity) const noexcept {
+    bool hierarchy_cache::is_expanded(const scene::scene &target, ecs::entity entity) const {
         if (entity.is_null()) {
             return false;
         }
-        const usize index = entity.index;
-        return index < mExpanded.size() && mExpanded.test(index);
+        const std::optional<core::uuid> guid = target.guid_of(entity);
+        return guid.has_value() && mExpanded.contains(*guid);
     }
 
     void hierarchy_cache::reveal(const scene::scene &target, ecs::entity entity) {
         ecs::entity parent = target.tree().parent_of(entity);
         while (!parent.is_null()) {
-            set_expanded(parent, true);
+            set_expanded(target, parent, true);
             parent = target.tree().parent_of(parent);
+        }
+    }
+
+    void hierarchy_cache::refresh_labels(const scene::scene &target, usize first, usize last) noexcept {
+        const usize end = std::min(last, mRows.size());
+        for (usize index = first; index < end; ++index) {
+            hierarchy_row &row = mRows[index];
+            if (!target.contains(row.entity)) {
+                continue;
+            }
+            row.nameId = target.name_of(row.entity);
+            if (target.is_enabled(row.entity)) {
+                row.flags &= ~hierarchy_row_flags::DISABLED;
+            } else {
+                row.flags |= hierarchy_row_flags::DISABLED;
+            }
         }
     }
 
@@ -124,8 +142,9 @@ namespace conjure::editor::ui {
             if (!children.empty()) {
                 row.flags |= hierarchy_row_flags::HAS_CHILDREN;
             }
-            // A filter shows every matching descendant, so filtered trees draw expanded.
-            const bool expanded = filtering || is_expanded(current.entity);
+            // A filter shows every matching descendant, so filtered trees draw expanded. The guid lookup runs
+            // only for rows with children.
+            const bool expanded = filtering || (!children.empty() && is_expanded(target, current.entity));
             if (expanded && !children.empty()) {
                 row.flags |= hierarchy_row_flags::EXPANDED;
             }

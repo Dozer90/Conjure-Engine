@@ -187,6 +187,16 @@ namespace conjure::editor {
         return result;
     }
 
+    f32 editor_camera::world_units_per_pixel(f32 viewportHeightPixels) const noexcept {
+        const f32 pixels = std::isfinite(viewportHeightPixels) ? std::max(viewportHeightPixels, 1.0f) : 1.0f;
+        if (mOrthographic) {
+            return mOrthographicHeight / pixels;
+        }
+        const f32 distance = glm::length(mPosition - mTarget);
+        const f32 visibleHeight = 2.0f * distance * std::tan(mVerticalFovRadians * 0.5f);
+        return visibleHeight / pixels;
+    }
+
     core::json::document editor_camera::to_json() const {
         core::json::document document = core::json::document::object();
         write_vec3(document, "position", mPosition);
@@ -203,13 +213,31 @@ namespace conjure::editor {
         if (!value.is_object()) {
             return make_editor_error(protocol_error_code::INVALID_ARGS, "camera settings must be an object");
         }
+
+        // Every member is validated into a local first and the camera is written only once all of them passed,
+        // so a failed view.set_camera leaves the camera exactly as it was (docs/design/04_editor.md D4).
         math::vec3 position = mPosition;
         math::vec3 target = mTarget;
+        f32 fovRadians = mVerticalFovRadians;
+        bool orthographic = mOrthographic;
+        f32 orthographicHeight = mOrthographicHeight;
+        f32 nearPlane = mNearPlane;
+        f32 farPlane = mFarPlane;
         if (value.contains("position")) {
             CONJURE_TRY_ASSIGN(position, read_vec3(value["position"], "position"));
         }
         if (value.contains("target")) {
             CONJURE_TRY_ASSIGN(target, read_vec3(value["target"], "target"));
+        }
+        if (value.contains("position") || value.contains("target")) {
+            // set_look_at would silently keep the old direction for coincident points; a client gets an error.
+            const math::vec3 offset = target - position;
+            if (!(glm::dot(offset, offset) >= MIN_DISTANCE * MIN_DISTANCE)) {
+                return make_editor_error(
+                  protocol_error_code::INVALID_ARGS,
+                  "position and target must be at least 0.01 apart"
+                );
+            }
         }
         if (value.contains("fov")) {
             // The wire unit is degrees (the catalogue: "vertical fov (degrees)"); radians stay internal.
@@ -217,14 +245,14 @@ namespace conjure::editor {
             if (!fov.is_number() || !(fov.as_f32() > 0.0f) || !(fov.as_f32() < MAX_FOV_DEGREES)) {
                 return make_editor_error(protocol_error_code::INVALID_ARGS, "fov: expected degrees in (0, 180)");
             }
-            mVerticalFovRadians = math::radians(fov.as_f32());
+            fovRadians = math::radians(fov.as_f32());
         }
         if (value.contains("orthographic")) {
-            const core::json::value orthographic = value["orthographic"];
-            if (!orthographic.is_bool()) {
+            const core::json::value orthographicValue = value["orthographic"];
+            if (!orthographicValue.is_bool()) {
                 return make_editor_error(protocol_error_code::INVALID_ARGS, "orthographic: expected a boolean");
             }
-            mOrthographic = orthographic.as_bool();
+            orthographic = orthographicValue.as_bool();
         }
         if (value.contains("orthographicHeight")) {
             const core::json::value height = value["orthographicHeight"];
@@ -234,17 +262,21 @@ namespace conjure::editor {
                   "orthographicHeight: expected a positive number"
                 );
             }
-            mOrthographicHeight = height.as_f32();
+            orthographicHeight = height.as_f32();
         }
         if (value.contains("near") || value.contains("far")) {
-            const f32 nearPlane = value.contains("near") ? value["near"].as_f32(mNearPlane) : mNearPlane;
-            const f32 farPlane = value.contains("far") ? value["far"].as_f32(mFarPlane) : mFarPlane;
+            nearPlane = value.contains("near") ? value["near"].as_f32(mNearPlane) : mNearPlane;
+            farPlane = value.contains("far") ? value["far"].as_f32(mFarPlane) : mFarPlane;
             if (!(nearPlane > 0.0f) || !(farPlane > nearPlane)) {
                 return make_editor_error(protocol_error_code::INVALID_ARGS, "near/far: 0 < near < far is required");
             }
-            mNearPlane = nearPlane;
-            mFarPlane = farPlane;
         }
+
+        mVerticalFovRadians = fovRadians;
+        mOrthographic = orthographic;
+        mOrthographicHeight = orthographicHeight;
+        mNearPlane = nearPlane;
+        mFarPlane = farPlane;
         set_look_at(position, target);
         return core::result<void>::success();
     }

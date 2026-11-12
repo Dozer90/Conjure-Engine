@@ -5,6 +5,10 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "frame": 0,
+      "revision": "@any"
+    }
   }
 }

@@ -51,6 +51,7 @@ namespace conjure::editor {
             std::filesystem::path mPortFile = {};
             u16 mBoundPort = 0;
             bool mRunning = false;
+            bool mStdioClosed = false;                      // a stdio transport reported its client closed
 
         public:
             explicit protocol_server(event_broadcaster &events);
@@ -168,6 +169,21 @@ namespace conjure::editor {
                 return mPortFile;
             }
 
+            /// <summary>
+            /// Follows a project switch: removes the current port file and, while a TCP transport is bound
+            /// (bound_port() != 0), writes the port to &lt;projectRoot&gt;/.conjure/ai_port. An empty root only
+            /// removes the file.
+            /// </summary>
+            void set_project_root(const std::filesystem::path &projectRoot);
+
+            /// <summary>
+            /// True once a stdio transport reported its client closed (standard input ended, or the client was
+            /// disconnected). A headless --ai-stdio editor without a TCP server quits on it.
+            /// </summary>
+            [[nodiscard]] bool stdio_closed() const noexcept {
+                return mStdioClosed;
+            }
+
         private:
             [[nodiscard]] client_state *find(u32 clientId) noexcept;
             [[nodiscard]] protocol_transport *transport_of(const client_state &client) noexcept;
@@ -176,5 +192,7 @@ namespace conjure::editor {
             void on_client_closed(u32 clientId);
             void deliver_event(u32 clientId, const protocol_event &event);
             [[nodiscard]] bool check_handshake(client_state &client, const protocol_request &request);
+            void write_port_file(const std::filesystem::path &projectRoot);
+            void remove_port_file();
     };
 }

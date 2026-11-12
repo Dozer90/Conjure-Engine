@@ -5,6 +5,9 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "path": "${project}/project.json"
+    }
   }
 }

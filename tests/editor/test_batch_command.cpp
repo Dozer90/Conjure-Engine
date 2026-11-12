@@ -3,9 +3,11 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 
+#include <span>
 #include <string>
 
 // editor.batch and the transaction commands (docs/design/04_editor.md 3.4, D8).
@@ -16,6 +18,13 @@ using namespace conjure::editor;
 namespace {
     core::json::document create(std::string_view name) {
         return core::json::object({{"cmd", "entity.create"}, {"args", core::json::object({{"name", name}})}});
+    }
+
+    core::json::document rename_missing() {
+        return core::json::object({
+          {"cmd", "entity.rename"},
+          {"args", core::json::object({{"entity", "Nobody/Here"}, {"name", "x"}})},
+        });
     }
 }
 
@@ -129,6 +138,62 @@ TEST_SUITE("editor/batch_command") {
         CHECK(editor.fail("editor.end_transaction") == protocol_error_code::INVALID_REQUEST);
         (void) editor.ok("history.undo");
         CHECK(editor.scene().world().entity_count() == 0);
+    }
+
+    TEST_CASE("regression - F086 an atomic batch rolls back while playing") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("keep");
+        (void) editor.ok("play.start");
+        const usize before = editor.scene().world().entity_count();
+        const protocol_response response = editor.send(
+          "editor.batch",
+          core::json::object({{"commands", core::json::array({create("InBatch"), rename_missing()})}})
+        );
+        REQUIRE_FALSE(response.ok);
+        CHECK(response.errorDetails.root()["failedIndex"].as_i64() == 1);
+        CHECK(editor.scene().world().entity_count() == before);
+        const core::json::document found = editor.ok("entity.find", core::json::object({{"name", "InBatch"}}));
+        CHECK(found.root()["total"].as_u64() == 0);
+        (void) editor.ok("play.stop");
+        CHECK(editor.context().undo().size() == 1);
+    }
+
+    TEST_CASE("regression - F086 an inverse editor.batch that fails during undo rolls back and records nothing") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("keep");
+        const usize entries = editor.context().undo().size();
+        command_inverse inverse = {};
+        inverse.name = "editor.batch";
+        inverse.args = core::json::object({{"commands", core::json::array({create("Ghost"), rename_missing()})}});
+        const core::result<void> undone = editor.context().dispatcher().dispatch_inverses(
+          std::span<const command_inverse>(&inverse, 1),
+          editor.client_id()
+        );
+        CHECK_FALSE(undone.has_value());
+        const core::json::document found = editor.ok("entity.find", core::json::object({{"name", "Ghost"}}));
+        CHECK(found.root()["total"].as_u64() == 0);
+        CHECK(editor.scene().world().entity_count() == 1);
+        CHECK(editor.context().undo().size() == entries);
+    }
+
+    TEST_CASE("regression - F156 history.undo, redo and clear are INVALID_REQUEST while a transaction is open") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("a");
+        (void) editor.create_entity("b");
+        (void) editor.ok("history.undo");
+        REQUIRE(editor.context().undo().size() == 2);
+        REQUIRE(editor.context().undo().cursor() == 1);
+        (void) editor.ok("editor.begin_transaction", core::json::object({{"label", "Open"}}));
+        CHECK(editor.fail("history.undo") == protocol_error_code::INVALID_REQUEST);
+        CHECK(editor.fail("history.redo") == protocol_error_code::INVALID_REQUEST);
+        CHECK(editor.fail("history.clear") == protocol_error_code::INVALID_REQUEST);
+        CHECK(editor.context().undo().size() == 2);
+        CHECK(editor.context().undo().cursor() == 1);
+        (void) editor.ok("editor.end_transaction");
+        CHECK(editor.context().undo().size() == 2);
+        CHECK(editor.context().undo().cursor() == 1);
+        (void) editor.ok("history.redo");
+        CHECK(editor.scene().world().entity_count() == 2);
     }
 
     TEST_CASE("editor.batch - inside an open transaction the batch joins the transaction entry") {

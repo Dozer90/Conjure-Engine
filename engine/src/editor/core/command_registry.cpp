@@ -15,6 +15,10 @@
 namespace conjure::editor {
 
     namespace {
+        // Command names are a few dozen bytes; a longer name is no misspelling of one, and the edit distance
+        // costs its length times every command's, so an over-long unknown name gets no suggestions.
+        constexpr usize MAX_SUGGESTION_NAME_LENGTH = 128;
+
         constexpr std::array<std::string_view, static_cast<usize>(editor_event::COUNT)> EVENT_NAMES = {
             "log",
             "selection.changed",
@@ -51,9 +55,7 @@ namespace conjure::editor {
         }
     }
 
-    command_registry::command_registry() {
-        recompute_hash();
-    }
+    command_registry::command_registry() = default;
 
     command_registry::~command_registry() = default;
 
@@ -104,7 +106,7 @@ namespace conjure::editor {
           }
         );
         mEntries.insert(position, std::move(added));
-        recompute_hash();
+        mSchemaHashStale = true;
         return core::result<void>::success();
     }
 
@@ -116,7 +118,7 @@ namespace conjure::editor {
             return false;
         }
         mEntries.erase(position);
-        recompute_hash();
+        mSchemaHashStale = true;
         return true;
     }
 
@@ -126,7 +128,7 @@ namespace conjure::editor {
             return existing.descriptor.owner == owner;
         });
         if (mEntries.size() != before) {
-            recompute_hash();
+            mSchemaHashStale = true;
         }
         return before - mEntries.size();
     }
@@ -160,6 +162,9 @@ namespace conjure::editor {
     }
 
     std::vector<std::string> command_registry::closest_names(std::string_view name, usize count) const {
+        if (count == 0 || name.size() > MAX_SUGGESTION_NAME_LENGTH) {
+            return {};
+        }
         struct scored {
             usize distance = 0;
             std::string_view name = "";
@@ -225,8 +230,15 @@ namespace conjure::editor {
             codes.push_back(to_string(code));
         }
         catalogue.set("errorCodes", codes);
-        catalogue.set("schemaHash", std::format("{:016x}", mSchemaHash));
+        catalogue.set("schemaHash", std::format("{:016x}", schema_hash()));
         return catalogue;
+    }
+
+    u64 command_registry::schema_hash() const {
+        if (mSchemaHashStale) {
+            recompute_hash();
+        }
+        return mSchemaHash;
     }
 
     const command_registry::entry *command_registry::find_entry(std::string_view name) const noexcept {
@@ -244,9 +256,10 @@ namespace conjure::editor {
         return &*position;
     }
 
-    void command_registry::recompute_hash() {
+    void command_registry::recompute_hash() const {
         // The hash covers names, flags, owners and schemas but not itself: it is computed over the
-        // catalogue without the schemaHash member.
+        // catalogue without the schemaHash member. Main thread only, like every other member, so the lazy
+        // update of the mutable cache needs no lock.
         core::json::document catalogue = core::json::document::object();
         core::json::document commands = core::json::document::array();
         for (const entry &existing : mEntries) {
@@ -258,6 +271,7 @@ namespace conjure::editor {
         catalogue.set("commands", commands);
         catalogue.set("protocolVersion", PROTOCOL_VERSION);
         mSchemaHash = core::hash::fnv1a64(catalogue.to_canonical_string());
+        mSchemaHashStale = false;
     }
 
     std::span<const std::string_view> protocol_event_names() noexcept {

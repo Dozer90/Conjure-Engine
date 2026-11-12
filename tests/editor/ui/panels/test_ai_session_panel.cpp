@@ -83,6 +83,31 @@ TEST_SUITE("editor/ui/panels/ai_session_panel") {
         CHECK(first.is_connected());
     }
 
+    TEST_CASE("regression - with an AI token set the panel says hello before its first command") {
+        editor_test::headless_editor editor = {};
+        editor.context().set_token("secret");
+        REQUIRE(editor.application().server().token() == "secret");
+        ai_session_panel panel = {};
+        panel.send(editor.context(), "editor.state");
+        CHECK(panel.sent_count() == 1);
+        editor.pump(2);
+        panel.update(editor.context());
+        CHECK(panel.is_connected());
+        bool sawState = false;
+        bool sawHello = false;
+        for (const std::string &line : panel.transcript()) {
+            CAPTURE(line);
+            sawState = sawState || (
+              line.find("\"ok\":true") != std::string::npos && line.find("playState") != std::string::npos
+            );
+            sawHello = sawHello || line.find("ai_session_panel.hello") != std::string::npos;
+            CHECK(line.find("UNAUTHORISED") == std::string::npos);
+            CHECK(line.find("secret") == std::string::npos);
+        }
+        CHECK(sawState);
+        CHECK(sawHello);
+    }
+
     TEST_CASE("ai_session_panel - the transcript is capped") {
         editor_test::headless_editor editor = {};
         ai_session_panel panel = {};

@@ -43,7 +43,9 @@ ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_c
 3. The handler returns a `command_outcome`: result, inverse (mandatory for `MUTATES` without `NO_UNDO`;
    `skipRecording` for a run that changed nothing undoable, such as `asset.import` of a file already inside
    the project), an optional normalised replay and a label. The dispatcher records undo, bumps the revision,
-   appends `revision` to the result and emits `scene.changed` and `command.executed`. A mutating handler
+   appends `revision` to the result and emits `scene.changed` and `command.executed`. The inverses and replays
+   that `history.undo` / `redo` dispatch neither bump nor emit: the history command does both once per step
+   (labelled `Undo X` / `Redo X`, or `... (failed)` after a step that broke off half-way). A mutating handler
    that returns no inverse is a logged `INTERNAL` error, never an abort. Module commands (`command_desc`)
    cannot return an inverse, so their `MUTATES` is registered as `MUTATES | NO_UNDO`.
 4. `ASYNC` handlers park an `async_reply`; `editor_context::tick` resolves completions once per frame and
@@ -53,8 +55,13 @@ ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_c
    `editor_context::rebind` (project.open) and the context's destructor call it before dropping the frame
    tasks, and a frame task destroyed early (exec_file, wait_frames, compile, module build) releases its
    sink and event client and fails its own reply with `CANCELLED`.
-5. `editor.batch` runs children atomically (inverses rolled back on failure) into one undo entry;
-   `editor.begin_transaction` / `end_transaction` group commands per client.
+5. `editor.batch` runs children atomically (inverses rolled back on failure) into one undo entry; the children's
+   inverses are collected even while playing or while the batch is itself an undo / redo step, so the rollback
+   always works, and only then is it decided whether the entry reaches the stack.
+   `editor.begin_transaction` / `end_transaction` group commands per client; `history.undo`, `redo` and `clear`
+   are refused (`INVALID_REQUEST`) while any client's transaction is open. `editor.exec_file` runs its file as a
+   private client: a transaction the file leaves open is committed when the task ends, and the task stops once
+   its own request was cancelled or timed out. An `editor.wait_frames` whose request is gone leaves at once.
 
 Undo: `undo_stack` stores `{label, undo[], redo[], coalesceKey, clientId}`; `history.undo` dispatches the inverses
 with recording suppressed. Coalescing merges consecutive single-command entries of equal key and client (the
@@ -86,7 +93,21 @@ configuration refuses it the editor logs a warning and falls back to the null de
 the main thread and encoded and written on a `core::jobs` job that posts the completion back. `--exec file.json`
 runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3). `--ai-stdio` reads stdin
 in 64 KiB chunks through a `line_splitter` on a reader thread whose state is shared through a `shared_ptr`: the
-thread is left blocked at exit (documented) and never touches the destroyed transport.
+thread is left blocked at exit (documented) and never touches the destroyed transport. Once standard input
+ends, `protocol_server::stdio_closed()` turns true and a headless `--ai-stdio` editor without a TCP server quits
+with 0 (`editor_application::run`). Whenever standard output carries protocol data (`--ai-stdio`, `--exec`
+without `--out`, `--export`: `editor_options::stdout_carries_protocol`), `main` replaces the console sink with
+one that writes every log line to standard error, so each stdout line parses. The TCP port file
+`<project>/.conjure/ai_port` follows `project.open`: `apply_pending_project_open` moves it with
+`protocol_server::set_project_root`. `initialise` failures exit 3 for `BAD_ARGUMENTS` (an option neither the
+editor nor the engine knows, refused by `make_engine_desc` before the project loads) or an `INVALID_CONFIG` a
+flag caused, otherwise 2.
+
+Selection: `selection_set::primary()` is the guid named last by the `set` / `add` that last changed the
+selection (the lowest remaining guid once it leaves, null when empty); `play.start` names it last in its backup,
+so `play.stop` restores it. `editor_context::selection_payload` is the one builder of `{guids, primary}`:
+`selection.get` / `set` / `clear` and every `selection.changed` (`emit_selection_changed`) start from it, so all
+of them carry `primary` as null for an empty selection, never `""`.
 
 Units: `view.set_camera` / `view.get_camera` carry `fov` in degrees; `input.inject {"text"}` is UTF-8 and
 injects one text event per code point (`INVALID_ARGS` for malformed bytes).

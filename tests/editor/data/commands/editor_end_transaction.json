@@ -5,6 +5,12 @@
       "args": {
         "label": "T"
       }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Inside"
+      }
     }
   ],
   "request": {
@@ -12,6 +18,9 @@
     "args": {}
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "entries": 1
+    }
   }
 }

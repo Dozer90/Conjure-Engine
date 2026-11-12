@@ -7,19 +7,23 @@
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/selection_set.h"
 
-#include <ImGuizmo.h>
 #include <imgui.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <format>
+#include <optional>
+#include <string>
+#include <utility>
 
 namespace conjure::editor::ui {
 
     namespace {
         constexpr f32 ORBIT_RADIANS_PER_PIXEL = 0.005f;
-        constexpr f32 PAN_UNITS_PER_PIXEL = 0.01f;
         constexpr f32 ZOOM_PER_WHEEL_TICK = 0.9f;
+        constexpr f32 SNAP_FIELD_WIDTH = 70.0f;
+        constexpr f32 MIN_SNAP_STEP = 0.001f;           // ImGuizmo silently skips steps near zero
     }
 
     viewport_panel::viewport_panel() :
@@ -35,23 +39,27 @@ namespace conjure::editor::ui {
         available.y = std::max(available.y, 1.0f);
         mRectMin = support::from_imvec(origin);
         mRectSize = support::from_imvec(available);
+        // view.pick from a protocol client builds its ray with the shape the user sees.
+        context.set_viewport_aspect(mRectSize.x / std::max(mRectSize.y, 1.0f));
 
-        // The scene renders underneath the pass-through dock node; the viewport itself is an input surface.
+        // An ordinary (opaque) window whose content area is an input surface; it does not show the scene through
+        // the editor camera yet (code sweep 2026-11-12 B10).
         ImGui::InvisibleButton(
           "##viewport_surface",
           available,
           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle
         );
         const bool hovered = ImGui::IsItemHovered();
-        if (hovered) {
+        // A drag that started on the surface keeps the camera moving after the cursor leaves the panel.
+        const bool active = ImGui::IsItemActive();
+        if (hovered || active) {
             handle_camera_input(context);
         }
-        bool gizmoUsed = false;
-        if (context.has_scene() && !context.selection().empty()) {
-            gizmoUsed = mGizmo.draw(context, mRectMin, mRectSize);
-        }
+        // Drawn every frame: without a scene or a selection it returns false, ends a pending drag and clears its
+        // hover state, so a hover left over from the last selection cannot block the next pick.
+        const bool gizmoUsed = mGizmo.draw(context, mRectMin, mRectSize);
         if (
-          hovered && !gizmoUsed && !ImGuizmo::IsOver() && ImGui::IsMouseClicked(
+          hovered && !gizmoUsed && !mGizmo.is_over() && ImGui::IsMouseClicked(
             ImGuiMouseButton_Left
           ) && context.has_scene()
         ) {
@@ -122,7 +130,7 @@ namespace conjure::editor::ui {
             }
             ImGui::SameLine();
         }
-        ImGui::Separator();
+        support::vertical_separator();
         ImGui::SameLine();
         if (ImGui::RadioButton("World", mGizmo.space() == gizmo_space::WORLD)) {
             mGizmo.set_space(gizmo_space::WORLD);
@@ -132,7 +140,9 @@ namespace conjure::editor::ui {
             mGizmo.set_space(gizmo_space::LOCAL);
         }
         ImGui::SameLine();
-        ImGui::Separator();
+        draw_snap_controls();
+        ImGui::SameLine();
+        support::vertical_separator();
         ImGui::SameLine();
         const bool twoD = context.current_view_mode() == editor_context::view_mode::TWO_D;
         if (ImGui::Button(twoD ? "2D" : "3D")) {
@@ -160,20 +170,53 @@ namespace conjure::editor::ui {
         }
     }
 
+    void viewport_panel::draw_snap_controls() {
+        bool snap = mGizmo.snap_enabled();
+        f32 translate = mGizmo.snap_translate();
+        f32 rotate = mGizmo.snap_rotate_degrees();
+        f32 scale = mGizmo.snap_scale();
+        bool changed = ImGui::Checkbox("Snap", &snap);
+        if (snap) {
+            // One step field, for the operation the gizmo shows (universal snaps with the translate step).
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(SNAP_FIELD_WIDTH);
+            const ImGuiSliderFlags clamp = ImGuiSliderFlags_AlwaysClamp;
+            bool stepChanged = false;
+            if (mGizmo.operation() == gizmo_operation::ROTATE) {
+                stepChanged = ImGui::DragFloat("##snap_step", &rotate, 1.0f, 1.0f, 180.0f, "%.0f deg", clamp);
+            } else if (mGizmo.operation() == gizmo_operation::SCALE) {
+                stepChanged = ImGui::DragFloat("##snap_step", &scale, 0.01f, 0.01f, 10.0f, "%.2f", clamp);
+            } else {
+                stepChanged = ImGui::DragFloat("##snap_step", &translate, 0.05f, 0.01f, 100.0f, "%.2f", clamp);
+            }
+            changed = changed || stepChanged;
+        }
+        if (changed) {
+            mGizmo.set_snap(
+              snap,
+              std::max(translate, MIN_SNAP_STEP),
+              std::max(rotate, MIN_SNAP_STEP),
+              std::max(scale, MIN_SNAP_STEP)
+            );
+        }
+    }
+
     void viewport_panel::handle_camera_input(editor_context &context) {
         editor_camera &camera = context.camera();
         const ImGuiIO &io = ImGui::GetIO();
+        // The scene under the cursor follows it at any zoom.
+        const f32 unitsPerPixel = camera.world_units_per_pixel(mRectSize.y);
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
             const ImVec2 delta = io.MouseDelta;
             if (context.current_view_mode() == editor_context::view_mode::TWO_D) {
-                camera.pan(math::vec2(-delta.x * PAN_UNITS_PER_PIXEL, delta.y * PAN_UNITS_PER_PIXEL));
+                camera.pan(math::vec2(-delta.x * unitsPerPixel, delta.y * unitsPerPixel));
             } else {
                 camera.orbit(-delta.x * ORBIT_RADIANS_PER_PIXEL, -delta.y * ORBIT_RADIANS_PER_PIXEL);
             }
         }
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
             const ImVec2 delta = io.MouseDelta;
-            camera.pan(math::vec2(-delta.x * PAN_UNITS_PER_PIXEL, delta.y * PAN_UNITS_PER_PIXEL));
+            camera.pan(math::vec2(-delta.x * unitsPerPixel, delta.y * unitsPerPixel));
         }
         if (std::abs(io.MouseWheel) > 0.0f) {
             camera.zoom(std::pow(ZOOM_PER_WHEEL_TICK, io.MouseWheel));

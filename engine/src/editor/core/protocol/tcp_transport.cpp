@@ -2,12 +2,34 @@
 
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/log_category.h"
+#include "conjure/editor/protocol/protocol_message.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
+#include <span>
+#include <string>
 #include <utility>
 
 namespace conjure::editor {
+
+    namespace {
+        /// <summary>
+        /// Tells a client beyond MAX_CLIENTS why it is about to be closed: one BUSY line with id null, sent once
+        /// and best effort. The client has not been read from, so the close that follows is graceful and the
+        /// line arrives before the end of the stream; a client that already sent bytes may see a reset instead.
+        /// </summary>
+        void refuse_busy(const net::socket_handle &socket) {
+            const std::string refusal = serialise(make_error_response(
+              null_id().root(),
+              protocol_error_code::BUSY,
+              std::format("the editor serves at most {} clients", tcp_transport::MAX_CLIENTS)
+            )) + "\n";
+            usize sent = 0;
+            const std::span<const std::byte> bytes(reinterpret_cast<const std::byte *>(refusal.data()), refusal.size());
+            (void) net::send(socket, bytes, sent);
+        }
+    }
 
     tcp_transport::tcp_transport(u16 port, u16 fallbackPorts, usize lineLimit) :
         mRequestedPort(port),
@@ -177,6 +199,7 @@ namespace conjure::editor {
             // Connections that are closing but still draining their last response do not hold a seat.
             if (client_count() >= MAX_CLIENTS) {
                 CONJURE_LOG_WARN(LOG_EDITOR, "ai protocol: refusing a client beyond the limit of {}", MAX_CLIENTS);
+                refuse_busy(accepted.value());
                 continue;   // the handle closes here
             }
             connection entry = {};

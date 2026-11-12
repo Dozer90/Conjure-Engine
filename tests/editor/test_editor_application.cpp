@@ -11,6 +11,7 @@
 #include "conjure/editor/editor_options.h"
 #include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/engine_error.h"
 #include "conjure/engine/exit_code.h"
 #include "conjure/engine/project.h"
 
@@ -102,6 +103,28 @@ TEST_SUITE("editor/editor_application") {
         CHECK_FALSE(noScripting.value().config.scripting.enabled);
         options.engineArguments = {"--frames", "many"};
         CHECK_FALSE(editor_application::make_engine_desc(options, {}).has_value());
+    }
+
+    TEST_CASE("regression - F079 editor_application an unrecognised engine argument fails with BAD_ARGUMENTS") {
+        testing::log_capture logs = {};
+        editor_options options = {};
+        options.headless = true;
+        options.aiPort = u16{0};
+        options.engineArguments = {"--log-level", "warn", "--bogus-flag", "value"};
+        const core::result<engine::application_desc> desc = editor_application::make_engine_desc(options, {});
+        CONJURE_CHECK_ERROR(desc, engine::engine_error::BAD_ARGUMENTS);
+        REQUIRE_FALSE(desc.has_value());
+        CHECK(desc.get_error().message().find("--bogus-flag value") != std::string::npos);
+        // Refused before the merge loads the project: a missing project does not hide the bad option.
+        testing::temp_directory directory = {};
+        CONJURE_CHECK_ERROR(
+          editor_application::make_engine_desc(options, directory.path() / "nowhere"),
+          engine::engine_error::BAD_ARGUMENTS
+        );
+        editor_application application = {};
+        const core::result<void> initialised = application.initialise(options, {});
+        CONJURE_CHECK_ERROR(initialised, engine::engine_error::BAD_ARGUMENTS);
+        CHECK_FALSE(application.is_initialised());
     }
 
     TEST_CASE("editor_application::make_engine_desc - --offscreen enables rendering") {

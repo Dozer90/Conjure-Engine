@@ -36,20 +36,49 @@ namespace conjure::editor::support {
                 );
                 return;
             }
-            if (context.engine_context().jobs != nullptr) {
-                const std::array<assets::asset_id, 1> ids = {added.value()};
-                const core::result<assets::import_report> imported = database->import(
-                  ids,
-                  *context.engine_context().jobs
-                );
-                (void) imported;
+            if (context.engine_context().jobs == nullptr) {
+                return;
             }
+            const std::array<assets::asset_id, 1> ids = {added.value()};
+            const core::result<assets::import_report> imported = database->import(ids, *context.engine_context().jobs);
+            // The scene file itself is saved; only its asset record lags behind, so this is worth a warning, not a
+            // failed save.
+            if (!imported.has_value()) {
+                CONJURE_LOG_WARN(
+                  LOG_EDITOR,
+                  "scene file '{}' was registered but its import failed: {}",
+                  path,
+                  imported.get_error().message()
+                );
+                return;
+            }
+            if (imported.value().sourcesFailed > 0) {
+                const std::vector<assets::import_failure> &failures = imported.value().failures;
+                CONJURE_LOG_WARN(
+                  LOG_EDITOR,
+                  "scene file '{}' was registered but its import failed: {}",
+                  path,
+                  failures.empty() ? std::string_view("no reason given") : std::string_view(failures.front().message)
+                );
+            }
+        }
+
+        /// <summary>
+        /// INVALID_ARGS for a path argument that normalise_scene_path() cannot turn into a scene path inside a
+        /// mount.
+        /// </summary>
+        core::error not_a_scene_path(std::string_view pathText) {
+            return invalid_args(std::format("args.path: '{}' is not a scene path inside a mount", pathText));
         }
 
         core::result<command_outcome> scene_new(command_invocation &invocation) {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::string_view name, require_string(invocation.args, "name"));
-            const std::string path = editor_context::normalise_scene_path(string_or(invocation.args, "path", ""));
+            const std::string_view pathText = string_or(invocation.args, "path", "");
+            const std::string path = editor_context::normalise_scene_path(pathText);
+            if (path.empty() && !core::str::trim(pathText).empty()) {
+                return not_a_scene_path(pathText);
+            }
             context.scene_manager().unload_all();
             context.scene().set_name(name);
             context.undo().clear();
@@ -66,6 +95,9 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const std::string path = editor_context::normalise_scene_path(pathText);
+            if (path.empty()) {
+                return not_a_scene_path(pathText);
+            }
             if (!context.filesystem().exists(path)) {
                 return make_editor_error(
                   protocol_error_code::ASSET_NOT_FOUND,
@@ -75,7 +107,16 @@ namespace conjure::editor::support {
             const core::result<scene::scene_id> loaded =
               context.scene_manager().load_file(context.filesystem(), path, scene::load_mode::REPLACE);
             if (!loaded.has_value()) {
-                return wrap(loaded.get_error());
+                // The path argument named an existing file, so a malformed, too deep or too new scene is a fault
+                // of the file's content (IO_ERROR), not of the request (INVALID_ARGS).
+                protocol_error_code code = classify_error(loaded.get_error());
+                if (code == protocol_error_code::INVALID_ARGS) {
+                    code = protocol_error_code::IO_ERROR;
+                }
+                return make_editor_error(
+                  code,
+                  std::format("cannot load '{}': {}", path, loaded.get_error().to_string())
+                );
             }
             context.undo().clear();
             context.selection().clear();
@@ -125,7 +166,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const std::string path = editor_context::normalise_scene_path(pathText);
             if (path.empty()) {
-                return invalid_args("args.path: a scene path is required");
+                return not_a_scene_path(pathText);
             }
             CONJURE_TRY(save_to(context, path));
             context.set_scene_state(true, path);

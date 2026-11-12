@@ -4,13 +4,18 @@
 
 #include "editor_test_support.h"
 
+#include "editor/core/commands/command_support.h"
+
 #include "conjure/core/json/document.h"
 #include "conjure/core/uuid.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/scene/hierarchy.h"
 
+#include <array>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // entity.* (docs/design/04_editor.md 3.5, 3.6, 10).
@@ -218,6 +223,67 @@ TEST_SUITE("editor/commands_entity") {
         (void) editor.ok("entity.get", core::json::object({{"entity", "Old"}}));
     }
 
+    TEST_CASE("regression - F648 entity names that are empty or contain '/' are INVALID_ARGS in create, create_many, "
+      "rename") {
+        editor_test::headless_editor editor = {};
+        for (const std::string_view bad : {std::string_view("a/b"), std::string_view(""), std::string_view("/")}) {
+            CAPTURE(bad);
+            CHECK(editor.fail(
+              "entity.create",
+              core::json::object({{"name", bad}})
+            ) == protocol_error_code::INVALID_ARGS);
+            CHECK(editor.fail(
+              "entity.create_many",
+              core::json::object({{"count", 2}, {"nameFormat", bad}})
+            ) == protocol_error_code::INVALID_ARGS);
+            const core::json::document nameComponent = core::json::object({{"value", bad}});
+            CHECK(editor.fail(
+              "entity.create",
+              core::json::object({{"name", "ok"}, {"components", core::json::object({{"name", nameComponent}})}})
+            ) == protocol_error_code::INVALID_ARGS);
+        }
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(editor.context().undo().size() == 0);
+        const std::string guid = editor.create_entity("Kept");
+        CHECK(editor.fail(
+          "entity.rename",
+          core::json::object({{"entity", guid}, {"name", "x/y"}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail("entity.rename", core::json::object({{"entity", guid}, {"name", ""}})) ==
+          protocol_error_code::INVALID_ARGS);
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Kept");
+        // Duplicate names are allowed by design (an ambiguous path lists the candidates), and so is a {i} format.
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("entity.create_many", core::json::object({{"count", 2}, {"nameFormat", "Cell {i}"}}));
+    }
+
+    TEST_CASE("regression - F648 undo of a rename restores a previous name containing '/'") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Imported");
+        const std::optional<core::uuid> parsed = core::uuid::parse(guid);
+        REQUIRE(parsed.has_value());
+        const ecs::entity entity = editor.scene().find_guid(*parsed);
+        // A name a scene file or a model import can give an entity, which no client may send.
+        CONJURE_REQUIRE_OK(editor.scene().set_name(entity, core::string_id("mesh/node.001")));
+        (void) editor.ok("entity.rename", core::json::object({{"entity", guid}, {"name", "Clean"}}));
+        (void) editor.ok("history.undo");
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() ==
+          "mesh/node.001");
+        (void) editor.ok("history.redo");
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Clean");
+    }
+
+    TEST_CASE("regression - F485 entity.create_many with count 2.0 creates two entities") {
+        editor_test::headless_editor editor = {};
+        const core::json::document created = editor.ok("entity.create_many", core::json::object({{"count", 2.0}}));
+        CHECK(created.root()["count"].as_u64() == 2);
+        CHECK(editor.scene().world().entity_count() == 2);
+        CHECK(editor.fail(
+          "entity.create_many",
+          core::json::object({{"count", 2.5}})
+        ) == protocol_error_code::INVALID_ARGS);
+    }
+
     TEST_CASE("entity.set_parent - keeps the world transform by default and undo restores the old parent") {
         editor_test::headless_editor editor = {};
         const std::string parent = editor.create_entity("Parent");
@@ -256,6 +322,22 @@ TEST_SUITE("editor/commands_entity") {
           "entity.set_parent",
           core::json::object({{"entity", parent}, {"parent", parent}})
         ) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - F646 entity.set_parent to the root answers parent null like entity.get") {
+        editor_test::headless_editor editor = {};
+        const std::string parent = editor.create_entity("Parent");
+        const std::string child = editor.create_entity("Child", parent);
+        const core::json::document rooted =
+          editor.ok("entity.set_parent", core::json::object({{"entity", child}, {"parent", nullptr}}));
+        CHECK(rooted.root()["guid"].as_string() == child);
+        REQUIRE(rooted.root().contains("parent"));
+        CHECK(rooted.root()["parent"].is_null());
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", child}})).root()["parent"].is_null());
+        // Under a parent the answer is still the parent's guid.
+        const core::json::document moved =
+          editor.ok("entity.set_parent", core::json::object({{"entity", child}, {"parent", parent}}));
+        CHECK(moved.root()["parent"].as_string() == parent);
     }
 
     TEST_CASE("entity.duplicate - copies the subtree next to the original and undo removes the copies") {
@@ -396,9 +478,58 @@ TEST_SUITE("editor/commands_entity") {
           "entity.find",
           core::json::object({{"component", "no_such_component"}})
         ) == protocol_error_code::TYPE_NOT_FOUND);
+
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", a},
+            {"type", "conjure.scene.tag"},
+            {"value", core::json::object({{"value", "enemy"}})},
+          })
+        );
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", b},
+            {"type", "conjure.scene.layer"},
+            {"value", core::json::object({{"index", 3}})},
+          })
+        );
+        const core::json::document byTag = editor.ok("entity.find", core::json::object({{"tag", "enemy"}}));
+        REQUIRE(byTag.root()["guids"].size() == 1);
+        CHECK(byTag.root()["guids"][0].as_string() == a);
+        const core::json::document byLayer = editor.ok("entity.find", core::json::object({{"layer", 3}}));
+        REQUIRE(byLayer.root()["guids"].size() == 1);
+        CHECK(byLayer.root()["guids"][0].as_string() == b);
+        const core::json::document byNameAndLayer = editor.ok(
+          "entity.find",
+          core::json::object({{"name", "Cell"}, {"layer", 3}})
+        );
+        REQUIRE(byNameAndLayer.root()["guids"].size() == 1);
+        CHECK(byNameAndLayer.root()["guids"][0].as_string() == b);
+        CHECK(editor.fail("entity.find", core::json::object({{"layer", 32}})) == protocol_error_code::INVALID_ARGS);
     }
 
-    TEST_CASE("entity.bounds - a sprite reports its bounds and a bare entity a unit box") {
+    TEST_CASE("entity.get - an untagged entity reports tag \"\" and entity.find {tag:\"\"} finds it") {
+        editor_test::headless_editor editor = {};
+        const std::string tagged = editor.create_entity("Tagged");
+        const std::string plain = editor.create_entity("Plain");
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", tagged},
+            {"type", "conjure.scene.tag"},
+            {"value", core::json::object({{"value", "enemy"}})},
+          })
+        );
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", plain}})).root()["tag"].as_string() == "");
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", tagged}})).root()["tag"].as_string() == "enemy");
+        const core::json::document untagged = editor.ok("entity.find", core::json::object({{"tag", ""}}));
+        REQUIRE(untagged.root()["guids"].size() == 1);
+        CHECK(untagged.root()["guids"][0].as_string() == plain);
+    }
+
+    TEST_CASE("entity.bounds - a bare entity reports a unit box around its position") {
         editor_test::headless_editor editor = {};
         const std::string bare = editor.create_entity("Bare");
         (void) editor.ok(
@@ -410,6 +541,130 @@ TEST_SUITE("editor/commands_entity") {
         CHECK(bounds.root()["min"][0].as_f32() == doctest::Approx(2.5f));
         CHECK(bounds.root()["max"][0].as_f32() == doctest::Approx(3.5f));
         CHECK_FALSE(bounds.root()["fromRenderBounds"].as_bool());
+    }
+
+    TEST_CASE("entity.bounds - without render bounds the box covers every entity of the subtree") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Root");
+        const std::string right = editor.create_entity("Right", root);
+        const std::string left = editor.create_entity("Left", root);
+        (void) editor.ok(
+          "entity.set_transform",
+          core::json::object({{"entity", right}, {"position", vec3(1.0f, 0.0f, 0.0f)}})
+        );
+        (void) editor.ok(
+          "entity.set_transform",
+          core::json::object({{"entity", left}, {"position", vec3(-1.0f, 0.0f, 0.0f)}})
+        );
+        const core::json::document bounds = editor.ok("entity.bounds", core::json::object({{"entity", root}}));
+        CHECK_FALSE(bounds.root()["fromRenderBounds"].as_bool(true));
+        const std::array<f32, 3> expectedMin = {-1.5f, -0.5f, -0.5f};
+        const std::array<f32, 3> expectedMax = {1.5f, 0.5f, 0.5f};
+        for (usize axis = 0; axis < 3; ++axis) {
+            CAPTURE(axis);
+            CHECK(bounds.root()["min"][axis].as_f32() == doctest::Approx(expectedMin[axis]));
+            CHECK(bounds.root()["max"][axis].as_f32() == doctest::Approx(expectedMax[axis]));
+        }
+    }
+
+    TEST_CASE("view.focus - an entity without render bounds frames its whole subtree") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Root");
+        const std::string child = editor.create_entity("Far", root);
+        (void) editor.ok(
+          "entity.set_transform",
+          core::json::object({{"entity", child}, {"position", vec3(0.0f, 4.0f, 0.0f)}})
+        );
+        const core::json::document focused = editor.ok("view.focus", core::json::object({{"entity", root}}));
+        CHECK(focused.root()["bounds"]["min"][1].as_f32() == doctest::Approx(-0.5f));
+        CHECK(focused.root()["bounds"]["max"][1].as_f32() == doctest::Approx(4.5f));
+        // The several-entities and whole-scene branches frame subtrees the same way.
+        const core::json::document several = editor.ok(
+          "view.focus",
+          core::json::object({{"entities", core::json::array({root})}})
+        );
+        CHECK(several.root()["bounds"]["max"][1].as_f32() == doctest::Approx(4.5f));
+        (void) editor.ok("selection.clear");
+        const core::json::document whole = editor.ok("view.focus");
+        CHECK(whole.root()["bounds"]["max"][1].as_f32() == doctest::Approx(4.5f));
+    }
+
+    TEST_CASE("entity.create / create_many / restore - parent null creates at the scene root") {
+        editor_test::headless_editor editor = {};
+        const core::json::document created = editor.ok(
+          "entity.create",
+          core::json::object({{"name", "Rooted"}, {"parent", nullptr}})
+        );
+        const std::string guid = std::string(created.root()["guid"].as_string());
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["parent"].is_null());
+        const core::json::document many = editor.ok(
+          "entity.create_many",
+          core::json::object({{"count", 2}, {"parent", nullptr}})
+        );
+        REQUIRE(many.root()["guids"].size() == 2);
+        for (const core::json::value manyGuid : many.root()["guids"]) {
+            const core::json::document info = editor.ok(
+              "entity.get",
+              core::json::object({{"entity", std::string(manyGuid.as_string())}})
+            );
+            CHECK(info.root()["parent"].is_null());
+        }
+        const ecs::entity rooted = editor.scene().find_guid(*core::uuid::parse(guid));
+        const core::result<core::json::document> archive = support::capture_subtree(editor.scene(), rooted);
+        CONJURE_REQUIRE_OK(archive);
+        (void) editor.ok("entity.destroy", core::json::object({{"entity", guid}}));
+        const core::json::document restored = editor.ok(
+          "entity.restore",
+          core::json::object({{"archive", archive.value()}, {"parent", nullptr}})
+        );
+        CHECK(restored.root()["guid"].as_string() == guid);
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["parent"].is_null());
+        CHECK(editor.scene().roots().size() == 3);
+    }
+
+    TEST_CASE("regression - undo of entity.create_many with 10000 entities restores an empty scene and redo brings "
+      "them back in order") {
+        editor_test::headless_editor editor = {};
+        const core::json::document result = editor.ok(
+          "entity.create_many",
+          core::json::object({{"count", 10000}, {"nameFormat", "Cell_{i}"}})
+        );
+        REQUIRE(result.root()["guids"].size() == 10000);
+        (void) editor.ok("history.undo");
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(editor.scene().roots().empty());
+        (void) editor.ok("history.redo");
+        REQUIRE(editor.scene().roots().size() == 10000);
+        for (usize index = 0; index < 10000; index += 997) {
+            CAPTURE(index);
+            CHECK(editor.scene().guid_of(editor.scene().roots()[index].entity)->to_string() ==
+              result.root()["guids"][index].as_string());
+        }
+
+        // Undo of a destroy_many over every tenth root, listed in reverse, puts each back at its own position.
+        core::json::document doomed = core::json::document::array();
+        for (usize index = 10000; index > 0; --index) {
+            if ((index - 1) % 10 == 0) {
+                doomed.push_back(result.root()["guids"][index - 1].as_string());
+            }
+        }
+        const core::json::document destroyed = editor.ok(
+          "entity.destroy_many",
+          core::json::object({{"entities", doomed}})
+        );
+        CHECK(destroyed.root()["destroyed"].as_i64() == 1000);
+        CHECK(editor.scene().roots().size() == 9000);
+        (void) editor.ok("history.undo");
+        REQUIRE(editor.scene().roots().size() == 10000);
+        usize firstMisplaced = 10000;
+        for (usize index = 0; index < 10000; ++index) {
+            const std::string actual = editor.scene().guid_of(editor.scene().roots()[index].entity)->to_string();
+            if (actual != result.root()["guids"][index].as_string()) {
+                firstMisplaced = index;
+                break;
+            }
+        }
+        CHECK(firstMisplaced == 10000);
     }
 
     TEST_CASE("entity.* - the inverse of every entity command restores the serialised scene exactly") {

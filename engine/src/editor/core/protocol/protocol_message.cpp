@@ -1,14 +1,85 @@
 #include "conjure/editor/protocol/protocol_message.h"
 
+#include "conjure/core/json/json.h"
 #include "conjure/core/json/writer.h"
+#include "conjure/core/string_utils.h"
 
 #include <format>
+#include <string>
 #include <utility>
 
 namespace conjure::editor {
 
     namespace {
         using core::json::value;
+
+        /// <summary>
+        /// The text unchanged when it is valid UTF-8, otherwise with every malformed byte replaced by U+FFFD: a
+        /// file or path in a legacy code page must still reach the client as a parseable line.
+        /// </summary>
+        [[nodiscard]] std::string valid_utf8(std::string_view text) {
+            if (core::str::is_valid_utf8(text)) {
+                return std::string(text);
+            }
+            return core::str::from_utf32(core::str::to_utf32(text));
+        }
+
+        /// <summary>
+        /// A deep copy of the tree whose keys and strings are all valid UTF-8 (see valid_utf8).
+        /// </summary>
+        [[nodiscard]] core::json::document sanitised_copy(const value &source) {
+            if (source.is_object()) {
+                core::json::document copy = core::json::document::object();
+                for (const core::json::member entry : source.members()) {
+                    const std::string key = valid_utf8(entry.key);
+                    if (entry.item.is_string()) {
+                        copy.set(key, std::string_view(valid_utf8(entry.item.as_string())));
+                    } else if (entry.item.is_object() || entry.item.is_array()) {
+                        copy.set(key, sanitised_copy(entry.item));
+                    } else {
+                        copy.set(key, entry.item);
+                    }
+                }
+                return copy;
+            }
+            if (source.is_array()) {
+                core::json::document copy = core::json::document::array();
+                for (const value element : source) {
+                    if (element.is_string()) {
+                        copy.push_back(std::string_view(valid_utf8(element.as_string())));
+                    } else if (element.is_object() || element.is_array()) {
+                        copy.push_back(sanitised_copy(element));
+                    } else {
+                        copy.push_back(element);
+                    }
+                }
+                return copy;
+            }
+            if (source.is_string()) {
+                return core::json::init_value(valid_utf8(source.as_string())).to_document();
+            }
+            return core::json::document::from_value(source);
+        }
+
+        /// <summary>
+        /// The JSON text of a value for write_raw_json, without the deep copy of a document: the fallback for an
+        /// invalid value, the sanitised copy's text when a string is not UTF-8 (the serialiser refuses it and
+        /// answers ""), and the fallback should even that fail.
+        /// </summary>
+        [[nodiscard]] std::string serialise_value(const value &source, std::string_view fallback) {
+            if (!source.is_valid()) {
+                return std::string(fallback);
+            }
+            std::string text = core::json::to_string(source);
+            if (!text.empty()) {
+                return text;
+            }
+            text = sanitised_copy(source).to_string();
+            if (!text.empty()) {
+                return text;
+            }
+            return std::string(fallback);
+        }
 
         [[nodiscard]] core::error protocol_failure(protocol_error_code code, std::string message) {
             return make_editor_error(code, std::move(message));
@@ -146,18 +217,17 @@ namespace conjure::editor {
         out.value(response.ok);
         if (response.ok) {
             out.key("result");
-            const value result = response.result.root();
-            out.write_raw_json(result.is_valid() ? core::json::document::from_value(result).to_string() : "{}");
+            out.write_raw_json(serialise_value(response.result.root(), "{}"));
         } else {
             out.key("error");
             out.begin_object();
             out.key("code");
             out.value(to_string(response.errorCode));
             out.key("message");
-            out.value(std::string_view(response.errorMessage));
+            out.value(std::string_view(valid_utf8(response.errorMessage)));
             out.key("details");
             const value details = response.errorDetails.root();
-            out.write_raw_json(details.is_object() ? core::json::document::from_value(details).to_string() : "{}");
+            out.write_raw_json(details.is_object() ? serialise_value(details, "{}") : std::string("{}"));
             out.end_object();
         }
         out.end_object();
@@ -174,8 +244,7 @@ namespace conjure::editor {
         out.key("frame");
         out.value(event.frame);
         out.key("data");
-        const value data = event.data.root();
-        out.write_raw_json(data.is_valid() ? core::json::document::from_value(data).to_string() : "{}");
+        out.write_raw_json(serialise_value(event.data.root(), "{}"));
         out.end_object();
         return out.finish();
     }
@@ -189,7 +258,7 @@ namespace conjure::editor {
         out.value(std::string_view(request.command));
         out.key("args");
         const value args = request.args.root();
-        out.write_raw_json(args.is_object() ? core::json::document::from_value(args).to_string() : "{}");
+        out.write_raw_json(args.is_object() ? serialise_value(args, "{}") : std::string("{}"));
         if (request.coalesceKey != 0) {
             out.key("coalesceKey");
             out.value(request.coalesceKey);

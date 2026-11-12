@@ -53,6 +53,27 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "guid": "9d06d521-6097-50e3-84dc-b43f5c44cefc",
+      "local": {
+        "position": [
+          1,
+          2,
+          3
+        ],
+        "rotation": [
+          0,
+          0.7071068,
+          0,
+          0.7071068
+        ],
+        "scale": [
+          2,
+          2,
+          2
+        ]
+      }
+    }
   }
 }

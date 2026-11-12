@@ -57,6 +57,12 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "guids": [
+        "@any",
+        "@any"
+      ]
+    }
   }
 }

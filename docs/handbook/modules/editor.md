@@ -8,7 +8,12 @@ TCP, stdio and the loopback, the dispatcher, play mode, picking, screenshots, th
 `editor_application`) and `conjure_editor_ui` (alias `conjure::editor_ui`: the Dear ImGui docking workspace, the
 panels, the property drawers, the ImGuizmo gizmos), plus `editor/src/main.cpp`. Both libraries are declared from
 `engine/CMakeLists.txt` (`editor` is the last entry of `CONJURE_ENGINE_MODULES`), join `conjure_shared` and are
-absent from Distribution; `conjure_editor` links `conjure::shared` and nothing else from the engine. This chapter
+absent from Distribution; `conjure_editor` links `conjure::shared` and nothing else from the engine. Like
+`conjure_runtime`, the executable reads its arguments as UTF-8 (`editor/src/editor_arguments.h`, the Windows
+backend re-reads the wide command line) and on Windows embeds an `activeCodePage` UTF-8 manifest
+(`editor/src/conjure_editor.manifest`), so a project path outside the legacy code page survives; it keeps the
+console subsystem in every configuration it is built in, and its run path is its own directory, where
+`conjure_shared` sits. This chapter
 is for people changing the editor or adding commands and panels; the binding design is
 [`04_editor.md`](../../design/04_editor.md), the cross-area decisions R11-R15, R35 and R40 of
 [`09_cross_area_resolutions.md`](../../design/09_cross_area_resolutions.md), and `engine/src/editor/README.md`
@@ -56,7 +61,9 @@ file pair.
    `closing` on `MESSAGE_TOO_LARGE` or a failed token handshake. A line that is not valid UTF-8 is a
    `PARSE_ERROR` that keeps the client connected (the design's table said `IO_ERROR` plus disconnect; the
    robustness tests pin the gentler behaviour).
-2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean`; the compiled JSON schema
+2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean` (none for a name over 128
+   bytes, whose edit distance would stall the frame; the message quotes at most 128 bytes, cut on a code point
+   boundary); the compiled JSON schema
    (`schema_validator`: `type`, `properties`, `required`, `additionalProperties`, `enum`, `items`, bounds) ->
    `INVALID_ARGS` naming the path; `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`, `PLAYING_ONLY` -> the
    matching code before the handler runs.
@@ -84,15 +91,25 @@ merges consecutive single-command entries of equal key and client (inspector dra
 transaction, consecutive records of equal key and command (one gizmo drag is one step). Inverses that restore
 several subtrees (`entity.destroy_many`) are one `editor.batch` whose children run in ascending sibling order.
 Play mode (D9): `play.start` captures a `scene_snapshot`, freezes the stack and runs the engine; `play.stop`
-restores the snapshot byte for byte (guids preserved) and remaps the selection; `play.step` runs exactly `n`
-fixed steps through `application::step_fixed` and answers once they ran (R13).
+restores the snapshot byte for byte (guids preserved) and remaps the selection, its primary included (the backup
+names the primary last); `play.step` runs exactly `n` fixed steps through `application::step_fixed` and answers
+once they ran (R13). `editor_context::selection_payload` is the one builder of `{guids, primary}` (`primary` null
+for an empty selection): every `selection.changed` carries it through `emit_selection_changed`, the selection's
+`on_changed` handler and `play.stop` alike, and the `selection.*` answers add `entities` and `count` to it.
 
 ## 4. The protocol
 
 `protocol_server::start(options, projectRoot)` opens TCP on `first_port()` (nine fallback ports when the port
-was not explicit; the chosen port is written to `<project>/.conjure/ai_port`) and stdio with `--ai-stdio`;
-`add_transport` plugs in a `loopback_transport` for tests. Clients are polled on the main thread
-(`transport_kind::TCP` and `LOOPBACK`); the stdio reader is the one `core::jobs::dedicated_thread` of the process
+was not explicit; the chosen port is written to `<project>/.conjure/ai_port`, and
+`editor_application::apply_pending_project_open` moves the file with `set_project_root` when `project.open`
+switches projects) and stdio with `--ai-stdio`; `add_transport` plugs in a `loopback_transport` for tests. When
+the stdio transport reports its client closed, `stdio_closed()` turns true and a headless stdio-only editor (no
+TCP server) quits with 0. Clients are polled on the main thread
+(`transport_kind::TCP` and `LOOPBACK`). `tcp_transport` serves at most `MAX_CLIENTS` (8) connections: a further
+client is accepted, sent one `BUSY` line with id null (best effort) and closed. A port in a Windows excluded range
+(`WSAEACCES`) counts as busy for the fallback search (`net::is_port_unavailable_error`), and on POSIX every socket
+is close-on-exec so `dotnet` and `cmake` children never inherit the listener. With `--ai-token` no event reaches a
+client before its valid `session.hello`. The stdio reader is the one `core::jobs::dedicated_thread` of the process
 (R38), reading 64 KiB chunks through a `line_splitter` whose state is shared through a `shared_ptr`, left blocked
 at exit by design. `event_broadcaster` fans events out with per-client subscriptions and a minimum log level; log
 events are shed under backlog pressure (`events.dropped`).
@@ -107,8 +124,21 @@ records as `log` events, flush. The UI layer (`editor-ui`) only draws and is pus
 script runtime on the null host; `view.screenshot` and `view.debug_draw` answer `NOT_AVAILABLE`; `script.compile`
 and `module.build` spawn `dotnet` / `cmake` when present. `--offscreen` asks for a real device without a
 swapchain; the engine configuration refuses it today and the editor falls back to the null device with a warning.
-`--exec` runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3, `${project}`
-placeholder, `--keep-going`).
+`--exec` runs a JSON array or NDJSON of requests through `headless_runner` (a leading UTF-8 byte order mark
+skipped, `${project}` expanded per request to the project open at the time, `--keep-going`); an asynchronous
+request is bounded by the dispatcher's `--timeout-seconds` in wall time, not by a frame count, and `editor.quit`
+ends the run with its non-zero exit code. `editor/src/main.cpp` maps the outcome to the exit code: 0 ok, 1 a
+command (or `--export`) failed, 2 a startup or project failure (a failed `initialise()`, unless the arguments are
+at fault, or a `project.open` whose restart failed for both projects), 3 bad arguments (a bad editor flag, an
+option neither the editor nor the engine knows, which `make_engine_desc` refuses as `BAD_ARGUMENTS` before the
+merge loads the project, or a flag that makes the merged configuration `INVALID_CONFIG` while the project alone
+validates), 4 a lost graphics device; a response stream that fails mid-run (`--out` on a full disk) also ends
+`--exec` with 2. When `editor_options::stdout_carries_protocol()` (`--ai-stdio`, `--exec`
+without `--out`, `--export`), main replaces the console log sink with one that writes every line to standard
+error, so standard output holds protocol lines only. `--export <dir>` sends `project.export {directory}`, plus
+`distributionDirectory` when `--distribution <dir>` names the folder `conjure_runtime`, `conjure_shared` and
+`shaders/` come from (the parser refuses `--distribution` without `--export`); without it the reply warns that the
+runtime was not copied.
 
 ## 6. The workspace
 
@@ -159,12 +189,15 @@ runs the inverse round trip of every mutating command, D8c), `test_batch_command
 `test_headless_runner`, `test_ai_builds_grid_sweeper` (the Grid Sweeper command file, also the integration
 scenario `tests/integration/test_ai_protocol_e2e.cpp`), the UI panels drawn inside `imgui_frame_scope` on the
 null rhi, and `test_editor_process` (label `process`, excluded from the default presets) spawning the real
-`conjure_editor --headless --exec`. `editor_test_support.h` provides `headless_editor` (a headless
-`editor_application` over a scratch project with an in-process client, `send` / `ok` / `fail`, snapshots for the
-inverse round trips), the fixture file format and the `LOOPBACK_TCP` precondition probe.
-`docs/generated/editor_protocol.json` is the `editor.schema` dump; regenerate it with
-`conjure_editor_tests --conjure-update-golden` when the catalogue changes, then refresh
-`.claude/skills/editor-ai-control/SKILL.md`.
+`conjure_editor --headless --exec`. A case whose name carries `[slow]` gets the label `slow` from the same side
+file of `tests/editor/CMakeLists.txt`, so only the nightly presets run it. Every undoable fixture must change
+the snapshot (the serialised scene and the project files) before its undo round trip counts; a fixture whose
+effect the snapshot cannot see (an empty folder) says `"expectChange": false` with a `_comment` naming the case
+that checks it instead. `editor_test_support.h` provides `headless_editor` (a headless `editor_application` over a
+scratch project with an in-process client, `send` / `ok` / `fail`, snapshots for the inverse round trips), the
+fixture file format and the `LOOPBACK_TCP` precondition probe. `docs/generated/editor_protocol.json` is the
+`editor.schema` dump; regenerate it with `conjure_editor_tests --conjure-update-golden` when the catalogue
+changes, then refresh `.claude/skills/editor-ai-control/SKILL.md`.
 
 ```
 python tools/build.py --build-dir build/mod_editor --target conjure_editor_tests --test -R editor

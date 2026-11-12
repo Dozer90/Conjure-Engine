@@ -8,9 +8,10 @@
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
-// The viewport (docs/design/04_editor.md 3.8, 3.9): a transparent window over the dockspace's pass-through
-// central node (the scene renders underneath), the gizmo for the selection, click picking through view.pick,
-// right-drag orbit, middle-drag pan and wheel zoom of the editor camera, and the operation/space toolbar.
+// The viewport (docs/design/04_editor.md 3.8, 3.9): an ordinary ImGui window whose content area is an input
+// surface (it does not show the scene through the editor camera yet, code sweep 2026-11-12 B10); the gizmo for
+// the selection, click picking through view.pick, right-drag orbit, middle-drag pan and wheel zoom of the editor
+// camera, and the operation/space/snap toolbar.
 
 namespace conjure::editor::ui {
 
@@ -54,6 +55,7 @@ namespace conjure::editor::ui {
 
         private:
             void draw_toolbar(editor_context &context);
+            void draw_snap_controls();
             void handle_camera_input(editor_context &context);
     };
 }

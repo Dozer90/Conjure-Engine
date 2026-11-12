@@ -854,7 +854,7 @@
         },
         {
             "name": "entity.bounds",
-            "summary": "The world bounds of an entity's subtree (a 1 m box around its position when nothing has render bounds).",
+            "summary": "The world bounds of an entity's subtree (a 1 m box around every entity of the subtree when nothing has render bounds).",
             "flags": [
                 "requires_scene"
             ],
@@ -901,8 +901,11 @@
                         "type": "string"
                     },
                     "parent": {
-                        "type": "string",
-                        "description": "guid or hierarchy path"
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "guid or hierarchy path; null = scene root"
                     },
                     "guid": {
                         "type": "string"
@@ -951,8 +954,11 @@
                         "type": "string"
                     },
                     "parent": {
-                        "type": "string",
-                        "description": "guid or hierarchy path"
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "guid or hierarchy path; null = scene root"
                     },
                     "components": {
                         "type": "object",
@@ -1229,8 +1235,11 @@
                         "additionalProperties": true
                     },
                     "parent": {
-                        "type": "string",
-                        "description": "guid or hierarchy path"
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "description": "guid or hierarchy path; null = scene root"
                     },
                     "index": {
                         "type": "integer",
@@ -1314,7 +1323,8 @@
                         "type": [
                             "string",
                             "null"
-                        ]
+                        ],
+                        "description": "guid or hierarchy path; null = scene root"
                     },
                     "keepWorld": {
                         "type": "boolean"
@@ -1339,7 +1349,10 @@
                         "type": "string"
                     },
                     "parent": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "revision": {
                         "type": "integer"
@@ -1529,7 +1542,7 @@
         },
         {
             "name": "input.inject",
-            "summary": "Injects synthetic input: a key, mouse button or gamepad button (press, release or tap held for holdFrames), a gamepad axis value, a mouse position, scroll or UTF-8 text (one text event per code point).",
+            "summary": "Injects synthetic input: a key, mouse button or gamepad button (press, release or tap held for holdFrames; a tap releases every control it pressed), a gamepad axis value, a mouse position, scroll or UTF-8 text (one text event per code point). Nothing is injected when any argument is invalid.",
             "flags": [],
             "owner": "editor",
             "args": {
@@ -2313,7 +2326,7 @@
         },
         {
             "name": "profiler.frame_stats",
-            "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-phase milliseconds, fixed steps, renderer counters and the entity count.",
+            "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and the entity count.",
             "flags": [],
             "owner": "editor",
             "args": {
@@ -2338,6 +2351,9 @@
                         ]
                     },
                     "systems": {
+                        "type": "array"
+                    },
+                    "phases": {
                         "type": "array"
                     },
                     "drawCalls": {
@@ -2384,7 +2400,7 @@
         },
         {
             "name": "project.export",
-            "summary": "Runs the export pipeline into a directory (progress events while it runs).",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied.",
             "flags": [
                 "requires_project",
                 "async",
@@ -2419,6 +2435,32 @@
             },
             "result": {
                 "type": "object",
+                "properties": {
+                    "directory": {
+                        "type": "string"
+                    },
+                    "runtimePath": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "bytes": {
+                        "type": "integer"
+                    },
+                    "durationMs": {
+                        "type": "number"
+                    },
+                    "assetCount": {
+                        "type": "integer"
+                    },
+                    "steps": {
+                        "type": "array"
+                    },
+                    "warnings": {
+                        "type": "array"
+                    }
+                },
                 "additionalProperties": true
             }
         },
@@ -3198,7 +3240,10 @@
                         "type": "integer"
                     },
                     "primary": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 }
             }
@@ -3226,7 +3271,10 @@
                         "type": "integer"
                     },
                     "primary": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 }
             }
@@ -3274,7 +3322,10 @@
                         "type": "integer"
                     },
                     "primary": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 }
             }
@@ -3781,5 +3832,5 @@
         "UNAUTHORISED",
         "INTERNAL"
     ],
-    "schemaHash": "2cc7afd190c0e52d"
+    "schemaHash": "9babb47223c6c8e1"
 }

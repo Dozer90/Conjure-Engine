@@ -46,6 +46,17 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "guid": "09474d6c-1194-5bfd-8b59-6973cf69e781",
+      "className": "Game.Timer",
+      "entryIndex": 1,
+      "scripts": {
+        "scripts": [
+          "@any",
+          "@any"
+        ]
+      }
+    }
   }
 }

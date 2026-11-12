@@ -13,7 +13,9 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <variant>
+#include <vector>
 
 // input.* (docs/design/04_editor.md 4.4, 7): synthetic input through platform::input::inject, which runs the
 // same state machine on the null backend as on glfw. A "tap" presses now and releases holdFrames frames later
@@ -23,16 +25,16 @@ namespace conjure::editor::support {
 
     namespace {
         /// <summary>
-        /// Releases a tapped key or button once the hold frames elapsed.
+        /// Releases every tapped key and button of one input.inject once the hold frames elapsed.
         /// </summary>
         class tap_release_task final : public frame_task {
             private:
-                platform::input_event mRelease = {};
+                std::vector<platform::input_event> mReleases = {};
                 u32 mFramesLeft = 0;
 
             public:
-                tap_release_task(platform::input_event release, u32 holdFrames) :
-                    mRelease(release),
+                tap_release_task(std::vector<platform::input_event> releases, u32 holdFrames) :
+                    mReleases(std::move(releases)),
                     mFramesLeft(holdFrames) {}
 
                 ~tap_release_task() override = default;
@@ -45,15 +47,17 @@ namespace conjure::editor::support {
                     }
                     platform::input *input = context.input();
                     if (input != nullptr) {
-                        input->inject(mRelease);
+                        for (const platform::input_event &release : mReleases) {
+                            input->inject(release);
+                        }
                     }
                     return true;
                 }
         };
 
-        core::result<math::vec3> read_vec3_2d(const core::json::value &value) {
+        core::result<math::vec3> read_vec3_2d(const core::json::value &value, std::string_view name) {
             if (!value.is_array() || value.size() != 2 || !value[0].is_number() || !value[1].is_number()) {
-                return invalid_args("expected [x, y]");
+                return invalid_args(std::format("{}: expected [x, y]", name));
             }
             return math::vec3(value[0].as_f32(), value[1].as_f32(), 0.0f);
         }
@@ -103,16 +107,17 @@ namespace conjure::editor::support {
             const bool pressed = action != inject_action::RELEASE;
             const platform::button_action buttonAction =
               pressed ? platform::button_action::PRESS : platform::button_action::RELEASE;
-            u32 injected = 0;
-            std::optional<platform::input_event> release = std::nullopt;
+            // Every argument is validated before anything is injected, so a bad later argument leaves no partial
+            // input behind; a tap of several controls releases each of them.
+            std::vector<platform::input_event> events = {};
+            std::vector<platform::input_event> releases = {};
             core::json::document result = core::json::document::object();
 
             if (args.contains("position")) {
-                CONJURE_TRY_ASSIGN(const math::vec3 position, read_vec3_2d(args["position"]));
+                CONJURE_TRY_ASSIGN(const math::vec3 position, read_vec3_2d(args["position"], "args.position"));
                 platform::mouse_move_event move = {};
                 move.position = math::vec2(position.x, position.y);
-                input->inject(move);
-                ++injected;
+                events.emplace_back(move);
                 result.set("position", core::json::array({position.x, position.y}));
             }
             if (args.contains("key")) {
@@ -125,12 +130,11 @@ namespace conjure::editor::support {
                 event.keyCode = *key;
                 event.action = buttonAction;
                 event.modifiers = modifiers;
-                input->inject(event);
-                ++injected;
+                events.emplace_back(event);
                 result.set("key", platform::to_string(*key));
                 if (action == inject_action::TAP) {
                     event.action = platform::button_action::RELEASE;
-                    release = platform::input_event(event);
+                    releases.emplace_back(event);
                 }
             }
             if (args.contains("button")) {
@@ -143,12 +147,11 @@ namespace conjure::editor::support {
                 event.button = *button;
                 event.action = buttonAction;
                 event.modifiers = modifiers;
-                input->inject(event);
-                ++injected;
+                events.emplace_back(event);
                 result.set("button", platform::to_string(*button));
                 if (action == inject_action::TAP) {
                     event.action = platform::button_action::RELEASE;
-                    release = platform::input_event(event);
+                    releases.emplace_back(event);
                 }
             }
             if (args.contains("gamepadButton")) {
@@ -165,12 +168,11 @@ namespace conjure::editor::support {
                 event.gamepadIndex = static_cast<u8>(gamepad);
                 event.button = *button;
                 event.action = buttonAction;
-                input->inject(event);
-                ++injected;
+                events.emplace_back(event);
                 result.set("gamepadButton", platform::to_string(*button));
                 if (action == inject_action::TAP) {
                     event.action = platform::button_action::RELEASE;
-                    release = platform::input_event(event);
+                    releases.emplace_back(event);
                 }
             }
             if (args.contains("axis")) {
@@ -191,17 +193,15 @@ namespace conjure::editor::support {
                 event.gamepadIndex = static_cast<u8>(gamepad);
                 event.axis = *axis;
                 event.value = value;
-                input->inject(event);
-                ++injected;
+                events.emplace_back(event);
                 result.set("axis", platform::to_string(*axis));
                 result.set("value", value);
             }
             if (args.contains("scroll")) {
-                CONJURE_TRY_ASSIGN(const math::vec3 offset, read_vec3_2d(args["scroll"]));
+                CONJURE_TRY_ASSIGN(const math::vec3 offset, read_vec3_2d(args["scroll"], "args.scroll"));
                 platform::mouse_scroll_event event = {};
                 event.offset = math::vec2(offset.x, offset.y);
-                input->inject(event);
-                ++injected;
+                events.emplace_back(event);
             }
             if (args.contains("text")) {
                 const std::string_view text = string_or(args, "text", "");
@@ -212,21 +212,24 @@ namespace conjure::editor::support {
                 for (const char32_t codepoint : core::str::to_utf32(text)) {
                     platform::text_event event = {};
                     event.codepoint = static_cast<u32>(codepoint);
-                    input->inject(event);
-                    ++injected;
+                    events.emplace_back(event);
                 }
             }
-            if (injected == 0) {
+            if (events.empty()) {
                 return invalid_args(
                   "args: expected at least one of key, button, gamepadButton, axis, position, scroll, text"
                 );
             }
-            if (release.has_value()) {
-                context.add_frame_task(std::make_unique<tap_release_task>(*release, holdFrames));
+            for (const platform::input_event &event : events) {
+                input->inject(event);
             }
-            result.set("injected", injected);
+            const bool releasePending = !releases.empty();
+            if (releasePending) {
+                context.add_frame_task(std::make_unique<tap_release_task>(std::move(releases), holdFrames));
+            }
+            result.set("injected", static_cast<u32>(events.size()));
             result.set("action", string_or(args, "action", "tap"));
-            result.set("releasePending", release.has_value());
+            result.set("releasePending", releasePending);
             result.set("frame", context.frame_index());
             command_outcome outcome = {};
             outcome.result = std::move(result);
@@ -251,8 +254,8 @@ namespace conjure::editor::support {
           make_command(
             "input.inject",
             "Injects synthetic input: a key, mouse button or gamepad button (press, release or tap held for "
-            "holdFrames), "
-            "a gamepad axis value, a mouse position, scroll or UTF-8 text (one text event per code point).",
+            "holdFrames; a tap releases every control it pressed), a gamepad axis value, a mouse position, scroll or "
+            "UTF-8 text (one text event per code point). Nothing is injected when any argument is invalid.",
             R"({"type":"object","properties":{"key":{"type":"string"},"button":{"type":"string"},)"
             R"("gamepadButton":{"type":"string"},"gamepad":{"type":"integer","minimum":0},"axis":{"type":"string"},)"
             R"("value":{"type":"number"},"action":{"type":"string","enum":["press","release","tap"]},)"

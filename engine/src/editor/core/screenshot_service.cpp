@@ -162,11 +162,13 @@ namespace conjure::editor {
             request.height = static_cast<u32>(height);
         }
         if (args.contains("camera")) {
+            // Any other non-empty value names an entity (guid, path or name); view.screenshot resolves it against
+            // the scene and hands the service its guid.
             const std::string_view camera = args["camera"].as_string();
-            if (camera != "editor" && camera != "game" && !core::uuid::parse(camera).has_value()) {
+            if (camera.empty()) {
                 return make_editor_error(
                   protocol_error_code::INVALID_ARGS,
-                  "args.camera: expected \"editor\", \"game\" or an entity guid"
+                  "args.camera: expected \"editor\", \"game\" or an entity (guid, path or name)"
                 );
             }
             request.camera = std::string(camera);

@@ -12,6 +12,27 @@
 
 namespace conjure::editor {
 
+    namespace {
+        // How much of an unknown command's name an error message echoes; real names are far shorter.
+        constexpr usize MAX_ECHOED_NAME_BYTES = 128;
+
+        /// <summary>
+        /// The name as an error message quotes it: whole when short, otherwise its first MAX_ECHOED_NAME_BYTES
+        /// bytes cut back to a code point boundary (a split character would make the response invalid UTF-8,
+        /// which the JSON writer refuses) followed by "...".
+        /// </summary>
+        [[nodiscard]] std::string echoed_name(std::string_view name) {
+            if (name.size() <= MAX_ECHOED_NAME_BYTES) {
+                return std::string(name);
+            }
+            usize cut = MAX_ECHOED_NAME_BYTES;
+            while (cut > 0 && (static_cast<unsigned char>(name[cut]) & 0xC0u) == 0x80u) {
+                --cut;
+            }
+            return std::string(name.substr(0, cut)) + "...";
+        }
+    }
+
     command_dispatcher::command_dispatcher(editor_context &context, command_registry &registry, undo_stack &undo) :
         mContext(&context),
         mRegistry(&registry),
@@ -187,7 +208,7 @@ namespace conjure::editor {
                 outDetails.set("failedIndex", index);
                 return make_editor_error(
                   protocol_error_code::UNKNOWN_COMMAND,
-                  std::format("args.commands[{}]: unknown command '{}'", index, name.as_string())
+                  std::format("args.commands[{}]: unknown command '{}'", index, echoed_name(name.as_string()))
                 );
             }
             if (has_flag(descriptor->flags, command_flags::NOT_IN_BATCH)) {
@@ -257,7 +278,9 @@ namespace conjure::editor {
             return *failure;
         }
 
-        if (!batch.entry.undo.empty()) {
+        // A batch dispatched as an undo or redo step records nothing: the history entry it belongs to is the one
+        // being applied.
+        if (!batch.entry.undo.empty() && mSuppressRecording == 0) {
             if (mUndo->frozen()) {
                 mContext->play().note_unrecorded_edit();
             } else if (mUndo->has_transaction(clientId)) {
@@ -279,6 +302,7 @@ namespace conjure::editor {
 
     core::result<void> command_dispatcher::dispatch_inverses(std::span<const command_inverse> inverses, u32 clientId) {
         ++mSuppressRecording;
+        ++mSuppressRevision;
         core::result<void> outcome = core::result<void>::success();
         for (usize index = inverses.size(); index > 0; --index) {
             const command_inverse &inverse = inverses[index - 1];
@@ -296,12 +320,14 @@ namespace conjure::editor {
                 break;
             }
         }
+        --mSuppressRevision;
         --mSuppressRecording;
         return outcome;
     }
 
     core::result<void> command_dispatcher::dispatch_replays(std::span<const command_request> replays, u32 clientId) {
         ++mSuppressRecording;
+        ++mSuppressRevision;
         core::result<void> outcome = core::result<void>::success();
         for (const command_request &replay : replays) {
             protocol_request request = {};
@@ -318,6 +344,7 @@ namespace conjure::editor {
                 break;
             }
         }
+        --mSuppressRevision;
         --mSuppressRecording;
         return outcome;
     }
@@ -339,7 +366,7 @@ namespace conjure::editor {
             return make_error_response(
               id,
               protocol_error_code::UNKNOWN_COMMAND,
-              std::format("unknown command '{}'", request.command),
+              std::format("unknown command '{}'", echoed_name(request.command)),
               std::move(details)
             );
         }
@@ -426,7 +453,9 @@ namespace conjure::editor {
                 );
             }
             if (has_flag(descriptor->flags, command_flags::MUTATES)) {
-                mContext->bump_revision();
+                if (mSuppressRevision == 0) {
+                    mContext->bump_revision();
+                }
                 if (!has_flag(descriptor->flags, command_flags::NO_UNDO)) {
                     mContext->set_scene_dirty(true);
                 }
@@ -452,10 +481,14 @@ namespace conjure::editor {
         }
         if (has_flag(descriptor->flags, command_flags::MUTATES)) {
             record_outcome(*descriptor, request, value);
-            const u64 revision = mContext->bump_revision();
             if (!has_flag(descriptor->flags, command_flags::NO_UNDO)) {
                 mContext->set_scene_dirty(true);
             }
+            if (mSuppressRevision > 0) {
+                // An undo or redo step: history.undo / redo bump the revision and announce the step once.
+                return make_ok_response(id, std::move(value.result));
+            }
+            const u64 revision = mContext->bump_revision();
             value.result.set("revision", revision);
             mContext->events().emit(
               editor_event::SCENE_CHANGED,
@@ -496,7 +529,7 @@ namespace conjure::editor {
       const protocol_request &request,
       command_outcome &outcome
     ) {
-        if (has_flag(descriptor.flags, command_flags::NO_UNDO) || mSuppressRecording > 0 || outcome.skipRecording) {
+        if (has_flag(descriptor.flags, command_flags::NO_UNDO) || outcome.skipRecording) {
             return;
         }
         if (!outcome.inverse.has_value()) {
@@ -510,10 +543,6 @@ namespace conjure::editor {
             );
             return;
         }
-        if (mUndo->frozen()) {
-            mContext->play().note_unrecorded_edit();
-            return;
-        }
         command_request replay = {};
         if (outcome.replay.has_value()) {
             replay = std::move(*outcome.replay);
@@ -523,12 +552,22 @@ namespace conjure::editor {
         }
         replay.clientId = request.clientId;
         replay.coalesceKey = request.coalesceKey;
+        // A running batch always collects its children's inverses, even while playing or while the batch itself
+        // runs as an undo or redo step: its atomic rollback needs them. run_batch decides afterwards whether the
+        // collected entry reaches the stack.
         if (mBatch != nullptr) {
             mBatch->entry.undo.push_back(std::move(*outcome.inverse));
             mBatch->entry.redo.push_back(std::move(replay));
             if (mBatch->entry.label.empty()) {
                 mBatch->entry.label = outcome.label;
             }
+            return;
+        }
+        if (mSuppressRecording > 0) {
+            return;
+        }
+        if (mUndo->frozen()) {
+            mContext->play().note_unrecorded_edit();
             return;
         }
         mUndo->record(

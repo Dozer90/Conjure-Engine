@@ -8,6 +8,7 @@
 #include "conjure/editor/editor_error.h"
 
 #include <cmath>
+#include <string>
 
 // editor_camera.h: the orbit camera that view.* commands and the viewport drive.
 
@@ -76,6 +77,22 @@ TEST_SUITE("editor/editor_camera") {
         CONJURE_CHECK_APPROX(camera.orthographic_height(), 8.0f);
     }
 
+    TEST_CASE("regression - F518 editor_camera world_units_per_pixel spans the visible height across the viewport") {
+        editor_camera camera = {};
+        camera.set_orthographic(true);
+        camera.set_orthographic_height(1000.0f);
+        CHECK(camera.world_units_per_pixel(1600.0f) == doctest::Approx(0.625f));
+        CHECK(camera.world_units_per_pixel(0.0f) == doctest::Approx(1000.0f));
+        camera.set_orthographic(false);
+        camera.set_vertical_fov(math::radians(90.0f));
+        camera.set_look_at(math::vec3(0.0f, 0.0f, 10.0f), math::vec3(0.0f));
+        CHECK(camera.world_units_per_pixel(400.0f) == doctest::Approx(0.05f));
+        // Zooming out doubles the distance and so the step a pixel of panning covers.
+        camera.zoom(2.0f);
+        CHECK(camera.world_units_per_pixel(400.0f) == doctest::Approx(0.1f));
+        CHECK(camera.world_units_per_pixel(-5.0f) == doctest::Approx(40.0f));
+    }
+
     TEST_CASE("editor_camera - projection is reverse-Z and respects the aspect ratio") {
         editor_camera camera = {};
         camera.set_planes(0.1f, 100.0f);
@@ -110,6 +127,54 @@ TEST_SUITE("editor/editor_camera") {
         CONJURE_CHECK_ERROR(other.apply_json(badFov.root()), protocol_error_code::INVALID_ARGS);
         const core::json::document notObject = core::json::array({1, 2, 3});
         CONJURE_CHECK_ERROR(other.apply_json(notObject.root()), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("editor_camera - apply_json that fails leaves every member unchanged") {
+        editor_camera camera = {};
+        camera.set_look_at(math::vec3(1.0f, 2.0f, 3.0f), math::vec3(0.0f));
+        const std::string before = camera.to_json().to_string();
+        // Every member but the last is valid: the near/far check fails after fov, orthographic and the height.
+        const core::json::document partial = core::json::object({
+          {"position", core::json::array({4.0, 5.0, 6.0})},
+          {"fov", 90.0},
+          {"orthographic", true},
+          {"orthographicHeight", 3.0},
+          {"near", 5.0},
+          {"far", 1.0},
+        });
+        CONJURE_CHECK_ERROR(camera.apply_json(partial.root()), protocol_error_code::INVALID_ARGS);
+        CHECK(camera.to_json().to_string() == before);
+        CHECK_FALSE(camera.is_orthographic());
+        CONJURE_CHECK_APPROX(camera.position(), math::vec3(1.0f, 2.0f, 3.0f));
+        // A bad member early in the object leaves the camera alone as well.
+        const core::json::document badHeight = core::json::object({{"fov", 30.0}, {"orthographicHeight", -1.0}});
+        CONJURE_CHECK_ERROR(camera.apply_json(badHeight.root()), protocol_error_code::INVALID_ARGS);
+        CHECK(camera.to_json().to_string() == before);
+    }
+
+    TEST_CASE("editor_camera - apply_json refuses a position on top of the target") {
+        editor_camera camera = {};
+        camera.set_look_at(math::vec3(0.0f, 0.0f, 10.0f), math::vec3(0.0f));
+        const std::string before = camera.to_json().to_string();
+        const core::json::document coincident = core::json::object({
+          {"position", core::json::array({1.0, 1.0, 1.0})},
+          {"target", core::json::array({1.0, 1.0, 1.0})},
+        });
+        CONJURE_CHECK_ERROR(camera.apply_json(coincident.root()), protocol_error_code::INVALID_ARGS);
+        CHECK(camera.to_json().to_string() == before);
+        // A target alone that lands on the current position is refused too.
+        const core::json::document ontoPosition = core::json::object({
+          {"target", core::json::array({0.0, 0.0, 10.0})},
+        });
+        CONJURE_CHECK_ERROR(camera.apply_json(ontoPosition.root()), protocol_error_code::INVALID_ARGS);
+        CHECK(camera.to_json().to_string() == before);
+        // Points 0.02 apart (more than the 0.01 minimum) are still a direction.
+        const core::json::document close = core::json::object({
+          {"position", core::json::array({1.0, 1.0, 1.0})},
+          {"target", core::json::array({1.0, 1.0, 0.98})},
+        });
+        CONJURE_REQUIRE_OK(camera.apply_json(close.root()));
+        CONJURE_CHECK_APPROX(camera.target(), math::vec3(1.0f, 1.0f, 0.98f));
     }
 
     TEST_CASE("regression - the fov crosses the protocol in degrees, as the catalogue says") {

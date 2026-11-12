@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Windows application manifest of conjure_editor, merged into the executable by the linker (CMake passes
+    .manifest sources to the manifest tool; conjure_editor.rc holds only the icon, no RT_MANIFEST, so the two do
+    not collide). activeCodePage makes UTF-8 the process code page (Windows 10 1903+), so every narrow string the
+    editor and the engine turn into a std::filesystem::path (- -project, - -exec, - -out, - -export, - -log-file and
+    the path arguments of protocol commands) decodes the UTF-8 argument vector editor_arguments_windows.cpp builds
+    from the wide command line, and a project outside the legacy code page opens.
+  -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

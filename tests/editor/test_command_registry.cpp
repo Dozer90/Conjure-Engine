@@ -6,6 +6,7 @@
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/protocol/protocol_message.h"
 
+#include <format>
 #include <string>
 #include <vector>
 
@@ -123,6 +124,29 @@ TEST_SUITE("editor/command_registry") {
         CHECK(first.schema_hash() == withoutUi);
     }
 
+    TEST_CASE("regression - F496 command_registry schema_hash follows changes made after an earlier read") {
+        command_registry registry = {};
+        const u64 empty = registry.schema_hash();
+        CONJURE_REQUIRE_OK(registry.add(make("core.keep")));
+        const u64 first = registry.schema_hash();
+        CHECK(first != empty);
+        CHECK(registry.describe_all(false).root()["schemaHash"].as_string() == std::format("{:016x}", first));
+        CONJURE_REQUIRE_OK(registry.add(make("plugin.a", command_flags::NONE, "plugin")));
+        const u64 withPlugin = registry.schema_hash();
+        CHECK(withPlugin != first);
+        CHECK(registry.describe_all(false).root()["schemaHash"].as_string() == std::format("{:016x}", withPlugin));
+        CHECK(registry.remove("plugin.a"));
+        CHECK(registry.schema_hash() == first);
+        CONJURE_REQUIRE_OK(registry.add(make("plugin.b", command_flags::NONE, "plugin")));
+        CHECK(registry.schema_hash() != first);
+        CHECK(registry.remove_owned_by("plugin") == 1);
+        CHECK(registry.schema_hash() == first);
+        CHECK(registry.remove_owned_by("nobody") == 0);
+        CHECK(registry.schema_hash() == first);
+        CHECK(registry.remove("core.keep"));
+        CHECK(registry.schema_hash() == empty);
+    }
+
     TEST_CASE("command_registry - closest_names suggests the nearest spellings") {
         command_registry registry = {};
         register_builtin_commands(registry);
@@ -130,6 +154,17 @@ TEST_SUITE("editor/command_registry") {
         REQUIRE_FALSE(closest.empty());
         CHECK(closest.front() == "entity.create");
         CHECK(registry.closest_names("x", 0).empty());
+    }
+
+    TEST_CASE("regression - F102 command_registry closest_names of an over-long name suggests nothing") {
+        command_registry registry = {};
+        register_builtin_commands(registry);
+        // 128 bytes still gets suggestions; one byte more is no command's spelling.
+        const std::string longest = "entity.create" + std::string(128 - 13, 'x');
+        REQUIRE(longest.size() == 128);
+        CHECK_FALSE(registry.closest_names(longest, 3).empty());
+        CHECK(registry.closest_names(longest + "x", 3).empty());
+        CHECK(registry.closest_names(std::string(1024 * 1024, 'e'), 3).empty());
     }
 
     TEST_CASE("protocol_event_names - lists every event once") {

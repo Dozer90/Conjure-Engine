@@ -2,20 +2,42 @@
 
 #include "editor_test_support.h"
 
+#include "conjure/core/uuid.h"
 #include "conjure/editor/command_registry.h"
+#include "conjure/editor/play_controller.h"
 #include "conjure/editor/schema_validator.h"
 #include "conjure/editor/ui/editor_workspace.h"
 #include "conjure/editor/ui/imgui_frame_scope.h"
+#include "conjure/editor/undo_stack.h"
+
+#include <imgui.h>
 
 #include <filesystem>
 #include <string>
 #include <vector>
 
-// editor_workspace.h: the dockspace, the default panels and the layout file.
+// editor_workspace.h: the dockspace, the default panels, the global shortcuts, Save Scene As and the layout file.
 
 using namespace conjure;
 using namespace conjure::editor;
 using namespace conjure::editor::ui;
+
+namespace {
+    void draw_frame(editor_test::headless_editor &editor, editor_workspace &workspace, imgui_frame_scope &scope) {
+        workspace.update(editor.context());
+        scope.begin_frame();
+        workspace.draw(editor.context());
+        scope.end_frame();
+    }
+
+    /// <summary>
+    /// The modifier ImGui matches against ImGuiMod_Ctrl in shortcuts: with macOS behaviours on, AddKeyEvent swaps
+    /// Ctrl and Super, so the Cmd key (Super) is what reaches a Ctrl shortcut.
+    /// </summary>
+    [[nodiscard]] ImGuiKey shortcut_modifier() {
+        return ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    }
+}
 
 TEST_SUITE("editor/ui/editor_workspace") {
 
@@ -134,5 +156,97 @@ TEST_SUITE("editor/ui/editor_workspace") {
         scope.end_frame();
         CHECK(reloaded.frames_drawn() == 1);
         CHECK(workspace.drawers().drawer(core::reflect::field_kind::F32));
+    }
+
+    TEST_CASE("regression - a scene made with New Scene is saved through Save Scene As") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("scene.new", core::json::object({{"name", "Untitled"}}));
+        (void) editor.create_entity("Kept");
+        CHECK(editor.context().scene_path().empty());
+        editor_workspace workspace = {};
+        workspace.create_default_panels(editor.context());
+        CHECK_FALSE(workspace.save_as_pending());
+        // Save Scene (and Ctrl+S) on a scene without a path asks for one instead of failing.
+        workspace.request_save_scene(editor.context());
+        CHECK(workspace.save_as_pending());
+        CHECK(workspace.save_as_path() == "scenes/Untitled");
+        imgui_frame_scope scope{};
+        for (int frame = 0; frame < 2; ++frame) {
+            draw_frame(editor, workspace, scope);
+        }
+        // The modal stays up across frames until the user saves or cancels.
+        CHECK(workspace.save_as_pending());
+        scope.begin_frame();
+        CHECK(ImGui::IsPopupOpen("Save Scene As"));
+        scope.end_frame();
+        CHECK_FALSE(workspace.save_scene_as(editor.context(), "   "));
+        CHECK_FALSE(workspace.save_as_error().empty());
+        CHECK(workspace.save_as_pending());
+        REQUIRE(workspace.save_scene_as(editor.context(), "scenes/from_ui"));
+        CHECK(workspace.save_as_error().empty());
+        CHECK_FALSE(workspace.save_as_pending());
+        CHECK(editor.context().scene_path() == "assets://scenes/from_ui.scene.json");
+        const std::filesystem::path saved = editor.project_directory() / "assets" / "scenes" / "from_ui.scene.json";
+        CHECK(std::filesystem::is_regular_file(saved));
+        // The next frame closes the dialog; Save Scene now saves in place.
+        draw_frame(editor, workspace, scope);
+        scope.begin_frame();
+        CHECK_FALSE(ImGui::IsPopupOpen("Save Scene As"));
+        scope.end_frame();
+        workspace.request_save_scene(editor.context());
+        CHECK_FALSE(workspace.save_as_pending());
+        CHECK_FALSE(editor.context().scene_dirty());
+    }
+
+    TEST_CASE("editor_workspace - Ctrl+Z and F5 work with the toolbar panel closed") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Undone");
+        editor_workspace workspace = {};
+        workspace.create_default_panels(editor.context());
+        REQUIRE(workspace.find_panel("toolbar") != nullptr);
+        workspace.find_panel("toolbar")->set_open(false);
+        imgui_frame_scope scope{};
+        // Shortcut routes are claimed one frame and honoured the next.
+        draw_frame(editor, workspace, scope);
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddKeyEvent(shortcut_modifier(), true);
+        io.AddKeyEvent(ImGuiKey_Z, true);
+        draw_frame(editor, workspace, scope);
+        CHECK(editor.scene().find_guid(*core::uuid::parse(guid)).is_null());
+        CHECK(editor.context().undo().can_redo());
+        io.AddKeyEvent(ImGuiKey_Z, false);
+        io.AddKeyEvent(shortcut_modifier(), false);
+        draw_frame(editor, workspace, scope);
+        CHECK(editor.context().play().state() == play_state::EDITING);
+        io.AddKeyEvent(ImGuiKey_F5, true);
+        draw_frame(editor, workspace, scope);
+        io.AddKeyEvent(ImGuiKey_F5, false);
+        draw_frame(editor, workspace, scope);
+        CHECK(editor.context().play().state() == play_state::PLAYING);
+        io.AddKeyEvent(ImGuiMod_Shift, true);
+        io.AddKeyEvent(ImGuiKey_F5, true);
+        draw_frame(editor, workspace, scope);
+        io.AddKeyEvent(ImGuiKey_F5, false);
+        io.AddKeyEvent(ImGuiMod_Shift, false);
+        draw_frame(editor, workspace, scope);
+        CHECK(editor.context().play().state() == play_state::EDITING);
+    }
+
+    TEST_CASE("editor_workspace - Ctrl+S on a scene without a path opens Save Scene As") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("scene.new", core::json::object({{"name", ""}}));
+        editor_workspace workspace = {};
+        workspace.create_default_panels(editor.context());
+        imgui_frame_scope scope{};
+        draw_frame(editor, workspace, scope);
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddKeyEvent(shortcut_modifier(), true);
+        io.AddKeyEvent(ImGuiKey_S, true);
+        draw_frame(editor, workspace, scope);
+        io.AddKeyEvent(ImGuiKey_S, false);
+        io.AddKeyEvent(shortcut_modifier(), false);
+        draw_frame(editor, workspace, scope);
+        CHECK(workspace.save_as_pending());
+        CHECK(workspace.save_as_path() == "scenes/untitled");
     }
 }

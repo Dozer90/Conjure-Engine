@@ -51,6 +51,15 @@
     }
   },
   "expect": {
-    "ok": true
+    "ok": true,
+    "result": {
+      "types": [
+        "conjure.scene.local_transform",
+        "conjure.scene.name",
+        "conjure.scene.guid",
+        "conjure.renderer.sprite"
+      ],
+      "count": 4
+    }
   }
 }

@@ -5,15 +5,27 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/reflect/type_id.h"
+#include "conjure/core/string_id.h"
 #include "conjure/core/uuid.h"
+#include "conjure/ecs/component_registry.h"
 #include "conjure/editor/protocol/protocol_message.h"
 
+#include <array>
 #include <string>
 
 // component.* (docs/design/04_editor.md 3.5, R40): values move through JSON only.
 
 using namespace conjure;
 using namespace conjure::editor;
+
+namespace {
+    // A dynamic component whose registered name starts with the "transform" alias. Namespace-scope ids are
+    // constant-initialised and never interned; intern() keeps the field name visible.
+    const std::array<ecs::dynamic_field_desc, 1> RIG_FIELDS = {
+        ecs::dynamic_field_desc{core::string_id::intern("weight"), core::reflect::type_id_of<f32>(), 0},
+    };
+}
 
 TEST_SUITE("editor/commands_component") {
 
@@ -301,5 +313,88 @@ TEST_SUITE("editor/commands_component") {
           "component.set",
           core::json::object({{"entity", guid}, {"path", "camera.cameraData.projection"}, {"value", "SIDEWAYS"}})
         ) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - F524 component.set prefers a full registered type name whose first segment is an alias") {
+        editor_test::headless_editor editor = {};
+        ecs::component_registry *components = editor.context().engine_context().components;
+        REQUIRE(components != nullptr);
+        ecs::dynamic_component_desc desc = {};
+        desc.name = core::string_id::intern("transform.rig");
+        desc.fields = RIG_FIELDS;
+        desc.size = sizeof(f32);
+        desc.alignment = alignof(f32);
+        CONJURE_REQUIRE_OK(components->register_dynamic(desc));
+        const std::string guid = editor.create_entity("Rigged");
+        (void) editor.ok("component.add", core::json::object({{"entity", guid}, {"type", "transform.rig"}}));
+        // "transform" alone is the alias of the local transform, which has no "rig" field.
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "transform.rig.weight"}, {"value", 2}})
+        );
+        const core::json::document got = editor.ok(
+          "component.get",
+          core::json::object({{"entity", guid}, {"path", "transform.rig.weight"}})
+        );
+        CHECK(got.root()["value"].as_f32() == doctest::Approx(2.0f));
+        CHECK(got.root()["type"].as_string() == "transform.rig");
+        // The short paths of the transform still resolve through the alias.
+        const core::json::document position = core::json::array({1.0f, 2.0f, 3.0f});
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "transform.position"}, {"value", position}})
+        );
+        (void) editor.ok("history.undo");
+        (void) editor.ok("history.undo");
+        CHECK(editor.ok(
+          "component.get",
+          core::json::object({{"entity", guid}, {"path", "transform.rig.weight"}})
+        ).root()["value"].as_f32() == doctest::Approx(0.0f));
+    }
+
+    TEST_CASE("regression - F524 component.remove accepts the registered type name the inspector sends") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Target");
+        (void) editor.ok("component.add", core::json::object({{"entity", guid}, {"type", "sprite"}}));
+        const core::json::document size = core::json::array({2.0f, 2.0f});
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "conjure.renderer.sprite.size"}, {"value", size}})
+        );
+        (void) editor.ok(
+          "component.remove",
+          core::json::object({{"entity", guid}, {"type", "conjure.renderer.sprite"}})
+        );
+        CHECK(editor.fail(
+          "component.get",
+          core::json::object({{"entity", guid}, {"path", "sprite"}})
+        ) == protocol_error_code::COMPONENT_NOT_FOUND);
+    }
+
+    TEST_CASE("regression - F648 component.set on the name component refuses '/' and the empty name") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Named");
+        CHECK(editor.fail(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "name.value"}, {"value", "a/b"}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "name"}, {"value", core::json::object({{"value", ""}})}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "component.set_many",
+          core::json::object({{"sets", core::json::array({core::json::object({
+            {"entity", guid},
+            {"path", "name.value"},
+            {"value", "x/y"},
+          })})}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Named");
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "name.value"}, {"value", "Fine"}})
+        );
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Fine");
     }
 }

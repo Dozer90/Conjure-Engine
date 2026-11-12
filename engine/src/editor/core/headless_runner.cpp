@@ -4,7 +4,10 @@
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/log_category.h"
 
+#include "conjure/core/clock.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/engine/exit_code.h"
+#include "conjure/engine/project.h"
 
 #include <format>
 #include <fstream>
@@ -62,6 +65,18 @@ namespace conjure::editor {
         });
     }
 
+    void exec_summary::record(bool ok, u32 index) noexcept {
+        ++executed;
+        if (ok) {
+            ++succeeded;
+            return;
+        }
+        ++failed;
+        if (firstFailedIndex < 0) {
+            firstFailedIndex = static_cast<i32>(index);
+        }
+    }
+
     headless_runner::headless_runner() = default;
     headless_runner::~headless_runner() = default;
 
@@ -107,9 +122,9 @@ namespace conjure::editor {
     ) {
         exec_summary summary = {};
         mFramesPumped = 0;
+        // The context survives a project restart (start_engine rebinds it), so the reference, the event client
+        // and the response sink stay valid across a project.open in the file.
         editor_context &context = application.context();
-        const std::filesystem::path projectRoot =
-          context.project() != nullptr ? context.project()->root_directory() : std::filesystem::path();
 
         const u32 clientId = context.events().register_client([&out](const protocol_event &event) {
             out << serialise(event) << '\n';
@@ -119,6 +134,7 @@ namespace conjure::editor {
             captured = response;
         });
 
+        bool outputFailed = false;
         for (usize index = 0; index < requests.size(); ++index) {
             protocol_request request = {};
             request.id = requests[index].id;
@@ -126,13 +142,23 @@ namespace conjure::editor {
             request.args = requests[index].args;
             request.coalesceKey = requests[index].coalesceKey;
             request.clientId = clientId;
-            if (!projectRoot.empty()) {
-                expand_placeholders(request, projectRoot);
+            // ${project} is the project open when this request runs: an earlier project.open may have moved it.
+            if (const engine::project *project = context.project(); project != nullptr) {
+                expand_placeholders(request, project->root_directory());
             }
             captured.reset();
             std::optional<protocol_response> response = context.dispatcher().dispatch(request);
+            bool abandoned = false;
             if (!response.has_value()) {
-                for (u32 frame = 0; frame < MAX_FRAMES_PER_REQUEST && !captured.has_value(); ++frame) {
+                // An asynchronous reply arrives through the sink some frames later. The dispatcher's own timeout
+                // runs on the engine clock (wall time) and answers every pending request with TIMEOUT, so a reply
+                // always arrives in a well-behaved editor; this bound is a fallback for a dispatcher that never
+                // answers. It is in seconds, not frames: a request that waits on a real process (script.compile
+                // runs dotnet) needs real seconds, however fast a headless frame is. engine() is fetched on every
+                // frame because a project restart replaces the engine.
+                const f64 pumpStart = application.engine().clock().now_seconds();
+                const f64 pumpLimit = context.dispatcher().async_timeout_seconds() * 2.0 + 5.0;
+                while (!captured.has_value()) {
                     const core::result<void> stepped = application.pump_frame();
                     ++mFramesPumped;
                     if (!stepped.has_value()) {
@@ -141,34 +167,37 @@ namespace conjure::editor {
                           protocol_error_code::INTERNAL,
                           std::format("the engine frame failed: {}", stepped.get_error().to_string())
                         );
+                        abandoned = true;
                         break;
                     }
-                    // The response may have arrived through the sink already; the dispatcher's own timeout
-                    // produces a TIMEOUT response otherwise.
+                    if (application.engine().clock().now_seconds() - pumpStart >= pumpLimit) {
+                        break;
+                    }
                 }
                 if (!captured.has_value()) {
                     captured = make_error_response(
                       request.id.root(),
                       protocol_error_code::TIMEOUT,
-                      std::format("'{}' did not answer within {} frames", request.command, MAX_FRAMES_PER_REQUEST)
+                      std::format("'{}' did not answer within {} seconds", request.command, pumpLimit)
                     );
+                    abandoned = true;
                 }
                 response = std::move(captured);
             }
             out << serialise(*response) << '\n';
             out.flush();
-            ++summary.executed;
-            if (response->ok) {
-                ++summary.succeeded;
-            } else {
-                ++summary.failed;
-                if (summary.firstFailedIndex < 0) {
-                    summary.firstFailedIndex = static_cast<i32>(index);
-                }
+            if (!out) {
+                // The request ran and is counted below, but no later answer could reach the caller.
+                outputFailed = true;
+                CONJURE_LOG_ERROR(LOG_EDITOR, "exec: the response of request #{} could not be written", index + 1);
+            }
+            summary.record(response->ok, static_cast<u32>(index));
+            if (!response->ok) {
                 CONJURE_LOG_WARN(
                   LOG_EDITOR,
-                  "exec: request {} '{}' failed: {} {}",
-                  index,
+                  "exec: request #{} (id {}) '{}' failed: {} {}",
+                  index + 1,
+                  request.id.to_string(),
                   request.command,
                   to_string(response->errorCode),
                   response->errorMessage
@@ -176,6 +205,18 @@ namespace conjure::editor {
                 if (!keepGoing) {
                     break;
                 }
+            }
+            if (outputFailed) {
+                break;
+            }
+            if (abandoned) {
+                // The engine is broken, or the request is still pending and its late reply would be taken for the
+                // answer to a later one: nothing after it can run reliably.
+                break;
+            }
+            if (application.quit_requested()) {
+                // editor.quit (or a quit from another client) ends the run after its reply.
+                break;
             }
             // Apply a project restart requested by this command before the next one runs.
             if (application.has_pending_project_open()) {
@@ -190,11 +231,26 @@ namespace conjure::editor {
 
         application.context().unregister_response_sink(clientId);
         application.context().events().unregister_client(clientId);
-        summary.exitCode = summary.failed == 0 ? 0 : 1;
+        if (outputFailed) {
+            summary.exitCode = static_cast<int>(engine::exit_code::RUNTIME_FAILURE);
+        } else {
+            summary.exitCode = summary.failed == 0 ? 0 : 1;
+        }
+        // A non-zero quit code wins: editor.quit's exitCode, or INIT_FAILURE from a project.open whose restart failed
+        // for both projects (that quit ends the run through the failed frame, not through the check above).
+        // editor.quit's default 0 still reports an earlier failure under --keep-going.
+        if (application.quit_requested() && application.exit_code() != 0) {
+            summary.exitCode = application.exit_code();
+        }
         return summary;
     }
 
     core::result<std::vector<protocol_request>> headless_runner::parse_command_file(std::string_view text) {
+        // Windows PowerShell 5.1 writes UTF-8 files with a byte order mark, which the JSON parser refuses.
+        constexpr std::string_view UTF8_BOM = "\xEF\xBB\xBF";
+        if (core::str::starts_with(text, UTF8_BOM)) {
+            text.remove_prefix(UTF8_BOM.size());
+        }
         std::vector<protocol_request> requests = {};
         const std::string_view trimmed = core::str::trim(text);
         if (trimmed.empty()) {

@@ -9,7 +9,8 @@
 
 #include <string>
 
-// The console: the console_buffer ring with a level filter, a category filter, auto-scroll and clear.
+// The console: the newest records of the console_buffer ring with a level filter, a category filter, auto-scroll
+// and clear.
 
 namespace conjure::editor::ui {
 
@@ -17,6 +18,7 @@ namespace conjure::editor::ui {
         private:
             core::log_level mMinLevel = core::log_level::INFO;
             std::string mCategoryFilter = "";
+            u64 mNewestSeqShown = 0;
             u32 mLinesDrawn = 0;
             bool mAutoScroll = true;
 
@@ -29,6 +31,14 @@ namespace conjure::editor::ui {
 
             [[nodiscard]] u32 lines_drawn() const noexcept {
                 return mLinesDrawn;
+            }
+
+            /// <summary>
+            /// The sequence number of the newest record the last draw listed (0 when it listed none). The panel
+            /// lists the newest matching records, so this follows console_buffer::last_seq() for unfiltered logs.
+            /// </summary>
+            [[nodiscard]] u64 newest_seq_shown() const noexcept {
+                return mNewestSeqShown;
             }
 
             [[nodiscard]] core::log_level min_level() const noexcept {

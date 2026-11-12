@@ -49,14 +49,16 @@ namespace conjure::editor {
             /// Builds the engine over the options (headless: null platform, rhi and audio; the scripting
             /// runtime on the null host so script.* commands work without .NET), initialises it, creates the
             /// context, pushes the frame layer (and the UI layer from the factory when not headless) and
-            /// starts the protocol server. Fails with the engine's error (exit 2 in main) or IO_ERROR when an
-            /// explicit port is busy.
+            /// starts the protocol server. Fails with the engine's error or, headless, IO_ERROR when an explicit
+            /// port is busy (a windowed editor logs that and runs without the server). conjure_editor's main
+            /// exits 3 for BAD_ARGUMENTS or an INVALID_CONFIG that a flag caused, otherwise 2.
             /// </summary>
             [[nodiscard]] core::result<void> initialise(const editor_options &options, layer_factory uiFactory);
 
             /// <summary>
             /// --export: runs project.export and returns 0 or 1. --exec: the headless runner's exit code.
-            /// Otherwise frames until quit; returns the exit code.
+            /// Otherwise frames until quit; returns the exit code. A headless --ai-stdio session without a TCP
+            /// server quits by itself and returns 0 once standard input ends.
             /// </summary>
             [[nodiscard]] int run();
 
@@ -118,7 +120,8 @@ namespace conjure::editor {
             /// <summary>
             /// The engine configuration the options produce for a project directory (empty = none): the
             /// merge of engine_config::defaults() (editor = true), --headless, project.json and the engine
-            /// arguments, plus the editor's scripting policy. Exposed for tests.
+            /// arguments, plus the editor's scripting policy. Fails with BAD_ARGUMENTS naming every option
+            /// neither the editor nor the engine knows, before the project is loaded. Exposed for tests.
             /// </summary>
             [[nodiscard]] static core::result<engine::application_desc> make_engine_desc(
               const editor_options &options,

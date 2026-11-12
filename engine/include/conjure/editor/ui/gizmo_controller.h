@@ -14,7 +14,8 @@
 // Transform gizmos over ImGuizmo (docs/design/04_editor.md 3.9): the first manipulated frame opens a
 // transaction and caches the selected entities' world matrices; every frame with a delta dispatches
 // component.set_many on the local transforms (through the parents' inverse world matrices, pivoting at the
-// centroid) with the drag session as coalesce key; the release ends the transaction.
+// centroid) with the drag session as coalesce key; the release ends the transaction. Descendants of selected
+// entities follow their ancestor instead of receiving the delta themselves.
 
 namespace conjure::editor::ui {
 
@@ -48,11 +49,12 @@ namespace conjure::editor::ui {
             gizmo_space mSpace = gizmo_space::WORLD;
             u64 mDragSession = 0;
             u32 mManipulations = 0;
-            f32 mSnapTranslate = 0.0f;
-            f32 mSnapRotateDegrees = 0.0f;
-            f32 mSnapScale = 0.0f;
+            f32 mSnapTranslate = 0.5f;
+            f32 mSnapRotateDegrees = 15.0f;
+            f32 mSnapScale = 0.1f;
             bool mDragging = false;
             bool mUseSnap = false;
+            bool mOverHandle = false;
 
         public:
             gizmo_controller();
@@ -96,10 +98,40 @@ namespace conjure::editor::ui {
                 return mSpace;
             }
 
+            /// <summary>
+            /// Snapping and its steps: world units for translate (and universal), degrees for rotate, a factor for
+            /// scale. The defaults are 0.5, 15 and 0.1 with snapping off; the viewport toolbar's Snap toggle and
+            /// step field drive it.
+            /// </summary>
             void set_snap(bool enabled, f32 translate, f32 rotateDegrees, f32 scale) noexcept;
+
+            [[nodiscard]] bool snap_enabled() const noexcept {
+                return mUseSnap;
+            }
+
+            [[nodiscard]] f32 snap_translate() const noexcept {
+                return mSnapTranslate;
+            }
+
+            [[nodiscard]] f32 snap_rotate_degrees() const noexcept {
+                return mSnapRotateDegrees;
+            }
+
+            [[nodiscard]] f32 snap_scale() const noexcept {
+                return mSnapScale;
+            }
 
             [[nodiscard]] bool is_dragging() const noexcept {
                 return mDragging;
+            }
+
+            /// <summary>
+            /// True when the last draw() showed the gizmo and the mouse was over one of its handles (the previous
+            /// frame's hotspot, as ImGuizmo reports it) or a drag is in progress. False after a draw() that showed
+            /// no gizmo (no frame, no scene or an empty selection), so the viewport can pick again.
+            /// </summary>
+            [[nodiscard]] bool is_over() const noexcept {
+                return mOverHandle;
             }
 
             [[nodiscard]] u32 manipulation_count() const noexcept {

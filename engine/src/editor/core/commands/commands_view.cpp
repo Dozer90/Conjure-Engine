@@ -1,4 +1,5 @@
 #include "editor/core/commands/command_support.h"
+#include "editor/core/component_access.h"
 
 #include "conjure/editor/editor_camera.h"
 #include "conjure/editor/entity_ref.h"
@@ -18,18 +19,30 @@
 namespace conjure::editor::support {
 
     namespace {
-        constexpr f32 DEFAULT_PICK_ASPECT = 16.0f / 9.0f;
-
         core::result<command_outcome> view_screenshot(command_invocation &invocation) {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(screenshot_request request, screenshot_service::parse_request(invocation.args));
             if (!context.screenshots().available()) {
+                if (context.offscreen()) {
+                    return not_available(
+                      "view.screenshot: off-screen rendering is not available in this build; run with a window"
+                    );
+                }
                 return not_available("view.screenshot needs a real device: run with --offscreen or a window");
             }
             if (request.camera != "editor" && request.camera != "game") {
-                // A guid: it must name a live entity with a camera.
-                core::json::document reference = core::json::document::from_value(invocation.args["camera"]);
-                CONJURE_TRY(resolve_entity(invocation, reference.root()));
+                // An entity by guid, path or name: it must be live and carry a camera, and the service always
+                // receives its guid.
+                CONJURE_TRY_ASSIGN(const ecs::entity entity, resolve_entity(invocation, invocation.args["camera"]));
+                const core::result<ecs::component_id> cameraType =
+                  access::resolve_component_type(context.components(), "camera", nullptr);
+                if (cameraType.has_value() && !context.scene().world().has_raw(entity, cameraType.value())) {
+                    return make_editor_error(
+                      protocol_error_code::COMPONENT_NOT_FOUND,
+                      "args.camera: the entity has no camera component"
+                    );
+                }
+                CONJURE_TRY_ASSIGN(request.camera, guid_string(context.scene(), entity));
             }
             context.screenshots().request(request, invocation.reply);
             return command_outcome{};
@@ -57,16 +70,12 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             scene::scene &scene = context.scene();
             math::aabb bounds = {};
+            // Every branch frames whole subtrees: render bounds when a subtree has them, otherwise a 1 m box
+            // around each of its entities (subtree_bounds_or_boxes), so a parent without render bounds still
+            // covers its children.
             if (invocation.args.contains("entity")) {
                 CONJURE_TRY_ASSIGN(const ecs::entity entity, resolve_entity(invocation, invocation.args["entity"]));
-                const std::optional<math::aabb> subtree = scene.subtree_bounds(entity);
-                if (subtree.has_value() && subtree->is_valid()) {
-                    bounds = *subtree;
-                } else {
-                    const math::vec3 position = scene.world_transform_of(entity).value_or(math::transform()).position;
-                    bounds.min = position - math::vec3(0.5f);
-                    bounds.max = position + math::vec3(0.5f);
-                }
+                bounds = subtree_bounds_or_boxes(scene, entity).bounds;
             } else if (invocation.args.contains("entities")) {
                 CONJURE_TRY_ASSIGN(
                   const std::vector<ecs::entity> entities,
@@ -76,12 +85,7 @@ namespace conjure::editor::support {
                     return invalid_args("args.entities: expected at least one entity");
                 }
                 for (const ecs::entity entity : entities) {
-                    const std::optional<math::aabb> subtree = scene.subtree_bounds(entity);
-                    if (subtree.has_value() && subtree->is_valid()) {
-                        bounds.expand(*subtree);
-                    } else {
-                        bounds.expand(scene.world_transform_of(entity).value_or(math::transform()).position);
-                    }
+                    bounds.expand(subtree_bounds_or_boxes(scene, entity).bounds);
                 }
             } else {
                 // The selection, or the whole scene.
@@ -90,19 +94,11 @@ namespace conjure::editor::support {
                     if (entity.is_null()) {
                         continue;
                     }
-                    const std::optional<math::aabb> subtree = scene.subtree_bounds(entity);
-                    if (subtree.has_value() && subtree->is_valid()) {
-                        bounds.expand(*subtree);
-                    } else {
-                        bounds.expand(scene.world_transform_of(entity).value_or(math::transform()).position);
-                    }
+                    bounds.expand(subtree_bounds_or_boxes(scene, entity).bounds);
                 }
                 if (!bounds.is_valid()) {
                     for (const scene::root_entry &root : scene.roots()) {
-                        const std::optional<math::aabb> subtree = scene.subtree_bounds(root.entity);
-                        if (subtree.has_value() && subtree->is_valid()) {
-                            bounds.expand(*subtree);
-                        }
+                        bounds.expand(subtree_bounds_or_boxes(scene, root.entity).bounds);
                     }
                 }
                 if (!bounds.is_valid()) {
@@ -139,7 +135,8 @@ namespace conjure::editor::support {
                 if (x < 0.0f || x > 1.0f || y < 0.0f || y > 1.0f) {
                     return invalid_args("args.x / args.y: expected normalised viewport coordinates in 0..1");
                 }
-                CONJURE_TRY_ASSIGN(const f32 aspect, f32_or(args, "aspect", DEFAULT_PICK_ASPECT));
+                // Without an aspect the ray matches what the viewport panel shows (16:9 headless).
+                CONJURE_TRY_ASSIGN(const f32 aspect, f32_or(args, "aspect", context.viewport_aspect()));
                 if (aspect <= 0.0f) {
                     return invalid_args("args.aspect: expected a positive ratio");
                 }

@@ -63,10 +63,14 @@ namespace conjure::editor::support {
                   {"optional", dependency.optional},
                 }));
             }
+            // Only a loaded module owns commands: one that failed validation or is unloaded registered none, and
+            // counting by name would credit it with another owner's (the built-ins belong to "editor").
             usize commands = 0;
-            for (const command_descriptor *descriptor : context.registry().descriptors()) {
-                if (descriptor->owner == manifest.name) {
-                    ++commands;
+            if (registry.state(id) == modules::module_state::LOADED) {
+                for (const command_descriptor *descriptor : context.registry().descriptors()) {
+                    if (descriptor->owner == manifest.name) {
+                        ++commands;
+                    }
                 }
             }
             const core::error &lastError = registry.last_error(id);

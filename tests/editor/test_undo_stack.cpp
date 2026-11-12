@@ -112,6 +112,21 @@ TEST_SUITE("editor/undo_stack") {
         CONJURE_CHECK_ERROR(stack.end_transaction(9), protocol_error_code::INVALID_REQUEST);
     }
 
+    TEST_CASE("undo_stack - has_open_transaction reports any client's staged transaction") {
+        undo_stack stack = {};
+        CHECK_FALSE(stack.has_open_transaction());
+        CONJURE_REQUIRE_OK(stack.begin_transaction("one", 1));
+        CONJURE_REQUIRE_OK(stack.begin_transaction("two", 2));
+        CHECK(stack.has_open_transaction());
+        CONJURE_REQUIRE_OK(stack.end_transaction(1));
+        CHECK(stack.has_open_transaction());
+        CONJURE_REQUIRE_OK(stack.end_transaction(2));
+        CHECK_FALSE(stack.has_open_transaction());
+        CONJURE_REQUIRE_OK(stack.begin_transaction("three", 3));
+        stack.clear();
+        CHECK_FALSE(stack.has_open_transaction());
+    }
+
     TEST_CASE("undo_stack - an empty transaction leaves no entry") {
         undo_stack stack = {};
         CONJURE_REQUIRE_OK(stack.begin_transaction("nothing", 1));

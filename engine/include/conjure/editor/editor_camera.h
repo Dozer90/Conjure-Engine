@@ -116,6 +116,13 @@ namespace conjure::editor {
             [[nodiscard]] math::ray screen_ray(const math::vec2 &viewportUv, f32 aspectRatio) const noexcept;
 
             /// <summary>
+            /// World units one viewport pixel spans at the target: the visible height (the orthographic height,
+            /// or 2 * distance * tan(fov / 2) in perspective) over the viewport height in pixels (at least 1), so
+            /// a pan moves the scene with the cursor whatever the zoom.
+            /// </summary>
+            [[nodiscard]] f32 world_units_per_pixel(f32 viewportHeightPixels) const noexcept;
+
+            /// <summary>
             /// {position, target, fov, orthographic, orthographicHeight, near, far} as view.get_camera returns;
             /// fov is the vertical field of view in degrees (the wire unit; the camera stores radians).
             /// </summary>

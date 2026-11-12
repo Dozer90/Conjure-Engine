@@ -5,7 +5,9 @@
 #include "conjure/core/uuid.h"
 #include "conjure/editor/selection_set.h"
 
+#include <algorithm>
 #include <array>
+#include <optional>
 #include <vector>
 
 // selection_set.h: guid set operations, the change event and the rebuild against a live scene.
@@ -32,7 +34,7 @@ TEST_SUITE("editor/selection_set") {
         selection.set(guids);
         REQUIRE(selection.size() == 3);
         CHECK(selection.guids()[0] == make_guid(1));
-        CHECK(selection.primary() == make_guid(1));
+        CHECK(selection.primary() == make_guid(2));
         CHECK(selection.contains(make_guid(2)));
         const std::array<core::uuid, 1> extra = {make_guid(9)};
         selection.add(extra);
@@ -75,6 +77,62 @@ TEST_SUITE("editor/selection_set") {
         selection.clear();
         CHECK(changes == 2);
         token.release();
+    }
+
+    TEST_CASE("regression - F657 selection_set primary is the guid named last, else the lowest one left") {
+        selection_set selection = {};
+        int changes = 0;
+        core::event_subscription token = selection.on_changed().subscribe([&changes]() {
+            ++changes;
+        });
+        const std::array<core::uuid, 3> guids = {make_guid(3), make_guid(1), make_guid(2)};
+        selection.set(guids);
+        CHECK(selection.primary() == make_guid(2));
+        const std::array<core::uuid, 2> extra = {make_guid(9), core::uuid::null()};
+        selection.add(extra);
+        CHECK(selection.primary() == make_guid(9));
+        const std::array<core::uuid, 1> nine = {make_guid(9)};
+        selection.remove(nine);
+        CHECK(selection.primary() == make_guid(1));
+
+        // The same guids with another one named last: only the primary changes, and that is a change.
+        changes = 0;
+        const std::array<core::uuid, 3> reordered = {make_guid(1), make_guid(2), make_guid(3)};
+        selection.set(reordered);
+        CHECK(selection.primary() == make_guid(3));
+        CHECK(changes == 1);
+        selection.set(reordered);
+        CHECK(changes == 1);
+
+        // Naming a guid that is already selected makes it the primary without adding anything.
+        const std::array<core::uuid, 1> one = {make_guid(1)};
+        selection.add(one);
+        CHECK(selection.primary() == make_guid(1));
+        CHECK(selection.size() == 3);
+        CHECK(changes == 2);
+
+        // Removing a guid that is not the primary keeps the primary.
+        const std::array<core::uuid, 1> two = {make_guid(2)};
+        selection.remove(two);
+        CHECK(selection.primary() == make_guid(1));
+        selection.clear();
+        CHECK(selection.primary().is_null());
+        token.release();
+    }
+
+    TEST_CASE("selection_set - a rebuild that drops the primary falls back to the lowest live guid") {
+        editor_test::headless_editor editor = {};
+        const std::optional<core::uuid> first = core::uuid::parse(editor.create_entity("first"));
+        const std::optional<core::uuid> second = core::uuid::parse(editor.create_entity("second"));
+        REQUIRE(first.has_value());
+        REQUIRE(second.has_value());
+        selection_set selection = {};
+        const std::array<core::uuid, 3> guids = {*first, *second, make_guid(0x42)};
+        selection.set(guids);
+        CHECK(selection.primary() == make_guid(0x42));
+        selection.rebuild(editor.scene());
+        CHECK(selection.size() == 2);
+        CHECK(selection.primary() == std::min(*first, *second));
     }
 
     TEST_CASE("selection_set - rebuild marks live entities and drops dead guids") {
