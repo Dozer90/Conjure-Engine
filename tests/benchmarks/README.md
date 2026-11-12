@@ -18,7 +18,7 @@ hand.
 | `src/bench_main.cpp` | the executable's entry point: command line, main thread, WARN console, seed, run, JSON output |
 | `bench_support.{h,cpp}` | build-time paths (shader index, managed SDK, test scripts), the .NET probe, `scratch_directory`, `random_transform`, `spawn_hierarchy` |
 | `bench_core.cpp`, `bench_ecs.cpp`, `bench_scene.cpp`, `bench_physics.cpp`, `bench_render_null_frame.cpp`, `bench_scripts_update_phase.cpp`, `bench_full_frame_10k.cpp` | the scenarios, one file per module (the renderer file holds both renderer rows) |
-| `thresholds.json` | `{"version": 1, "scenarios": {"<module>.<scenario>": {"desktop": {"p50_ms", "p95_ms", "p99_ms"}, "ci": {...}, "allocs": n}}}`; a missing `allocs` means "not checked", a time of 0 means "not checked" |
+| `thresholds.json` | `{"version": 1, "scenarios": {"<module>.<scenario>": {"desktop": {"p50_ms", "p95_ms", "p99_ms"}, "ci": {...}, "allocs": n}}}`; a missing `allocs` means "not checked", a time of 0 means "not checked"; a class that sets no limit (no time above 0, absent or all 0, and the entry has no `allocs`) leaves the scenario `UNTHRESHOLDED` for that class; any other member (a misspelled `p50ms` or `dekstop`) is rejected when the file loads |
 | `tests/` | `conjure_benchmarks_tests` (label `unit;benchmarks`): `test_benchmark.cpp`, `test_bench_runner.cpp`, the self-tests of 08 section 11 |
 
 The executable links `tests/support/src/tracked_global_new.cpp` like every test executable (08 D3), so
@@ -48,14 +48,24 @@ mode the determinism tests use; any other N is that many workers (at most 256). 
 
 Thresholds are **enforced in Development and Distribution** (a breached or missing entry exits 1) and
 **reported only in Debug** (the compile definition `CONJURE_BENCH_ENFORCE_DEFAULT`); `--enforce` and
-`--no-enforce` override either. A scenario whose machine precondition is unmet (no .NET runtime, no managed
-SDK, no shader index) is reported `SKIPPED` and the run exits 77 when every selected scenario skipped, which
-CTest shows as *Not Run*. A scenario is `FAILED` with a `reason` whatever its figures say when it returned
-without calling either `measure()` or `skip()` (a forgotten skip would otherwise pass every threshold over
-zero samples, 08 D12) or when it called `bench_context::fail(reason)` (the full-frame scenarios do when a
-measured `step_frame()` returned an error, the application requested quit, or the fixture's own sample
-vectors grew inside the measured loop). `benchmark.<name>` entries carry the labels `benchmark` and
-`<module>`, the `[dotnet]` ones also `scripting` and `dotnet`.
+`--no-enforce` override either. An entry that sets no limit for the selected class counts as missing: the row
+is `UNTHRESHOLDED`. A scenario whose machine precondition is unmet (no .NET runtime, no managed SDK, no shader
+index) is reported `SKIPPED` and the run exits 77 when every selected scenario skipped, which CTest shows as
+*Not Run*. A scenario is `FAILED` with a `reason` whatever its figures say when it returned without calling
+either `measure()` or `skip()` (a forgotten skip would otherwise pass every threshold over zero samples, 08
+D12) or when it called `bench_context::fail(reason)` (the full-frame scenarios do when a measured
+`step_frame()` returned an error, the application requested quit, or the fixture's own sample vectors grew
+inside the measured loop). Such a scenario failure is not a threshold verdict: it **exits 1 in every
+configuration**, Debug and `--no-enforce` included, so the `benchmark.*` CTest entries of a Debug tree still
+catch a broken scenario. `benchmark.<name>` entries carry the labels `benchmark` and `<module>`, the
+`[dotnet]` ones also `scripting` and `dotnet`.
+
+After the run the runner prints `benchmark: thresholds entry '<name>' matches no registered scenario` for
+every `thresholds.json` entry that names none of the registered scenarios (all of them, whatever `--filter`
+selected), so a renamed scenario or a misspelled entry does not leave its limits applying to nothing unseen.
+The warning does not change the exit code. A build with physics, the renderer or scripting compiled out
+(`CONJURE_WITH_PHYSICS/RENDERER/SCRIPTING=OFF`) registers none of the scenarios that need the module (its own
+rows and the matching `engine.full_frame_10k_*` row) and therefore names their entries.
 
 Every scenario prints one machine-readable line, and the full-frame and physics sync scenarios one more
 per reported sub-phase:
@@ -186,6 +196,16 @@ scenario set, the performance round closed the engine-side allocation breaches o
 4 item 15(j) and the integration cut the job system's dispatch cost; its section 3 "Performance round" entry
 is the record).
 
+- **Exit code of a scenario failure.** 08_testing.md 3.6 says "exit code 1 iff `--enforce` and any scenario
+  failed"; that sentence predates `bench_context::fail` and the never-measured check and refers to threshold
+  verdicts (a breached limit, an unthresholded row). A scenario that returned without `measure()` or `skip()`,
+  or called `fail()`, exits 1 with or without `--enforce` (08 D12: silent passes are worse than failures);
+  before this, a Debug tree, which only reports thresholds, let such a `benchmark.*` CTest entry pass.
+- **Strict `thresholds.json`.** 08 2.4 marks `p50Milliseconds` as required; the loader does not require
+  `p50_ms` (a class with only `p95_ms`/`p99_ms`, or an entry with only `allocs`, is accepted). It rejects
+  unknown members of an entry and of a class object, and a class that sets no limit is `UNTHRESHOLDED` rather
+  than a threshold that passes every figure; a misspelled key or class used to read as "not checked" and pass.
+  An `allocs` gate alone still counts as a limit for both classes.
 - **Scenario set.** All 17 rows of 08_testing.md 7.1 have a scenario and a `thresholds.json` entry with the
   design's figures. `core.job_parallel_for_1m`, `renderer.extract_10k` and `scripting.native_call_100k` were
   missing until the fix-4 round (the first integration run's "8 of 17" counted the three unlisted scenarios below
@@ -289,6 +309,8 @@ measured iteration, exact allocation maximum), `skip`, `fail`, phases, the lazil
 workers and inline with `--threads 0`), `resolve_job_thread_count` (AUTO, 0, a request), the registry and
 the `CONJURE_BENCHMARK` registration; `tests/test_bench_runner.cpp` covers every command-line option and
 its failure (`--threads 0|auto|N` included), the glob filter, `thresholds.json` (both classes, the shared
-allocation gate, every malformed shape), `summarise` for each metric, `run` / `run_all` with the exit codes
-0 / 1 / 2 / 77, the FAILED verdicts of a scenario that neither measured nor skipped (a null function too)
-and of one that called `fail`, the escaping of `reason` in the report line and the JSON report round trip.
+allocation gate, every malformed shape, unknown members of an entry or a class), `summarise` for each metric,
+`run` / `run_all` with the exit codes 0 / 1 / 2 / 77, the FAILED verdicts of a scenario that neither measured
+nor skipped (a null function too) and of one that called `fail`, which fail the run with enforcement off as
+well, the `UNTHRESHOLDED` row of a class without any limit, the warning for thresholds entries that match no
+scenario, the escaping of `reason` in the report line and the JSON report round trip.

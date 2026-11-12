@@ -30,10 +30,11 @@
 //       [reason="<text>"]
 // The reason (SKIPPED and FAILED rows) is double-quoted with '"' and '\' escaped by a backslash.
 //
-// Exit codes: 0 every selected scenario passed (or thresholds are not enforced), 1 a scenario failed
-// (a breached threshold, bench_context::fail, or a return without measure() or skip()) or is
-// unthresholded under --enforce, 2 bad command line or no scenario matched, 77 every selected scenario
-// skipped (CTest's SKIP_RETURN_CODE).
+// Exit codes: 0 every selected scenario passed (or only threshold verdicts failed and thresholds are not
+// enforced); 1 a scenario failed (bench_context::fail, or a return without measure() or skip()) whether
+// or not thresholds are enforced, or under --enforce a threshold is breached or a scenario is
+// unthresholded; 2 bad command line or no scenario matched; 77 every selected scenario skipped (CTest's
+// SKIP_RETURN_CODE).
 
 namespace conjure::bench {
 
@@ -48,7 +49,8 @@ namespace conjure::bench {
     inline constexpr int BENCH_EXIT_USAGE = 2;
 
     /// <summary>
-    /// Exit code of a failed or unthresholded scenario under --enforce.
+    /// Exit code of a scenario failure (always) or of a breached threshold or an unthresholded scenario
+    /// under --enforce.
     /// </summary>
     inline constexpr int BENCH_EXIT_FAILED = 1;
 
@@ -109,12 +111,16 @@ namespace conjure::bench {
             /// <summary>
             /// Reads a thresholds.json file ({"version": 1, "scenarios": {"<name>": {"desktop": {"p50_ms",
             /// "p95_ms", "p99_ms"}, "ci": {...}, "allocs": n}}}). IO_FAILURE, PARSE_FAILURE, or
-            /// INVALID_ARGUMENT naming the malformed member. Replaces the thresholds held so far.
+            /// INVALID_ARGUMENT naming the malformed member; an entry or class member outside that set (a
+            /// misspelled "p50ms" or "dekstop") is malformed too. Replaces the thresholds held so far.
             /// </summary>
             [[nodiscard]] core::result<void> load_thresholds(const std::filesystem::path &path);
 
             /// <summary>
-            /// load_thresholds from text (tests and embedded defaults).
+            /// load_thresholds from text (tests and embedded defaults), with the same validation: unknown
+            /// members of an entry or of a class object are INVALID_ARGUMENT. A class whose times are all 0
+            /// or absent, in an entry without an "allocs" gate, sets no limit, so run() reports the scenario
+            /// UNTHRESHOLDED for that class (an "allocs" gate alone is a limit for both classes).
             /// </summary>
             [[nodiscard]] core::result<void> load_thresholds_text(std::string_view text);
 
@@ -133,18 +139,25 @@ namespace conjure::bench {
             /// <summary>
             /// Runs one scenario in a fresh bench_context, summarises it against the loaded thresholds,
             /// prints its report lines and keeps the result. A scenario that skipped is SKIPPED; one that
-            /// returned without measuring, or called fail(), is FAILED with the reason, whatever its figures.
+            /// returned without measuring, or called fail(), is FAILED with the reason and scenarioFailed
+            /// set, whatever its figures. An entry that sets no limit for the selected machine class counts
+            /// as no entry: the row is UNTHRESHOLDED.
             /// </summary>
             bench_result run(const bench_descriptor &descriptor);
 
             /// <summary>
             /// Runs every descriptor whose name matches the filter and returns the exit code described
-            /// in the header comment.
+            /// in the header comment. Afterwards prints "benchmark: thresholds entry '&lt;name&gt;' matches
+            /// no registered scenario" for every loaded entry that names none of 'descriptors' (all of
+            /// them, not only the selected ones), sorted by name; the warning leaves the exit code alone.
             /// </summary>
             [[nodiscard]] int run_all(std::span<const bench_descriptor> descriptors);
 
             /// <summary>
-            /// The exit code the results collected so far yield (what run_all returns).
+            /// The exit code the results collected so far yield (what run_all returns): 2 without results,
+            /// 77 when every one skipped, 1 when a scenario failed (returned without measure() or skip(),
+            /// or called fail()) in every configuration, --no-enforce included, 1 under --enforce when a
+            /// threshold is breached or a scenario is unthresholded, 0 otherwise.
             /// </summary>
             [[nodiscard]] int exit_code() const noexcept;
 
@@ -202,5 +215,6 @@ namespace conjure::bench {
 
         private:
             void print(const bench_result &result) const;
+            void warn_unmatched_thresholds(std::span<const bench_descriptor> descriptors) const;
     };
 }

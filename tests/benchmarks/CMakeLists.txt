@@ -6,8 +6,9 @@
 #
 # Thresholds (thresholds.json next to this file) are enforced in Development and Distribution (exit 1 on a
 # breach or a missing entry) and only reported in Debug (CONJURE_BENCH_ENFORCE_DEFAULT); --enforce /
-# --no-enforce override either default. A scenario whose machine precondition is unmet (no .NET runtime)
-# exits 77, which CTest reports as Not Run.
+# --no-enforce override either default. A scenario that never measured or called fail() exits 1 in every
+# configuration. A scenario whose machine precondition is unmet (no .NET runtime) exits 77, which CTest
+# reports as Not Run.
 
 if(NOT TARGET conjure::engine)
     message(STATUS "benchmarks: conjure::engine is not available, benchmarks skipped")

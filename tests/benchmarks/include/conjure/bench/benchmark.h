@@ -46,7 +46,9 @@ namespace conjure::bench {
 
     /// <summary>
     /// The pass limits of one scenario for one machine class. A time of 0 is not checked; the allocation
-    /// limit is exact and the same in both classes.
+    /// limit is exact and the same in both classes. bench_runner::run treats a threshold that sets no limit
+    /// at all (every time 0, allocations unlimited) as no threshold, so the scenario is UNTHRESHOLDED;
+    /// summarise() judges whatever threshold it is given.
     /// </summary>
     struct bench_threshold {
         f64 p50Milliseconds = 0.0;
@@ -109,7 +111,7 @@ namespace conjure::bench {
     enum class bench_status : u8 {
         PASSED,
         FAILED,             // a thresholded metric is above its limit, the scenario failed, or it never measured
-        UNTHRESHOLDED,      // no entry for the scenario in the thresholds file
+        UNTHRESHOLDED,      // no thresholds entry, or one that sets no limit for the selected machine class
         SKIPPED             // a machine precondition was not met
     };
 
@@ -132,6 +134,7 @@ namespace conjure::bench {
         bool hasThreshold = false;
         bench_status status = bench_status::UNTHRESHOLDED;
         std::string reason = {};                    // why the scenario skipped or failed; empty otherwise
+        bool scenarioFailed = false;                // never measured or called fail(): exit 1 even without --enforce
         std::vector<bench_phase_result> phases = {};
     };
 
@@ -223,7 +226,8 @@ namespace conjure::bench {
             /// <summary>
             /// Marks the scenario as failed for a reason the thresholds cannot see (a measured frame returned
             /// an error, the fixture grew during the measured loop). The runner reports FAILED with the
-            /// reason whatever the figures say; the samples are still reported. The first reason wins.
+            /// reason whatever the figures say and fails the run with or without --enforce; the samples are
+            /// still reported. The first reason wins.
             /// </summary>
             void fail(std::string_view reason);
 
@@ -298,7 +302,8 @@ namespace conjure::bench {
 
             /// <summary>
             /// True once measure() ran to completion. A scenario that returns neither measured nor skipped
-            /// is reported FAILED by the runner (08_testing.md D12: silent passes are worse than failures).
+            /// is reported FAILED by the runner and fails the run whether or not thresholds are enforced
+            /// (08_testing.md D12: silent passes are worse than failures).
             /// </summary>
             [[nodiscard]] bool is_measured() const noexcept {
                 return mMeasured;

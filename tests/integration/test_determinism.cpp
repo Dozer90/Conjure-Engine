@@ -26,6 +26,7 @@
     #include "conjure/physics/components.h"
 #endif
 
+#include <atomic>
 #include <span>
 #include <vector>
 
@@ -34,7 +35,10 @@
 // same options, (b) across 0, 2 and 8 job workers with physics off and (c) between two runs with physics on at
 // one worker count. The spawner is EXCLUSIVE and creates entities through its command buffer; the integrator
 // is PARALLEL over chunks and destroys through the grain buffers, which are flushed in grain order, so entity
-// id values never depend on how the work was split (01_ecs.md 3.5).
+// id values never depend on how the work was split (01_ecs.md 3.5). The population is sized so the work really
+// is split: a mover row is 40 bytes (409 per 16 KiB chunk) and the scheduler's minEntitiesPerJob of 1,024
+// groups chunks two per grain, so the steady 24 * 90 = 2,160 movers (6 chunks) run as at least 3 grains,
+// which the 2 and 8 worker runs hand to the job system. Every run checks that more than one grain ran.
 
 using namespace conjure;
 using namespace conjure::testing;
@@ -58,10 +62,15 @@ namespace {
     using integration_determinism::mover;
 
     constexpr u32 FRAME_COUNT = 300;
-    constexpr u32 SPAWN_PER_FRAME = 7;
+    constexpr u32 SPAWN_PER_FRAME = 24;
     constexpr u64 LIFETIME_FRAMES = 90;
     constexpr core::string_id SPAWN_SYSTEM("integration.determinism.spawn");
     constexpr core::string_id INTEGRATE_SYSTEM("integration.determinism.integrate");
+
+    // The most grains one integrator dispatch used during the current run_sequence. Only the integrator
+    // writes it, once per frame after its grains joined; atomic because with workers the system itself may
+    // run on a job thread while run_sequence reads the value on the test thread.
+    std::atomic<u32> sMaxIntegratorGrains = 0;
 
     /// <summary>
     /// EXCLUSIVE (UPDATE): spawns SPAWN_PER_FRAME movers per frame through the system's command buffer with
@@ -81,7 +90,7 @@ namespace {
 
     /// <summary>
     /// PARALLEL (UPDATE, after the spawner): integrates every mover over the chunks in grains and destroys the
-    /// ones past their lifetime through the grain command buffer.
+    /// ones past their lifetime through the grain command buffer, then records the grain count of the dispatch.
     /// </summary>
     void integrate_movers(ecs::system_context &context) {
         const f32 deltaTime = context.delta_time();
@@ -99,6 +108,11 @@ namespace {
             }
         };
         movers.parallel_for_each_chunk(context, integrate);
+
+        const u32 grains = context.last_grain_count();
+        if (grains > sMaxIntegratorGrains.load()) {
+            sMaxIntegratorGrains.store(grains);
+        }
     }
 
     void register_determinism_systems(ecs::scheduler &scheduler, engine::engine_context &context) {
@@ -151,12 +165,16 @@ namespace {
         }
 #endif
 
+        sMaxIntegratorGrains.store(0);
         for (u32 frame = 0; frame < FRAME_COUNT; ++frame) {
             engine.step_frames(1);
             hashes.push_back(engine.world_hash());
         }
         // The spawner and integrator did run: the population grew and then held at the lifetime window.
         CHECK(engine.world().entity_count() > SPAWN_PER_FRAME * (LIFETIME_FRAMES - 2));
+        // The integrator split its chunks into several grains: the grain count follows the chunk count, not
+        // the worker count, so the inline run splits too and the worker runs really fan out.
+        CHECK(sMaxIntegratorGrains.load() > 1);
         return hashes;
     }
 

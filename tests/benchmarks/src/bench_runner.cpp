@@ -28,7 +28,7 @@ namespace {
     constexpr std::string_view USAGE =
       "usage: conjure_benchmarks [options]\n"
       "  --class desktop|ci        machine class whose thresholds apply (default: desktop)\n"
-      "  --enforce | --no-enforce  fail (exit 1) on a breached or missing threshold\n"
+      "  --enforce | --no-enforce  exit 1 on a breached or missing threshold (a failed scenario always exits 1)\n"
       "  --filter <glob>           run the scenarios whose name matches ('*' and '?'; default: *)\n"
       "  --out <file>              write every result as JSON\n"
       "  --threads N|auto          job system workers: 0 runs every job inline, auto is hardware threads - 1\n"
@@ -85,6 +85,16 @@ namespace {
         return member->as_f64();
     }
 
+    /// <summary>
+    /// True when a threshold limits anything: a time above 0 or an allocation gate. One that limits
+    /// nothing would pass every figure, so the runner treats it as no threshold (UNTHRESHOLDED).
+    /// </summary>
+    [[nodiscard]] bool limits_anything(const bench_threshold &threshold) noexcept {
+        const bool limitsTime =
+          threshold.p50Milliseconds > 0.0 || threshold.p95Milliseconds > 0.0 || threshold.p99Milliseconds > 0.0;
+        return limitsTime || threshold.maxAllocationsPerIteration != UNLIMITED_ALLOCATIONS;
+    }
+
     [[nodiscard]] core::result<bench_threshold> read_class_threshold(
       const core::json::value &entry,
       std::string_view className,
@@ -103,6 +113,19 @@ namespace {
               className
             );
         }
+
+        // A misspelled limit ("p50ms") would otherwise read as "not checked" and pass silently.
+        for (const core::json::member member : object->members()) {
+            if (member.key != "p50_ms" && member.key != "p95_ms" && member.key != "p99_ms") {
+                return core::make_error(
+                  core::error_code::INVALID_ARGUMENT,
+                  "thresholds: scenario '{}' class '{}' has unknown member '{}'",
+                  scenario,
+                  className,
+                  member.key
+                );
+            }
+        }
         CONJURE_TRY_ASSIGN(threshold.p50Milliseconds, read_milliseconds(*object, "p50_ms", scenario));
         CONJURE_TRY_ASSIGN(threshold.p95Milliseconds, read_milliseconds(*object, "p95_ms", scenario));
         CONJURE_TRY_ASSIGN(threshold.p99Milliseconds, read_milliseconds(*object, "p99_ms", scenario));
@@ -119,6 +142,18 @@ namespace {
               "thresholds: scenario '{}' must be an object",
               scenario
             );
+        }
+
+        // A misspelled class ("dekstop") would otherwise leave that class without a limit.
+        for (const core::json::member member : entry.members()) {
+            if (member.key != "desktop" && member.key != "ci" && member.key != "allocs") {
+                return core::make_error(
+                  core::error_code::INVALID_ARGUMENT,
+                  "thresholds: scenario '{}' has unknown member '{}'",
+                  scenario,
+                  member.key
+                );
+            }
         }
         scenario_thresholds thresholds = {};
         CONJURE_TRY_ASSIGN(thresholds.desktop, read_class_threshold(entry, "desktop", scenario));
@@ -399,8 +434,14 @@ bench_result bench_runner::run(const bench_descriptor &descriptor) {
         descriptor.function(context);
     }
 
+    // An entry that limits nothing for this class (no time above 0, whether the class object is absent or
+    // all zero, and no allocation gate) would pass any figure; it counts as no entry, so --enforce fails the
+    // row.
     const scenario_thresholds *thresholds = thresholds_of(descriptor.name);
-    const bench_threshold *threshold = thresholds == nullptr ? nullptr : &thresholds->of(mOptions.machineClass);
+    const bench_threshold *threshold = nullptr;
+    if (thresholds != nullptr && limits_anything(thresholds->of(mOptions.machineClass))) {
+        threshold = &thresholds->of(mOptions.machineClass);
+    }
     bench_result result = {};
     if (context.is_skipped()) {
         result.name = std::string(descriptor.name);
@@ -420,12 +461,15 @@ bench_result bench_runner::run(const bench_descriptor &descriptor) {
         result.phases.assign(context.phases().begin(), context.phases().end());
         // A scenario that returned without measuring would otherwise pass every threshold over zero
         // samples; a scenario that failed for a reason the figures cannot show must not pass either.
+        // Neither is a threshold verdict, so both fail the run whether or not thresholds are enforced.
         if (!context.is_measured()) {
             result.status = bench_status::FAILED;
             result.reason = "the scenario returned without measure() or skip()";
+            result.scenarioFailed = true;
         } else if (context.is_failed()) {
             result.status = bench_status::FAILED;
             result.reason = std::string(context.failure_reason());
+            result.scenarioFailed = true;
         }
     }
     result.iterations = static_cast<u32>(context.samples_milliseconds().size());
@@ -445,6 +489,7 @@ int bench_runner::run_all(std::span<const bench_descriptor> descriptors) {
         ++selected;
         CONJURE_UNUSED(run(descriptor));
     }
+    warn_unmatched_thresholds(descriptors);
     if (selected == 0) {
         std::fprintf(mOutput, "benchmark: no scenario matches '%s'\n", mOptions.nameFilter.c_str());
         std::fflush(mOutput);
@@ -459,6 +504,7 @@ int bench_runner::exit_code() const noexcept {
     }
     bool allSkipped = true;
     bool anyFailed = false;
+    bool anyScenarioFailed = false;
     for (const bench_result &result : mResults) {
         if (result.status != bench_status::SKIPPED) {
             allSkipped = false;
@@ -466,9 +512,18 @@ int bench_runner::exit_code() const noexcept {
         if (result.status == bench_status::FAILED || result.status == bench_status::UNTHRESHOLDED) {
             anyFailed = true;
         }
+        if (result.scenarioFailed) {
+            anyScenarioFailed = true;
+        }
     }
     if (allSkipped) {
         return BENCH_EXIT_SKIPPED;
+    }
+
+    // Enforcement decides only threshold verdicts; a scenario that failed fails every configuration
+    // (08_testing.md D12: silent passes are worse than failures).
+    if (anyScenarioFailed) {
+        return BENCH_EXIT_FAILED;
     }
     return mOptions.enforceThresholds && anyFailed ? BENCH_EXIT_FAILED : 0;
 }
@@ -635,6 +690,35 @@ void bench_runner::print(const bench_result &result) const {
     for (const bench_phase_result &phase : result.phases) {
         const std::string phaseLine = format_phase_line(result, phase);
         std::fprintf(mOutput, "%s\n", phaseLine.c_str());
+    }
+    std::fflush(mOutput);
+}
+
+void bench_runner::warn_unmatched_thresholds(std::span<const bench_descriptor> descriptors) const {
+    // A renamed scenario or a misspelled entry name leaves its limits applying to nothing; say so instead
+    // of letting the scenario run UNTHRESHOLDED unnoticed in a reported-only configuration.
+    std::vector<std::string_view> unmatched = {};
+    for (const auto &entry : mThresholds) {
+        const std::string_view name = entry.first;
+        const auto named = [name](const bench_descriptor &descriptor) {
+            return descriptor.name == name;
+        };
+        if (std::none_of(descriptors.begin(), descriptors.end(), named)) {
+            unmatched.push_back(name);
+        }
+    }
+    if (unmatched.empty()) {
+        return;
+    }
+
+    std::sort(unmatched.begin(), unmatched.end());
+    for (const std::string_view name : unmatched) {
+        std::fprintf(
+          mOutput,
+          "benchmark: thresholds entry '%.*s' matches no registered scenario\n",
+          static_cast<int>(name.size()),
+          name.data()
+        );
     }
     std::fflush(mOutput);
 }

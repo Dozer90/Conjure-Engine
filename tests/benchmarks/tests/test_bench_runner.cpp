@@ -253,7 +253,7 @@ TEST_SUITE("benchmarks/bench_runner") {
         const scenario_thresholds *loose = runner.thresholds_of("scene.loose");
         REQUIRE(loose != nullptr);
         CHECK(loose->desktop.maxAllocationsPerIteration == UNLIMITED_ALLOCATIONS);
-        CHECK(loose->ci.p50Milliseconds == 0.0);     // no ci object: nothing checked
+        CHECK(loose->ci.p50Milliseconds == 0.0);     // no ci object: the CI class is unthresholded
         CHECK(runner.thresholds_of("missing") == nullptr);
     }
 
@@ -442,8 +442,155 @@ TEST_SUITE("benchmarks/bench_runner") {
         relaxed.enforceThresholds = false;
         quiet_runner lenient(relaxed);
         CONJURE_REQUIRE_OK(lenient.runner.load_thresholds_text(THRESHOLDS_TEXT));
-        CHECK(lenient.runner.run(bench_descriptor{"ecs.fast", &allocating_scenario}).status == bench_status::FAILED);
+        const bench_result breached = lenient.runner.run(bench_descriptor{"ecs.fast", &allocating_scenario});
+        CHECK(breached.status == bench_status::FAILED);
+        CHECK_FALSE(breached.scenarioFailed);       // a threshold verdict, which only enforcement turns into exit 1
         CHECK(lenient.runner.exit_code() == 0);
+    }
+
+    TEST_CASE("bench_runner - a scenario failure fails the run with enforcement off") {
+        bench_options relaxed = quick_options();
+        relaxed.enforceThresholds = false;
+
+        // The forgotten-skip shape.
+        quiet_runner forgotten(relaxed);
+        CONJURE_REQUIRE_OK(forgotten.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        const bench_result unmeasured = forgotten.runner.run(bench_descriptor{"ecs.fast", &forgetful_scenario});
+        CHECK(unmeasured.status == bench_status::FAILED);
+        CHECK(unmeasured.scenarioFailed);
+        CHECK(forgotten.runner.exit_code() == BENCH_EXIT_FAILED);
+
+        // A measured scenario that called fail() with figures inside every limit.
+        quiet_runner failing(relaxed);
+        CONJURE_REQUIRE_OK(failing.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        const bench_result failed = failing.runner.run(bench_descriptor{"ecs.fast", &failing_scenario});
+        CHECK(failed.status == bench_status::FAILED);
+        CHECK(failed.scenarioFailed);
+        CHECK(failing.runner.exit_code() == BENCH_EXIT_FAILED);
+
+        // run_all: a passing and a skipped scenario around the failure do not hide it, and neither does an
+        // unthresholded scenario, which without enforcement alone would exit 0.
+        const std::array<bench_descriptor, 4> descriptors = {
+          bench_descriptor{"ecs.fast", &fast_scenario},
+          bench_descriptor{"other.unlisted", &fast_scenario},
+          bench_descriptor{"scene.loose", &failing_scenario},
+          bench_descriptor{"scripting.skipped", &skipping_scenario},
+        };
+        quiet_runner mixed(relaxed);
+        CONJURE_REQUIRE_OK(mixed.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        CHECK(mixed.runner.run_all(descriptors) == BENCH_EXIT_FAILED);
+
+        bench_options unthresholdedOnly = relaxed;
+        unthresholdedOnly.nameFilter = "other.*";
+        quiet_runner unthresholded(unthresholdedOnly);
+        CONJURE_REQUIRE_OK(unthresholded.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        CHECK(unthresholded.runner.run_all(descriptors) == 0);
+    }
+
+    TEST_CASE("bench_runner - a selected class without any limit is UNTHRESHOLDED and fails under enforcement") {
+        // scene.loose has no ci object.
+        bench_options ciOptions = quick_options();
+        ciOptions.machineClass = machine_class::CI;
+        quiet_runner quiet(ciOptions);
+        CONJURE_REQUIRE_OK(quiet.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        const bench_result loose = quiet.runner.run(bench_descriptor{"scene.loose", &fast_scenario});
+        CHECK(loose.status == bench_status::UNTHRESHOLDED);
+        CHECK_FALSE(loose.hasThreshold);
+        CHECK_FALSE(loose.scenarioFailed);
+        CHECK(quiet.runner.exit_code() == BENCH_EXIT_FAILED);
+        CHECK(quiet.output().find("benchmark name=scene.loose phase=total status=UNTHRESHOLDED") != std::string::npos);
+
+        // Every time 0 without an allocation gate limits nothing either; an allocation gate alone does.
+        constexpr std::string_view LIMITLESS_TEXT =
+          "{\"version\": 1, \"scenarios\": {"
+          "  \"a.zero\": {\"desktop\": {\"p50_ms\": 0, \"p95_ms\": 0, \"p99_ms\": 0}, \"ci\": {}},"
+          "  \"a.gated\": {\"allocs\": 0}"
+          "}}";
+        quiet_runner desktop(quick_options());
+        CONJURE_REQUIRE_OK(desktop.runner.load_thresholds_text(LIMITLESS_TEXT));
+        const bench_result zero = desktop.runner.run(bench_descriptor{"a.zero", &fast_scenario});
+        CHECK(zero.status == bench_status::UNTHRESHOLDED);
+        CHECK_FALSE(zero.hasThreshold);
+        const bench_result gated = desktop.runner.run(bench_descriptor{"a.gated", &fast_scenario});
+        CHECK(gated.status == bench_status::PASSED);
+        REQUIRE(gated.hasThreshold);
+        CHECK(gated.threshold.maxAllocationsPerIteration == 0);
+        CHECK(desktop.runner.exit_code() == BENCH_EXIT_FAILED);
+
+        // Without enforcement an unthresholded row is reported, not failed.
+        bench_options relaxed = ciOptions;
+        relaxed.enforceThresholds = false;
+        quiet_runner lenient(relaxed);
+        CONJURE_REQUIRE_OK(lenient.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        const bench_result reported = lenient.runner.run(bench_descriptor{"scene.loose", &fast_scenario});
+        CHECK(reported.status == bench_status::UNTHRESHOLDED);
+        CHECK(lenient.runner.exit_code() == 0);
+    }
+
+    TEST_CASE("bench_runner - unknown members of a thresholds entry are rejected") {
+        bench_runner runner(quick_options());
+        CONJURE_REQUIRE_OK(runner.load_thresholds_text(THRESHOLDS_TEXT));
+
+        // A misspelled limit inside a class object.
+        const core::result<void> limit =
+          runner.load_thresholds_text("{\"version\": 1, \"scenarios\": {\"a.b\": {\"desktop\": {\"p50ms\": 1.0}}}}");
+        REQUIRE_FALSE(limit.has_value());
+        CHECK(limit.get_error().is(core::error_code::INVALID_ARGUMENT));
+        CHECK(limit.get_error().message().find("'p50ms'") != std::string::npos);
+        CHECK(limit.get_error().message().find("'desktop'") != std::string::npos);
+
+        // A misspelled class name, and a misspelled allocation gate.
+        const core::result<void> machine =
+          runner.load_thresholds_text("{\"version\": 1, \"scenarios\": {\"a.b\": {\"dekstop\": {\"p50_ms\": 1.0}}}}");
+        REQUIRE_FALSE(machine.has_value());
+        CHECK(machine.get_error().is(core::error_code::INVALID_ARGUMENT));
+        CHECK(machine.get_error().message().find("'dekstop'") != std::string::npos);
+        CONJURE_CHECK_ERROR(
+          runner.load_thresholds_text(
+            "{\"version\": 1, \"scenarios\": {\"a.b\": {\"desktop\": {\"p50_ms\": 1.0}, \"alloc\": 0}}}"
+          ),
+          core::error_code::INVALID_ARGUMENT
+        );
+
+        // The rejected files left the previous set in place.
+        CHECK(runner.threshold_count() == 2);
+        CHECK(runner.thresholds_of("a.b") == nullptr);
+    }
+
+    TEST_CASE("bench_runner - run_all names thresholds entries that match no scenario") {
+        constexpr std::string_view STALE_TEXT =
+          "{\"version\": 1, \"scenarios\": {"
+          "  \"zeta.renamed\": {\"desktop\": {\"p50_ms\": 1.0}},"
+          "  \"ecs.fast\": {\"desktop\": {\"p50_ms\": 1.0}},"
+          "  \"audio.removed\": {\"desktop\": {\"p50_ms\": 1.0}},"
+          "  \"scene.loose\": {\"desktop\": {\"p50_ms\": 100.0}}"
+          "}}";
+        const std::array<bench_descriptor, 2> descriptors = {
+          bench_descriptor{"ecs.fast", &fast_scenario},
+          bench_descriptor{"scene.loose", &fast_scenario},
+        };
+
+        // scene.loose is registered but not selected: its entry is not stale.
+        bench_options options = quick_options();
+        options.nameFilter = "ecs.*";
+        quiet_runner quiet(options);
+        CONJURE_REQUIRE_OK(quiet.runner.load_thresholds_text(STALE_TEXT));
+        CHECK(quiet.runner.run_all(descriptors) == 0);
+
+        const std::string output = quiet.output();
+        const usize audio = output.find("benchmark: thresholds entry 'audio.removed' matches no registered scenario\n");
+        const usize zeta = output.find("benchmark: thresholds entry 'zeta.renamed' matches no registered scenario\n");
+        REQUIRE(audio != std::string::npos);
+        REQUIRE(zeta != std::string::npos);
+        CHECK(audio < zeta);
+        CHECK(output.find("entry 'ecs.fast'") == std::string::npos);
+        CHECK(output.find("entry 'scene.loose'") == std::string::npos);
+
+        // Every entry matched: no warning at all.
+        quiet_runner clean(options);
+        CONJURE_REQUIRE_OK(clean.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        CHECK(clean.runner.run_all(descriptors) == 0);
+        CHECK(clean.output().find("matches no registered scenario") == std::string::npos);
     }
 
     TEST_CASE("bench_runner - run_all filters by name and yields the documented exit codes") {
@@ -522,11 +669,26 @@ TEST_SUITE("benchmarks/bench_runner") {
         CHECK(results[1]["phases"].size() == 1);
         CHECK(results[1]["phases"][0]["name"].as_string() == "UPDATE");
         CHECK(results[1]["phases"][0]["p50_ms"].as_f64() == 0.5);
-        CHECK_FALSE(results[1]["threshold"].contains("allocs"));
+        // scene.loose has no ci object: the CI row is unthresholded and carries no threshold object.
+        CHECK(results[1]["status"].as_string() == "UNTHRESHOLDED");
+        CHECK_FALSE(results[1].contains("threshold"));
         CHECK(results[2]["status"].as_string() == "SKIPPED");
         CHECK(results[2]["reason"].as_string() == "precondition unmet");
         CHECK_FALSE(results[0].contains("reason"));
         CHECK(core::json::document::parse(quiet.runner.to_json()).has_value());
+
+        // A threshold without an allocation gate leaves "allocs" out of its object (scene.loose, desktop).
+        quiet_runner desktop(quick_options());
+        CONJURE_REQUIRE_OK(desktop.runner.load_thresholds_text(THRESHOLDS_TEXT));
+        CONJURE_UNUSED(desktop.runner.run(bench_descriptor{"scene.loose", &phased_scenario}));
+        const std::string desktopText = desktop.runner.to_json();
+        const core::result<core::json::document> desktopParsed = core::json::document::parse(desktopText);
+        CONJURE_REQUIRE_OK(desktopParsed);
+        const core::json::value loose = desktopParsed.value().root()["results"][0];
+        CHECK(loose["status"].as_string() == "PASSED");
+        REQUIRE(loose.contains("threshold"));
+        CHECK(loose["threshold"]["p50_ms"].as_f64() == 100.0);
+        CHECK_FALSE(loose["threshold"].contains("allocs"));
 
         // An unwritable path is an IO failure.
         CONJURE_CHECK_ERROR(quiet.runner.write_json(quiet.directory().path()), core::error_code::IO_FAILURE);
