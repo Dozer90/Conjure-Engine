@@ -45,6 +45,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+
+// The managed SDK directory, defined by CMakeLists.txt here when the tree builds the SDK.
+#ifndef CONJURE_SUPPORT_ENGINE_TEST_MANAGED_DIR
+    #define CONJURE_SUPPORT_ENGINE_TEST_MANAGED_DIR ""
+#endif
 
 using namespace conjure;
 using namespace conjure::testing;
@@ -143,10 +149,12 @@ TEST_SUITE("testing/headless_engine") {
         }
     }
 
-    TEST_CASE("headless_engine - construction time is reported, not asserted") {
-        // The design's 5 ms budget (08_testing.md 11) belongs to the benchmark harness, where timing is
-        // measured under controlled conditions; a unit test on a loaded CI runner only reports it. The first
-        // start in a process also pays the warm-up (headless_engine.cpp), so the second one is timed.
+    TEST_CASE("headless_engine - construction stays under a regression ceiling") {
+        // A regression ceiling 50x the 5 ms budget of 08_testing.md 8.2, not the budget itself: 14-26 ms is
+        // typical in Debug today and a loaded CI runner must not flake, so only a gross regression fails here.
+        // The precise budget belongs to a benchmark. The first start in a process also pays the warm-up
+        // (headless_engine.cpp), so the second one is timed.
+        constexpr f64 CONSTRUCTION_CEILING_SECONDS = 0.25;
         {
             const headless_engine warm(quiet_options());
         }
@@ -159,6 +167,11 @@ TEST_SUITE("testing/headless_engine") {
 
         // Reported after the fixture: doctest keeps a message's text for the rest of the case.
         MESSAGE("headless_engine construction took " << seconds * 1000.0 << " ms");
+        CHECK_MESSAGE(
+          seconds <= CONSTRUCTION_CEILING_SECONDS,
+          "headless_engine construction took " << seconds * 1000.0 << " ms, above the "
+            << CONSTRUCTION_CEILING_SECONDS * 1000.0 << " ms regression ceiling (budget 5 ms, 08_testing.md 8.2)"
+        );
     }
 
     TEST_CASE("headless_engine - a construction failure is reported exactly once") {
@@ -378,6 +391,26 @@ TEST_SUITE("testing/headless_engine") {
         engine.step_frames(1);   // frame 4
         CHECK(state.is_key_released(platform::key::W));
         CHECK_FALSE(state.is_key_down(platform::key::W));
+    }
+
+    TEST_CASE("headless_engine - input scheduled at frame_index() after stepping is delivered by the next frame") {
+        headless_engine engine(quiet_options());
+        const platform::input_state &state = engine.context().input->snapshot();
+        engine.step_frames(3);
+
+        // Frames are absolute: frame_index() is the next frame to run, so it is still open.
+        engine.input().key(engine.frame_index(), platform::key::W, platform::button_action::PRESS);
+        engine.step_frames(1);
+
+        CHECK(engine.input().late_event_count() == 0);
+        CHECK(state.is_key_pressed(platform::key::W));
+    }
+
+    TEST_CASE("headless_engine - input scheduled for a frame that already ran fails the case once") {
+        check_single_failure(
+          "support_engine_child - input scheduled for a frame that already ran fails the case",
+          "which already ran"
+        );
     }
 
     /*-----------------------------------------------------------------------*/
@@ -645,13 +678,17 @@ TEST_SUITE("testing/headless_engine") {
         CHECK(engine.fixed_update_count() == 2);
     }
 
-    TEST_CASE("headless_engine - the DOTNET_RUNTIME precondition probe is installed") {
-        // The probe also needs the managed SDK next to the build; without hostfxr it never holds.
-        if (!scripting::is_runtime_available()) {
-            CHECK_FALSE(precondition_holds(precondition::DOTNET_RUNTIME));
-            return;
-        }
-        MESSAGE("DOTNET_RUNTIME holds: " << precondition_holds(precondition::DOTNET_RUNTIME));
+    TEST_CASE("headless_engine - the DOTNET_RUNTIME probe holds exactly when hostfxr and the managed SDK are present") {
+        // Without the probe the library installs, the precondition never holds and every [dotnet] case would
+        // skip quietly; the expectation is computed independently from the SDK directory this tree built.
+        const std::filesystem::path managed(CONJURE_SUPPORT_ENGINE_TEST_MANAGED_DIR);
+        const std::filesystem::path managedAssembly = managed / "Conjure.Managed.dll";
+        std::error_code probe = {};
+        const bool sdkPresent = !managed.empty() && std::filesystem::is_regular_file(managedAssembly, probe);
+        const bool expected = sdkPresent && scripting::is_runtime_available();
+        CAPTURE(sdkPresent);
+
+        CHECK(precondition_holds(precondition::DOTNET_RUNTIME) == expected);
     }
 
     TEST_CASE("headless_engine - [scripting] the real .NET host attaches a runtime and skips the memory check"

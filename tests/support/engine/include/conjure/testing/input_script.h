@@ -25,6 +25,12 @@
 // O(n), fine for a test script), so every reader is allocation-free and honestly noexcept. The script is
 // a plain container: it never touches a window itself (headless_engine::step_frames does), so it can also
 // drive platform::input::inject.
+//
+// Frames are absolute frame indices, never offsets from "now": with headless_engine, frame_index() is the
+// next frame to run, so a case that has already stepped schedules at engine.frame_index() + n. Whoever
+// delivers the events closes each frame it ran (close_frames_before); an event scheduled before the first
+// open frame is still stored but counted as late (late_event_count), because nothing will deliver it.
+// clear() forgets the events but keeps the late count and the first open frame.
 
 namespace conjure::testing {
 
@@ -32,6 +38,8 @@ namespace conjure::testing {
         private:
             std::vector<u64> mFrames = {};                          // sorted, parallel to mEvents
             std::vector<platform::input_event> mEvents = {};        // sorted by frame, insertion order within
+            u64 mFirstOpenFrame = 0;                                // frames below it already ran
+            u64 mLateEventCount = 0;                                // events scheduled below mFirstOpenFrame
 
         public:
             input_script();
@@ -105,9 +113,26 @@ namespace conjure::testing {
 
             /// <summary>
             /// Any input event verbatim at 'frame'. The one call that allocates: it places the event after
-            /// every event already scheduled for that frame.
+            /// every event already scheduled for that frame. A frame before the first open frame is stored
+            /// too but counted as late (late_event_count), since nothing will deliver it.
             /// </summary>
             void push(u64 frame, const platform::input_event &event);
+
+            /*---------------------------------------------------------------*/
+            // Delivery bookkeeping
+
+            /// <summary>
+            /// Marks every frame below 'frame' as already run: events scheduled for one of them from now on
+            /// count as late. The first open frame never moves backwards.
+            /// </summary>
+            void close_frames_before(u64 frame) noexcept;
+
+            /// <summary>
+            /// Events scheduled for a frame that had already run when they were scheduled; clear() keeps it.
+            /// </summary>
+            [[nodiscard]] u64 late_event_count() const noexcept {
+                return mLateEventCount;
+            }
 
             /*---------------------------------------------------------------*/
             // Reading (never allocate; spans stay valid until the next scheduling call)
@@ -148,7 +173,7 @@ namespace conjure::testing {
             [[nodiscard]] std::optional<u64> last_frame() const noexcept;
 
             /// <summary>
-            /// Forgets every event.
+            /// Forgets every event; the late count and the first open frame stay.
             /// </summary>
             void clear() noexcept;
     };

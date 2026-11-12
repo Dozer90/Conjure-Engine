@@ -113,6 +113,7 @@ namespace conjure::testing {
             audio::null_backend *mAudioBackend = nullptr;       // nullptr when audio is off
 #endif
             u64 mFrameIndex = 0;
+            u64 mLateEventsReported = 0;                        // input_script::late_event_count() already failed
             usize mInternedAtBaseline = 0;                      // string_id::interned_count() at the baseline
             u32 mScratchSceneCount = 0;
             bool mCheckMemory = true;
@@ -161,12 +162,14 @@ namespace conjure::testing {
             /// <summary>
             /// Runs frameCount frames of fixedDeltaSeconds each (one fixed update per frame), delivering the
             /// input script's events for each frame first. A frame failure fails the case (REQUIRE). Zero
-            /// frames is a no-op.
+            /// frames runs nothing (late input is still reported). Input frames are absolute; an event
+            /// scheduled for a frame that already ran fails the case at the next step_frames call.
             /// </summary>
             void step_frames(u32 frameCount);
 
             /// <summary>
             /// Runs frameCount frames with an explicit delta (the engine clamps it like any frame delta).
+            /// Input scheduled for a frame that already ran fails the case as in step_frames(u32).
             /// </summary>
             void step_frames(u32 frameCount, f64 deltaSeconds);
 

@@ -122,12 +122,25 @@ void input_script::gamepad_axis(u64 frame, u32 padIndex, platform::gamepad_axis 
 }
 
 void input_script::push(u64 frame, const platform::input_event &event) {
+    if (frame < mFirstOpenFrame) {
+        ++mLateEventCount;
+    }
+
     // After the last event already on this frame: a PRESS scheduled before a RELEASE on the same frame
     // stays a press-then-release.
     const auto position = std::upper_bound(mFrames.begin(), mFrames.end(), frame);
     const usize index = static_cast<usize>(std::distance(mFrames.begin(), position));
     mFrames.insert(position, frame);
     mEvents.insert(mEvents.begin() + static_cast<std::ptrdiff_t>(index), event);
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Delivery bookkeeping
+
+void input_script::close_frames_before(u64 frame) noexcept {
+    mFirstOpenFrame = std::max(mFirstOpenFrame, frame);
 }
 
 

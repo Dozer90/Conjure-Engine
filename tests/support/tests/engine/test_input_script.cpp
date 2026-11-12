@@ -195,6 +195,30 @@ TEST_SUITE("testing/input_script") {
         CHECK(script.frames().empty());
     }
 
+    TEST_CASE("input_script - events scheduled before the first open frame are counted as late") {
+        input_script script = {};
+        script.key(0, key::W, button_action::PRESS);
+        CHECK(script.late_event_count() == 0);   // nothing has run yet: every frame is open
+
+        script.close_frames_before(5);
+        script.key(3, key::A, button_action::PRESS);
+        script.key(5, key::A, button_action::RELEASE);
+
+        CHECK(script.late_event_count() == 1);
+        CHECK(script.event_count() == 3);
+        CHECK(script.events_for(3).size() == 1);   // stored all the same
+        CHECK(script.events_for(5).size() == 1);
+
+        // The first open frame never moves backwards, and clear() keeps the count and the open frame.
+        script.close_frames_before(2);
+        script.key(4, key::S, button_action::PRESS);
+        CHECK(script.late_event_count() == 2);
+        script.clear();
+        CHECK(script.late_event_count() == 2);
+        script.key(4, key::S, button_action::RELEASE);
+        CHECK(script.late_event_count() == 3);
+    }
+
     TEST_CASE("input_script - push accepts any input alternative verbatim") {
         input_script script = {};
         cursor_enter_event entered = {};

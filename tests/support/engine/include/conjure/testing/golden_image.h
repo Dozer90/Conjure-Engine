@@ -11,9 +11,11 @@
 // Golden-image comparison (docs/design/08_testing.md 2.3, 3.5, 4.6, D11). compare() loads the reference
 // PNG of a scene, measures the actual image against it with per-channel tolerance, mismatching-pixel
 // fraction and mean absolute error, and writes actual.png / diff.png into the test output root on a
-// failure. --conjure-update-golden (environment().updateGoldens) turns a missing reference into a write
-// of the actual image. render_offscreen() is meant to produce the actual image through a headless_engine
-// and is refused unless the build enabled CONJURE_TEST_GOLDEN_IMAGES; the pure comparison runs everywhere.
+// failure. --conjure-update-golden (environment().updateGoldens) writes the actual image as the reference
+// whenever the reference is missing, unreadable or fails the comparison (a size mismatch included), and
+// the result then passes with a WARN; a passing comparison never rewrites anything. render_offscreen() is
+// meant to produce the actual image through a headless_engine and is refused unless the build enabled
+// CONJURE_TEST_GOLDEN_IMAGES; the pure comparison runs everywhere.
 //
 // Rendering is not functional yet: a headless engine::application has no swapchain, and the engine's
 // renderer_subsystem drops every camera view in that case instead of pointing it at an off-screen target,
@@ -43,6 +45,7 @@ namespace conjure::testing {
         bool passed = false;
         bool referenceMissing = false;                  // no reference (written when updateGoldens)
         bool referenceWritten = false;                  // update mode stored the actual image as reference
+                                                        // (it was missing, unreadable or failed the comparison)
         bool dimensionMismatch = false;
         u32 mismatchPixelCount = 0;
         f32 mismatchFraction = 0.0f;
@@ -78,10 +81,12 @@ namespace conjure::testing {
             );
 
             /// <summary>
-            /// Compares 'actual' with reference/<sceneName>/<backend>.png (3.5). A missing reference fails
-            /// unless environment().updateGoldens, in which case the actual image becomes the reference and
-            /// the result passes with a WARN. A dimension mismatch fails without a diff. On failure
-            /// actual.png (and diff.png when sizes agree) land in outputRoot/<scene>/<backend>/.
+            /// Compares 'actual' with reference/<sceneName>/<backend>.png (3.5). A missing or unreadable
+            /// reference fails, and a dimension mismatch fails without a diff. On failure actual.png (and
+            /// diff.png when sizes agree) land in outputRoot/<scene>/<backend>/. With
+            /// environment().updateGoldens, a reference that is missing, unreadable or fails the comparison
+            /// (a size mismatch included) is written from the actual image instead, nothing lands in the
+            /// output directory and the result passes with a WARN; a passing comparison never rewrites.
             /// </summary>
             [[nodiscard]] static golden_result compare(
               std::string_view sceneName,
@@ -100,8 +105,8 @@ namespace conjure::testing {
             );
 
             /// <summary>
-            /// Per-channel |reference - actual| x 8, clamped to 255, alpha opaque. Empty when the
-            /// dimensions differ.
+            /// Per channel max(|reference - actual|, |alpha delta|) x 8, clamped to 255, alpha opaque: an
+            /// alpha-only difference shows as grey. Empty when the dimensions differ.
             /// </summary>
             [[nodiscard]] static core::image make_diff(const core::image &reference, const core::image &actual);
 

@@ -4,6 +4,7 @@
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 #include "conjure/testing/test_environment.h"
+#include "support_engine_child_runner.h"
 
 #include "conjure/core/error.h"
 #include "conjure/core/image.h"
@@ -11,9 +12,10 @@
 #include "conjure/core/result.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
-#include <vector>
 
 using namespace conjure;
 using namespace conjure::core;
@@ -42,6 +44,18 @@ namespace {
         options.referenceRoot = scratch.file("reference");
         options.outputRoot = scratch.file("output");
         return options;
+    }
+
+    /// <summary>
+    /// Runs this executable again with --conjure-update-golden and a -tc filter (a comma-separated list of
+    /// case names): updateGoldens is a start-up setting, so update mode is only observable from a second
+    /// process (support_engine_child_runner.h clears the CONJURE_TEST_* variables of the shell).
+    /// </summary>
+    [[nodiscard]] process_result run_in_update_mode(std::string_view caseFilter) {
+        return run_support_engine_program(
+          CONJURE_SUPPORT_ENGINE_TESTS_PATH,
+          {std::string("-tc=") + std::string(caseFilter), "--conjure-isolated", "--conjure-update-golden"}
+        );
     }
 }
 
@@ -149,14 +163,39 @@ TEST_SUITE("testing/golden_image") {
     TEST_CASE("golden_image - make_diff amplifies the channel delta eight times and clamps") {
         const image reference = solid(4, 2, rgba8{100, 100, 100, 255});
         image actual = reference;
-        actual.set_pixel(1, 1, rgba8{101, 90, 160, 0});
+        actual.set_pixel(1, 1, rgba8{101, 90, 160, 255});
 
         const image diff = golden_image::make_diff(reference, actual);
 
         REQUIRE(diff.width() == 4);
         REQUIRE(diff.height() == 2);
         CHECK(diff.pixel(0, 0) == rgba8{0, 0, 0, 255});
-        CHECK(diff.pixel(1, 1) == rgba8{8, 80, 255, 255});   // alpha differences are not drawn
+        CHECK(diff.pixel(1, 1) == rgba8{8, 80, 255, 255});
+    }
+
+    TEST_CASE("golden_image - make_diff draws an alpha-only difference as grey") {
+        const image reference = solid(4, 2, rgba8{100, 100, 100, 255});
+        image actual = reference;
+        actual.set_pixel(1, 1, rgba8{100, 100, 100, 250});
+
+        const image diff = golden_image::make_diff(reference, actual);
+
+        REQUIRE(diff.width() == 4);
+        REQUIRE(diff.height() == 2);
+        CHECK(diff.pixel(0, 0) == rgba8{0, 0, 0, 255});
+        CHECK(diff.pixel(1, 1) == rgba8{40, 40, 40, 255});
+
+        // A fully transparent copy fails the comparison on alpha alone, and the diff shows every pixel of it.
+        const image transparent = solid(4, 2, rgba8{100, 100, 100, 0});
+        CHECK_FALSE(golden_image::compare_images(reference, transparent, golden_options{}).passed);
+        const image transparentDiff = golden_image::make_diff(reference, transparent);
+        for (u32 y = 0; y < transparentDiff.height(); ++y) {
+            for (u32 x = 0; x < transparentDiff.width(); ++x) {
+                CAPTURE(x);
+                CAPTURE(y);
+                CHECK(transparentDiff.pixel(x, y) == rgba8{255, 255, 255, 255});
+            }
+        }
     }
 
     /*-----------------------------------------------------------------------*/
@@ -194,22 +233,29 @@ TEST_SUITE("testing/golden_image") {
     }
 
     TEST_CASE("golden_image - update mode writes the missing reference and passes") {
-        // Observed through a second process: updateGoldens is a start-up setting of the executable.
         log_capture logs = {};
-        process_desc desc = {};
-        desc.executable = CONJURE_SUPPORT_ENGINE_TESTS_PATH;
-        desc.arguments = {
-            "-tc=golden_image - a missing reference is reported and the actual image is written",
-            "--conjure-isolated",
-            "--conjure-update-golden",
-        };
-        desc.environment = {{"CONJURE_TEST_UPDATE_GOLDEN", ""}, {"CONJURE_TEST_ISOLATED", ""}};
-        desc.timeoutSeconds = 120.0;
 
-        const result<process_result> finished = process::run(desc);
-        CONJURE_REQUIRE_OK(finished);
-        CHECK_FALSE(finished->timedOut);
-        CHECK_MESSAGE(finished->exitCode == 0, finished->standardOutput);
+        const process_result run =
+          run_in_update_mode("golden_image - a missing reference is reported and the actual image is written");
+
+        CHECK_MESSAGE(run.exitCode == 0, run.standardOutput);
+        CHECK(selected_case_count(run.standardOutput) == std::optional<u32>(1));
+    }
+
+    TEST_CASE("golden_image - update mode rewrites an out-of-date, resized or unreadable reference and passes") {
+        // The update-mode halves of the three failing cases below; the passing comparison rides along to show
+        // that update mode never rewrites a reference that passes. No case name holds a comma (-tc splits on it).
+        log_capture logs = {};
+
+        const process_result run = run_in_update_mode(
+          "golden_image - an existing reference is compared and a failure writes actual and diff,"
+          "golden_image - a reference of another size fails without a diff image,"
+          "golden_image - an unreadable reference is reported as a failure,"
+          "golden_image - a passing comparison writes nothing"
+        );
+
+        CHECK_MESSAGE(run.exitCode == 0, run.standardOutput);
+        CHECK(selected_case_count(run.standardOutput) == std::optional<u32>(4));
     }
 
     TEST_CASE("golden_image - an existing reference is compared and a failure writes actual and diff") {
@@ -224,10 +270,26 @@ TEST_SUITE("testing/golden_image") {
 
         const image actual = solid(WIDTH, HEIGHT, rgba8{90, 40, 40, 255});
         const golden_result verdict = golden_image::compare("shadows", actual, options);
+        const result<image> stored = image::load_file(referencePath);
+        CONJURE_REQUIRE_OK(stored);
 
-        CHECK_FALSE(verdict.passed);
         CHECK_FALSE(verdict.referenceMissing);
         CHECK(verdict.mismatchPixelCount == WIDTH * HEIGHT);
+        if (environment().updateGoldens) {
+            // The update-mode half of this case runs in the child process of the update-mode case above.
+            CHECK(verdict.passed);
+            CHECK(verdict.referenceWritten);
+            CHECK(verdict.actualPath.empty());
+            CHECK(verdict.diffPath.empty());
+            CHECK(verdict.message.find("was out of date") != std::string::npos);
+            CHECK(stored.value() == actual);
+            CHECK_FALSE(std::filesystem::exists(scratch.file("output"), failure));
+            return;
+        }
+
+        CHECK_FALSE(verdict.passed);
+        CHECK_FALSE(verdict.referenceWritten);
+        CHECK(stored.value() == reference);
         CHECK(verdict.actualPath == golden_image::output_directory("shadows", options) / "actual.png");
         CHECK(verdict.diffPath == golden_image::output_directory("shadows", options) / "diff.png");
         CHECK(file_exists(verdict.actualPath));
@@ -252,6 +314,7 @@ TEST_SUITE("testing/golden_image") {
         const golden_result verdict = golden_image::compare("ibl_only", reference, options);
 
         CHECK(verdict.passed);
+        CHECK_FALSE(verdict.referenceWritten);   // in update mode too: a pass is never rewritten
         CHECK(verdict.actualPath.empty());
         CHECK(verdict.diffPath.empty());
         CHECK_FALSE(std::filesystem::exists(scratch.file("output"), failure));
@@ -267,11 +330,25 @@ TEST_SUITE("testing/golden_image") {
         CONJURE_REQUIRE_OK(solid(8, 8, rgba8{}).save_png(referencePath));
 
         const golden_result verdict = golden_image::compare("sprites", solid(WIDTH, HEIGHT, rgba8{}), options);
+        const result<image> stored = image::load_file(referencePath);
+        CONJURE_REQUIRE_OK(stored);
+
+        CHECK(verdict.dimensionMismatch);
+        CHECK(verdict.diffPath.empty());
+        if (environment().updateGoldens) {
+            // Regenerated, never resized (3.5): the new reference has the actual image's size.
+            CHECK(verdict.passed);
+            CHECK(verdict.referenceWritten);
+            CHECK(verdict.actualPath.empty());
+            CHECK(stored->width() == WIDTH);
+            CHECK(stored->height() == HEIGHT);
+            return;
+        }
 
         CHECK_FALSE(verdict.passed);
-        CHECK(verdict.dimensionMismatch);
+        CHECK_FALSE(verdict.referenceWritten);
+        CHECK(stored->width() == 8);
         CHECK(file_exists(verdict.actualPath));
-        CHECK(verdict.diffPath.empty());
     }
 
     TEST_CASE("golden_image - an unreadable reference is reported as a failure") {
@@ -283,11 +360,24 @@ TEST_SUITE("testing/golden_image") {
         REQUIRE_FALSE(failure);
         CONJURE_REQUIRE_OK(scratch.write_text("reference/corrupt/null.png", "this is not a png"));
 
-        const golden_result verdict = golden_image::compare("corrupt", solid(WIDTH, HEIGHT, rgba8{}), options);
+        const image actual = solid(WIDTH, HEIGHT, rgba8{});
+        const golden_result verdict = golden_image::compare("corrupt", actual, options);
 
-        CHECK_FALSE(verdict.passed);
         CHECK_FALSE(verdict.referenceMissing);
         CHECK(verdict.message.find("unreadable") != std::string::npos);
+        if (environment().updateGoldens) {
+            CHECK(verdict.passed);
+            CHECK(verdict.referenceWritten);
+            CHECK(verdict.message.find("was unreadable") != std::string::npos);
+            CHECK(verdict.actualPath.empty());
+            const result<image> rewritten = image::load_file(referencePath);
+            CONJURE_REQUIRE_OK(rewritten);
+            CHECK(rewritten.value() == actual);
+            return;
+        }
+
+        CHECK_FALSE(verdict.passed);
+        CHECK_FALSE(verdict.referenceWritten);
         CHECK(file_exists(verdict.actualPath));
     }
 

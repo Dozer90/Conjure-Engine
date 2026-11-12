@@ -4,9 +4,9 @@
 # file systems. The protocol client is exercised against an in-memory scripted channel.
 #
 # conjure_support_engine_child is a second doctest program the self-tests spawn through core::process
-# (support_engine_child_runner.h) to observe a headless_engine failing its case from a constructor or a
-# destructor: the exit code, the failure text and that each failure is reported exactly once. It is never
-# registered with CTest.
+# (support_engine_child_runner.h) to observe a headless_engine failing its case from a constructor, a
+# destructor or step_frames: the exit code, the failure text and that each failure is reported exactly once.
+# It is never registered with CTest.
 
 if(NOT TARGET conjure::test_support_engine)
     message(STATUS "tests/support/tests/engine: conjure::test_support_engine is not built, self-tests skipped")
@@ -57,10 +57,18 @@ conjure_add_test_module(support_engine
 
 add_dependencies(conjure_support_engine_tests conjure_support_engine_child)
 
-# The golden update-mode case runs this executable again with --conjure-update-golden (the flag is a
+# The golden update-mode cases run this executable again with --conjure-update-golden (the flag is a
 # process-wide setting test_main parses, so it can only be observed from a second process); the fixture
 # failure cases run the child.
 target_compile_definitions(conjure_support_engine_tests PRIVATE
     CONJURE_SUPPORT_ENGINE_TESTS_PATH="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_support_engine_tests>>"
     CONJURE_SUPPORT_ENGINE_CHILD_PATH="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_support_engine_child>>"
 )
+
+# The managed SDK the library's DOTNET_RUNTIME probe looks for (CONJURE_TEST_MANAGED_DIR is private to the
+# library), so the probe case can compute its expectation on its own instead of trusting the probe.
+if(TARGET conjure_managed_sdk AND CONJURE_MANAGED_SDK_DIR)
+    target_compile_definitions(conjure_support_engine_tests PRIVATE
+        CONJURE_SUPPORT_ENGINE_TEST_MANAGED_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_SDK_DIR}>"
+    )
+endif()

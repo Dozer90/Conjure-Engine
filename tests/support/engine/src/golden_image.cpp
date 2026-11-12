@@ -25,18 +25,43 @@ namespace {
 
     /// <summary>
     /// Saves an image, creating the directory; a failure is reported in the result message, never thrown.
+    /// True when the file was written (most callers only need the message).
     /// </summary>
-    void save_image(const core::image &source, const std::filesystem::path &path, std::string &message) {
+    bool save_image(const core::image &source, const std::filesystem::path &path, std::string &message) {
         std::error_code failure = {};
         std::filesystem::create_directories(path.parent_path(), failure);
         if (failure) {
             message += std::format(" (could not create {}: {})", path.parent_path().string(), failure.message());
-            return;
+            return false;
         }
         const core::result<void> saved = source.save_png(path);
         if (!saved.has_value()) {
             message += std::format(" (could not write {}: {})", path.string(), saved.get_error().to_string());
+            return false;
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Update mode (--conjure-update-golden): the actual image becomes the reference and the verdict passes
+    /// with a WARN when the write succeeds. 'reason' says what was wrong with the old reference.
+    /// </summary>
+    void rewrite_reference(
+      golden_result &verdict,
+      std::string_view sceneName,
+      const core::image &actual,
+      std::string_view reason
+    ) {
+        verdict.message = std::format(
+          "golden '{}': reference {} {} and has been written from the actual image",
+          sceneName,
+          verdict.referencePath.string(),
+          reason
+        );
+        // An existing file says nothing about this write, so the save's own outcome decides.
+        verdict.referenceWritten = save_image(actual, verdict.referencePath, verdict.message);
+        verdict.passed = verdict.referenceWritten;
+        CONJURE_LOG_WARN(LOG_TESTING, "{}", verdict.message);
     }
 
     [[nodiscard]] u8 channel_delta(std::byte a, std::byte b) noexcept {
@@ -100,6 +125,11 @@ golden_result golden_image::compare(
     core::result<core::image> reference = core::image::load_file(verdict.referencePath);
     if (!reference.has_value()) {
         if (!reference.get_error().is(core::error_code::NOT_FOUND)) {
+            if (environment().updateGoldens) {
+                const std::string reason = std::format("was unreadable ({})", reference.get_error().to_string());
+                rewrite_reference(verdict, sceneName, actual, reason);
+                return verdict;
+            }
             verdict.message = std::format(
               "golden '{}': reference {} is unreadable: {}",
               sceneName,
@@ -113,16 +143,7 @@ golden_result golden_image::compare(
 
         verdict.referenceMissing = true;
         if (environment().updateGoldens) {
-            verdict.message = std::format(
-              "golden '{}': reference {} was missing and has been written from the actual image",
-              sceneName,
-              verdict.referencePath.string()
-            );
-            save_image(actual, verdict.referencePath, verdict.message);
-            std::error_code ignored = {};
-            verdict.referenceWritten = std::filesystem::is_regular_file(verdict.referencePath, ignored);
-            verdict.passed = verdict.referenceWritten;
-            CONJURE_LOG_WARN(LOG_TESTING, "{}", verdict.message);
+            rewrite_reference(verdict, sceneName, actual, "was missing");
             return verdict;
         }
 
@@ -138,6 +159,12 @@ golden_result golden_image::compare(
 
     verdict = compare_images(reference.value(), actual, options);
     verdict.referencePath = reference_path(sceneName, options);
+    if (!verdict.passed && environment().updateGoldens) {
+        // A size mismatch included: the reference is regenerated, never resized (3.5).
+        const std::string reason = std::format("was out of date ({})", verdict.message);
+        rewrite_reference(verdict, sceneName, actual, reason);
+        return verdict;
+    }
     verdict.message = std::format("golden '{}': {}", sceneName, verdict.message);
     if (verdict.passed) {
         return verdict;
@@ -221,8 +248,12 @@ core::image golden_image::make_diff(const core::image &reference, const core::im
     const std::span<const std::byte> observed = actual.pixels();
     const std::span<std::byte> output = diff.pixels();
     for (usize offset = 0; offset < output.size(); offset += core::image::BYTES_PER_PIXEL) {
+        // compare_images counts alpha like any channel, so an alpha-only difference must show too: it is
+        // folded into every colour channel (grey) while the diff itself stays opaque.
+        const u8 alphaDelta = channel_delta(expected[offset + 3], observed[offset + 3]);
         for (usize channel = 0; channel < 3; ++channel) {
-            const u8 delta = channel_delta(expected[offset + channel], observed[offset + channel]);
+            const u8 colourDelta = channel_delta(expected[offset + channel], observed[offset + channel]);
+            const u8 delta = std::max(colourDelta, alphaDelta);
             const u32 amplified = static_cast<u32>(delta) * DIFF_AMPLIFICATION;
             output[offset + channel] = static_cast<std::byte>(std::min<u32>(amplified, 255));
         }

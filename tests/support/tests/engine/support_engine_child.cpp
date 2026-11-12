@@ -1,8 +1,8 @@
 // Cases run by conjure_support_engine_tests in a child process (see CMakeLists.txt here). Each is selected
 // with -tc="<name>" and observed through its exit code and output: they fail on purpose, from a fixture's
-// constructor or destructor, which is why this program is not registered with CTest. The parent asserts
-// that each failure is reported exactly once (headless_engine.h: a construction failure or an unallowed
-// ERROR must not drag a bogus memory_guard failure behind it).
+// constructor, destructor or step_frames, which is why this program is not registered with CTest. The
+// parent asserts that each failure is reported exactly once (headless_engine.h: a construction failure, an
+// unallowed ERROR or late input must not drag a bogus memory_guard failure behind it).
 
 #include "conjure/testing/doctest.h"
 
@@ -12,6 +12,8 @@
 
 #include "conjure/core/log.h"
 #include "conjure/core/types.h"
+#include "conjure/platform/button_action.h"
+#include "conjure/platform/key.h"
 
 #include <filesystem>
 #include <memory>
@@ -51,6 +53,15 @@ TEST_SUITE("testing/support_engine_child") {
         CONJURE_LOG_ERROR(LOG_TESTING, "deliberate error text from the child");
         engine.step_frames(1);
         CHECK(engine.frame_index() == 1);
+    }
+
+    TEST_CASE("support_engine_child - input scheduled for a frame that already ran fails the case") {
+        headless_engine engine(quiet_options());
+        engine.step_frames(3);
+        engine.input().key(1, platform::key::W, platform::button_action::PRESS);   // meant as "one frame on"
+        engine.step_frames(1);
+        engine.step_frames(1);   // the late event was reported once and is not reported again
+        CHECK(engine.frame_index() == 5);
     }
 
     TEST_CASE("support_engine_child - a leak during the run is reported with the interning budget") {

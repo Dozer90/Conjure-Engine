@@ -1,7 +1,8 @@
 # conjure_test_support: the core-level test support library (docs/design/08_testing.md D2, 2.2, 4.1-4.3
 # and docs/design/10_core.md 3). Depends on conjure::core only; never installed or shipped.
 #
-# Public headers live under include/conjure/testing/. test_main.cpp and tracked_global_new.cpp are
+# Public headers live under include/conjure/testing/ and are header-checked (conjure_header_check: each
+# one compiles alone, like an engine module's). test_main.cpp and tracked_global_new.cpp are
 # deliberately not part of the library: conjure_add_test_module() compiles them into every test
 # executable (cmake/ConjureTesting.cmake, CONJURE_TEST_MAIN_SOURCES).
 #
@@ -51,11 +52,19 @@ function(conjure_add_test_support_library target alias engineLibrary)
             conjure::warnings
             conjure::sanitizers
     )
+    # Registered like a module's public headers so conjure_header_check() compiles each one alone.
+    set(absoluteHeaders "")
+    foreach(header IN LISTS CONJURE_TEST_SUPPORT_HEADERS)
+        list(APPEND absoluteHeaders "${CMAKE_CURRENT_SOURCE_DIR}/${header}")
+    endforeach()
+    set_property(TARGET ${target} PROPERTY CONJURE_PUBLIC_HEADERS "${absoluteHeaders}")
+
     set_target_properties(${target} PROPERTIES FOLDER "Tests")
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${CONJURE_TEST_SUPPORT_HEADERS} ${CONJURE_TEST_SUPPORT_SOURCES})
 endfunction()
 
 conjure_add_test_support_library(conjure_test_support conjure::test_support conjure::core)
+conjure_header_check(conjure_test_support INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(TARGET conjure::shared)
     conjure_add_test_support_library(conjure_test_support_shared conjure::test_support_shared conjure::shared)
 endif()

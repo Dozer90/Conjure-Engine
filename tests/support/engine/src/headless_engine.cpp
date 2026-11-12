@@ -383,6 +383,21 @@ void headless_engine::step_frames(u32 frameCount) {
 }
 
 void headless_engine::step_frames(u32 frameCount, f64 deltaSeconds) {
+    // events_for() delivers by exact frame, so an event scheduled for a frame that already ran would be
+    // dropped without a word. Each late batch fails the case once; the memory check goes off because
+    // doctest keeps the failure's record alive.
+    const u64 late = mRun->input.late_event_count();
+    if (late > mLateEventsReported) {
+        const u64 newlyLate = late - mLateEventsReported;
+        mLateEventsReported = late;
+        mCheckMemory = false;
+        FAIL_CHECK(
+          "headless_engine: " << newlyLate << " input event(s) were scheduled for a frame before " << mFrameIndex
+          << ", which already ran, and are never delivered; input_script frames are absolute (schedule at "
+          "frame_index() + n)"
+        );
+    }
+
     for (u32 frame = 0; frame < frameCount; ++frame) {
         for (const platform::input_event &event : mRun->input.events_for(mFrameIndex)) {
             mWindow->push_event(platform::to_event(event));
@@ -396,6 +411,7 @@ void headless_engine::step_frames(u32 frameCount, f64 deltaSeconds) {
             return;
         }
         ++mFrameIndex;
+        mRun->input.close_frames_before(mFrameIndex);
     }
     refresh_stats();
 }
