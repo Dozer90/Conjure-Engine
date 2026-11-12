@@ -7,7 +7,12 @@ here; implementers do not make architectural choices.
 
 Scope: editor libraries and executable, command model and undo, AI control protocol (TCP localhost,
 stdin/stdout, `--headless --exec`), command catalogue, picking, play/pause/step with snapshot restore,
-screenshots, Distribution stripping, public header list.
+play-mode persist, workspace layout, themes, screenshots, Distribution stripping, public header list.
+
+Revised 2026-11-13 at the owner's request: play-mode **persist** (D16, 3.13), the default workspace layout
+(D17, 3.14) and named, user-customisable **themes** (D18, 3.15). The visual target for all three is the
+owner-approved mockup canvas "Conjure editor, finished" (Midnight default plus Autumn, Deep Ocean, Aurora,
+Synthwave and High contrast); where this document and the mockup disagree, this document wins.
 
 ---
 
@@ -44,9 +49,12 @@ forces it OFF for Distribution). Targets: `conjure_editor_core`, `conjure_editor
 | D9 | **Play mode runs in the editing world** with an opaque `scene::scene_snapshot` captured on `play.start` and restored on `play.stop`. While not `EDITING` the undo stack is frozen (mutations execute, are not recorded, and raise one `warning` event per play session). Selection is remapped by guid after restore. | Simplest consistent rule; snapshot format is the scene module's business (binary chunk copy recommended, see 8). |
 | D10 | **Picking is CPU-side**: AABB broad phase over per-entity world bounds (always), triangle narrow phase when the mesh asset keeps CPU geometry (editor builds keep it), `mode:"physics"` delegates to Jolt. No GPU id buffer. | Works with the `null` RHI, unit-testable, no readback latency. |
 | D11 | **Hierarchy and inspector are cache-driven**: flat `hierarchy_row` array rebuilt only when `scene::structure_version()` changes, drawn with `ImGuiListClipper`; inspector reads one JSON document per selected component per frame via `reflection_path`. | 10,000 entities cost O(visible rows) per frame. |
-| D12 | **Selection is UI state** (not undoable); every change emits `selection.changed`. Editor-only state lives in sidecars: `<scene>.editor.json`, `<project>/.conjure/editor_layout.ini`, `<project>/.conjure/ai_port`. | Scene/prefab/project files never learn the editor exists. |
+| D12 | **Selection is UI state** (not undoable); every change emits `selection.changed`. Editor-only state lives in sidecars: `<scene>.editor.json`, `<project>/.conjure/editor_layout.ini`, `<project>/.conjure/ai_port`. Per-user preferences (active theme, user themes, recent projects) live in the user configuration folder (3.15), never in a project. | Scene/prefab/project files never learn the editor exists. |
 | D13 | **Distribution stripping is linkage**: no `CONJURE_EDITOR*` macro anywhere in `engine/` (CI grep). Module hooks are data: trivially copyable `editor::panel_desc` / `editor::command_desc` extension records (headers `conjure/editor/panel_desc.h`, `command_desc.h`, installable with the SDK without editor internals) that an `editor_module_consumer` (`modules::module_consumer`, exists only in the editor process) applies; the runtime simply has no consumer for those extension points (R14). CI checks the Distribution runtime binary for `conjure::editor` / `ImGui` symbols. | Impossible to ship editor code by accident; zero preprocessor coupling. |
 | D14 | Headless: `--headless` selects `null` platform/rhi/audio; `--offscreen` additionally creates a real RHI device without a swapchain so `view.screenshot` works without a window. | Agents get pixels in CI-like runs; unit tests stay GPU-free. |
+| D16 | **Play-mode persist.** While playing or paused, a user or protocol client may pin a field, a whole component or a whole entity. On `play.stop` the snapshot is restored as before, then the pinned values (read at the moment of Stop) are re-applied as **one undoable edit**. The persist list is session state: cleared on every `play.start` and after every Stop, never saved, never carried into the next play. | Designers tune live and keep exactly what they chose; everything else still resets. One undo entry makes a bad persist one Ctrl+Z away. Clearing at Start as well as Stop means a crash mid-play cannot leave stale pins. |
+| D17 | **A default docked layout is built on first run** (no saved layout for the project) with ImGui's DockBuilder, and every later arrangement is saved to `<project>/.conjure/editor_layout.ini` (D12). Window > Reset layout rebuilds the default. | An editor whose panels open as loose floating windows is unusable (code sweep of 2026-11-12, editor UI blockers). |
+| D18 | **Themes are data.** A theme is a JSON document of semantic colour roles, chrome gradients, fonts and metrics. Built-in themes ship inside the editor; users duplicate, edit and save their own in a per-user folder; the active theme is a per-user setting, not a project setting. | Taste is personal and must not churn project files or version control. Data, not code, lets users and agents create themes without rebuilding the editor. |
 | D15 | Discoverability: `session.hello` returns protocol/engine versions and `schemaHash`; `editor.schema` returns the whole catalogue with schemas; `reflection.components` returns every component type with fields, defaults and attributes. A test dumps `editor.schema` to `docs/generated/editor_protocol.json`. | The agent never depends on documentation that can drift. |
 
 ### 1.3 What was rejected and why
@@ -325,16 +333,18 @@ insertion pass), assign names and guids in a batch, then apply per-entity overri
 (editing)    the engine runs in simulation_mode::PAUSED while EDITING: TRANSFORM/SYNC/EXTRACT still run, the
              fixed loop (physics) and UPDATE systems without RUNS_WHILE_PAUSED do not; script_runtime is in
              script_mode::EDIT (no managed instances)                                            (R13)
-play.start   require EDITING; mSnapshot = scene_serializer::capture(scene); mSelection = selection.guids()
+play.start   require EDITING; persist_list.clear(); mSnapshot = scene_serializer::capture(scene); mSelection = selection.guids()
              undo.set_frozen(true); script_runtime.set_mode(PLAY); engine.set_simulation_mode(RUNNING)
              state = PLAYING; emit play.state
 play.pause   PLAYING -> PAUSED; engine.set_simulation_mode(PAUSED)
 play.resume  PAUSED -> PLAYING; engine.set_simulation_mode(RUNNING)
 play.step    {fixedSteps?=1} PAUSED only; async: engine.step_fixed(n) makes the next frame run exactly n fixed
              steps and return to PAUSED; the reply completes when engine_time.fixedStepIndex has advanced by n
-play.stop    engine.set_simulation_mode(PAUSED); script_runtime.set_mode(EDIT); scene_serializer::restore(scene, mSnapshot)
-             (failure -> ERROR log, empty scene, state EDITING; never a crash)
-             selection.set(existing guids of mSelection); undo.set_frozen(false); emit play.state
+play.stop    engine.set_simulation_mode(PAUSED); captured = persist_list.capture(scene) (3.13, before restore)
+             script_runtime.set_mode(EDIT); scene_serializer::restore(scene, mSnapshot)
+             (failure -> ERROR log, empty scene, state EDITING; never a crash; captured values are dropped)
+             selection.set(existing guids of mSelection); undo.set_frozen(false)
+             persist_list.apply(captured) as one recorded edit (3.13); persist_list.clear(); emit play.state
 ```
 
 Any mutating command while not `EDITING` executes but is not recorded; the first one per play session
@@ -397,6 +407,161 @@ are written to the same stream (they carry `event`, not `id`). Stop at the first
   writes with `std::fwrite` + `fflush`. With `--ai-stdio`, logging goes to stderr and file, never stdout.
 - `loopback_transport`: in-process pair for tests and the UI's AI session panel.
 
+### 3.13 Play-mode persist
+
+Data (`conjure/editor/persist_list.h`, owned by `play_controller`, main thread only):
+
+```cpp
+enum class persist_scope : std::uint8_t {
+    FIELD,          // one reflection path inside one component ("transform.position", "script.scripts[0].fields.mines")
+    COMPONENT,      // one whole component
+    ENTITY,         // the whole entity: every component, its name, enabled state and parent; children only when `children`
+};
+
+struct persist_entry {
+    core::uuid entity;                   // scene guid (D5)
+    persist_scope scope = persist_scope::FIELD;
+    std::string component;               // registry name; empty for ENTITY
+    std::string path;                    // reflection path inside the component; FIELD only
+    bool children = false;               // ENTITY only: include the subtree
+    std::uint32_t clientId = 0;          // who pinned it (0 = the UI)
+    std::uint64_t pinnedAtFrame = 0;
+};
+```
+
+Rules:
+
+- Pinning is allowed only while `PLAYING` or `PAUSED` (`WRONG_PLAY_STATE` otherwise). The entity must be alive
+  (`ENTITY_NOT_FOUND`); a FIELD path must resolve (`PATH_NOT_FOUND`); a COMPONENT must be present
+  (`COMPONENT_NOT_FOUND`).
+- An entity created during play (its guid is not in the snapshot) can only be pinned with ENTITY scope; a FIELD or
+  COMPONENT pin on it is promoted to ENTITY and the reply says so (`promoted: true`). Without that the value would
+  have no entity to land on after the restore.
+- Entries are deduplicated: an ENTITY pin subsumes FIELD and COMPONENT pins on the same entity, a COMPONENT pin
+  subsumes FIELD pins inside it. Unpinning the wider entry does not resurrect the narrower ones.
+- Pins are UI state, like selection (D12): not recorded by the undo stack, announced by the `persist.changed` event.
+- Values are **not** captured when pinned. They are read at Stop, so a designer can pin first and keep tuning. A
+  value the game keeps rewriting (a timer, a moving body) keeps whatever it held at the moment of Stop; the Persist
+  panel shows the live value so this is visible before stopping.
+
+`persist_list::capture(scene)` runs at Stop **before** the restore. For each entry, in the order ENTITY, COMPONENT,
+FIELD: resolve the guid; skip with reason `ENTITY_DESTROYED` when it is gone; read the value through the same
+reflection JSON the inspector uses (`component_to_json`, `reflection_path::read_at`; for ENTITY,
+`scene_serializer::save_subtree(entity)` limited to the entity itself unless `children`). Output: a vector of
+ready-to-dispatch `command_request`s plus the skipped list. Nothing in capture mutates the scene.
+
+`persist_list::apply(captured)` runs after the restore and the undo unfreeze, as one atomic `editor.batch`
+labelled `Persist from play (N)`, built only from existing commands: an ENTITY entry whose guid is in the
+snapshot becomes `entity.destroy` followed by `entity.restore {archive, parent, index}` with the captured archive
+(same guid, same parent and sibling index); one created during play becomes `entity.restore` alone (original
+parent when it still exists, else the scene root); COMPONENT entries become `component.set` of the whole component, or `component.add` when the snapshot entity lacks
+it; FIELD entries become `component.set {path}`. Validation happens in capture, so the batch is all-or-nothing per
+D4 over the entries that survived; skipped entries are reported, never silently dropped. On a prefab instance the
+applied values become ordinary prefab overrides through the scene module's normal diff. The reply to `play.stop`
+and the `persist.applied` event carry `{applied, skipped:[{entity, component, path, reason}], undoLabel}`.
+
+Change markers (the inspector's "changed in play" dot): for the selected entities only, the inspector compares the
+component JSON it already reads each frame with the same component in the snapshot. `play_controller` exposes
+`snapshot_component_json(guid, component)`, decoded from the snapshot on demand and cached per selected entity for
+the play session (`scene::scene_snapshot` gains a by-guid component read; owed to the scene module). The hierarchy
+marks only entities touched by editor commands during play and entities with pins; it never diffs the whole scene.
+
+Budget: capture plus apply for 100 pinned fields under 2 ms; pinning costs no per-frame work.
+
+### 3.14 Workspace layout
+
+On the first frame of a project with no `<project>/.conjure/editor_layout.ini`, `editor_workspace::build_default
+_layout()` splits the dockspace with `ImGui::DockBuilder*`:
+
+```
++------------------------------------------------------------------------------------------+
+| title bar (OS)                                                                           |
+| menu bar: File  Edit  Assets  Entity  Play  Window  Help                                 |
+| toolbar (fixed, not a dock node): tools | pivot | snap | play controls | persist | undo  |
++-------------+------------------------------------------------------+---------------------+
+| Hierarchy   | Scene | Game   (tabs)                                | Inspector |         |
+| 262 px      | viewport, its own overlay toolbar                    | Project settings    |
+|             |                                                      | 340 px              |
++-------------+------------------------------------------------------+---------------------+
+| Assets | Persist | Profiler | History        | Console | AI session                     |
+| 236 px, split 59 / 41                                                                    |
++------------------------------------------------------------------------------------------+
+| status bar (fixed): state | scene + unsaved | persist count | AI port | build, GPU | fps    |
++------------------------------------------------------------------------------------------+
+```
+
+Sizes are at 100 % UI scale and scale with it. `io.IniFilename` points at the project's layout file (today it is
+null, code sweep 2026-11-12); Window > Reset layout deletes the file's dock state and rebuilds the default; every
+closed panel can be reopened from the Window menu. Started without `--project`, the editor shows a start screen
+(recent projects from the user configuration folder, Open, New) instead of an empty workspace.
+
+The window is cleared to the theme's `panel` colour before the UI pass every frame (the 2026-11-12 sweep found the
+back buffer never cleared, which smeared every moved panel).
+
+### 3.15 Themes
+
+A theme file (`<name>.conjure-theme.json`, UTF-8, schema-validated like command arguments):
+
+```json
+{
+  "schema_version": 1,
+  "name": "Deep Ocean",
+  "base": "dark",
+  "colours": {
+    "panel": "#0b1a24", "head": "#10283a", "sunken": "#071219", "tabbar": "#06141d", "menu": "#06141d",
+    "line": "#163447", "line2": "#040c12", "control": "#0f2636", "controlLine": "#1e4258",
+    "text": "#c4e3ef", "strong": "#e8f7fc", "muted": "#7fa9bc", "faint": "#5a7f90",
+    "accent": "#2fd0e0", "accentSoft": "#0e4b5c", "accentText": "#e3fcff",
+    "play": "#ff9a6b", "playSoft": "#4a2618", "playText": "#ffc2a3",
+    "persist": "#a6f06a", "persistSoft": "#21401a",
+    "prefab": "#5cc8ff", "script": "#b39cff", "warning": "#ffb347", "error": "#ff6b6b"
+  },
+  "chrome": {
+    "title":   {"linear": {"angle": 90, "stops": [["#03101a", 0], ["#062638", 0.5], ["#03101a", 1]]}},
+    "toolbar": {"linear": {"angle": 180, "stops": [["#0d2533", 0], ["#0a1d29", 1]]}},
+    "status":  {"linear": {"angle": 90, "stops": [["#063b4f", 0], ["#0c6f86", 0.45], ["#14a3b3", 0.75], ["#0b5a6e", 1]]},
+                "text": "#eafcff"},
+    "viewportBackdrop": {"radial": {"centre": [0.5, 0.3], "stops": [["#10403a", 0], ["#0a2232", 0.55], ["#06131c", 1]]}},
+    "grid": "#78dcff10", "gridMajor": "#78dcff21"
+  },
+  "fonts": {"ui": "Inter", "mono": "JetBrains Mono", "size": 13},
+  "metrics": {"rounding": 5, "density": "comfortable"}
+}
+```
+
+Rules:
+
+- **Roles, not widgets.** Colours name meanings (`accent`, `play`, `persist`, `prefab`), and the editor maps them
+  onto every `ImGuiCol_*` and onto its own drawing (gizmo outlines, play-mode border, persist pins, status bar).
+  A theme cannot restyle one widget; that keeps every theme complete and every new widget themed for free.
+- **Gradients only on chrome**: the title area, toolbar, status bar and the viewport backdrop. Panels, fields,
+  lists and text backgrounds are flat so values stay readable. Linear gradients take 2 to 4 stops, radial 2 to 3;
+  they are drawn with `ImDrawList` multi-colour rectangles, one strip per stop pair.
+- **The scene is never themed.** `viewportBackdrop` is used only where the scene draws nothing: an editing view of a
+  scene with no environment and no camera clear colour. The 2D grid and gizmo outline colours come from the theme;
+  game pixels do not.
+- **Validation** on load and save, reported per rule, a failing theme is refused (built-ins must pass in CI):
+  `text`, `strong` and `muted` reach 4.5:1 contrast on `panel`, `head` and `sunken`; `faint` reaches 3:1;
+  `accentText` on `accentSoft`, `playText` on `playSoft`, `chrome.status.text` on every status stop reach 4.5:1;
+  `accent`, `play` and `persist` differ from each other by at least 20 in CIEDE2000 **and** in lightness by at
+  least 8, so meaning never rests on hue alone. Missing roles fall back to the `base` theme's value.
+- **Fonts**: Inter (UI) and JetBrains Mono (numbers, logs, paths) ship with the editor under the SIL Open Font
+  Licence 1.1, with the licence text added to the third-party notices (the sweep found none exist). A theme may name
+  any font the font cache can load; unknown fonts fall back with one warning.
+
+Built-in themes, compiled into `conjure_editor_ui` as embedded JSON: **Midnight** (default), **Autumn**, **Deep
+Ocean**, **Aurora**, **Synthwave**, **High contrast**. A light **Daylight** theme is owed before 1.0 for bright rooms
+and projectors.
+
+Customisation (the Theme editor, `ui/panels/theme_editor_panel`, opened from Edit > Preferences > Themes):
+duplicate any theme, edit roles with colour pickers and gradient-stop editors while the whole editor previews
+live, see validation results inline, then Save. User themes are written to `<user config>/themes/`; Import and
+Export copy a single theme file so themes can be shared. Built-ins are read-only; editing one duplicates it. The
+user configuration folder is `%APPDATA%/Conjure` on Windows, `$XDG_CONFIG_HOME/conjure` (default
+`~/.config/conjure`) on Linux and `~/Library/Application Support/Conjure` on macOS; `platform` owes the
+`user_config_directory()` that resolves it. The active theme and the recent-projects list are stored in
+`<user config>/editor_settings.json`. Theme files are watched: saving one from an external text editor re-applies it.
+
 ## 4. Public API
 
 All headers under `engine/include/conjure/editor/`. None includes ImGui, ImGuizmo, sockets or stb.
@@ -423,6 +588,9 @@ All headers under `engine/include/conjure/editor/`. None includes ImGui, ImGuizm
 | `console_buffer.h` | `struct console_entry`, `class console_buffer` |
 | `event_broadcaster.h` | `enum class editor_event`, `class event_broadcaster` |
 | `editor_context.h` | `class editor_context` |
+| `persist_list.h` | `enum class persist_scope`, `struct persist_entry`, `struct persist_capture`, `class persist_list` (3.13) |
+| `theme.h` | `struct theme_colours`, `struct theme_gradient`, `struct theme`, `parse_theme()`, `validate_theme()`, `builtin_themes()` (3.15; no ImGui, so the protocol and tests use it) |
+| `user_settings.h` | `struct editor_user_settings` (active theme, recent projects), load/save in the user configuration folder |
 | `protocol/protocol_message.h` | `protocol_request`, `protocol_response`, `protocol_event`, `parse_request()`, `serialise()` |
 | `protocol/line_splitter.h` | `class line_splitter` |
 | `protocol/protocol_transport.h` | `enum class transport_kind`, `struct inbound_line`, `class protocol_transport` |
@@ -445,11 +613,12 @@ console,reflection,modules,profiler}.cpp`, `snapshot_guard.{h,cpp}`, `README.md`
 |---|---|
 | `editor_layer.h` | `class editor_layer : public engine::layer`; `create_editor_layer(editor_context &context)` |
 | `editor_panel.h` | `class editor_panel` (title, draw, open flag), `struct panel_descriptor`, `class panel_registry` |
-| `editor_workspace.h` | `class editor_workspace` (dockspace, layout load/save, menu bar) |
+| `editor_workspace.h` | `class editor_workspace` (dockspace, `build_default_layout()`, layout load/save, menu bar, status bar, start screen) |
+| `theme_applier.h` | `apply_theme(const theme &)` onto ImGui style and the editor's own draw colours; `draw_gradient(...)` |
 | `property_drawer.h` | `class property_drawer_registry`, `using draw_fn` (reflection field -> ImGui widget) |
 | `hierarchy_cache.h` | `struct hierarchy_row`, `class hierarchy_cache` |
 | `gizmo_controller.h` | `enum class gizmo_operation`, `class gizmo_controller` |
-| `panels/hierarchy_panel.h`, `inspector_panel.h`, `asset_browser_panel.h`, `viewport_panel.h`, `console_panel.h`, `profiler_panel.h`, `toolbar_panel.h`, `history_panel.h`, `ai_session_panel.h`, `export_dialog.h` | one `editor_panel` subclass each |
+| `panels/hierarchy_panel.h`, `inspector_panel.h`, `asset_browser_panel.h`, `viewport_panel.h`, `console_panel.h`, `profiler_panel.h`, `toolbar_panel.h`, `history_panel.h`, `ai_session_panel.h`, `persist_panel.h`, `theme_editor_panel.h`, `export_dialog.h` | one `editor_panel` subclass each |
 
 ImGui/ImGuizmo includes appear only in `engine/src/editor/ui/**/*.cpp`.
 
@@ -706,6 +875,13 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state}` |
 | `play.step` | A | `{fixedSteps?}` -> `{state, frame}` |
 | `play.state` | | -> `{state, frame, simulationTime}` |
+| `play.persist` | S | `{**entity**, component?, path?, children?}` (no component = ENTITY scope; component without path = COMPONENT) -> `{entries, promoted}`; PLAYING or PAUSED only |
+| `play.unpersist` | S | `{entity?, component?, path?, all?}` -> `{entries}` |
+| `play.persisted` | | -> `{entries:[{entity, name, scope, component, path, children, before, current, clientId}]}` (`before` from the snapshot, `current` live) |
+| `editor.theme.list` / `editor.theme.get` | | -> `{themes:[{name, builtIn, valid}], active}` / `{name}` -> theme document |
+| `editor.theme.set` | | `{**name**}` -> `{active}` (per-user setting, not undoable; `NOT_AVAILABLE` headless) |
+| `editor.theme.save` / `editor.theme.delete` | | `{**theme**}` -> `{name, validation}` / `{**name**}` (user themes only; built-ins `INVALID_ARGS`) |
+| `editor.layout.reset` | | -> `{}` (rebuilds the default layout, 3.14; `NOT_AVAILABLE` headless) |
 | `input.inject` / `input.clear` | | `{key?, button?, axis?, value?, action:"press"\|"release"\|"tap", holdFrames?}` |
 | `view.screenshot` | A | `{path, width?, height?, camera?, format?, waitFrames?}` -> `{path, width, height, frame}` |
 | `view.set_camera` / `view.get_camera` / `view.focus` | | `{position, target, fov?}` / -> same / `{entity}` |
@@ -723,7 +899,8 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 Events: `log`, `selection.changed`, `play.state`, `scene.changed {revision, label}`, `scene.loaded {path}`,
 `progress {operation, fraction, message}` (export, imports, module builds), `script.compiled`, `script.reloaded`,
 `asset.imported`, `module.state {name, state, error?}`, `command.executed {clientId, cmd, ok}`,
-`client.connected`, `client.disconnected`, `events.dropped {count}`, `warning {code, message}` (R15).
+`client.connected`, `client.disconnected`, `events.dropped {count}`, `warning {code, message}` (R15),
+`persist.changed {entries}`, `persist.applied {applied, skipped, undoLabel}`, `theme.changed {active}`.
 
 Grid-game walk-through (proves completeness; the generic minesweeper-style Grid Sweeper of 17_demo_games.md 2.1): `session.hello` -> `project.create` -> `asset.import`
 (cell sprite atlas PNG, UI font) -> `asset.create_material` x3 -> `scene.new` -> `editor.batch`
@@ -851,6 +1028,13 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
     browser, viewport (`gizmo_controller`, picking), profiler, AI session panel, export dialog.
 19. `tests/benchmarks/bench_editor.cpp`; `docs/generated/editor_protocol.json` dump test;
     `.claude/skills/editor-ai-control` generated from it; `tools/check_distribution_symbols.py`.
+20. `persist_list` + `play.persist` / `play.unpersist` / `play.persisted`; capture and apply wired into
+    `play.stop`; scene module by-guid snapshot component read; Persist panel, inspector pins and markers, toolbar
+    and status bar counts (3.13).
+21. Default layout, back-buffer clear, Window menu, start screen, layout file per project (3.14).
+22. `theme` parse/validate, built-in theme JSON, `theme_applier`, bundled fonts and their licence notices,
+    `platform::user_config_directory()`, `editor_user_settings`, theme commands, Theme editor panel, file watch
+    (3.15).
 
 ## 10. Tests (`tests/editor/`, target `conjure_editor_tests`, all null backends)
 
@@ -890,6 +1074,15 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
 - `test_play_controller.cpp`: `start_snapshots_and_freezes`, `edits_during_play_discarded_with_warning`,
   `stop_restores_10k_entities_exactly`, `selection_remapped_by_guid`, `step_runs_exactly_n_fixed_updates`,
   `illegal_transitions_wrong_play_state`, `restore_failure_leaves_editing_state`.
+- `test_persist_list.cpp`: `pin_requires_play`, `field_component_entity_scopes`, `narrow_pins_subsumed_by_wider`,
+  `created_in_play_promoted_to_entity`, `value_read_at_stop_not_at_pin`, `stop_applies_one_undo_entry`,
+  `undo_after_stop_restores_snapshot_values`, `destroyed_entity_skipped_and_reported`,
+  `list_cleared_on_start_and_after_stop`, `persist_does_not_survive_into_next_play`,
+  `prefab_instance_value_becomes_override`, `script_field_path_persists`, `entity_children_flag`,
+  `pins_from_protocol_client_recorded_with_client_id`, `restore_failure_drops_captured_values`.
+- `test_theme.cpp`: `builtins_parse_and_validate`, `contrast_rule_refuses_low_contrast_text`,
+  `accent_play_persist_must_differ_in_lightness`, `gradient_stop_counts`, `missing_roles_fall_back_to_base`,
+  `user_theme_save_load_round_trip`, `builtin_is_read_only`, `unknown_font_falls_back_with_warning`.
 - `test_selection_set.cpp`: `set_add_remove_clear`, `duplicates_ignored`, `changed_event_once`.
 - `test_picker.cpp`: `nearest_aabb_wins`, `miss`, `tie_smaller_volume`, `ray_inside_box`,
   `triangle_narrow_phase_beats_bounds`, `sprite_quad`, `physics_mode_delegates`.
@@ -910,7 +1103,12 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
 - `tests/integration/test_ai_builds_grid_game.cpp`: feeds `samples/games/grid_sweeper/commands/build_grid_sweeper.json`
   through `headless_runner`; asserts entity count, components, prefab instances, saved scene, and
   compiled script when `dotnet` is present (otherwise `NOT_AVAILABLE` is the asserted outcome).
-- `tests/benchmarks/bench_editor.cpp`: `create_many_10k`, `snapshot_capture_restore_10k`,
+- Real-window tier (label `window`, never null backends; the gap the 2026-11-12 sweep named): the windowed editor
+  starts, draws 120 frames, resizes, minimises, restores and exits 0 with no debug-layer message; the back buffer
+  is cleared; the default layout puts each panel inside its dock rectangle; each built-in theme renders its
+  reference screenshot within tolerance; a scripted input run pins a gizmo drag during play, stops, and finds the
+  value in the scene and one entry on the undo stack.
+- `tests/benchmarks/bench_editor.cpp`: `persist_capture_apply_100`, `create_many_10k`, `snapshot_capture_restore_10k`,
   `hierarchy_rebuild_10k`, `pick_broad_phase_10k`, `dispatch_10k_component_set`.
 
 ## 11. Out of scope / future
@@ -920,3 +1118,6 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
 - Per-field JSON diffs for very large components (whole-component before/after is used).
 - GPU id-buffer picking for skinned/instanced meshes; collaborative multi-user undo.
 - Visual scripting, animation timeline, terrain/particle editors, module marketplace.
+- Persist lists that survive between plays or are saved: excluded on purpose (D16); each play starts clean.
+- Per-project themes, a theme marketplace, and themes that restyle individual widgets.
+- Named, switchable layouts beyond the default and the saved one per project.
