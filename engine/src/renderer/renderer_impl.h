@@ -84,6 +84,8 @@ namespace conjure::renderer {
         bool atlasRendered = false;                               // a prepared view owns the atlas pass this frame
         u32 lastViewOverflow = 0;
         u32 lastLightOverflow = 0;
+        u32 invalidCameraViews = 0;                               // one bit per view index: its invalid camera WARNed
+        static_assert(MAX_VIEWS <= 32, "invalidCameraViews holds one bit per view");
         bool warnedNoSwapchain = false;
 
         pass_shared shared = {};

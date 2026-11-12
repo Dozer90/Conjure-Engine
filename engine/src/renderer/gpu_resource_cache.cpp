@@ -31,6 +31,26 @@ namespace {
         return desc;
     }
 
+    /// <summary>
+    /// Counts and logs an upload whose GPU objects the device refused: the id keeps resolving to the
+    /// fallback, which would otherwise look exactly like an upload that has not flushed yet.
+    /// </summary>
+    void report_build_failure(
+      upload_report &report,
+      std::string_view kind,
+      std::string_view name,
+      const assets::asset_id &asset
+    ) {
+        ++report.failed;
+        CONJURE_LOG_ERROR(
+          LOG_RENDERER,
+          "{} '{}' (asset {}) could not be created on the device; drawing the fallback",
+          kind,
+          name,
+          asset.to_string()
+        );
+    }
+
     [[nodiscard]] usize sampler_index(sampler_filter filter, texture_wrap wrap) noexcept {
         return static_cast<usize>(filter) * 3 + static_cast<usize>(wrap);
     }
@@ -137,7 +157,7 @@ core::result<void> gpu_resource_cache::create_fallbacks(nvrhi::ICommandList &com
     if (!build_material(mFallbackMaterial, material_asset::fallback(), commandList, "fallback_material")) {
         return core::make_error(renderer_error::RESOURCE_CREATION_FAILED, "the device refused the fallback material");
     }
-    const environment_asset greyEnvironment = environment_asset::uniform(math::vec3(0.25f));
+    const environment_asset greyEnvironment = environment_asset::uniform(math::vec3(FALLBACK_ENVIRONMENT_RADIANCE));
     if (!build_environment(mFallbackEnvironment, greyEnvironment, commandList, "fallback_environment")) {
         return core::make_error(
           renderer_error::RESOURCE_CREATION_FAILED,
@@ -757,6 +777,9 @@ upload_report gpu_resource_cache::flush_uploads(nvrhi::ICommandList &commandList
                 const std::string name = mesh->name().empty() ? "mesh" : std::string(mesh->name());
                 record->ready = build_mesh(record->mirror, *mesh, commandList, name.c_str());
                 done = true;
+                if (!record->ready) {
+                    report_build_failure(report, "mesh", name, record->asset);
+                }
             }
         } else if (const texture_asset *texture = std::get_if<texture_asset>(&upload.payload); texture != nullptr) {
             gpu_texture_id id = {};
@@ -769,7 +792,11 @@ upload_report gpu_resource_cache::flush_uploads(nvrhi::ICommandList &commandList
                 const std::string name = texture->name().empty() ? "texture" : std::string(texture->name());
                 record->ready = build_texture(record->mirror, *texture, commandList, name.c_str());
                 done = true;
-                if (record->ready && !record->asset.is_null()) {
+                if (!record->ready) {
+                    report_build_failure(report, "texture", name, record->asset);
+                }
+                // A failed replacement rebinds too: its materials drop the buried texture for the fallback.
+                if (!record->asset.is_null()) {
                     report.materialsRebound += rebind_materials_using(record->asset, frameIndex);
                 }
             }
@@ -784,6 +811,9 @@ upload_report gpu_resource_cache::flush_uploads(nvrhi::ICommandList &commandList
                 const std::string name = material->name().empty() ? "material" : std::string(material->name());
                 record->ready = build_material(record->mirror, *material, commandList, name.c_str());
                 done = true;
+                if (!record->ready) {
+                    report_build_failure(report, "material", name, record->asset);
+                }
             }
         } else if (const environment_asset *environment = std::get_if<environment_asset>(
           &upload.payload
@@ -798,6 +828,9 @@ upload_report gpu_resource_cache::flush_uploads(nvrhi::ICommandList &commandList
                 const std::string name = environment->name().empty() ? "environment" : std::string(environment->name());
                 record->ready = build_environment(record->mirror, *environment, commandList, name.c_str());
                 done = true;
+                if (!record->ready) {
+                    report_build_failure(report, "environment", name, record->asset);
+                }
             }
         }
         if (done) {
@@ -904,7 +937,11 @@ const gpu_mesh &gpu_resource_cache::resolve_mesh(gpu_mesh_id id) {
         warn_stale(0, "mesh", id.to_u64(), id.index);
     } else if (!record->pendingReported) {
         record->pendingReported = true;
-        CONJURE_LOG_DEBUG(LOG_RENDERER, "mesh id {} has not been uploaded yet; drawing the fallback", id.index);
+        CONJURE_LOG_DEBUG(
+          LOG_RENDERER,
+          "mesh id {} is not ready (upload pending or failed); drawing the fallback",
+          id.index
+        );
     }
     return mFallbackMesh;
 }
@@ -920,7 +957,11 @@ const gpu_texture &gpu_resource_cache::resolve_texture(gpu_texture_id id) {
         warn_stale(1, "texture", id.to_u64(), id.index);
     } else if (!record->pendingReported) {
         record->pendingReported = true;
-        CONJURE_LOG_DEBUG(LOG_RENDERER, "texture id {} has not been uploaded yet; drawing the fallback", id.index);
+        CONJURE_LOG_DEBUG(
+          LOG_RENDERER,
+          "texture id {} is not ready (upload pending or failed); drawing the fallback",
+          id.index
+        );
     }
     return mFallbackTextures[0];
 }
@@ -936,7 +977,11 @@ const gpu_material &gpu_resource_cache::resolve_material(gpu_material_id id) {
         warn_stale(2, "material", id.to_u64(), id.index);
     } else if (!record->pendingReported) {
         record->pendingReported = true;
-        CONJURE_LOG_DEBUG(LOG_RENDERER, "material id {} has not been uploaded yet; drawing the fallback", id.index);
+        CONJURE_LOG_DEBUG(
+          LOG_RENDERER,
+          "material id {} is not ready (upload pending or failed); drawing the fallback",
+          id.index
+        );
     }
     return mFallbackMaterial;
 }
@@ -954,7 +999,7 @@ const gpu_environment &gpu_resource_cache::resolve_environment(gpu_environment_i
         record->pendingReported = true;
         CONJURE_LOG_DEBUG(
           LOG_RENDERER,
-          "environment id {} has not been uploaded yet; drawing the fallback",
+          "environment id {} is not ready (upload pending or failed); drawing the fallback",
           id.index
         );
     }

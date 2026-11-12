@@ -72,9 +72,10 @@ namespace conjure::renderer {
 
         public:
             /// <summary>
-            /// Imports .gltf/.glb into CPU assets. Unsupported extensions are warned and skipped. Fails
-            /// with NOT_FOUND when the file does not exist, IO_FAILURE when it cannot be read, then as
-            /// import_bytes.
+            /// Imports .gltf/.glb into CPU assets. Unsupported extensions are warned and skipped. Buffers
+            /// and images are read only from the model's directory and below: a URI that is absolute or
+            /// climbs out of it with '..' fails with NOT_FOUND. Fails with NOT_FOUND when the file does
+            /// not exist, IO_FAILURE when it cannot be read, then as import_bytes.
             /// </summary>
             [[nodiscard]] core::result<gltf_import_result> import(
               const std::filesystem::path &sourcePath,
@@ -83,9 +84,11 @@ namespace conjure::renderer {
 
             /// <summary>
             /// Imports from memory; external buffers and images are read through 'reader' (a null
-            /// reader fails them with NOT_FOUND). Fails with PARSE_FAILURE for malformed glTF,
-            /// NOT_FOUND for a missing buffer or image and UNSUPPORTED for points / lines topology or
-            /// an accessor layout the importer cannot read.
+            /// reader fails them with NOT_FOUND). Fails with PARSE_FAILURE for malformed glTF (also an
+            /// accessor or buffer view reaching past its buffer, a byteStride above 252, a node cycle,
+            /// or a COLOR_0 that is not VEC3 or VEC4), NOT_FOUND for a missing buffer or image and
+            /// UNSUPPORTED for points / lines topology or an accessor layout the importer cannot read.
+            /// Node hierarchies of any depth import without recursion.
             /// </summary>
             [[nodiscard]] core::result<gltf_import_result> import_bytes(
               std::span<const std::byte> bytes,

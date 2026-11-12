@@ -3,23 +3,16 @@
 // in the rotated view direction and scaled by the environment intensity.
 
 #include "gpu_types.hlsli"
+#include "fullscreen.hlsli"
 
 TextureCube gSky : register(t0, space0);
 SamplerState gLinearClampSampler : register(s0, space0);
 
-struct skybox_output {
-    float4 position : SV_Position;
-    float2 uv : TEXCOORD;
-};
-
-skybox_output vs_main(uint vertexId : SV_VertexID) {
-    skybox_output output;
-    output.uv = float2((vertexId << 1) & 2, vertexId & 2);
-    output.position = float4(output.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    return output;
+fullscreen_output vs_main(uint vertexId : SV_VertexID) {
+    return fullscreen_vs(vertexId);
 }
 
-float4 ps_main(skybox_output input) : SV_Target0 {
+float4 ps_main(fullscreen_output input) : SV_Target0 {
     float2 ndc = float2(input.uv.x * 2.0 - 1.0, 1.0 - input.uv.y * 2.0);
     float4 farPoint = mul(float4(ndc, 0.0, 1.0), gView.worldFromClip);
     float4 nearPoint = mul(float4(ndc, 1.0, 1.0), gView.worldFromClip);

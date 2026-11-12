@@ -2,6 +2,7 @@
 
 #include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/gpu_ids.h"
+#include "conjure/renderer/limits.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
@@ -45,7 +46,9 @@ namespace conjure::renderer {
         rhi::shader_library *shaders = nullptr;     // non-owning
         core::jobs::job_system *jobs = nullptr;     // null = serial culling / sorting
         u32 cascadeResolution = 2048;               // texels per cascade slice
-        u32 atlasResolution = 4096;                 // edge of the local-light shadow atlas
+        // Edge of the local-light shadow atlas; clamped to [256, 16384] and rounded down to a power of
+        // two (WARN when changed). desc() reports the value given here.
+        u32 atlasResolution = 4096;
         bool enableImGui = true;                    // ignored outside editor builds
     };
 
@@ -86,7 +89,8 @@ namespace conjure::renderer {
         u32 transientTexturesLive = 0;
         u32 transientTexturesCreated = 0;
         u64 uploadBytes = 0;
-        core::small_vector<const char *, 192> passNames = {};    // executed passes in order (every view)
+        // Executed passes in order (every view); holds the largest frame, MAX_VIEWS full view graphs.
+        core::small_vector<const char *, MAX_VIEWS * MAX_PASSES_PER_VIEW> passNames = {};
         core::small_vector<pass_timing, 48> passTimings = {};    // Development builds with timer queries
 
         /// <summary>
@@ -235,7 +239,8 @@ namespace conjure::renderer {
             /// <summary>
             /// Synchronous readback of a render target's colour texture as RGBA8 (waits for the GPU).
             /// On the null device the image is zero-filled and the right size. Fails with NOT_FOUND for
-            /// an unknown target and rhi_error::DEVICE_LOST on a lost device.
+            /// an unknown target, rhi_error::DEVICE_LOST on a lost device and
+            /// renderer_error::RESOURCE_CREATION_FAILED when the staging texture cannot be created or mapped.
             /// </summary>
             [[nodiscard]] core::result<core::image> read_back(render_target_id target);
 

@@ -32,9 +32,14 @@ namespace conjure::renderer {
 
     inline constexpr std::string_view ENVIRONMENT_ASSET_TYPE_NAME = "conjure.renderer.environment";
     inline constexpr std::string_view ENVIRONMENT_IMPORTER_ID = "conjure.renderer.environment";
-    inline constexpr u32 ENVIRONMENT_IMPORTER_VERSION = 1;
+    inline constexpr u32 ENVIRONMENT_IMPORTER_VERSION = 2;     // 2: radiance clamped to the half range
     inline constexpr u32 ENVIRONMENT_BLOB_VERSION = 1;
     inline constexpr std::array<std::string_view, 1> ENVIRONMENT_EXTENSIONS = {".hdr"};
+
+    /// <summary>
+    /// The grey radiance of both fallback environments: the loader's and the renderer's.
+    /// </summary>
+    inline constexpr f32 FALLBACK_ENVIRONMENT_RADIANCE = 0.25f;
 
     /// <summary>
     /// Nine spherical harmonics coefficients (bands 0..2) of RGB irradiance.
@@ -141,7 +146,8 @@ namespace conjure::renderer {
 
         public:
             /// <summary>
-            /// Parses a .cenv blob. Fails with renderer_error::INVALID_ASSET naming the problem.
+            /// Parses a .cenv blob. Fails with renderer_error::INVALID_ASSET naming the problem, including
+            /// a cubemap whose mip count exceeds the chain of its size (bit_width(size) levels).
             /// </summary>
             [[nodiscard]] static core::result<environment_asset> parse_blob(std::span<const std::byte> bytes);
 
@@ -184,8 +190,9 @@ namespace conjure::renderer {
     /// <summary>
     /// Bakes an environment on the CPU: cubemap, mips, SH9, GGX prefilter. Faces are baked through
     /// jobs->parallel_for when a job system is given and inline otherwise; the output is bit-identical
-    /// either way. Fails with INVALID_ARGUMENT for an invalid image or options (sizes not powers of two
-    /// or below 8, zero samples).
+    /// either way. Both cubemaps store radiance clamped to the finite half range [0, 65504] (NaN reads
+    /// as 0), so a bright sun never packs to infinity. Fails with INVALID_ARGUMENT for an invalid image
+    /// or options (sizes not powers of two or below 8, zero samples).
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<environment_asset> bake_environment(
       const equirect_image &source,
@@ -233,7 +240,8 @@ namespace conjure::renderer {
     };
 
     /// <summary>
-    /// The conjure.renderer.environment loader; the fallback is the uniform grey environment.
+    /// The conjure.renderer.environment loader; the fallback is the uniform grey environment of
+    /// FALLBACK_ENVIRONMENT_RADIANCE, the same grey the renderer lights a scene without an environment by.
     /// </summary>
     class CONJURE_API environment_loader final :
         public assets::typed_asset_loader<environment_asset, environment_asset> {

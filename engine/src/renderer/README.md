@@ -137,7 +137,10 @@ a blit pipeline the first time a new target format appears (outside frames). `re
 `rhi::rhi_error::DEVICE_LOST`; every other problem of a scene is clamped and logged (views beyond
 `MAX_VIEWS`, lights beyond `MAX_LIGHTS_PER_VIEW`, sprite and debug caps, atlas overflow). A stale
 gpu id draws the fallback (unit cube, white texture, magenta unlit material, grey environment) and
-WARNs once.
+WARNs once. An upload whose GPU objects the device refuses logs an ERROR naming the kind, name and
+asset, counts in `upload_report::failed` and leaves its id on the fallback (a failed replacement
+drops the previous mirror too); the materials using a refused texture rebind that slot to its
+fallback (white, flat normal or black).
 
 ## Tests
 

@@ -25,7 +25,7 @@ forward_output vs_main(mesh_vertex vertex, uint instanceId : SV_InstanceID) {
     output.worldPosition = transform_point(instance, vertex.position);
     output.position = mul(float4(output.worldPosition, 1.0), gView.clipFromWorld);
     output.worldNormal = transform_normal(instance, vertex.normal.xyz);
-    output.worldTangent = float4(transform_normal(instance, vertex.tangent.xyz), vertex.normal.w);
+    output.worldTangent = float4(transform_direction(instance, vertex.tangent.xyz), vertex.normal.w);
     output.uv0 = vertex.uv0;
     output.uv1 = vertex.uv1;
     output.colour = vertex.colour;

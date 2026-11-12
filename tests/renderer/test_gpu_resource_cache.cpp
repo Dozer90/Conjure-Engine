@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/approx.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/test_environment.h"
 #include "renderer_test_support.h"
@@ -12,6 +13,7 @@
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/texture_asset.h"
 
+#include "conjure/assets/asset_payload.h"
 #include "conjure/assets/asset_ref.h"
 #include "conjure/core/image.h"
 #include "conjure/core/jobs/job_system.h"
@@ -570,6 +572,72 @@ TEST_SUITE("renderer/gpu_resource_cache") {
         static_cast<void>(fixture.cache->resolve_mesh(unknown));
         static_cast<void>(fixture.cache->resolve_mesh(unknown));
         CHECK(logs.count(core::log_level::WARN) == 2);
+    }
+
+    TEST_CASE("gpu_resource_cache - a failed device build is logged as an error and counted in the report") {
+        log_capture logs = {};
+        logs.allow_errors();
+        cache_fixture fixture(3);
+        // An empty mesh has no streams to create buffers from, so build_mesh refuses it.
+        const gpu_mesh_id mesh = fixture.cache->enqueue_mesh(test_asset_id(1), mesh_asset());
+        const upload_report report = fixture.flush();
+        CHECK(report.completed == 1);
+        CHECK(report.failed == 1);
+        CHECK(logs.count(core::log_level::ERR) == 1);
+        CHECK(logs.contains(core::log_level::ERR, "mesh"));
+        CHECK(logs.contains(core::log_level::ERR, test_asset_id(1).to_string()));
+        CHECK_FALSE(fixture.cache->is_mesh_ready(mesh));
+        CHECK(&fixture.cache->resolve_mesh(mesh) == &fixture.cache->fallback_mesh());
+        CHECK(logs.contains(core::log_level::DEBUG, "upload pending or failed"));
+
+        // A good upload of the same asset replaces the failure.
+        static_cast<void>(fixture.cache->enqueue_mesh(test_asset_id(1), mesh_asset::unit_cube()));
+        const upload_report retried = fixture.flush();
+        CHECK(retried.failed == 0);
+        CHECK(fixture.cache->is_mesh_ready(mesh));
+        CHECK(logs.count(core::log_level::ERR) == 1);
+    }
+
+    TEST_CASE("regression - a texture replacement the device cannot build rebinds its materials to the fallback") {
+        log_capture logs = {};
+        logs.allow_errors();
+        cache_fixture fixture(3);
+        material_asset value = {};
+        value.desc().textures[0] = assets::asset_ref<texture_asset>(test_asset_id(9));
+        const gpu_material_id material = fixture.cache->enqueue_material(test_asset_id(3), value);
+        const gpu_texture_id texture = fixture.cache->enqueue_texture(test_asset_id(9), big_texture(2));
+        static_cast<void>(fixture.flush());
+        REQUIRE(fixture.cache->resolve_material(material).textures[0] == texture);
+        nvrhi::IBindingSet *bound = fixture.cache->resolve_material(material).bindingSet.Get();
+
+        // A texture without mips cannot be created: the id falls back and the material lets go of the
+        // buried texture instead of binding it until the next successful upload.
+        CHECK(fixture.cache->enqueue_texture(test_asset_id(9), texture_asset()) == texture);
+        const upload_report failed = fixture.flush();
+        CHECK(failed.completed == 1);
+        CHECK(failed.failed == 1);
+        CHECK(failed.materialsRebound == 1);
+        CHECK(logs.contains(core::log_level::ERR, "texture"));
+        CHECK_FALSE(fixture.cache->is_texture_ready(texture));
+        const gpu_material &rebound = fixture.cache->resolve_material(material);
+        CHECK_FALSE(rebound.textures[0].is_valid());
+        CHECK(rebound.bindingSet.Get() != bound);
+        CHECK((rebound.data.flags.x & 1u) == 0);
+    }
+
+    TEST_CASE("gpu_resource_cache - the fallback environment matches the loader fallback") {
+        cache_fixture fixture(3);
+        const environment_loader loader = {};
+        core::result<assets::asset_payload> fallback = loader.create_fallback();
+        CONJURE_REQUIRE_OK(fallback);
+        const environment_asset *loaded = assets::payload_as<environment_asset>(fallback.value());
+        REQUIRE(loaded != nullptr);
+        const math::vec3 expected = loaded->irradiance()[0];
+        CONJURE_CHECK_APPROX(fixture.cache->fallback_environment().irradiance[0], expected);
+        CONJURE_CHECK_APPROX(
+          expected,
+          environment_asset::uniform(math::vec3(FALLBACK_ENVIRONMENT_RADIANCE)).irradiance()[0]
+        );
     }
 
     TEST_CASE("gpu_resource_cache - a mirror released mid-frame stays valid until collect and dies afterwards") {

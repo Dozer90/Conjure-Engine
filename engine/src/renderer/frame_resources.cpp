@@ -17,7 +17,6 @@ namespace {
     constexpr u32 INITIAL_SPRITE_CAPACITY = 1024;        // sprites
     constexpr u32 INITIAL_DEBUG_VERTEX_CAPACITY = 4096;
     constexpr u32 INITIAL_SHADOW_TILE_CAPACITY = 64;
-    constexpr u32 BRDF_LUT_SIZE = 256;
 
     [[nodiscard]] u32 grow(u32 current, u32 needed) noexcept {
         u32 capacity = std::max<u32>(current, 1);
@@ -84,7 +83,7 @@ nvrhi::BufferHandle frame_resources::create_index(u64 byteSize, const char *name
 core::result<void> frame_resources::create(nvrhi::IDevice &device, u32 cascadeResolution, u32 atlasResolution) {
     mDevice = &device;
     mCascadeResolution = std::clamp<u32>(cascadeResolution, 256, 8192);
-    mAtlasResolution = std::clamp<u32>(atlasResolution, 256, 16384);
+    mAtlasResolution = std::clamp<u32>(atlasResolution, MIN_ATLAS_RESOLUTION, MAX_ATLAS_RESOLUTION);
     const auto fail = [](const char *what) {
         return core::make_error(renderer_error::RESOURCE_CREATION_FAILED, "the device refused the {}", what);
     };

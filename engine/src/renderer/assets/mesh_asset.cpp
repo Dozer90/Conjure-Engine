@@ -25,6 +25,24 @@ namespace {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "mesh_asset::from_geometry: {}", detail);
     }
 
+    [[nodiscard]] bool is_finite(const math::vec3 &value) noexcept {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    }
+
+    [[nodiscard]] bool all_finite(std::span<const math::vec3> values) noexcept {
+        return std::all_of(values.begin(), values.end(), [](const math::vec3 &value) { return is_finite(value); });
+    }
+
+    /// <summary>
+    /// Finite corners with min <= max on every axis (what from_geometry computes for real positions).
+    /// </summary>
+    [[nodiscard]] bool is_valid_bounds(const math::aabb &bounds) noexcept {
+        if (!is_finite(bounds.min) || !is_finite(bounds.max)) {
+            return false;
+        }
+        return bounds.min.x <= bounds.max.x && bounds.min.y <= bounds.max.y && bounds.min.z <= bounds.max.z;
+    }
+
     [[nodiscard]] u8 to_unorm8(f32 value) noexcept {
         return static_cast<u8>(std::lround(math::saturate(value) * 255.0f));
     }
@@ -210,6 +228,9 @@ core::result<mesh_asset> mesh_asset::from_geometry(const mesh_geometry &geometry
     CONJURE_TRY(checkAttribute(geometry.uv0.size(), "uv0"));
     CONJURE_TRY(checkAttribute(geometry.uv1.size(), "uv1"));
     CONJURE_TRY(checkAttribute(geometry.colours.size(), "colour"));
+    if (!all_finite(geometry.positions)) {
+        return invalid_geometry("non-finite position");
+    }
     for (const u32 index : geometry.indices) {
         if (index >= vertexCount) {
             return invalid_geometry("index out of range");
@@ -403,6 +424,9 @@ core::result<mesh_asset> mesh_asset::parse_blob(std::span<const std::byte> bytes
     mesh_asset result = {};
     CONJURE_TRY_ASSIGN(result.mName, reader.read_string(detail::MAX_BLOB_NAME_LENGTH));
     CONJURE_TRY_ASSIGN(result.mStreams.positions, reader.read_array<math::vec3>(vertexCount, "positions"));
+    if (!all_finite(result.mStreams.positions)) {
+        return reader.invalid("non-finite position");
+    }
     CONJURE_TRY_ASSIGN(
       result.mStreams.attributes,
       reader.read_array<packed_vertex_attributes>(vertexCount, "attributes")
@@ -425,6 +449,9 @@ core::result<mesh_asset> mesh_asset::parse_blob(std::span<const std::byte> bytes
           static_cast<u64>(part.firstIndex) + part.indexCount > indexCount || part.materialSlot >= MAX_MATERIAL_SLOTS) {
             return reader.invalid("submesh range is inconsistent");
         }
+        if (!is_valid_bounds(part.bounds)) {
+            return reader.invalid("submesh bounds are not finite or inverted");
+        }
         expectedFirst += part.indexCount;
         result.mSubmeshes.push_back(part);
     }
@@ -433,6 +460,9 @@ core::result<mesh_asset> mesh_asset::parse_blob(std::span<const std::byte> bytes
     }
     CONJURE_TRY_ASSIGN(result.mBounds.min, reader.read_vec3());
     CONJURE_TRY_ASSIGN(result.mBounds.max, reader.read_vec3());
+    if (!is_valid_bounds(result.mBounds)) {
+        return reader.invalid("mesh bounds are not finite or inverted");
+    }
     if (reader.remaining() != 0) {
         return reader.invalid("trailing bytes");
     }

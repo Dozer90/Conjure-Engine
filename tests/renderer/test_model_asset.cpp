@@ -14,6 +14,7 @@
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <string>
@@ -218,6 +219,36 @@ TEST_SUITE("renderer/model_asset") {
           model_asset::parse_json(R"({"nodes": [{"camera": {"projection": "fisheye"}}]})"),
           core::error_code::INVALID_ARGUMENT
         );
+    }
+
+    TEST_CASE("model_asset - parse_json rejects mesh, parent and material indices beyond u32") {
+        // One mesh and one material, so index 0 is in range: a value that wrapped to 0 used to pass.
+        const std::string lists = std::string(R"({"meshes": [")") + core::uuid(1, 1).to_string() +
+          R"("], "materials": [")" + core::uuid(2, 1).to_string() + R"("], "nodes": [{"name": "root"}, )";
+        const std::array<std::string_view, 5> outOfRange = {
+          R"({"mesh": 4294967296})",
+          R"({"mesh": 4294967295})",
+          R"({"parent": 4294967295})",
+          R"({"mesh": 18446744073709551615})",
+          R"({"materials": [18446744073709551615]})",
+        };
+        for (const std::string_view node : outOfRange) {
+            CAPTURE(node);
+            const std::string text = lists + std::string(node) + "]}";
+            CONJURE_CHECK_ERROR(model_asset::parse_json(text), core::error_code::INVALID_ARGUMENT);
+        }
+        // -1 is the written form of INVALID_INDEX and still parses as it; the largest index is fine.
+        core::result<model_asset> valid = model_asset::parse_json(
+          lists + R"({"mesh": -1, "parent": -1, "materials": [-1, 0]}, {"mesh": 0, "parent": 0}]})"
+        );
+        CONJURE_REQUIRE_OK(valid);
+        REQUIRE(valid.value().nodes().size() == 3);
+        CHECK(valid.value().nodes()[1].mesh == INVALID_INDEX);
+        CHECK(valid.value().nodes()[1].parent == INVALID_INDEX);
+        CHECK(valid.value().nodes()[1].materials[0] == INVALID_INDEX);
+        CHECK(valid.value().nodes()[1].materials[1] == 0);
+        CHECK(valid.value().nodes()[2].mesh == 0);
+        CHECK(valid.value().nodes()[2].parent == 0);
     }
 
     TEST_CASE("model_loader - loads the JSON payload and has no fallback") {

@@ -45,7 +45,7 @@ from them every frame. The renderer itself never includes the ECS.
 | `conjure/renderer/render_settings.h` | `post_process_settings`, `shadow_settings`, `ssao_settings`, `environment_settings`, `tonemap_operator`, `exposure_mode` |
 | `conjure/renderer/render_target.h` | `render_target_desc`, `render_target`, `is_render_target_colour_format()` |
 | `conjure/renderer/sprite_batch.h` | `sprite`, `sprite_space`, `sprite_batcher` |
-| `conjure/renderer/debug_draw.h` | `debug_draw_buffer`, `debug_draw` (timed shapes), `debug_vertex` |
+| `conjure/renderer/debug_draw.h` | `debug_draw_buffer`, `debug_draw` (timed shapes), `debug_depth` (TESTED / OVERLAY), `debug_vertex`, `pack_debug_colour()` |
 | `conjure/renderer/gpu_ids.h` | `gpu_mesh_id`, `gpu_texture_id`, `gpu_material_id`, `gpu_environment_id`, `render_target_id` |
 | `conjure/renderer/limits.h` | the budgets: `MAX_VIEWS`, `MAX_LIGHTS_PER_VIEW`, `MAX_SHADOW_CASCADES`, `MAX_SPRITES_PER_FRAME`, `MAX_MATERIAL_SLOTS`, ... |
 | `conjure/renderer/components.h` | the five reflected components and `register_components()` |

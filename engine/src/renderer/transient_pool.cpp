@@ -107,7 +107,8 @@ nvrhi::BufferDesc transient_pool::to_nvrhi(const graph_buffer_desc &desc) {
 nvrhi::ITexture *transient_pool::acquire(const graph_texture_desc &desc, u64 frameIndex) {
     std::vector<pooled_texture> &bucket = mTextures[desc.hash()];
     for (pooled_texture &entry : bucket) {
-        if (entry.inUse) {
+        // A 64-bit hash may collide: an entry of another description is never handed out.
+        if (entry.inUse || !entry.desc.same_storage(desc)) {
             continue;
         }
         entry.inUse = true;
@@ -130,6 +131,7 @@ nvrhi::ITexture *transient_pool::acquire(const graph_texture_desc &desc, u64 fra
     ++mTexturesCreated;
     pooled_texture entry = {};
     entry.texture = created;
+    entry.desc = desc;
     entry.inUse = true;
     entry.inUseFrame = frameIndex;
     entry.lastUsedFrame = frameIndex;
@@ -140,7 +142,7 @@ nvrhi::ITexture *transient_pool::acquire(const graph_texture_desc &desc, u64 fra
 nvrhi::IBuffer *transient_pool::acquire_buffer(const graph_buffer_desc &desc, u64 frameIndex) {
     std::vector<pooled_buffer> &bucket = mBuffers[desc.hash()];
     for (pooled_buffer &entry : bucket) {
-        if (entry.inUse) {
+        if (entry.inUse || !entry.desc.same_storage(desc)) {
             continue;
         }
         entry.inUse = true;
@@ -160,6 +162,7 @@ nvrhi::IBuffer *transient_pool::acquire_buffer(const graph_buffer_desc &desc, u6
     ++mBuffersCreated;
     pooled_buffer entry = {};
     entry.buffer = created;
+    entry.desc = desc;
     entry.inUse = true;
     entry.lastUsedFrame = frameIndex;
     bucket.push_back(std::move(entry));
@@ -167,8 +170,10 @@ nvrhi::IBuffer *transient_pool::acquire_buffer(const graph_buffer_desc &desc, u6
 }
 
 void transient_pool::end_frame(u64 frameIndex) {
-    for (auto &[key, bucket] : mTextures) {
-        for (auto iterator = bucket.begin(); iterator != bucket.end();) {
+    // A bucket left empty is erased, so descriptions no longer used are not walked every frame.
+    for (auto bucket = mTextures.begin(); bucket != mTextures.end();) {
+        std::vector<pooled_texture> &entries = bucket->second;
+        for (auto iterator = entries.begin(); iterator != entries.end();) {
             iterator->inUse = false;
             const bool stale = frameIndex >= iterator->lastUsedFrame
               && frameIndex - iterator->lastUsedFrame > mEvictionFrames;
@@ -176,22 +181,33 @@ void transient_pool::end_frame(u64 frameIndex) {
                 if (mFramebuffers != nullptr) {
                     mFramebuffers->remove_texture(iterator->texture.Get());
                 }
-                iterator = bucket.erase(iterator);
+                iterator = entries.erase(iterator);
             } else {
                 ++iterator;
             }
         }
+        if (entries.empty()) {
+            bucket = mTextures.erase(bucket);
+        } else {
+            ++bucket;
+        }
     }
-    for (auto &[key, bucket] : mBuffers) {
-        for (auto iterator = bucket.begin(); iterator != bucket.end();) {
+    for (auto bucket = mBuffers.begin(); bucket != mBuffers.end();) {
+        std::vector<pooled_buffer> &entries = bucket->second;
+        for (auto iterator = entries.begin(); iterator != entries.end();) {
             iterator->inUse = false;
             const bool stale = frameIndex >= iterator->lastUsedFrame
               && frameIndex - iterator->lastUsedFrame > mEvictionFrames;
             if (stale) {
-                iterator = bucket.erase(iterator);
+                iterator = entries.erase(iterator);
             } else {
                 ++iterator;
             }
+        }
+        if (entries.empty()) {
+            bucket = mBuffers.erase(bucket);
+        } else {
+            ++bucket;
         }
     }
 }

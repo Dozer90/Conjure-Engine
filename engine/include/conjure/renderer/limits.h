@@ -3,7 +3,8 @@
 #include "conjure/core/types.h"
 
 // Fixed budgets of the renderer (docs/design/02_renderer.md 2.1). The same values are #defined in
-// engine/shaders/shared/gpu_types.hlsli; tests/renderer/test_gpu_types.cpp compares both sides.
+// engine/shaders/shared/gpu_types.hlsli (except MAX_PASSES_PER_VIEW, which only the CPU uses);
+// tests/renderer/test_gpu_types.cpp compares both sides.
 
 namespace conjure::renderer {
 
@@ -41,6 +42,16 @@ namespace conjure::renderer {
     /// Mip levels of the bloom chain.
     /// </summary>
     inline constexpr u32 BLOOM_MIP_COUNT = 6;
+
+    /// <summary>
+    /// Passes one view's render graph executes at most: a pass per shadow cascade, the bloom chain
+    /// (BLOOM_MIP_COUNT down passes, one up pass fewer) and sixteen single passes (shadow_atlas,
+    /// depth_prepass, light_cull, ssao_gtao, ssao_blur_h, ssao_blur_v, forward_opaque, skybox,
+    /// forward_blend, world_sprites, debug_draw, exposure_histogram, exposure_adapt, tonemap,
+    /// screen_sprites, blit). render_stats::passNames holds MAX_VIEWS times this many. CPU-only: not
+    /// mirrored in gpu_types.hlsli.
+    /// </summary>
+    inline constexpr u32 MAX_PASSES_PER_VIEW = MAX_SHADOW_CASCADES + (2 * BLOOM_MIP_COUNT - 1) + 16;
 
     /// <summary>
     /// Frames a transient texture stays pooled without use before it is released.

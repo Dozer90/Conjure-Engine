@@ -9,6 +9,7 @@
 #include "conjure/core/uuid.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 using namespace conjure;
@@ -20,7 +21,8 @@ namespace {
     }
 
     /// <summary>
-    /// Reads an index member: a non-negative integer, or -1 / missing for INVALID_INDEX.
+    /// Reads an index member: a non-negative integer below INVALID_INDEX, or a negative one / missing
+    /// for INVALID_INDEX. Larger integers fail instead of wrapping into a valid u32.
     /// </summary>
     [[nodiscard]] core::result<u32> read_index(const core::json::value &object, std::string_view key) {
         const core::json::value member = object[key];
@@ -30,9 +32,13 @@ namespace {
         if (!member.is_integer()) {
             return invalid_model(std::string(key) + " must be an integer");
         }
-        const i64 value = member.as_i64(-1);
+        // Integers beyond i64 (only u64 can hold them) take the fallback and fail the range check.
+        const i64 value = member.as_i64(std::numeric_limits<i64>::max());
         if (value < 0) {
             return INVALID_INDEX;
+        }
+        if (value >= static_cast<i64>(INVALID_INDEX)) {
+            return invalid_model(std::string(key) + " is out of range");
         }
         return static_cast<u32>(value);
     }
@@ -232,7 +238,7 @@ core::result<model_asset> model_asset::parse_json(std::string_view text) {
                 if (!material.is_integer()) {
                     return invalid_model("node material indices must be integers");
                 }
-                const i64 value = material.as_i64(-1);
+                const i64 value = material.as_i64(std::numeric_limits<i64>::max());
                 if (value >= 0 && static_cast<u64>(value) >= result.mMaterials.size()) {
                     return invalid_model("node material index out of range");
                 }

@@ -242,6 +242,30 @@ TEST_SUITE("renderer/shadow_atlas_allocator") {
     }
 
     TEST_CASE(
+      "regression - sweep-2026-11-12 F375 a non-power-of-two atlas edge is rounded down and still grants tiles"
+    ) {
+        // A 3000 edge splits into 1500, 750 and 375 texel nodes, none of which is a valid tile size: every
+        // request used to be dropped. The edge is rounded down to 2048 instead.
+        shadow_atlas_allocator allocator(3000);
+        CHECK(allocator.atlas_size() == 2048);
+        CHECK(allocator.max_tile_size() == 1024);
+        std::vector<atlas_request> requests = {request(1, 1024), request(2, 512), request(3, 256, 6)};
+        allocator.allocate(requests);
+        CHECK(allocator.allocations()[0].tileCount == 1);
+        CHECK(allocator.allocations()[0].grantedSize == 1024);
+        CHECK(allocator.allocations()[1].grantedSize == 512);
+        CHECK(allocator.allocations()[2].tileCount == 6);
+        CHECK(allocator.allocations()[2].grantedSize == 256);
+        CHECK(allocator.dropped_count() == 0);
+        CHECK(tiles_disjoint(allocator));
+        // Already a power of two: unchanged, also above the largest tile.
+        shadow_atlas_allocator exact(8192);
+        CHECK(exact.atlas_size() == 8192);
+        shadow_atlas_allocator justBelow(511);
+        CHECK(justBelow.atlas_size() == 256);
+    }
+
+    TEST_CASE(
       "shadow_atlas_allocator - many mixed requests fill the atlas without overlap and in order of importance"
     ) {
         shadow_atlas_allocator allocator(4096);

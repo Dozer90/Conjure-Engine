@@ -69,16 +69,21 @@ the renderer draws for a missing asset; none of them touches the GPU (that is `r
 `mesh_geometry` is the unpacked input (`positions`, `normals`, `tangents`, `uv0`, `uv1`, `colours`, `indices`,
 `submeshIndexCounts`, `submeshMaterialSlots`); `mesh_asset::from_geometry` packs it into the GPU layout (`mesh_streams`: 12-byte positions plus packed
 attributes, 16- or 32-bit indices), computes bounds and validates (`INVALID_ARGUMENT` for a non-triangle index
-count, an index out of range or inconsistent submeshes). `submeshes()` lists `{firstIndex, indexCount,
-materialSlot, bounds}`; `bounds()`, `vertex_count()`, `index_count()`, `triangle_count()`, `gpu_byte_size()` and
-`name()` describe it. `parse_blob` / `write_blob` are the cooked form (`MESH_BLOB_VERSION`).
+count, an index out of range, inconsistent submeshes or a non-finite (NaN or infinite) position). `submeshes()`
+lists `{firstIndex, indexCount, materialSlot, bounds}`; `bounds()`, `vertex_count()`, `index_count()`,
+`triangle_count()`, `gpu_byte_size()` and `name()` describe it. `parse_blob` / `write_blob` are the cooked form
+(`MESH_BLOB_VERSION`); `parse_blob` also rejects non-finite positions and non-finite or inverted (min above max)
+submesh and mesh bounds with `INVALID_ASSET`.
 
 ### Textures
 
 `texture_asset` holds RGBA8 mips (`mips()`, `width()`, `height()`, `mip_count()`), a colour space
 (`texture_colour_space::SRGB` or `LINEAR`), a `sampler_filter` and a `texture_wrap`; `pixel(x, y)` reads the top
 mip. `decode(bytes, settings)` runs the image decoders, `from_image` wraps a `core::image`, `load_from_file` reads a
-file, `mip_count_for(width, height)` says how many mips a size gets. `MAX_DIMENSION` is 16384.
+file (any path, Unicode included; `name()` is its UTF-8 filename), `mip_count_for(width, height)` says how many
+mips a size gets. `MAX_DIMENSION` is 16384: `decode` reads the image header first and refuses a larger image with
+`INVALID_ARGUMENT` before decoding any of it. `parse_blob` accepts only a mip chain the base size allows and an
+RGBA8 format that matches the colour space (`RGBA8_SRGB` for sRGB, `RGBA8_UNORM` for linear).
 
 ### Materials
 
@@ -87,22 +92,28 @@ file, `mip_count_for(width, height)` says how many mips a size gets. `MAX_DIMENS
 (`alpha_mode::SOLID`, `MASK`, `BLEND`; `SOLID` is glTF's opaque mode under a name that is not a Windows macro),
 `doubleSided`, `unlit`, and `textures[MATERIAL_TEXTURE_SLOTS]` as `asset_ref<texture_asset>` (base colour,
 metallic-roughness, normal, occlusion, emissive; `material_texture` names the slots) with per-slot UV set
-indices. `parse_json` / `to_json` are the `.cmat` text form, `parse_blob` / `write_blob` the cooked one.
+indices. `parse_json` / `to_json` are the `.cmat` text form, `parse_blob` / `write_blob` the cooked one. The
+`.cmat` keys are the British spellings `to_json` writes; unknown keys import with a warning, which names the
+`.cmat` key for a glTF spelling when that key exists at the same level (a top-level `baseColorFactor` is reported
+as "did you mean 'baseColourFactor'?", a `baseColor` inside `textures` as "did you mean 'baseColour'?").
 
 ### Models
 
 `model_asset` is a flat, parent-first list of `model_node {name, parent, localTransform, mesh, materials[],
 hasLight, lightData, hasCamera, cameraData}` plus the mesh and material asset ids the nodes index. `add_node`,
 `add_mesh`, `add_material` build one; `root_nodes()`, `children_of(node)` and `world_transform(node)` walk it. The
-JSON form (`parse_json`, `to_json`) is what the importer cooks.
+JSON form (`parse_json`, `to_json`) is what the importer cooks; `-1` is the written form of "no index", and an
+index of 4294967295 or more fails with `INVALID_ARGUMENT` instead of wrapping.
 
 ### Environments
 
 An `environment_asset` carries the sky `cubemap_data` (six faces, mip chain), the `prefiltered()` specular
 cubemap (`ENVIRONMENT_MIP_COUNT` roughness levels) and the `irradiance()` SH9 coefficients.
 `bake_environment(equirect_image, environment_bake_options {skySize, prefilteredSize, sampleCount}, jobs)`
-produces one from a decoded `.hdr` (`equirect_image::decode_hdr(bytes)`); `environment_asset::uniform(radiance,
-size)` is a flat sky for tests;
+produces one from a decoded `.hdr` (`equirect_image::decode_hdr(bytes)`); the cubemaps store radiance clamped to
+the finite half range (65504), so a sun brighter than that bakes as 65504 rather than infinity.
+`environment_asset::uniform(radiance, size)` is a flat sky for tests; the loader's fallback and the renderer's
+ambient for a scene without an environment are both `uniform(FALLBACK_ENVIRONMENT_RADIANCE)` (0.25).
 `evaluate_sh9_irradiance` and `cubemap_texel_direction` are the helpers the shaders mirror.
 
 > [!NOTE]
@@ -111,12 +122,15 @@ size)` is a flat sky for tests;
 
 ## The glTF importer
 
-`gltf_importer::import(path, options)` reads a `.gltf` or `.glb` with its external buffers and images;
+`gltf_importer::import(path, options)` reads a `.gltf` or `.glb` with its external buffers and images; those URIs
+must stay inside the model's directory: absolute paths and `..` segments that leave it fail with `NOT_FOUND`.
 `import_bytes(bytes, options, reader)` reads from memory and asks `reader(relativePath)` for the rest. The result
 holds `meshes`, `materials` (plus `materialTextures`, the texture indices per material slot), `textures`, the
 `model` and `warnings`. `gltf_import_options` has `generateTangents`, `scale`, `importCameras` and
 `importLights` (KHR_lights_punctual). Skins, animations, texture transforms and unknown extensions are warnings;
-malformed files are `PARSE_FAILURE`, missing buffers `NOT_FOUND`, points and lines `UNSUPPORTED`.
+malformed files are `PARSE_FAILURE` (the document is validated first: an accessor or buffer view that reaches past
+its buffer, a `byteStride` above 252, a node cycle or a `COLOR_0` that is not `VEC3` or `VEC4` is malformed),
+missing buffers `NOT_FOUND`, points and lines `UNSUPPORTED`. Node trees of any depth import.
 
 `gltf_asset_importer` is the pipeline adapter: the model is the primary asset, meshes, materials and textures are
 sub-assets with stable uuids (`mesh/<i>`, `material/<i>`, `texture/<i>`), and the model depends on them so a

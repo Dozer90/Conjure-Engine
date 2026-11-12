@@ -18,11 +18,13 @@
 #include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/rhi/texture_format.h"
 
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 // texture_asset.h (docs/design/02_renderer.md 2.6, 4.2): RGBA8 textures with CPU mips, decoding
@@ -61,6 +63,65 @@ namespace {
         }
         return bytes;
     }
+
+    void append_u32_big_endian(std::vector<std::byte> &bytes, u32 value) {
+        for (const u32 shift : {24u, 16u, 8u, 0u}) {
+            bytes.push_back(static_cast<std::byte>((value >> shift) & 0xFFu));
+        }
+    }
+
+    void append_u32(std::vector<std::byte> &bytes, u32 value) {
+        for (const u32 shift : {0u, 8u, 16u, 24u}) {
+            bytes.push_back(static_cast<std::byte>((value >> shift) & 0xFFu));
+        }
+    }
+
+    void write_u32(std::vector<std::byte> &bytes, usize offset, u32 value) {
+        for (usize index = 0; index < 4; ++index) {
+            bytes[offset + index] = static_cast<std::byte>((value >> (index * 8)) & 0xFFu);
+        }
+    }
+
+    /// <summary>
+    /// The start of an RGBA PNG: the signature, an IHDR of the given size (stb does not check its CRC)
+    /// and the header of an empty IDAT. stb's header scan stops at the first IDAT, so the size is
+    /// readable while a decode fails for want of image data.
+    /// </summary>
+    [[nodiscard]] std::vector<std::byte> png_header_only(u32 width, u32 height) {
+        constexpr std::array<u8, 8> SIGNATURE = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        constexpr std::array<u8, 5> FORMAT = {8, 6, 0, 0, 0};   // 8 bits per channel, RGBA, deflate, no interlace
+        std::vector<std::byte> bytes = {};
+        for (const u8 value : SIGNATURE) {
+            bytes.push_back(static_cast<std::byte>(value));
+        }
+        append_u32_big_endian(bytes, 13);
+        for (const char character : std::string_view("IHDR")) {
+            bytes.push_back(static_cast<std::byte>(character));
+        }
+        append_u32_big_endian(bytes, width);
+        append_u32_big_endian(bytes, height);
+        for (const u8 value : FORMAT) {
+            bytes.push_back(static_cast<std::byte>(value));
+        }
+        append_u32_big_endian(bytes, 0);              // CRC
+        append_u32_big_endian(bytes, 0);
+        for (const char character : std::string_view("IDAT")) {
+            bytes.push_back(static_cast<std::byte>(character));
+        }
+        append_u32_big_endian(bytes, 0);              // CRC
+        return bytes;
+    }
+
+    /// <summary>
+    /// Offset of the first mip's pixels in a .ctex blob: magic, version, four enumerator bytes, the mip
+    /// count, the name, then the mip's width, height and byte count.
+    /// </summary>
+    [[nodiscard]] usize first_pixel_offset(const texture_asset &texture) noexcept {
+        return 4 + 4 + 4 + 4 + 4 + texture.name().size() + 4 + 4 + 8;
+    }
+
+    constexpr usize CTEX_COLOUR_SPACE_OFFSET = 9;
+    constexpr usize CTEX_MIP_COUNT_OFFSET = 12;
 }
 
 TEST_SUITE("renderer/texture_asset") {
@@ -278,12 +339,8 @@ TEST_SUITE("renderer/texture_asset") {
     }
 
     TEST_CASE("texture_asset - corrupt blobs fail with INVALID_ASSET") {
-        const std::vector<std::byte> blob = texture_asset::checker(
-          core::rgba8{},
-          core::rgba8{255, 255, 255, 255},
-          4,
-          2
-        ).write_blob();
+        const texture_asset source = texture_asset::checker(core::rgba8{}, core::rgba8{255, 255, 255, 255}, 4, 2);
+        const std::vector<std::byte> blob = source.write_blob();
         CONJURE_CHECK_ERROR(texture_asset::parse_blob({}), renderer_error::INVALID_ASSET);
         std::vector<std::byte> badMagic = blob;
         badMagic[1] = std::byte{'?'};
@@ -301,15 +358,100 @@ TEST_SUITE("renderer/texture_asset") {
         std::vector<std::byte> trailing = blob;
         trailing.push_back(std::byte{1});
         CONJURE_CHECK_ERROR(texture_asset::parse_blob(trailing), renderer_error::INVALID_ASSET);
-        // A huge mip count or size in the header must not allocate blindly.
-        for (usize offset = 8; offset < 40 && offset < blob.size(); ++offset) {
+        // A corrupted header field (enumerators, mip count, name length, the first mip's size and byte
+        // count) must fail; a corrupted pixel byte may parse but never changes the layout.
+        const usize pixels = first_pixel_offset(source);
+        for (usize offset = 8; offset < pixels + 4 && offset < blob.size(); ++offset) {
+            CAPTURE(offset);
             std::vector<std::byte> huge = blob;
             huge[offset] = std::byte{0xFF};
             const core::result<texture_asset> parsed = texture_asset::parse_blob(huge);
+            if (offset < pixels) {
+                CHECK_FALSE(parsed.has_value());
+            }
             if (!parsed.has_value()) {
                 CHECK(parsed.get_error().is(renderer_error::INVALID_ASSET));
+                continue;
             }
+            CHECK(parsed.value().width() == source.width());
+            CHECK(parsed.value().height() == source.height());
+            CHECK(parsed.value().mip_count() == source.mip_count());
+            CHECK(parsed.value().format() == source.format());
+            CHECK(parsed.value().gpu_byte_size() == source.gpu_byte_size());
         }
+    }
+
+    TEST_CASE(
+      "texture_asset - parse_blob rejects a mip chain longer than the base size allows and an RGBA8 format "
+      "that disagrees with the colour space"
+    ) {
+        // A 2x2 texture has two mips; a third 1x1 one used to pass the halving rule.
+        const core::rgba8 colour = {1, 2, 3, 4};
+        const texture_asset small = texture_asset::solid_colour(colour, texture_colour_space::SRGB, 2, 2);
+        REQUIRE(small.mip_count() == 2);
+        std::vector<std::byte> longChain = small.write_blob();
+        CONJURE_REQUIRE_OK(texture_asset::parse_blob(longChain));
+        write_u32(longChain, CTEX_MIP_COUNT_OFFSET, 3);
+        append_u32(longChain, 1);
+        append_u32(longChain, 1);
+        append_u32(longChain, 4);
+        append_u32(longChain, 0);
+        longChain.insert(longChain.end(), 4, std::byte{7});
+        CONJURE_CHECK_ERROR(texture_asset::parse_blob(longChain), renderer_error::INVALID_ASSET);
+
+        // RGBA8_UNORM is the linear format; claiming sRGB for it is a corrupt blob.
+        const texture_asset linear = texture_asset::solid_colour(colour, texture_colour_space::LINEAR);
+        REQUIRE(linear.format() == rhi::texture_format::RGBA8_UNORM);
+        std::vector<std::byte> mismatched = linear.write_blob();
+        CONJURE_REQUIRE_OK(texture_asset::parse_blob(mismatched));
+        mismatched[CTEX_COLOUR_SPACE_OFFSET] = static_cast<std::byte>(texture_colour_space::SRGB);
+        CONJURE_CHECK_ERROR(texture_asset::parse_blob(mismatched), renderer_error::INVALID_ASSET);
+    }
+
+    TEST_CASE("texture_asset - decode refuses an image whose header exceeds MAX_DIMENSION before decoding it") {
+        // 20000 x 16 RGBA fits stb's own size budget, so only the engine's limit refuses it; without the
+        // header check the decode ran first and failed on the missing image data instead.
+        const std::vector<std::byte> wide = png_header_only(20000, 16);
+        const core::result<texture_asset> decoded = texture_asset::decode(wide, texture_colour_space::SRGB, false);
+        CONJURE_CHECK_ERROR(decoded, core::error_code::INVALID_ARGUMENT);
+        if (!decoded.has_value()) {
+            CHECK(decoded.get_error().message().find("texel limit") != std::string::npos);
+        }
+        // Within the limit the same truncated file is an ordinary decode failure.
+        CONJURE_CHECK_ERROR(
+          texture_asset::decode(png_header_only(64, 16), texture_colour_space::SRGB, false),
+          renderer_error::DECODE_FAILED
+        );
+    }
+
+    TEST_CASE("texture_asset - load_from_file handles non-ASCII paths without throwing") {
+        // Japanese names no Western ANSI code page can encode: path::string() throws for them on Windows.
+        temp_directory directory("texture_utf8");
+        const std::u8string_view missingName = u8"存在しない.png";
+        const core::result<texture_asset> missing = texture_asset::load_from_file(
+          directory.path() / std::filesystem::path(missingName),
+          texture_colour_space::SRGB
+        );
+        CONJURE_CHECK_ERROR(missing, core::error_code::NOT_FOUND);
+        const std::string missingUtf8(reinterpret_cast<const char *>(missingName.data()), missingName.size());
+        if (!missing.has_value()) {
+            CHECK(missing.get_error().message().find(missingUtf8) != std::string::npos);
+        }
+
+        const std::vector<std::byte> png = png_of(2, 2, core::rgba8{5, 6, 7, 8});
+        const std::filesystem::path ascii = directory.write_file(
+          "ascii.png",
+          std::string_view(reinterpret_cast<const char *>(png.data()), png.size())
+        );
+        const std::u8string_view name = u8"画像.png";
+        const std::filesystem::path named = directory.path() / std::filesystem::path(name);
+        std::error_code renameError = {};
+        std::filesystem::rename(ascii, named, renameError);
+        REQUIRE_FALSE(renameError);
+        core::result<texture_asset> loaded = texture_asset::load_from_file(named, texture_colour_space::LINEAR);
+        CONJURE_REQUIRE_OK(loaded);
+        CHECK(loaded.value().pixel(1, 1) == core::rgba8{5, 6, 7, 8});
+        CHECK(loaded.value().name() == std::string_view(reinterpret_cast<const char *>(name.data()), name.size()));
     }
 
     TEST_CASE("texture_import_settings - JSON round-trips, missing keys keep defaults and bad values fail") {

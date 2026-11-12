@@ -5,6 +5,7 @@
 #include "conjure/core/hash.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <span>
@@ -63,7 +64,7 @@ math::vec4 atlas_tile::uv_rect(u32 atlasSize) const noexcept {
 }
 
 shadow_atlas_allocator::shadow_atlas_allocator(u32 atlasSize) :
-    mAtlasSize(std::max<u32>(atlasSize, MIN_SHADOW_TILE_SIZE)),
+    mAtlasSize(std::bit_floor(std::max<u32>(atlasSize, MIN_SHADOW_TILE_SIZE))),
     mMinTile(MIN_SHADOW_TILE_SIZE),
     mMaxTile(std::min<u32>(MAX_SHADOW_TILE_SIZE, mAtlasSize)) {
     rebuild_tree();

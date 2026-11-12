@@ -15,6 +15,7 @@ conjure_add_shaders(
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/brdf.hlsli"
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/colour.hlsli"
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/common.hlsli"
+        "${CMAKE_CURRENT_SOURCE_DIR}/shared/fullscreen.hlsli"
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/gpu_types.hlsli"
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/mesh_pass.hlsli"
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/noise.hlsli"

@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <vector>
@@ -38,6 +39,14 @@ namespace {
         blob[offset] = value;
         return blob;
     }
+
+    [[nodiscard]] std::vector<std::byte> with_float(std::vector<std::byte> blob, usize offset, f32 value) {
+        std::memcpy(blob.data() + offset, &value, sizeof(value));
+        return blob;
+    }
+
+    // End of the .cmesh header fields: magic, version, vertex, index and submesh counts.
+    constexpr usize MESH_BLOB_COUNTS_END = 20;
 }
 
 TEST_SUITE("renderer/mesh_asset") {
@@ -326,7 +335,8 @@ TEST_SUITE("renderer/mesh_asset") {
     }
 
     TEST_CASE("mesh_asset - corrupt blobs fail with INVALID_ASSET instead of reading out of bounds") {
-        const std::vector<std::byte> blob = mesh_asset::unit_cube().write_blob();
+        const mesh_asset original = mesh_asset::unit_cube();
+        const std::vector<std::byte> blob = original.write_blob();
         CONJURE_CHECK_ERROR(mesh_asset::parse_blob({}), renderer_error::INVALID_ASSET);
         CONJURE_CHECK_ERROR(
           mesh_asset::parse_blob(std::span<const std::byte>(blob).subspan(0, 3)),
@@ -345,12 +355,58 @@ TEST_SUITE("renderer/mesh_asset") {
         std::vector<std::byte> trailing = blob;
         trailing.push_back(std::byte{0});
         CONJURE_CHECK_ERROR(mesh_asset::parse_blob(trailing), renderer_error::INVALID_ASSET);
-        // Every byte flipped somewhere in the counts must either parse to an equal mesh or fail cleanly.
+        // A corrupted header field (version and the three counts) must fail; corrupted name or position
+        // bytes may parse but never change the sizes.
         for (usize offset = 4; offset < 64 && offset < blob.size(); ++offset) {
+            CAPTURE(offset);
             const core::result<mesh_asset> parsed = mesh_asset::parse_blob(corrupt(blob, offset, std::byte{0xFF}));
+            if (offset < MESH_BLOB_COUNTS_END) {
+                CHECK_FALSE(parsed.has_value());
+            }
             if (!parsed.has_value()) {
                 CHECK(parsed.get_error().is(renderer_error::INVALID_ASSET));
+                continue;
             }
+            CHECK(parsed.value().vertex_count() == original.vertex_count());
+            CHECK(parsed.value().index_count() == original.index_count());
+            CHECK(parsed.value().submeshes().size() == original.submeshes().size());
+        }
+    }
+
+    TEST_CASE("mesh_asset - parse_blob rejects non-finite positions and non-finite or inverted bounds") {
+        const mesh_asset quad = mesh_asset::quad(1.0f);
+        const std::vector<std::byte> blob = quad.write_blob();
+        CONJURE_REQUIRE_OK(mesh_asset::parse_blob(blob));
+        // Layout: magic, version, three counts, the name, positions, attributes, indices, then one
+        // submesh {firstIndex, indexCount, materialSlot, bounds} and the mesh bounds.
+        const usize vertexBytes = sizeof(math::vec3) + sizeof(packed_vertex_attributes);
+        const usize positions = MESH_BLOB_COUNTS_END + 4 + quad.name().size();
+        const usize submesh = positions + quad.vertex_count() * vertexBytes + quad.index_count() * sizeof(u32);
+        const usize submeshBoundsMin = submesh + 3 * sizeof(u32);
+        const usize meshBoundsMax = submeshBoundsMin + 2 * sizeof(math::vec3) + sizeof(math::vec3);
+        REQUIRE(meshBoundsMax + sizeof(math::vec3) == blob.size());
+        const f32 notANumber = std::numeric_limits<f32>::quiet_NaN();
+        const f32 infinity = std::numeric_limits<f32>::infinity();
+
+        SUBCASE("a NaN position") {
+            const std::vector<std::byte> patched = with_float(blob, positions, notANumber);
+            CONJURE_CHECK_ERROR(mesh_asset::parse_blob(patched), renderer_error::INVALID_ASSET);
+        }
+        SUBCASE("submesh bounds with min.x above max.x") {
+            const f32 maxX = quad.submeshes()[0].bounds.max.x;
+            const std::vector<std::byte> patched = with_float(blob, submeshBoundsMin, maxX + 1.0f);
+            CONJURE_CHECK_ERROR(mesh_asset::parse_blob(patched), renderer_error::INVALID_ASSET);
+        }
+        SUBCASE("an infinite mesh bound") {
+            const std::vector<std::byte> patched = with_float(blob, meshBoundsMax, infinity);
+            CONJURE_CHECK_ERROR(mesh_asset::parse_blob(patched), renderer_error::INVALID_ASSET);
+        }
+        SUBCASE("from_geometry with a NaN or infinite position") {
+            mesh_geometry geometry = triangle_geometry();
+            geometry.positions[1].y = notANumber;
+            CONJURE_CHECK_ERROR(mesh_asset::from_geometry(geometry), core::error_code::INVALID_ARGUMENT);
+            geometry.positions[1].y = infinity;
+            CONJURE_CHECK_ERROR(mesh_asset::from_geometry(geometry), core::error_code::INVALID_ARGUMENT);
         }
     }
 

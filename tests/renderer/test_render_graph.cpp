@@ -11,6 +11,7 @@
 #include "renderer/timer_ring.h"
 #include "renderer/transient_pool.h"
 
+#include "conjure/renderer/limits.h"
 #include "conjure/renderer/renderer.h"
 
 #include "conjure/core/log.h"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The render graph (docs/design/02_renderer.md R3, 2.7, 10 "test_render_graph"): declaration
@@ -620,5 +622,48 @@ TEST_SUITE("renderer/render_graph") {
         fixture.run(2);
         CHECK(fixture.log.empty());
         CHECK(fixture.stats.passesExecuted == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F402 pass names of MAX_VIEWS graphs of MAX_PASSES_PER_VIEW passes are all recorded"
+    ) {
+        // One render_stats collects every view's graph of a frame; at the largest frame the list used to
+        // stop at 192 names, so executed() and count() under-reported the last views.
+        graph_fixture fixture = {};
+        const auto sideEffect = [](pass_builder &builder) {
+            builder.side_effect();
+        };
+        std::vector<std::unique_ptr<scripted_pass>> passes = {};
+        for (u32 index = 0; index < MAX_PASSES_PER_VIEW; ++index) {
+            const std::string name = "pass_" + std::to_string(index);
+            passes.push_back(std::make_unique<scripted_pass>(name, fixture.log, sideEffect));
+            passes.back()->mute();
+        }
+        fixture.stats.reset();
+        for (u32 view = 0; view < MAX_VIEWS; ++view) {
+            fixture.graph.reset();
+            for (const std::unique_ptr<scripted_pass> &pass : passes) {
+                fixture.graph.add_pass(*pass);
+            }
+            const u64 frameIndex = view + 1;
+            fixture.graph.compile(*fixture.pool, frameIndex);
+            fixture.commandList->open();
+            fixture.graph.execute(
+              *fixture.commandList,
+              *fixture.framebuffers,
+              fixture.constants,
+              fixture.stats,
+              nullptr
+            );
+            fixture.commandList->close();
+            nvrhi::ICommandList *list = fixture.commandList.Get();
+            fixture.device->native_device()->executeCommandLists(&list, 1);
+            fixture.pool->end_frame(frameIndex);
+        }
+        CHECK(fixture.stats.passesExecuted == MAX_VIEWS * MAX_PASSES_PER_VIEW);
+        CHECK(fixture.stats.passNames.size() == fixture.stats.passesExecuted);
+        CHECK(fixture.stats.count(passes.front()->name()) == MAX_VIEWS);
+        CHECK(fixture.stats.count(passes.back()->name()) == MAX_VIEWS);
+        CHECK(std::string_view(fixture.stats.passNames.back()) == passes.back()->name());
     }
 }

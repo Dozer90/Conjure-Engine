@@ -9,7 +9,8 @@
 #include <vector>
 
 // Quadtree tile allocator for the local-light shadow atlas (docs/design/02_renderer.md R9, 3.4):
-// one 4096^2 (configurable) atlas with leaves of 1024, 512 and 256 texels. Every frame the
+// one 4096^2 (configurable) atlas with leaves of 1024, 512 and 256 texels; the edge is rounded down
+// to a power of two so every quadtree level is a valid tile size. Every frame the
 // shadow-casting lights are offered in importance order; a light keeps its tiles across frames while
 // its request (size and tile count) is unchanged, a request that no longer fits is halved down to
 // 256, and a light that still does not fit renders unshadowed. Point lights take six tiles.

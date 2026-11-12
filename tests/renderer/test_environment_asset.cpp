@@ -20,6 +20,7 @@
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/memory_file_system.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -87,6 +88,16 @@ namespace {
             bytes.push_back(static_cast<std::byte>(character));
         }
         return bytes;
+    }
+
+    // A .cenv cubemap header: size (u32), mip count (u32), texel count (u64).
+    constexpr usize CUBEMAP_HEADER_SIZE = 16;
+
+    /// <summary>
+    /// Offset of the sky cubemap header in a .cenv blob: magic, version, the name, then nine SH vec3s.
+    /// </summary>
+    [[nodiscard]] usize sky_header_offset(const environment_asset &environment) noexcept {
+        return 4 + 4 + 4 + environment.name().size() + 9 * sizeof(math::vec3);
     }
 }
 
@@ -385,15 +396,76 @@ TEST_SUITE("renderer/environment_asset") {
         std::vector<std::byte> trailing = blob;
         trailing.push_back(std::byte{0});
         CONJURE_CHECK_ERROR(environment_asset::parse_blob(trailing), renderer_error::INVALID_ASSET);
-        // A cubemap header claiming an enormous size must be refused, not allocated.
-        for (usize offset = 8; offset < 140 && offset < blob.size(); ++offset) {
+        // A corrupted name length or sky cubemap header (size, mip count, texel count) must be refused,
+        // not allocated; corrupted name, SH or texel bytes may parse but never change the layout.
+        const usize skyHeader = sky_header_offset(baked.value());
+        for (usize offset = 8; offset < skyHeader + CUBEMAP_HEADER_SIZE + 1 && offset < blob.size(); ++offset) {
+            CAPTURE(offset);
             std::vector<std::byte> huge = blob;
             huge[offset] = std::byte{0xFF};
             const core::result<environment_asset> result = environment_asset::parse_blob(huge);
+            const bool nameLength = offset < 12;
+            const bool skyHeaderField = offset >= skyHeader && offset < skyHeader + CUBEMAP_HEADER_SIZE;
+            if (nameLength || skyHeaderField) {
+                CHECK_FALSE(result.has_value());
+            }
             if (!result.has_value()) {
                 CHECK(result.get_error().is(renderer_error::INVALID_ASSET));
+                continue;
+            }
+            CHECK(result.value().gpu_byte_size() == baked.value().gpu_byte_size());
+            CHECK(result.value().sky().is_consistent());
+            CHECK(result.value().prefiltered().is_consistent());
+        }
+    }
+
+    TEST_CASE("environment_asset - parse_blob rejects a cubemap mip count above the size's chain") {
+        const environment_asset grey = environment_asset::uniform(math::vec3(0.5f), 4);
+        REQUIRE(grey.sky().mipCount == 3);
+        const std::vector<std::byte> blob = grey.write_blob();
+        CONJURE_REQUIRE_OK(environment_asset::parse_blob(blob));
+
+        // A size-4 cubemap has the chain 4, 2, 1; a fourth (repeated 1x1) level used to be accepted
+        // because the mip size clamps at 1.
+        cubemap_data overlong = grey.sky();
+        overlong.mipCount = 4;
+        overlong.texels.resize(overlong.texels.size() + overlong.face_length(3) * CUBEMAP_FACE_COUNT, pack_half(0.5f));
+        REQUIRE(overlong.is_consistent());
+        const environment_asset tampered(overlong, grey.prefiltered(), grey.irradiance(), "uniform");
+        CONJURE_CHECK_ERROR(environment_asset::parse_blob(tampered.write_blob()), renderer_error::INVALID_ASSET);
+        // Non-power-of-two sizes keep their full chain.
+        const environment_asset odd = environment_asset::uniform(math::vec3(0.5f), 5);
+        core::result<environment_asset> parsed = environment_asset::parse_blob(odd.write_blob());
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value() == odd);
+    }
+
+    TEST_CASE("regression - an HDRI texel above the half range bakes to finite halves") {
+        // A constant sky with a small sun of 1e6 at the image centre (+Z): RGBA16F tops out at 65504,
+        // and the sun used to pack to +inf, which bloom's Karis weight turns into NaN.
+        equirect_image source = equirect_image::constant(32, 16, math::vec3(1.0f));
+        for (u32 y = 6; y < 10; ++y) {
+            for (u32 x = 14; x < 18; ++x) {
+                const usize index = (static_cast<usize>(y) * source.width + x) * 3;
+                source.rgb[index] = 1.0e6f;
+                source.rgb[index + 1] = 1.0e6f;
+                source.rgb[index + 2] = 1.0e6f;
             }
         }
+        core::result<environment_asset> baked = bake_environment(source, small_options(), nullptr);
+        CONJURE_REQUIRE_OK(baked);
+        const auto finite = [](const cubemap_data &cubemap) {
+            return std::ranges::none_of(cubemap.texels, [](u16 half) { return (half & 0x7C00u) == 0x7C00u; });
+        };
+        CHECK(finite(baked.value().sky()));
+        CHECK(finite(baked.value().prefiltered()));
+        f32 brightest = 0.0f;
+        for (const u16 half : baked.value().sky().texels) {
+            brightest = std::max(brightest, unpack_half(half));
+        }
+        CHECK(brightest == 65504.0f);
+        // Ordinary radiance is untouched.
+        CHECK(baked.value().sky().texel(0, 2, 0, 0).x == doctest::Approx(1.0f).epsilon(0.01));
     }
 
     TEST_CASE("environment_importer - decodes and bakes the .hdr with the settings, inline or on jobs") {
@@ -511,7 +583,8 @@ TEST_SUITE("renderer/environment_asset") {
         REQUIRE(grey != nullptr);
         CHECK(grey->sky().is_consistent());
         const math::vec3 texel = grey->sky().texel(0, 0, 0, 0);
-        CHECK(texel.x == doctest::Approx(0.5f).epsilon(0.01));
+        CHECK(texel.x == doctest::Approx(FALLBACK_ENVIRONMENT_RADIANCE).epsilon(0.01));
+        CHECK(*grey == environment_asset::uniform(math::vec3(FALLBACK_ENVIRONMENT_RADIANCE)));
         CHECK(texel.x == doctest::Approx(texel.y));
         CHECK(texel.x == doctest::Approx(texel.z));
         CHECK(ENVIRONMENT_ASSET_TYPE_NAME == "conjure.renderer.environment");

@@ -23,7 +23,17 @@ float3 view_position_at(float2 uv) {
     return view.xyz / max(abs(view.w), 1e-6) * (view.w < 0.0 ? -1.0 : 1.0);
 }
 
-float horizon_cos(float3 position, float3 view, float2 uv, float2 direction, float stepUv, float thickness, float horizonInit) {
+// stepUv is one step in uv per axis: the same pixel distance is a different uv distance along x and y
+// on a target that is not square.
+float horizon_cos(
+  float3 position,
+  float3 view,
+  float2 uv,
+  float2 direction,
+  float2 stepUv,
+  float thickness,
+  float horizonInit
+) {
     float maxCos = horizonInit;
     [unroll]
     for (int step = 1; step <= CONJURE_GTAO_STEPS; ++step) {
@@ -67,7 +77,7 @@ void cs_main(uint3 threadId : SV_DispatchThreadID) {
     // Projected radius in half-resolution pixels, clamped.
     float projectedScale = gView.clipFromView[1][1] * gView.viewportSize.y * 0.5 / max(-position.z, 1e-3);
     float radiusPixels = min(gView.ssaoParams.x * projectedScale * 0.5, CONJURE_GTAO_MAX_RADIUS_PIXELS);
-    float stepUv = radiusPixels / float(CONJURE_GTAO_STEPS) / float(halfSize.x);
+    float2 stepUv = radiusPixels / float(CONJURE_GTAO_STEPS) / float2(halfSize);
     if (radiusPixels < 1.0) {
         gAmbientOcclusion[threadId.xy] = 1.0;
         return;

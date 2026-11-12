@@ -165,7 +165,7 @@ core::result<texture_asset> texture_asset::load_from_file(
     CONJURE_TRY_ASSIGN(bytes, detail::read_file_bytes(path));
     core::result<texture_asset> decoded = decode(bytes, colourSpace, generateMips);
     if (decoded.has_value()) {
-        decoded.value().mName = path.filename().string();
+        decoded.value().mName = detail::path_utf8(path.filename());
     }
     return decoded;
 }
@@ -240,12 +240,18 @@ core::result<texture_asset> texture_asset::parse_blob(std::span<const std::byte>
     if (!colourSpaceOk || !filterOk || !wrapOk) {
         return reader.invalid("enumerator out of range");
     }
+    // RGBA8 carries its colour space in the format (from_rgba8 picks it); the two must agree.
+    const rhi::texture_format format = static_cast<rhi::texture_format>(formatValue);
+    const bool isRgba8 = format == rhi::texture_format::RGBA8_UNORM || format == rhi::texture_format::RGBA8_SRGB;
+    if (isRgba8 && format != format_for(static_cast<texture_colour_space>(colourSpaceValue))) {
+        return reader.invalid("format does not match the colour space");
+    }
     if (mipCount == 0 || mipCount > 15) {
         return reader.invalid("mip count out of range");
     }
 
     texture_asset result = {};
-    result.mFormat = static_cast<rhi::texture_format>(formatValue);
+    result.mFormat = format;
     result.mColourSpace = static_cast<texture_colour_space>(colourSpaceValue);
     result.mFilter = static_cast<sampler_filter>(filterValue);
     result.mWrap = static_cast<texture_wrap>(wrapValue);
@@ -259,6 +265,10 @@ core::result<texture_asset> texture_asset::parse_blob(std::span<const std::byte>
         CONJURE_TRY_ASSIGN(byteCount, reader.read_u64());
         if (level.width == 0 || level.height == 0 || level.width > MAX_DIMENSION || level.height > MAX_DIMENSION) {
             return reader.invalid("mip size out of range");
+        }
+        // The halving rule below clamps at 1x1, so without this a chain could repeat 1x1 mips.
+        if (mip == 0 && mipCount > mip_count_for(level.width, level.height)) {
+            return reader.invalid("mip count exceeds the chain of the base size");
         }
         const u64 expected = rhi::row_pitch(result.mFormat, level.width) * level.height;
         if (byteCount != expected) {

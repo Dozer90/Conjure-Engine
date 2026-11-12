@@ -11,9 +11,11 @@
 #include <vector>
 
 // Pooled transient resources of the render graph (docs/design/02_renderer.md R3, 2.7). Textures are
-// keyed by the hash of their description without the debug name; one texture is never handed out
-// twice within a frame; a texture unused for TRANSIENT_EVICTION_FRAMES frames is released at
-// end_frame (and the framebuffer cache drops the framebuffers that referenced it). No aliasing.
+// bucketed by the hash of their description without the debug name, and a hash match is confirmed
+// with same_storage before an entry is reused; one texture is never handed out twice within a frame;
+// a texture unused for TRANSIENT_EVICTION_FRAMES frames is released at end_frame (and the framebuffer
+// cache drops the framebuffers that referenced it), and a bucket left empty is erased with it. No
+// aliasing.
 
 namespace conjure::renderer {
 
@@ -53,6 +55,7 @@ namespace conjure::renderer {
         private:
             struct pooled_texture {
                 nvrhi::TextureHandle texture = nullptr;
+                graph_texture_desc desc = {};           // confirms a bucket's hash match (same_storage)
                 u64 lastUsedFrame = 0;
                 u64 inUseFrame = 0;
                 bool inUse = false;
@@ -60,6 +63,7 @@ namespace conjure::renderer {
 
             struct pooled_buffer {
                 nvrhi::BufferHandle buffer = nullptr;
+                graph_buffer_desc desc = {};            // confirms a bucket's hash match (same_storage)
                 u64 lastUsedFrame = 0;
                 bool inUse = false;
             };
@@ -105,6 +109,13 @@ namespace conjure::renderer {
             /// Textures currently pooled (in use or free).
             /// </summary>
             [[nodiscard]] u32 live_texture_count() const noexcept;
+
+            /// <summary>
+            /// Texture and buffer buckets currently held; end_frame erases the ones it empties.
+            /// </summary>
+            [[nodiscard]] usize bucket_count() const noexcept {
+                return mTextures.size() + mBuffers.size();
+            }
 
             /// <summary>
             /// Textures created since the last reset_counters().

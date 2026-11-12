@@ -32,6 +32,18 @@ namespace conjure::renderer {
     inline constexpr u32 VIEW_CONSTANT_WRITES_PER_VIEW = 1;
     inline constexpr u32 VIEW_CONSTANT_VERSIONS = MAX_VIEWS * VIEW_CONSTANT_WRITES_PER_VIEW * MAX_FRAMES_IN_FLIGHT;
 
+    /// <summary>
+    /// Edge of the split-sum BRDF lookup table in texels; the texture and the bake's viewport share it.
+    /// </summary>
+    inline constexpr u32 BRDF_LUT_SIZE = 256;
+
+    /// <summary>
+    /// The range the local-light shadow atlas edge is clamped to (renderer::create also rounds it down
+    /// to a power of two).
+    /// </summary>
+    inline constexpr u32 MIN_ATLAS_RESOLUTION = 256;
+    inline constexpr u32 MAX_ATLAS_RESOLUTION = 16384;
+
     struct view_resources {
         nvrhi::BufferHandle lights = nullptr;           // MAX_LIGHTS_PER_VIEW gpu_light records
         nvrhi::BufferHandle shadowTiles = nullptr;      // atlas tiles then this view's cascades

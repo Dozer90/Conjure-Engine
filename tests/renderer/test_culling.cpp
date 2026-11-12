@@ -118,6 +118,26 @@ TEST_SUITE("renderer/culling") {
         CHECK(out.empty());
     }
 
+    TEST_CASE("cull_instances - an instance with invalid world bounds is never visible") {
+        // The renderer builds its draw lists from these indices only and relies on every visible
+        // instance having valid bounds (the depth sort uses their centre).
+        const math::frustum frustum = test_frustum();
+        std::vector<mesh_instance> instances = {};
+        instances.push_back(instance_with(math::aabb()));
+        instances.push_back(instance_with(box_at(math::vec3(0.0f, 0.0f, -10.0f), 1.0f)));
+        instances.push_back(instance_with(math::aabb(), 0xFFFFFFFFu, true));
+        std::vector<u32> out = {};
+        cull_instances(instances, frustum, cull_options(), nullptr, out);
+        CHECK(out == std::vector<u32>{1});
+        cull_options casters = {};
+        casters.shadowCastersOnly = true;
+        casters.ignoreFarPlane = true;
+        cull_instances(instances, frustum, casters, nullptr, out);
+        CHECK(out == std::vector<u32>{1});
+        CHECK_FALSE(instance_visible(instances[0], frustum, casters));
+        CHECK_FALSE(instance_visible(instances[2], frustum, cull_options()));
+    }
+
     TEST_CASE("cull_instances - the job-parallel path above the threshold equals the serial result") {
         const math::frustum frustum = test_frustum();
         const u32 count = CULLING_PARALLEL_THRESHOLD * 3 + 17;

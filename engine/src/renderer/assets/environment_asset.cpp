@@ -11,6 +11,7 @@
 #include "conjure/core/vfs/path_utils.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <utility>
 
@@ -57,6 +58,10 @@ namespace {
         CONJURE_TRY_ASSIGN(halfCount, reader.read_u64());
         if (data.size == 0 || data.size > MAX_BAKE_SIZE || data.mipCount == 0 || data.mipCount > 16) {
             return reader.invalid("cubemap size or mip count out of range");
+        }
+        // mip_size clamps at 1, so a longer chain would repeat 1x1 levels nothing produces.
+        if (data.mipCount > static_cast<u32>(std::bit_width(data.size))) {
+            return reader.invalid("cubemap mip count exceeds the chain of its size");
         }
         usize expected = 0;
         for (u32 mip = 0; mip < data.mipCount; ++mip) {
@@ -460,5 +465,5 @@ core::result<environment_asset> environment_loader::finalise_typed(
 }
 
 std::optional<environment_asset> environment_loader::create_fallback_typed() const {
-    return environment_asset::uniform(math::vec3(0.5f));
+    return environment_asset::uniform(math::vec3(FALLBACK_ENVIRONMENT_RADIANCE));
 }

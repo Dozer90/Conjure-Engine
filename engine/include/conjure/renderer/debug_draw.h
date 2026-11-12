@@ -37,6 +37,15 @@ namespace conjure::renderer {
     [[nodiscard]] CONJURE_API u32 pack_debug_colour(const math::vec4 &colour) noexcept;
 
     /// <summary>
+    /// How a debug line meets the scene: hidden behind geometry (TESTED) or drawn on top (OVERLAY). A
+    /// typed argument, so it can never be confused with the facade's duration in the same position.
+    /// </summary>
+    enum class debug_depth : u8 {
+        TESTED,
+        OVERLAY
+    };
+
+    /// <summary>
     /// Line primitives collected for one frame. Each shape call appends pairs of vertices to the
     /// depth-tested or the overlay list; the lists are capped at MAX_DEBUG_VERTICES each (excess is
     /// dropped and counted).
@@ -60,12 +69,17 @@ namespace conjure::renderer {
             /// <summary>
             /// One line from a to b.
             /// </summary>
-            void line(const math::vec3 &a, const math::vec3 &b, const math::vec4 &colour, bool depthTested = true);
+            void line(
+              const math::vec3 &a,
+              const math::vec3 &b,
+              const math::vec4 &colour,
+              debug_depth depth = debug_depth::TESTED
+            );
 
             /// <summary>
             /// The twelve edges of a box (24 vertices). An invalid box adds nothing.
             /// </summary>
-            void box(const math::aabb &box, const math::vec4 &colour, bool depthTested = true);
+            void box(const math::aabb &box, const math::vec4 &colour, debug_depth depth = debug_depth::TESTED);
 
             /// <summary>
             /// Three great circles of 'segments' lines each.
@@ -74,19 +88,23 @@ namespace conjure::renderer {
               const math::vec3 &centre,
               f32 radius,
               const math::vec4 &colour,
-              bool depthTested = true,
+              debug_depth depth = debug_depth::TESTED,
               u32 segments = 24
             );
 
             /// <summary>
             /// The twelve edges of the view volume of a clip-from-world matrix (24 vertices).
             /// </summary>
-            void frustum(const math::mat4 &clipFromWorld, const math::vec4 &colour, bool depthTested = true);
+            void frustum(
+              const math::mat4 &clipFromWorld,
+              const math::vec4 &colour,
+              debug_depth depth = debug_depth::TESTED
+            );
 
             /// <summary>
             /// Three axis lines (red X, green Y, blue Z) of 'length' from the origin of a transform.
             /// </summary>
-            void axes(const math::mat4 &worldFromLocal, f32 length = 1.0f, bool depthTested = true);
+            void axes(const math::mat4 &worldFromLocal, f32 length = 1.0f, debug_depth depth = debug_depth::TESTED);
 
             /// <summary>
             /// A grid in the XZ plane centred on 'centre': (2 * halfLines + 1) lines along each axis,
@@ -97,11 +115,11 @@ namespace conjure::renderer {
               u32 halfLines,
               f32 spacing,
               const math::vec4 &colour,
-              bool depthTested = true
+              debug_depth depth = debug_depth::TESTED
             );
 
             /// <summary>
-            /// Appends every vertex of another buffer.
+            /// Appends every vertex of another buffer and adds its dropped count to this one's.
             /// </summary>
             void append(const debug_draw_buffer &other);
 
@@ -130,12 +148,14 @@ namespace conjure::renderer {
             }
 
         private:
-            void push_line(const math::vec3 &a, const math::vec3 &b, u32 packed, bool depthTested);
+            void push_line(const math::vec3 &a, const math::vec3 &b, u32 packed, debug_depth depth);
     };
 
     /// <summary>
     /// The engine-owned facade: immediate shapes (drawn for one frame) and timed shapes (kept for
     /// durationSeconds). Thread-safe; append_to() and tick() run on the main thread each frame.
+    /// Immediate shapes are written straight into the frame list under the mutex; only timed shapes
+    /// build a buffer of their own (outside the lock).
     /// </summary>
     class CONJURE_API debug_draw {
         private:
@@ -164,29 +184,40 @@ namespace conjure::renderer {
               const math::vec3 &b,
               const math::vec4 &colour,
               f32 durationSeconds = 0.0f,
-              bool depthTested = true
+              debug_depth depth = debug_depth::TESTED
             );
 
+            /// <summary>
+            /// A box (debug_draw_buffer::box) that lives this frame (durationSeconds 0) or for durationSeconds.
+            /// </summary>
             void box(
               const math::aabb &box,
               const math::vec4 &colour,
               f32 durationSeconds = 0.0f,
-              bool depthTested = true
+              debug_depth depth = debug_depth::TESTED
             );
 
+            /// <summary>
+            /// A sphere (debug_draw_buffer::sphere) that lives this frame (durationSeconds 0) or for
+            /// durationSeconds.
+            /// </summary>
             void sphere(
               const math::vec3 &centre,
               f32 radius,
               const math::vec4 &colour,
               f32 durationSeconds = 0.0f,
-              bool depthTested = true
+              debug_depth depth = debug_depth::TESTED
             );
 
+            /// <summary>
+            /// Axis lines (debug_draw_buffer::axes) that live this frame (durationSeconds 0) or for
+            /// durationSeconds.
+            /// </summary>
             void axes(
               const math::mat4 &worldFromLocal,
               f32 length = 1.0f,
               f32 durationSeconds = 0.0f,
-              bool depthTested = true
+              debug_depth depth = debug_depth::TESTED
             );
 
             /// <summary>
@@ -214,5 +245,8 @@ namespace conjure::renderer {
             /// Drops every immediate and timed entry.
             /// </summary>
             void clear();
+
+        private:
+            void add_timed(debug_draw_buffer &&shape, f32 durationSeconds);
     };
 }

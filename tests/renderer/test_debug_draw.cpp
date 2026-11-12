@@ -1,15 +1,20 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/approx.h"
+#include "conjure/testing/test_environment.h"
 
 #include "conjure/renderer/camera.h"
 #include "conjure/renderer/debug_draw.h"
 #include "conjure/renderer/limits.h"
 
+#include "conjure/core/jobs/job_system.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
+#include <functional>
 #include <span>
+#include <type_traits>
+#include <vector>
 
 // debug_draw.h (docs/design/02_renderer.md 3.10): line vertices packed as the GPU consumes them,
 // shape helpers with known vertex counts, the per-list cap, and the facade with timed entries.
@@ -60,7 +65,7 @@ TEST_SUITE("renderer/debug_draw") {
         CHECK(buffer.depth_tested().size() == 2);
         buffer.box(unit_box(), RED);
         CHECK(buffer.depth_tested().size() == 2 + 24);
-        buffer.sphere(math::vec3(0.0f), 1.0f, RED, true, 24);
+        buffer.sphere(math::vec3(0.0f), 1.0f, RED, debug_depth::TESTED, 24);
         CHECK(buffer.depth_tested().size() == 2 + 24 + 3 * 24 * 2);
         buffer.frustum(clip_from_view(camera(), 1.0f), RED);
         CHECK(buffer.depth_tested().size() == 2 + 24 + 144 + 24);
@@ -73,13 +78,13 @@ TEST_SUITE("renderer/debug_draw") {
         CHECK_FALSE(buffer.empty());
         // A sphere with fewer than three segments still draws three.
         debug_draw_buffer coarse = {};
-        coarse.sphere(math::vec3(0.0f), 1.0f, RED, true, 1);
+        coarse.sphere(math::vec3(0.0f), 1.0f, RED, debug_depth::TESTED, 1);
         CHECK(coarse.depth_tested().size() == 3 * 3 * 2);
     }
 
     TEST_CASE("debug_draw_buffer - shapes carry their colour and geometry") {
         debug_draw_buffer buffer = {};
-        buffer.line(math::vec3(1.0f, 2.0f, 3.0f), math::vec3(4.0f, 5.0f, 6.0f), RED, false);
+        buffer.line(math::vec3(1.0f, 2.0f, 3.0f), math::vec3(4.0f, 5.0f, 6.0f), RED, debug_depth::OVERLAY);
         REQUIRE(buffer.overlay().size() == 2);
         CONJURE_CHECK_APPROX(buffer.overlay()[0].position, math::vec3(1.0f, 2.0f, 3.0f));
         CONJURE_CHECK_APPROX(buffer.overlay()[1].position, math::vec3(4.0f, 5.0f, 6.0f));
@@ -144,7 +149,7 @@ TEST_SUITE("renderer/debug_draw") {
         buffer.box(unit_box(), RED);
         CHECK(buffer.dropped_count() == 2 + 24);
         // The overlay list has its own cap.
-        buffer.line(math::vec3(0.0f), math::vec3(1.0f), RED, false);
+        buffer.line(math::vec3(0.0f), math::vec3(1.0f), RED, debug_depth::OVERLAY);
         CHECK(buffer.overlay().size() == 2);
         CHECK(buffer.dropped_count() == 26);
         buffer.clear();
@@ -155,7 +160,7 @@ TEST_SUITE("renderer/debug_draw") {
     TEST_CASE("debug_draw_buffer - append copies both lists and clear keeps nothing") {
         debug_draw_buffer a = {};
         a.line(math::vec3(0.0f), math::vec3(1.0f), RED);
-        a.line(math::vec3(0.0f), math::vec3(2.0f), RED, false);
+        a.line(math::vec3(0.0f), math::vec3(2.0f), RED, debug_depth::OVERLAY);
         debug_draw_buffer b = {};
         b.box(unit_box(), RED);
         b.append(a);
@@ -200,7 +205,7 @@ TEST_SUITE("renderer/debug_draw") {
     TEST_CASE("debug_draw - submit adds a prepared buffer, clear drops everything") {
         debug_draw facade = {};
         debug_draw_buffer shape = {};
-        shape.line(math::vec3(0.0f), math::vec3(1.0f), RED, false);
+        shape.line(math::vec3(0.0f), math::vec3(1.0f), RED, debug_depth::OVERLAY);
         facade.submit(shape);
         facade.submit(shape, 5.0f);
         CHECK(facade.timed_entry_count() == 1);
@@ -215,5 +220,84 @@ TEST_SUITE("renderer/debug_draw") {
         frame.clear();
         facade.append_to(frame);
         CHECK(frame.empty());
+    }
+
+    TEST_CASE("debug_draw - the depth mode is a typed argument that cannot be confused with a duration") {
+        // The facade takes the duration where the buffer takes the depth mode: neither converts into the other.
+        static_assert(!std::is_convertible_v<bool, debug_depth>, "a bool is not a depth mode");
+        static_assert(!std::is_convertible_v<debug_depth, f32>, "a depth mode is not a duration");
+        debug_draw facade = {};
+        facade.line(math::vec3(0.0f), math::vec3(1.0f), RED, 0.0f, debug_depth::OVERLAY);
+        facade.box(unit_box(), RED, 0.0f, debug_depth::OVERLAY);
+        facade.sphere(math::vec3(0.0f), 1.0f, RED, 0.0f, debug_depth::OVERLAY);
+        facade.axes(math::mat4(1.0f), 1.0f, 0.0f, debug_depth::OVERLAY);
+        CHECK(facade.timed_entry_count() == 0);
+        debug_draw_buffer frame = {};
+        facade.append_to(frame);
+        CHECK(frame.overlay().size() == 2 + 24 + 144 + 6);
+        CHECK(frame.depth_tested().empty());
+
+        debug_draw_buffer buffer = {};
+        buffer.frustum(clip_from_view(camera(), 1.0f), RED, debug_depth::OVERLAY);
+        buffer.grid(math::vec3(0.0f), 1, 1.0f, RED, debug_depth::OVERLAY);
+        buffer.axes(math::mat4(1.0f), 1.0f, debug_depth::OVERLAY);
+        CHECK(buffer.overlay().size() == 24 + 2 * 3 * 2 + 6);
+        CHECK(buffer.depth_tested().empty());
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F398 dropped vertices are carried through append and append_to") {
+        const u32 lines = MAX_DEBUG_VERTICES / 2 + 1;
+        debug_draw_buffer full = {};
+        for (u32 index = 0; index < lines; ++index) {
+            full.line(math::vec3(0.0f), math::vec3(1.0f), RED);
+        }
+        REQUIRE(full.dropped_count() == 2);
+        debug_draw_buffer copy = {};
+        copy.append(full);
+        CHECK(copy.depth_tested().size() == MAX_DEBUG_VERTICES);
+        CHECK(copy.dropped_count() == 2);
+
+        // The facade's immediate list drops at the same cap; the frame buffer reports those drops.
+        debug_draw facade = {};
+        for (u32 index = 0; index < lines; ++index) {
+            facade.line(math::vec3(0.0f), math::vec3(1.0f), RED);
+        }
+        debug_draw_buffer frame = {};
+        facade.append_to(frame);
+        CHECK(frame.depth_tested().size() == MAX_DEBUG_VERTICES);
+        CHECK(frame.dropped_count() == 2);
+        frame.clear();
+        facade.append_to(frame);
+        CHECK(frame.empty());
+        CHECK(frame.dropped_count() == 0);   // the immediate list and its count were cleared
+    }
+
+    TEST_CASE("debug_draw - immediate and timed shapes from several threads all reach append_to [parallel]") {
+        constexpr usize JOB_COUNT = 4;
+        constexpr u32 LINES_PER_JOB = 1000;
+        debug_draw facade = {};
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc jobsDesc = {};
+        jobsDesc.workerCount = environment().jobThreadCount;
+        CONJURE_REQUIRE_OK(jobs.start(jobsDesc));
+        std::vector<std::function<void()>> work = {};
+        for (usize job = 0; job < JOB_COUNT; ++job) {
+            work.emplace_back([&facade]() {
+                for (u32 index = 0; index < LINES_PER_JOB; ++index) {
+                    const f32 offset = static_cast<f32>(index);
+                    facade.line(math::vec3(offset), math::vec3(offset + 1.0f), RED);
+                }
+                facade.box(unit_box(), RED, 1.0f);
+            });
+        }
+        const core::jobs::job_handle handle = jobs.schedule(work);
+        jobs.wait(handle);
+        jobs.stop();
+
+        CHECK(facade.timed_entry_count() == JOB_COUNT);
+        debug_draw_buffer frame = {};
+        facade.append_to(frame);
+        CHECK(frame.depth_tested().size() == JOB_COUNT * (LINES_PER_JOB * 2 + 24));
+        CHECK(frame.dropped_count() == 0);
     }
 }

@@ -246,6 +246,38 @@ TEST_SUITE("renderer/transient_pool") {
         CHECK(defaults.live_texture_count() == 0);
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F381 F728 a bucket whose resources were all evicted is erased") {
+        // end_frame used to keep every bucket ever created and walk all of them each frame.
+        pool_fixture fixture = {};
+        fixture.pool->set_eviction_frames(1);
+        graph_buffer_desc bufferDesc = {};
+        bufferDesc.byteSize = 512;
+        bufferDesc.structStride = 4;
+        CHECK(fixture.pool->bucket_count() == 0);
+        REQUIRE(fixture.pool->acquire(hdr_desc(), 1) != nullptr);
+        REQUIRE(fixture.pool->acquire_buffer(bufferDesc, 1) != nullptr);
+        graph_texture_desc kept = hdr_desc("kept");
+        kept.width = 32;
+        REQUIRE(fixture.pool->acquire(kept, 1) != nullptr);
+        CHECK(fixture.pool->bucket_count() == 3);
+        fixture.pool->end_frame(1);
+        CHECK(fixture.pool->bucket_count() == 3);
+
+        // Only the 'kept' description is used again: the other two buckets empty and go.
+        REQUIRE(fixture.pool->acquire(kept, 3) != nullptr);
+        fixture.pool->end_frame(3);
+        CHECK(fixture.pool->bucket_count() == 1);
+        CHECK(fixture.pool->live_texture_count() == 1);
+        fixture.pool->end_frame(5);
+        CHECK(fixture.pool->bucket_count() == 0);
+        CHECK(fixture.pool->live_texture_count() == 0);
+
+        // An erased bucket is recreated on demand.
+        CHECK(fixture.pool->acquire(hdr_desc(), 6) != nullptr);
+        CHECK(fixture.pool->bucket_count() == 1);
+        CHECK(fixture.pool->textures_created() == 3);
+    }
+
     TEST_CASE("transient_pool - clear releases everything and the framebuffers that referenced it") {
         pool_fixture fixture = {};
         nvrhi::ITexture *a = fixture.pool->acquire(hdr_desc("a"), 1);

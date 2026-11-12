@@ -170,6 +170,15 @@ float3 transform_normal(gpu_instance instance, float3 normal) {
     return float3(dot(instance.normal0.xyz, normal), dot(instance.normal1.xyz, normal), dot(instance.normal2.xyz, normal));
 }
 
+// Surface directions such as tangents follow the world matrix; only normals use transform_normal.
+float3 transform_direction(gpu_instance instance, float3 direction) {
+    return float3(
+      dot(instance.world0.xyz, direction),
+      dot(instance.world1.xyz, direction),
+      dot(instance.world2.xyz, direction)
+    );
+}
+
 float4 unpack_rgba8(uint packed) {
     return float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, (packed >> 24) & 0xFF) / 255.0;
 }

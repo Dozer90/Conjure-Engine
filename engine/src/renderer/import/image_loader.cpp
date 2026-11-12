@@ -4,12 +4,14 @@
 #include "conjure/renderer/texture_asset.h"
 
 #include "conjure/core/error.h"
+#include "conjure/core/result.h"
 
 #include <stb_image.h>
 
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <string_view>
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -36,6 +38,41 @@ namespace {
     [[nodiscard]] bool too_large(std::span<const std::byte> encoded) noexcept {
         return encoded.size() > static_cast<usize>(std::numeric_limits<int>::max());
     }
+
+    [[nodiscard]] bool exceeds_texel_limit(int width, int height) noexcept {
+        const bool tooWide = static_cast<u32>(width) > texture_asset::MAX_DIMENSION;
+        const bool tooTall = static_cast<u32>(height) > texture_asset::MAX_DIMENSION;
+        return tooWide || tooTall;
+    }
+
+    /// <summary>
+    /// Fails with INVALID_ARGUMENT when the header alone already names a size above the texel limit,
+    /// so an oversized image is refused before stb allocates and decodes it. A header stb cannot read
+    /// passes: the decode that follows reports it.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_header_size(std::span<const std::byte> encoded, std::string_view caller) {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        const int known = stbi_info_from_memory(
+          reinterpret_cast<const stbi_uc *>(encoded.data()),
+          static_cast<int>(encoded.size()),
+          &width,
+          &height,
+          &channels
+        );
+        if (known == 0 || !exceeds_texel_limit(width, height)) {
+            return core::result<void>();
+        }
+        return core::make_error(
+          core::error_code::INVALID_ARGUMENT,
+          "{}: {}x{} exceeds the {} texel limit",
+          caller,
+          width,
+          height,
+          texture_asset::MAX_DIMENSION
+        );
+    }
 }
 
 core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(std::span<const std::byte> encoded) {
@@ -45,6 +82,7 @@ core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(std:
     if (too_large(encoded)) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "decode_rgba8: file larger than 2 GiB");
     }
+    CONJURE_TRY(check_header_size(encoded, "decode_rgba8"));
 
     int width = 0;
     int height = 0;
@@ -60,9 +98,8 @@ core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(std:
     if (pixels == nullptr || width <= 0 || height <= 0) {
         return decode_failure();
     }
-    const bool tooWide = static_cast<u32>(width) > texture_asset::MAX_DIMENSION;
-    const bool tooTall = static_cast<u32>(height) > texture_asset::MAX_DIMENSION;
-    if (tooWide || tooTall) {
+    // The header check above covers every format stb can describe; this one stays as the backstop.
+    if (exceeds_texel_limit(width, height)) {
         return core::make_error(
           core::error_code::INVALID_ARGUMENT,
           "decode_rgba8: {}x{} exceeds the {} texel limit",
@@ -87,6 +124,7 @@ core::result<detail::decoded_hdr_image> conjure::renderer::detail::decode_hdr_rg
     if (too_large(encoded)) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "decode_hdr_rgb: file larger than 2 GiB");
     }
+    CONJURE_TRY(check_header_size(encoded, "decode_hdr_rgb"));
 
     int width = 0;
     int height = 0;
@@ -102,9 +140,8 @@ core::result<detail::decoded_hdr_image> conjure::renderer::detail::decode_hdr_rg
     if (pixels == nullptr || width <= 0 || height <= 0) {
         return decode_failure();
     }
-    const bool tooWide = static_cast<u32>(width) > texture_asset::MAX_DIMENSION;
-    const bool tooTall = static_cast<u32>(height) > texture_asset::MAX_DIMENSION;
-    if (tooWide || tooTall) {
+    // The header check above covers every format stb can describe; this one stays as the backstop.
+    if (exceeds_texel_limit(width, height)) {
         return core::make_error(
           core::error_code::INVALID_ARGUMENT,
           "decode_hdr_rgb: {}x{} exceeds the {} texel limit",

@@ -14,17 +14,20 @@
 #include "conjure/core/error.h"
 #include "conjure/core/hash.h"
 #include "conjure/core/jobs/parallel_for.h"
+#include "conjure/core/platform_detect.h"
 #include "conjure/rhi/rhi_error.h"
 
 #include <nvrhi/utils.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <utility>
 
 // The renderer (docs/design/02_renderer.md 3.1): begin_frame (acquire, uploads), prepare (resolve
 // ids, cull, sort, fill instances, lights, shadow tiles), one render graph per view, ImGui, present.
@@ -36,6 +39,14 @@ namespace {
     constexpr u32 PARALLEL_FILL_GRAIN = 1024;
     constexpr f32 SPOT_FOV_MARGIN_RADIANS = 0.05f;
     constexpr f32 LOCAL_SHADOW_NEAR_PLANE = gpu::LOCAL_SHADOW_NEAR_PLANE;
+
+    // An invalid near plane is clamped into this range; the upper bound keeps near + the default depth
+    // range representable, so the far plane derived from it always lies beyond the near plane.
+    constexpr f32 MIN_CAMERA_NEAR = 1.0e-4f;
+    constexpr f32 MAX_CAMERA_NEAR = 1.0e6f;
+
+    // An invalid perspective field of view is clamped to [CAMERA_FOV_MARGIN_RADIANS, PI - CAMERA_FOV_MARGIN_RADIANS].
+    constexpr f32 CAMERA_FOV_MARGIN_RADIANS = 0.01f;
 
     /// <summary>
     /// Face directions and up vectors of the six point-light shadow projections (+X, -X, +Y, -Y, +Z, -Z).
@@ -93,13 +104,75 @@ namespace {
     }
 
     /// <summary>
+    /// True when clip_from_view accepts the camera (camera.cpp valid_camera, the aspect aside) and every
+    /// field its projection uses is finite.
+    /// </summary>
+    [[nodiscard]] bool usable_camera(const camera &value) noexcept {
+        const bool planes = std::isfinite(value.nearPlane) && std::isfinite(value.farPlane) && value.nearPlane > 0.0f
+          && value.farPlane > value.nearPlane;
+        if (!planes) {
+            return false;
+        }
+        if (value.projection == projection_type::PERSPECTIVE) {
+            return value.verticalFovRadians > 0.0f && value.verticalFovRadians < math::PI;
+        }
+        return std::isfinite(value.orthographicHeight) && value.orthographicHeight > 0.0f;
+    }
+
+    /// <summary>
+    /// A usable camera unchanged; otherwise the camera with every field its projection uses clamped or
+    /// reset to the default, so the result always passes usable_camera. The field the projection does
+    /// not use is left untouched.
+    /// </summary>
+    [[nodiscard]] camera sanitised_camera(const camera &value) noexcept {
+        if (usable_camera(value)) {
+            return value;
+        }
+        const camera defaults = {};
+        camera result = value;
+        result.nearPlane = defaults.nearPlane;
+        if (std::isfinite(value.nearPlane)) {
+            result.nearPlane = math::clamp(value.nearPlane, MIN_CAMERA_NEAR, MAX_CAMERA_NEAR);
+        }
+        if (!std::isfinite(value.farPlane) || !(value.farPlane > result.nearPlane)) {
+            result.farPlane = result.nearPlane + (defaults.farPlane - defaults.nearPlane);
+        }
+
+        // valid_camera treats every projection but PERSPECTIVE as orthographic.
+        if (value.projection == projection_type::PERSPECTIVE) {
+            result.verticalFovRadians = defaults.verticalFovRadians;
+            if (std::isfinite(value.verticalFovRadians)) {
+                const f32 maxFov = math::PI - CAMERA_FOV_MARGIN_RADIANS;
+                result.verticalFovRadians = math::clamp(value.verticalFovRadians, CAMERA_FOV_MARGIN_RADIANS, maxFov);
+            }
+            return result;
+        }
+        if (!std::isfinite(value.orthographicHeight) || !(value.orthographicHeight > 0.0f)) {
+            result.orthographicHeight = defaults.orthographicHeight;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The outer cone of a spot light as the light record and its shadow tile both use it: user data
+    /// clamped to (0, PI / 2], NaN replaced by the default cone.
+    /// </summary>
+    [[nodiscard]] f32 spot_outer_cone(const light &value) noexcept {
+        if (std::isnan(value.outerConeRadians)) {
+            const light defaults = {};
+            return defaults.outerConeRadians;
+        }
+        return math::clamp(value.outerConeRadians, 1.0e-3f, math::HALF_PI);
+    }
+
+    /// <summary>
     /// The HLSL-side light record of a scene light.
     /// </summary>
     [[nodiscard]] gpu::light make_gpu_light(const light &value, u32 tileIndex, shadow_filter defaultFilter) noexcept {
         gpu::light record = {};
         record.positionRange = math::vec4(value.position, std::max(value.range, 1.0e-3f));
         const math::vec3 direction = math::safe_normalize(value.direction, math::vec3(0.0f, -1.0f, 0.0f));
-        const f32 outer = math::clamp(value.outerConeRadians, 1.0e-3f, math::HALF_PI);
+        const f32 outer = spot_outer_cone(value);
         const f32 inner = math::clamp(value.innerConeRadians, 0.0f, outer);
         record.directionCosOuter = math::vec4(direction, std::cos(outer));
         record.colourIntensity = math::vec4(value.colour, std::max(value.intensity, 0.0f));
@@ -174,8 +247,24 @@ core::result<std::unique_ptr<renderer>> renderer::create(const renderer_desc &de
     if (desc.device->is_lost()) {
         return device_lost_error();
     }
+
+    // The allocator's quadtree only grants tiles whose edge divides the atlas edge by a power of two,
+    // and the allocator, the texture, the tile rectangles and the texel size must agree on one edge.
+    const u32 atlasResolution = std::bit_floor(
+      std::clamp<u32>(desc.atlasResolution, MIN_ATLAS_RESOLUTION, MAX_ATLAS_RESOLUTION)
+    );
+    if (atlasResolution != desc.atlasResolution) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "atlasResolution {} is not a power of two in [{}, {}]; using {}",
+          desc.atlasResolution,
+          MIN_ATLAS_RESOLUTION,
+          MAX_ATLAS_RESOLUTION,
+          atlasResolution
+        );
+    }
     std::unique_ptr<renderer> created = std::make_unique<renderer>(create_tag{});
-    created->mImpl = std::make_unique<impl>(desc.atlasResolution);
+    created->mImpl = std::make_unique<impl>(atlasResolution);
     impl &state = *created->mImpl;
     state.desc = desc;
     state.device = desc.device->native_device();
@@ -191,7 +280,7 @@ core::result<std::unique_ptr<renderer>> renderer::create(const renderer_desc &de
     state.framebuffers = std::make_unique<framebuffer_cache>(device);
     state.pool = std::make_unique<transient_pool>(device, state.framebuffers.get());
     state.bindingSets = std::make_unique<binding_set_cache>(device);
-    CONJURE_TRY(state.frame.create(device, desc.cascadeResolution, desc.atlasResolution));
+    CONJURE_TRY(state.frame.create(device, desc.cascadeResolution, atlasResolution));
 
     // Samplers of the view sets: comparison (NVRHI compares with Less; shadows.hlsli inverts the
     // result for reverse-Z), linear clamp, point clamp.
@@ -256,7 +345,9 @@ core::result<std::unique_ptr<renderer>> renderer::create(const renderer_desc &de
         nvrhi::GraphicsState graphics = {};
         graphics.pipeline = state.pipelines->graphics(graphics_variant::BRDF_LUT);
         graphics.framebuffer = framebuffer;
-        graphics.viewport.addViewportAndScissorRect(nvrhi::Viewport(256.0f, 256.0f));
+        graphics.viewport.addViewportAndScissorRect(
+          nvrhi::Viewport(static_cast<f32>(BRDF_LUT_SIZE), static_cast<f32>(BRDF_LUT_SIZE))
+        );
         graphics.addBindingSet(set);
         state.commandList->setGraphicsState(graphics);
         const gpu::draw_constants push = {};
@@ -600,20 +691,26 @@ namespace {
         for (const u32 instanceIndex : visibleInstances) {
             const mesh_instance &source = scene.meshes[instanceIndex];
             const gpu_mesh &mesh = state.resources->resolve_mesh(source.mesh);
-            const math::vec3 centre = source.worldBounds.is_valid() ? source.worldBounds.center()
-              : math::vec3(source.worldFromLocal[3]);
+            const bool meshLive = &mesh != &state.resources->fallback_mesh();
+            // cull_instances rejects invalid bounds (box_intersects), so every visible instance has valid ones.
+            CONJURE_ASSERT(source.worldBounds.is_valid(), "build_region: a visible instance has invalid bounds");
+            const math::vec3 centre = source.worldBounds.center();
             const f32 viewDepth = -(viewFromWorld * math::vec4(centre, 1.0f)).z;
             for (u32 submeshIndex = 0; submeshIndex < mesh.submeshes.size(); ++submeshIndex) {
                 const submesh &part = mesh.submeshes[submeshIndex];
                 const u32 slot = std::min<u32>(part.materialSlot, MAX_MATERIAL_SLOTS - 1);
                 const gpu_material_id materialId = source.materials[slot];
                 const gpu_material &material = state.resources->resolve_material(materialId);
+                const bool materialLive = &material != &state.resources->fallback_material();
                 draw_item item = {};
                 item.instanceIndex = instanceIndex;
                 item.submesh = submeshIndex;
                 item.materialSlot = slot;
-                item.meshIndex = source.mesh.is_valid() ? source.mesh.index : 0x3FFFFFu;
-                item.materialIndex = materialId.is_valid() ? materialId.index : 0x3FFFFFu;
+                // Batches key on the slot index alone, and a released id frees its slot at once: a stale
+                // id and the live id that reuses its slot would merge into one batch. Every id that
+                // resolves to the fallback (stale, unknown or pending) shares the fallback's key instead.
+                item.meshIndex = meshLive ? source.mesh.index : MAX_DRAW_KEY_INDEX;
+                item.materialIndex = materialLive ? materialId.index : MAX_DRAW_KEY_INDEX;
                 item.variant = variant_of(material.alphaMode);
                 item.doubleSided = material.doubleSided;
                 item.layer = 0;
@@ -775,8 +872,10 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
         const light &value = scene.lights[lightIndex];
         state.lightTileBase[lightIndex] = static_cast<u32>(state.atlasTileData.size());
         state.stats.shadowTilesAllocated += allocation.tileCount;
+        // The cone is sanitised exactly as in the light record, so a negative or NaN cone of user data
+        // never reaches clip_from_view.
         const f32 fov = value.type == light_type::POINT ? math::HALF_PI : std::min(
-          2.0f * value.outerConeRadians + SPOT_FOV_MARGIN_RADIANS,
+          2.0f * spot_outer_cone(value) + SPOT_FOV_MARGIN_RADIANS,
           math::PI - 0.1f
         );
         for (u8 face = 0; face < allocation.tileCount; ++face) {
@@ -866,10 +965,30 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
 
 void prepare_view(renderer_state &state, frame_view_state &stateOfView, const render_scene &scene) {
     const render_view &view = *stateOfView.view;
+
+    // A bad camera in the scene data is clamped with one WARN per view until it is valid again
+    // (renderer.h: a bad scene never aborts a frame); clip_from_view would assert on it.
+    const camera cameraData = sanitised_camera(view.cameraData);
+    const u32 viewBit = 1u << stateOfView.viewIndex;
+    if (usable_camera(view.cameraData)) {
+        state.invalidCameraViews &= ~viewBit;
+    } else if ((state.invalidCameraViews & viewBit) == 0) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "view {}: invalid camera (near {}, far {}, fov {}, height {}) clamped",
+          stateOfView.viewIndex,
+          view.cameraData.nearPlane,
+          view.cameraData.farPlane,
+          view.cameraData.verticalFovRadians,
+          view.cameraData.orthographicHeight
+        );
+        state.invalidCameraViews |= viewBit;
+    }
+
     const f32 aspect = static_cast<f32>(
       stateOfView.viewport.width
     ) / static_cast<f32>(std::max<u32>(stateOfView.viewport.height, 1));
-    const math::mat4 clipFromView = clip_from_view(view.cameraData, aspect);
+    const math::mat4 clipFromView = clip_from_view(cameraData, aspect);
     const math::mat4 clipFromWorld = clipFromView * view.viewFromWorld;
     const math::mat4 worldFromView = glm::inverse(view.viewFromWorld);
     stateOfView.frustum = frustum_from_clip(clipFromWorld);
@@ -900,7 +1019,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
       state.visible,
       scene,
       view.viewFromWorld,
-      view.cameraData.farPlane,
+      cameraData.farPlane,
       false,
       &stateOfView.opaqueBatchCount
     );
@@ -973,7 +1092,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
         const light &sun = scene.lights[directionalShadowScene];
         directionalSourceRadius = std::max(sun.sourceRadius, 0.0f);
         const cascade_set cascades = build_cascades(
-          view.cameraData,
+          cameraData,
           worldFromView,
           aspect,
           sun.direction,
@@ -1118,8 +1237,8 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
         );
     }
     constants.nearFarExposure = math::vec4(
-      view.cameraData.nearPlane,
-      view.cameraData.farPlane,
+      cameraData.nearPlane,
+      cameraData.farPlane,
       manualExposure,
       scene.deltaSeconds
     );
@@ -1189,6 +1308,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     constants.exposureParams2 = math::vec4(scene.postProcess.maxEv100, 0.0f, 0.0f, 0.0f);
 }
 
+// A pass added to this graph must be counted in MAX_PASSES_PER_VIEW (limits.h), which sizes render_stats::passNames.
 void render_view_graph(renderer_state &state, frame_view_state &stateOfView, const render_scene &scene) {
     pass_shared &shared = state.shared;
     shared.scene = &scene;
@@ -1290,6 +1410,9 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
 core::result<void> renderer::render(const render_scene &scene) {
     impl &state = *mImpl;
     CONJURE_ASSERT(state.renderThread == std::this_thread::get_id(), "renderer::render from a foreign thread");
+    // The draw data belongs to this render() alone: every exit (device lost, a skipped acquire, a drawn
+    // frame) drops it, so a later frame never draws data ImGui has since freed.
+    ImDrawData *const imguiDrawData = std::exchange(state.imguiDrawData, nullptr);
     if (state.lost || state.desc.device->is_lost()) {
         state.lost = true;
         return device_lost_error();
@@ -1341,19 +1464,20 @@ core::result<void> renderer::render(const render_scene &scene) {
 
     // 4. ImGui into the swapchain.
 #if defined(CONJURE_BUILD_EDITOR) && CONJURE_BUILD_EDITOR
-    if (state.imgui != nullptr && state.imguiDrawData != nullptr && backBuffer != nullptr) {
+    if (state.imgui != nullptr && imguiDrawData != nullptr && backBuffer != nullptr) {
         nvrhi::FramebufferDesc desc = {};
         desc.addColorAttachment(backBuffer);
         nvrhi::IFramebuffer *framebuffer = state.framebuffers->get(desc);
         if (framebuffer != nullptr) {
             state.commandList->beginMarker("imgui");
-            state.imgui->render(state.imguiDrawData, framebuffer, *state.commandList);
+            state.imgui->render(imguiDrawData, framebuffer, *state.commandList);
             state.commandList->endMarker();
             state.stats.drawCalls += state.imgui->stats().drawCalls;
         }
     }
+#else
+    CONJURE_UNUSED(imguiDrawData);
 #endif
-    state.imguiDrawData = nullptr;
 
     // 5. end_frame.
     state.commandList->close();
@@ -1469,19 +1593,29 @@ core::result<core::image> renderer::read_back(render_target_id target) {
       nvrhi::CpuAccessMode::Read,
       &rowPitch
     );
-    core::image image(size.x, size.y);
-    if (mapped != nullptr) {
-        const std::byte *rows = static_cast<const std::byte *>(mapped);
-        const u32 bytesPerPixel = rhi::bytes_per_pixel(format);
-        for (u32 y = 0; y < size.y; ++y) {
-            const std::byte *row = rows + static_cast<usize>(y) * rowPitch;
-            for (u32 x = 0; x < size.x; ++x) {
-                const std::byte *texel = row + static_cast<usize>(x) * bytesPerPixel;
-                image.set_pixel(x, y, decode_read_back_texel(format, texel));
-            }
+    // A blank image would read as a successful capture of a black frame.
+    if (mapped == nullptr) {
+        if (state.desc.device->is_lost()) {
+            state.lost = true;
+            return device_lost_error();
         }
-        state.device->unmapStagingTexture(staging);
+        return core::make_error(
+          renderer_error::RESOURCE_CREATION_FAILED,
+          "read_back: the staging texture could not be mapped"
+        );
     }
+
+    core::image image(size.x, size.y);
+    const std::byte *rows = static_cast<const std::byte *>(mapped);
+    const u32 bytesPerPixel = rhi::bytes_per_pixel(format);
+    for (u32 y = 0; y < size.y; ++y) {
+        const std::byte *row = rows + static_cast<usize>(y) * rowPitch;
+        for (u32 x = 0; x < size.x; ++x) {
+            const std::byte *texel = row + static_cast<usize>(x) * bytesPerPixel;
+            image.set_pixel(x, y, decode_read_back_texel(format, texel));
+        }
+    }
+    state.device->unmapStagingTexture(staging);
     return image;
 }
 

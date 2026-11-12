@@ -289,6 +289,78 @@ TEST_SUITE("renderer/material_asset") {
         CONJURE_CHECK_ERROR(importer.import(garbageContext), assets::asset_error_code::IMPORT_FAILED);
     }
 
+    TEST_CASE("material_importer - unknown keys such as baseColorFactor are reported as import warnings") {
+        const material_importer importer = {};
+        core::vfs::memory_file_system fileSystem = {};
+        assets::sub_asset_table subAssets = {};
+        const std::vector<std::byte> gltfSpelling = bytes_of(
+          R"({"baseColorFactor": [1, 0, 0, 1], "roughnessFactor": 0.5, "textures": {"albedo": null}})"
+        );
+        assets::import_context context(
+          fileSystem,
+          "assets://red.cmat",
+          "assets/red.cmat",
+          gltfSpelling,
+          {},
+          "windows",
+          renderer_support::test_asset_id(11),
+          subAssets,
+          {}
+        );
+        core::result<assets::import_output> imported = importer.import(context);
+        CONJURE_REQUIRE_OK(imported);
+        REQUIRE(context.warnings().size() == 2);
+        CHECK(context.warnings()[0].find("'baseColorFactor'") != std::string::npos);
+        CHECK(context.warnings()[0].find("did you mean 'baseColourFactor'") != std::string::npos);
+        CHECK(context.warnings()[1].find("'albedo'") != std::string::npos);
+        // The keys are still ignored: the import keeps the default white.
+        core::result<material_asset> cooked = material_asset::parse_blob(imported.value().assets[0].payload);
+        CONJURE_REQUIRE_OK(cooked);
+        CHECK(cooked.value().desc().baseColourFactor == math::vec4(1.0f));
+        CHECK(cooked.value().desc().roughnessFactor == doctest::Approx(0.5f));
+
+        // A spelling is suggested only where it is a key: baseColour exists only inside "textures"
+        // and baseColourFactor only at the top level.
+        const std::vector<std::byte> misplaced = bytes_of(
+          R"({"baseColor": [1, 0, 0, 1], "textures": {"baseColor": null, "baseColorFactor": null}})"
+        );
+        assets::import_context misplacedContext(
+          fileSystem,
+          "assets://misplaced.cmat",
+          "assets/misplaced.cmat",
+          misplaced,
+          {},
+          "windows",
+          renderer_support::test_asset_id(13),
+          subAssets,
+          {}
+        );
+        CONJURE_REQUIRE_OK(importer.import(misplacedContext));
+        REQUIRE(misplacedContext.warnings().size() == 3);
+        CHECK(misplacedContext.warnings()[0].find("unknown key 'baseColor'") != std::string::npos);
+        CHECK(misplacedContext.warnings()[0].find("did you mean") == std::string::npos);
+        CHECK(misplacedContext.warnings()[1].find("'baseColor'") != std::string::npos);
+        CHECK(misplacedContext.warnings()[1].find("did you mean 'baseColour'") != std::string::npos);
+        CHECK(misplacedContext.warnings()[2].find("'baseColorFactor'") != std::string::npos);
+        CHECK(misplacedContext.warnings()[2].find("did you mean") == std::string::npos);
+
+        // The canonical form uses only known keys.
+        const std::vector<std::byte> canonical = material_asset::fallback().write_blob();
+        assets::import_context canonicalContext(
+          fileSystem,
+          "assets://magenta.cmat",
+          "assets/magenta.cmat",
+          canonical,
+          {},
+          "windows",
+          renderer_support::test_asset_id(12),
+          subAssets,
+          {}
+        );
+        CONJURE_REQUIRE_OK(importer.import(canonicalContext));
+        CHECK(canonicalContext.warnings().empty());
+    }
+
     TEST_CASE("material_loader - loads the JSON payload and falls back to the magenta material") {
         const material_loader loader = {};
         CHECK(loader.type() == assets::asset_type_traits<material_asset>::id());

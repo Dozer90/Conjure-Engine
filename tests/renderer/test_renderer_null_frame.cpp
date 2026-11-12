@@ -8,7 +8,9 @@
 #include "renderer/culling.h"
 
 #include "conjure/renderer/camera.h"
+#include "conjure/renderer/debug_draw.h"
 #include "conjure/renderer/environment_asset.h"
+#include "conjure/renderer/light.h"
 #include "conjure/renderer/limits.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
@@ -561,7 +563,7 @@ TEST_SUITE("renderer/null_frame") {
             scene.sprites.push_back(value);
         }
         scene.debugDraw.line(math::vec3(0.0f), math::vec3(1.0f), math::vec4(1.0f));
-        scene.debugDraw.box(assets.cubeBounds, math::vec4(1.0f, 0.0f, 0.0f, 1.0f), false);
+        scene.debugDraw.box(assets.cubeBounds, math::vec4(1.0f, 0.0f, 0.0f, 1.0f), debug_depth::OVERLAY);
         CONJURE_REQUIRE_OK(fixture->render(scene));
         const render_stats &stats = fixture->stats();
         CHECK(stats.executed("depth_prepass"));
@@ -838,6 +840,83 @@ TEST_SUITE("renderer/null_frame") {
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().shadowTilesAllocated == 12);
         CHECK(fixture->stats().shadowTilesDropped == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F046 a blended-only view with an environment uses one cleared depth buffer"
+    ) {
+        // Without opaque geometry the skybox runs before the prepass and creates (and clears) the depth
+        // buffer. The prepass used to create a second one that nothing cleared, and forward_blend,
+        // the sprites and the debug lines tested against stale pooled depth.
+        log_capture logs = {};
+        headless_renderer withSky = make_headless_renderer();
+        headless_renderer withoutSky = make_headless_renderer();
+        const scene_assets skyAssets = upload_assets(*withSky);
+        const scene_assets plainAssets = upload_assets(*withoutSky);
+        const render_target_id skyTarget = make_target(*withSky, math::uvec2(64, 64));
+        const render_target_id plainTarget = make_target(*withoutSky, math::uvec2(64, 64));
+        render_scene skyScene = {};
+        skyScene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), skyTarget));
+        skyScene.meshes.push_back(
+          instance_at(skyAssets.sphere, skyAssets.blended, math::vec3(0.0f), skyAssets.sphereBounds)
+        );
+        skyScene.environment.environment = skyAssets.environment;
+        render_scene plainScene = {};
+        plainScene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), plainTarget));
+        plainScene.meshes.push_back(
+          instance_at(plainAssets.sphere, plainAssets.blended, math::vec3(0.0f), plainAssets.sphereBounds)
+        );
+        CONJURE_REQUIRE_OK(withSky->render(skyScene));
+        CONJURE_REQUIRE_OK(withoutSky->render(plainScene));
+        const render_stats &sky = withSky->stats();
+        const render_stats &plain = withoutSky->stats();
+        CHECK(sky.executed("skybox"));
+        CHECK_FALSE(sky.executed("forward_opaque"));
+        CHECK_FALSE(plain.executed("skybox"));
+        // The environment adds no depth buffer of its own: the same transients as without it.
+        CHECK(sky.transientTexturesCreated > 0);
+        CHECK(sky.transientTexturesCreated == plain.transientTexturesCreated);
+
+        usize skybox = sky.passNames.size();
+        usize prepass = sky.passNames.size();
+        usize blend = sky.passNames.size();
+        for (usize index = 0; index < sky.passNames.size(); ++index) {
+            const std::string_view name = sky.passNames[index];
+            skybox = name == "skybox" ? index : skybox;
+            prepass = name == "depth_prepass" ? index : prepass;
+            blend = name == "forward_blend" ? index : blend;
+        }
+        CHECK(skybox < prepass);
+        CHECK(prepass < blend);
+        CHECK(blend < sky.passNames.size());
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F404 a spot light with a negative outer cone still gets a valid shadow projection"
+    ) {
+        // The light record clamps the cone; the shadow tile's field of view used the raw value, and a
+        // negative (or NaN) cone reached clip_from_view, which asserts on it.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(64, 64));
+        render_scene scene = {};
+        scene.views.push_back(grid_view(target));
+        fill_grid(scene, assets, 4);
+        light spot = caster_light(light_type::SPOT, math::vec3(0.0f, 2.0f, -4.0f), 10.0f, 1);
+        spot.outerConeRadians = -0.3f;
+        scene.lights.push_back(spot);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().shadowTilesAllocated == 1);
+        CHECK(fixture->stats().shadowTilesDropped == 0);
+        CHECK(fixture->stats().executed("shadow_atlas"));
+
+        scene.lights[0].outerConeRadians = std::numeric_limits<f32>::quiet_NaN();
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().shadowTilesAllocated == 1);
+        CHECK(fixture->stats().executed("shadow_atlas"));
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

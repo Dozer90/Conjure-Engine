@@ -20,12 +20,15 @@
 #include "conjure/core/vfs/memory_file_system.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // gltf_importer.h (docs/design/02_renderer.md 4.2): .gltf / .glb to CPU meshes, materials,
@@ -113,6 +116,48 @@ namespace {
         core::result<gltf_import_result> imported = importer.import_bytes(bytes, options, nullptr);
         CONJURE_REQUIRE_OK(imported);
         return std::move(imported).value();
+    }
+
+    /// <summary>
+    /// A hand-written .gltf with one embedded buffer holding 'values' (little-endian floats); 'members'
+    /// is spliced in as the further top-level members (bufferViews, accessors, meshes, ...).
+    /// </summary>
+    [[nodiscard]] std::string embedded_document(std::span<const f32> values, std::string_view members) {
+        std::vector<std::byte> buffer(values.size() * sizeof(f32));
+        std::memcpy(buffer.data(), values.data(), buffer.size());
+        return std::string(R"({"asset": {"version": "2.0"}, "buffers": [{"byteLength": )") +
+          std::to_string(buffer.size()) + R"(, "uri": "data:application/octet-stream;base64,)" +
+          base64_encode(buffer) + R"("}], )" + std::string(members) + "}";
+    }
+
+    /// <summary>
+    /// The three positions of a triangle in the XY plane.
+    /// </summary>
+    constexpr std::array<f32, 9> TRIANGLE_POSITIONS = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+
+    /// <summary>
+    /// A triangle whose COLOR_0 accessor has the given glTF type and component count.
+    /// </summary>
+    [[nodiscard]] std::string coloured_triangle(std::string_view colourType, usize colourComponents) {
+        std::vector<f32> values(TRIANGLE_POSITIONS.begin(), TRIANGLE_POSITIONS.end());
+        values.insert(values.end(), 3 * colourComponents, 0.5f);
+        const std::string colourBytes = std::to_string(3 * colourComponents * sizeof(f32));
+        return embedded_document(
+          values,
+          std::string(R"("bufferViews": [{"buffer": 0, "byteLength": 36}, )") +
+            R"({"buffer": 0, "byteOffset": 36, "byteLength": )" + colourBytes + "}], " +
+            R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}, )" +
+            R"({"bufferView": 1, "componentType": 5126, "count": 3, "type": ")" + std::string(colourType) + R"("}], )" +
+            R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0, "COLOR_0": 1}}]}], )" +
+            R"("nodes": [{"mesh": 0}], "scenes": [{"nodes": [0]}], "scene": 0)"
+        );
+    }
+
+    /// <summary>
+    /// The message of a failed import, or an empty string when it succeeded.
+    /// </summary>
+    [[nodiscard]] std::string failure_message(const core::result<gltf_import_result> &imported) {
+        return imported.has_value() ? std::string() : std::string(imported.get_error().message());
     }
 }
 
@@ -417,6 +462,182 @@ TEST_SUITE("renderer/gltf_importer") {
         std::vector<std::byte> glb = builder.build_glb();
         glb.resize(glb.size() / 2);
         CONJURE_CHECK_ERROR(importer.import_bytes(glb, {}, nullptr), core::error_code::PARSE_FAILURE);
+    }
+
+    TEST_CASE("gltf_importer - malformed documents fail with PARSE_FAILURE instead of reading out of bounds") {
+        const gltf_importer importer = {};
+        const std::string triangleView = R"("bufferViews": [{"buffer": 0, "byteLength": 36}, )";
+        const std::string meshAndScene = R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}], )"
+                                         R"("nodes": [{"mesh": 0}], "scenes": [{"nodes": [0]}], "scene": 0)";
+
+        SUBCASE("an image buffer view running past its buffer") {
+            const std::string text = embedded_document(
+              TRIANGLE_POSITIONS,
+              triangleView + R"({"buffer": 0, "byteLength": 4096}], )" +
+                R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}], )" +
+                R"("images": [{"bufferView": 1, "mimeType": "image/png"}], "textures": [{"source": 0}], )" +
+                meshAndScene
+            );
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(text), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("invalid document") != std::string::npos);
+        }
+        SUBCASE("an accessor whose elements run past its buffer view") {
+            const std::string text = embedded_document(
+              TRIANGLE_POSITIONS,
+              R"("bufferViews": [{"buffer": 0, "byteLength": 36}], )"
+              R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 30, "type": "VEC3"}], )" +
+                meshAndScene
+            );
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(text), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("invalid document") != std::string::npos);
+        }
+        SUBCASE("a byteStride large enough to wrap the accessor range check") {
+            // 2^62 * 4 wraps to 0, so cgltf_validate alone sees a 12-byte accessor and the importer
+            // then reads element i at 2^62 * i bytes into the view.
+            const std::string text = embedded_document(
+              TRIANGLE_POSITIONS,
+              R"("bufferViews": [{"buffer": 0, "byteLength": 36, "byteStride": 4611686018427387904}], )"
+              R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 5, "type": "VEC3"}], )" +
+                meshAndScene
+            );
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(text), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("byteStride above 252") != std::string::npos);
+        }
+        SUBCASE("an index count large enough to wrap the accessor range check") {
+            // 4 * (2^62 + 1) wraps to 4, so cgltf_validate alone accepts the accessor and then scans
+            // 2^62 indices for their bound.
+            std::vector<f32> values(TRIANGLE_POSITIONS.begin(), TRIANGLE_POSITIONS.end());
+            values.resize(values.size() + 3, 0.0f);
+            const std::string text = embedded_document(
+              values,
+              triangleView + R"({"buffer": 0, "byteOffset": 36, "byteLength": 12}], )" +
+                R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}, )" +
+                R"({"bufferView": 1, "componentType": 5125, "count": 4611686018427387905, "type": "SCALAR"}], )" +
+                R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}], )" +
+                R"("nodes": [{"mesh": 0}], "scenes": [{"nodes": [0]}], "scene": 0)"
+            );
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(text), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("accessor 1 has more elements") != std::string::npos);
+        }
+        SUBCASE("a sparse count large enough to wrap the sparse range checks") {
+            // The sparse indices wrap the same way, and cgltf_validate scans them for their bound.
+            const std::string sparse = R"("sparse": {"count": 4611686018427387905, )"
+                                       R"("indices": {"bufferView": 1, "componentType": 5125}, )"
+                                       R"("values": {"bufferView": 2}})";
+            const std::string text = embedded_document(
+              TRIANGLE_POSITIONS,
+              triangleView + R"({"buffer": 0, "byteLength": 12}, )" +
+                R"({"buffer": 0, "byteOffset": 12, "byteLength": 24}], )" +
+                R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", )" + sparse +
+                "}], " + meshAndScene
+            );
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(text), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("accessor 0 has more elements") != std::string::npos);
+        }
+        SUBCASE("two nodes listing each other as children") {
+            // Without a scene every parentless node is a root: the cycle has none, so only the
+            // validation sees it.
+            const std::string nodes = R"({"asset": {"version": "2.0"}, )"
+                                      R"("nodes": [{"children": [1]}, {"children": [0]}])";
+            const std::string cycle = nodes + "}";
+            const core::result<gltf_import_result> imported = importer.import_bytes(bytes_of(cycle), {}, nullptr);
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("invalid document") != std::string::npos);
+            const std::string listed = nodes + R"(, "scenes": [{"nodes": [0]}], "scene": 0})";
+            CONJURE_CHECK_ERROR(importer.import_bytes(bytes_of(listed), {}, nullptr), core::error_code::PARSE_FAILURE);
+        }
+        // The documents the builder writes are valid and still import.
+        const gltf_test_builder builder = scene_builder();
+        CONJURE_CHECK_OK(importer.import_bytes(bytes_of(builder.build_embedded()), {}, nullptr));
+        CONJURE_CHECK_OK(importer.import_bytes(builder.build_glb(), {}, nullptr));
+    }
+
+    TEST_CASE("regression - a node hierarchy thousands of levels deep imports without exhausting the stack") {
+        // Every node is the only child of the previous one; the old recursive walk used one call
+        // frame per level and overflowed the stack long before the end of the chain.
+        constexpr u32 DEPTH = 10000;
+        std::string nodes = {};
+        for (u32 index = 0; index + 1 < DEPTH; ++index) {
+            nodes += R"({"children": [)" + std::to_string(index + 1) + "]}, ";
+        }
+        nodes += "{}";
+        const std::string text = R"({"asset": {"version": "2.0"}, "nodes": [)" + nodes +
+          R"(], "scenes": [{"nodes": [0]}], "scene": 0})";
+        const gltf_importer importer = {};
+        const gltf_import_result result = import_or_fail(importer, bytes_of(text));
+        REQUIRE(result.model.nodes().size() == DEPTH);
+        CHECK(result.model.root_nodes() == std::vector<u32>{0});
+        u32 misplaced = 0;
+        for (u32 index = 1; index < DEPTH; ++index) {
+            if (result.model.nodes()[index].parent != index - 1) {
+                ++misplaced;
+            }
+        }
+        CHECK(misplaced == 0);
+    }
+
+    TEST_CASE(
+      "gltf_importer - a COLOR_0 accessor that is not VEC3 or VEC4 fails the import instead of reading out of bounds"
+    ) {
+        const gltf_importer importer = {};
+        const gltf_import_result valid = import_or_fail(importer, bytes_of(coloured_triangle("VEC3", 3)));
+        REQUIRE(valid.meshes.size() == 1);
+        CHECK(valid.meshes[0].streams().attributes[0].colour == pack_rgba8(math::vec4(0.5f, 0.5f, 0.5f, 1.0f)));
+        const std::array<std::pair<std::string_view, usize>, 2> narrow = {
+          std::pair<std::string_view, usize>{"SCALAR", 1},
+          std::pair<std::string_view, usize>{"VEC2", 2},
+        };
+        for (const auto &[type, components] : narrow) {
+            CAPTURE(type);
+            const core::result<gltf_import_result> imported = importer.import_bytes(
+              bytes_of(coloured_triangle(type, components)),
+              {},
+              nullptr
+            );
+            CONJURE_CHECK_ERROR(imported, core::error_code::PARSE_FAILURE);
+            CHECK(failure_message(imported).find("COLOR_0") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("gltf_importer - import refuses buffer URIs outside the model's directory") {
+        const gltf_test_builder builder = scene_builder();
+        const std::string binary = text_of(builder.binary());
+        temp_directory directory("gltf_escape");
+        const std::filesystem::path secret = directory.write_file("secret.bin", binary);
+        const gltf_importer importer = {};
+
+        const std::filesystem::path climbing = directory.write_file(
+          "sub/climbing.gltf",
+          builder.build_external("../secret.bin")
+        );
+        const core::result<gltf_import_result> climbed = importer.import(climbing, {});
+        CONJURE_CHECK_ERROR(climbed, core::error_code::NOT_FOUND);
+        CHECK(failure_message(climbed).find("outside the model's directory") != std::string::npos);
+
+        const std::u8string absoluteUri = secret.generic_u8string();
+        const std::filesystem::path absolute = directory.write_file(
+          "sub/absolute.gltf",
+          builder.build_external(std::string(reinterpret_cast<const char *>(absoluteUri.data()), absoluteUri.size()))
+        );
+        const core::result<gltf_import_result> rooted = importer.import(absolute, {});
+        CONJURE_CHECK_ERROR(rooted, core::error_code::NOT_FOUND);
+        CHECK(failure_message(rooted).find("outside the model's directory") != std::string::npos);
+
+        // A '..' that stays inside the directory and a sub-directory are fine.
+        static_cast<void>(directory.write_file("sub/bin/data.bin", binary));
+        const std::filesystem::path nested = directory.write_file(
+          "sub/nested.gltf",
+          builder.build_external("bin/../bin/data.bin")
+        );
+        core::result<gltf_import_result> imported = importer.import(nested, {});
+        CONJURE_REQUIRE_OK(imported);
+        CHECK(imported.value().meshes.size() == 2);
+        CHECK(imported.value().model.name() == "nested");
     }
 
     TEST_CASE("gltf_import_options - JSON round-trips, defaults apply and wrong types fail") {

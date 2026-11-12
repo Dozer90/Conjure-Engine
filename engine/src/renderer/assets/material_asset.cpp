@@ -3,11 +3,19 @@
 #include "conjure/assets/assets_error.h"
 #include "conjure/core/assert.h"
 #include "conjure/core/error.h"
+#include "conjure/core/json/document.h"
+#include "conjure/core/json/value.h"
 #include "conjure/core/reflect/json_conversion.h"
 #include "conjure/core/uuid.h"
 #include "conjure/core/vfs/path_utils.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <format>
+#include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 
 using namespace conjure;
@@ -17,6 +25,74 @@ namespace {
     constexpr std::array<std::string_view, MATERIAL_TEXTURE_SLOTS> TEXTURE_KEYS = {
       "baseColour", "metallicRoughness", "normal", "occlusion", "emissive"
     };
+
+    // Every top-level key of the .cmat form (to_json writes exactly these).
+    constexpr std::array<std::string_view, 14> MATERIAL_KEYS = {
+      "alphaCutoff", "alphaMode", "baseColourFactor", "doubleSided", "emissiveFactor", "emissiveStrength",
+      "metallicFactor", "name", "normalScale", "occlusionStrength", "roughnessFactor", "textureUvSets",
+      "textures", "unlit"
+    };
+
+    template <usize Count>
+    [[nodiscard]] bool is_known(const std::array<std::string_view, Count> &keys, std::string_view key) noexcept {
+        return std::find(keys.begin(), keys.end(), key) != keys.end();
+    }
+
+    /// <summary>
+    /// The suffix of an unknown-key warning: the .cmat spelling of a glTF (American) key. The hint is
+    /// given only when that spelling is one of 'keys', the set the key was checked against, so a
+    /// top-level baseColor is not sent to the textures-only baseColour.
+    /// </summary>
+    template <usize Count>
+    [[nodiscard]] std::string spelling_hint(std::string_view key, const std::array<std::string_view, Count> &keys) {
+        constexpr std::string_view AMERICAN = "Color";
+        const usize american = key.find(AMERICAN);
+        if (american == std::string_view::npos) {
+            return std::string();
+        }
+        std::string british(key);
+        british.replace(american, AMERICAN.size(), "Colour");
+        if (!is_known(keys, british)) {
+            return std::string();
+        }
+        return std::format(" (did you mean '{}'?)", british);
+    }
+
+    /// <summary>
+    /// Warns about every key parse_json ignores, at the top level and inside "textures". The format
+    /// keeps one spelling, so a glTF key such as baseColorFactor would otherwise import silently as
+    /// the default. Unparsable text is left to parse_json, which has already accepted the source.
+    /// </summary>
+    void report_unknown_keys(std::span<const std::byte> source, assets::import_context &context) {
+        const std::string_view text(reinterpret_cast<const char *>(source.data()), source.size());
+        const core::result<core::json::document> parsed = core::json::document::parse(text);
+        if (!parsed.has_value()) {
+            return;
+        }
+        const core::json::value root = parsed.value().root();
+        for (const core::json::member member : root.members()) {
+            if (!is_known(MATERIAL_KEYS, member.key)) {
+                context.add_warning(
+                  std::format("unknown key '{}' is ignored{}", member.key, spelling_hint(member.key, MATERIAL_KEYS))
+                );
+            }
+        }
+        const core::json::value textures = root["textures"];
+        if (!textures.is_object()) {
+            return;
+        }
+        for (const core::json::member member : textures.members()) {
+            if (!is_known(TEXTURE_KEYS, member.key)) {
+                context.add_warning(
+                  std::format(
+                    "unknown texture key '{}' is ignored{}",
+                    member.key,
+                    spelling_hint(member.key, TEXTURE_KEYS)
+                  )
+                );
+            }
+        }
+    }
 
     [[nodiscard]] core::error invalid_material(std::string_view detail) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "material_asset: {}", detail);
@@ -299,6 +375,7 @@ core::result<assets::import_output> material_importer::import(assets::import_con
     if (!parsed.has_value()) {
         return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, parsed.get_error().message());
     }
+    report_unknown_keys(context.source_bytes(), context);
     material_asset &material = parsed.value();
     if (material.name().empty()) {
         material.set_name(std::string(core::vfs::path_utils::stem(context.source_path())));

@@ -20,6 +20,21 @@ namespace {
     constexpr f32 SH_Y20 = 0.315392f;
     constexpr f32 SH_Y22 = 0.546274f;
 
+    // The largest finite RGBA16F value: pack_half turns anything above it into infinity, which bloom's
+    // Karis weight then turns into NaN.
+    constexpr f32 MAX_HALF = 65504.0f;
+
+    /// <summary>
+    /// One radiance channel as a finite, non-negative half: NaN and negative values become 0 and
+    /// anything brighter than the half range (including +inf) becomes MAX_HALF.
+    /// </summary>
+    [[nodiscard]] u16 pack_radiance(f32 value) noexcept {
+        if (std::isnan(value)) {
+            return pack_half(0.0f);
+        }
+        return pack_half(std::clamp(value, 0.0f, MAX_HALF));
+    }
+
     /// <summary>
     /// Runs body(face) for the six faces, on jobs when available.
     /// </summary>
@@ -357,9 +372,9 @@ cubemap_data conjure::renderer::detail::pack_cubemap(const cubemap_f32 &cubemap)
     const u16 one = pack_half(1.0f);
     for (usize index = 0; index < cubemap.texels.size(); ++index) {
         const math::vec3 &texel = cubemap.texels[index];
-        packed.texels[index * 4] = pack_half(texel.x);
-        packed.texels[index * 4 + 1] = pack_half(texel.y);
-        packed.texels[index * 4 + 2] = pack_half(texel.z);
+        packed.texels[index * 4] = pack_radiance(texel.x);
+        packed.texels[index * 4 + 1] = pack_radiance(texel.y);
+        packed.texels[index * 4 + 2] = pack_radiance(texel.z);
         packed.texels[index * 4 + 3] = one;
     }
     return packed;

@@ -80,7 +80,8 @@ namespace conjure::renderer {
     /// What one flush did.
     /// </summary>
     struct upload_report {
-        u32 completed = 0;
+        u32 completed = 0;              // records flushed, built or not (they count against the byte budget)
+        u32 failed = 0;                 // completed records the device could not build; the fallback serves them
         u32 pending = 0;
         u64 bytes = 0;
         u32 materialsRebound = 0;       // binding sets rebuilt because a texture arrived or was released
@@ -95,8 +96,8 @@ namespace conjure::renderer {
             struct entry {
                 Mirror mirror = {};
                 assets::asset_id asset = {};
-                bool ready = false;             // false until the first upload flushed
-                bool pendingReported = false;   // the "not uploaded yet" DEBUG line was logged
+                bool ready = false;             // false until an upload flushed and built
+                bool pendingReported = false;   // the "not ready" DEBUG line was logged
             };
 
             template <typename Mirror>
@@ -202,8 +203,9 @@ namespace conjure::renderer {
             /// Creates the GPU objects of the queued uploads in queue order, up to 'budgetBytes' of
             /// payload (at least one record always runs); once a record is deferred, every later record
             /// of the same id is deferred too so a newer payload never flushes before an older one.
-            /// Materials whose textures arrived or were released are rebound, and only the materials
-            /// whose constants changed are written.
+            /// A record the device cannot build logs an ERROR, counts in upload_report::failed and
+            /// leaves its id on the fallback. Materials whose textures arrived, failed or were released
+            /// are rebound, and only the materials whose constants changed are written.
             /// </summary>
             upload_report flush_uploads(nvrhi::ICommandList &commandList, u64 frameIndex, u64 budgetBytes);
 
@@ -219,9 +221,9 @@ namespace conjure::renderer {
             void drop_all();
 
             /// <summary>
-            /// The mirror, or the fallback for a stale, unknown or not yet uploaded id (a stale or unknown
-            /// id WARNs once, a pending one logs DEBUG once; fallbacks_used() is incremented). Locks
-            /// internally; the reference is valid until the next collect().
+            /// The mirror, or the fallback for a stale, unknown or not ready id (a stale or unknown id
+            /// WARNs once, a pending or failed one logs DEBUG once; fallbacks_used() is incremented).
+            /// Locks internally; the reference is valid until the next collect().
             /// </summary>
             [[nodiscard]] const gpu_mesh &resolve_mesh(gpu_mesh_id id);
             [[nodiscard]] const gpu_texture &resolve_texture(gpu_texture_id id);

@@ -67,7 +67,9 @@ rendered and the frame being extracted never share a buffer.
 
 `renderer_desc` names the `rhi::device`, the `rhi::shader_library` (the index `conjure_add_shaders` built), an
 optional `rhi::swapchain` (null = headless, every view must name a target), an optional `core::jobs::job_system`
-(culling and draw-list building run on it), the cascade and atlas resolutions, and `enableImGui`.
+(culling and draw-list building run on it), the cascade and atlas resolutions, and `enableImGui`. The atlas
+resolution is clamped to [256, 16384] and rounded down to a power of two, with a WARN when that changes it (3000
+becomes 2048); `desc()` still reports the value you passed.
 `renderer::create` builds every pipeline, binding layout, fallback resource and the BRDF lookup table up front;
 it fails with `SHADER_NOT_FOUND` (naming the shader key), `PIPELINE_CREATION_FAILED`, `RESOURCE_CREATION_FAILED`
 or `INVALID_ARGUMENT`. Nothing is created mid-frame afterwards.
@@ -105,7 +107,10 @@ ray from a pixel.
 
 Everything beyond a budget is clamped and logged, never fatal: views past `MAX_VIEWS` are skipped
 (`render_stats::viewsSkipped`), lights past `MAX_LIGHTS_PER_VIEW` dropped (`lightsDropped`), sprites past
-`MAX_SPRITES_PER_FRAME` and debug vertices past `MAX_DEBUG_VERTICES` counted as dropped.
+`MAX_SPRITES_PER_FRAME` and debug vertices past `MAX_DEBUG_VERTICES` counted as dropped. A view whose `camera`
+`clip_from_view` would reject (near not above zero, far not beyond near, a field of view outside (0, pi), an
+orthographic height not above zero, or a non-finite value) renders with those fields clamped or reset to the
+defaults, with one WARN per view until its camera is valid again.
 
 ## Targets and read-back
 
@@ -113,8 +118,9 @@ Everything beyond a budget is clamped and logged, never fatal: views past `MAX_V
 `get_render_target(id)` gives `size()`, `colour_texture()` (a `gpu_texture_id` you may draw as a sprite or in
 ImGui) and `frames_rendered()`; `resize_render_target(id, size)` recreates it; `destroy_render_target(id)` frees
 it. `read_back(id)` waits for the GPU and returns a `core::image` (RGBA8); on the null device the image is
-zero-filled and the right size. `is_render_target_colour_format(format)` tells you which `rhi::texture_format`s a
-target accepts.
+zero-filled and the right size. It fails with `NOT_FOUND` for an unknown target, `rhi_error::DEVICE_LOST` on a lost
+device and `RESOURCE_CREATION_FAILED` when the staging texture cannot be created or mapped, never with a blank
+image. `is_render_target_colour_format(format)` tells you which `rhi::texture_format`s a target accepts.
 
 ## Sprites and debug drawing
 
@@ -123,16 +129,26 @@ rectangle, a colour, a `size` (world units or pixels), a `sprite_space` and a la
 sorts world-space sprites with the 3D scene and screen-space ones on top.
 `sprite_batcher` is the CPU batching the renderer uses, exposed for tools that want the vertex runs.
 
-`debug_draw_buffer` collects lines (`line`, `box`, `sphere`, `frustum`, `axes`, `grid`), each depth-tested or
-overlay; `render_scene::debugDraw` is one. `debug_draw` keeps shapes alive for a duration: `line(...,
-durationSeconds)`, `tick(deltaSeconds)` and `append_to(buffer)` each frame.
+`debug_draw_buffer` collects lines (`line`, `box`, `sphere`, `frustum`, `axes`, `grid`); each shape takes a
+`debug_depth` after its colour (after `length` for `axes`; `sphere` takes its segment count after it):
+`debug_depth::TESTED` (the default, hidden behind geometry) or `debug_depth::OVERLAY` (drawn on top).
+`render_scene::debugDraw` is one. `debug_draw` keeps shapes alive for a duration: `line(...,
+durationSeconds, depth)`, `tick(deltaSeconds)` and `append_to(buffer)` each frame. `debug_depth` is a typed
+argument, so it can never be passed where the facade expects the duration. Vertices dropped at the
+`MAX_DEBUG_VERTICES` cap are counted by `dropped_count()` and carried along by `append` and `append_to`.
+
+```cpp
+scene.debugDraw.box(bounds, math::vec4(1.0f, 0.0f, 0.0f, 1.0f), renderer::debug_depth::OVERLAY);
+debugDraw.line(from, to, math::vec4(0.0f, 1.0f, 0.0f, 1.0f), 2.0f);   // depth-tested, kept for two seconds
+```
 
 ## The null device and statistics
 
 `render_stats` is filled on every device: `viewsRendered`, `passesExecuted` and `passNames` (in order),
 `drawCalls`, `instancesDrawn`, `instancesCulled`, `trianglesDrawn`, `lightsRendered`, `shadowCascadesRendered`,
 `shadowTilesAllocated`, `spritesDrawn`, `uploadsCompleted`, `fallbacksUsed`, `transientTexturesLive` and more;
-`executed("tonemap")` and `count(name)` query the pass list. On the null device the `rhi::device::null_stats()`
+`executed("tonemap")` and `count(name)` query the pass list, which holds every executed pass of the largest frame
+(`MAX_VIEWS` views of `MAX_PASSES_PER_VIEW` passes each). On the null device the `rhi::device::null_stats()`
 counters say what was recorded (draws, dispatches, buffers and textures created, command lists submitted), which
 is how every renderer test asserts without a GPU.
 

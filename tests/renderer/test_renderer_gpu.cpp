@@ -5,11 +5,14 @@
 #include "renderer_test_support.h"
 
 #include "conjure/renderer/camera.h"
+#include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/renderer.h"
+#include "conjure/renderer/texture_asset.h"
 
+#include "conjure/assets/asset_ref.h"
 #include "conjure/core/image.h"
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
@@ -34,9 +37,9 @@ namespace {
 
     constexpr math::uvec2 TARGET_SIZE = math::uvec2(128, 128);
 
-    [[nodiscard]] render_target_id make_target(renderer_type &instance) {
+    [[nodiscard]] render_target_id make_target(renderer_type &instance, math::uvec2 size = TARGET_SIZE) {
         render_target_desc desc = {};
-        desc.size = TARGET_SIZE;
+        desc.size = size;
         desc.colourFormat = rhi::texture_format::RGBA8_SRGB;
         core::result<render_target_id> created = instance.create_render_target(desc);
         CONJURE_REQUIRE_OK(created);
@@ -83,6 +86,70 @@ namespace {
         const math::uvec2 pixel = project_to_pixel(clipFromWorld, world, TARGET_SIZE);
         REQUIRE(pixel.x != std::numeric_limits<u32>::max());
         return image.pixel(pixel.x, pixel.y);
+    }
+
+    /// <summary>
+    /// Mean linear luminance of the projected disc of a unit sphere at the origin seen along -Z, one
+    /// and a half pixels in from its rim.
+    /// </summary>
+    [[nodiscard]] f32 sphere_disc_luminance(const core::image &image, const math::mat4 &clipFromWorld) {
+        const math::uvec2 centrePixel = project_to_pixel(clipFromWorld, math::vec3(0.0f, 0.0f, 1.0f), TARGET_SIZE);
+        const math::uvec2 edgePixel = project_to_pixel(clipFromWorld, math::vec3(1.0f, 0.0f, 0.0f), TARGET_SIZE);
+        const f32 radius = static_cast<f32>(edgePixel.x - centrePixel.x) - 1.5f;
+        REQUIRE(radius > 10.0f);
+        f32 sum = 0.0f;
+        u32 count = 0;
+        for (u32 y = 0; y < TARGET_SIZE.y; ++y) {
+            for (u32 x = 0; x < TARGET_SIZE.x; ++x) {
+                const f32 dx = static_cast<f32>(x) - static_cast<f32>(centrePixel.x);
+                const f32 dy = static_cast<f32>(y) - static_cast<f32>(centrePixel.y);
+                if (dx * dx + dy * dy <= radius * radius) {
+                    sum += linear_luminance(image.pixel(x, y));
+                    ++count;
+                }
+            }
+        }
+        REQUIRE(count > 100);
+        return sum / static_cast<f32>(count);
+    }
+
+    /// <summary>
+    /// Mean linear luminance of the floor (y = 0) over a world-space rectangle in XZ, sampled every 5 cm.
+    /// </summary>
+    [[nodiscard]] f32 floor_luminance(
+      const core::image &image,
+      const math::mat4 &clipFromWorld,
+      const math::vec2 &minimum,
+      const math::vec2 &maximum
+    ) {
+        const math::uvec2 size(image.width(), image.height());
+        f32 sum = 0.0f;
+        u32 count = 0;
+        for (f32 z = minimum.y; z <= maximum.y; z += 0.05f) {
+            for (f32 x = minimum.x; x <= maximum.x; x += 0.05f) {
+                const math::uvec2 pixel = project_to_pixel(clipFromWorld, math::vec3(x, 0.0f, z), size);
+                REQUIRE(pixel.x != std::numeric_limits<u32>::max());
+                sum += linear_luminance(image.pixel(pixel.x, pixel.y));
+                ++count;
+            }
+        }
+        REQUIRE(count > 0);
+        return sum / static_cast<f32>(count);
+    }
+
+    /// <summary>
+    /// Renders the scene twice (the first frame flushes the uploads) and reads the target back.
+    /// </summary>
+    [[nodiscard]] core::image render_and_read(
+      renderer_type &instance,
+      const render_scene &scene,
+      render_target_id target
+    ) {
+        CONJURE_REQUIRE_OK(instance.render(scene));
+        CONJURE_REQUIRE_OK(instance.render(scene));
+        core::result<core::image> readBack = instance.read_back(target);
+        CONJURE_REQUIRE_OK(readBack);
+        return std::move(readBack).value();
     }
 }
 
@@ -407,6 +474,201 @@ TEST_SUITE("renderer/gpu") {
         core::result<core::image> adapted = fixture->read_back(target);
         CONJURE_REQUIRE_OK(adapted);
         CHECK(pixel_at(adapted.value(), clip_from_world_of(view), math::vec3(0.0f)).r > 60);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - under the uniform fallback sky a smooth grey metal sphere reflects more than a rough one") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id target = make_target(*fixture);
+        const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
+        const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
+        const auto greyMetal = [](f32 roughness) {
+            material_asset material = {};
+            material.desc().baseColourFactor = math::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+            material.desc().metallicFactor = 1.0f;
+            material.desc().roughnessFactor = roughness;
+            return material;
+        };
+        const gpu_material_id smooth = fixture->upload_material(test_asset_id(2), greyMetal(0.05f));
+        const gpu_material_id rough = fixture->upload_material(test_asset_id(3), greyMetal(1.0f));
+
+        // No lights, no shadows, no SSAO: a metal is lit by the split-sum specular of the constant
+        // fallback sky alone, so only the BRDF lookup table tells the two spheres apart.
+        render_scene scene = {};
+        render_view view = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target, 0.6f);
+        view.flags = view_flags::NO_POST_PROCESS;
+        scene.views.push_back(view);
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = false;
+        const math::mat4 clipFromWorld = clip_from_world_of(view);
+        const auto discLuminance = [&](gpu_material_id material) {
+            scene.meshes.clear();
+            scene.meshes.push_back(instance_at(sphere, material, math::vec3(0.0f), sphereMesh.bounds()));
+            return sphere_disc_luminance(render_and_read(*fixture, scene, target), clipFromWorld);
+        };
+        const f32 smoothLuminance = discLuminance(smooth);
+        const f32 roughLuminance = discLuminance(rough);
+        CAPTURE(smoothLuminance);
+        CAPTURE(roughLuminance);
+        // About 0.5 and 0.3 of the sky radiance; the table baked upside down swapped them.
+        CHECK(smoothLuminance > roughLuminance * 1.1f);
+        CHECK(smoothLuminance == doctest::Approx(0.5f * FALLBACK_ENVIRONMENT_RADIANCE).epsilon(0.2));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - GTAO darkens the floor beside a pillar equally far along x and y on a 2:1 target") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        constexpr math::uvec2 WIDE = math::uvec2(256, 128);
+        const render_target_id target = make_target(*fixture, WIDE);
+        const mesh_asset floorMesh = floor_mesh();
+        const mesh_asset cubeMesh = mesh_asset::unit_cube();
+        const gpu_mesh_id floor = fixture->upload_mesh(test_asset_id(1), floorMesh);
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(2), cubeMesh);
+        const gpu_material_id material = fixture->upload_material(test_asset_id(3), white_rough());
+
+        // Straight down with -Z up on screen: screen x is world x and screen y is world z, with square
+        // pixels, so equal floor distances along x and z cover equal pixel distances.
+        render_scene scene = {};
+        const math::vec3 eye(0.0f, 6.0f, 0.0f);
+        render_view view = look_at_view(eye, math::vec3(0.0f), target, 0.8f);
+        view.viewFromWorld = math::look_at(eye, math::vec3(0.0f), math::vec3(0.0f, 0.0f, -1.0f));
+        scene.views.push_back(view);
+        // SSAO is part of post-processing; an exposure of 1 without bloom or a tonemap curve keeps the
+        // read-back the linear shading.
+        scene.postProcess.exposure = exposure_mode::MANUAL;
+        scene.postProcess.manualEv100 = -std::log2(1.2f);
+        scene.postProcess.bloomEnabled = false;
+        scene.postProcess.tonemap = tonemap_operator::NONE;
+        scene.meshes.push_back(instance_at(floor, material, math::vec3(0.0f), floorMesh.bounds()));
+        // A 1 x 2 x 1 m pillar standing on the floor at the origin.
+        mesh_instance pillar = instance_at(cube, material, math::vec3(0.0f), cubeMesh.bounds());
+        pillar.worldFromLocal = glm::scale(
+          glm::translate(math::mat4(1.0f), math::vec3(0.0f, 1.0f, 0.0f)),
+          math::vec3(1.0f, 2.0f, 1.0f)
+        );
+        pillar.worldBounds.min = math::vec3(-0.5f, 0.0f, -0.5f);
+        pillar.worldBounds.max = math::vec3(0.5f, 2.0f, 0.5f);
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = true;
+        scene.ssao.radius = 1.0f;
+        scene.ssao.thickness = 9.0f;
+        scene.ssao.intensity = 3.0f;
+
+        // The bare floor first: its own ambient occlusion varies with the distance from the image
+        // centre, so the pillar's share is the difference between the two frames at each place.
+        const core::image bare = render_and_read(*fixture, scene, target);
+        scene.meshes.push_back(pillar);
+        const core::image occluded = render_and_read(*fixture, scene, target);
+        CHECK(fixture->stats().executed("ssao_gtao"));
+
+        const f32 aspect = static_cast<f32>(WIDE.x) / static_cast<f32>(WIDE.y);
+        const math::mat4 clipFromWorld = clip_from_view(view.cameraData, aspect) * view.viewFromWorld;
+        const auto darkening = [&](const math::vec2 &minimum, const math::vec2 &maximum) {
+            return floor_luminance(bare, clipFromWorld, minimum, maximum) -
+              floor_luminance(occluded, clipFromWorld, minimum, maximum);
+        };
+        // The pillar's top face covers the floor out to 0.75 m on screen. Bands 0.55 to 0.9 m beyond
+        // that lie inside the 1 m search radius but outside half of it, which is all the vertical
+        // search reached when the step was measured in units of the target's width.
+        constexpr f32 NEAR_EDGE = 1.3f;
+        constexpr f32 FAR_EDGE = 1.65f;
+        constexpr f32 HALF_WIDTH = 0.3f;
+        const f32 alongX = 0.5f * (
+          darkening(math::vec2(NEAR_EDGE, -HALF_WIDTH), math::vec2(FAR_EDGE, HALF_WIDTH)) +
+          darkening(math::vec2(-FAR_EDGE, -HALF_WIDTH), math::vec2(-NEAR_EDGE, HALF_WIDTH))
+        );
+        const f32 alongZ = 0.5f * (
+          darkening(math::vec2(-HALF_WIDTH, NEAR_EDGE), math::vec2(HALF_WIDTH, FAR_EDGE)) +
+          darkening(math::vec2(-HALF_WIDTH, -FAR_EDGE), math::vec2(HALF_WIDTH, -NEAR_EDGE))
+        );
+        CAPTURE(alongX);
+        CAPTURE(alongZ);
+        CHECK(alongX > 0.01f);
+        CHECK(alongZ > alongX * 0.75f);
+        CHECK(alongZ < alongX / 0.75f);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - a normal-mapped quad under non-uniform scale bends its normal along the world tangent") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id target = make_target(*fixture);
+
+        // A quad facing +Z with its UVs turned 45 degrees: U grows along (1, 1, 0), which makes the
+        // generated tangent (1, 1, 0) / sqrt(2).
+        mesh_geometry geometry = {};
+        geometry.positions = {
+          math::vec3(-1.0f, -1.0f, 0.0f), math::vec3(1.0f, -1.0f, 0.0f),
+          math::vec3(1.0f, 1.0f, 0.0f),   math::vec3(-1.0f, 1.0f, 0.0f),
+        };
+        geometry.normals.assign(4, math::vec3(0.0f, 0.0f, 1.0f));
+        geometry.uv0 = {math::vec2(0.0f, 0.5f), math::vec2(0.5f, 1.0f), math::vec2(1.0f, 0.5f), math::vec2(0.5f, 0.0f)};
+        geometry.indices = {0, 1, 2, 0, 2, 3};
+        core::result<mesh_asset> quadMesh = mesh_asset::from_geometry(geometry, "turned_quad");
+        CONJURE_REQUIRE_OK(quadMesh);
+        const gpu_mesh_id quad = fixture->upload_mesh(test_asset_id(1), quadMesh.value());
+
+        // A constant normal map tilted 30 degrees toward +tangent: (sin 30, 0, cos 30) encoded.
+        const texture_asset normalMap = texture_asset::solid_colour(
+          core::rgba8{191, 128, 238, 255},
+          texture_colour_space::LINEAR,
+          4,
+          4
+        );
+        static_cast<void>(fixture->upload_texture(test_asset_id(2), normalMap));
+        material_asset bumped = white_rough();
+        bumped.desc().normalScale = 1.0f;
+        bumped.desc().textures[static_cast<usize>(material_texture::NORMAL)] =
+          assets::asset_ref<texture_asset>(test_asset_id(2));
+        const gpu_material_id material = fixture->upload_material(test_asset_id(3), bumped);
+
+        render_scene scene = {};
+        render_view view = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target, 0.6f);
+        view.flags = view_flags::NO_POST_PROCESS;
+        scene.views.push_back(view);
+        // Scale (4, 1, 1): the world tangent is M * t, along (4, 1, 0); the normal matrix (the inverse
+        // transpose) turns it to (1, 4, 0) instead.
+        mesh_instance stretched = instance_at(quad, material, math::vec3(0.0f), quadMesh.value().bounds());
+        stretched.worldFromLocal = glm::scale(math::mat4(1.0f), math::vec3(4.0f, 1.0f, 1.0f));
+        stretched.worldBounds.min = math::vec3(-4.0f, -1.0f, 0.0f);
+        stretched.worldBounds.max = math::vec3(4.0f, 1.0f, 0.0f);
+        scene.meshes.push_back(stretched);
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = false;
+
+        const math::vec3 surfaceNormal(0.0f, 0.0f, 1.0f);
+        const f32 sinTilt = 0.5f;
+        const f32 cosTilt = std::sqrt(3.0f) * 0.5f;
+        const math::vec3 expected = glm::normalize(
+          glm::normalize(math::vec3(4.0f, 1.0f, 0.0f)) * sinTilt + surfaceNormal * cosTilt
+        );
+        const math::vec3 mistaken = glm::normalize(
+          glm::normalize(math::vec3(1.0f, 4.0f, 0.0f)) * sinTilt + surfaceNormal * cosTilt
+        );
+        const auto centreUnderLightAlong = [&](const math::vec3 &normal) {
+            light sun = {};
+            sun.type = light_type::DIRECTIONAL;
+            sun.direction = -normal;
+            sun.intensity = math::HALF_PI;              // Lambert: albedo / pi * E = 0.5 at N.L = 1
+            sun.castsShadows = false;
+            scene.lights.clear();
+            scene.lights.push_back(sun);
+            const core::image image = render_and_read(*fixture, scene, target);
+            return linear_luminance(pixel_at(image, clip_from_world_of(view), math::vec3(0.0f)));
+        };
+        const f32 aligned = centreUnderLightAlong(expected);
+        const f32 misaligned = centreUnderLightAlong(mistaken);
+        CAPTURE(aligned);
+        CAPTURE(misaligned);
+        // N.L is 1 for the light along the true perturbed normal and 0.87 for the other one: 0.5 and
+        // 0.43 of direct light on top of the 0.25 ambient.
+        CHECK(aligned > misaligned + 0.03f);
+        CHECK(aligned == doctest::Approx(0.75f).epsilon(0.15));
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

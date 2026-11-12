@@ -36,6 +36,10 @@ namespace {
     constexpr int GLTF_WRAP_CLAMP = 33071;
     constexpr int GLTF_WRAP_MIRROR = 33648;
 
+    // glTF caps byteStride at 252; cgltf does not, and cgltf_validate multiplies the stride by the
+    // element count without an overflow check.
+    constexpr cgltf_size MAX_BYTE_STRIDE = 252;
+
     constexpr std::array<std::string_view, 3> SUPPORTED_EXTENSIONS = {
       "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_lights_punctual"
     };
@@ -197,6 +201,44 @@ namespace {
             document.ownedBuffers[index] = std::move(bytes).value();
             buffer.data = document.ownedBuffers[index].data();
             buffer.data_free_method = cgltf_data_free_method_none;
+        }
+        return core::result<void>();
+    }
+
+    /// <summary>
+    /// Bounds what cgltf_validate multiplies without overflow checks, so its range checks cannot wrap:
+    /// every buffer view lies inside its resolved buffer with a byteStride of at most 252, and no
+    /// accessor or sparse block has more elements than its views have bytes. cgltf parses offsets as
+    /// at most 2^63 - 1, so offset + stride * (count - 1) + element size stays below 2^64. Reads no
+    /// buffer data, unlike cgltf_validate, which scans index data through the views.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_view_ranges(const cgltf_data &data) {
+        for (cgltf_size index = 0; index < data.buffer_views_count; ++index) {
+            const cgltf_buffer_view &view = data.buffer_views[index];
+            const bool outside = view.buffer == nullptr || view.offset > view.buffer->size
+              || view.size > view.buffer->size - view.offset;
+            if (outside) {
+                return parse_failure(std::format("invalid document: buffer view {} lies outside its buffer", index));
+            }
+            if (view.stride > MAX_BYTE_STRIDE) {
+                return parse_failure(
+                  std::format("invalid document: buffer view {} has a byteStride above {}", index, MAX_BYTE_STRIDE)
+                );
+            }
+        }
+        for (cgltf_size index = 0; index < data.accessors_count; ++index) {
+            const cgltf_accessor &accessor = data.accessors[index];
+            const cgltf_accessor_sparse &sparse = accessor.sparse;
+            const bool denseTooLong = accessor.buffer_view != nullptr && accessor.count > accessor.buffer_view->size;
+            // cgltf_parse requires both sparse views, so they are set whenever is_sparse is.
+            const bool sparseTooLong = accessor.is_sparse
+              && (sparse.count > accessor.count || sparse.count > sparse.indices_buffer_view->size
+                  || sparse.count > sparse.values_buffer_view->size);
+            if (denseTooLong || sparseTooLong) {
+                return parse_failure(
+                  std::format("invalid document: accessor {} has more elements than its buffer views hold", index)
+                );
+            }
         }
         return core::result<void>();
     }
@@ -426,6 +468,16 @@ namespace {
             if (anyColours) {
                 if (colours != nullptr && colours->count == vertexCount) {
                     const cgltf_size components = cgltf_num_components(colours->type);
+                    if (components != 3 && components != 4) {
+                        return parse_failure(
+                          std::format(
+                            "mesh '{}' primitive {}: COLOR_0 must be VEC3 or VEC4, not {} components",
+                            name,
+                            primitiveIndex,
+                            components
+                          )
+                        );
+                    }
                     std::vector<f32> values = {};
                     CONJURE_TRY_ASSIGN(values, unpack_floats(*colours, components));
                     for (u32 vertex = 0; vertex < vertexCount; ++vertex) {
@@ -492,6 +544,10 @@ namespace {
             const cgltf_buffer_view &view = *image.buffer_view;
             if (view.buffer == nullptr || view.buffer->data == nullptr) {
                 return core::make_error(core::error_code::NOT_FOUND, "gltf: image {} buffer has no data", imageIndex);
+            }
+            // check_view_ranges already bounds every view; the copy below must not depend on that alone.
+            if (view.offset > view.buffer->size || view.size > view.buffer->size - view.offset) {
+                return parse_failure(std::format("image {} buffer view exceeds its buffer", imageIndex));
             }
             const std::byte *start = static_cast<const std::byte *>(view.buffer->data) + view.offset;
             return std::vector<std::byte>(start, start + view.size);
@@ -676,7 +732,15 @@ namespace {
         std::vector<u32> meshIndexByGltfMesh;
     };
 
-    void import_node(node_import_context &context, const cgltf_node &node, u32 parent, bool isRoot) {
+    /// <summary>
+    /// A node waiting to be imported: the glTF node and the model index of its parent.
+    /// </summary>
+    struct pending_node {
+        const cgltf_node *node = nullptr;
+        u32 parent = INVALID_INDEX;
+    };
+
+    [[nodiscard]] model_node convert_node(const node_import_context &context, const cgltf_node &node, u32 parent) {
         model_node entry = {};
         entry.name = node.name != nullptr ? node.name : "";
         entry.parent = parent;
@@ -685,6 +749,7 @@ namespace {
         math::mat4 local(1.0f);
         std::memcpy(&local, matrix.data(), sizeof(local));
         entry.localTransform = math::transform::from_matrix(local);
+        const bool isRoot = parent == INVALID_INDEX;
         if (isRoot && context.options.scale != 1.0f) {
             entry.localTransform.position *= context.options.scale;
             entry.localTransform.scale *= context.options.scale;
@@ -706,18 +771,49 @@ namespace {
             entry.hasCamera = true;
             entry.cameraData = import_camera(*node.camera);
         }
-        const u32 index = context.result.model.add_node(std::move(entry));
-        for (cgltf_size child = 0; child < node.children_count; ++child) {
-            if (node.children[child] != nullptr) {
-                import_node(context, *node.children[child], index, false);
+        return entry;
+    }
+
+    /// <summary>
+    /// Adds a root node and its subtree to the model, parents before children in document order.
+    /// </summary>
+    void import_tree(node_import_context &context, const cgltf_node &root) {
+        // An explicit stack instead of recursion: a hostile file can nest nodes as deep as it likes,
+        // which would overflow the call stack of an importer worker. Children are pushed in reverse so
+        // they pop in document order.
+        std::vector<pending_node> stack = {};
+        stack.push_back(pending_node{&root, INVALID_INDEX});
+        while (!stack.empty()) {
+            const pending_node current = stack.back();
+            stack.pop_back();
+            const u32 index = context.result.model.add_node(convert_node(context, *current.node, current.parent));
+            for (cgltf_size child = current.node->children_count; child > 0; --child) {
+                const cgltf_node *next = current.node->children[child - 1];
+                if (next != nullptr) {
+                    stack.push_back(pending_node{next, index});
+                }
             }
         }
     }
 
+    /// <summary>
+    /// Reads buffers and images of a model on disk. URIs are UTF-8 and may only name files in the
+    /// model's directory or below: an absolute path or a '..' that leaves it fails with INVALID_ARGUMENT.
+    /// </summary>
     [[nodiscard]] gltf_file_reader directory_reader(const std::filesystem::path &directory) {
         return [directory](std::string_view relativePath) -> core::result<std::vector<std::byte>> {
-            const std::filesystem::path path = directory / std::filesystem::path(std::string(relativePath));
-            return detail::read_file_bytes(path);
+            const std::filesystem::path relative =
+              std::filesystem::path(std::u8string(relativePath.begin(), relativePath.end())).lexically_normal();
+            const bool escapes = relative.empty() || relative.has_root_name() || relative.has_root_directory()
+              || *relative.begin() == "..";
+            if (escapes) {
+                return core::make_error(
+                  core::error_code::INVALID_ARGUMENT,
+                  "gltf: '{}' points outside the model's directory",
+                  relativePath
+                );
+            }
+            return detail::read_file_bytes(directory / relative);
         };
     }
 }
@@ -742,7 +838,7 @@ core::result<gltf_import_result> gltf_importer::import(
       directory_reader(sourcePath.parent_path())
     );
     if (imported.has_value() && imported.value().model.name().empty()) {
-        imported.value().model.set_name(sourcePath.stem().string());
+        imported.value().model.set_name(detail::path_utf8(sourcePath.stem()));
     }
     return imported;
 }
@@ -762,6 +858,14 @@ core::result<gltf_import_result> gltf_importer::import_bytes(
         return parse_failure(cgltf_result_name(parsed));
     }
     CONJURE_TRY(resolve_buffers(document, reader));
+    // check_view_ranges keeps cgltf_validate's unchecked size arithmetic from wrapping, so it runs
+    // first. cgltf_validate then bounds every accessor by its buffer view and rejects node cycles
+    // before anything reads through them; it scans index data, so both need the resolved buffers.
+    CONJURE_TRY(check_view_ranges(*document.data));
+    const cgltf_result valid = cgltf_validate(document.data);
+    if (valid != cgltf_result_success) {
+        return parse_failure(std::format("invalid document: {}", cgltf_result_name(valid)));
+    }
     const cgltf_data &data = *document.data;
 
     gltf_import_result result = {};
@@ -884,13 +988,13 @@ core::result<gltf_import_result> gltf_importer::import_bytes(
     if (scene != nullptr) {
         for (cgltf_size index = 0; index < scene->nodes_count; ++index) {
             if (scene->nodes[index] != nullptr) {
-                import_node(context, *scene->nodes[index], INVALID_INDEX, true);
+                import_tree(context, *scene->nodes[index]);
             }
         }
     } else {
         for (cgltf_size index = 0; index < data.nodes_count; ++index) {
             if (data.nodes[index].parent == nullptr) {
-                import_node(context, data.nodes[index], INVALID_INDEX, true);
+                import_tree(context, data.nodes[index]);
             }
         }
     }

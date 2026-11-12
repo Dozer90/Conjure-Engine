@@ -1,19 +1,13 @@
 // Split-sum BRDF lookup table (docs/design/02_renderer.md R13, 3.6): 256^2 RG16_FLOAT with
-// x = N.V and y = roughness, 1024 Hammersley samples, baked once at renderer creation.
+// x = N.V and y = roughness, 1024 Hammersley samples, baked once at renderer creation. Texture v is
+// the roughness (row 0 is smooth), matching the float2(N.V, roughness) lookup in forward_pbr.hlsl.
 
 #include "gpu_types.hlsli"
 #include "brdf.hlsli"
-
-struct fullscreen_output {
-    float4 position : SV_Position;
-    float2 uv : TEXCOORD;
-};
+#include "fullscreen.hlsli"
 
 fullscreen_output vs_main(uint vertexId : SV_VertexID) {
-    fullscreen_output output;
-    output.uv = float2((vertexId << 1) & 2, vertexId & 2);
-    output.position = float4(output.uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    return output;
+    return fullscreen_vs(vertexId);
 }
 
 float radical_inverse(uint bits) {
@@ -34,7 +28,7 @@ float3 importance_sample_ggx(float2 xi, float alpha) {
 
 float2 ps_main(fullscreen_output input) : SV_Target0 {
     float nDotV = max(input.uv.x, 1e-3);
-    float roughness = max(1.0 - input.uv.y, CONJURE_MIN_ROUGHNESS);
+    float roughness = max(input.uv.y, CONJURE_MIN_ROUGHNESS);
     float alpha = roughness * roughness;
     float3 view = float3(sqrt(1.0 - nDotV * nDotV), 0.0, nDotV);
     float scale = 0.0;

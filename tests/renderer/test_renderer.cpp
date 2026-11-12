@@ -5,6 +5,7 @@
 
 #include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/gltf_importer.h"
+#include "conjure/renderer/light.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/model_asset.h"
@@ -27,6 +28,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 // renderer.h (docs/design/02_renderer.md 1, 3, 5, 6): creation, the upload / find / release
@@ -307,6 +309,94 @@ TEST_SUITE("renderer/renderer") {
         CONJURE_REQUIRE_OK(instance.render(scene));
         CHECK(instance.stats().viewsRendered == 1);
         created.value().reset();
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F375 a non-power-of-two atlasResolution is rounded down with one WARN and "
+      "local shadows still allocate"
+    ) {
+        log_capture logs = {};
+        std::unique_ptr<rhi::device> device = make_device();
+        std::unique_ptr<rhi::shader_library> shaders = open_shaders(*device);
+        renderer_desc desc = headless_desc(*device, *shaders);
+        desc.atlasResolution = 3000;
+        core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        renderer_type &instance = *created.value();
+        u32 atlasWarnings = 0;
+        for (const std::string &message : logs.messages(core::log_level::WARN)) {
+            atlasWarnings += message.find("atlasResolution") != std::string::npos ? 1u : 0u;
+        }
+        CHECK(atlasWarnings == 1);
+        CHECK(logs.contains(core::log_level::WARN, "using 2048"));
+        CHECK(instance.desc().atlasResolution == 3000);   // the description as given
+
+        render_target_desc targetDesc = {};
+        targetDesc.size = math::uvec2(32, 32);
+        core::result<render_target_id> target = instance.create_render_target(targetDesc);
+        CONJURE_REQUIRE_OK(target);
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target.value()));
+        light spot = {};
+        spot.type = light_type::SPOT;
+        spot.position = math::vec3(0.0f, 2.0f, 0.0f);
+        spot.castsShadows = true;
+        spot.shadowResolution = 1024;
+        scene.lights.push_back(spot);
+        CONJURE_REQUIRE_OK(instance.render(scene));
+        CHECK(instance.stats().shadowTilesAllocated == 1);
+        CHECK(instance.stats().shadowTilesDropped == 0);
+
+        // A power of two in range is taken as it is, without a WARN.
+        log_capture quiet = {};
+        desc.atlasResolution = 2048;
+        core::result<std::unique_ptr<renderer_type>> exact = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(exact);
+        CHECK(quiet.count(core::log_level::WARN) == 0);
+        created.value().reset();
+        exact.value().reset();
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F378 a stale mesh id and a live id that reuses its slot are drawn as "
+      "separate batches"
+    ) {
+        // Batches keyed on the slot index alone: a stale id and the live id that reuses its slot merged
+        // into one batch drawn with a single mesh. A stale id must batch exactly like an invalid one.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const gpu_mesh_id first = fixture->upload_mesh(test_asset_id(1), mesh_asset::unit_cube());
+        const gpu_material_id material = fixture->upload_material(test_asset_id(2), material_asset());
+        CONJURE_REQUIRE_OK(fixture->render(render_scene()));
+        fixture->release_mesh(first);
+        const gpu_mesh_id second = fixture->upload_mesh(test_asset_id(3), mesh_asset::uv_sphere(0.5f, 8, 16));
+        REQUIRE(second.index == first.index);
+        REQUIRE(second != first);
+
+        render_target_desc desc = {};
+        desc.size = math::uvec2(32, 32);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value()));
+        const math::aabb bounds = mesh_asset::unit_cube().bounds();
+        scene.meshes.push_back(instance_at(gpu_mesh_id(), material, math::vec3(-1.0f, 0.0f, 0.0f), bounds));
+        scene.meshes.push_back(instance_at(second, material, math::vec3(1.0f, 0.0f, 0.0f), bounds));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        const u32 expectedDrawCalls = fixture->stats().drawCalls;
+        const u32 expectedTriangles = fixture->stats().trianglesDrawn;
+
+        scene.meshes[0].mesh = first;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().drawCalls == expectedDrawCalls);
+        CHECK(fixture->stats().trianglesDrawn == expectedTriangles);
+        CHECK(fixture->stats().instancesDrawn >= 2);
+
+        // Each mesh pass draws two batches: one instance alone is one batch fewer per pass.
+        scene.meshes.resize(1);
+        scene.meshes[0].mesh = second;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().drawCalls < expectedDrawCalls);
     }
 
     TEST_CASE("register_asset_types - registers the five types and four importers once") {

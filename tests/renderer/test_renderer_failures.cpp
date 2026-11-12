@@ -4,6 +4,8 @@
 #include "conjure/testing/temp_directory.h"
 #include "renderer_test_support.h"
 
+#include "conjure/renderer/camera.h"
+#include "conjure/renderer/light.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/renderer.h"
@@ -18,6 +20,7 @@
 #include "conjure/rhi/shader_library.h"
 #include "conjure/rhi/texture_format.h"
 
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -192,6 +195,71 @@ TEST_SUITE("renderer/failures") {
         scene.environment.rotationRadians = 1.0e6f;
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().viewsRendered == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F052 an invalid camera is clamped with one WARN per view and the frame renders"
+    ) {
+        // clip_from_view asserts on these cameras; scene data is clamped instead (a bad scene never
+        // aborts a frame) and each view WARNs once until its camera is valid again.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(1), mesh_asset::unit_cube());
+        render_scene scene = {};
+        scene.meshes.push_back(
+          instance_at(cube, gpu_material_id(), math::vec3(0.0f), mesh_asset::unit_cube().bounds())
+        );
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.castsShadows = true;
+        scene.lights.push_back(sun);
+        const render_view valid = look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value());
+        for (u32 index = 0; index < 6; ++index) {
+            scene.views.push_back(valid);
+        }
+        scene.views[0].cameraData.nearPlane = 10.0f;
+        scene.views[0].cameraData.farPlane = 5.0f;
+        scene.views[1].cameraData.nearPlane = 1.0e20f;
+        scene.views[2].cameraData.nearPlane = std::numeric_limits<f32>::quiet_NaN();
+        scene.views[3].cameraData.verticalFovRadians = 0.0f;
+        scene.views[4].cameraData.projection = projection_type::ORTHOGRAPHIC;
+        scene.views[4].cameraData.orthographicHeight = 0.0f;
+        // A perspective camera ignores its orthographic height: valid, no WARN.
+        scene.views[5].cameraData.orthographicHeight = 0.0f;
+
+        const auto cameraWarnings = [&logs]() {
+            u32 count = 0;
+            for (const std::string &message : logs.messages(core::log_level::WARN)) {
+                count += message.find("invalid camera") != std::string::npos ? 1u : 0u;
+            }
+            return count;
+        };
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 6);
+        CHECK(fixture->stats().instancesDrawn >= 1);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 6);
+        CHECK(cameraWarnings() == 5);
+        for (u32 index = 0; index < 5; ++index) {
+            CAPTURE(index);
+            CHECK(logs.contains(core::log_level::WARN, "view " + std::to_string(index) + ": invalid camera"));
+        }
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "view 5: invalid camera"));
+
+        // A valid camera re-arms the warning of its view.
+        scene.views[0] = valid;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(cameraWarnings() == 5);
+        scene.views[0].cameraData.farPlane = std::numeric_limits<f32>::infinity();
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(cameraWarnings() == 6);
+        CHECK(fixture->stats().viewsRendered == 6);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
