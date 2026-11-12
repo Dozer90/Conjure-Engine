@@ -66,6 +66,9 @@ TEST_SUITE("scripting/script_exceptions") {
         CHECK(fixture.runtime.entry(id)->is_live());
         CHECK(fixture.runtime.entry(id)->has_flag(script_entry_flags::FAULTED));
         CHECK(logs.count(core::log_level::ERR) == 1);
+        // The managed guard reports the CREATE fault to native, which logs its own WARN for it.
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "OnCreate of 'Conjure.TestScripts.CreateThrower'"));
         fixture.run_frame();
         fixture.run_frame();
         CHECK(fixture.field_i64(id, "Updates") == 0);

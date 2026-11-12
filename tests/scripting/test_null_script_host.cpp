@@ -289,6 +289,53 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(fixture.host.recorder().calls().empty());
     }
 
+    TEST_CASE("null_host_recorder - each list stops at MAX_RECORDS and counts the rest") {
+        null_host_recorder recorder = {};
+        CHECK(recorder.is_enabled());
+        CHECK(recorder.dropped_count() == 0);
+        for (usize index = 0; index < null_host_recorder::MAX_RECORDS + 5; ++index) {
+            recorder.record_call("run_phase");
+        }
+        CHECK(recorder.calls().size() == null_host_recorder::MAX_RECORDS);
+        CHECK(recorder.dropped_count() == 5);
+
+        // The lists are bounded one by one: a full call log leaves room in the others.
+        recorder.record_destroy(null_host_recorder::destroy_record{});
+        CHECK(recorder.destroys().size() == 1);
+        CHECK(recorder.dropped_count() == 5);
+
+        recorder.clear();
+        CHECK(recorder.calls().empty());
+        CHECK(recorder.destroys().empty());
+        CHECK(recorder.dropped_count() == 0);
+        recorder.record_call("run_phase");
+        CHECK(recorder.calls().size() == 1);
+    }
+
+    TEST_CASE("null_script_host - set_recording(false) records no calls and survives reset_recorder") {
+        bare_host fixture = {};
+        fixture.host.set_recording(false);
+        fixture.host.reset_recorder();
+        CHECK_FALSE(fixture.host.recorder().is_enabled());
+
+        const i32 slot = fixture.create(1, 100);
+        CHECK(fixture.host.is_slot_live(slot));                    // the host itself works as before
+        CHECK(fixture.managed().run_phase(static_cast<u8>(script_phase::UPDATE), 0.1f) == 1);
+        const std::array<u8, 2> blob = {1, 2};
+        CHECK(fixture.managed().apply_fields(slot, blob.data(), static_cast<i32>(blob.size())) == 0);
+        CHECK(fixture.managed().collect_garbage() == 0);
+        CHECK(fixture.host.recorder().calls().empty());
+        CHECK(fixture.host.recorder().creates().empty());
+        CHECK(fixture.host.recorder().phases().empty());
+        CHECK(fixture.host.recorder().applies().empty());
+        CHECK(fixture.host.recorder().dropped_count() == 0);
+        CHECK(fixture.host.recorder().collect_garbage_count() == 1);     // the counters keep counting
+
+        fixture.host.set_recording(true);
+        CHECK(fixture.managed().run_phase(static_cast<u8>(script_phase::UPDATE), 0.1f) == 1);
+        CHECK(fixture.host.recorder().calls() == std::vector<std::string>{"run_phase"});
+    }
+
     TEST_CASE("null_script_host - the managed table fails softly once the host is gone") {
         conjure_managed_api copy = {};
         {

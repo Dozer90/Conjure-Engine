@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/scripting_error.h"
 
+#include "conjure/core/assert.h"
 #include "conjure/core/hash.h"
 
 #include <algorithm>
@@ -101,6 +102,11 @@ core::result<void> script_class_registry::stage_field(u64 classHash, script_fiel
 }
 
 void script_class_registry::commit_staging() {
+    // Without an open staging the staged half is empty: committing it would wipe the active schema.
+    CONJURE_ASSERT(mStagingOpen, "script_class_registry::commit_staging without begin_staging");
+    if (!mStagingOpen) {
+        return;
+    }
     for (script_class_info &info : mStaging.classes) {
         info.sort_fields();
     }

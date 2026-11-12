@@ -8,7 +8,9 @@
 #include "conjure/scripting/managed_build.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace conjure;
@@ -109,6 +111,26 @@ TEST_SUITE("scripting/managed_build") {
             telemetryOff = telemetryOff || (name == "DOTNET_CLI_TELEMETRY_OPTOUT" && value == "1");
         }
         CHECK(telemetryOff);
+    }
+
+    TEST_CASE("managed_build_runner - command_line passes non-ASCII paths as UTF-8") {
+        // "Jörg" spelt as UTF-8 bytes: path::string() would hand the ANSI code page to dotnet on Windows.
+        const std::string_view folderUtf8 = "J\xC3\xB6rg";
+        const std::u8string folder(folderUtf8.begin(), folderUtf8.end());
+        build_request request = {};
+        request.projectPath = std::filesystem::path(folder) / "Game.csproj";
+        request.configuration = "Debug";
+        request.outputDirectory = std::filesystem::path(folder) / "bin";
+        const core::process_desc desc = managed_build_runner::command_line(request, "dotnet");
+
+        const std::u8string projectUtf8 = request.projectPath.u8string();
+        const std::u8string outputUtf8 = request.outputDirectory.u8string();
+        REQUIRE(desc.arguments.size() >= 6);
+        CHECK(desc.arguments[1] == std::string(projectUtf8.begin(), projectUtf8.end()));
+        CHECK(desc.arguments[1].starts_with(folderUtf8));
+        CHECK(desc.arguments[4] == "-o");
+        CHECK(desc.arguments[5] == std::string(outputUtf8.begin(), outputUtf8.end()));
+        CHECK(desc.arguments[5].starts_with(folderUtf8));
     }
 
     TEST_CASE("managed_build_runner - a dotnet that cannot start yields a launch failure on the main thread") {

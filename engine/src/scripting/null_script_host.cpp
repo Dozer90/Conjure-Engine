@@ -1,5 +1,7 @@
 #include "conjure/scripting/null_script_host.h"
 
+#include "scripting/scripting_internal.h"
+
 #include "conjure/scripting/log_category.h"
 #include "conjure/scripting/scripting_error.h"
 
@@ -45,34 +47,62 @@ u32 null_host_recorder::count(std::string_view call) const noexcept {
 }
 
 void null_host_recorder::clear() {
+    // Whether to record is the owner's setting, not something recorded.
+    const bool enabled = mEnabled;
     *this = null_host_recorder();
+    mEnabled = enabled;
+}
+
+void null_host_recorder::set_enabled(bool enabled) noexcept {
+    mEnabled = enabled;
 }
 
 void null_host_recorder::record_call(std::string_view call) {
+    if (!admits(mCalls.size())) {
+        return;
+    }
     mCalls.emplace_back(call);
 }
 
 void null_host_recorder::record_create(const create_record &record) {
+    if (!admits(mCreates.size())) {
+        return;
+    }
     mCreates.push_back(record);
 }
 
 void null_host_recorder::record_destroy(const destroy_record &record) {
+    if (!admits(mDestroys.size())) {
+        return;
+    }
     mDestroys.push_back(record);
 }
 
 void null_host_recorder::record_phase(const phase_record &record) {
+    if (!admits(mPhases.size())) {
+        return;
+    }
     mPhases.push_back(record);
 }
 
 void null_host_recorder::record_collision(const collision_record &record) {
+    if (!admits(mCollisions.size())) {
+        return;
+    }
     mCollisions.push_back(record);
 }
 
 void null_host_recorder::record_apply(const apply_record &record) {
+    if (!admits(mApplies.size())) {
+        return;
+    }
     mApplies.push_back(record);
 }
 
 void null_host_recorder::record_load(std::string path) {
+    if (!admits(mLoadedAssemblies.size())) {
+        return;
+    }
     mLoadedAssemblies.push_back(std::move(path));
 }
 
@@ -90,6 +120,17 @@ void null_host_recorder::record_shutdown() {
 
 void null_host_recorder::record_collect_fields() {
     ++mCollectFieldsCount;
+}
+
+bool null_host_recorder::admits(usize listSize) noexcept {
+    if (!mEnabled) {
+        return false;
+    }
+    if (listSize >= MAX_RECORDS) {
+        ++mDroppedCount;
+        return false;
+    }
+    return true;
 }
 
 
@@ -261,6 +302,10 @@ void null_script_host::reset_recorder() {
     mRecorder.clear();
 }
 
+void null_script_host::set_recording(bool enabled) noexcept {
+    mRecorder.set_enabled(enabled);
+}
+
 null_script_host *null_script_host::active() noexcept {
     return sActiveHost;
 }
@@ -329,17 +374,21 @@ core::result<std::vector<script_class_info>> null_script_host::parse_classes_fix
 
 i32 null_script_host::load_game_assembly(std::string_view path) {
     mRecorder.record_call("load_game_assembly");
-    mRecorder.record_load(std::string(path));
+    if (mRecorder.is_enabled()) {
+        mRecorder.record_load(std::string(path));
+    }
     if (mLoadResult != 0) {
         return mLoadResult;
     }
 
     std::vector<script_class_info> classes = mFakeClasses;
     if (!path.empty()) {
-        const std::filesystem::path assemblyPath(path);
+        // The ABI path is UTF-8 (the runtime sends path_to_utf8), never the ANSI code page.
+        const std::filesystem::path assemblyPath = detail::utf8_to_path(path);
         std::error_code probe = {};
         const bool exists = std::filesystem::exists(assemblyPath, probe);
-        const std::string fixtureName = assemblyPath.stem().string() + ".classes.json";
+        std::filesystem::path fixtureName = assemblyPath.stem();
+        fixtureName += ".classes.json";
         const std::filesystem::path fixture = assemblyPath.parent_path() / fixtureName;
         const bool fixtureExists = std::filesystem::exists(fixture, probe);
         if (!exists && !fixtureExists) {
@@ -347,14 +396,19 @@ i32 null_script_host::load_game_assembly(std::string_view path) {
         }
         if (fixtureExists) {
             core::vfs::native_file_system files(fixture.parent_path(), true);
-            const core::result<std::vector<std::byte>> bytes = files.read_file(fixture.filename().string());
+            const core::result<std::vector<std::byte>> bytes = files.read_file(detail::path_to_utf8(fixtureName));
             if (!bytes.has_value()) {
                 return status_of(script_error::ASSEMBLY_LOAD_FAILED);
             }
             const std::string_view text(reinterpret_cast<const char *>(bytes.value().data()), bytes.value().size());
             core::result<std::vector<script_class_info>> parsed = parse_classes_fixture(text);
             if (!parsed.has_value()) {
-                CONJURE_LOG_ERROR(LOG_SCRIPTING, "classes fixture {}: {}", fixture.string(), parsed.get_error());
+                CONJURE_LOG_ERROR(
+                  LOG_SCRIPTING,
+                  "classes fixture {}: {}",
+                  detail::path_to_utf8(fixture),
+                  parsed.get_error()
+                );
                 return status_of(script_error::ASSEMBLY_LOAD_FAILED);
             }
             for (script_class_info &info : parsed.value()) {
@@ -397,13 +451,16 @@ i32 null_script_host::create_instances(conjure_create_request *requests, i32 cou
         state.fields.assign(request.fields, request.fields + request.fields_size);
         request.out_slot = slot;
 
-        null_host_recorder::create_record record = {};
-        record.entity = request.entity;
-        record.classHash = request.class_hash;
-        record.slot = slot;
-        record.flags = request.flags;
-        record.fields = state.fields;
-        mRecorder.record_create(record);
+        if (mRecorder.is_enabled()) {
+            // The record copies the fields: built only when the recorder keeps records.
+            null_host_recorder::create_record record = {};
+            record.entity = request.entity;
+            record.classHash = request.class_hash;
+            record.slot = slot;
+            record.flags = request.flags;
+            record.fields = state.fields;
+            mRecorder.record_create(record);
+        }
         if (mCreateHook) {
             // The hook may create or destroy slots (as OnCreate may): no reference into mSlots survives it.
             mCreateHook(request, slot);
@@ -481,14 +538,17 @@ i32 null_script_host::dispatch_collisions(const conjure_collision_record *record
 
 i32 null_script_host::apply_fields(i32 slot, const u8 *blob, i32 size) {
     mRecorder.record_call("apply_fields");
-    null_host_recorder::apply_record record = {};
-    record.slot = slot;
-    record.blob.assign(blob, blob + size);
-    mRecorder.record_apply(record);
+    if (mRecorder.is_enabled()) {
+        // The record copies the blob: built only when the recorder keeps records.
+        null_host_recorder::apply_record record = {};
+        record.slot = slot;
+        record.blob.assign(blob, blob + size);
+        mRecorder.record_apply(record);
+    }
     if (!is_slot_live(slot)) {
         return status_of(script_error::INSTANCE_NOT_FOUND);
     }
-    mSlots[static_cast<usize>(slot)].fields = record.blob;
+    mSlots[static_cast<usize>(slot)].fields.assign(blob, blob + size);
     return 0;
 }
 

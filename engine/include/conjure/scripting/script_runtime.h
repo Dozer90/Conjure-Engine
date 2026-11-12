@@ -98,6 +98,14 @@ namespace conjure::scripting {
                 script_entry_id id = {};
             };
 
+            /// <summary>
+            /// A fault reported inside create_instances, before its slot was mapped (OnCreate threw).
+            /// </summary>
+            struct faulted_slot {
+                i32 slot = -1;
+                script_callback callback = script_callback::COUNT;
+            };
+
             struct query_scope_state {
                 u32 id = 0;
                 ecs::iteration_scope lock = {};
@@ -136,6 +144,7 @@ namespace conjure::scripting {
             ecs::component_id mScriptComponentId = {};
             ecs::observer_id mAddedObserver = {};
             ecs::observer_id mRemovedObserver = {};
+            ecs::observer_id mDestroyedObserver = {};       // forgets the entity names
             std::filesystem::path mAssemblyPath = {};
             bool mAssemblyLoaded = false;
             bool mInFlush = false;
@@ -145,7 +154,8 @@ namespace conjure::scripting {
             u32 mZombieAssemblies = 0;
             std::vector<u64> mWarnedMissingClasses = {};
             std::vector<u64> mWarnedMirrorNames = {};
-            std::vector<i32> mFaultedBeforeMapped = {};     // slots marked faulted inside create_instances
+            std::vector<faulted_slot> mFaultedBeforeMapped = {};            // faults inside create_instances
+            std::vector<conjure_collision_record> mCollisionRecords = {};   // dispatch_collision_events' batch
             std::unordered_map<ecs::entity, std::string> mEntityNames = {};
             std::function<std::span<const collision_event>()> mCollisionSource = {};
 
@@ -166,8 +176,11 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Bindings must have filled native_api() before this call; the core entries are filled here.
-            /// Initialises the host and loads config.gameAssemblyPath when set. Failure leaves the runtime
-            /// DISABLED: entries keep their JSON with INVALID_SLOT and every phase is a no-op.
+            /// Initialises the host and loads config.gameAssemblyPath when set. A host start or table
+            /// validation failure leaves the runtime DISABLED: entries keep their JSON with INVALID_SLOT and
+            /// every phase is a no-op. A failure to load config.gameAssemblyPath is returned
+            /// (ASSEMBLY_LOAD_FAILED) but leaves the runtime READY without an assembly (03_scripting.md 6:
+            /// scenes still load); call load_game_assembly again once it is built.
             /// </summary>
             [[nodiscard]] core::result<void> initialize(const script_runtime_config &config);
 
@@ -240,7 +253,8 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Builds one conjure_collision_record per participating entry whose class overrides the
-            /// callback and sends them in one dispatch_collisions call.
+            /// callback and sends them in one dispatch_collisions call. The record buffer is kept between
+            /// calls, so a warm dispatch allocates nothing.
             /// </summary>
             void dispatch_collision_events(std::span<const collision_event> events);
 
@@ -266,7 +280,8 @@ namespace conjure::scripting {
             );
 
             /// <summary>
-            /// Destroys the entry's instance now (OnDestroy, entity alive) and removes the entry.
+            /// Destroys the entry's instance now (OnDestroy, entity alive) and removes the entry. Ignored (DEBUG
+            /// log) when the id does not belong to the entity's script set or no world is attached.
             /// </summary>
             void remove_script(ecs::entity entity, script_entry_id id);
 
@@ -342,7 +357,10 @@ namespace conjure::scripting {
             void request_entity_destroy(ecs::entity entity);
 
             /// <summary>
-            /// script_mark_faulted: records the FAULTED flag on the entry of a slot.
+            /// script_mark_faulted: records the FAULTED flag on the entry of a slot with a WARN (an OnCreate
+            /// fault disables every callback of the instance, any other callback is disabled after three
+            /// consecutive faults). A fault reported inside create_instances, before the slot is mapped, is
+            /// applied and logged once the slot is.
             /// </summary>
             void mark_faulted(i32 slot, script_callback callback);
 
@@ -358,7 +376,8 @@ namespace conjure::scripting {
             // which keep both in step; this table lets Entity.Create(name) / Entity.Find(name) work with ecs alone)
 
             /// <summary>
-            /// Remembers a display name for an entity (empty erases).
+            /// Remembers a display name for an entity (empty erases). The name lives until the entity is
+            /// destroyed, by any path (an observer of the attached world), or the world is detached.
             /// </summary>
             void set_entity_name(ecs::entity entity, std::string_view name);
 
@@ -373,7 +392,15 @@ namespace conjure::scripting {
             [[nodiscard]] ecs::entity find_entity_by_name(std::string_view name) const noexcept;
 
             /// <summary>
-            /// component_lookup_type: logs the first mismatch of each mirror name once; true the first time.
+            /// Entities with a remembered name (diagnostics and tests).
+            /// </summary>
+            [[nodiscard]] usize entity_name_count() const noexcept {
+                return mEntityNames.size();
+            }
+
+            /// <summary>
+            /// component_lookup_type: true the first time a mirror name mismatches since the last assembly
+            /// load, shutdown or world attach (the caller logs it then); false after that.
             /// </summary>
             [[nodiscard]] bool note_mirror_mismatch(u64 nameHash);
 
@@ -564,6 +591,7 @@ namespace conjure::scripting {
             void force_close_query_scopes();
             void flush_deferred_commands();
             void warn_missing_class_once(u64 classHash);
+            void log_faulted(i32 slot, script_callback callback, const script_entry &entryValue) const;
             void write_set_entries_json(script_set &set, core::json::writer &out);
             [[nodiscard]] core::result<void> replace_set_entries(u32 handle, const core::json::value &in);
     };

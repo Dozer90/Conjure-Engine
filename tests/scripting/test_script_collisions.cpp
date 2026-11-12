@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/test_environment.h"
 #include "scripting_test_support.h"
@@ -32,6 +33,31 @@ namespace {
 }
 
 TEST_SUITE("scripting/script_collisions") {
+
+    TEST_CASE("script_runtime - a warm collision dispatch allocates nothing") {
+        scripting_fixture fixture = {};
+        fixture.load_fake_classes({make_class("Game.Bumper", {script_callback::COLLISION_ENTER})});
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity a = fixture.create_entity();
+        const ecs::entity b = fixture.create_entity();
+        REQUIRE(fixture.runtime.add_script(a, hash_of("Game.Bumper"), {}).is_valid());
+        REQUIRE(fixture.runtime.add_script(b, hash_of("Game.Bumper"), {}).is_valid());
+        fixture.runtime.flush_pending();
+        REQUIRE(fixture.runtime.stats().liveInstances == 2);
+
+        // The recorder allocates per record, so it is off; a counting hook shows the records still arrive.
+        u32 received = 0;
+        fixture.null_host().set_recording(false);
+        fixture.null_host().set_collision_hook([&received](const conjure_collision_record &) {
+            ++received;
+        });
+        const std::array<collision_event, 1> events = {event_between(a, b, collision_kind::COLLISION_ENTER)};
+        fixture.runtime.dispatch_collision_events(events);         // warm-up: the record buffer grows once
+        REQUIRE(received == 2);
+        CONJURE_CHECK_NO_ALLOCATIONS(fixture.runtime.dispatch_collision_events(events));
+        CHECK(received == 4);
+        fixture.null_host().set_collision_hook({});
+    }
 
     TEST_CASE("script collisions - events reach only the overriding callbacks [dotnet]" * doctest::timeout(60)) {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);

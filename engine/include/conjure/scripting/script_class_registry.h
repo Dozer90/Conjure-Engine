@@ -101,7 +101,8 @@ namespace conjure::scripting {
             [[nodiscard]] core::result<void> stage_field(u64 classHash, script_field_info field);
 
             /// <summary>
-            /// Sorts every staged class' fields, makes the staging half active and closes staging.
+            /// Sorts every staged class' fields, makes the staging half active and closes staging. Requires an
+            /// open staging (begin_staging); otherwise asserts and leaves the active table untouched.
             /// </summary>
             void commit_staging();
 

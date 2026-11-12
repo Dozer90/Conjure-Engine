@@ -2,6 +2,7 @@
 
 #include "conjure/scripting/log_category.h"
 #include "conjure/scripting/script_class_registry.h"
+#include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
@@ -20,6 +21,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The core-owned entries of the native table (docs/design/03_scripting.md 2.1, R26/R64): log_*,
@@ -143,7 +145,14 @@ namespace {
         }
         script_class_registry &classes = runtime->classes_mutable();
         if (!classes.is_staging_open()) {
-            classes.begin_staging();
+            // Only an assembly load opens, commits or discards the staging table (03_scripting.md 3.7): a
+            // class registered at any other time would be staged into a table nothing ever commits.
+            CONJURE_LOG_WARN(
+              LOG_SCRIPTING,
+              "script_register_class: '{}' ignored outside an assembly load",
+              view_of(desc->full_name, desc->name_length)
+            );
+            return;
         }
         script_class_info info = {};
         info.hash = desc->hash;
@@ -210,14 +219,21 @@ namespace {
         if (runtime == nullptr) {
             return status_of(script_error::NOT_INITIALIZED);
         }
+        // The set is read in place: every GetScript<T>() lands here, and scripts_of() would build a vector.
+        const ecs::world &world = *runtime->world();
+        const script_store &store = std::as_const(*runtime).store();
+        const script_component *component = world.get<script_component>(ecs::entity::from_u64(entity));
+        const script_set *set = component == nullptr ? nullptr : store.find(component->setHandle);
+        if (set == nullptr) {
+            return 0;
+        }
         int32_t count = 0;
-        for (const script_entry_id id : runtime->scripts_of(ecs::entity::from_u64(entity))) {
-            const script_entry *entryValue = runtime->entry(id);
-            if (entryValue == nullptr || !entryValue->is_live()) {
+        for (const script_entry &entryValue : set->entries) {
+            if (!entryValue.is_live()) {
                 continue;
             }
             if (slots != nullptr && count < capacity) {
-                slots[count] = entryValue->managedSlot;
+                slots[count] = entryValue.managedSlot;
             }
             ++count;
         }

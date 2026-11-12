@@ -153,6 +153,63 @@ TEST_SUITE("scripting/script_component") {
         CHECK_FALSE(store.resolve_slot(11).has_value());
     }
 
+    TEST_CASE("script_store - mapped_slot_count follows map, remap, unmap, remove_entry, free_set and clear") {
+        script_store store = {};
+        // The counter must always equal the number of valid records in the reverse map.
+        const auto validRecords = [&store]() {
+            usize valid = 0;
+            for (i32 slot = 0; slot < 16; ++slot) {
+                if (store.resolve_slot(slot).has_value()) {
+                    ++valid;
+                }
+            }
+            return valid;
+        };
+        const u32 handle = store.create_set({});
+        const script_entry_id first = store.add_entry(handle, make_entry(1));
+        const script_entry_id second = store.add_entry(handle, make_entry(2));
+        const script_entry_id third = store.add_entry(handle, make_entry(3));
+        CHECK(store.mapped_slot_count() == 0);
+
+        store.map_slot(4, first);
+        store.map_slot(5, second);
+        CHECK(store.mapped_slot_count() == 2);
+        store.map_slot(5, second);                  // the same mapping again
+        CHECK(store.mapped_slot_count() == 2);
+        store.map_slot(5, third);                   // slot 5 now names the third entry; the second still claims it
+        CHECK(store.mapped_slot_count() == 2);
+        CHECK(store.mapped_slot_count() == validRecords());
+
+        store.unmap_slot(5);
+        CHECK(store.mapped_slot_count() == 1);
+        store.unmap_slot(5);                        // nothing left to unmap
+        store.unmap_slot(12);                       // never mapped
+        CHECK(store.mapped_slot_count() == 1);
+        CHECK(store.mapped_slot_count() == validRecords());
+
+        // Removing the first entry unmaps slot 4 and shifts the second down, whose stale claim on slot 5 is
+        // written back into the reverse map.
+        REQUIRE(store.find(handle)->entries[1].is_live());
+        CHECK(store.remove_entry(first));
+        CHECK(store.mapped_slot_count() == 1);
+        CHECK(store.mapped_slot_count() == validRecords());
+        REQUIRE(store.resolve_slot(5).has_value());
+        CHECK(store.resolve_slot(5)->entryIndex == 0);
+        CHECK(store.find_entry(*store.resolve_slot(5))->classHash == 2);
+
+        CHECK(store.free_set(handle));
+        CHECK(store.mapped_slot_count() == 0);
+        CHECK(store.mapped_slot_count() == validRecords());
+
+        const u32 other = store.create_set({});
+        store.map_slot(9, store.add_entry(other, make_entry(4)));
+        store.map_slot(10, store.add_entry(other, make_entry(5)));
+        CHECK(store.mapped_slot_count() == 2);
+        store.clear();
+        CHECK(store.mapped_slot_count() == 0);
+        CHECK(store.mapped_slot_count() == validRecords());
+    }
+
     TEST_CASE("script_store - clone_set deep copies entries without slots") {
         script_store store = {};
         const u32 source = store.create_set(ecs::entity{1, 1});
@@ -263,6 +320,20 @@ TEST_SUITE("scripting/script_component") {
           core::error_code::INVALID_STATE
         );
         script_component_serializer().remapEntities(&target, ecs::entity_remap());
+    }
+
+    TEST_CASE("script_component - writing a set without a runtime fails instead of dropping its scripts") {
+        REQUIRE(script_runtime::active() == nullptr);
+        script_component source = {};
+        source.setHandle = script_store::make_handle(1, 1);
+        core::json::writer out = {};
+        CONJURE_CHECK_ERROR(script_component_serializer().writeJson(&source, out), core::error_code::INVALID_STATE);
+
+        // A component without a set has nothing to lose: it still writes the empty form.
+        const script_component empty = {};
+        core::json::writer emptyOut = {};
+        CONJURE_CHECK_OK(script_component_serializer().writeJson(&empty, emptyOut));
+        CHECK(emptyOut.finish() == R"({"scripts":[]})");
     }
 
     TEST_CASE("script_component - the serializer writes and reads the script set") {

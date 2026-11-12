@@ -1,6 +1,7 @@
 #include "conjure/scripting/script_host.h"
 
 #include "scripting/hostfxr_runtime.h"
+#include "scripting/scripting_internal.h"
 
 #include "conjure/scripting/dotnet_script_host.h"
 #include "conjure/scripting/null_script_host.h"
@@ -57,7 +58,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
         return core::make_error(
           script_error::RUNTIME_CONFIG_INVALID,
           "'{}': {}",
-          configPath.string(),
+          detail::path_to_utf8(configPath),
           parsed.get_error().message()
         );
     }
@@ -66,7 +67,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
         return core::make_error(
           script_error::RUNTIME_CONFIG_INVALID,
           "'{}' has no runtimeOptions object",
-          configPath.string()
+          detail::path_to_utf8(configPath)
         );
     }
     if (options["includedFrameworks"].is_array()) {
@@ -76,7 +77,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
         return core::make_error(
           script_error::RUNTIME_CONFIG_INVALID,
           "'{}' names neither a framework nor includedFrameworks",
-          configPath.string()
+          detail::path_to_utf8(configPath)
         );
     }
     return host_mode::FRAMEWORK_DEPENDENT;
@@ -93,7 +94,7 @@ core::result<void> conjure::scripting::validate_managed_directory(const std::fil
               script_error::MANAGED_SDK_MISSING,
               "'{}' is missing from '{}'",
               anchor,
-              managedDirectory.string()
+              detail::path_to_utf8(managedDirectory)
             );
         }
     }

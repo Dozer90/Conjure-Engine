@@ -143,7 +143,12 @@ bool script_store::remove_entry(script_entry_id id) {
             script_entry_id movedId = {};
             movedId.setHandle = id.setHandle;
             movedId.entryIndex = static_cast<u8>(index);
-            mSlotToEntry[static_cast<usize>(moved.managedSlot)] = movedId;
+            script_entry_id &record = mSlotToEntry[static_cast<usize>(moved.managedSlot)];
+            // Normally still mapped; a slot remapped to another entry and then unmapped is mapped again here.
+            if (!record.is_valid()) {
+                ++mMappedCount;
+            }
+            record = movedId;
         }
     }
     return true;
@@ -178,6 +183,9 @@ void script_store::map_slot(i32 slot, script_entry_id id) {
     if (index >= mSlotToEntry.size()) {
         mSlotToEntry.resize(index + 1);
     }
+    if (!mSlotToEntry[index].is_valid()) {
+        ++mMappedCount;
+    }
     mSlotToEntry[index] = id;
     entryValue->managedSlot = slot;
 }
@@ -187,6 +195,9 @@ void script_store::unmap_slot(i32 slot) {
         return;
     }
     const script_entry_id id = mSlotToEntry[static_cast<usize>(slot)];
+    if (id.is_valid()) {
+        --mMappedCount;
+    }
     mSlotToEntry[static_cast<usize>(slot)] = {};
     script_entry *entryValue = find_entry(id);
     if (entryValue != nullptr && entryValue->managedSlot == slot) {
@@ -205,16 +216,6 @@ std::optional<script_entry_id> script_store::resolve_slot(i32 slot) const noexce
     return id;
 }
 
-usize script_store::mapped_slot_count() const noexcept {
-    usize count = 0;
-    for (const script_entry_id &id : mSlotToEntry) {
-        if (id.is_valid()) {
-            ++count;
-        }
-    }
-    return count;
-}
-
 void script_store::for_each_set(const std::function<void(u32, script_set &)> &callable) {
     for (u32 index = 0; index < mSlots.size(); ++index) {
         set_slot &slot = mSlots[index];
@@ -231,6 +232,7 @@ void script_store::clear() {
         }
     }
     mSlotToEntry.clear();
+    mMappedCount = 0;
 }
 
 script_store::set_slot *script_store::live_slot(u32 handle) noexcept {
@@ -303,14 +305,22 @@ namespace {
 
     core::result<void> write_script_component_json(const void *component, core::json::writer &out) {
         const auto *value = static_cast<const script_component *>(component);
-        script_runtime *runtime = script_runtime::active();
-        if (runtime == nullptr || value->setHandle == INVALID_SET_HANDLE) {
+        if (value->setHandle == INVALID_SET_HANDLE) {
             out.begin_object();
             out.key("scripts");
             out.begin_array();
             out.end_array();
             out.end_object();
             return core::result<void>::success();
+        }
+        // The set lives in the runtime's store: without it an empty list would be written, and a save that
+        // succeeds while dropping every script is worse than one that fails.
+        script_runtime *runtime = script_runtime::active();
+        if (runtime == nullptr) {
+            return core::error(
+              core::error_code::INVALID_STATE,
+              "script_component written without a live script_runtime; its scripts would be lost"
+            );
         }
         runtime->write_set_json(value->setHandle, out);
         return core::result<void>::success();

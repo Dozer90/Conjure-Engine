@@ -84,15 +84,21 @@ nullptr}`: the copy hook deep-copies the set, destruct frees it, `writeJson` / `
 `{"scripts":[{"class","hash","fields"}]}` and `remapEntities` rewrites `ENTITY` fields through the class schema.
 The ECS consults the hooks for every archive, scene file, prefab, snapshot and `component_to_json` path, which
 is how scripts cross the scene module without a dependency (R29; `tests/integration/test_scripting_scene.cpp`).
-All hooks resolve the runtime through `script_runtime::active()` and do nothing when no runtime is alive.
+All hooks resolve the runtime through `script_runtime::active()`. Without a live runtime, the copy hook drops
+the set (WARN), destruct and `remapEntities` do nothing, and `readJson` as well as a `writeJson` of a component
+that has a set fail with `INVALID_STATE`, so a save never silently writes an empty script list.
 
 ## 5. Hot reload
 
 `reload_game_assembly`: load new -> collect fields -> destroy -> unload -> swap registries -> recreate
 (`OnCreate` again, `OnStart` not). A failed load leaves the running game untouched; a leaked load context is a
 WARN (`ASSEMBLY_LEAKED` is logged and counted, not returned). `hot_reload_controller` debounces requests and
-optionally polls the assembly's write time; `scripting.frame_begin` ticks it. Plugin assemblies share the game
-load context (R36), so a leaky plugin prevents unloading the game assembly.
+optionally polls the write time of the assembly and its `.pdb` (the load context reads both); a watched reload
+that fails with `ASSEMBLY_LOAD_FAILED` is retried up to three times, one debounce window apart, because the build
+may still be writing or locking the files. `scripting.frame_begin` ticks it. Plugin assemblies share the game
+load context (R36), so a leaky plugin prevents unloading the game assembly. Paths cross the ABI, the logs and the
+`dotnet` command line as UTF-8 through the private `scripting_internal.h` (`detail::path_to_utf8`,
+`detail::utf8_to_path`), never `path::string()`, which is the ANSI code page on Windows.
 
 ## 6. The managed side
 

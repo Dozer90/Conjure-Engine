@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
 #include "scripting_test_support.h"
@@ -129,6 +130,45 @@ TEST_SUITE("scripting/native_entries") {
         CHECK(api.script_get_slots(entity.to_u64(), slots.data(), 1) == 2);     // count reported, one written
         CHECK(api.script_get_slots(entity.to_u64(), nullptr, 0) == 2);
         CHECK(api.script_get_slots(fixture.create_entity().to_u64(), slots.data(), 8) == 0);
+    }
+
+    TEST_CASE("native entries - script_get_slots allocates nothing") {
+        entries_fixture fixture = {};
+        const conjure_native_api &api = fixture.api();
+        const ecs::entity entity = fixture.create_entity();
+        REQUIRE(api.script_add(entity.to_u64(), hash_of(PLAYER)) == 0);
+        REQUIRE(api.script_add(entity.to_u64(), hash_of(PLAYER)) == 1);
+        fixture.runtime.flush_pending();
+
+        // Every managed GetScript<T>() lands here: the set is read in place.
+        std::array<int32_t, 8> slots = {};
+        int32_t count = 0;
+        CONJURE_CHECK_NO_ALLOCATIONS(count = api.script_get_slots(entity.to_u64(), slots.data(), 8));
+        CHECK(count == 2);
+        CHECK(slots[0] != slots[1]);
+    }
+
+    TEST_CASE("native entries - script_register_class outside an assembly load is ignored with a warning") {
+        log_capture logs = {};
+        entries_fixture fixture = {};
+        const conjure_native_api &api = fixture.api();
+        const std::string name = "Game.Stray";
+        conjure_script_class_desc desc = {};
+        desc.hash = hash_of(name);
+        desc.full_name = name.c_str();
+        desc.name_length = static_cast<int32_t>(name.size());
+        api.script_register_class(&desc);
+        CHECK_FALSE(fixture.runtime.classes().is_staging_open());
+        CHECK(fixture.runtime.classes().find(hash_of(name)) == nullptr);
+        CHECK(fixture.runtime.classes().find_staged(hash_of(name)) == nullptr);
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "Game.Stray"));
+
+        // The next load stages and commits its own classes as usual.
+        CONJURE_REQUIRE_OK(fixture.runtime.load_game_assembly({}));
+        CHECK(fixture.runtime.classes().find(PLAYER) != nullptr);
+        CHECK(fixture.runtime.classes().find(hash_of(name)) == nullptr);
+        CHECK_FALSE(fixture.runtime.classes().is_staging_open());
     }
 
     TEST_CASE("native entries - component lookup, has, add, get, set and remove on a native type") {

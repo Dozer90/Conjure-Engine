@@ -56,8 +56,11 @@ entity plus up to `MAX_SCRIPTS_PER_ENTITY` (8) `script_entry {classHash, managed
 on copy, free it on destruction and write / read the set as `{"scripts":[{"class","hash","fields"}]}` JSON, so
 every ECS path (archives, prefabs, scene files, snapshots, `duplicate_subtree`) carries scripts without
 aliasing a store entry. `script_entry_flags`: `STARTED` (`OnStart` ran), `FAULTED` (a callback was disabled
-after three consecutive faults), `CLASS_MISSING` (no class for the hash in the active registry; the JSON is
-preserved).
+after three consecutive faults, or every callback because `OnCreate` threw; logged as a WARN either way),
+`CLASS_MISSING` (no class for the hash in the active registry; the JSON is preserved).
+
+The set lives in the runtime's store, so the hooks need a live runtime: without one, writing a component that has
+a set fails with `INVALID_STATE` rather than saving an empty script list, and reading one fails the same way.
 
 > [!CAUTION]
 > Never copy a `script_component` by hand into another entity: two entities would own one set. Go through the
@@ -94,7 +97,12 @@ scripts may change the world directly.
 flush, after `OnDestroy` ran with the entity alive; one without scripts is destroyed now, or through
 `deferred_commands()` while the world is locked. `set_entity_name`, `entity_name` and `find_entity_by_name` are
 the small name table the core `entity_*` entries use so `Entity.Create(name)` and `Entity.Find(name)` work with
-the ECS alone (the scene's `name` component is kept in step by the bindings).
+the ECS alone (the scene's `name` component is kept in step by the bindings). A name lives as long as its entity:
+removing the entity's scripts keeps it, and every destroy path (native, `Entity.Destroy()`, command buffers, scene
+unload) forgets it through an observer of the attached world.
+
+`remove_script(entity, id)` removes one entry and runs its `OnDestroy`; an id that does not belong to that
+entity's script set is ignored.
 
 ## Fields
 
@@ -112,7 +120,13 @@ through a map, which is how archives and prefabs keep script references pointing
 `script_class_registry` holds `script_class_info {hash, fullName, callbackMask, fields}` for every class the
 loaded assembly registered (`has_callback(script_callback::UPDATE)`, `find_field(hash)`). A load stages classes
 (`begin_staging`, `stage_class`, `stage_field`) and commits them atomically, so a failed load leaves the running
-game untouched. `runtime.classes()` is the committed table; `script_name_hash(fullName)` is the key.
+game untouched; `commit_staging()` without an open staging asserts and keeps the active table, and a class the
+managed side registers outside a load is ignored with a WARN. `runtime.classes()` is the committed table;
+`script_name_hash(fullName)` is the key.
+
+`initialize(config)` with a `gameAssemblyPath` that does not load returns `ASSEMBLY_LOAD_FAILED` but leaves the
+runtime `READY` without an assembly (scenes still load, entries keep their JSON); call `load_game_assembly` again
+once the build exists. Only a failure to start the host or to validate the tables leaves it `DISABLED`.
 
 ## DOD query scopes
 

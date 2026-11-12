@@ -1,5 +1,7 @@
 #include "scripting/hostfxr_runtime.h"
 
+#include "scripting/scripting_internal.h"
+
 #include "conjure/scripting/log_category.h"
 #include "conjure/scripting/scripting_error.h"
 
@@ -73,9 +75,9 @@ core::result<void> hostfxr_runtime::ensure_started(const script_host_config &con
             CONJURE_LOG_WARN(
               LOG_SCRIPTING,
               "the .NET runtime already runs from '{}' ({}); attaching the host for '{}' ({}) to it (D1)",
-              mManagedDirectory.string(),
+              detail::path_to_utf8(mManagedDirectory),
               to_string(mMode),
-              config.managedDirectory.string(),
+              detail::path_to_utf8(config.managedDirectory),
               to_string(mode)
             );
         }
@@ -179,7 +181,7 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
         return core::make_error(
           script_error::RUNTIME_CONFIG_INVALID,
           "hostfxr rejected '{}' ({})",
-          (config.managedDirectory / std::filesystem::path(BOOTSTRAP_RUNTIME_CONFIG)).string(),
+          detail::path_to_utf8(config.managedDirectory / std::filesystem::path(BOOTSTRAP_RUNTIME_CONFIG)),
           describe_status(initialized)
         );
     }
@@ -289,8 +291,8 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
       LOG_SCRIPTING,
       ".NET runtime started ({}) from '{}' with hostfxr '{}'",
       to_string(mode),
-      config.managedDirectory.string(),
-      hostfxrPath.string()
+      detail::path_to_utf8(config.managedDirectory),
+      detail::path_to_utf8(hostfxrPath)
     );
     return core::result<void>::success();
 }
@@ -303,8 +305,8 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
             CONJURE_LOG_DEBUG(
               LOG_SCRIPTING,
               "hostfxr '{}' is already loaded; '{}' is not loaded again",
-              mHostfxrPath.string(),
-              path.string()
+              detail::path_to_utf8(mHostfxrPath),
+              detail::path_to_utf8(path)
             );
         }
         return core::result<void>::success();
@@ -314,7 +316,7 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
         return core::make_error(
           script_error::RUNTIME_NOT_FOUND,
           "hostfxr at '{}' did not load: {}",
-          path.string(),
+          detail::path_to_utf8(path),
           loaded.get_error().message()
         );
     }
@@ -340,7 +342,7 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
         return core::make_error(
           script_error::HOSTFXR_INCOMPATIBLE,
           "hostfxr at '{}' lacks a required export; .NET 8 or later is required",
-          path.string()
+          detail::path_to_utf8(path)
         );
     }
     return core::result<void>::success();

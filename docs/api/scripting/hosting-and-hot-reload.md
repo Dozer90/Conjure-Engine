@@ -69,7 +69,12 @@ list, `apply_fields` stores the blob per slot and `collect_fields` echoes it, `r
 stand in for script code: `set_create_hook`, `set_destroy_hook`, `set_phase_hook`, `set_collision_hook` run inside
 the managed call and may call back into the runtime like a script would. `recorder()` lists every call, create,
 destroy, phase and collision it saw; `live_slot_count()`, `slot_fields(slot)`, `slot_phase_count(slot, phase)`
-inspect one slot.
+inspect one slot. Each recorder list keeps at most `null_host_recorder::MAX_RECORDS` (65,536) entries and counts
+the rest in `dropped_count()`, so a long-running null host (the headless editor runs one by default) stays
+bounded; `set_recording(false)` records nothing at all and builds no record (the counters keep counting,
+`reset_recorder()` keeps the setting), so recording adds no allocation to a managed call under an allocation gate;
+only the slot state the host keeps (a new slot, a slot's fields) may still grow. `recorder().count(call)` scans the
+kept calls, so it too stops at `MAX_RECORDS` and counts no call made while recording is off.
 
 > [!IMPORTANT]
 > The managed directory (`script_host_config::managedDirectory`, by default `managed/` next to the executable)
@@ -99,8 +104,12 @@ the engine writes before each phase; 64-byte aligned), `conjure_create_request`,
 
 `hot_reload_controller(runtime, assemblyPath)` coalesces `request()`s inside a debounce window
 (`set_debounce_seconds`, 0.2 s by default), reloads on the next `tick(nowSeconds)` (`request(true)` bypasses the
-window) and can poll the assembly file's write time itself (`set_watch_interval_seconds`). `state()` is `IDLE`,
-`PENDING` or `RELOADING`; `reload_count()`, `request_count()` and `last_result()` report what happened.
+window) and can poll the write time of the assembly and of the `.pdb` next to it itself
+(`set_watch_interval_seconds`; the newer of the two stamps counts). A reload the watch requested that fails with
+`ASSEMBLY_LOAD_FAILED` (the build may still be writing or locking the files) is retried up to three times, one
+debounce window apart, with a WARN each; a reload asked for with `request()` is not retried. `state()` is `IDLE`,
+`PENDING` or `RELOADING`; `reload_count()` (every attempt, retries included), `request_count()` and `last_result()`
+report what happened.
 
 The reload itself (`script_runtime::reload_game_assembly`) loads the new assembly into a fresh collectible
 context, collects every live instance's fields, destroys the instances, unloads the old context, swaps the class
@@ -116,7 +125,9 @@ system) and posts the `build_report` to the main-thread queue: `succeeded`, `tim
 (`build_diagnostic {file, line, column, isError, code, message}` parsed from MSBuild's output), `output`,
 `elapsedSeconds` and `launch` (the failure when `dotnet` could not be started). `build_request` adds an output
 directory, `-p:Name=Value` properties and a timeout; `is_building()`, `wait()` and `set_dotnet_executable` round
-it out, and `run_blocking(request, dotnet)` is the synchronous form tools use.
+it out, and `run_blocking(request, dotnet)` is the synchronous form tools use. Paths reach `dotnet` (and the game
+assembly path reaches the managed side) as UTF-8 on every platform, so a project under a non-ASCII directory
+builds and loads.
 
 ## API summary
 
@@ -127,7 +138,7 @@ it out, and `run_blocking(request, dotnet)` is the synchronous form tools use.
 | `result<host_mode> detect_host_mode(const path &)`, `result<void> validate_managed_directory(const path &)` | directory checks |
 | `result<void> script_host::initialize(const script_host_config &, conjure_native_api &)`, `void shutdown()`, `const conjure_managed_api &managed_api() const`, `script_host_status status() const`, `script_backend backend() const` | the interface |
 | `host_mode dotnet_script_host::mode() const`, `const path &managed_directory() const`, `static bool is_runtime_started()` | the CLR host |
-| `void null_script_host::add_fake_class(script_class_info)`, `set_create_hook(...)`, `set_destroy_hook(...)`, `set_phase_hook(...)`, `set_collision_hook(...)`, `const null_host_recorder &recorder() const`, `static null_script_host *active()` | the fake |
+| `void null_script_host::add_fake_class(script_class_info)`, `set_create_hook(...)`, `set_destroy_hook(...)`, `set_phase_hook(...)`, `set_collision_hook(...)`, `const null_host_recorder &recorder() const`, `void set_recording(bool)`, `static null_script_host *active()` | the fake |
 | `hot_reload_controller(script_runtime &, path)`, `void request(bool immediate = false)`, `void tick(f64 nowSeconds)`, `reload_state state() const` | reloads |
 | `managed_build_runner(core::jobs::job_system * = nullptr)`, `void build(const path &project, string_view configuration, function<void(const build_report &)>)`, `void build(const build_request &, ...)`, `static build_report run_blocking(const build_request &, string_view dotnet)` | builds |
 | `span<const native_entry_descriptor> native_entry_descriptors()`, `u64 compute_native_api_hash()`, `i32 find_native_entry(string_view)`, `result<void> validate_native_api(const conjure_native_api &)`, `validate_managed_api(const conjure_managed_api &)` | `native_api.h` |

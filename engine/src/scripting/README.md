@@ -34,7 +34,9 @@ R36, R39, R54, R61, R64.
 Private files: `hostfxr_api.h` (the only file that includes `nethost.h`, `hostfxr.h` and
 `coreclr_delegates.h`; `host_string`, `host_status`), `hostfxr_runtime.{h,cpp}` (the process-wide CLR:
 locate hostfxr, initialise for the runtime config or the self-contained command line, load
-`Conjure.Bootstrap` and fetch its `Initialize` export), `native_api_core.cpp` (the 20 core entries:
+`Conjure.Bootstrap` and fetch its `Initialize` export), `scripting_internal.h` (`detail::path_to_utf8` /
+`detail::utf8_to_path`: paths cross the managed ABI, the logs and the dotnet command line as UTF-8, never
+through `path::string()`), `native_api_core.cpp` (the 20 core entries:
 log, class registration, faults, entities, components, queries), `native_api.cpp`, `script_runtime.cpp`,
 `script_component.cpp`, `script_fields.cpp`, `script_class_registry.cpp`, `script_host.cpp`,
 `dotnet_script_host.cpp`, `null_script_host.cpp`, `script_system.cpp`, `hot_reload.cpp`,
@@ -113,7 +115,9 @@ consults it for types without reflection). Every ECS path (`component_to_json`, 
 `read_archive_json`, archives, scene files, prefabs, snapshots) therefore carries scripts without the scene
 module knowing scripting exists (R29); `tests/scripting/test_script_component.cpp` and
 `tests/integration/test_scripting_scene.cpp` assert the round trips. All hooks resolve the runtime through
-`script_runtime::active()` and do nothing when no runtime is alive.
+`script_runtime::active()`. Without a live runtime, the copy hook drops the set (WARN), destruct and
+`remapEntities` do nothing, and `readJson` as well as a `writeJson` of a component that has a set fail with `INVALID_STATE`, so a
+save never silently writes an empty script list.
 
 ## Re-entrancy and sessions
 

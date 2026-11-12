@@ -84,6 +84,7 @@ conjure_add_module(scripting
         script_runtime.cpp
         script_system.cpp
         scripting_error.cpp
+        scripting_internal.h
     PUBLIC_DEPS
         conjure::core
         conjure::ecs

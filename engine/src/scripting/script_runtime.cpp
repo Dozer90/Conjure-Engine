@@ -1,5 +1,7 @@
 #include "conjure/scripting/script_runtime.h"
 
+#include "scripting/scripting_internal.h"
+
 #include "conjure/scripting/log_category.h"
 #include "conjure/scripting/script_fields.h"
 #include "conjure/scripting/scripting_error.h"
@@ -156,6 +158,7 @@ void script_runtime::shutdown() {
     mPendingEntityDestroys.clear();
     mQueryScopes.clear();
     mWarnedMissingClasses.clear();
+    mWarnedMirrorNames.clear();
 }
 
 void script_runtime::attach_world(ecs::world *world) {
@@ -174,12 +177,15 @@ void script_runtime::attach_world(ecs::world *world) {
     if (mWorld != nullptr) {
         mWorld->unobserve(mAddedObserver);
         mWorld->unobserve(mRemovedObserver);
+        mWorld->unobserve(mDestroyedObserver);
         mAddedObserver = {};
         mRemovedObserver = {};
+        mDestroyedObserver = {};
         mQueryScopes.clear();
         mQueryCache.clear();        // the cached queries point into the old world's archetypes
         mDeferredCommands.reset();
         mEntityNames.clear();
+        mWarnedMirrorNames.clear();
     }
     mWorld = world;
     mScriptComponentId = {};
@@ -188,6 +194,11 @@ void script_runtime::attach_world(ecs::world *world) {
     }
 
     mDeferredCommands = std::make_unique<ecs::command_buffer>(*mWorld);
+    // Every destroy path (native, Entity.Destroy, command buffers, scene unload) fires this observer, so a name
+    // lives exactly as long as its entity; worlds without script_component are covered too.
+    mDestroyedObserver = mWorld->observe_destroyed([this](ecs::world &, ecs::entity target, ecs::command_buffer &) {
+        mEntityNames.erase(target);
+    });
     mScriptComponentId = mWorld->registry().id_of<script_component>();
     if (!mScriptComponentId.is_valid()) {
         CONJURE_LOG_WARN(
@@ -315,7 +326,10 @@ void script_runtime::dispatch_collision_events(std::span<const collision_event> 
         return;
     }
 
-    std::vector<conjure_collision_record> records = {};
+    // The member keeps its capacity, so a warm dispatch allocates nothing. Not re-entrant: only
+    // scripting.collision_dispatch drives it, and no native entry leads back here from a callback.
+    std::vector<conjure_collision_record> &records = mCollisionRecords;
+    records.clear();
     records.reserve(events.size() * 2);
     const auto appendFor = [&](ecs::entity participant, ecs::entity other, const collision_event &event, f32 sign) {
         const script_component *component = std::as_const(*mWorld).get<script_component>(participant);
@@ -388,7 +402,6 @@ void script_runtime::destroy_all(bool callOnDestroy) {
     if (mWorld != nullptr) {
         for (const ecs::entity target : entities) {
             if (mWorld->is_alive(target)) {
-                mEntityNames.erase(target);
                 static_cast<void>(mWorld->destroy_entity(target));
             }
         }
@@ -436,7 +449,12 @@ script_entry_id script_runtime::add_script(ecs::entity entity, u64 classHash, co
 }
 
 void script_runtime::remove_script(ecs::entity entity, script_entry_id id) {
-    CONJURE_UNUSED(entity);
+    const script_component *component =
+      mWorld == nullptr ? nullptr : std::as_const(*mWorld).get<script_component>(entity);
+    if (component == nullptr || component->setHandle != id.setHandle) {
+        CONJURE_LOG_DEBUG(LOG_SCRIPTING, "remove_script: the entry does not belong to {}", entity);
+        return;
+    }
     const script_entry *entryValue = mStore.find_entry(id);
     if (entryValue == nullptr) {
         return;
@@ -599,7 +617,6 @@ void script_runtime::on_component_removed(ecs::entity entity, const script_compo
     std::erase_if(mPendingCreates, [&component](const pending_create &pending) {
         return pending.id.setHandle == component.setHandle;
     });
-    mEntityNames.erase(entity);
 }
 
 void script_runtime::on_component_added(ecs::entity entity, script_component &component) {
@@ -644,7 +661,6 @@ void script_runtime::request_entity_destroy(ecs::entity entity) {
         deferred_commands().destroy_entity(entity);
         return;
     }
-    mEntityNames.erase(entity);
     static_cast<void>(mWorld->destroy_entity(entity));
 }
 
@@ -654,19 +670,15 @@ void script_runtime::mark_faulted(i32 slot, script_callback callback) {
     if (entryValue == nullptr) {
         // OnCreate runs inside create_instances, before the slot is mapped: remembered until it is.
         if (mCreatingInstances && slot >= 0) {
-            mFaultedBeforeMapped.push_back(slot);
+            faulted_slot faulted = {};
+            faulted.slot = slot;
+            faulted.callback = callback;
+            mFaultedBeforeMapped.push_back(faulted);
         }
         return;
     }
     entryValue->flags |= script_entry_flags::FAULTED;
-    const script_class_info *info = mClasses.find(entryValue->classHash);
-    CONJURE_LOG_WARN(
-      LOG_SCRIPTING,
-      "{} of '{}' (slot {}) disabled after three consecutive faults",
-      to_string(callback),
-      info == nullptr ? std::string("?") : info->fullName,
-      slot
-    );
+    log_faulted(slot, callback, *entryValue);
 }
 
 void script_runtime::set_entity_name(ecs::entity entity, std::string_view name) {
@@ -939,7 +951,7 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
 
     // 1. New load context; classes go to the staging registry. Failure changes nothing.
     mClasses.begin_staging();
-    const std::string utf8Path = assemblyPath.string();
+    const std::string utf8Path = detail::path_to_utf8(assemblyPath);
     const i32 loaded = managed.load_game_assembly(utf8Path.c_str(), static_cast<i32>(utf8Path.size()));
     if (loaded != 0) {
         mClasses.discard_staging();
@@ -983,6 +995,7 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
     // badges belong to the destroyed instances: the managed DisabledMask starts clean, so does the flag.
     mClasses.commit_staging();
     mWarnedMissingClasses.clear();
+    mWarnedMirrorNames.clear();         // a still-wrong mirror of the new assembly is reported again
     mAssemblyLoaded = true;
     mAssemblyPath = assemblyPath;
     mStore.for_each_set([](u32, script_set &set) {
@@ -1100,7 +1113,6 @@ void script_runtime::process_pending_destroys() {
         // OnDestroy with the entity alive (03_scripting.md 3.4); the slots are unmapped before the entity
         // goes so the REMOVED observer finds nothing left to defer.
         destroy_slots(slots, true);
-        mEntityNames.erase(target);
         static_cast<void>(mWorld->destroy_entity(target));
     }
 }
@@ -1178,11 +1190,12 @@ void script_runtime::process_pending_creates() {
             }
             mStore.map_slot(slot, ids[index]);
         }
-        for (const i32 slot : mFaultedBeforeMapped) {
-            const std::optional<script_entry_id> faulted = mStore.resolve_slot(slot);
-            script_entry *entryValue = faulted.has_value() ? mStore.find_entry(*faulted) : nullptr;
+        for (const faulted_slot &faulted : mFaultedBeforeMapped) {
+            const std::optional<script_entry_id> faultedId = mStore.resolve_slot(faulted.slot);
+            script_entry *entryValue = faultedId.has_value() ? mStore.find_entry(*faultedId) : nullptr;
             if (entryValue != nullptr) {
                 entryValue->flags |= script_entry_flags::FAULTED;
+                log_faulted(faulted.slot, faulted.callback, *entryValue);
             }
         }
         mFaultedBeforeMapped.clear();
@@ -1364,6 +1377,28 @@ void script_runtime::warn_missing_class_once(u64 classHash) {
       LOG_SCRIPTING,
       "script class {:#018x} is not in the loaded assembly; its entries keep their fields until it returns",
       classHash
+    );
+}
+
+void script_runtime::log_faulted(i32 slot, script_callback callback, const script_entry &entryValue) const {
+    const script_class_info *info = mClasses.find(entryValue.classHash);
+    const std::string_view className = info == nullptr ? std::string_view("?") : std::string_view(info->fullName);
+    if (callback == script_callback::CREATE) {
+        // The managed guard disables every callback of an instance whose OnCreate threw, on the first fault.
+        CONJURE_LOG_WARN(
+          LOG_SCRIPTING,
+          "OnCreate of '{}' (slot {}) threw: every callback of the instance is disabled",
+          className,
+          slot
+        );
+        return;
+    }
+    CONJURE_LOG_WARN(
+      LOG_SCRIPTING,
+      "{} of '{}' (slot {}) disabled after three consecutive faults",
+      to_string(callback),
+      className,
+      slot
     );
 }
 

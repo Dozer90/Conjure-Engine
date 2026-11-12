@@ -26,10 +26,18 @@
 namespace conjure::scripting {
 
     /// <summary>
-    /// What the null host recorded. Cleared by null_script_host::reset_recorder().
+    /// What the null host recorded. Cleared by null_script_host::reset_recorder(). Each list keeps at most
+    /// MAX_RECORDS entries and counts the rest in dropped_count(), so a long-running null host (the headless
+    /// editor runs one by default) stays bounded; set_enabled(false) records nothing at all (the counters
+    /// keep counting).
     /// </summary>
     class CONJURE_API null_host_recorder {
         public:
+            /// <summary>
+            /// Entries each list keeps; later records are dropped and counted.
+            /// </summary>
+            static constexpr usize MAX_RECORDS = 65536;
+
             struct create_record {
                 u64 entity = 0;
                 u64 classHash = 0;
@@ -73,6 +81,8 @@ namespace conjure::scripting {
             u32 mCollectGarbageCount = 0;
             u32 mShutdownCount = 0;
             u32 mCollectFieldsCount = 0;
+            u64 mDroppedCount = 0;
+            bool mEnabled = true;
 
         public:
             null_host_recorder();
@@ -133,14 +143,35 @@ namespace conjure::scripting {
             }
 
             /// <summary>
-            /// Number of calls with this name.
+            /// Records a full list turned away since the last clear().
+            /// </summary>
+            [[nodiscard]] u64 dropped_count() const noexcept {
+                return mDroppedCount;
+            }
+
+            /// <summary>
+            /// False after set_enabled(false): the lists stay as they are.
+            /// </summary>
+            [[nodiscard]] bool is_enabled() const noexcept {
+                return mEnabled;
+            }
+
+            /// <summary>
+            /// Number of recorded calls with this name (a scan of calls(): at most MAX_RECORDS are kept, and none
+            /// while recording is disabled).
             /// </summary>
             [[nodiscard]] u32 count(std::string_view call) const noexcept;
 
             /// <summary>
-            /// Forgets everything.
+            /// Forgets everything recorded; whether recording is enabled is kept.
             /// </summary>
             void clear();
+
+            /// <summary>
+            /// False stops filling the lists, so recording allocates nothing (the null host then builds no record
+            /// either); the counters keep counting.
+            /// </summary>
+            void set_enabled(bool enabled) noexcept;
 
             /*---------------------------------------------------------------*/
             // Recording (called by the null host)
@@ -156,6 +187,12 @@ namespace conjure::scripting {
             void record_collect_garbage();
             void record_shutdown();
             void record_collect_fields();
+
+        private:
+            /// <summary>
+            /// True when a list of this size may take one more record; counts a drop when it is full.
+            /// </summary>
+            [[nodiscard]] bool admits(usize listSize) noexcept;
     };
 
     class CONJURE_API null_script_host final : public script_host {
@@ -276,7 +313,10 @@ namespace conjure::scripting {
             void set_collision_hook(collision_hook hook);
 
             /// <summary>
-            /// Marks a slot started (as the managed side does after OnStart) so a test can inspect the flag.
+            /// True when the slot is live and either took part in a FIXED_UPDATE or UPDATE run_phase (the
+            /// phases that run OnStart; LATE_UPDATE does not start a slot) or was created with
+            /// CREATE_FLAG_ALREADY_STARTED. This mirrors what the managed side marks after OnStart, so a test
+            /// can inspect it.
             /// </summary>
             [[nodiscard]] bool is_slot_started(i32 slot) const noexcept;
 
@@ -313,6 +353,14 @@ namespace conjure::scripting {
             }
 
             void reset_recorder();
+
+            /// <summary>
+            /// False makes the recorder record nothing (null_host_recorder::set_enabled) and the host build no
+            /// record, so recording adds no allocation to a managed call: for long runs and allocation gates. Only
+            /// the slot state the host keeps (a new slot, a slot's fields) may still grow. Survives
+            /// reset_recorder(). On by default.
+            /// </summary>
+            void set_recording(bool enabled) noexcept;
 
             [[nodiscard]] bool is_assembly_loaded() const noexcept {
                 return mAssemblyLoaded;

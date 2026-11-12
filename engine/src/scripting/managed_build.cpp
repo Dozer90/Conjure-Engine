@@ -1,5 +1,7 @@
 #include "conjure/scripting/managed_build.h"
 
+#include "scripting/scripting_internal.h"
+
 #include "conjure/scripting/log_category.h"
 #include "conjure/scripting/scripting_error.h"
 
@@ -193,10 +195,11 @@ std::vector<build_diagnostic> managed_build_runner::parse_output(std::string_vie
 core::process_desc managed_build_runner::command_line(const build_request &request, std::string_view dotnet) {
     core::process_desc desc = {};
     desc.executable = std::string(dotnet);
-    desc.arguments = {"build", request.projectPath.string(), "-c", request.configuration};
+    // core::process takes UTF-8 arguments; path::string() would hand it the ANSI code page on Windows.
+    desc.arguments = {"build", detail::path_to_utf8(request.projectPath), "-c", request.configuration};
     if (!request.outputDirectory.empty()) {
         desc.arguments.push_back("-o");
-        desc.arguments.push_back(request.outputDirectory.string());
+        desc.arguments.push_back(detail::path_to_utf8(request.outputDirectory));
     }
     desc.arguments.push_back("--nologo");
     desc.arguments.push_back("-clp:NoSummary");
@@ -233,7 +236,7 @@ build_report managed_build_runner::run_blocking(const build_request &request, st
         report.launch = core::make_error(
           script_error::BUILD_FAILED,
           "dotnet build of '{}' exited with {} ({} error(s))",
-          request.projectPath.string(),
+          detail::path_to_utf8(request.projectPath),
           result.exitCode,
           report.error_count()
         );

@@ -1,10 +1,13 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 #include "scripting_test_support.h"
 
 #include "conjure/core/json/document.h"
 #include "conjure/core/math/glm_types.h"
+#include "conjure/core/vfs/native_file_system.h"
+#include "conjure/ecs/command_buffer.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/ecs/world.h"
 #include "conjure/scripting/native_api.h"
@@ -16,8 +19,10 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -774,6 +779,172 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(logs.count(core::log_level::WARN) == 1);
         CHECK_FALSE(runtime.script_component_id().is_valid());
         runtime.attach_world(nullptr);
+    }
+
+    TEST_CASE("script_runtime - a game assembly in a non-ASCII directory reaches the host as UTF-8") {
+        scripting_fixture fixture = {};
+        temp_directory directory = {};
+        // "Jörg" spelt as UTF-8 bytes: the classes fixture beside the assembly is found only through them.
+        const std::string_view folderUtf8 = "J\xC3\xB6rg";
+        core::vfs::native_file_system files(directory.path());
+        CONJURE_REQUIRE_OK(files.create_directories(folderUtf8));
+        CONJURE_REQUIRE_OK(files.write_text_file(
+          std::string(folderUtf8) + "/Game.classes.json",
+          R"({"classes":[{"name":"Game.Umlaut"}]})"
+        ));
+        const std::u8string folder(folderUtf8.begin(), folderUtf8.end());
+        const std::filesystem::path assembly = directory.path() / std::filesystem::path(folder) / "Game.dll";
+
+        CONJURE_REQUIRE_OK(fixture.runtime.load_game_assembly(assembly));
+        const std::u8string assemblyUtf8 = assembly.u8string();
+        const std::string expected(assemblyUtf8.begin(), assemblyUtf8.end());
+        REQUIRE_FALSE(fixture.null_host().recorder().loaded_assemblies().empty());
+        CHECK(fixture.null_host().recorder().loaded_assemblies().back() == expected);
+        CHECK(fixture.null_host().loaded_assembly() == expected);
+        CHECK(fixture.runtime.classes().find("Game.Umlaut") != nullptr);
+        CHECK(fixture.runtime.assembly_path() == assembly);
+    }
+
+    TEST_CASE("script_runtime - initialize with a missing game assembly fails but stays READY") {
+        temp_directory directory = {};
+        ecs::component_registry registry = {};
+        register_test_components(registry);
+        ecs::world world(registry);
+        {
+            script_runtime runtime(create_script_host(script_backend::NULL_HOST));
+            runtime.attach_world(&world);
+            script_runtime_config config = {};
+            config.host.backend = script_backend::NULL_HOST;
+            config.gameAssemblyPath = directory.file("Missing.dll");
+            CONJURE_CHECK_ERROR(runtime.initialize(config), script_error::ASSEMBLY_LOAD_FAILED);
+            CHECK(runtime.status() == script_host_status::READY);
+            CHECK_FALSE(runtime.is_assembly_loaded());
+            CHECK_FALSE(runtime.classes().is_staging_open());
+
+            // Scripting keeps working without an assembly: the next build loads normally.
+            CONJURE_REQUIRE_OK(directory.write_text("Game.classes.json", R"({"classes":[{"name":"Game.Late"}]})"));
+            CONJURE_REQUIRE_OK(runtime.load_game_assembly(directory.file("Game.dll")));
+            CHECK(runtime.is_assembly_loaded());
+            CHECK(runtime.classes().find("Game.Late") != nullptr);
+            runtime.shutdown();
+            runtime.attach_world(nullptr);
+        }
+        CHECK(script_runtime::active() == nullptr);
+    }
+
+    TEST_CASE("script_runtime - an entity name survives script removal and is forgotten on every destroy path") {
+        loaded_fixture fixture = {};
+        const ecs::entity scripted = fixture.create_entity();
+        REQUIRE(fixture.runtime.add_script(scripted, hash_of(PLAYER), {}).is_valid());
+        fixture.runtime.set_entity_name(scripted, "scripted");
+        CONJURE_REQUIRE_OK(fixture.world.remove<script_component>(scripted));
+        CHECK(fixture.runtime.entity_name(scripted) == "scripted");
+        CHECK(fixture.runtime.find_entity_by_name("scripted") == scripted);
+
+        const ecs::entity native = fixture.create_entity();
+        const ecs::entity requested = fixture.create_entity();
+        const ecs::entity buffered = fixture.create_entity();
+        fixture.runtime.set_entity_name(native, "native");
+        fixture.runtime.set_entity_name(requested, "requested");
+        fixture.runtime.set_entity_name(buffered, "buffered");
+        REQUIRE(fixture.runtime.entity_name_count() == 4);
+
+        CONJURE_REQUIRE_OK(fixture.world.destroy_entity(scripted));
+        CONJURE_REQUIRE_OK(fixture.world.destroy_entity(native));
+        CHECK(fixture.runtime.entity_name_count() == 2);
+
+        // Entity.Destroy inside a query scope goes through the runtime's deferred command buffer.
+        {
+            const ecs::iteration_scope lock = fixture.world.lock_iteration();
+            fixture.runtime.request_entity_destroy(requested);
+        }
+        CHECK(fixture.runtime.entity_name(requested) == "requested");
+        static_cast<void>(fixture.world.flush(fixture.runtime.deferred_commands()));
+        CHECK_FALSE(fixture.world.is_alive(requested));
+        CHECK(fixture.runtime.entity_name_count() == 1);
+
+        ecs::command_buffer commands(fixture.world);
+        commands.destroy_entity(buffered);
+        static_cast<void>(fixture.world.flush(commands));
+        CHECK_FALSE(fixture.world.is_alive(buffered));
+        CHECK(fixture.runtime.entity_name_count() == 0);
+        CHECK(fixture.runtime.find_entity_by_name("buffered") == ecs::NULL_ENTITY);
+    }
+
+    TEST_CASE("script_runtime - remove_script ignores an id that belongs to another entity") {
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity first = fixture.create_entity();
+        const ecs::entity second = fixture.create_entity();
+        const script_entry_id firstId = fixture.runtime.add_script(first, hash_of(PLAYER), {});
+        const script_entry_id secondId = fixture.runtime.add_script(second, hash_of(ENEMY), {});
+        fixture.runtime.flush_pending();
+        const i32 firstSlot = fixture.slot_of(firstId);
+        REQUIRE(firstSlot != INVALID_SLOT);
+        fixture.null_host().reset_recorder();
+
+        fixture.runtime.remove_script(second, firstId);
+        CHECK(fixture.null_host().recorder().destroys().empty());
+        CHECK(fixture.slot_of(firstId) == firstSlot);
+        CHECK(fixture.null_host().is_slot_live(firstSlot));
+        CHECK(fixture.runtime.scripts_of(first).size() == 1);
+        REQUIRE(fixture.runtime.scripts_of(second).size() == 1);
+        CHECK(fixture.runtime.entry(secondId)->classHash == hash_of(ENEMY));
+        fixture.runtime.remove_script(fixture.create_entity(), firstId);      // an entity without scripts
+        CHECK(fixture.runtime.scripts_of(first).size() == 1);
+
+        fixture.runtime.remove_script(first, firstId);
+        CHECK(fixture.runtime.scripts_of(first).empty());
+        REQUIRE(fixture.null_host().recorder().destroys().size() == 1);
+        CHECK(fixture.null_host().recorder().destroys()[0].slot == firstSlot);
+    }
+
+    TEST_CASE("script_runtime - an OnCreate fault is flagged and logged with its own message") {
+        log_capture logs = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const script_entry_id id = fixture.runtime.add_script(fixture.create_entity(), hash_of(PLAYER), {});
+        conjure_native_api &api = fixture.runtime.native_api();
+        fixture.null_host().set_create_hook([&api](const conjure_create_request &, i32 slot) {
+            // What the managed guard does when OnCreate throws; the slot is not mapped yet.
+            api.script_mark_faulted(slot, static_cast<uint8_t>(script_callback::CREATE));
+        });
+        fixture.runtime.flush_pending();
+        fixture.null_host().set_create_hook({});
+
+        REQUIRE(fixture.runtime.entry(id) != nullptr);
+        CHECK(fixture.runtime.entry(id)->is_live());
+        CHECK(fixture.runtime.entry(id)->has_flag(script_entry_flags::FAULTED));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "OnCreate"));
+        CHECK(logs.contains(core::log_level::WARN, PLAYER));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "three consecutive"));
+    }
+
+    TEST_CASE("script_runtime - a reload, a shutdown and a world attach re-arm the mirror mismatch warnings") {
+        loaded_fixture fixture = {};
+        CHECK(fixture.runtime.note_mirror_mismatch(5));
+        CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
+
+        // A failed load changes nothing, a successful one re-arms.
+        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+        CONJURE_CHECK_ERROR(fixture.runtime.load_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+        CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
+        fixture.null_host().set_load_result(0);
+        CONJURE_REQUIRE_OK(fixture.runtime.load_game_assembly({}));
+        CHECK(fixture.runtime.note_mirror_mismatch(5));
+        CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
+
+        fixture.runtime.shutdown();
+        script_runtime_config config = {};
+        config.host.backend = script_backend::NULL_HOST;
+        CONJURE_REQUIRE_OK(fixture.runtime.initialize(config));
+        CHECK(fixture.runtime.note_mirror_mismatch(5));
+        CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
+
+        fixture.runtime.attach_world(&fixture.world);
+        CHECK(fixture.runtime.note_mirror_mismatch(5));
+        CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
     }
 
     TEST_CASE("regression - review 1 OnDestroy may add scripts while the set being replaced is destroyed") {

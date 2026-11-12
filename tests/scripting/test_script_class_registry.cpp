@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/assert_capture.h"
 #include "scripting_test_support.h"
 
 #include "conjure/core/hash.h"
@@ -11,6 +12,7 @@
 
 using namespace conjure;
 using namespace conjure::scripting;
+using namespace conjure::testing;
 using namespace scripting_test;
 
 TEST_SUITE("scripting/script_class_registry") {
@@ -53,6 +55,29 @@ TEST_SUITE("scripting/script_class_registry") {
           registry.stage_field(1, make_field("f", script_field_kind::INT32)),
           core::error_code::INVALID_STATE
         );
+    }
+
+    TEST_CASE("script_class_registry - commit_staging without an open staging keeps the active table") {
+        script_class_registry registry = {};
+        registry.begin_staging();
+        CONJURE_REQUIRE_OK(registry.stage_class(make_class("Game.Kept", {})));
+        registry.commit_staging();
+        REQUIRE(registry.find("Game.Kept") != nullptr);
+
+        expect_assert guard = {};
+        registry.commit_staging();                  // a second commit
+        CHECK(registry.find("Game.Kept") != nullptr);
+        registry.begin_staging();
+        CONJURE_REQUIRE_OK(registry.stage_class(make_class("Game.Dropped", {})));
+        registry.discard_staging();
+        registry.commit_staging();                  // a commit after a discard
+        CHECK(registry.find("Game.Kept") != nullptr);
+        CHECK(registry.find("Game.Dropped") == nullptr);
+        CHECK(registry.size() == 1);
+        CHECK_FALSE(registry.is_staging_open());
+#if CONJURE_ASSERTS_ENABLED
+        CHECK(guard.count() == 2);
+#endif
     }
 
     TEST_CASE("script_class_registry - swap_staging replaces the active schema and clears staging") {

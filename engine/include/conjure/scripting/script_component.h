@@ -54,7 +54,7 @@ namespace conjure::scripting {
     enum class script_entry_flags : u8 {
         NONE = 0,
         STARTED = 1 << 0,           // OnStart ran (or the entry was created ALREADY_STARTED)
-        FAULTED = 1 << 1,           // a callback was disabled after three consecutive faults
+        FAULTED = 1 << 1,           // a callback was disabled (three consecutive faults, or OnCreate threw)
         CLASS_MISSING = 1 << 2      // no class for the hash in the active registry; JSON preserved
     };
     CONJURE_ENUM_FLAGS(script_entry_flags);
@@ -125,6 +125,7 @@ namespace conjure::scripting {
             std::vector<set_slot> mSlots = {};
             std::vector<u32> mFreeList = {};
             std::vector<script_entry_id> mSlotToEntry = {};     // indexed by managed slot
+            usize mMappedCount = 0;                             // valid records of mSlotToEntry
             usize mLiveCount = 0;
 
         public:
@@ -190,9 +191,11 @@ namespace conjure::scripting {
             [[nodiscard]] std::optional<script_entry_id> resolve_slot(i32 slot) const noexcept;
 
             /// <summary>
-            /// Number of mapped slots.
+            /// Number of mapped slots: a counter the mapping functions keep, so stats() costs nothing.
             /// </summary>
-            [[nodiscard]] usize mapped_slot_count() const noexcept;
+            [[nodiscard]] usize mapped_slot_count() const noexcept {
+                return mMappedCount;
+            }
 
             /// <summary>
             /// Live sets.
@@ -239,7 +242,9 @@ namespace conjure::scripting {
 
     /// <summary>
     /// The serializer hooks of the component: {"scripts":[{"class","hash","fields"}]} through the active
-    /// runtime; remapEntities rewrites ENTITY fields of every entry with the class schema.
+    /// runtime; remapEntities rewrites ENTITY fields of every entry with the class schema. Without a live
+    /// runtime writeJson writes {"scripts":[]} for a component without a set and fails with INVALID_STATE for
+    /// one with a set (its scripts would be lost), readJson fails with INVALID_STATE, remapEntities does nothing.
     /// </summary>
     [[nodiscard]] CONJURE_API ecs::component_serializer script_component_serializer() noexcept;
 

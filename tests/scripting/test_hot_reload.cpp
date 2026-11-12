@@ -9,13 +9,30 @@
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <array>
+#include <chrono>
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 using namespace conjure;
 using namespace conjure::scripting;
 using namespace conjure::testing;
 using namespace scripting_test;
+
+namespace {
+
+    /// <summary>
+    /// Moves a file's write time 'seconds' later, as a rebuild would.
+    /// </summary>
+    void bump_write_time(const std::filesystem::path &file, i64 seconds) {
+        std::error_code probe = {};
+        const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, probe);
+        REQUIRE_FALSE(probe);
+        std::filesystem::last_write_time(file, stamp + std::chrono::seconds(seconds), probe);
+        REQUIRE_FALSE(probe);
+    }
+}
 
 TEST_SUITE("scripting/hot_reload") {
 
@@ -171,5 +188,62 @@ TEST_SUITE("scripting/hot_reload") {
         CHECK(reload.watch_interval_seconds() == 0.0);
         reload.set_debounce_seconds(-3.0);
         CHECK(reload.debounce_seconds() == 0.0);
+    }
+
+    TEST_CASE("hot_reload_controller - a watched reload that fails to load is retried up to three times") {
+        log_capture logs = {};
+        scripting_fixture fixture = {};
+        temp_directory directory = {};
+        CONJURE_REQUIRE_OK(directory.write_text("Game.dll", "v1"));
+        const std::filesystem::path assembly = directory.file("Game.dll");
+        hot_reload_controller reload(fixture.runtime, assembly);
+        reload.set_watch_interval_seconds(1.0);
+        reload.set_debounce_seconds(0.0);
+        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+        reload.tick(1.0);                                      // baseline stamp
+        bump_write_time(assembly, 5);
+
+        // The change is seen at 2.0; each failed load is tried again on the next tick (no debounce).
+        const std::array<f64, 5> ticks = {2.0, 2.1, 2.2, 2.3, 2.4};
+        const std::array<u32, 5> expectedReloads = {1, 2, 3, 4, 4};
+        for (usize index = 0; index < ticks.size(); ++index) {
+            CAPTURE(index);
+            reload.tick(ticks[index]);
+            CHECK(reload.reload_count() == expectedReloads[index]);
+        }
+        CHECK(reload.state() == reload_state::IDLE);
+        CHECK(reload.request_count() == 1);
+        CONJURE_CHECK_ERROR(reload.last_result(), script_error::ASSEMBLY_LOAD_FAILED);
+        CHECK(logs.count(core::log_level::WARN) == 4);
+        CHECK(logs.contains(core::log_level::WARN, "retrying (0 left)"));
+
+        // A reload asked for with request() that fails is not retried.
+        reload.request();
+        reload.tick(3.5);
+        CHECK(reload.reload_count() == 5);
+        CHECK(reload.state() == reload_state::IDLE);
+        reload.tick(3.6);
+        CHECK(reload.reload_count() == 5);
+        CHECK(logs.count(core::log_level::WARN) == 5);
+    }
+
+    TEST_CASE("hot_reload_controller - a change of the .pdb alone requests a reload") {
+        scripting_fixture fixture = {};
+        temp_directory directory = {};
+        CONJURE_REQUIRE_OK(directory.write_text("Game.dll", "v1"));
+        CONJURE_REQUIRE_OK(directory.write_text("Game.pdb", "symbols v1"));
+        hot_reload_controller reload(fixture.runtime, directory.file("Game.dll"));
+        reload.set_watch_interval_seconds(1.0);
+        reload.set_debounce_seconds(0.0);
+        reload.tick(1.0);                                      // baseline: the newer of the two stamps
+        CHECK(reload.request_count() == 0);
+
+        bump_write_time(directory.file("Game.pdb"), 5);
+        reload.tick(2.0);
+        CHECK(reload.request_count() == 1);
+        CHECK(reload.reload_count() == 1);
+        CONJURE_CHECK_OK(reload.last_result());
+        reload.tick(3.0);                                      // unchanged since
+        CHECK(reload.request_count() == 1);
     }
 }

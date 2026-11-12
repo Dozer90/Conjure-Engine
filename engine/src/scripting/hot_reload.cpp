@@ -1,6 +1,9 @@
 #include "conjure/scripting/hot_reload.h"
 
+#include "scripting/scripting_internal.h"
+
 #include "conjure/scripting/log_category.h"
+#include "conjure/scripting/scripting_error.h"
 
 #include "conjure/core/log.h"
 
@@ -26,6 +29,8 @@ hot_reload_controller::~hot_reload_controller() {}
 // Public methods
 
 void hot_reload_controller::request(bool immediate) {
+    // Only the watch's own requests are retried (poll_assembly_file re-arms the flag after this call).
+    mWatchTriggered = false;
     ++mRequestCount;
     mImmediate = mImmediate || immediate;
     if (mState == reload_state::RELOADING) {
@@ -84,13 +89,31 @@ void hot_reload_controller::perform_reload() {
     mLastResult = mRuntime->reload_game_assembly(mAssemblyPath);
     ++mReloadCount;
     if (!mLastResult.has_value()) {
+        // A watched build may still be writing the .dll or the .pdb, or hold them locked, when the change is
+        // seen: the load is tried again one debounce window later, a few times, before the failure stands.
+        const bool retry = mWatchTriggered && mWatchRetriesLeft > 0 &&
+          mLastResult.get_error().is(script_error::ASSEMBLY_LOAD_FAILED);
+        if (retry) {
+            --mWatchRetriesLeft;
+            CONJURE_LOG_WARN(
+              LOG_SCRIPTING,
+              "hot reload of '{}' failed: {}; retrying ({} left)",
+              detail::path_to_utf8(mAssemblyPath),
+              mLastResult.get_error(),
+              mWatchRetriesLeft
+            );
+            mState = reload_state::PENDING;
+            mRequestTime = -1.0;        // restamped by the next tick, which then waits one debounce window
+            return;
+        }
         CONJURE_LOG_WARN(
           LOG_SCRIPTING,
           "hot reload of '{}' failed: {}",
-          mAssemblyPath.string(),
+          detail::path_to_utf8(mAssemblyPath),
           mLastResult.get_error()
         );
     }
+    mWatchTriggered = false;
     if (mState == reload_state::RELOADING) {
         mState = reload_state::IDLE;
     }
@@ -102,10 +125,21 @@ void hot_reload_controller::poll_assembly_file(f64 nowSeconds) {
     }
     mLastWatchTime = nowSeconds;
     std::error_code probe = {};
-    const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(mAssemblyPath, probe);
+    std::filesystem::file_time_type stamp = std::filesystem::last_write_time(mAssemblyPath, probe);
     if (probe) {
         return;     // not built yet or being written; try again next interval
     }
+
+    // The load context reads the symbols next to the assembly too, so a build that rewrote only the .pdb, or
+    // finished it after the .dll, counts as a change: the newer of the two stamps is watched.
+    std::filesystem::path symbolsPath = mAssemblyPath;
+    symbolsPath.replace_extension(".pdb");
+    std::error_code symbolsProbe = {};
+    const std::filesystem::file_time_type symbolsStamp = std::filesystem::last_write_time(symbolsPath, symbolsProbe);
+    if (!symbolsProbe && symbolsStamp > stamp) {
+        stamp = symbolsStamp;
+    }
+
     if (!mHasWatchStamp) {
         mHasWatchStamp = true;
         mWatchStamp = stamp;
@@ -114,6 +148,8 @@ void hot_reload_controller::poll_assembly_file(f64 nowSeconds) {
     if (stamp != mWatchStamp) {
         mWatchStamp = stamp;
         request(false);
+        mWatchTriggered = true;
+        mWatchRetriesLeft = WATCH_RETRY_LIMIT;
     }
 }
 

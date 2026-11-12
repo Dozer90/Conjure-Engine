@@ -94,8 +94,10 @@ namespace conjure::scripting {
             void write_asset(u64 hash, const core::uuid &value);
 
             /// <summary>
-            /// Patches the field count and returns the bytes the blob needs (more than the output size when
-            /// the writer overflowed; the content written up to the overflow is complete and valid).
+            /// Patches the field count and returns the bytes the blob needs. When that is more than the output
+            /// size (overflowed()), the output is NOT a valid blob: the header counts every field while the
+            /// bytes stop at the overflow, possibly inside a field header, so field_blob_reader rejects it.
+            /// Retry with an output of the returned size (the measure-then-write idiom json_to_blob uses).
             /// </summary>
             [[nodiscard]] usize finish();
 

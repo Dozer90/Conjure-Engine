@@ -22,6 +22,8 @@ namespace conjure::scripting {
 
     class CONJURE_API hot_reload_controller {
         private:
+            static constexpr u32 WATCH_RETRY_LIMIT = 3;     // retries of a watched load that failed
+
             script_runtime *mRuntime = nullptr;
             std::filesystem::path mAssemblyPath = {};
             reload_state mState = reload_state::IDLE;
@@ -32,6 +34,8 @@ namespace conjure::scripting {
             bool mHasWatchStamp = false;
             std::filesystem::file_time_type mWatchStamp = {};
             bool mImmediate = false;
+            bool mWatchTriggered = false;       // the pending reload was requested by the watch
+            u32 mWatchRetriesLeft = 0;
             u32 mReloadCount = 0;
             u32 mRequestCount = 0;
             core::result<void> mLastResult = core::result<void>::success();
@@ -70,8 +74,11 @@ namespace conjure::scripting {
             }
 
             /// <summary>
-            /// Polls the assembly's write time every 'seconds' inside tick() and requests a reload when it
-            /// changed; 0 (default) disables the watch.
+            /// Polls the write time of the assembly and of the .pdb next to it (the newer of the two) every
+            /// 'seconds' inside tick() and requests a reload when it changed; 0 (default) disables the watch. A
+            /// reload the watch requested that fails with ASSEMBLY_LOAD_FAILED (a build still writing or locking
+            /// the files) is retried up to 3 times, one debounce window apart (a WARN each); a reload asked for
+            /// with request() is not retried.
             /// </summary>
             void set_watch_interval_seconds(f64 seconds) noexcept;
 
@@ -86,7 +93,7 @@ namespace conjure::scripting {
             }
 
             /// <summary>
-            /// Reloads performed by tick().
+            /// Reload attempts tick() performed, including the retries of a failed watched reload.
             /// </summary>
             [[nodiscard]] u32 reload_count() const noexcept {
                 return mReloadCount;
