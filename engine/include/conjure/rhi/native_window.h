@@ -37,7 +37,7 @@ namespace conjure::rhi {
     };
 
     /// <summary>
-    /// The enumerator name of a window kind ("WINDOWS"), "NONE" for NONE and out-of-range values.
+    /// The enumerator name of a window kind ("WINDOWS", "NONE"); "" for an out-of-range value.
     /// </summary>
     [[nodiscard]] CONJURE_API std::string_view to_string(native_window_kind kind) noexcept;
 }

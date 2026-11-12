@@ -145,7 +145,9 @@ namespace conjure::rhi::null_backend {
             }
 
             /// <summary>
-            /// Copies data into the CPU storage (writeBuffer, copyBuffer); out-of-range bytes are dropped.
+            /// Copies data into the CPU storage (writeBuffer, copyBuffer). Callers range-check first and
+            /// report an out-of-range or overlapping request; out-of-range bytes are dropped here and
+            /// data may alias the storage, both only defensively.
             /// </summary>
             void write(u64 offset, std::span<const std::byte> data);
             [[nodiscard]] std::span<const std::byte> storage();

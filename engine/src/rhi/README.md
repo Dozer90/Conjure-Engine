@@ -57,34 +57,43 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   engine's job (v1 quits, R8). `simulate_device_loss()` exists for those tests on every backend;
   `inject_null_fault(null_fault::WAIT_IDLE | PRESENT)` arms one failure on the null backend so the
   "failed waitForIdle marks the device lost" and "present reports DEVICE_LOST" paths run in CTest.
-- **Present failures.** A present the API refuses for a reason other than removal or an out-of-date
-  surface (`DXGI_ERROR_INVALID_CALL`, an unexpected `VkResult`) is `rhi_error::PRESENT_FAILED`;
-  `SWAPCHAIN_CREATION_FAILED` is reserved for creation and resize.
+- **Present failures.** An acquire or present the API refuses for a reason other than removal or an
+  out-of-date surface (`DXGI_ERROR_INVALID_CALL`, an unexpected `VkResult`) is
+  `rhi_error::PRESENT_FAILED`; `SWAPCHAIN_CREATION_FAILED` is reserved for creation and resize.
 - **Null device** (`backends/null/`). A complete `nvrhi::IDevice`: every `create*` stores the
   descriptor and returns a live handle (invalid descriptors such as a zero-sized texture, an empty
   shader blob or a pipeline without a vertex shader return `nullptr` and an `Error` message, like a
   real backend). Buffers own zero-filled CPU storage so `mapBuffer` / `writeBuffer` / `copyBuffer`
-  round-trip; staging textures map to zero-filled memory (readback is zero, 02_renderer.md 6);
-  command lists count draws, instances, dispatches, clears, writes, copies and keep `beginMarker`
-  names in recording order; they also track resource states so `getTextureSubresourceState` /
-  `getBufferState` answer like D3D12 (`keepInitialState` textures start at their initial state;
-  per-list tracking resets on `open()`; a permanent state is stored on the `null_texture` /
-  `null_buffer` itself, so it is visible to every command list and dies with the resource instead of
-  surviving in a pointer-keyed map). The device is the instrument the renderer's allocation gates
-  measure through (`renderer.null_frame_10k`, allocs 0, counts device-side allocations too), so its
-  bookkeeping is allocation-free in steady state: the referenced-resource list and the state trackers
-  (`core::flat_hash_map`, `clear()` keeps the table) keep their storage across `open()`, the counters
-  are integers, and marker names, the one growing record, are stored only after a consumer asked for
-  them with `device::reset_null_stats()` and at most `MAX_RECORDED_MARKER_NAMES` (4096) per reset;
-  the rest are counted in `null_device_stats::markerNamesDropped`. A headless run that never resets
-  the stats stores no names and never grows (`test_null_device.cpp` "open/close 100 command lists
-  after warm-up allocates nothing"). `executeCommandLists` returns an increasing fence and refuses a
-  list that is still open. `queryFeatureSupport` is true for `ComputeQueue`, `CopyQueue`,
-  `ConstantBufferRanges`, `DeferredCommandLists`, `VirtualResources` and `WaveLaneCountMinMax`
-  (32 lanes); every GPU-only feature is false. `getGraphicsAPI()` reports `D3D12` so code that
-  branches on the API takes the zero-based `SV_InstanceID` path the design assumes. The statistics
-  are read with `device::null_stats()` (a snapshot) and cleared with `reset_null_stats()`, which is
-  also what starts the marker-name recording: a test that asserts on the pass stream resets first.
+  round-trip for buffers created with CPU access; an out-of-range `writeBuffer` / `copyBuffer`, or a
+  `copyBuffer` whose source and destination ranges overlap in one buffer, reports an `Error` and
+  stores nothing (`bufferWriteBytes` counts only stored bytes), and mapping a buffer or staging
+  texture created with `CpuAccessMode::None` returns `nullptr` with an `Error`, as on D3D12 (a map
+  with a different mode than the creation one, or a second map, is legal there and here). Staging
+  textures map to zero-filled memory (readback is zero, 02_renderer.md 6); `queryFormatSupport`
+  answers like a D3D12 device (integer formats are not `ShaderSample`, block-compressed formats are
+  not `RenderTarget`). Command lists count draws, instances, dispatches, clears, writes, copies and
+  keep `beginMarker` names in recording order; they also track the states set explicitly
+  (`beginTracking*State`, `set*State`, `setPermanent*State`) so `getTextureSubresourceState` /
+  `getBufferState` report them. The implicit transitions of automatic barriers (`setGraphicsState`,
+  clears, copies, writes) are not modelled; an untracked resource reports its `initialState` when
+  `keepInitialState` is set, `Unknown` otherwise; per-list tracking resets on `open()`; a permanent
+  state is stored on the `null_texture` / `null_buffer` itself, so it is visible to every command
+  list and dies with the resource instead of surviving in a pointer-keyed map. The device is the
+  instrument the renderer's allocation gates measure through (`renderer.null_frame_10k`, allocs 0,
+  counts device-side allocations too), so its bookkeeping is allocation-free in steady state: the
+  referenced-resource list and the state trackers (`core::flat_hash_map`, `clear()` keeps the table)
+  keep their storage across `open()`, the counters are integers, and marker names, the one growing
+  record, are stored only after a consumer asked for them with `device::reset_null_stats()` and at
+  most `MAX_RECORDED_MARKER_NAMES` (4096) per reset; the rest are counted in
+  `null_device_stats::markerNamesDropped`. A headless run that never resets the stats stores no
+  names and never grows (`test_null_device.cpp` "open/close 100 command lists after warm-up
+  allocates nothing"). `executeCommandLists` returns an increasing fence and refuses a list that is
+  still open. `queryFeatureSupport` is true for `ComputeQueue`, `CopyQueue`, `ConstantBufferRanges`,
+  `DeferredCommandLists`, `VirtualResources` and `WaveLaneCountMinMax` (32 lanes); every GPU-only
+  feature is false. `getGraphicsAPI()` reports `D3D12` so code that branches on the API takes the
+  zero-based `SV_InstanceID` path the design assumes. The statistics are read with
+  `device::null_stats()` (a snapshot) and cleared with `reset_null_stats()`, which is also what
+  starts the marker-name recording: a test that asserts on the pass stream resets first.
 - **Null swapchain.** `bufferCount` textures in the `Present` state with `keepInitialState`;
   `acquire()` returns the current index and `present()` advances it, so acquire/present pairs
   cycle `0, 1, 2, 0, ...`; `resize` recreates the buffers and restarts at 0. Zero sizes are
@@ -100,7 +109,9 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   `Present` state, `keepInitialState`) carries the sRGB format. A `native_window` of kind `NONE`
   creates a composition swapchain that is never attached to a visual: nothing is shown, but the real
   acquire / clear / present / resize path runs, which is how the `[gpu]` tests work on WARP without a
-  window. Tearing is used only with `vsync = false` when DXGI reports support.
+  window. Tearing is used only with `vsync = false` when DXGI reports support. A resize that fails in
+  `ResizeBuffers` or while wrapping leaves no back buffers (a wrap that fails half-way drops the ones it
+  made), and `acquire()` / `present()` return `OUT_OF_DATE` until a resize succeeds, as on Vulkan.
 - **Vulkan.** Instance, surface, physical device, device and `VkSwapchainKHR` over
   `nvrhi::vulkan::createDevice`, with every entry point loaded at runtime through
   `core::dynamic_library` (no link dependency on the loader; a machine without `vulkan-1` fails
@@ -123,6 +134,11 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   caches it (a returned span is valid until `reload()`), `reload` re-parses the index and drops the
   cache, keeping the old table when the new index does not parse. Keys match the index exactly:
   `defines` is the axis string in CMake order (`"ALPHA_MASK=1|FOO=2"`), never reordered.
+  `shader_library` ignores `sourceHash`; it is there for the build's incremental rebuilds. A blob is
+  read in one call into a buffer sized by `std::filesystem::file_size`. The index's blob paths are
+  UTF-8 and become paths through `std::u8string`, never as a narrow string, which Windows decodes in
+  the ANSI code page. Paths in messages and log lines are formatted as UTF-8 (`path::u8string()`),
+  never through `path::string()`, which throws on Windows for a character outside that code page.
 - **Shader build.** `conjure_add_shaders(TARGET OUTPUT_DIR [SOURCE_DIR] [INCLUDE_DIRS] [DEPENDENCIES] SHADERS ...)`
   expands each `source;entry;stage;defines` entry into its permutations and runs `dxc` (DXIL, `-T xx_6_5 -HV 2018 -Zpr -WX`,
   `-Zi -Qembed_debug` outside Distribution, `-O3` in it) and `glslang` (SPIR-V, `vulkan1.2`, the NVRHI

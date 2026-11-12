@@ -123,6 +123,7 @@ TEST_SUITE("rhi/null_device") {
         CHECK((colour & nvrhi::FormatSupport::ShaderUavStore) != 0);
         CHECK((colour & nvrhi::FormatSupport::DepthStencil) == 0);
         CHECK((colour & nvrhi::FormatSupport::IndexBuffer) == 0);
+        CHECK((colour & nvrhi::FormatSupport::ShaderSample) != 0);
 
         const nvrhi::FormatSupport depth = native.queryFormatSupport(nvrhi::Format::D32);
         CHECK((depth & nvrhi::FormatSupport::DepthStencil) != 0);
@@ -135,13 +136,18 @@ TEST_SUITE("rhi/null_device") {
 
         const nvrhi::FormatSupport compressed = native.queryFormatSupport(nvrhi::Format::BC7_UNORM_SRGB);
         CHECK((compressed & nvrhi::FormatSupport::Texture) != 0);
+        CHECK((compressed & nvrhi::FormatSupport::ShaderSample) != 0);
+        CHECK((compressed & nvrhi::FormatSupport::RenderTarget) == 0);
         CHECK((compressed & nvrhi::FormatSupport::Buffer) == 0);
         CHECK((compressed & nvrhi::FormatSupport::Blendable) == 0);
 
+        // Integer formats are loaded, never filtered.
         const nvrhi::FormatSupport indices = native.queryFormatSupport(nvrhi::Format::R32_UINT);
         CHECK((indices & nvrhi::FormatSupport::IndexBuffer) != 0);
         CHECK((indices & nvrhi::FormatSupport::ShaderAtomic) != 0);
         CHECK((indices & nvrhi::FormatSupport::Blendable) == 0);
+        CHECK((indices & nvrhi::FormatSupport::ShaderLoad) != 0);
+        CHECK((indices & nvrhi::FormatSupport::ShaderSample) == 0);
 
         CHECK(native.queryFormatSupport(nvrhi::Format::UNKNOWN) == nvrhi::FormatSupport::None);
         CHECK(native.queryFormatSupport(nvrhi::Format::COUNT) == nvrhi::FormatSupport::None);
@@ -391,6 +397,9 @@ TEST_SUITE("rhi/null_device") {
 
         CHECK(native.createTexture(colour_texture_desc(0, 8)) == nullptr);
         CHECK(native.createStagingTexture(colour_texture_desc(8, 0), nvrhi::CpuAccessMode::Read) == nullptr);
+        nvrhi::TextureDesc flatStaging = colour_texture_desc(8, 8);
+        flatStaging.depth = 0;
+        CHECK(native.createStagingTexture(flatStaging, nvrhi::CpuAccessMode::Read) == nullptr);
         CHECK(native.createBuffer(vertex_buffer_desc(0)) == nullptr);
         nvrhi::BufferDesc volatileDesc = vertex_buffer_desc(64);
         volatileDesc.isVolatile = true;
@@ -407,7 +416,7 @@ TEST_SUITE("rhi/null_device") {
         CHECK(native.createSamplerFeedbackTexture(nullptr, nvrhi::SamplerFeedbackTextureDesc()) == nullptr);
         CHECK(native.createInputLayout(nullptr, 2, nullptr) == nullptr);
 
-        CHECK(logs.count(core::log_level::ERR) == 14);
+        CHECK(logs.count(core::log_level::ERR) == 15);
         CHECK(logs.contains(core::log_level::ERR, "createTexture"));
         CHECK(logs.contains(core::log_level::ERR, "createShader: the shader bytecode is empty"));
         CHECK(logs.contains(core::log_level::ERR, "createGraphicsPipeline: a vertex shader is required"));
@@ -652,7 +661,9 @@ TEST_SUITE("rhi/null_device") {
         log_capture logs = {};
         const std::unique_ptr<device> created = make_null_device();
         nvrhi::IDevice &native = *created->native_device();
-        const nvrhi::BufferHandle buffer = native.createBuffer(vertex_buffer_desc(32));
+        nvrhi::BufferDesc desc = vertex_buffer_desc(32);
+        desc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        const nvrhi::BufferHandle buffer = native.createBuffer(desc);
         const nvrhi::CommandListHandle commandList = native.createCommandList();
         REQUIRE(buffer != nullptr);
 
@@ -660,9 +671,6 @@ TEST_SUITE("rhi/null_device") {
         commandList->open();
         commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 0);
         commandList->copyBuffer(buffer, 16, buffer, 0, 16);
-        // Out-of-range writes are dropped, never written past the end.
-        commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 24);
-        commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 1000);
         commandList->close();
         native.executeCommandList(commandList);
 
@@ -672,8 +680,8 @@ TEST_SUITE("rhi/null_device") {
         CHECK(mapped[3] == 40);
         CHECK(mapped[4] == 10);
         CHECK(mapped[5] == 20);
-        CHECK(mapped[6] == 10);
-        CHECK(mapped[7] == 20);
+        CHECK(mapped[6] == 30);
+        CHECK(mapped[7] == 40);
         native.unmapBuffer(buffer);
 
         // A write through the mapping persists across map/unmap cycles.
@@ -683,6 +691,78 @@ TEST_SUITE("rhi/null_device") {
         native.unmapBuffer(buffer);
         CHECK(static_cast<const u32 *>(native.mapBuffer(buffer, nvrhi::CpuAccessMode::Read))[0] == 99);
         native.unmapBuffer(buffer);
+    }
+
+    TEST_CASE("regression - code sweep F683 out-of-range buffer writes, copies and overlapping copies store nothing") {
+        log_capture logs = {};
+        logs.allow_errors();
+        const std::unique_ptr<device> created = make_null_device();
+        nvrhi::IDevice &native = *created->native_device();
+        nvrhi::BufferDesc desc = vertex_buffer_desc(32);
+        desc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        const nvrhi::BufferHandle buffer = native.createBuffer(desc);
+        const nvrhi::CommandListHandle commandList = native.createCommandList();
+        REQUIRE(buffer != nullptr);
+        REQUIRE(commandList != nullptr);
+        created->reset_null_stats();
+
+        // Bytes 0..15 hold the payload; every later call reaches past the 32-byte end, and a clamped
+        // store would put payload values into bytes 16..31. The last copy fits but overlaps itself
+        // (bytes 0..15 onto 8..23), which D3D12 rejects and a plain memcpy would make undefined.
+        const std::array<u32, 4> payload = {10, 20, 30, 40};
+        commandList->open();
+        commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 0);
+        commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 24);
+        commandList->writeBuffer(buffer, payload.data(), sizeof(payload), 1000);
+        commandList->copyBuffer(buffer, 24, buffer, 0, 16);
+        commandList->copyBuffer(buffer, 16, buffer, 24, 16);
+        commandList->copyBuffer(buffer, 8, buffer, 0, 16);
+        commandList->close();
+        native.executeCommandList(commandList);
+
+        CHECK(logs.count(core::log_level::ERR) == 5);
+        CHECK(logs.contains(core::log_level::ERR, "writeBuffer: dataSize + destOffsetBytes exceeds"));
+        CHECK(logs.contains(core::log_level::ERR, "copyBuffer: the range exceeds"));
+        CHECK(logs.contains(core::log_level::ERR, "copyBuffer: the source and destination ranges of one buffer"));
+        const null_device_stats stats = stats_of(*created);
+        CHECK(stats.bufferWrites == 3);
+        CHECK(stats.bufferWriteBytes == sizeof(payload));
+        CHECK(stats.bufferCopies == 3);
+
+        const u32 *mapped = static_cast<const u32 *>(native.mapBuffer(buffer, nvrhi::CpuAccessMode::Read));
+        REQUIRE(mapped != nullptr);
+        CHECK(mapped[0] == 10);
+        CHECK(mapped[1] == 20);
+        CHECK(mapped[2] == 30);
+        CHECK(mapped[3] == 40);
+        for (usize index = 4; index < 8; ++index) {
+            CAPTURE(index);
+            CHECK(mapped[index] == 0);
+        }
+        native.unmapBuffer(buffer);
+    }
+
+    TEST_CASE("regression - code sweep F684 a buffer or staging texture created without CPU access does not map") {
+        log_capture logs = {};
+        logs.allow_errors();
+        const std::unique_ptr<device> created = make_null_device();
+        nvrhi::IDevice &native = *created->native_device();
+        const nvrhi::BufferHandle gpuOnly = native.createBuffer(vertex_buffer_desc(32));
+        const nvrhi::StagingTextureHandle staging = native.createStagingTexture(
+          colour_texture_desc(4, 4),
+          nvrhi::CpuAccessMode::None
+        );
+        REQUIRE(gpuOnly != nullptr);
+        REQUIRE(staging != nullptr);
+
+        size_t rowPitch = 0;
+        CHECK(native.mapBuffer(gpuOnly, nvrhi::CpuAccessMode::Read) == nullptr);
+        CHECK(
+          native.mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch) == nullptr
+        );
+        CHECK(logs.count(core::log_level::ERR) == 2);
+        CHECK(logs.contains(core::log_level::ERR, "mapBuffer: the buffer was created without CPU access"));
+        CHECK(logs.contains(core::log_level::ERR, "mapStagingTexture: the staging texture was created without"));
     }
 
     TEST_CASE("null_device - staging textures map to zero-filled memory with a tight row pitch") {
@@ -741,7 +821,7 @@ TEST_SUITE("rhi/null_device") {
         CHECK(tiles == 0);
     }
 
-    TEST_CASE("null_device - resource state tracking answers like a real backend") {
+    TEST_CASE("null_device - explicit resource states are reported and implicit transitions are not modelled") {
         log_capture logs = {};
         const std::unique_ptr<device> created = make_null_device();
         nvrhi::IDevice &native = *created->native_device();
@@ -776,6 +856,12 @@ TEST_SUITE("rhi/null_device") {
         CHECK(commandList->getTextureSubresourceState(untracked, 0, 0) == nvrhi::ResourceStates::CopyDest);
         commandList->setBufferState(buffer, nvrhi::ResourceStates::CopySource);
         CHECK(commandList->getBufferState(buffer) == nvrhi::ResourceStates::CopySource);
+
+        // A real backend's automatic barriers would move the copied subresources (mip 0 of each) to
+        // CopyDest / CopySource; the null device keeps the explicit and initial states.
+        commandList->copyTexture(tracked, nvrhi::TextureSlice(), untracked, nvrhi::TextureSlice());
+        CHECK(commandList->getTextureSubresourceState(tracked, 0, 0) == nvrhi::ResourceStates::ShaderResource);
+        CHECK(commandList->getTextureSubresourceState(untracked, 0, 0) == nvrhi::ResourceStates::CopyDest);
 
         commandList->setPermanentTextureState(untracked, nvrhi::ResourceStates::ShaderResource);
         commandList->setTextureState(untracked, nvrhi::AllSubresources, nvrhi::ResourceStates::RenderTarget);

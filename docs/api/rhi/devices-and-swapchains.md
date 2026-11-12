@@ -64,9 +64,9 @@ core::status present_frames(u32 frameCount, void (*record)(device &gpu, nvrhi::I
 `graphics_backend` has three values: `NULL_DEVICE`, `D3D12` and `VULKAN`. `is_backend_compiled()` tells you
 which ones this build contains (`NULL_DEVICE` always is) and `default_graphics_backend()` returns the first
 compiled one in the order D3D12, Vulkan, null. `to_string()` gives the lower-case name (`"null"`, `"d3d12"`,
-`"vulkan"`) and `parse_graphics_backend()` reads one back, ignoring case and surrounding whitespace; anything
-else is `core::error_code::INVALID_ARGUMENT`. That pair is what a `--backend` command-line option or a
-settings file should use.
+`"vulkan"`, and `""` for an out-of-range value) and `parse_graphics_backend()` reads one back, ignoring case
+and surrounding whitespace; anything else is `core::error_code::INVALID_ARGUMENT`. That pair is what a
+`--backend` command-line option or a settings file should use.
 
 After creation, `device.capabilities()` reports what the adapter can do:
 
@@ -126,7 +126,7 @@ engine's window. A default-constructed handle has kind `NONE`, which `is_headles
 | D3D12 | a composition swapchain that is never attached to anything: nothing is shown, but acquire, clear, present and resize all run for real (this is how the GPU tests work on WARP) |
 | Vulkan | `INVALID_DESC`: Vulkan has no windowless swapchain |
 
-`to_string(native_window_kind)` returns the enumerator name, `"NONE"` for unknown values.
+`to_string(native_window_kind)` returns the enumerator name, and `""` for an out-of-range value.
 
 ## Swapchains
 
@@ -147,7 +147,9 @@ follows `resize()`, the format and buffer count are as created. `owner()` is the
 
 `resize(width, height)` waits for the GPU, recreates the back buffers and discards an image that was acquired
 but not presented. Zero is `INVALID_DESC`; `OUT_OF_DATE` on Vulkan means the surface is currently empty (a
-minimised window), so keep the old size and try again later.
+minimised window), so keep the old size and try again later. A resize the API refuses
+(`SWAPCHAIN_CREATION_FAILED`) can leave the swapchain without back buffers; on every backend `acquire()` and
+`present()` then return `OUT_OF_DATE` until a later resize succeeds.
 
 > [!WARNING]
 > Every `back_buffer()` pointer is invalid after `resize()`; fetch it again after each `acquire()` rather
@@ -156,8 +158,9 @@ minimised window), so keep the old size and try again later.
 
 > [!TIP]
 > Treat `OUT_OF_DATE` from `acquire()` or `present()` as "resize and draw again", not as an error to report:
-> on Vulkan it is the normal signal that the window changed under you. `PRESENT_FAILED` is the real failure
-> (the API refused for another reason) and is worth logging.
+> it is the normal signal that the window changed under you (Vulkan) or that the last resize did not
+> complete (every backend). `PRESENT_FAILED` is the real failure (the API refused the acquire or present for
+> another reason) and is worth logging.
 
 ## Device loss
 
@@ -220,9 +223,11 @@ payloads: `R8_UNORM`, `RG8_UNORM`, `RGBA8_UNORM`, `RGBA8_SRGB`, `BGRA8_SRGB`, `R
 ## Testing without a GPU
 
 The null device is a complete device: every resource you create is a live handle, buffers keep real CPU
-storage so writes and copies round-trip, and command lists count what they record. `device.null_stats()`
-returns a snapshot of those counters (`std::nullopt` on D3D12 and Vulkan) and `reset_null_stats()` clears
-them. The most useful fields:
+storage so writes and copies round-trip, and command lists count what they record. Like D3D12, it refuses
+three kinds of misuse with an error in the log: a buffer write or copy past the end of a buffer and a copy
+between overlapping ranges of one buffer store nothing, and a buffer or staging texture created without CPU
+access does not map. `device.null_stats()` returns a snapshot of the counters (`std::nullopt` on D3D12 and
+Vulkan) and `reset_null_stats()` clears them. The most useful fields:
 
 | `null_device_stats` field | Counts |
 |---|---|

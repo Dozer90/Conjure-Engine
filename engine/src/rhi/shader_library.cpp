@@ -9,10 +9,10 @@
 #include "conjure/core/string_utils.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <fstream>
 #include <ios>
-#include <iterator>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -41,7 +41,8 @@ std::string_view conjure::rhi::to_string(shader_stage stage) noexcept {
             break;
         }
     }
-    return "vertex";
+    // An out-of-range value must not print as a valid stage.
+    return "";
 }
 
 core::result<shader_stage> conjure::rhi::parse_shader_stage(std::string_view name) noexcept {
@@ -70,15 +71,33 @@ namespace {
     struct index_entry;
     using entry_table = std::unordered_map<std::string, index_entry>;
 
+    // index.json's sourceHash is not read: it exists for the build's incremental rebuilds
+    // (cmake/ConjureShaderIndex.cmake), and reload() drops every cached blob anyway.
     struct index_entry {
         std::string name = {};
         std::string entry = {};
         std::string defines = {};
         shader_stage stage = shader_stage::VERTEX;
         std::string blobPath = {};          // relative to the shader directory; empty when this backend has no blob
-        std::string sourceHash = {};
         std::vector<std::byte> blob = {};   // loaded lazily by get()
     };
+
+    /// <summary>
+    /// The path as UTF-8 for messages. On Windows path::string() converts through the ANSI code page
+    /// and throws for a character outside it; u8string() never depends on the code page.
+    /// </summary>
+    std::string display_path(const std::filesystem::path &path) {
+        const std::u8string text = path.u8string();
+        return std::string(reinterpret_cast<const char *>(text.data()), text.size());
+    }
+
+    /// <summary>
+    /// A path from UTF-8 text such as an index.json blob path. Building a path from a narrow string
+    /// decodes it through the ANSI code page on Windows, which misreads or rejects non-ASCII names.
+    /// </summary>
+    std::filesystem::path path_from_utf8(std::string_view utf8) {
+        return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+    }
 
     /// <summary>
     /// "name|entry|defines" with a separator no permutation axis can contain ('\n'), so two keys
@@ -126,7 +145,7 @@ namespace {
             return core::make_error(
               core::error_code::NOT_FOUND,
               "shader index '{}' does not exist",
-              indexPath.string()
+              display_path(indexPath)
             );
         }
 
@@ -136,7 +155,7 @@ namespace {
             return core::make_error(
               core::error_code::PARSE_FAILURE,
               "shader index '{}': root is not an object",
-              indexPath.string()
+              display_path(indexPath)
             );
         }
         const i64 version = root["version"].as_i64(-1);
@@ -144,7 +163,7 @@ namespace {
             return core::make_error(
               core::error_code::PARSE_FAILURE,
               "shader index '{}': unsupported version {} (expected {})",
-              indexPath.string(),
+              display_path(indexPath),
               version,
               SUPPORTED_INDEX_VERSION
             );
@@ -154,7 +173,7 @@ namespace {
             return core::make_error(
               core::error_code::PARSE_FAILURE,
               "shader index '{}': 'shaders' is not an array",
-              indexPath.string()
+              display_path(indexPath)
             );
         }
 
@@ -167,7 +186,7 @@ namespace {
                 return core::make_error(
                   core::error_code::PARSE_FAILURE,
                   "shader index '{}': entry {} needs string fields name, entry and stage",
-                  indexPath.string(),
+                  display_path(indexPath),
                   position
                 );
             }
@@ -175,14 +194,13 @@ namespace {
             entry.name = std::string(item["name"].as_string());
             entry.entry = std::string(item["entry"].as_string());
             entry.defines = std::string(item["defines"].as_string());
-            entry.sourceHash = std::string(item["sourceHash"].as_string());
             entry.blobPath = select_blob_path(item, backend);
             const core::result<shader_stage> stage = parse_shader_stage(item["stage"].as_string());
             if (!stage.has_value()) {
                 return core::make_error(
                   core::error_code::PARSE_FAILURE,
                   "shader index '{}': entry {} ({}/{}): {}",
-                  indexPath.string(),
+                  display_path(indexPath),
                   position,
                   entry.name,
                   entry.entry,
@@ -196,7 +214,7 @@ namespace {
                 return core::make_error(
                   core::error_code::PARSE_FAILURE,
                   "shader index '{}': duplicate entry {}/{} [{}]",
-                  indexPath.string(),
+                  display_path(indexPath),
                   entry.name,
                   entry.entry,
                   entry.defines
@@ -208,21 +226,27 @@ namespace {
         return entries;
     }
 
+    /// <summary>
+    /// The whole file in one read into a buffer sized from the file system.
+    /// </summary>
     core::result<std::vector<std::byte>> read_blob(const std::filesystem::path &path) {
+        std::error_code sizeError = {};
+        const std::uintmax_t size = std::filesystem::file_size(path, sizeError);
+        if (sizeError) {
+            return core::make_error(core::error_code::IO_FAILURE, "cannot open shader blob '{}'", display_path(path));
+        }
+        if (size == 0) {
+            return core::make_error(core::error_code::IO_FAILURE, "shader blob '{}' is empty", display_path(path));
+        }
+
         std::ifstream stream(path, std::ios::binary);
         if (!stream.is_open()) {
-            return core::make_error(core::error_code::IO_FAILURE, "cannot open shader blob '{}'", path.string());
+            return core::make_error(core::error_code::IO_FAILURE, "cannot open shader blob '{}'", display_path(path));
         }
-        std::vector<char> bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-        if (stream.bad()) {
-            return core::make_error(core::error_code::IO_FAILURE, "cannot read shader blob '{}'", path.string());
-        }
-        if (bytes.empty()) {
-            return core::make_error(core::error_code::IO_FAILURE, "shader blob '{}' is empty", path.string());
-        }
-        std::vector<std::byte> blob(bytes.size());
-        for (usize index = 0; index < bytes.size(); ++index) {
-            blob[index] = static_cast<std::byte>(bytes[index]);
+        std::vector<std::byte> blob(static_cast<usize>(size));
+        stream.read(reinterpret_cast<char *>(blob.data()), static_cast<std::streamsize>(blob.size()));
+        if (stream.gcount() != static_cast<std::streamsize>(blob.size())) {
+            return core::make_error(core::error_code::IO_FAILURE, "cannot read shader blob '{}'", display_path(path));
         }
         return blob;
     }
@@ -262,7 +286,7 @@ core::result<std::unique_ptr<shader_library>> shader_library::open(
     CONJURE_LOG_INFO(
       LOG_RHI,
       "opened shader library '{}' with {} entries for the {} backend",
-      shaderDirectory.string(),
+      display_path(shaderDirectory),
       library->mImpl->entries.size(),
       to_string(device.backend())
     );
@@ -292,7 +316,7 @@ core::result<shader_blob> shader_library::get(const shader_key &key) {
         );
     }
     if (entry.blob.empty()) {
-        CONJURE_TRY_ASSIGN(entry.blob, read_blob(mImpl->directory / entry.blobPath));
+        CONJURE_TRY_ASSIGN(entry.blob, read_blob(mImpl->directory / path_from_utf8(entry.blobPath)));
         ++mImpl->loadedBlobs;
         CONJURE_LOG_TRACE(LOG_RHI, "loaded shader blob '{}' ({} bytes)", entry.blobPath, entry.blob.size());
     }
@@ -302,7 +326,7 @@ core::result<shader_blob> shader_library::get(const shader_key &key) {
     return blob;
 }
 
-bool shader_library::contains(const shader_key &key) const noexcept {
+bool shader_library::contains(const shader_key &key) const {
     const auto found = mImpl->entries.find(make_lookup_key(key.name, key.entry, key.defines));
     return found != mImpl->entries.end() && !found->second.blobPath.empty();
 }
@@ -317,7 +341,8 @@ core::result<void> shader_library::reload() {
     CONJURE_LOG_INFO(
       LOG_RHI,
       "reloaded shader library '{}' ({} entries)",
-      mImpl->directory.string(), mImpl->entries.size()
+      display_path(mImpl->directory),
+      mImpl->entries.size()
     );
     return core::result<void>::success();
 }

@@ -145,7 +145,7 @@ nvrhi::StagingTextureHandle null_device::createStagingTexture(
   const nvrhi::TextureDesc &d,
   nvrhi::CpuAccessMode cpuAccess
 ) {
-    if (d.width == 0 || d.height == 0 || d.format == nvrhi::Format::UNKNOWN) {
+    if (d.width == 0 || d.height == 0 || d.depth == 0 || d.format == nvrhi::Format::UNKNOWN) {
         report_error("createStagingTexture: a staging texture needs a non-zero size and a known format");
         return nullptr;
     }
@@ -163,6 +163,11 @@ void *null_device::mapStagingTexture(
 ) {
     null_staging_texture *staging = dynamic_cast<null_staging_texture *>(tex);
     if (staging == nullptr) {
+        return nullptr;
+    }
+    // Only the creation mode matters, as on D3D12: mapping with another mode or twice is legal.
+    if (staging->cpu_access() == nvrhi::CpuAccessMode::None) {
+        report_error("mapStagingTexture: the staging texture was created without CPU access");
         return nullptr;
     }
     return staging->map(slice, outRowPitch);
@@ -249,6 +254,11 @@ nvrhi::BufferHandle null_device::createBuffer(const nvrhi::BufferDesc &d) {
 void *null_device::mapBuffer(nvrhi::IBuffer *buffer, nvrhi::CpuAccessMode) {
     null_buffer *target = dynamic_cast<null_buffer *>(buffer);
     if (target == nullptr) {
+        return nullptr;
+    }
+    // A GPU-only buffer lives in a default heap on D3D12 and cannot be mapped there either.
+    if (target->getDesc().cpuAccess == nvrhi::CpuAccessMode::None) {
+        report_error("mapBuffer: the buffer was created without CPU access");
         return nullptr;
     }
     return target->map();
@@ -668,19 +678,23 @@ nvrhi::FormatSupport null_device::queryFormatSupport(nvrhi::Format format) {
         return nvrhi::FormatSupport::None;
     }
 
-    nvrhi::FormatSupport support = nvrhi::FormatSupport::Texture | nvrhi::FormatSupport::ShaderLoad |
-      nvrhi::FormatSupport::ShaderSample;
+    // Like a D3D12 device: integer formats are loaded, never filtered, and block-compressed formats are
+    // sampled but cannot be rendered to.
+    nvrhi::FormatSupport support = nvrhi::FormatSupport::Texture | nvrhi::FormatSupport::ShaderLoad;
+    if (info.kind != nvrhi::FormatKind::Integer) {
+        support = support | nvrhi::FormatSupport::ShaderSample;
+    }
     const bool compressed = info.blockSize > 1;
     if (info.hasDepth || info.hasStencil) {
         support = support | nvrhi::FormatSupport::DepthStencil;
         return support;
     }
-    support = support | nvrhi::FormatSupport::RenderTarget;
     if (info.kind != nvrhi::FormatKind::Integer && !compressed) {
         support = support | nvrhi::FormatSupport::Blendable;
     }
     if (!compressed) {
-        support = support | nvrhi::FormatSupport::Buffer | nvrhi::FormatSupport::VertexBuffer;
+        support = support | nvrhi::FormatSupport::RenderTarget | nvrhi::FormatSupport::Buffer |
+          nvrhi::FormatSupport::VertexBuffer;
         if (!info.isSRGB) {
             support = support | nvrhi::FormatSupport::ShaderUavLoad | nvrhi::FormatSupport::ShaderUavStore;
         }

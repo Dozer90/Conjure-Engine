@@ -144,7 +144,8 @@ float4 ps_main(float4 position : SV_Position) : SV_Target0 {
 }
 ```
 
-`dxil` and `spirv` are paths relative to the index, empty for a backend that was not compiled. When
+`dxil` and `spirv` are paths relative to the index, empty for a backend that was not compiled. `sourceHash`
+is for the build's incremental rebuilds; `shader_library` ignores it. When
 `shader_library::open()` runs it selects one column for the device's backend:
 
 | Device backend | Column used | Blob format |
@@ -192,7 +193,7 @@ them after a successful reload.
 | Signature (short) | Purpose |
 |---|---|
 | `enum class shader_stage : u8 { VERTEX, PIXEL, COMPUTE }` | the stages the build supports |
-| `std::string_view to_string(shader_stage)` / `result<shader_stage> parse_shader_stage(std::string_view)` | `"vertex"`, `"pixel"`, `"compute"`; the parser also takes `"vs"`, `"ps"`, `"cs"` |
+| `std::string_view to_string(shader_stage)` / `result<shader_stage> parse_shader_stage(std::string_view)` | `"vertex"`, `"pixel"`, `"compute"` (`""` for an out-of-range value); the parser also takes `"vs"`, `"ps"`, `"cs"` |
 | `struct shader_key { std::string_view name, entry, defines; }` | one permutation |
 | `struct shader_blob { std::span<const std::byte> bytes; shader_stage stage; }` | a compiled shader |
 | `static result<std::unique_ptr<shader_library>> shader_library::open(device &, const std::filesystem::path &)` | open `index.json` |

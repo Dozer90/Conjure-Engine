@@ -119,8 +119,9 @@ it when `waitForIdle()` returns false.
 | Area | Behaviour |
 |---|---|
 | Resources | every `create*` stores the descriptor and returns a live handle; invalid descriptors (zero-sized texture, empty shader blob, pipeline without a vertex shader) return `nullptr` and an `Error` message like a real backend. `null_backend::make_resource` (`null_resources.h`) is the single `new` site, because `RefCounter::Release` deletes the object itself |
-| Buffers and staging textures | buffers own zero-filled CPU storage so `mapBuffer` / `writeBuffer` / `copyBuffer` round-trip; staging textures map to zero-filled memory with a tight row pitch, so readback is zero |
-| Command lists | count draws, instances, dispatches, clears, writes, copies and keep `beginMarker` names in recording order (once armed, see Statistics); track resource states so `getTextureSubresourceState` / `getBufferState` answer like D3D12 (per-list tracking resets on `open()`; a permanent state lives on the `null_texture` / `null_buffer` itself, visible to every list and gone with the resource). `executeCommandLists` returns an increasing fence and refuses an open list |
+| Buffers and staging textures | buffers own zero-filled CPU storage so `mapBuffer` / `writeBuffer` / `copyBuffer` round-trip for buffers created with CPU access; an out-of-range `writeBuffer` / `copyBuffer`, or a `copyBuffer` between overlapping ranges of one buffer, reports an `Error` and stores nothing (`bufferWriteBytes` counts only stored bytes); mapping a GPU-only buffer or staging texture (`CpuAccessMode::None`) returns `nullptr` with an `Error`, as on D3D12, while a different map mode or a second map stays legal. Staging textures map to zero-filled memory with a tight row pitch, so readback is zero |
+| Command lists | count draws, instances, dispatches, clears, writes, copies and keep `beginMarker` names in recording order (once armed, see Statistics); track the explicitly set states (`beginTracking*State`, `set*State`, `setPermanent*State`) so `getTextureSubresourceState` / `getBufferState` report them. The implicit transitions of automatic barriers (`setGraphicsState`, clears, copies, writes) are not modelled; an untracked resource reports its `initialState` with `keepInitialState`, `Unknown` otherwise. Per-list tracking resets on `open()`; a permanent state lives on the `null_texture` / `null_buffer` itself, visible to every list and gone with the resource. `executeCommandLists` returns an increasing fence and refuses an open list |
+| Format support | `queryFormatSupport` answers like a D3D12 device: every known format is `Texture` and `ShaderLoad`; non-integer formats are `ShaderSample`; depth formats add `DepthStencil` only; uncompressed formats add `RenderTarget`, `Buffer` and `VertexBuffer` (plus UAV load/store unless sRGB); `Blendable` excludes integer and compressed formats |
 | Features | `queryFeatureSupport` is true for `ComputeQueue`, `CopyQueue`, `ConstantBufferRanges`, `DeferredCommandLists`, `VirtualResources`, `WaveLaneCountMinMax` (32 lanes); every GPU-only feature is false. `getGraphicsAPI()` reports `D3D12` so API-dependent code takes the zero-based `SV_InstanceID` path |
 | Statistics | `record(fn)` applies `fn(null_device_stats &)` under `mStatsMutex`; `stats()` snapshots; `reset_stats()` clears. Marker names are stored only after the first `reset_stats()` armed the recording and at most `MAX_RECORDED_MARKER_NAMES` (4096) per reset, the rest counted in `markerNamesDropped`, so a headless run that never resets allocates nothing per frame (the renderer's allocation gates measure through this device) |
 | Faults | `inject_fault` arms one `null_fault`; `consume_fault(fault)` returns true once for the armed one and disarms. `waitForIdle` consumes `WAIT_IDLE`, the null swapchain's present consumes `PRESENT` |
@@ -148,10 +149,15 @@ chosen from `device_desc::window.kind`), physical device, device and queues over
 
 `shader_library.cpp` parses `index.json` with `core::json`: `version` must be 1, `shaders` an array, every
 entry an object with string `name`, `entry` and `stage` (`defines`, `dxil` and `spirv` default to empty); an
-unknown stage or a duplicate `name/entry/defines` is `PARSE_FAILURE` naming the entry. `open` picks the column for the device's backend
-(DXIL on D3D12, SPIR-V on Vulkan; the null device takes DXIL and falls back to SPIR-V). `get` loads a blob
-once into a cache keyed by entry and returns a span into it; an empty file is `IO_FAILURE`. `reload` parses
-into a fresh table and swaps it in only on success, dropping the cache.
+unknown stage or a duplicate `name/entry/defines` is `PARSE_FAILURE` naming the entry. `open` picks the
+column for the device's backend (DXIL on D3D12, SPIR-V on Vulkan; the null device takes DXIL and falls back
+to SPIR-V). `get` loads a blob once into a cache keyed by entry and returns a span into it; the file is read
+in one call into a buffer sized by `std::filesystem::file_size`, and an empty file is `IO_FAILURE`. `reload`
+parses into a fresh table and swaps it in only on success, dropping the cache. `sourceHash` is ignored (it
+serves the build's incremental rebuilds). The index's UTF-8 blob paths become paths through a local
+`path_from_utf8()` (`std::u8string`), and paths in messages and log lines go back through `display_path()`
+(`path::u8string()`): on Windows a narrow string is decoded in the ANSI code page, and `path::string()` throws
+for a character outside it.
 
 ## 4. Swapchains per backend
 
@@ -159,15 +165,16 @@ into a fresh table and swaps it in only on success, dropping the cache.
 `RGBA8_UNORM`, `RGBA8_SRGB`, `BGRA8_SRGB`, `RGBA16_FLOAT`), checks `is_lost()` and asks the backend. The
 public wrapper adds the `DEVICE_LOST` short-circuit on `acquire`, `present` and `resize`, logs a present that
 observed loss, and rejects a zero resize before the backend sees it. On every backend `buffer_count()` is the
-number of back buffers that exist now, 0 after a failed resize until one succeeds.
+number of back buffers that exist now, 0 after a failed resize until one succeeds; while it is, `acquire` and
+`present` return `OUT_OF_DATE`.
 
 | | Null | D3D12 | Vulkan |
 |---|---|---|---|
 | API object | `bufferCount` null textures in `Present` state with `keepInitialState` | flip-discard `IDXGISwapChain3`, buffers wrapped with `createHandleForNativeTexture` | `VkSurfaceKHR` + `VkSwapchainKHR`, images wrapped the same way; binary semaphores through `queueWaitForSemaphore` / `queueSignalSemaphore` |
 | `NONE` window | ignored | composition swapchain never attached to a visual: the real present path without a window (the `[gpu]` tests) | `INVALID_DESC` (also `COCOA` until MoltenVK surfaces land) |
 | Format and vsync | mapped directly | flip model forbids sRGB buffers: created `UNORM`, the NVRHI wrapper carries the sRGB format | the requested format must be offered with the sRGB non-linear colour space or creation is `SWAPCHAIN_CREATION_FAILED`; present mode FIFO with vsync, else mailbox, then immediate |
-| `acquire` | returns the current index | `GetCurrentBackBufferIndex` | `vkAcquireNextImageKHR` with the frame slot's semaphore; `OUT_OF_DATE` when no usable swapchain exists |
-| `present` | advances the index (`0, 1, 2, 0, ...`); consumes a `PRESENT` fault as `DEVICE_LOST` | `Present`, tearing only with `vsync = false` and DXGI support; `DXGI_ERROR_DEVICE_REMOVED` marks lost, `DXGI_ERROR_INVALID_CALL` is `PRESENT_FAILED` | `vkQueuePresentKHR`; `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` are `OUT_OF_DATE`, `VK_SUBOPTIMAL_KHR` is success, `VK_ERROR_DEVICE_LOST` marks lost, anything else is `PRESENT_FAILED` |
+| `acquire` | returns the current index | `GetCurrentBackBufferIndex`; `OUT_OF_DATE` while a failed resize left no back buffers | `vkAcquireNextImageKHR` with the frame slot's semaphore; `OUT_OF_DATE` when no usable swapchain exists or the surface changed, `VK_ERROR_DEVICE_LOST` marks lost, anything else is `PRESENT_FAILED` |
+| `present` | advances the index (`0, 1, 2, 0, ...`); consumes a `PRESENT` fault as `DEVICE_LOST` | `Present`, tearing only with `vsync = false` and DXGI support; `DXGI_ERROR_DEVICE_REMOVED` marks lost, `DXGI_ERROR_INVALID_CALL` is `PRESENT_FAILED`; `OUT_OF_DATE` while a failed resize left no back buffers | `vkQueuePresentKHR`; `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` are `OUT_OF_DATE`, `VK_SUBOPTIMAL_KHR` is success, `VK_ERROR_DEVICE_LOST` marks lost, anything else is `PRESENT_FAILED` |
 | `resize` | recreates buffers, restarts at 0 | waits idle, releases wrappers, `ResizeBuffers`, re-wraps | flushes a pending acquire (its semaphore wait is submitted empty), queries the surface and returns `OUT_OF_DATE` for a zero extent without touching the old swapchain, passes the old `VkSwapchainKHR` as `oldSwapchain` and destroys it exactly once; new semaphores are built before the old set is destroyed |
 | Back-buffer usage | - | render target | `COLOR_ATTACHMENT` guaranteed; `TRANSFER_DST` only when the surface offers it, otherwise a WARN says `clearTextureFloat` cannot be used on a back buffer and the renderer must clear through a render pass |
 
@@ -254,8 +261,8 @@ safe from any thread because NVRHI's validation layer and the drivers call it fr
 | API refuses the device (no adapter at `adapterIndex`, no Vulkan loader) | `rhi_error::DEVICE_CREATION_FAILED` with the API's text | `device::create` |
 | API refuses to create or resize the swapchain | `rhi_error::SWAPCHAIN_CREATION_FAILED` | `swapchain::create`, `resize` |
 | Device removed, `Fatal` message, failed `waitForIdle` | `rhi_error::DEVICE_LOST`; `is_lost()` sticky | every swapchain call afterwards |
-| Surface changed or empty (Vulkan) | `rhi_error::OUT_OF_DATE` | `acquire`, `present`, `resize` |
-| Present refused for another reason (`DXGI_ERROR_INVALID_CALL`, unexpected `VkResult`) | `rhi_error::PRESENT_FAILED` | `present` |
+| Surface changed or empty (Vulkan), or a failed resize left no back buffers (every backend) | `rhi_error::OUT_OF_DATE` | `acquire`, `present`, `resize` |
+| Acquire or present refused for another reason (`DXGI_ERROR_INVALID_CALL`, unexpected `VkResult`) | `rhi_error::PRESENT_FAILED` | `present`, `acquire` |
 | Missing index, unreadable index, corrupt index | `NOT_FOUND`, `IO_FAILURE`, `PARSE_FAILURE` | `shader_library::open`, `reload` (old table kept) |
 | Unknown key or no blob for this backend, missing or empty blob | `NOT_FOUND`, `IO_FAILURE` | `shader_library::get` |
 
@@ -272,12 +279,12 @@ one `test_<header>.cpp` per public header plus the topic files the design names 
 | Aspect | How |
 |---|---|
 | GPU-free default | every case runs on the null device; `conjure_rhi_tests` is green on every CI platform |
-| `[gpu]` cases | start with `CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER)`; `rhi_test_support.cpp` installs the probe from a static initialiser (tries WARP once per process, console muted) so they skip with exit 77 where no software adapter or no D3D12 backend exists ([Testing](../testing.md) section 6). They create a WARP device, clear and present a headless composition swapchain for six frames, resize it, and open the built index to check the DXIL column is selected |
+| `[gpu]` cases | start with `CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER)`; `rhi_test_support.cpp` installs the probe from a static initialiser (tries WARP once per process, console muted) so they skip with exit 77 where no software adapter or no D3D12 backend exists ([Testing](../testing.md) section 6). They create a WARP device, clear and present a headless composition swapchain for six frames, resize it, force a failed resize (32768 x 32768, past the D3D12 limit) to check `OUT_OF_DATE` until the next resize succeeds, and open the built index to check the DXIL column is selected |
 | Shader pipeline | `add_dependencies(conjure_rhi_tests conjure_shaders)`; `test_shader_library.cpp` opens the real `index.json` from `CONJURE_TEST_SHADER_DIR` and checks the blob magic (`DXBC` or `0x07230203`); every other case writes its own index into a `temp_directory` |
 | NVRHI in tests | `test_null_device.cpp`, `test_null_swapchain.cpp`, `test_device_lost.cpp` and `test_swapchain.cpp` include `<nvrhi/nvrhi.h>` because the null device is an `nvrhi::IDevice` reachable only through `native_device()`: the sanctioned exception to "no third-party headers in tests", to be listed in `tools/style_exceptions.json` once a `third_party_in_tests` section exists |
 | Format mapping | proven by `static_assert`s in `texture_format.cpp`, not by a test |
 | Leaks | `memory_guard` around device, swapchain and library lifetimes with `LOG_RHI` muted (captured log lines allocate) |
-| Regressions | `TEST_CASE("regression - review F<n> ...")` next to the behaviour they pin |
+| Regressions | `TEST_CASE("regression - review F<n> ...")` for review findings and `TEST_CASE("regression - code sweep F<n> ...")` for code-sweep findings, next to the behaviour they pin |
 
 ```
 python tools/build.py --build-dir build/mod_rhi --target conjure_rhi_tests --test -R rhi

@@ -12,11 +12,12 @@ using namespace conjure::rhi;
 
 TEST_SUITE("rhi/backend") {
 
-    TEST_CASE("graphics_backend - to_string names every backend in lower case") {
+    TEST_CASE("graphics_backend - to_string names every backend in lower case and out-of-range values empty") {
         CHECK(to_string(graphics_backend::NULL_DEVICE) == "null");
         CHECK(to_string(graphics_backend::D3D12) == "d3d12");
         CHECK(to_string(graphics_backend::VULKAN) == "vulkan");
-        CHECK(to_string(graphics_backend::COUNT) == "null");
+        CHECK(to_string(graphics_backend::COUNT).empty());
+        CHECK(to_string(static_cast<graphics_backend>(200)).empty());
     }
 
     TEST_CASE("graphics_backend - parse_graphics_backend accepts any case and surrounding whitespace") {

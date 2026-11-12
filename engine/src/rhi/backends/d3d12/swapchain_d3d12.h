@@ -54,6 +54,8 @@ namespace conjure::rhi::d3d12_backend {
             [[nodiscard]] const swapchain_desc &desc() const noexcept override;
 
         private:
+            // True when every buffer of the description is wrapped; false after a failed resize().
+            [[nodiscard]] bool has_back_buffers() const noexcept;
             [[nodiscard]] core::result<void> wrap_back_buffers();
             void release_back_buffers();
     };

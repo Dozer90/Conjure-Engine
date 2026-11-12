@@ -31,18 +31,21 @@ std::string_view conjure::rhi::to_string(graphics_backend backend) noexcept {
             break;
         }
     }
-    return "null";
+    // An out-of-range value must not print as a valid backend.
+    return "";
 }
 
 core::result<graphics_backend> conjure::rhi::parse_graphics_backend(std::string_view name) noexcept {
-    const std::string lowered = core::str::to_lower(core::str::trim(name));
-    if (lowered == "null") {
+    // Compared on the trimmed view without a lower-cased copy, like parse_shader_stage and
+    // parse_texture_format.
+    const std::string_view trimmed = core::str::trim(name);
+    if (core::str::iequals(trimmed, "null")) {
         return graphics_backend::NULL_DEVICE;
     }
-    if (lowered == "d3d12") {
+    if (core::str::iequals(trimmed, "d3d12")) {
         return graphics_backend::D3D12;
     }
-    if (lowered == "vulkan") {
+    if (core::str::iequals(trimmed, "vulkan")) {
         return graphics_backend::VULKAN;
     }
     return core::make_error(core::error_code::INVALID_ARGUMENT, "unknown graphics backend '{}'", name);

@@ -59,15 +59,18 @@ namespace conjure::rhi {
             );
 
             /// <summary>
-            /// Acquires the next back buffer and returns its index. Fails with rhi_error::DEVICE_LOST or
-            /// rhi_error::OUT_OF_DATE (Vulkan: resize and try again).
+            /// Acquires the next back buffer and returns its index. Fails with rhi_error::DEVICE_LOST,
+            /// rhi_error::OUT_OF_DATE (resize and try again: the surface changed on Vulkan, or a previous
+            /// resize() failed and left no back buffers on any backend) or rhi_error::PRESENT_FAILED for
+            /// any other refusal by the API.
             /// </summary>
             [[nodiscard]] core::result<u32> acquire();
 
             /// <summary>
             /// Presents the acquired back buffer. Fails with rhi_error::DEVICE_LOST (the device is then
-            /// marked lost), rhi_error::OUT_OF_DATE (resize and retry) or rhi_error::PRESENT_FAILED for
-            /// any other refusal by the API.
+            /// marked lost), rhi_error::OUT_OF_DATE (resize and retry: the surface changed on Vulkan, or a
+            /// previous resize() failed and left no back buffers on any backend) or
+            /// rhi_error::PRESENT_FAILED for any other refusal by the API.
             /// </summary>
             [[nodiscard]] core::result<void> present();
 
@@ -76,8 +79,9 @@ namespace conjure::rhi {
             /// not yet presented is discarded. Fails with rhi_error::INVALID_DESC for a zero size,
             /// rhi_error::DEVICE_LOST, rhi_error::OUT_OF_DATE (Vulkan: the surface is currently empty,
             /// e.g. the window is minimised; retry later) or rhi_error::SWAPCHAIN_CREATION_FAILED. Every
-            /// back_buffer() pointer is invalid afterwards; after a failure buffer_count() may be 0 until
-            /// a later resize() succeeds.
+            /// back_buffer() pointer is invalid afterwards; after a failure buffer_count() may be 0, and
+            /// while it is, acquire() and present() fail with rhi_error::OUT_OF_DATE, until a later
+            /// resize() succeeds.
             /// </summary>
             [[nodiscard]] core::result<void> resize(u32 width, u32 height);
 

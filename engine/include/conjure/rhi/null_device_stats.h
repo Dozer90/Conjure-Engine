@@ -66,10 +66,10 @@ namespace conjure::rhi {
         u32 textureClears = 0;          // clearTextureFloat + clearTextureUInt
         u32 depthClears = 0;
         u32 bufferClears = 0;
-        u32 bufferWrites = 0;
-        u64 bufferWriteBytes = 0;
+        u32 bufferWrites = 0;           // every writeBuffer, an out-of-range one included
+        u64 bufferWriteBytes = 0;       // bytes writeBuffer stored; an out-of-range write stores none
         u32 textureWrites = 0;
-        u32 bufferCopies = 0;
+        u32 bufferCopies = 0;           // every copyBuffer, a refused one included
         u32 textureCopies = 0;
         u32 timerQueriesBegun = 0;
         u32 markersBegun = 0;

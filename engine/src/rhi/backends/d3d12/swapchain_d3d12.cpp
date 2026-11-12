@@ -44,6 +44,13 @@ namespace {
         return result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET ||
           result == DXGI_ERROR_DEVICE_HUNG || result == DXGI_ERROR_DRIVER_INTERNAL_ERROR;
     }
+
+    core::error unusable_error() {
+        return core::make_error(
+          rhi_error::OUT_OF_DATE,
+          "the swapchain has no back buffers (the last resize did not complete); resize it again"
+        );
+    }
 }
 
 /*===========================================================================*/
@@ -139,11 +146,19 @@ core::result<void> d3d12_swapchain::initialise(const native_window &window) {
 }
 
 core::result<u32> d3d12_swapchain::acquire() {
+    // A resize that failed in ResizeBuffers or while wrapping left no (or only some) back buffers, so
+    // the index DXGI reports would name a null back_buffer(); answer like Vulkan until a resize succeeds.
+    if (!has_back_buffers()) {
+        return unusable_error();
+    }
     mCurrentIndex = mSwapchain->GetCurrentBackBufferIndex();
     return mCurrentIndex;
 }
 
 core::result<void> d3d12_swapchain::present() {
+    if (!has_back_buffers()) {
+        return unusable_error();
+    }
     const UINT syncInterval = mDesc.vsync ? 1 : 0;
     const UINT presentFlags = (!mDesc.vsync && mBackend.allow_tearing()) ? DXGI_PRESENT_ALLOW_TEARING : 0;
     const HRESULT presented = mSwapchain->Present(syncInterval, presentFlags);
@@ -233,12 +248,19 @@ const swapchain_desc &d3d12_swapchain::desc() const noexcept {
 /*===========================================================================*/
 // Private methods
 
+bool d3d12_swapchain::has_back_buffers() const noexcept {
+    return mBackBuffers.size() == mDesc.bufferCount;
+}
+
 core::result<void> d3d12_swapchain::wrap_back_buffers() {
+    // Every failure below drops the wrappers made so far, so a failed wrap leaves buffer_count() at 0
+    // as swapchain.h promises instead of a partial list.
     mBackBuffers.reserve(mDesc.bufferCount);
     for (u32 index = 0; index < mDesc.bufferCount; ++index) {
         ComPtr<ID3D12Resource> resource = nullptr;
         const HRESULT fetched = mSwapchain->GetBuffer(index, IID_PPV_ARGS(&resource));
         if (FAILED(fetched)) {
+            release_back_buffers();
             return core::make_error(
               rhi_error::SWAPCHAIN_CREATION_FAILED,
               "IDXGISwapChain::GetBuffer({}) failed with {}",
@@ -265,6 +287,7 @@ core::result<void> d3d12_swapchain::wrap_back_buffers() {
           textureDesc
         );
         if (texture == nullptr) {
+            release_back_buffers();
             return core::make_error(
               rhi_error::SWAPCHAIN_CREATION_FAILED,
               "nvrhi refused to wrap swapchain buffer {}",

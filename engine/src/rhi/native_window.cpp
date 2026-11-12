@@ -21,5 +21,6 @@ std::string_view conjure::rhi::to_string(native_window_kind kind) noexcept {
             return "WAYLAND";
         }
     }
-    return "NONE";
+    // An out-of-range value must not print as a valid kind.
+    return "";
 }

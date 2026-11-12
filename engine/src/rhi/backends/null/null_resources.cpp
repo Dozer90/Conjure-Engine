@@ -128,7 +128,8 @@ void null_buffer::write(u64 offset, std::span<const std::byte> data) {
     if (count == 0) {
         return;
     }
-    std::memcpy(mStorage.data() + offset, data.data(), count);
+    // memmove: copyBuffer passes a span of this same storage as the source.
+    std::memmove(mStorage.data() + offset, data.data(), count);
 }
 
 std::span<const std::byte> null_buffer::storage() {

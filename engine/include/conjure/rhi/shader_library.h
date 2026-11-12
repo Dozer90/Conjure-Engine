@@ -30,7 +30,7 @@ namespace conjure::rhi {
     };
 
     /// <summary>
-    /// The index.json spelling of a stage: "vertex", "pixel" or "compute".
+    /// The index.json spelling of a stage: "vertex", "pixel" or "compute"; "" for an out-of-range value.
     /// </summary>
     [[nodiscard]] CONJURE_API std::string_view to_string(shader_stage stage) noexcept;
 
@@ -89,9 +89,10 @@ namespace conjure::rhi {
             [[nodiscard]] core::result<shader_blob> get(const shader_key &key);
 
             /// <summary>
-            /// True when an entry with a blob for this backend matches the key (no file access).
+            /// True when an entry with a blob for this backend matches the key (no file access; the
+            /// lookup key is composed in a heap string, so the call may allocate).
             /// </summary>
-            [[nodiscard]] bool contains(const shader_key &key) const noexcept;
+            [[nodiscard]] bool contains(const shader_key &key) const;
 
             /// <summary>
             /// Re-reads index.json and drops every cached blob (development hot reload). On failure the

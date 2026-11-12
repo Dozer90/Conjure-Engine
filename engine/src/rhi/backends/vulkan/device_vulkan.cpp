@@ -56,13 +56,11 @@ namespace {
     }
 
     /// <summary>
-    /// Ranks device types: the preferred kind first, CPU devices last (they are only chosen when
-    /// preferSoftwareAdapter is set).
+    /// Ranks device types, discrete first. CPU devices never compete with GPUs here:
+    /// select_physical_device keeps only CPU devices when preferSoftwareAdapter is set and only non-CPU
+    /// devices otherwise, so adapterIndex counts the same kind of device as on D3D12.
     /// </summary>
-    int device_type_rank(VkPhysicalDeviceType type, bool preferSoftware) noexcept {
-        if (preferSoftware) {
-            return type == VK_PHYSICAL_DEVICE_TYPE_CPU ? 0 : 1;
-        }
+    int device_type_rank(VkPhysicalDeviceType type) noexcept {
         switch (type) {
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: {
                 return 0;
@@ -402,9 +400,7 @@ core::result<void> vulkan_device_backend::select_physical_device(const device_de
             continue;   // NVRHI's queues are timeline semaphores
         }
 
-        candidates.push_back(
-          candidate{physical, device_type_rank(properties.deviceType, desc.preferSoftwareAdapter), graphicsFamily}
-        );
+        candidates.push_back(candidate{physical, device_type_rank(properties.deviceType), graphicsFamily});
     }
     std::stable_sort(candidates.begin(), candidates.end(), [](const candidate &left, const candidate &right) {
         return left.rank < right.rank;

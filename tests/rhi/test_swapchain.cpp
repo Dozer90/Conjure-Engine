@@ -222,6 +222,42 @@ TEST_SUITE("rhi/swapchain") {
         CHECK_FALSE(created->is_lost());
     }
 
+    TEST_CASE("regression - code sweep F288 [gpu] after a failed D3D12 resize acquire and present report OUT_OF_DATE") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        const std::unique_ptr<device> created = make_software_device();
+        core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
+          *created,
+          headless_window(),
+          small_swapchain_desc(128, 128)
+        );
+        CONJURE_REQUIRE_OK(chain);
+        swapchain &target = *chain.value();
+        CONJURE_CHECK_OK(target.acquire());
+        CONJURE_CHECK_OK(target.present());
+
+        // 32768 is twice the D3D12 texture limit, so ResizeBuffers refuses it; the REQUIRE stops the case
+        // loudly should WARP ever accept the size.
+        const core::result<void> refused = target.resize(32768, 32768);
+        CONJURE_CHECK_ERROR(refused, rhi_error::SWAPCHAIN_CREATION_FAILED);
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(target.buffer_count() == 0);
+        CHECK(target.back_buffer(0) == nullptr);
+        CONJURE_CHECK_ERROR(target.acquire(), rhi_error::OUT_OF_DATE);
+        CONJURE_CHECK_ERROR(target.present(), rhi_error::OUT_OF_DATE);
+        CHECK_FALSE(created->is_lost());
+
+        // The next successful resize makes the chain usable again.
+        CONJURE_REQUIRE_OK(target.resize(64, 48));
+        CHECK(target.buffer_count() == 3);
+        REQUIRE(target.back_buffer(2) != nullptr);
+        CHECK(target.back_buffer(2)->getDesc().width == 64);
+        CONJURE_CHECK_OK(target.acquire());
+        CONJURE_CHECK_OK(target.present());
+        created->wait_idle();
+        CHECK_FALSE(created->is_lost());
+    }
+
     TEST_CASE("swapchain - [gpu] D3D12 rejects window handles it cannot present to") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};

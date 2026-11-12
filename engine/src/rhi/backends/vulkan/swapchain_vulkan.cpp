@@ -221,8 +221,14 @@ core::result<u32> vulkan_swapchain::acquire() {
           describe_vk_result(acquired)
         );
     }
+    // SWAPCHAIN_CREATION_FAILED is reserved for create and resize (swapchain.h); any other refusal of
+    // an acquire is a failed frame, like a refused present.
     if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-        return swapchain_failure("vkAcquireNextImageKHR", acquired);
+        return core::make_error(
+          rhi_error::PRESENT_FAILED,
+          "vkAcquireNextImageKHR failed with {}",
+          describe_vk_result(acquired)
+        );
     }
     mCurrentImage = imageIndex;
     mImageAcquired = true;

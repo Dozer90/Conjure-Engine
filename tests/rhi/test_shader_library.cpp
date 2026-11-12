@@ -15,9 +15,13 @@
 
 #include <array>
 #include <filesystem>
+#include <fstream>
+#include <ios>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 
 // shader_library (docs/design/02_renderer.md 3.12, 4.1, 10 "test_shader_library"). The index
 // conjure_shaders built is read from CONJURE_TEST_SHADER_DIR (a compile definition set by
@@ -73,6 +77,21 @@ namespace {
         CONJURE_REQUIRE_OK(directory.write_text(name, content));
     }
 
+    /// <summary>
+    /// Writes a file at a full path; temp_directory::write_text takes a narrow name, which Windows would
+    /// read in the ANSI code page, so the non-ASCII directory cases write through std::filesystem::path.
+    /// </summary>
+    void write_path_or_fail(const std::filesystem::path &path, std::string_view content) {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.is_open());
+        stream.write(content.data(), static_cast<std::streamsize>(content.size()));
+        REQUIRE(stream.good());
+    }
+
+    std::string utf8_text(std::u8string_view text) {
+        return std::string(reinterpret_cast<const char *>(text.data()), text.size());
+    }
+
     std::unique_ptr<shader_library> open_or_fail(device &target, const std::filesystem::path &directory) {
         core::result<std::unique_ptr<shader_library>> opened = shader_library::open(target, directory);
         CONJURE_REQUIRE_OK(opened);
@@ -90,7 +109,8 @@ TEST_SUITE("rhi/shader_library") {
         CHECK(to_string(shader_stage::VERTEX) == "vertex");
         CHECK(to_string(shader_stage::PIXEL) == "pixel");
         CHECK(to_string(shader_stage::COMPUTE) == "compute");
-        CHECK(to_string(shader_stage::COUNT) == "vertex");
+        CHECK(to_string(shader_stage::COUNT).empty());
+        CHECK(to_string(static_cast<shader_stage>(200)).empty());
         const std::array<shader_stage, 3> stages = {shader_stage::VERTEX, shader_stage::PIXEL, shader_stage::COMPUTE};
         for (const shader_stage stage : stages) {
             CAPTURE(to_string(stage));
@@ -341,6 +361,84 @@ TEST_SUITE("rhi/shader_library") {
         CONJURE_CHECK_ERROR(empty, core::error_code::IO_FAILURE);
         CHECK(empty.get_error().message().find("is empty") != std::string::npos);
         CHECK(library->loaded_blob_count() == 0);
+    }
+
+    TEST_CASE("shader_library - a blob larger than the stream buffer is returned byte for byte") {
+        log_capture logs = {};
+        temp_directory directory = {};
+        std::string payload(256 * 1024, '\0');
+        for (usize index = 0; index < payload.size(); ++index) {
+            payload[index] = static_cast<char>(index % 251);
+        }
+        // What a text-mode read would mangle: Ctrl-Z (end of file on Windows) and a CR LF pair.
+        payload[1000] = '\x1A';
+        payload[2000] = '\r';
+        payload[2001] = '\n';
+        write_or_fail(directory, "big.dxil", payload);
+        const std::string entries = entry_json("big", "cs_main", "compute", "", "big.dxil", "");
+        write_or_fail(directory, "index.json", index_json(entries));
+        const std::unique_ptr<device> created = make_null_device();
+        const std::unique_ptr<shader_library> library = open_or_fail(*created, directory.path());
+
+        const core::result<shader_blob> blob = library->get({"big", "cs_main", ""});
+        CONJURE_REQUIRE_OK(blob);
+        CHECK(blob.value().stage == shader_stage::COMPUTE);
+        CHECK(blob.value().bytes.size() == payload.size());
+        CHECK(as_text(blob.value()) == payload);
+    }
+
+    TEST_CASE("regression - code sweep F295 contains is not noexcept because composing the lookup key allocates") {
+        log_capture logs = {};
+        temp_directory directory = {};
+        write_or_fail(directory, "a.dxil", BLOB_A);
+        write_or_fail(directory, "index.json", index_json(entry_json("a", "vs_main", "vertex", "", "a.dxil", "")));
+        const std::unique_ptr<device> created = make_null_device();
+        const std::unique_ptr<shader_library> library = open_or_fail(*created, directory.path());
+        const shader_key key = {"a", "vs_main", ""};
+        // A noexcept contains() would turn an allocation failure into std::terminate.
+        CHECK_FALSE(noexcept(library->contains(key)));
+        CHECK(library->contains(key));
+    }
+
+    TEST_CASE("regression - code sweep F293 directory and blob names outside the ANSI code page load and reload") {
+        log_capture logs = {};
+        temp_directory directory = {};
+        // Japanese names no Western ANSI code page can encode: path::string() throws for them on Windows,
+        // and a path built from index.json's UTF-8 bytes as a narrow string names the wrong file.
+        const std::u8string_view folderName = u8"シェーダー";
+        const std::u8string_view blobName = u8"頂点.dxil";
+        const std::filesystem::path shaderDirectory = directory.path() / std::filesystem::path(folderName);
+        std::error_code createError = {};
+        std::filesystem::create_directories(shaderDirectory, createError);
+        REQUIRE_FALSE(createError);
+        write_path_or_fail(shaderDirectory / "a.dxil", BLOB_A);
+        write_path_or_fail(shaderDirectory / std::filesystem::path(blobName), BLOB_B);
+        const std::string entries = entry_json("a", "vs_main", "vertex", "", "a.dxil", "") + "," +
+          entry_json("missing", "vs_main", "vertex", "", "missing.dxil", "") + "," +
+          entry_json("named", "vs_main", "vertex", "", utf8_text(blobName), "");
+        write_path_or_fail(shaderDirectory / "index.json", index_json(entries));
+        const std::unique_ptr<device> created = make_null_device();
+        const std::unique_ptr<shader_library> library = open_or_fail(*created, shaderDirectory);
+
+        CHECK(as_text(library->get({"a", "vs_main", ""}).value()) == BLOB_A);
+        const core::result<shader_blob> namedBlob = library->get({"named", "vs_main", ""});
+        CONJURE_REQUIRE_OK(namedBlob);
+        CHECK(as_text(namedBlob.value()) == BLOB_B);
+        const core::result<shader_blob> missingBlob = library->get({"missing", "vs_main", ""});
+        CONJURE_CHECK_ERROR(missingBlob, core::error_code::IO_FAILURE);
+        CHECK(missingBlob.get_error().message().find(utf8_text(folderName)) != std::string::npos);
+        CONJURE_CHECK_OK(library->reload());
+        CHECK(logs.contains(core::log_level::INFO, "opened shader library"));
+        CHECK(logs.contains(core::log_level::INFO, "reloaded shader library"));
+        CHECK(logs.contains(core::log_level::INFO, utf8_text(folderName)));
+
+        const std::u8string_view missingName = u8"存在しない";
+        const core::result<std::unique_ptr<shader_library>> notFound = shader_library::open(
+          *created,
+          directory.path() / std::filesystem::path(missingName)
+        );
+        CONJURE_CHECK_ERROR(notFound, core::error_code::NOT_FOUND);
+        CHECK(notFound.get_error().message().find(utf8_text(missingName)) != std::string::npos);
     }
 
     TEST_CASE("shader_library - reload re-reads the index and drops the cached blobs") {

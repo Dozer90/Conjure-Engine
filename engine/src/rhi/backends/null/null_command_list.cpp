@@ -2,10 +2,10 @@
 
 #include "rhi/backends/null/null_device.h"
 #include "rhi/backends/null/null_resources.h"
+#include "rhi/message_callback.h"
 
 #include "conjure/core/hash.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -15,6 +15,15 @@
 using namespace conjure;
 using namespace conjure::rhi;
 using namespace conjure::rhi::null_backend;
+
+namespace {
+    /// <summary>
+    /// True when [offset, offset + size) lies inside a buffer of 'capacity' bytes, without overflowing.
+    /// </summary>
+    bool range_fits(u64 offset, u64 size, u64 capacity) noexcept {
+        return size <= capacity && offset <= capacity - size;
+    }
+}
 
 /*===========================================================================*/
 /*===========================================================================*/
@@ -144,13 +153,10 @@ void null_command_list::resolveTexture(
 
 void null_command_list::writeBuffer(nvrhi::IBuffer *b, const void *data, size_t dataSize, uint64_t destOffsetBytes) {
     reference(b);
-    null_buffer *buffer = dynamic_cast<null_buffer *>(b);
-    if (buffer != nullptr && data != nullptr && dataSize > 0) {
-        buffer->write(destOffsetBytes, std::span<const std::byte>(static_cast<const std::byte *>(data), dataSize));
-    }
-    mDevice.record([dataSize](null_device_stats &stats) {
+    const u64 stored = store_buffer_write(b, data, dataSize, destOffsetBytes);
+    mDevice.record([stored](null_device_stats &stats) {
         ++stats.bufferWrites;
-        stats.bufferWriteBytes += dataSize;
+        stats.bufferWriteBytes += stored;
     });
 }
 
@@ -170,19 +176,34 @@ void null_command_list::copyBuffer(
 ) {
     reference(dest);
     reference(src);
-    null_buffer *destination = dynamic_cast<null_buffer *>(dest);
-    null_buffer *source = dynamic_cast<null_buffer *>(src);
-    if (destination != nullptr && source != nullptr) {
-        const std::span<const std::byte> sourceBytes = source->storage();
-        if (srcOffsetBytes < sourceBytes.size()) {
-            const usize available = sourceBytes.size() - static_cast<usize>(srcOffsetBytes);
-            const usize count = static_cast<usize>(std::min<u64>(available, dataSizeBytes));
-            destination->write(destOffsetBytes, sourceBytes.subspan(static_cast<usize>(srcOffsetBytes), count));
-        }
-    }
     mDevice.record([](null_device_stats &stats) {
         ++stats.bufferCopies;
     });
+
+    null_buffer *destination = dynamic_cast<null_buffer *>(dest);
+    null_buffer *source = dynamic_cast<null_buffer *>(src);
+    if (destination == nullptr || source == nullptr) {
+        return;
+    }
+    // D3D12 rejects a copy that leaves either buffer; storing the part that fits would hide the bug.
+    const bool sourceFits = range_fits(srcOffsetBytes, dataSizeBytes, source->getDesc().byteSize);
+    const bool destinationFits = range_fits(destOffsetBytes, dataSizeBytes, destination->getDesc().byteSize);
+    if (!sourceFits || !destinationFits) {
+        report_error("copyBuffer: the range exceeds the source or destination buffer");
+        return;
+    }
+    // D3D12 also rejects overlapping regions of one buffer. Both ranges fit, so the sums cannot overflow.
+    const bool overlaps = destination == source && srcOffsetBytes < destOffsetBytes + dataSizeBytes &&
+      destOffsetBytes < srcOffsetBytes + dataSizeBytes;
+    if (overlaps) {
+        report_error("copyBuffer: the source and destination ranges of one buffer overlap");
+        return;
+    }
+    const std::span<const std::byte> sourceBytes = source->storage();
+    destination->write(
+      destOffsetBytes,
+      sourceBytes.subspan(static_cast<usize>(srcOffsetBytes), static_cast<usize>(dataSizeBytes))
+    );
 }
 
 void null_command_list::clearSamplerFeedbackTexture(nvrhi::ISamplerFeedbackTexture *texture) {
@@ -442,9 +463,7 @@ void null_command_list::endMarker() {
 /*===========================================================================*/
 // Resource state tracking
 
-void null_command_list::setEnableAutomaticBarriers(bool enable) {
-    mAutomaticBarriers = enable;
-}
+void null_command_list::setEnableAutomaticBarriers(bool) {}
 
 void null_command_list::setResourceStatesForBindingSet(nvrhi::IBindingSet *bindingSet) {
     reference(bindingSet);
@@ -583,6 +602,24 @@ void null_command_list::reference(nvrhi::IResource *resource) {
         return;
     }
     mReferencedResources.emplace_back(resource);
+}
+
+void null_command_list::report_error(const char *text) {
+    mDevice.messages().message(nvrhi::MessageSeverity::Error, text);
+}
+
+u64 null_command_list::store_buffer_write(nvrhi::IBuffer *b, const void *data, usize dataSize, u64 destOffsetBytes) {
+    null_buffer *buffer = dynamic_cast<null_buffer *>(b);
+    if (buffer == nullptr || data == nullptr || dataSize == 0) {
+        return 0;
+    }
+    // Like nvrhi::validation (and D3D12), a write past the end stores nothing rather than a clamped part.
+    if (!range_fits(destOffsetBytes, dataSize, buffer->getDesc().byteSize)) {
+        report_error("writeBuffer: dataSize + destOffsetBytes exceeds the buffer size");
+        return 0;
+    }
+    buffer->write(destOffsetBytes, std::span<const std::byte>(static_cast<const std::byte *>(data), dataSize));
+    return dataSize;
 }
 
 std::optional<nvrhi::ResourceStates> null_command_list::permanent_texture_state(nvrhi::ITexture *texture) noexcept {

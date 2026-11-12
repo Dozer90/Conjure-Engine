@@ -9,13 +9,16 @@
 #include <vector>
 
 // The null backend's command list (docs/design/02_renderer.md R17): records counters and debug
-// marker names into the owning null_device's stats, applies buffer writes to the CPU storage of
-// null buffers, and tracks resource states so getTextureSubresourceState / getBufferState answer
-// like a real backend: per-list tracking lives here and resets on open(), permanent states live on
-// the null_texture / null_buffer themselves (null_resources.h). Nothing is executed. The per-list
-// containers (referenced resources, state trackers) keep their storage across open() so a command
-// list that records the same frame again allocates nothing (the renderer's allocation gates measure
-// through this device).
+// marker names into the owning null_device's stats, applies buffer writes and copies to the CPU
+// storage of null buffers (an out-of-range one reports an Error and stores nothing), and tracks the
+// states set explicitly (beginTracking*State, set*State, setPermanent*State) so
+// getTextureSubresourceState / getBufferState report them. The implicit transitions of automatic
+// barriers (setGraphicsState, clears, copies, writes) are not modelled, and an untracked resource
+// reports its initialState when keepInitialState is set, Unknown otherwise. Per-list tracking lives
+// here and resets on open(); permanent states live on the null_texture / null_buffer themselves
+// (null_resources.h). Nothing is executed. The per-list containers (referenced resources, state
+// trackers) keep their storage across open() so a command list that records the same frame again
+// allocates nothing (the renderer's allocation gates measure through this device).
 
 namespace conjure::rhi::null_backend {
 
@@ -38,7 +41,6 @@ namespace conjure::rhi::null_backend {
             null_device &mDevice;   // set by the only constructor; the device owns and outlives its command lists
             nvrhi::CommandListParameters mParameters = {};
             bool mOpen = false;
-            bool mAutomaticBarriers = true;
             std::vector<nvrhi::ResourceHandle> mReferencedResources = {};   // liveness until the next open()
             core::flat_hash_map<subresource_key, nvrhi::ResourceStates, subresource_key_hash> mTextureStates = {};
             core::flat_hash_map<nvrhi::IBuffer *, nvrhi::ResourceStates> mBufferStates = {};
@@ -218,6 +220,16 @@ namespace conjure::rhi::null_backend {
 
         private:
             void reference(nvrhi::IResource *resource);
+            void report_error(const char *text);
+
+            // Applies a writeBuffer to the null buffer's storage and returns the bytes stored: 0 for a
+            // null buffer or empty data, and 0 with an Error for a range past the end of the buffer.
+            [[nodiscard]] u64 store_buffer_write(
+              nvrhi::IBuffer *b,
+              const void *data,
+              usize dataSize,
+              u64 destOffsetBytes
+            );
             [[nodiscard]] static std::optional<nvrhi::ResourceStates> permanent_texture_state(
               nvrhi::ITexture *texture
             ) noexcept;
