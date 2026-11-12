@@ -31,10 +31,10 @@ generated or downloaded and therefore never committed.
 | `managed/` | the C# SDK (`Conjure.Managed`), the test scripts and the project templates built with `dotnet` |
 | `samples/` | sample projects, first `feature_test` (wave 5; skipped until `feature_test/CMakeLists.txt` exists) |
 | `tests/` | the test support library, one test directory per module, the style check registration |
-| `tools/` | Python scripts: build driver, style, export and documentation checks, asset download; `tests/` holds the documentation checker's self-test |
+| `tools/` | Python scripts: build driver, style, export, documentation, Distribution-symbol and CI-skip checks, asset download, the native API and icon generators; `tests/` holds the self-tests of the documentation checker, the icon generator and the other tools ([Tools](#4-tools)) |
 | `docs/` | requirements, architecture, conventions, style, design record, both documentation sets |
 | `.claude/skills/` | agent skills: `build-and-test`, `add-engine-module`, `add-component`, `code-review-checklist`, `write-docs`, `editor-ai-control` (driving the editor over its AI protocol, generated from `editor.schema`; `AGENTS.md` 1 names every `SKILL.md`) |
-| `.github/workflows/` | `ci.yml`, the pull-request matrix (see [Continuous integration](ci.md)) |
+| `.github/workflows/` | `ci.yml`, the pull-request matrix, and `nightly.yml`, the nightly matrix (slow cases, TSan, Distribution export, golden images, benchmarks; see [Continuous integration](ci.md)) |
 | `mkdocs.yml` | the documentation site (navigation, theme, plugins) |
 | `.clang-format`, `.editorconfig`, `.gitattributes`, `.gitignore` | editor and git configuration: LF everywhere, binary extensions marked, build outputs ignored |
 
@@ -85,7 +85,7 @@ depends on `foundation`; the remaining dependencies are listed in `engine/src/co
 
 | Area | `engine/src/core/<area>/` | Public headers | Test target |
 |---|---|---|---|
-| `foundation` | `assert.cpp`, `error.cpp`, `log.cpp`, `uuid.cpp`, `build_info.h.in` | flat: `conjure/core/platform_detect.h`, `types.h`, `api.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h`, `non_copyable.h`; generated `build_info.h` | `conjure_core_foundation_tests` |
+| `foundation` | `assert.cpp`, `error.cpp`, `log.cpp`, `uuid.cpp`, `local_time_{windows,posix}.cpp`, private `local_time.h`, `console_output.h`, `build_info.h.in` | flat: `conjure/core/platform_detect.h`, `types.h`, `api.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h`, `non_copyable.h`; generated `build_info.h` | `conjure_core_foundation_tests` |
 | `math` | `aabb.cpp`, `frustum.cpp`, `ray.cpp`, `transform.cpp`, `projection.cpp`, private `look_rotation.{h,cpp}` | `conjure/core/math.h` plus `conjure/core/math/*.h` | `conjure_core_math_tests` |
 | `containers` | `containers.cpp` | `conjure/core/containers/*.h` (header-only templates) | `conjure_core_containers_tests` |
 | `strings` | `string_id.cpp`, `string_utils.cpp`, `bit_vector.cpp`, `radix_sort.cpp` | flat: `conjure/core/string_id.h`, `string_utils.h`, `bit_vector.h`, `radix_sort.h` | `conjure_core_strings_tests` |
@@ -105,8 +105,8 @@ has its own `README.md` with the same four sections as a module README.
 
 ```
 tests/CMakeLists.txt                   adds support/, then one directory per module (CONJURE_TEST_MODULES), integration/ and
-                                       benchmarks/ when present; registers the CTest entries style.check (label style),
-                                       docs.check and docs.check_tool (label docs)
+                                       benchmarks/ when present; registers the Python CTest entries: style.check and
+                                       docs.check, the tools' self-tests and brand.icons_up_to_date (section 4)
 tests/support/                         conjure_test_support (and conjure_test_support_shared, the same sources against
                                        conjure::shared): include/conjure/testing/*.h, src/*.cpp, src/test_main.cpp,
                                        src/tracked_global_new.cpp; tests/ holds its self-tests (conjure_support_tests)
@@ -129,12 +129,12 @@ Conventions worth knowing when looking for something:
   `conjure_support_child`. Their paths reach the tests as compile definitions.
 - `tools/style_exceptions.json` lists the public headers that have no test file (macro-only headers) and
   the test files allowed to use otherwise forbidden constructs, each with its reason.
-- `tests/assets/` is the `assets` module's test directory, not the in-repo fixture root that
-  `docs/design/08_testing.md` 2.1 planned there, although `CONJURE_TEST_REPO_ASSET_ROOT` still points at it;
-  the wave-2 suites build their fixtures in code or in `temp_directory` instead.
-- Planned by `docs/design/08_testing.md` 2.1 and not present yet: `tests/.downloaded/` (fetched by
-  `tools/download_test_assets.py`), `tests/integration/`, `tests/downloaded/`, `tests/golden/`,
-  `tests/benchmarks/`, `tests/sanitizers/`.
+- `tests/assets/` is both the `assets` module unit-test directory and the in-repo fixture root of
+  `docs/design/08_testing.md` 2.1: `projects/`, `scenes/` and `prefabs/` hold the read-only fixtures
+  `conjure::testing::repo_asset()` resolves through `CONJURE_TEST_REPO_ASSET_ROOT` (`tests/assets/README.md`
+  lists each).
+- `tests/.downloaded/` is created by `tools/download_test_assets.py` and ignored (section 6). Planned by
+  `docs/design/08_testing.md` 2.1 and not present yet: `tests/downloaded/`, `tests/golden/`, `tests/sanitizers/`.
 
 ## 4. Tools
 
@@ -143,9 +143,14 @@ Conventions worth knowing when looking for something:
 | `tools/build.py` | cross-platform build driver: default preset per host, MSVC environment import, `--build-dir`, `--target`, `--test -R/-L`, `--clean` |
 | `tools/check_style.py` | mechanical style rules over `engine/`, `editor/`, `runtime/`, `tests/`, `samples/`; `--tests-mirror-headers`; CTest entry `style.check` |
 | `tools/style_exceptions.json` | the two exception tables read by `check_style.py` |
-| `tools/check_exports.py` | reports public classes, free functions and `extern` variables without `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); default module `modules`, `--all` for every module |
+| `tools/check_exports.py` | reports public classes, free functions and `extern` variables without `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); every module by default (or the modules named); CTest `exports.check_annotations`, `exports.check_tool`, `exports.count_shared_library` |
 | `tools/check_docs.py` | documentation structure and coverage checks (`docs/design/16_documentation.md` D9); CTest entry `docs.check` |
-| `tools/tests/test_check_docs.py`, `tools/tests/check_docs/` | the checker's self-test and its fixture tree; CTest entry `docs.check_tool` |
+| `tools/tests/test_check_docs.py` | the checker self-test (generates its fake docs tree in a temporary directory); CTest entry `docs.check_tool` |
+| `tools/check_distribution_symbols.py` | proves the Distribution `conjure_runtime` and `conjure_shared` carry no editor or Dear ImGui symbol; CTest `runtime.distribution_symbols` (labels `runtime;process`; registered in a Distribution tree, in a multi-config tree (where it skips with 77 unless ctest runs `-C Distribution`) or with `CONJURE_DISTRIBUTION_BUILD_DIR`) and its self-test `runtime.check_distribution_symbols_tool`; `--self-test` also runs in `style-and-headers` |
+| `tools/ctest_check_skips.py` | fails a CI run when a skipped test carries no allowed label or name tag, reading the ctest JUnit output; used in `ci.yml` and `nightly.yml`, with `--self-test` in `style-and-headers` |
+| `tools/generate_native_api.py` | generates `native_api_hash.h`, `NativeApi.g.cs` and `docs/generated/native_api_manifest.json` from `native_api.inl`, and `BindingStatus.g.cs` from `bindings_error.inl`; CTest `conjure_scripting_api_generated_up_to_date` runs `--check` |
+| `tools/generate_brand_icons.py`, `tools/tests/test_generate_brand_icons.py` | the editor icon ([Logo and application icon](brand.md)); CTest `brand.icons_up_to_date` and `brand.icons_tool` |
+| `tools/tests/test_build.py`, `test_check_style.py`, `test_download_test_assets.py`, `test_generate_native_api.py` | the self-tests of `build.py`, `check_style.py`, `download_test_assets.py` and `generate_native_api.py`; CTest `build.driver_tool`, `style.check_tool`, `test_assets.downloader_tool`, `native_api.generator_tool` |
 | `tools/docs.py` | `install`, `serve`, `build`, `check` for the documentation site |
 | `tools/docs_requirements.txt` | pinned MkDocs toolchain |
 | `tools/download_test_assets.py`, `tools/test_assets.json`, `tools/test_assets.lock` | downloads the public fixtures listed in the manifest into `tests/.downloaded/`, verifies every file against the SHA-256 pinned in the committed lock (a file the lock does not know is pinned on first download and the lock is committed with the change; `--verify` and `--locked` fail on an unpinned asset), writes the `.assets_ready` stamp |
@@ -157,7 +162,7 @@ Conventions worth knowing when looking for something:
 | `docs/DESIGN_DOC.md` | the customer's requirements |
 | `docs/ARCHITECTURE.md` | binding top-level map: modules, dependency graph, frame, waves |
 | `docs/CONVENTIONS.md`, `docs/CODE_STYLE.cpp` | engineering conventions and the authoritative code style (a C++ file, excluded from the site) |
-| `docs/design/00_brief.md` ... `16_documentation.md` | the design record, one note per area; linked from the handbook, never from the wiki |
+| `docs/design/00_brief.md` ... `17_demo_games.md` | the design record, one note per area; linked from the handbook, never from the wiki |
 | `docs/index.md` | landing page of the site: pick your document set |
 | `docs/api/` | 📘 Public API wiki, one directory per module |
 | `docs/handbook/` | 🛠 Engineering handbook (this set); `modules/` one page per engine module, `module-system/` the module system chapter |
@@ -165,8 +170,7 @@ Conventions worth knowing when looking for something:
 
 ## 6. Generated and ignored files
 
-Nothing in this table is committed; `.gitignore` covers all of it except `tests/.downloaded/`, which
-is not ignored yet.
+Nothing in this table is committed; `.gitignore` covers all of it.
 
 | Path | Produced by | Notes |
 |---|---|---|

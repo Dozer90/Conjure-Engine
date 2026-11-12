@@ -130,6 +130,11 @@ tools/docs_requirements.txt        mkdocs-material, mkdocs-github-admonitions-pl
 
 ## 6. Tests
 
-`tools/check_docs.py` self-test fixtures live in `tools/tests/check_docs/` (a tiny fake docs tree with a missing badge,
-a dangling link, an undocumented header) and run through `python -m pytest`-free plain asserts in
-`tools/tests/test_check_docs.py`, registered as CTest `docs.check_tool` (label `docs`).
+`tools/tests/test_check_docs.py` builds a tiny fake repository in a temporary directory (`make_fake_repo()` under
+`tempfile.TemporaryDirectory`). The tree has a page without a badge, a dangling link, a TODO marker, an over-long
+page, an uncovered header and a module without a handbook page, plus the excluded umbrella, `_error`,
+`log_category` and `detail/` headers (and the cases the checker gained since: FIXME and XXX markers, reference
+definitions and hrefs, links inside code, a page of exactly 400 lines, front matter, a wiki page with the handbook
+badge). The test points the checker path constants at that tree and checks the reported problems against expected
+and forbidden substrings and an exact count with plain Python (no pytest). It is registered as CTest
+`docs.check_tool` (label `docs`).

@@ -70,8 +70,9 @@ of its module. A page without a sibling carries the badge alone.
 | to an anchor | `[Section](#2-anatomy-of-a-page)`; the slug is the lower-cased heading with punctuation removed and spaces as hyphens |
 
 Every link is relative and its target must exist: `mkdocs build --strict` and `check_docs.py` both fail on a
-dangling path. The wiki never links into `docs/design/`, `AGENTS.md` or `engine/`; it links to the handbook
-instead, which links on.
+dangling path. Link syntax inside a code span or a fenced block, like the examples on this page, is not a link.
+The wiki never links into `docs/design/`, `AGENTS.md` or `engine/`; it links to the handbook instead, which links
+on.
 
 ### 2.3 Alert boxes
 
@@ -147,17 +148,19 @@ line per problem and exits 1 when any exists:
 | Check | Fails when |
 |---|---|
 | badge | the first content line after the H1 (front matter skipped) does not contain the set's badge string |
-| links | a relative Markdown link points at a file that does not exist, anywhere in the page including code blocks; `http(s):`, `mailto:` and `#anchor` links are not checked and anchors are not verified |
-| length | a page exceeds 400 lines |
+| links | a relative Markdown link, reference definition or HTML href outside code spans and fenced blocks points at a file that does not exist; `http(s):`, `mailto:` and `#anchor` links are not checked and anchors are not verified |
+| length | a page exceeds 400 lines (a final newline does not count as a line) |
 | markers | the page contains a to-do, fix-me or triple-X marker word, in any context |
 | header coverage | a header under `engine/include/conjure/<module>/` is not mentioned by include path (`conjure/<module>/<name>.h`) in any page under `docs/api/<module>/` |
 | module pages | a directory under `engine/src/` with a `CMakeLists.txt` has no `docs/handbook/modules/<module>.md` |
 
-`needs_wiki_page()` decides which headers the coverage rule applies to. It currently returns `True` for every
-header, so umbrella headers (`conjure/core/math.h`), `log_category.h` and `*_error.h` files must be mentioned
-too; the intended exclusion policy (umbrella includes, generated files, `detail/` directories) is documented in
-the function and not implemented yet. The core wiki pages mention every core header, so core is clean; the
-checker reports the headers and module pages of every later-wave module whose code is already in the tree.
+`needs_wiki_page()` decides which headers the coverage rule applies to. It excludes the stems in
+`EXCLUDED_STEMS` (`api.h`, `platform_detect.h`, `build_info.h`, `log_category.h`), any header whose stem ends in
+`_error` (`EXCLUDED_SUFFIXES`), anything under a `detail/`, `internal/` or `generated/` directory
+(`EXCLUDED_DIRECTORIES`), and umbrella headers whose stem equals the module name or the name of their own
+directory (`conjure/ecs/ecs.h`, `conjure/core/math/math.h`). Every other public header must be named by include
+path on a wiki page of its module, including the convenience include `conjure/core/math.h`, which the umbrella
+rule does not match. `docs.check` is clean on `main`.
 
 > [!TIP]
 > Run `python tools/docs.py check` first and `python tools/docs.py build` second. The checker's messages name
@@ -167,12 +170,12 @@ checker reports the headers and module pages of every later-wave module whose co
 ### 4.3 Test entries and CI
 
 `tests/CMakeLists.txt` registers `python -I tools/check_docs.py` as the CTest entry `docs.check` and the checker's
-self-test `tools/tests/test_check_docs.py` (fixtures under `tools/tests/check_docs/`) as `docs.check_tool`, both
-with label `docs` and a 120 s timeout, next to `style.check` (D9 and section 6 of the record). The default test
-presets run the `docs` label, so every CI test leg runs both ([Continuous integration](ci.md#2-the-matrix),
-[Testing](testing.md#10-labels)), and the `style-and-headers` job runs `check_docs.py`, its self-test and
-`mkdocs build --strict` ([Continuous integration](ci.md#2-the-matrix)); run `python tools/docs.py build` by hand
-before a documentation change is reported done.
+self-test `tools/tests/test_check_docs.py` (it generates its fixture tree in a temporary directory) as
+`docs.check_tool`, both with label `docs` and a 120 s timeout, next to `style.check` (D9 and section 6 of the
+record). The default test presets run the `docs` label, so every CI test leg runs both ([Continuous
+integration](ci.md#2-the-matrix), [Testing](testing.md#10-labels)), and the `style-and-headers` job runs
+`check_docs.py`, its self-test and `mkdocs build --strict` ([Continuous integration](ci.md#2-the-matrix)); run
+`python tools/docs.py build` by hand before a documentation change is reported done.
 
 ## 5. The site
 

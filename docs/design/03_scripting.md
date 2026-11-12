@@ -473,16 +473,18 @@ implemented; without instances `redefine_dynamic` alone suffices.
 - `conjure_add_managed_project(NAME <n> PROJECT <csproj> OUTPUT <dir> SOURCES <cs files...>)` creates target
   `conjure_managed_<n>` running `dotnet build <csproj> -c $<IF:$<CONFIG:Debug>,Debug,Release> -o <dir>
   --artifacts-path <build>/managed/artifacts/<n> --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true` with a
-  stamp file depending on the listed sources (no globbing; csproj uses `EnableDefaultCompileItems=false` with
-  explicit `<Compile>` items, and the CTest check `conjure_managed_sources_match` compares both lists). `-o`
-  redirects the assemblies only: restore and compile intermediates follow `--artifacts-path`, one directory per
-  managed target of the build tree, so concurrent build trees and the `ScriptVariant` builds never share an
-  `obj/` and nothing is written beside the projects (`managed/Directory.Build.props` defaults `ArtifactsPath` to
-  `build/managed_artifacts` for builds run by hand; the CTest check `conjure_managed_source_tree_clean` fails when
-  an `obj/` or `bin/` appears in `managed/`). On multi-config generators the stamp carries `$<CONFIG>` and the
-  shared output holds the configuration built last. `conjure_scripting` depends on `conjure_managed_sdk`
-  when `CONJURE_BUILD_MANAGED`. SDK missing with `CONJURE_WITH_SCRIPTING=ON` is a configure error (already
-  the behaviour of `FindNetHost.cmake`); `dotnet` missing with `CONJURE_BUILD_MANAGED=ON` likewise.
+  stamp file depending on the listed sources, the csproj and every project file it reaches through
+  `<ProjectReference>` (each also a configure dependency; a missing referenced project is a configure error) (no
+  globbing; csproj uses `EnableDefaultCompileItems=false` with explicit `<Compile>` items, and the CTest check
+  `conjure_managed_sources_match` compares both lists). `-o` redirects the assemblies only: restore and compile
+  intermediates follow `--artifacts-path`, one directory per managed target of the build tree, so concurrent build
+  trees and the `ScriptVariant` builds never share an `obj/` and nothing is written beside the projects
+  (`managed/Directory.Build.props` defaults `ArtifactsPath` to `build/managed_artifacts` for builds run by hand; the
+  CTest check `conjure_managed_source_tree_clean` fails when an `obj/` or `bin/` appears in `managed/`). On
+  multi-config generators the stamp carries `$<CONFIG>` and the shared output holds the configuration built last.
+  `conjure_scripting` depends on `conjure_managed_sdk` when `CONJURE_BUILD_MANAGED`. SDK missing with
+  `CONJURE_WITH_SCRIPTING=ON` is a configure error (already the behaviour of `FindNetHost.cmake`); `dotnet` missing
+  with `CONJURE_BUILD_MANAGED=ON` likewise.
 - `CONJURE_SCRIPTING_HAS_DOTNET` is defined for test targets when the SDK was built; CLR tests use
   `doctest::skip(!HAS_DOTNET)` and the CTest label `dotnet`.
 - Runtime build runner: `managed_build_runner::build(csproj, configuration)` spawns `dotnet build` through

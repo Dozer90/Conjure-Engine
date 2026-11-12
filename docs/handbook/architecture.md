@@ -34,12 +34,9 @@ principles shape every module:
 | Assets are content-addressed blobs | Sources get uuids and `.meta` sidecars, importers cook into a hash-validated cache, export packs it | `05_assets.md` |
 
 > [!NOTE]
-> Modules land wave by wave. Waves 1 and 2 are in the tree: `core`, `ecs`, `platform`, `rhi`, `assets`, `audio`
-> and `modules`, each with a handbook page under [`modules/`](modules/core.md) and wiki pages under `docs/api/`.
-> `engine/CMakeLists.txt` adds each `engine/src/<module>/` that has a `CMakeLists.txt` and skips the rest, so
-> the tree always builds; to see what is built today, run the configure step and read its
-> `engine: module '<name>' not present yet, skipping` lines. For a wave-3 or later module the design record is
-> the reference until its code lands.
+> Waves 1 to 4 are in the tree: every engine module has its code, a handbook page under
+> [`modules/`](modules/core.md) and wiki pages under `docs/api/`. The wave-5 row below is design only; for it the
+> design record is the reference.
 
 ## 2. Module map and waves
 

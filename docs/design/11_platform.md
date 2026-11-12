@@ -306,12 +306,13 @@ dropped). `should_close()` is `glfwWindowShouldClose`; `request_close()` sets it
 ### 3.5 Null backend (`null_backend`)
 
 Holds `mLogicalSize`, `mContentScale`, `mFocused = true`, `mMinimised = false`, `mFullscreen`, `mCursorMode`,
-`mClipboard`, one virtual monitor `{"Null Monitor", 1920 x 1080 @ 60, scale 1}`, `mPending` and `mDelivered` event
-vectors. Test controls (all main thread) queue events for the next pump: `push_event(const event &)`,
-`simulate_resize(u32 width, u32 height)` (logical; framebuffer = `round(size * scale)`; queues
-`framebuffer_resized_event`), `simulate_content_scale(math::vec2)`, `simulate_focus(bool)`, `simulate_minimise(bool)`,
-`simulate_close()`, `simulate_drop_files(std::span<const std::string>)`. `pump_events` swaps the two vectors and
-returns the delivered one; with nothing queued it returns an empty span, which is what `06_engine_loop.md` 7 states.
+`mClipboard`, one virtual monitor `{"Null Monitor", 1920 x 1080 @ 60, scale nullContentScale}` (kept equal to the
+window's by `simulate_content_scale`), `mPending` and `mDelivered` event vectors. Test controls (all main thread)
+queue events for the next pump: `push_event(const event &)`, `simulate_resize(u32 width, u32 height)` (logical;
+framebuffer = `round(size * scale)`; queues `framebuffer_resized_event`), `simulate_content_scale(math::vec2)`,
+`simulate_focus(bool)`, `simulate_minimise(bool)`, `simulate_close()`,
+`simulate_drop_files(std::span<const std::string>)`. `pump_events` swaps the two vectors and returns the delivered
+one; with nothing queued it returns an empty span, which is what `06_engine_loop.md` 7 states.
 `set_fullscreen(true)` resizes to the virtual monitor mode and queues the resize event; `set_size`, `set_title`,
 `set_cursor_mode`, clipboard setters update state so getters round-trip (so the bindings' `input_clipboard_*` and
 `input_set_cursor_mode` are real implementations on the null window, not stubs; R57). `gamepad_name(i)` returns

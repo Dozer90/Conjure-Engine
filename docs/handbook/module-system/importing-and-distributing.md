@@ -6,7 +6,7 @@ How modules get into a project and out of it again: where the editor and runtime
 directory must contain, how the exported game is laid out, what "compatible" means for a module binary and how C#
 assemblies travel with a module. The manager API that performs all of this (`discover`, `load_all`,
 `export_layout`) is on the 📘 API page; this chapter is about the conventions and the engine wiring around it.
-Parts of that wiring belong to the wave-4 `engine` and `editor` modules and are marked as designed.
+The wiring lives in the `engine` module (`modules_subsystem`) and in the editor `module.*` commands.
 
 ## Contents
 - [1. Declaring modules in a project](#1-declaring-modules-in-a-project)
@@ -42,10 +42,10 @@ its version against the range and orders the loads so dependencies come first; a
 and count as missing for dependents.
 
 > [!NOTE]
-> The `project.json` block and the discovery directories are the wave-4 engine design (`06_engine_loop.md` 3.4,
-> R20). What exists today is the manager: `discover(directory)`, `add_manifest(path)`, `add_static_module(desc)`,
-> resolution and every failure code, exercised by `tests/modules/` over a directory laid out exactly like
-> `<project>/modules/`.
+> The engine reads the `project.json` block and searches these directories in
+> `engine/src/engine/subsystems/modules_subsystem.cpp` (`06_engine_loop.md` 3.4, R20). `tests/modules/`
+> exercises the manager itself (`discover(directory)`, `add_manifest(path)`, `add_static_module(desc)`,
+> resolution and every failure code) over a directory laid out exactly like `<project>/modules/`.
 
 ## 2. Binary layout
 
@@ -76,8 +76,8 @@ succeeds on Windows too; the runtime loads in place. The cache is cleaned when a
 
 ## 3. Loading at start-up
 
-The engine (wave 4, `06_engine_loop.md` 3.4 step 15) constructs the services and consumers first, then the
-manager, in this order:
+The engine (`modules_subsystem`, `06_engine_loop.md` 3.4 step 15) constructs the services and consumers first,
+then the manager, in this order:
 
 1. `provide_service()` for `engine::engine_context`, `engine::application`, `ecs::world`, `assets::asset_database`,
    `scene::scene_manager` (R19).
@@ -146,7 +146,8 @@ Consequences for module authors and SDK maintainers:
 
 ## 6. C# assemblies in modules
 
-As designed (`03_scripting.md` 2.3 and 3.8, `07_modules.md` 9, R36):
+As implemented by `scripting_module_consumer` (`engine/src/engine/module_consumers/scripting_module_consumer.cpp`;
+`03_scripting.md` 2.3 and 3.8, `07_modules.md` 9, R36), except the native-binding records:
 
 - A module lists its assemblies under `"managed"` (relative to the module root) or adds them from the entry with
   `module_registrar::register_managed_assembly()`; both end up in `module_registration_set::managedAssemblies`,
@@ -161,7 +162,9 @@ As designed (`03_scripting.md` 2.3 and 3.8, `07_modules.md` 9, R36):
   the operation like a full reload.
 - Native bindings a module adds for its C# code travel as `scripting::native_binding_desc { entryName, function }`
   records filling an existing null slot of the fixed native table; a new slot needs an `.inl` line in the engine
-  tree.
+  tree. This part is still design only: `scripting::native_binding_desc` is not defined and no consumer reads it.
+  A slot filled before the bindings run is overridden by `bindings::fill_native_table` with a WARN when its group
+  is compiled in (B3).
 - `export_layout()` copies every listed assembly into `<out>/modules/<name>/managed/` and writes the full list
   into the exported manifest's `"managed"` array, so the exported tree describes itself; a missing assembly at
   export time is `EXPORT_FAILED`.
@@ -169,7 +172,8 @@ As designed (`03_scripting.md` 2.3 and 3.8, `07_modules.md` 9, R36):
   error); loading and unloading is never driven from managed code.
 
 The assembly paths and their export are implemented and tested today (`test_module_manager_shared`,
-`test_module_export_layout`); the ALC behaviour is the scripting module's, wave 3.
+`test_module_export_layout`); the ALC side is `scripting_module_consumer` over
+`script_runtime::reload_game_assembly`.
 
 ## Related
 - design records: [`../../design/07_modules.md`](../../design/07_modules.md) D2, D8, D9, 3.7, 9, 12,

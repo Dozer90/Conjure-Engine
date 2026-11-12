@@ -105,8 +105,8 @@ what a script cannot see.
 - Scope: one logical change; the commit builds and passes `ctest` on its own, so a bisect never lands on
   a broken tree.
 - Never commit build outputs, IDE files or the documentation virtual environment (`.gitignore` covers
-  them) nor downloaded assets: `tests/.downloaded/` is not ignored yet, so check `git status` after running
-  `tools/download_test_assets.py` ([Repository layout](repository-layout.md#6-generated-and-ignored-files)).
+  them) nor downloaded assets (`tests/.downloaded/` is ignored;
+  [Repository layout](repository-layout.md#6-generated-and-ignored-files)).
 - Prefer a new commit over amending a pushed one.
 
 ## 7. AGENTS.md and the skills
@@ -121,7 +121,6 @@ steps every time:
 | `add-engine-module` | adding a subsystem, backend, importer family or gameplay system | module layout, `conjure_add_module` / `conjure_add_test_module` registration, log category, backends with a `null` implementation, README |
 | `code-review-checklist` | before every commit, when reviewing another agent's work | section 5 |
 | `write-docs` | writing or updating a wiki page or a handbook page, before `python tools/docs.py check` | the page templates, badge and link prefixes, alert meanings, the header coverage rule, the build and check commands ([Documentation](documentation.md)) |
-
 | `add-component` | adding a component type to a module | the `CONJURE_COMPONENT` / `CONJURE_REFLECT_STRUCT` pair, registration, the C# mirror and the test the pair needs |
 | `editor-ai-control` | building, editing, inspecting or play-testing a scene through `conjure_editor`, scripting the editor in CI, looking up a command's arguments | starting the editor headless or with a window, the wire format, the command catalogue summarised from `docs/generated/editor_protocol.json` (`editor.schema`), exit codes of `--exec` |
 

@@ -50,7 +50,7 @@ forces it OFF for Distribution). Targets: `conjure_editor_core`, `conjure_editor
 | D10 | **Picking is CPU-side**: AABB broad phase over per-entity world bounds (always), triangle narrow phase when the mesh asset keeps CPU geometry (editor builds keep it), `mode:"physics"` delegates to Jolt. No GPU id buffer. | Works with the `null` RHI, unit-testable, no readback latency. |
 | D11 | **Hierarchy and inspector are cache-driven**: flat `hierarchy_row` array rebuilt only when `scene::structure_version()` changes, drawn with `ImGuiListClipper`; inspector reads one JSON document per selected component per frame via `reflection_path`. | 10,000 entities cost O(visible rows) per frame. |
 | D12 | **Selection is UI state** (not undoable); every change emits `selection.changed`. Editor-only state lives in sidecars: `<scene>.editor.json`, `<project>/.conjure/editor_layout.ini`, `<project>/.conjure/ai_port`. Per-user preferences (active theme, user themes, recent projects) live in the user configuration folder (3.15), never in a project. | Scene/prefab/project files never learn the editor exists. |
-| D13 | **Distribution stripping is linkage**: no `CONJURE_EDITOR*` macro anywhere in `engine/` (CI grep). Module hooks are data: trivially copyable `editor::panel_desc` / `editor::command_desc` extension records (headers `conjure/editor/panel_desc.h`, `command_desc.h`, installable with the SDK without editor internals) that an `editor_module_consumer` (`modules::module_consumer`, exists only in the editor process) applies; the runtime simply has no consumer for those extension points (R14). CI checks the Distribution runtime binary for `conjure::editor` / `ImGui` symbols. | Impossible to ship editor code by accident; zero preprocessor coupling. |
+| D13 | **Distribution stripping is linkage**: no `CONJURE_EDITOR*` macro in `engine/` outside the editor libraries themselves (whose private `CONJURE_EDITOR_WITH_BINDINGS` is allowed); a review rule, the CI grep is not written yet. Module hooks are data: trivially copyable `editor::panel_desc` / `editor::command_desc` extension records (headers `conjure/editor/panel_desc.h`, `command_desc.h`, installable with the SDK without editor internals) that an `editor_module_consumer` (`modules::module_consumer`, exists only in the editor process) applies; the runtime simply has no consumer for those extension points (R14). CI checks the Distribution runtime binary for `conjure::editor` / `ImGui` symbols. | Impossible to ship editor code by accident; zero preprocessor coupling. |
 | D14 | Headless: `--headless` selects `null` platform/rhi/audio; `--offscreen` additionally creates a real RHI device without a swapchain so `view.screenshot` works without a window. | Agents get pixels in CI-like runs; unit tests stay GPU-free. |
 | D16 | **Play-mode persist.** While playing or paused, a user or protocol client may pin a field, a whole component or a whole entity. On `play.stop` the snapshot is restored as before, then the pinned values (read at the moment of Stop) are re-applied as **one undoable edit**. The persist list is session state: cleared on every `play.start` and after every Stop, never saved, never carried into the next play. | Designers tune live and keep exactly what they chose; everything else still resets. One undo entry makes a bad persist one Ctrl+Z away. Clearing at Start as well as Stop means a crash mid-play cannot leave stale pins. |
 | D17 | **A default docked layout is built on first run** (no saved layout for the project) with ImGui's DockBuilder, and every later arrangement is saved to `<project>/.conjure/editor_layout.ini` (D12). Window > Reset layout rebuilds the default. | An editor whose panels open as loose floating windows is unusable (code sweep of 2026-11-12, editor UI blockers). |
@@ -85,7 +85,10 @@ namespace conjure::editor {
         PLAYING_ONLY = 1 << 4,               // Refused while EDITING.
         ASYNC = 1 << 5,                      // Handler answers later through async_reply.
         UI_ONLY = 1 << 6,                    // Hidden from editor.schema (panel focus etc.).
-        NOT_IN_BATCH = 1 << 7,               // Implied by ASYNC; also play.*, project.open.
+        NOT_IN_BATCH = 1 << 7,               // Implied by ASYNC; also editor.batch, editor.begin_transaction/
+                                             // end_transaction/quit, history.undo/redo, module.load/unload/reload,
+                                             // play.start/stop, project.create/open, scene.new/open/close
+                                             // (play.pause/resume are batchable).
         NO_UNDO = 1 << 8                     // MUTATES without an inverse (module commands, command_desc); not recorded.
     };
     CONJURE_ENUM_FLAGS(command_flags);
@@ -189,7 +192,7 @@ Wire form:
 -> {"id":12,"cmd":"entity.create","args":{"name":"Player","components":{"transform":{"position":[1,0,1]}}}}
 <- {"id":12,"ok":true,"result":{"guid":"a9e2c0d4-...","revision":42}}
 <- {"id":13,"ok":false,"error":{"code":"ENTITY_NOT_FOUND","message":"No entity 'Maze/Wall_99'","details":{}}}
-<- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["a9e2c0d4-..."]}}
+<- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["a9e2c0d4-..."],"primary":"a9e2c0d4-..."}}
 ```
 
 `protocol_error_code : std::uint16_t` = `NONE, PARSE_ERROR, INVALID_REQUEST, MESSAGE_TOO_LARGE, UNKNOWN_COMMAND,
@@ -375,13 +378,13 @@ the centroid) with the drag session as `coalesceKey`; on release it dispatches `
 
 ### 3.10 Screenshot
 
-`view.screenshot {path, width?, height?, camera?:"editor"|"game"|guid, format?:"png"|"jpg", waitFrames?=0}`
+`view.screenshot {path, width?, height?, camera?:"editor"|"game"|guid, format?:"png", waitFrames?=0}`
 (async): `screenshot_service` creates (or reuses) a `renderer::render_target` of the requested size and, during
 EXTRACT, appends a `render_view` targeting it with the chosen camera for `waitFrames + 1` frames; it then calls
 `renderer::read_back(target)` (synchronous, waits for idle; the renderer offers no asynchronous capture, R12) on
-the main thread. The service hands the `core::image` to a job that encodes with `stbi_write_png` /
-`stbi_write_jpg`, writes the file and completes the reply with `{path, width, height, frame}`. `null` RHI ->
-`NOT_AVAILABLE` (also in headless CI; area H's tests assert that code).
+the main thread. The service hands the `core::image` to a job that encodes it with `core::image::save_png`
+(any other `format` is `INVALID_ARGS`), writes the file and completes the reply with `{path, width, height,
+frame}`. `null` RHI -> `NOT_AVAILABLE` (also in headless CI; area H's tests assert that code).
 
 ### 3.11 Headless runner
 
@@ -827,7 +830,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `editor.state` | | -> `{project, scene, playState, revision, selection, headless, offscreen, port, clients}` |
 | `editor.batch` | M | `{commands:[{cmd,args}], label?, atomic?}` -> `{results:[response]}` |
 | `editor.begin_transaction` / `editor.end_transaction` | | `{label}` / `{}` |
-| `editor.wait_frames` | A | `{count}` -> `{frame}` |
+| `editor.wait_frames` | A | `{frames?=1}` (at least 1) -> `{frame}` |
 | `editor.exec_file` | A | `{path, keepGoing?}` -> `exec_summary` |
 | `editor.quit` | | `{exitCode?, saveChanges?}` |
 | `history.undo` / `history.redo` | | `{count?}` -> `{applied, labels}` |
@@ -844,7 +847,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `scene.query` | S | `{with?:[types], without?:[types], fields?:[paths], limit?, offset?}` -> `{rows:[{guid, name, fields}], total}` |
 | `scene.get_hierarchy` | S | `{root?, depth?}` -> nested `{guid, name, children}` |
 | `scene.set_settings` | M S | `{settings}` (ambient, skybox HDRI, gravity, physics layers) |
-| `entity.create` | M S | `{name?, parent?, guid?, components?:{type:json}}` -> `{guid}` (`guid` is a uuid string; omitted = generated; `DUPLICATE_GUID` when taken) |
+| `entity.create` | M S | `{name?, parent?, guid?, components?:{type:json}}` -> `{guid}` (`guid` is a uuid string; omitted = generated; `INVALID_ARGS` (`args.guid: <uuid> is already in use`) when taken) |
 | `entity.create_many` | M S | `{count, nameFormat?, parent?, components?, overrides?:[json], guids?:[uuid]}` -> `{guids}` (`guids` must hold `count` uuids when given) |
 | `entity.destroy` / `entity.destroy_many` | M S | `{entity}` / `{entities}` (subtrees) |
 | `entity.restore` | M S | `{archive, parent?, index?}` -> `{guid, entities}`: the inverse of `entity.destroy`, reinstates a captured subtree with its guids (undo payload, also accepted from clients) |

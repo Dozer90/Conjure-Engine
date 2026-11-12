@@ -4,8 +4,8 @@
 
 This chapter takes a fresh machine to a green `ctest` run: what to install, how `tools/build.py` drives
 CMake, which presets and configurations exist, how to run and filter tests, how to keep a private build
-directory when several builds run at once, how the repository behaves in an IDE, and how to build the
-documentation site.
+directory when several builds run at once, how the repository behaves in an IDE, how to build the
+documentation site and how to start the editor and the runtime you built.
 
 ## Contents
 
@@ -18,6 +18,7 @@ documentation site.
 - [Build options](#7-build-options)
 - [IDE notes](#8-ide-notes)
 - [Documentation toolchain](#9-documentation-toolchain)
+- [Running the editor and the runtime](#10-running-the-editor-and-the-runtime)
 
 ## 1. Prerequisites
 
@@ -55,8 +56,9 @@ Build products land in predictable places so executables find each other without
 
 | Path | Content |
 |---|---|
-| `build/<preset>/bin/` | test executables, helper programs (`conjure_process_child`), later the editor, runtime, shaders and managed assemblies |
-| `build/<preset>/lib/` | static libraries `conjure_core_<area>.lib` (MSVC) / `libconjure_core_<area>.a` (GCC, Clang) |
+| `build/<preset>/bin/` | `conjure_editor`, `conjure_runtime`, `conjure_shared`, the test executables and helper programs (`conjure_process_child`); `managed/` holds the C# assemblies |
+| `build/<preset>/shaders/` | compiled shaders and `index.json` (target `conjure_shaders`) |
+| `build/<preset>/lib/` | the static library of every engine module and core area (`conjure_<module>.lib`, `conjure_core_<area>.lib` on MSVC; `lib*.a` on GCC and Clang) |
 | `build/<preset>/generated/include/conjure/core/build_info.h` | generated from `engine/src/core/foundation/build_info.h.in` |
 | `build/<preset>/_deps/` | FetchContent sources and builds of the pinned third-party libraries |
 | `build/<preset>/compile_commands.json` | `CMAKE_EXPORT_COMPILE_COMMANDS` is on for every preset |
@@ -186,12 +188,13 @@ Options are declared in the root `CMakeLists.txt` (`CONJURE_ENABLE_TSAN` in `cma
 | `CONJURE_PLATFORM_GLFW` | ON | GLFW window backend; required by `CONJURE_BUILD_EDITOR` |
 | `CONJURE_WARNINGS_AS_ERRORS` | ON | `/WX` or `-Werror` on every Conjure target |
 | `CONJURE_ENABLE_ASAN` / `_UBSAN` / `_TSAN` | OFF | sanitizers; TSan is exclusive with ASan and needs GCC or Clang |
+| `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC` | OFF | build Jolt with `CROSS_PLATFORM_DETERMINISTIC` (bit-identical physics across platforms; slower) |
 | `CONJURE_TEST_GOLDEN_IMAGES` | OFF | gates the golden-image tests of later waves |
 
 ## 8. IDE notes
 
 - **Visual Studio.** `cmake --preset windows-vs` writes `build/windows-vs/Conjure.sln` with the `Debug` and
-  `Development` configurations (`Distribution` appears only with `-DCONJURE_BUILD_EDITOR=OFF`, section 5).
+  `Development` configurations (`Distribution` appears only with `-DCONJURE_BUILD_EDITOR=OFF`, section 4).
   Targets are grouped by the `FOLDER` property (`Engine`, `Engine/core`, `ThirdParty`,
   `Tests`, `Tests/HeaderChecks`, `Executables`) and sources by `source_group(TREE ...)`. Opening the
   repository folder directly also works because Visual Studio reads `CMakePresets.json`.
@@ -223,6 +226,43 @@ content line after the title, a relative link whose target does not exist, a pag
 to-do, fix-me or triple-X marker (the exact words are the tuple in `check_page()` of `tools/check_docs.py`), a
 public header under `engine/include/conjure/<module>/` that no wiki page of that module references by
 include path, or an engine module without `docs/handbook/modules/<module>.md`.
+
+## 10. Running the editor and the runtime
+
+Both executables land in `build/<preset>/bin/` (with `.exe` on Windows). The editor exists in Debug and
+Development builds (`CONJURE_BUILD_EDITOR`); the runtime is built in every configuration and is the only one a
+Distribution build ships.
+
+```bash
+cp -r tests/assets/projects/minimal build/minimal_project      # a scratch copy, see the warning below
+build/<preset>/bin/conjure_editor --project build/minimal_project
+build/<preset>/bin/conjure_editor --project build/minimal_project --headless \
+    --exec <commands.json> --out <replies.ndjson>
+build/<preset>/bin/conjure_editor --help                       # every option and the exit codes
+build/<preset>/bin/conjure_runtime --project build/minimal_project
+build/<preset>/bin/conjure_runtime --project build/minimal_project --headless --frames 60
+```
+
+> [!CAUTION]
+> A windowed start from the build tree fails today with `engine.RENDERER_INIT_FAILED`: `conjure_shaders` writes
+> `build/<preset>/shaders/`, while the engine opens `shaders/index.json` next to the executable and no flag
+> overrides it (code sweep 2026-11-12, B2). Until that is fixed, copy the shaders next to the executables first
+> (`cp -r build/<preset>/shaders build/<preset>/bin/`) or use the `--headless` lines.
+
+The first editor line opens a window over the project (see the caution above); the second runs the requests of a
+JSON array or NDJSON file without a window and exits with 0 when every command succeeded and 1 when one failed
+(`--keep-going` continues past a failure), writing the responses and events to the `--out` file instead of standard
+output. The runtime runs the same project as a game with no editor code; `--headless --frames 60` is the smoke test
+without a window. Driving the editor as an agent is the `editor-ai-control` skill
+(`.claude/skills/editor-ai-control/SKILL.md`).
+
+> [!WARNING]
+> Open a copy of a fixture project, never `tests/assets/projects/` itself: the asset database writes `.meta`
+> sidecars and its cache next to the project's sources, and the `.meta` files are deliberately not ignored by
+> git.
+
+Every option and what each executable needs next to it: 📘 API: [The editor](../api/editor/index.md),
+📘 API: [The runtime](../api/runtime/index.md).
 
 ## Related
 

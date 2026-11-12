@@ -284,19 +284,22 @@ Facades are `readonly struct`s holding one `Entity` (03 4.1) or `static` classes
 ### 2.6 `[NativeComponent]` mirrors beyond `LocalTransform` (`Api/Components/*.cs`)
 
 `[NativeComponent("<registered name>")] [StructLayout(LayoutKind.Sequential)] public struct X : IComponent`.
-`ComponentType<T>.Id` resolves once per class load through `component_lookup_type(nameHash, size, layoutHash)`
-(03 3.9); a mismatch yields id 0 and `InvalidOperationException` on first use. Layout hash per B10. Field name
+`ComponentType<T>.Id` resolves through `component_lookup_type(nameHash, size, layoutHash)` (03 3.9) on first use
+and again after every native handshake (`NativeBridge.Generation`); id 0 is never cached. A mismatch yields id 0
+and `InvalidOperationException` on first use. Layout hash per B10. Field name
 mapping: C# `PascalCase` -> native `camelCase`; kinds: `float` F32, `int` I32, `uint` U32, `byte` U8, `ulong` U64,
 `NativeBool` (1 byte) BOOL, `Vector2/3/4`, `Quaternion` QUAT, `Matrix4x4` MAT4, `TransformData` TRANSFORM,
-`Entity` ENTITY, `StringId` STRING_ID, `AssetId` UUID, `AssetRef<T>` ASSET_REF (24 bytes: `AssetId Id; nint Slot`),
-`enum : byte/int` ENUM. Tag components are empty structs used only with `Has/Add/RemoveComponent`.
+`EntityHandle` ENTITY (8 bytes, 4-aligned; a script-facing `Entity` would shift the following fields), `StringId`
+STRING_ID, `AssetId` UUID, `AssetRef<T>` ASSET_REF (24 bytes: `AssetId Id; nint Slot`),
+`enum : byte/int` ENUM; the mirror primitives are `EntityHandle`, `NativeBool` and `StringId`. Tag components are
+empty structs used only with `Has/Add/RemoveComponent`.
 
 | Mirror | Native type (registering module) | Fields (declaration order) | Size |
 |---|---|---|---|
 | `LocalTransform` | `scene.local_transform` (scene; already in 03) | `Vector3 Position; Quaternion Rotation; Vector3 Scale` | 40 |
 | `WorldTransform` | `scene.world_transform` (read-only by convention) | `Matrix4x4 Matrix` | 64 |
 | `InterpolatedTransform` | `scene.interpolated_transform` | `TransformData Previous; TransformData Current` | 80 |
-| `Parent` | `scene.parent` | `Entity Value; uint SiblingIndex` (`13_scene.md` 2.1, R55; `ecs::entity` is 4-aligned, so the mirror has no padding and the struct is 12 bytes, wave 3 integration) | 12 |
+| `Parent` | `scene.parent` | `EntityHandle Value; uint SiblingIndex` (`13_scene.md` 2.1, R55; `ecs::entity` is 4-aligned, so the mirror has no padding and the struct is 12 bytes, wave 3 integration) | 12 |
 | `Name` | `scene.name` | `StringId Value` | 8 |
 | `Tag` | `scene.tag` | `StringId Value` | 8 |
 | `Layer` | `scene.layer` | `byte Index` (`u8` natively, R55) | 1 |
@@ -307,22 +310,23 @@ mapping: C# `PascalCase` -> native `camelCase`; kinds: `float` F32, `int` I32, `
 | `BoxColliderData` | `physics.box_collider` | `Vector3 HalfExtents; Vector3 Offset; Quaternion Rotation; NativeBool IsTrigger; byte Pad0..2` | 44 |
 | `SphereColliderData` | `physics.sphere_collider` | `float Radius; Vector3 Offset; NativeBool IsTrigger; byte Pad0..2` | 20 |
 | `CapsuleColliderData` | `physics.capsule_collider` | `float Radius; float HalfHeight; Vector3 Offset; Quaternion Rotation; NativeBool IsTrigger; byte Pad0..2` | 40 |
-| `ConvexColliderData` | `physics.convex_collider` | `AssetRef<CollisionMeshAsset> Mesh; Vector3 Offset; Quaternion Rotation; float ConvexRadius; NativeBool IsTrigger; byte Pad0..2; uint Pad1` | 64 |
-| `MeshColliderData` | `physics.mesh_collider` | `AssetRef<CollisionMeshAsset> Mesh; NativeBool IsTrigger; byte Pad0..6` | 32 |
-| `PhysicsMaterialData` | `physics.physics_material` | `float Friction; float Restitution` | 8 |
-| `CharacterControllerData` | `physics.character_controller` | `float Radius; float Height; float MaxSlopeAngleDegrees; float StepHeight; float Mass; float MaxStrength; float Padding; byte Layer; CharacterFlags Flags (byte); byte Pad0..1; Vector3 Velocity; GroundState Ground (byte); byte Pad2..4; Vector3 GroundNormal; Entity GroundEntity` (68 bytes natively: the 4-aligned entity handle needs no `Pad5`, `14_physics.md` as implemented) | 68 |
+| `ConvexColliderData` | `physics.convex_collider` | `AssetRef<CollisionMeshAsset> Mesh; Vector3 Offset; Quaternion Rotation; float ConvexRadius; NativeBool IsTrigger; byte Pad0..2; uint Pad3` | 64 |
+| `MeshColliderData` | `physics.mesh_collider` | `AssetRef<CollisionMeshAsset> Mesh; NativeBool IsTrigger; byte Pad0..2; uint Pad3` | 32 |
+| `PhysicsMaterialData` | `physics.material` | `float Friction; float Restitution` | 8 |
+| `CharacterControllerData` | `physics.character_controller` | `float Radius; float Height; float MaxSlopeAngleDegrees; float StepHeight; float Mass; float MaxStrength; float Padding; byte Layer; CharacterFlags Flags (byte); byte Pad0..1; Vector3 Velocity; GroundState Ground (byte); byte Pad2..4; Vector3 GroundNormal; EntityHandle GroundEntity` (68 bytes natively: the 4-aligned entity handle needs no `Pad5`, `14_physics.md` as implemented) | 68 |
 | `AudioSourceData` | `audio.audio_source` (`12_audio.md` 2.6; registered by the engine's `audio_subsystem`, R7, R50) | `AssetRef<AudioClipAsset> Clip; float Volume; float Pitch; NativeBool Loop; NativeBool Spatial; NativeBool PlayOnStart; NativeBool OneShot; StringId Group; AttenuationModel Attenuation (byte); byte Pad0..2; float MinDistance; float MaxDistance; float Rolloff; AudioPlaybackRequest PlaybackRequest (byte); NativeBool IsPlaying; byte Pad3..8; SourceHandle Handle` (opaque 16 bytes: `ulong Voice; uint ClipVersion; byte Flags; byte Pad0..2`) | 88 |
 | `AudioListenerData` | `audio.audio_listener` | `float Gain; NativeBool Active; byte Pad0..2` | 8 |
-| `ScriptComponentHandle` | `scripting.script_component` (hidden; `EDITOR_HIDDEN`) | `uint SetHandle` | 4 |
+| `ScriptComponentHandle` | `scripting.script_component` (hidden; `EDITOR_HIDDEN`) | `uint SetHandle`; not written yet: owed with a reflection description of `script_component` | 4 |
 
 Native type names are abbreviated (`scene.parent` = registered name `conjure.scene.parent`). The owning design
 notes (`13_scene.md` 2.1, `14_physics.md` 2.3, `12_audio.md` 2.6) define the fields; the rows above restate them in
 order and must change in the same PR as the native struct (the hash test fails otherwise; R48, R50, R55).
 `ecs::entity` is `{u32, u32}` with 4-byte alignment (`09_cross_area_resolutions.md` 3, wave 2 integration), so an
 entity handle inside a mirror is 4-aligned and introduces no 8-byte padding: `Parent` is 12 bytes and
-`CharacterControllerData` 68, as the layout-hash test pins. Fields
-named `Pad*` exist only to make `Marshal.OffsetOf` agree with the C++ layout and are excluded from the layout hash on
-both sides (`type_info` has no padding fields; R61). `children` (a `small_vector`) is never mirrored, use
+`CharacterControllerData` 68, as the layout-hash test pins. Fields named `Pad<digits>` make the managed blittable
+layout (what `Span<T>`, `sizeof(T)` and the get/set copies use) match the C++ struct; `Marshal.OffsetOf` is never
+used (it widens bool to 4 bytes); padding fields are excluded from the layout hash on both sides (`type_info` has
+no padding fields; R61). `children` (a `small_vector`) is never mirrored, use
 `entity_get_children`. `SetComponent<T>` on a mirror with `AssetRef<T>` fields calls `asset_ref_bind` per field
 (offsets cached at class load) so the slot pointer is valid when the bytes land (the R25 bind pass for scripts).
 

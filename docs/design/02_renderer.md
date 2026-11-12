@@ -55,8 +55,9 @@ custom user materials, `KHR_texture_transform` (warned, ignored), text rendering
 `constexpr std::uint32_t` in `namespace conjure::renderer`: `MAX_VIEWS = 8`, `MAX_LIGHTS_PER_VIEW = 1024`,
 `MAX_LIGHTS_PER_TILE = 64`, `LIGHT_TILE_SIZE = 16`, `MAX_SHADOW_CASCADES = 4`,
 `MAX_SPRITES_PER_FRAME = 65536`, `MAX_DEBUG_VERTICES = 1 << 20`, `MAX_MATERIAL_SLOTS = 8`,
-`INVALID_INDEX = 0xFFFFFFFFu`. The same values are `#define`d in `gpu_types.hlsli` and compared by
-`test_gpu_types`.
+`INVALID_INDEX = 0xFFFFFFFFu`, `MAX_PASSES_PER_VIEW = MAX_SHADOW_CASCADES + (2 * BLOOM_MIP_COUNT - 1) + 16`
+(CPU-only, not mirrored in `gpu_types.hlsli`; it sizes `render_stats::passNames`). The other values are
+`#define`d in `gpu_types.hlsli` and compared by `test_gpu_types`.
 
 ### 2.2 GPU ids (`gpu_ids.h`)
 `gpu_mesh_id`, `gpu_texture_id`, `gpu_material_id`, `gpu_environment_id`, `render_target_id`: distinct
@@ -609,7 +610,8 @@ namespace conjure::renderer {
     // render_stats: std::uint32_t viewsRendered, passesExecuted, passesCulled, drawCalls, instancesDrawn,
     // instancesCulled, trianglesDrawn, lightsRendered, shadowTilesAllocated, shadowTilesDropped,
     // spritesDrawn, uploadsCompleted, fallbacksUsed, transientTexturesLive, transientTexturesCreated;
-    // std::uint64_t uploadBytes; core::small_vector<const char *, 48> passNames (executed, in order);
+    // std::uint64_t uploadBytes;
+    // core::small_vector<const char *, MAX_VIEWS * MAX_PASSES_PER_VIEW> passNames (executed, in order);
     // core::small_vector<pass_timing, 48> passTimings (name + GPU milliseconds, Development builds).
 
     class renderer {

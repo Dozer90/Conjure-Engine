@@ -141,7 +141,7 @@ renderer, physics, audio and scripting libraries when they are compiled. Headers
 | Header | Provides | Use it for |
 |---|---|---|
 | `conjure/testing/headless_engine.h` | `headless_engine_options` (`workerCount`, `fixedDeltaSeconds`, `enableRenderer`, `enablePhysics`, `enableAudio`, `enableScripting`, `useNullScriptHost`, `allowErrors`, `checkMemory`, `project`, `gameAssembly`, `registerSystems`), `headless_engine`: `load_scene`, `load_scene_json`, `step_frames`, `step_seconds`, `application()`, `context()`, `world()`, `scenes()`, `active_scene()`, `window()`, `input()`, `rhi_stats()`, `audio_stats()`, `checks()`, `logs()`, `frame_index()`, `fixed_update_count()`, `world_hash()`, `find_entity()` | a whole `engine::application` on the null window, device and audio backend with `log_capture` and `memory_guard` built in; `workerCount` 0 runs the jobs inline; a one-time warm-up process absorbs the process-wide first-use allocations (D6) |
-| `conjure/testing/input_script.h` | `input_script`: `key`, `tap_key`, `text`, `mouse_move`, `mouse_button`, `mouse_scroll`, `gamepad_*`, `push`, `events_for(frame)` | scripted input replayed into the null window frame by frame |
+| `conjure/testing/input_script.h` | `input_script`: `key`, `tap_key`, `text`, `mouse_move`, `mouse_button`, `mouse_scroll`, `gamepad_*`, `push`, `events_for(frame)`, `close_frames_before`, `late_event_count` | scripted input replayed into the null window frame by frame; frames are absolute (schedule at `frame_index() + n` after stepping) and an event scheduled for a frame that already ran fails the case at the next `step_frames` |
 | `conjure/testing/world_builder.h` | `spawn_many`, `spawn_hierarchy(scene, hierarchy_shape)`, `hierarchy_entity_count`, `spawn_box_body`, `spawn_script_entity`, `mark_dirty_fraction` | populating a world or scene with 10,000 entities in one call |
 | `conjure/testing/protocol_client.h` | `protocol_channel`, `scripted_protocol_channel`, `protocol_client`: `send(command, args)`, `send_raw`, `receive`, `events()`, `response_ok`, `error_code_of` | driving the editor protocol from a test without sockets |
 | `conjure/testing/golden_image.h` | `golden_options`, `golden_result`, `golden_image::render_headless`, `compare`, `compare_images`, `make_diff`, `reference_path`, `output_directory` | the golden-image scenarios behind `CONJURE_TEST_GOLDEN_IMAGES` (`render_offscreen` waits for off-screen rendering) |
@@ -314,14 +314,16 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
   library, blank line between groups, quotes for Conjure headers), `third-party-include` (public headers),
   `doctest-include`, `test-case-name`, `forbidden-in-tests`, `file-name` (snake_case) and
   `tests-mirror-headers`. Exit code 0 clean, 1 findings, 2 usage error.
-- **Export check.** `python tools/check_exports.py [module ...]` (default `modules`; `--all` for every module)
-  reports public classes with out-of-line members, namespace-scope function prototypes and `extern` variables
-  that lack `CONJURE_API` (`docs/design/07_modules.md` 5 and 9). Output is `path:line: kind: message`; exit
-  code 0 clean, 1 findings, 2 usage error. Not a CTest entry yet; see [Modules module](modules/modules.md) 7.2.
+- **Export check.** `python tools/check_exports.py [module ...]` (every module by default or with `--all`; name
+  modules to check only those) reports public classes with out-of-line members, namespace-scope prototypes and
+  `extern` variables that lack `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); output `path:line: kind:
+  message`, exit code 0 clean, 1 findings, 2 usage error. CTest runs it as `exports.check_annotations`, its
+  `--self-test` as `exports.check_tool` and `--count-exports` over the built `conjure_shared` as
+  `exports.count_shared_library` (labels `exports;style`); see [Modules module](modules/modules.md) 7.2.
 - **Documentation checks.** `python -I tools/check_docs.py` (CTest `docs.check`, label `docs`) checks badges,
   links, page length, markers and header coverage of both documentation sets; `tools/tests/test_check_docs.py`
-  (CTest `docs.check_tool`) is the checker's self-test over the fixtures in `tools/tests/check_docs/`. The
-  [Documentation](documentation.md#4-tooling) chapter explains both.
+  (CTest `docs.check_tool`) is the checker's self-test over a fake docs tree it generates in a temporary
+  directory. The [Documentation](documentation.md#4-tooling) chapter explains both.
 - **Generated outputs.** `python -I tools/generate_brand_icons.py --check` (CTest `brand.icons_up_to_date`,
   label `generated`) fails while the editor's committed icon differs from what the logo drawings produce;
   `tools/tests/test_generate_brand_icons.py` (CTest `brand.icons_tool`) is the generator's self-test. The
@@ -333,7 +335,10 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 |---|---|---|
 | `unit`, `<module>` | every entry from `conjure_add_test_module()` (`core_math`, `support`, ...) | run |
 | extra `LABELS` | e.g. `support` on the self-tests | run |
-| `style` | `style.check` | run |
+| `style` | `style.check`, `style.check_tool`; also the `exports.*` entries (labels `exports;style`, section 9) | run |
+| `build` | `build.abi_identity_non_ascii_path` (the ABI identity script over a non-ASCII path), `build.managed_project_references` (the managed `<ProjectReference>` parser through the source-tree check) | run |
+| `tools` | `build.driver_tool`, `test_assets.downloader_tool`, `native_api.generator_tool`, `runtime.check_distribution_symbols_tool` (labels `runtime;tools`): the tool self-tests; `build.driver_tool` is not under `build` | run |
+| `managed` | `conjure_managed_sources_match.<name>` and `conjure_managed_source_tree_clean.<name>`, registered per managed project by `cmake/ConjureManaged.cmake` (`docs/design/03_scripting.md` 3.10) | run |
 | `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
 | `generated` | `conjure_scripting_api_generated_up_to_date`, `brand.icons_up_to_date`, `brand.icons_tool` | run |
 | `integration`, `engine`, `bindings`, `editor`, `runtime`, `benchmarks` | the wave-4 suites (`benchmarks` is the harness self-test, not the scenarios) | run |

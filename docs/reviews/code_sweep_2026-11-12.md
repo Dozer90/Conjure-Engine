@@ -87,7 +87,7 @@ Full evidence, refuter reasoning and the dropped findings are in `build/sweep_sa
 
 The shader library is written to ${PROJECT_BINARY_DIR}/shaders, while the engine opens <executable directory>/shaders (build/<preset>/bin/shaders). No build step copies or redirects it, and there is no command-line flag for the shader directory. Every windowed start of both executables fails; only tests and benchmarks work because they pass rendering.shaderDirectory explicitly.
 
-**Smallest fix:** Set OUTPUT_DIR to "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders" (still inside the build dir, so the existing check passes; tests read the CONJURE_SHADER_OUTPUT_DIR property and follow automatically), and correct repository-layout.md. Add a process test that starts conjure_runtime with --rhi null but the default shader directory, or asserts index.json exists beside the executable.
+**Smallest fix:** Set OUTPUT_DIR to "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders" (still inside the build dir, so the existing check passes; tests read the CONJURE_SHADER_OUTPUT_DIR property and follow automatically), and correct repository-layout.md. In docs/handbook/getting-started.md, remove the CAUTION box of section 10 (added 2026-11-13 because of this blocker) and move the `build/<preset>/shaders/` row of section 2 to `build/<preset>/bin/shaders/`. Add a process test that starts conjure_runtime with --rhi null but the default shader directory, or asserts index.json exists beside the executable.
 
 ### B3. Resizing the window kills the app on D3D12: back-buffer framebuffers are still cached when ResizeBuffers runs
 

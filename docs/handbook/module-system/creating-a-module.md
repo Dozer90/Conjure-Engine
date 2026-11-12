@@ -143,14 +143,15 @@ Every extension is a trivially copyable descriptor defined by the consuming area
 |---|---|---|
 | Component type | `ecs::component_type_desc` via `ecs::describe_component<T>()` (`conjure/ecs/component_type_desc.h`) | `T` is named with `CONJURE_COMPONENT(T, "name")`; the registry deep-copies the `reflect::type_info` at attach, so reflect the struct (`CONJURE_REFLECT_STRUCT`) for the inspector, scene files and C# mirrors |
 | System | `ecs::system_extension_desc` | `name`, `phase`, `flags`, `reads` / `writes` / `after` / `before` as `const core::string_id *` plus counts, and a `run(system_context &)` function pointer; the ECS consumer rejects a system without a declared access set in `validate()` |
-| Asset importer, asset type | `assets::importer_extension_desc` (`"assets.importer"`), `assets::asset_type_extension_desc` (`"assets.type"`) | designed in `07_modules.md` 9 with the assets module; factories are called by the assets consumer on attach |
-| Editor panel, command | `editor::panel_desc` (`"editor.panel"`), `editor::command_desc` (`"editor.command"`) | designed; stored and never read on a runtime host |
-| Native C# binding | `scripting::native_binding_desc` (`"scripting.binding"`) | designed; fills an existing null slot of the native table by name (R36) |
+| Asset importer, asset type | `assets::importer_extension_desc` (`"assets.importer"`), `assets::asset_type_extension_desc` (`"assets.type"`) | the assets consumer (`assets_module_consumer`) calls the factories on attach |
+| Editor panel, command | `editor::panel_desc` (`"editor.panel"`), `editor::command_desc` (`"editor.command"`) | `editor_module_consumer` registers them in the editor; stored and never read on a runtime host |
+| Native C# binding | `scripting::native_binding_desc` (`"scripting.binding"`) | designed (R36): fills an existing null slot of the native table by name; the type is not defined and no consumer reads it yet |
 | C# assembly | `registrar.register_managed_assembly("managed/X.dll")` or the manifest's `"managed"` | appended to the single game `AssemblyLoadContext` |
 
 The arrays a `system_extension_desc` points at must outlive the module (namespace-scope `constexpr` arrays in the
-module do). Strings in descriptors may point at module literals; consumers copy what they keep. The ECS descriptors
-exist today; the others arrive with their modules and the module system needs no change for them.
+module do). Strings in descriptors may point at module literals; consumers copy what they keep. The ECS, assets and
+editor descriptors are read by their consumers today; `scripting::native_binding_desc` is still design only, and
+the module system needs no change for it.
 
 ## 6. Building
 

@@ -419,11 +419,23 @@ from a note in detail, the note is right.
     `BUILD_EXTERNAL=OFF` fails to link `glslang-standalone` on MSVC 2026 (unresolved SPIRV symbols), so no SPIR-V blob
     builds on Windows with `CONJURE_RHI_VULKAN=ON`; the Windows SDK `dxc` has no SPIR-V code generation either. Vulkan
     is OFF by default on Windows and the Linux / macOS presets are unaffected; a glslang tag that links (or a fetched
-    DXC release) is wanted before Vulkan is exercised on Windows. (c) `tests/benchmarks` does not exist yet; the
-    benchmarks `01`/`05`/`11`/`12` name (`bench_ecs`, `bench_asset_ref_get`, `bench_asset_load`, `bench_pack_lookup`,
-    `bench_platform`, `bench_audio`, `bench_module_reload`) are owed by whoever creates it. (d) `tools/test_assets.json`
-    still lacks CC0 `audio/tone.{ogg,mp3,flac}` clips, so the `[downloaded]` decoder case skips. (e) The platform
-    module's `conjure_input_block` layout pins and `key::DEL` are facts the C# generator (wave 4) must honour.
+    DXC release) is wanted before Vulkan is exercised on Windows. (c) `tests/benchmarks` exists since wave 4
+    (`bench_core`, `bench_ecs`, `bench_scene`, `bench_physics`, `bench_render_null_frame`,
+    `bench_scripts_update_phase`, `bench_full_frame_10k`; `tests/benchmarks/README.md`). Still owed, with their
+    design budgets: `bench_asset_ref_get` (10,000 `get()` < 20 us, 05:211/917), `bench_asset_load` (1,000 blobs
+    < 250 ms main thread, 05:918), `bench_pack_lookup` (05:918), `bench_platform` (10,000 events + `end_frame`
+    < 50 us, snapshot < 0.2 us, 11:677), `bench_audio` (update + `end_frame` with 256 voices < 0.1 ms, 12 A16/:792),
+    `bench_module_reload` (07:930), `bench_culling_10k` / `bench_draw_list_10k` (< 2 ms) /
+    `bench_render_graph_compile` (02:928-929), `bench_bindings` (`1k_raycasts` < 1 ms, `counter_thunk_overhead`
+    < 2 ns/call, `10k_transform_set_via_facade` < 1.5 ms, `10k_transform_set_via_span` < 0.1 ms; 15:779, also
+    03:921-922), `bench_editor` (`create_many` 10,000 entities with 4 components < 20 ms, 04:331;
+    `persist_capture_apply_100`, `create_many_10k`, `snapshot_capture_restore_10k`, `hierarchy_rebuild_10k`,
+    `pick_broad_phase_10k`, `dispatch_10k_component_set`, 04:1114-1115) and the scripting
+    `reload_10k_instances` (< 250 ms, 03:922). (d) `tools/test_assets.json` still lacks CC0
+    `audio/tone.{ogg,mp3,flac}`; the `[downloaded]` decoder case skips only where nothing was downloaded and fails
+    its `REQUIRE(exists)` wherever `tools/download_test_assets.py` has run (every `build-test` leg of `ci.yml` and
+    every leg of the nightly matrix; code sweep 2026-11-12). (e) The platform module's `conjure_input_block`
+    layout pins and `key::DEL` are facts the C# generator (wave 4) must honour.
 14. **Wave 3 loose ends (integration).** (a) *Resolved in wave 4*: `conjure_shared` exported 46,318 symbols in Debug
     and 47,320 in Distribution of the 65,535 limit (21 static libraries); the `CONJURE_API`-only export switch (item
     13a) landed before `engine`, `bindings` and the editor libraries joined the umbrella (5,283 Debug exports with all
@@ -432,14 +444,15 @@ from a note in detail, the note is right.
     was not attempted inside the integration (the GLFW backend and the font-atlas path are what the tests exercise);
     `ARCHITECTURE.md` 9 records the pinned version. (c) `core::jobs` has no allocation-free fire-and-forget
     `schedule` with a caller-owned counter; the physics Jolt adapter keeps its `parallel_for` helper-range trick and
-    the ECS scheduler's `parallelSystems` path still allocates one counter per stage. (d) `tests/benchmarks`
-    (`bench_scene`, `bench_physics`, `bench_render_null_frame`, `10k_scripts_update_phase`) is still owed with the
-    directory itself (item 13c). (e) `scene::transform_state` has no "physics wrote this" flag; the pull writes
-    `local_transform` directly and the pass re-dirties those rows once. (f) `physics.physics_world - 600 empty steps
-    allocate nothing after the first` failed once in each of the Debug and Development CTest runs while the other
-    configuration was compiling on the same machine and passes alone and in an idle run; the suspect is the job
-    system's block pool growing under contention, to be measured before it is called flaky. (g) The `.gitignore`
-    already covers `build/`, `**/bin/` and `**/obj/`, so no entry was added for the managed outputs.
+    the ECS scheduler's `parallelSystems` path still allocates one counter per stage. (d) *Resolved in wave 4*:
+    `tests/benchmarks` holds `bench_scene`, `bench_physics`, `bench_render_null_frame` and `scripting.update_10k`
+    in `bench_scripts_update_phase` (item 13c lists what is still owed). (e) `scene::transform_state` has no "physics
+    wrote this" flag; the pull writes `local_transform` directly and the pass re-dirties those rows once. (f)
+    `physics.physics_world - 600 empty steps allocate nothing after the first` failed once in each of the Debug and
+    Development CTest runs while the other configuration was compiling on the same machine and passes alone and in an
+    idle run; the suspect is the job system's block pool growing under contention, to be measured before it is called
+    flaky. (g) The `.gitignore` already covers `build/`, `**/bin/` and `**/obj/`, so no entry was added for the managed
+    outputs.
 15. **Wave 4 loose ends (integration).** (a) *Resolved in the performance round (2026-11)*: an engine frame is
     allocation-free in Development. The wave-4 integration measured an empty headless frame at 13 blocks with
     inline jobs and 11 with two workers (review 4: 10), the same over a 10,000-entity hierarchy, and 526-542 per
@@ -488,15 +501,15 @@ from a note in detail, the note is right.
     `asset_database` and `hot_reload_controller` exposure for `script.reload`; a pre-load consumer hook on
     `modules_subsystem` so `editor_module_consumer` need not unload and reload; a public `scene::root_index_of` and an
     id-independent `ecs::world_hash` variant; a command-buffer prefab adoption path with expected-repair accounting
-    for locked-scope `prefab_*` / `create_many` entries; `script_component` with a reflection description so the
-    `ScriptComponentHandle` mirror resolves; `renderer::debug_draw` exposed through `engine_context`; a one-time WARN in
-    `renderer::render()` for swapchain views without a swapchain; a registry-independent
-    `ecs::entity_archive::~entity_archive`; `conjure::testing::protocol_client::connect_in_process` / `connect_tcp`
-    over `editor::loopback_transport` and the TCP socket (the design-11 ping cases); `bench_engine_frame.cpp` (the
-    frame-overhead scenarios; `bench_full_frame_10k.cpp` covers the 10,000-entity frames). (f) The first successful
-    `core::vfs::native_file_system` read in a process allocates about 1,070 blocks that live until exit (stream and
-    locale machinery); `headless_engine` warms it up before its baseline. (g) `IMGUI_API` export and
-    `conjure::thirdparty::imgui_interface` stay in `cmake/ConjureSharedLibrary.cmake`
+    for locked-scope `prefab_*` / `create_many` entries; `script_component` with a reflection description, and the
+    `ScriptComponentHandle` mirror itself, which was never written; `renderer::debug_draw` exposed through
+    `engine_context`; a one-time WARN in `renderer::render()` for swapchain views without a swapchain; a
+    registry-independent `ecs::entity_archive::~entity_archive`; `conjure::testing::protocol_client::connect_in_process`
+    / `connect_tcp` over `editor::loopback_transport` and the TCP socket (the design-11 ping cases);
+    `bench_engine_frame.cpp` (the frame-overhead scenarios; `bench_full_frame_10k.cpp` covers the 10,000-entity frames).
+    (f) The first successful `core::vfs::native_file_system` read in a process allocates about 1,070 blocks that live
+    until exit (stream and locale machinery); `headless_engine` warms it up before its baseline. (g) `IMGUI_API`
+    export and `conjure::thirdparty::imgui_interface` stay in `cmake/ConjureSharedLibrary.cmake`
     (`conjure_export_imgui_from_shared`), which `07_modules.md` 5 names next to the ImGui target; behaviour is
     identical and the move was not made. (h) The GCC/Clang builds with `CXX_VISIBILITY_PRESET hidden` are not
     verifiable from the Windows integration machine; the first Linux and macOS CI runs prove them. (i) Core

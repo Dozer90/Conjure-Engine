@@ -79,9 +79,12 @@ anatomy and the CMake helpers. An engine module never loads at run time.
 | 📘 API: [Modules and plugins](../../api/modules/index.md), [Writing a module](../../api/modules/writing-a-module.md), [Loading and managing modules](../../api/modules/loading-and-managing.md) | the user-facing pages: every public header by include path, short signatures, examples |
 
 > [!NOTE]
-> Consumers (`ecs_module_consumer`, assets, scripting, editor) and the engine wiring (`project.json` module
-> settings, discovery directories, the editor's Modules panel and `module.*` protocol commands) are wave-4 work;
-> this section marks them as designed where they are not yet code.
+> The consumers (ecs, assets and scripting in `engine/src/engine/module_consumers/`, the editor
+> `editor_module_consumer`) and the engine wiring are implemented. The wiring is the `project.json` `"modules"`
+> block (`engine/src/engine/project.cpp`), discovery in `engine/src/engine/subsystems/modules_subsystem.cpp`, and
+> the `module.list`/`discover`/`load`/`unload`/`reload`/`build` commands in
+> `engine/src/editor/core/commands/commands_modules.cpp`. The editor Modules panel (`07_modules.md`) and the
+> `scripting::native_binding_desc` record are not built yet.
 
 ## Related
 - design records: [`../../design/07_modules.md`](../../design/07_modules.md) (binding),

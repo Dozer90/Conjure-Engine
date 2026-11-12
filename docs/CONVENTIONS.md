@@ -9,7 +9,7 @@ reference; this document adds the project-specific conventions on top of it.
 | Thing | Style | Example |
 |---|---|---|
 | Namespaces | snake_case | `conjure::ecs` |
-| Classes / structs / enums / type aliases | snake_case | `class entity_world`, `struct aabb` |
+| Classes / structs / enums / type aliases | snake_case | `class world`, `struct aabb` |
 | Functions / methods | snake_case | `void destroy_entity(entity id)` |
 | Local variables / parameters | camelCase | `const int chunkIndex = 0;` |
 | Class member variables | camelCase with `m` prefix | `int mEntityCount = 0;` |
@@ -17,10 +17,10 @@ reference; this document adds the project-specific conventions on top of it.
 | Static members and file-scope statics | camelCase with `s` prefix | `static int sInstanceCount;` |
 | Constants / constexpr / enum values / macros | ALL_CAPS | `constexpr int MAX_COMPONENTS = 256;` |
 | Template parameters | PascalCase | `template <typename ComponentType>` |
-| Files | snake_case | `entity_world.h`, `entity_world.cpp` |
-| Public headers | `engine/include/conjure/<module>/<name>.h` (core areas: `conjure/core/<name>.h`, or `conjure/core/<area>/<name>.h` for large areas) | `conjure/ecs/entity_world.h` |
+| Files | snake_case | `world.h`, `world.cpp` |
+| Public headers | `engine/include/conjure/<module>/<name>.h` (core areas: `conjure/core/<name>.h`, or `conjure/core/<area>/<name>.h` for large areas) | `conjure/ecs/world.h` |
 | Private headers / sources | `engine/src/<module>/<name>.{h,cpp}` | |
-| Tests | `tests/<module>/test_<name>.cpp` | `tests/ecs/test_entity_world.cpp` |
+| Tests | `tests/<module>/test_<name>.cpp` | `tests/ecs/test_world.cpp` |
 | CMake targets | `conjure_<module>`, tests `conjure_<module>_tests`; core areas `conjure_core_<area>` / `conjure_core_<area>_tests` | |
 | Macros | `CONJURE_` prefix | `CONJURE_ASSERT(x)` |
 
@@ -140,9 +140,9 @@ is its summary.
 ## 7. CMake
 
 - Modules are declared with `conjure_add_module(<name> SOURCES ... PUBLIC_DEPS ... PRIVATE_DEPS ...)`.
-- Third-party dependencies are declared once in `cmake/Dependencies.cmake` (FetchContent, pinned
-  tags/commits) and exposed as `conjure::thirdparty::<name>` interface targets.
-- Warnings are errors. The warning set is in `cmake/CompilerWarnings.cmake`. Third-party targets
+- Third-party dependencies are declared once in `third_party/CMakeLists.txt` (FetchContent, pinned
+  tags/commits, `SYSTEM`, `EXCLUDE_FROM_ALL`) and exposed as `conjure::thirdparty::<name>` targets.
+- Warnings are errors. The warning set is in `cmake/ConjureWarnings.cmake`. Third-party targets
   have warnings suppressed via `SYSTEM` includes.
 - No globbing for sources. List every file.
 

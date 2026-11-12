@@ -22,9 +22,9 @@ the asset pipeline. It owns exactly one per-frame hot path, `scene.propagate_tra
 | Id | Decision | Rationale |
 |---|---|---|
 | S1 | **One `ecs::world` per `scene::scene`; additive scene assets share the world.** A loaded scene asset is a record `{scene_id, roots, asset handles}`; membership of an entity is "the root it hangs under". | One world keeps queries, bindings and systems trivial (`engine_context::world`); Unity semantics for additive loads without per-entity bookkeeping. |
-| S2 | **Hierarchy depth is encoded as a tag component per depth (`depth_tag<D>`, D = 1..31, TRANSIENT, EDITOR_HIDDEN); roots are `without<parent>`.** `MAX_HIERARCHY_DEPTH = 32`. | Makes "one level at a time with `parallel_for_chunks`" (R3, `01_ecs.md` 8) literally true: every level is a set of chunks, the `changed<local_transform>` chunk filter applies per level, and children of one wide root still fan out. Reparenting across depths costs one archetype move per descendant (measured, acceptable: ~1 us each). |
+| S2 | **Hierarchy depth is encoded as a tag component per depth (`depth_tag<D>`, D = 1..31, TRANSIENT, EDITOR_HIDDEN); roots are `without<parent>`.** `MAX_HIERARCHY_DEPTH = 32`. | Makes "one level at a time" (R3, `01_ecs.md` 8) literally true: every level is a set of chunks, the `changed<local_transform>` chunk filter applies per level, and children of one wide root still fan out. Reparenting across depths costs one archetype move per descendant (measured, acceptable: ~1 us each). |
 | S3 | **`children` is `core::small_vector<ecs::entity, 4>`, TRANSIENT, rebuilt from `parent` on load.** Sibling order is persisted as `parent::siblingIndex`; root order is persisted in the scene header `roots`. | The vector is a cache for traversal and the editor; `parent` is the single serialised truth, so files cannot encode an inconsistent tree. |
-| S4 | **Propagation recomputes an entity when its chunk's `local_transform` changed, its chunk carries `transform_dirty`, or its parent recomputed this run.** The last fact is a per-entity `transform_state::lastUpdateRun` stamp written by the parent's level pass and read after the level join. `render_world_transform` is written in the same pass (R3, `06_engine_loop.md` 3.2). | Chunk-granular change detection has no false negatives; the stamp carries dirtiness down the tree with O(1) random access and no allocation. |
+| S4 | **Propagation recomputes an entity when its chunk's `local_transform` changed, its chunk carries `transform_dirty`, or its parent recomputed this run.** The last fact is a per-entity `transform_state::lastUpdateRun` stamp written by the parent's level pass and read after the level join; the parent's visit also sets the child's `transform_state::pending` mark, so the child's level finds the row without a parent lookup per row (3.4). `render_world_transform` is written in the same pass (R3, `06_engine_loop.md` 3.2). | Chunk-granular change detection has no false negatives; the stamp carries dirtiness down the tree with O(1) random access and no allocation. |
 | S5 | **Transform companions are a unit.** Every entity with `local_transform` also has `world_transform`, `render_world_transform` and `transform_state`; `scene` adds them together, and an observer repairs raw adds. An ancestor without `local_transform` contributes identity (its children are positioned in world space). | One rule, no "optional world transform" branches in the hot pass. |
 | S6 | **Cascaded destroy is observer-driven through the ECS deferred buffer; the scene never recurses.** `observe_destroyed` enqueues `destroy_entity(child)` per child; the ECS drains until empty. `scene::destroy()` queues for `scene.destroy_pending` (FRAME_END); `scene::destroy_now()` is the editor/test path. | Binding per `ARCHITECTURE.md` 4.4 and `01_ecs.md` D9; depth is bounded by the drain loop, not the C++ stack. |
 | S7 | **All hierarchy mutation goes through `scene` (`set_parent`, `create_entity`, instantiate, destroy).** Raw `world.add/remove<parent>` is tolerated: observers queue a repair that `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE, before propagation) applies in the same frame with one WARN per frame. | Scripts can reach the raw ECS (`03_scripting.md`); a stale tree may never be the result. |
@@ -59,7 +59,7 @@ All components are named `conjure.scene.<name>` through `CONJURE_COMPONENT` and 
 | `world_transform` | `math::mat4 matrix = identity;` | TRANSIENT | no | Simulation truth. Reflection with `readOnly` attribute for the inspector. |
 | `render_world_transform` | `math::mat4 matrix = identity;` | TRANSIENT | no | What extraction reads. |
 | `interpolated_transform` | `math::transform previous; math::transform current;` | TRANSIENT | no | World-space poses. Scene only defines and registers it; physics adds it (deferred buffer, `ADDED` observer of a dynamic/kinematic `rigid_body` or a `character_controller`), writes it in `physics.pull_transforms` and removes it when the body dies on a living entity (`14_physics.md` 3.3, `06_engine_loop.md` 3.2, R47). |
-| `transform_state` | `u32 lastUpdateRun = 0; transform_state_flags flags = NONE;` | TRANSIENT, EDITOR_HIDDEN | no | `enum class transform_state_flags : u8 { NONE = 0, INTERPOLATED_SUBTREE = 1 << 0 }` + `CONJURE_ENUM_FLAGS`. |
+| `transform_state` | `u32 lastUpdateRun = 0; transform_state_flags flags = NONE; bool pending = false;` | TRANSIENT, EDITOR_HIDDEN | no | `enum class transform_state_flags : u8 { NONE = 0, INTERPOLATED_SUBTREE = 1 << 0 }` + `CONJURE_ENUM_FLAGS`. Still 8 bytes (`static_assert`); `pending` is set by the parent's level when the parent's world matrix changed, it sits in an interpolated subtree or its flags changed, and cleared by the child's level (3.4). |
 | `transform_dirty` | (tag) | TRANSIENT, EDITOR_HIDDEN | no | Set by structural hierarchy changes; cleared by the propagation pass through its command buffer. |
 | `depth_tag<D>` (D = 1..31) | (tag) | TRANSIENT, EDITOR_HIDDEN | no | Names `conjure.scene.depth_01` .. `depth_31`. Roots carry none. |
 | `name` | `core::string_id value;` | - | yes (string) | Interned in every configuration (`10_core.md` 2.4). |
@@ -235,48 +235,76 @@ by the next propagation without a dirty tag of their own.
 ### 3.4 Transform propagation (`scene.propagate_transforms`, TRANSFORM, PARALLEL, `RUNS_WHILE_PAUSED`)
 
 Owned by `transform_system`. Queries, built once: `mRootQuery = {with: local_transform, without: parent}`,
-`mLevelQuery[d] = {with: local_transform | depth_tag<d>}` for d = 1..31; `writes = {world_transform,
-render_world_transform, transform_state}`, `reads = {local_transform, parent, interpolated_transform, transform_dirty}`.
+`mLevelQuery[d] = {with: local_transform | depth_tag<d>}` for d = 1..31. `describe()` declares `writes =
+{world_transform, render_world_transform, transform_state}` and `reads = {local_transform, parent, children,
+interpolated_transform, transform_dirty}`; the `children` read keeps a TRANSFORM-phase writer of the lists out of
+the pass's stage (the scheduler packs stages from the declared masks alone).
+
+Each level (the roots, then depth 1 .. `max_depth_in_use()`) runs in three steps on the system thread. *Collect*
+walks the level's chunks once with `level.for_each_chunk` and keeps the rows to recompute: a whole chunk when its
+`local_transform` changed since the previous run, when it carries `transform_dirty` or when it holds interpolated
+poses, otherwise only its rows marked `transform_state::pending`. *Dispatch* runs the kept rows inline below
+`INLINE_ROW_LIMIT` = 512 rows (or without a job system), otherwise through `jobs->parallel_for(jobCount, 1, body)`
+in jobs of about `ROWS_PER_JOB` = 128 rows; each job resolves a row's parent once (consecutive siblings share the
+lookup) and marks the row's children pending. The join of the dispatch is the barrier between levels. Last,
+`transform_dirty` is removed on the system thread through the command buffer.
 
 ```text
 run(ctx):
-    runId = ++mRunCounter; since = ctx.since_version()
+    runId = ++mRunCounter (never 0); since = ctx.since_version()
     alpha = mInterpolationEnabled ? ctx.frame().interpolationAlpha : 1.0f
-    ctx.parallel_for_chunks(mRootQuery, process_chunk)            // level 0
-    for d in 1 .. scene.max_depth_in_use(): ctx.parallel_for_chunks(mLevelQuery[d], process_chunk)
-    // the join inside each parallel_for_chunks is the barrier between levels
+    run_level(mRootQuery)                                                  // level 0
+    for d in 1 .. scene.max_depth_in_use(): run_level(mLevelQuery[d])
 
-process_chunk(chunk, commands):
-    localChanged = chunk.column_version(ids.localTransform) > since
-    chunkDirty   = chunk.has(ids.transformDirty)
-    locals  = chunk.get<const local_transform>(); parents = chunk.get_optional<const parent>()
-    poses   = chunk.get_optional<const interpolated_transform>()          // empty span if absent
-    // pass 1: decide, without stamping anything
-    for row: need[row] = localChanged || chunkDirty || parent_updated(parents[row], runId) || !poses.empty()
-             || parent_flags(parents[row]) != 0 || state_flags_changed(row)
-    if no row needs work: stats.chunksSkipped++; return                   // chunk untouched, no stamp
-    worlds = chunk.get<world_transform>(); renders = chunk.get<render_world_transform>(); states = chunk.get<transform_state>()
-    for row where need[row]:
-        p = parents.empty() ? none : world.get<const world_transform / render_world_transform / transform_state>(parents[row].value)
-        parentWorld = p ? p.world : identity; parentRender = p ? p.render : identity; parentFlags = p ? p.flags : NONE
-        recomputeWorld = localChanged || chunkDirty || (p && p.state.lastUpdateRun == runId)
-        if recomputeWorld: worlds[row] = parentWorld * locals[row].to_transform().to_matrix(); states[row].lastUpdateRun = runId
-        self = !poses.empty(); subtree = self || (parentFlags & INTERPOLATED_SUBTREE)
+run_level(level):
+    level.for_each_chunk(chunk):                                           // collect, sequential
+        removeDirty  = chunk.has(ids.transformDirty)
+        recomputeAll = removeDirty || chunk.column_version(ids.localTransform) > since
+        whole        = recomputeAll || chunk.has(ids.interpolatedTransform)
+        rows = whole ? chunk.count() : count of rows with states[row].pending
+        if rows == 0: stats.chunksSkipped++; continue                      // chunk untouched, no stamp
+        mLevelChunks.push({chunk, rows, removeDirty, recomputeAll, whole})
+    split mLevelChunks into jobs of consecutive chunks holding about ROWS_PER_JOB rows (mJobBounds)
+    lock = world.lock_iteration()
+    if jobs && jobCount > 1 && totalRows >= INLINE_ROW_LIMIT: jobs->parallel_for(jobCount, 1, process_chunk...)
+    else: process_chunk for every kept chunk, inline
+    lock.release()
+    for kept chunk with removeDirty: for row: ctx.commands().remove_raw(entities[row], ids.transformDirty)
+
+process_chunk(item):                                                       // a job thread
+    for row where item.whole || states[row].pending:
+        states[row].pending = false
+        p = lookup_parent(parents[row].value)       // nearest ancestor with a world_transform, cached per sibling run
+        parentWorld = p ? p.world : identity; parentRender = p ? p.render : identity
+        recomputeWorld = item.recomputeAll || (p && p.state.lastUpdateRun == runId)
+        if recomputeWorld:
+            worlds[row] = parentWorld * locals[row].to_transform().to_matrix(); states[row].lastUpdateRun = runId
+        self = chunk holds poses; subtree = self || (p && p.state.flags & INTERPOLATED_SUBTREE)
+        hadSubtree = states[row].flags & INTERPOLATED_SUBTREE
         if self:         renders[row] = math::transform::lerp(poses[row].previous, poses[row].current, alpha).to_matrix()
         elif subtree:    renders[row] = parentRender * locals[row].to_transform().to_matrix()
-        elif recomputeWorld or flags changed: renders[row] = worlds[row]
+        elif recomputeWorld or hadSubtree: renders[row] = worlds[row]
         states[row].flags = subtree ? INTERPOLATED_SUBTREE : NONE
-    if chunkDirty: for row: commands.remove_raw(entities[row], ids.transformDirty)   // flushed at stage end
-    stats accumulate (relaxed atomics, once per chunk)
+        if recomputeWorld || subtree || hadSubtree != subtree: mark_children_pending(children[row])
+    stats accumulate (a local tally per job range, added to relaxed atomics once per range)
 ```
 
-Correctness: the parent of a level-d entity is at level d-1 and finished before the join; parent reads are
-`const` random access (`01_ecs.md` 5.2 allows reading other entities' columns while locked and writing disjoint
-rows). An interpolated entity's render pose is its own world-space lerp (the "parent-render space" R of
-`06_engine_loop.md` 3.2 cancels against `parentRender`); descendants follow `parentRender` every frame through
-`INTERPOLATED_SUBTREE`; roots without a pose get `render == world`. Both matrices are written in one visit
-(R3). Allocation-free in steady state: queries refresh only on new archetypes, grain buffers are pooled by the
-scheduler, dirty tags are gone after the first run. Budget: 10k entities, 8 workers, ~0.3 ms (`06_engine_loop.md` 8).
+Correctness: every ancestor of a level-d entity is at a shallower level and finished before the join; parent
+reads are `const` random access (`01_ecs.md` 5.2 allows reading other entities' columns while locked and writing
+disjoint rows). A job writes rows of its own chunks and the `pending` byte of their children, which sit in the
+next level (no job touches them until the join; one parent per child, so no two jobs write the same byte); the
+mark goes through the non-const `world::get_raw(entity, id, false)`, which stamps nothing, and the child's own
+level stamps the column when it processes the row. A transformless child (S5) is in no level, so the mark goes to
+its children instead (an explicit stack bounded by `MAX_HIERARCHY_DEPTH`). A clean chunk costs one sequential
+scan of its 8-byte state column and no parent is looked up for a clean row; below `INLINE_ROW_LIMIT` dirty rows
+the dispatch costs more than the rows (the limit is a fixed row count, not one per worker, see
+`engine/src/scene/README.md`). An interpolated entity's render pose is its own world-space lerp (the
+"parent-render space" R of `06_engine_loop.md` 3.2 cancels against `parentRender`); descendants follow
+`parentRender` every frame through `INTERPOLATED_SUBTREE`; roots without a pose get `render == world`. Both
+matrices are written in one visit (R3). Allocation-free in steady state: queries refresh only on new archetypes,
+the level scratch (`mLevelChunks`, `mJobBounds`) keeps its capacity and dirty tags are gone after the first run,
+so the pass allocates nothing from the third frame after a structural change. Budget: 10k entities, 8 workers,
+~0.3 ms (`06_engine_loop.md` 8).
 
 ### 3.5 Dirty tracking summary
 
@@ -285,7 +313,7 @@ scheduler, dirty tags are gone after the first run. Budget: 10k entities, 8 work
 | `local_transform` written (script, physics pull, editor) | chunk column version (`changed<local_transform>`) | every row of that chunk, then descendants via the stamp |
 | Reparent at same depth | `transform_dirty` tag on the reparented entity | its chunk, then descendants |
 | Reparent across depths / new entity / instantiate / load | archetype move stamps all columns + `transform_dirty` | chunk, then descendants |
-| Parent recomputed | `transform_state::lastUpdateRun == runId` | the child |
+| Parent recomputed | `transform_state::lastUpdateRun == runId`, found through the `transform_state::pending` mark the parent's visit sets | the child |
 | `interpolated_transform` present on self or ancestor | `INTERPOLATED_SUBTREE` bit | render matrix only, every frame |
 
 ### 3.6 Destroy
@@ -814,7 +842,8 @@ interning in every configuration; `small_vector`, `flat_hash_map`; `math::transf
 EDITOR_HIDDEN, generated `component_ops` for `children`, `component_info::assetRefFieldOffsets`;
 `world::create_entity(mask)`, `instantiate_batch`, `get`/`get_raw(forWrite)`, `mask_of`,
 `observe`/`observe_destroyed` with the deferred buffer draining until empty, `command_buffer` with
-one-move-per-entity flush; `system_context::parallel_for_chunks`, `chunk_view::column_version/has/get_optional`,
+one-move-per-entity flush; `system_context::jobs`, `query::for_each_chunk`, `world::lock_iteration`,
+`chunk_view::column_version/has/column_data`,
 `since_version()`, `frame().interpolationAlpha`; `entity_archive::capture/validate`, `write_archive_json/
 read_archive_json`, `unresolved_components`; `EXCLUSIVE | RUNS_WHILE_PAUSED`, `after/before` labels.
 

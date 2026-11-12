@@ -59,6 +59,9 @@ Missing directories print a status line and are skipped, so partial trees config
   `CMAKE_<LANG>_FLAGS_DISTRIBUTION` from `RELEASE` (same for `EXE/SHARED/MODULE/STATIC` linker flags), and
   maps imported targets that only know the standard configurations with
   `CMAKE_MAP_IMPORTED_CONFIG_DEVELOPMENT "RelWithDebInfo;Release;"` and `..._DISTRIBUTION "Release;RelWithDebInfo;"`.
+- Before `project()` it sets `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT` to `$<$<CONFIG:Debug,Development>:ProgramDatabase>`
+  unless one is given (CMP0141 takes `/Zi` out of the flag defaults, and CMake's own default names only Debug and
+  RelWithDebInfo), so MSVC Development objects carry debug info and Distribution produces no PDB.
 - `conjure::platform_defines` (`cmake/ConjureWarnings.cmake`) adds `CONJURE_DEBUG=1`, `CONJURE_DEVELOPMENT=1`
   or `CONJURE_DISTRIBUTION=1` through `$<CONFIG:...>` generator expressions, plus `CONJURE_WITH_*` and
   `CONJURE_RHI_*` for the enabled subsystems. On Windows it also defines `NOMINMAX`, `WIN32_LEAN_AND_MEAN`,
@@ -154,8 +157,9 @@ Distribution-only GUI subsystem described in section 2. `tests/core/system/CMake
 > [!WARNING]
 > `PUBLIC_DEPS` becomes part of every consumer's include path and link line. A third-party target listed
 > there (other than `conjure::thirdparty::glm`) would let its headers reach public headers, which
-> `tools/check_style.py` rejects (`third-party-include`). Keep yyjson, stb, Jolt, NVRHI, GLFW, miniaudio,
-> ImGui and nethost in `PRIVATE_DEPS`.
+> `tools/check_style.py` rejects (`third-party-include`: a public header includes Conjure and C++ standard
+> library headers only, glm through `conjure/core/math/glm_types.h`). Keep yyjson, stb, Jolt, NVRHI, GLFW,
+> miniaudio, ImGui and nethost in `PRIVATE_DEPS`.
 
 ### 4.4 The umbrella shared library and game modules
 
@@ -206,8 +210,10 @@ the plugins it loads share one engine copy. `tests/modules/` is the suite that n
 permutation to DXIL with `dxc` (`CONJURE_RHI_D3D12`) and to SPIR-V with glslang or `dxc -spirv`
 (`CONJURE_RHI_VULKAN`, chosen by `CONJURE_SPIRV_COMPILER`), and `cmake/ConjureShaderIndex.cmake` writes
 `<OUTPUT_DIR>/index.json` at build time for `rhi::shader_library`. `engine/shaders/CMakeLists.txt` declares the
-engine's own list as the target `conjure_shaders` into `${PROJECT_BINARY_DIR}/shaders`; `conjure_rhi_tests`
-depends on it and the wave-3 renderer will append its pass shaders. Compiler lookup, depfiles and the index
+engine's own list as the target `conjure_shaders` into `${PROJECT_BINARY_DIR}/shaders`; the list holds the RHI
+fullscreen-triangle pair and every renderer pass shader (`engine/src/renderer/assets/shader_asset.cpp` lists the
+same permutations), and `conjure_renderer` and the test executables that render (rhi, renderer, engine, editor,
+integration, benchmarks) depend on it. Compiler lookup, depfiles and the index
 format are in [RHI module](modules/rhi.md#5-shader-pipeline); the user-facing side is 📘 API:
 [Shaders](../api/rhi/shaders.md).
 
@@ -218,7 +224,7 @@ never to third-party code:
 
 | Compiler | Flags |
 |---|---|
-| MSVC | `/W4 /permissive- /external:W0`, the opt-in `/w14xxx` set (`4242 4254 4263 4265 4287 4296 4311 4545 4546 4547 4549 4555 4619 4640 4826 4905 4906 4928`), `/we4289`, `/wd4201` (nameless struct/union used by the math types); `/WX` when `CONJURE_WARNINGS_AS_ERRORS` |
+| MSVC | `/W4 /permissive- /external:W0`, the opt-in `/w14xxx` set (`4242 4254 4263 4265 4287 4296 4311 4545 4546 4547 4549 4555 4619 4640 4826 4905 4906 4928`), `/we4289`, `/wd4201` (nameless struct/union used by the math types), `/wd4251 /wd4275` (dll-interface warnings for standard-library members of exported classes; `conjure_shared` and its consumers are built with one toolchain, `07_modules.md` 5); `/WX` when `CONJURE_WARNINGS_AS_ERRORS` |
 | GCC and Clang | `-Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough`; GCC adds `-Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op`; `-Werror` when `CONJURE_WARNINGS_AS_ERRORS` |
 
 Third-party headers stay silent because every `FetchContent_Declare` carries `SYSTEM` (CMake marks their
@@ -229,7 +235,8 @@ doctest's `TEST_CASE` expands `__COUNTER__`; engine targets never see it.
 
 > [!IMPORTANT]
 > Do not disable a warning to make a build pass (`AGENTS.md` rule 6). Fix the code; if a third-party header
-> is at fault, route it through a `SYSTEM` include as above.
+> is at fault, route it through a `SYSTEM` include as above. The three `/wd` entries above are design decisions
+> recorded with their reasons, not build fixes.
 
 ## 6. Sanitizers
 
@@ -258,9 +265,20 @@ chapter documents them in full; the build-relevant facts are:
   with the target's usage requirements and the project warning set, and hangs that off the aggregate target
   `conjure_header_check`, which is part of `ALL`. A header that does not compile alone therefore breaks the
   default build.
-- `tests/CMakeLists.txt` registers `tools/check_style.py --tests-mirror-headers` as the CTest entry
-  `style.check` (label `style`) and `tools/check_docs.py` plus its self-test as `docs.check` and
-  `docs.check_tool` (label `docs`), each with a 120 s timeout, when a Python 3 interpreter is found.
+- `tests/CMakeLists.txt` registers `tools/check_style.py --tests-mirror-headers` plus its self-test as the
+  CTest entries `style.check` and `style.check_tool` (label `style`), `tools/check_docs.py` plus its self-test
+  as `docs.check` and `docs.check_tool` (label `docs`), and the self-tests of `tools/build.py`,
+  `tools/download_test_assets.py` and `tools/generate_native_api.py` as `build.driver_tool`,
+  `test_assets.downloader_tool` and `native_api.generator_tool` (label `tools`), each with a 120 s timeout,
+  when a Python 3 interpreter is found. The self-tests live in `tools/tests/` and never touch the network.
+- Independently of Python, it registers `build.abi_identity_non_ascii_path` (label `build`, 60 s timeout):
+  `cmake/ConjureSharedLibrary.cmake` in script mode over a header list that names a path with a non-ASCII
+  directory, which fails if the list is read back truncated.
+- Also independently of Python, it registers `build.managed_project_references` (label `build`, 60 s timeout):
+  the `CHECK_CLEAN` script mode of `cmake/ConjureManaged.cmake` over a probe `App.csproj` whose `<ProjectReference>`
+  names `..\Lib\Lib.csproj` with backslashes, next to a `Lib/` that holds an `obj/`; it passes only when the
+  check reports `Lib/obj`, so it fails when the reference parser returns the path unresolved or resolves it
+  against anything but the project's directory.
 
 ## 8. Third-party dependencies
 
@@ -289,12 +307,17 @@ CMake 4; `FETCHCONTENT_UPDATES_DISCONNECTED ON` stops re-fetching on every confi
 Adding a dependency (`AGENTS.md` rule 9): declare it here with a pinned `GIT_TAG`, `SYSTEM` and
 `EXCLUDE_FROM_ALL`, turn off its tests, docs and install, create the `conjure::thirdparty::<name>` alias,
 give it `FOLDER "ThirdParty"`, list it in `PRIVATE_DEPS` of the consuming module, and extend
-`THIRD_PARTY_INCLUDE_ROOTS` in `tools/check_style.py` so the public-header rule knows its include prefix.
+`THIRD_PARTY_INCLUDE_ROOTS` in `tools/check_style.py` so the include-order rule requires angle brackets for the
+new headers (and `THIRD_PARTY_FLAT_HEADER_PREFIXES` for headers included without a directory, so they are
+grouped as third-party rather than standard library). The public-header rule needs no entry: it accepts only
+Conjure and C++ standard library headers and rejects every other include on its own.
 
 > [!NOTE]
-> `docs/CONVENTIONS.md` section 7 and `docs/design/00_brief.md` name the file `cmake/Dependencies.cmake`;
-> the implementation put the declarations in `third_party/CMakeLists.txt`. The rules are identical, and
-> `.github/workflows/ci.yml` keys its dependency cache on the hash of that file.
+> The design records (`docs/design/00_brief.md`, `02_renderer.md`, `11_platform.md`, `14_physics.md`) name the
+> file `cmake/Dependencies.cmake` (and `00_brief.md` the warning file `CompilerWarnings.cmake`); the
+> implementation put the declarations in `third_party/CMakeLists.txt` and the warnings in
+> `cmake/ConjureWarnings.cmake`. The rules are identical, and `.github/workflows/ci.yml` keys its dependency cache
+> on the hash of `third_party/CMakeLists.txt`.
 
 ## 9. Generated build info
 
