@@ -7,14 +7,18 @@
 #     Creates the target conjure_managed_<n> (part of ALL) that runs
 #       dotnet build <csproj> -c <configuration> -o <dir> --artifacts-path <build>/artifacts/<n>
 #                    --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true
-#     behind a stamp file that depends on the listed SOURCES, the project file, managed/Directory.Build.props
-#     and the stamp files of the managed DEPENDS targets (so a rebuilt SDK rebuilds the projects compiled
-#     against it), so an unchanged project costs nothing. No globbing: SOURCES lists every file the csproj compiles, and
-#     the CTest entry conjure_managed_sources_match.<n> (label "managed") checks that the csproj's explicit
-#     <Compile Include> items and SOURCES name the same files (SKIP_SOURCES_CHECK omits the entry when
-#     SOURCES deliberately covers more than the project, such as referenced projects). The configuration
-#     defaults to Debug for the Debug build type and Release otherwise. The dotnet program comes from NetHost_DOTNET_EXECUTABLE
-#     (cmake/FindNetHost.cmake) or PATH; missing dotnet with CONJURE_BUILD_MANAGED=ON is a configure error.
+#     behind a stamp file that depends on the listed SOURCES, the project file, every project file it reaches through
+#     <ProjectReference> items (transitively; the project file and each of those are configure dependencies too, so
+#     editing any of them, an added or removed reference included, re-runs configure), managed/Directory.Build.props and
+#     the stamp files of the managed DEPENDS targets (so a rebuilt SDK rebuilds the projects compiled against it), so an
+#     unchanged project costs nothing. A referenced project that does not exist is a configure error. No globbing:
+#     SOURCES lists every file the csproj compiles (a referenced project's source files are inputs only through SOURCES
+#     or the stamp of a DEPENDS target that builds it), and the CTest entry conjure_managed_sources_match.<n> (label
+#     "managed") checks that the csproj's explicit <Compile Include> items and SOURCES name the same files
+#     (SKIP_SOURCES_CHECK omits the entry when SOURCES deliberately covers more than the project, such as referenced
+#     projects). The configuration defaults to Debug for the Debug build type and Release otherwise. The dotnet program
+#     comes from NetHost_DOTNET_EXECUTABLE (cmake/FindNetHost.cmake) or PATH; missing dotnet with
+#     CONJURE_BUILD_MANAGED=ON is a configure error.
 #
 #     -o redirects only the final assemblies; restore and the compile intermediates follow --artifacts-path,
 #     one directory per managed target of this build tree, so concurrent build trees of one checkout
@@ -35,18 +39,32 @@
 # mismatch; with -DCONJURE_MANAGED_CHECK_CLEAN=ON instead it performs the source-tree check.
 # conjure_add_managed_project registers both invocations as CTest entries.
 
+# Sets <outReferences> to the absolute paths of the projects <project> names in its <ProjectReference Include>
+# items (direct references only), resolved against the directory of <project>. Shared by the source-tree check
+# below and by the stamp dependencies of conjure_add_managed_project.
+function(conjure_managed_project_references project outReferences)
+    file(READ "${project}" projectText)
+    get_filename_component(projectDirectory "${project}" DIRECTORY)
+    string(REGEX MATCHALL "<ProjectReference Include=\"[^\"]+\"" referenceItems "${projectText}")
+    set(references "")
+    foreach(item IN LISTS referenceItems)
+        string(REGEX REPLACE "<ProjectReference Include=\"([^\"]+)\"" "\\1" relative "${item}")
+        string(REPLACE "\\" "/" relative "${relative}")
+        get_filename_component(referenced "${relative}" ABSOLUTE BASE_DIR "${projectDirectory}")
+        list(APPEND references "${referenced}")
+    endforeach()
+    set(${outReferences} "${references}" PARENT_SCOPE)
+endfunction()
+
 if(CMAKE_SCRIPT_MODE_FILE AND CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST_FILE)
     if(NOT CONJURE_MANAGED_CHECK_PROJECT)
         message(FATAL_ERROR "ConjureManaged.cmake -P needs -DCONJURE_MANAGED_CHECK_PROJECT=<csproj>")
     endif()
-    file(READ "${CONJURE_MANAGED_CHECK_PROJECT}" projectText)
     get_filename_component(projectDirectory "${CONJURE_MANAGED_CHECK_PROJECT}" DIRECTORY)
     if(CONJURE_MANAGED_CHECK_CLEAN)
         set(projectDirectories "${projectDirectory}")
-        string(REGEX MATCHALL "<ProjectReference Include=\"[^\"]+\"" referenceItems "${projectText}")
-        foreach(item IN LISTS referenceItems)
-            string(REGEX REPLACE "<ProjectReference Include=\"([^\"]+)\"" "\\1" relative "${item}")
-            get_filename_component(referenced "${projectDirectory}/${relative}" ABSOLUTE)
+        conjure_managed_project_references("${CONJURE_MANAGED_CHECK_PROJECT}" referencedProjects)
+        foreach(referenced IN LISTS referencedProjects)
             get_filename_component(referencedDirectory "${referenced}" DIRECTORY)
             list(APPEND projectDirectories "${referencedDirectory}")
         endforeach()
@@ -68,6 +86,7 @@ if(CMAKE_SCRIPT_MODE_FILE AND CMAKE_SCRIPT_MODE_FILE STREQUAL CMAKE_CURRENT_LIST
         message(STATUS "managed source tree clean (${CONJURE_MANAGED_CHECK_PROJECT})")
         return()
     endif()
+    file(READ "${CONJURE_MANAGED_CHECK_PROJECT}" projectText)
     string(REGEX MATCHALL "<Compile Include=\"[^\"]+\"" compileItems "${projectText}")
     set(projectSources "")
     foreach(item IN LISTS compileItems)
@@ -135,6 +154,28 @@ function(conjure_add_managed_project)
     if(NOT EXISTS "${projectPath}")
         message(FATAL_ERROR "conjure_add_managed_project(${ARG_NAME}): project '${projectPath}' does not exist")
     endif()
+    # dotnet build compiles every project reachable through <ProjectReference> items, so each of their project
+    # files is an input of the stamp. Every project file visited is a configure dependency as well: a reference
+    # added or removed in any of them re-runs configure and with it this walk.
+    set(referencedProjects "")
+    set(pendingProjects "${projectPath}")
+    while(pendingProjects)
+        list(POP_FRONT pendingProjects visitedProject)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${visitedProject}")
+        conjure_managed_project_references("${visitedProject}" directReferences)
+        foreach(referenced IN LISTS directReferences)
+            if(NOT EXISTS "${referenced}")
+                message(FATAL_ERROR
+                    "conjure_add_managed_project(${ARG_NAME}): '${referenced}', referenced by "
+                    "'${visitedProject}', does not exist"
+                )
+            endif()
+            if(NOT referenced IN_LIST referencedProjects AND NOT referenced STREQUAL projectPath)
+                list(APPEND referencedProjects "${referenced}")
+                list(APPEND pendingProjects "${referenced}")
+            endif()
+        endforeach()
+    endwhile()
     set(sources "")
     foreach(source IN LISTS ARG_SOURCES)
         get_filename_component(absolute "${source}" ABSOLUTE)
@@ -176,6 +217,9 @@ function(conjure_add_managed_project)
             endif()
         endif()
     endforeach()
+    # A referenced project file may also be listed in SOURCES; each input is named once.
+    set(stampInputs ${sources} "${projectPath}" ${referencedProjects} "${propsFile}" ${dependencyStamps})
+    list(REMOVE_DUPLICATES stampInputs)
 
     add_custom_command(
         OUTPUT "${stamp}"
@@ -183,7 +227,7 @@ function(conjure_add_managed_project)
                 -c "${ARG_CONFIGURATION}" -o "${ARG_OUTPUT}" --artifacts-path "${artifactsDirectory}"
                 --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true ${propertyArguments}
         COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
-        DEPENDS ${sources} "${projectPath}" "${propsFile}" ${dependencyStamps} ${ARG_DEPENDS}
+        DEPENDS ${stampInputs} ${ARG_DEPENDS}
         COMMENT "dotnet build ${ARG_NAME} (${ARG_CONFIGURATION}) -> ${ARG_OUTPUT}"
         VERBATIM
     )

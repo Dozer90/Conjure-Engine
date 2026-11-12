@@ -78,7 +78,8 @@ set(CONJURE_MANAGED_SDK_SOURCES
 )
 
 # The SDK: building the bootstrap builds Conjure.Managed through its project reference and lays both
-# out, with the runtime config, in one directory (the managed_directory of script_host_config).
+# out, with the runtime config and Conjure.Managed.xml, in one directory (the managed_directory of
+# script_host_config).
 conjure_add_managed_project(
     NAME sdk
     PROJECT Conjure.Bootstrap/Conjure.Bootstrap.csproj
@@ -109,6 +110,12 @@ add_test(NAME conjure_managed_sources_match.bootstrap
         -P "${CONJURE_MANAGED_CMAKE_FILE}"
 )
 set_tests_properties(conjure_managed_sources_match.bootstrap PROPERTIES LABELS "managed" TIMEOUT 60)
+# The SDK's XML documentation ships beside Conjure.Managed.dll (game projects reference both); hashing a
+# missing file fails the entry.
+add_test(NAME conjure_managed_xml_docs.sdk
+    COMMAND "${CMAKE_COMMAND}" -E sha256sum "${CONJURE_MANAGED_OUTPUT_ROOT}/Conjure.Managed.xml"
+)
+set_tests_properties(conjure_managed_xml_docs.sdk PROPERTIES LABELS "managed" TIMEOUT 60)
 endif()
 
 if(TARGET conjure_scripting)

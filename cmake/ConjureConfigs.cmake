@@ -29,6 +29,15 @@ else()
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug;Development;Distribution")
 endif()
 
+# MSVC debug information (CMP0141, NEW under cmake_minimum_required 3.28): /Zi no longer sits in the
+# CMAKE_<LANG>_FLAGS_<CONFIG> defaults but comes from this variable, whose built-in default names only Debug and
+# RelWithDebInfo, and Development derives its flags from RelWithDebInfo's (conjure_derive_config_flags), so both
+# configurations are named here. Distribution produces no PDB. Set before project(), the value initialises
+# MSVC_DEBUG_INFORMATION_FORMAT on every target, fetched ones included; a value given on the command line wins.
+if(NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,Development>:ProgramDatabase>")
+endif()
+
 # Derive the custom configurations from the standard ones once the compiler is known.
 # CMAKE_<LANG>_FLAGS_<CONFIG> are initialised by project(), so the root CMakeLists.txt
 # calls conjure_derive_config_flags() immediately after project().

@@ -53,7 +53,9 @@ include_guard(GLOBAL)
 # Script mode: generate abi_identity.h
 #------------------------------------------------------------------------------
 if(CMAKE_SCRIPT_MODE_FILE AND DEFINED CONJURE_ABI_IDENTITY_OUTPUT)
-    file(STRINGS "${CONJURE_ABI_IDENTITY_HEADER_LIST}" abiHeaders)
+    # ENCODING UTF-8 keeps non-ASCII checkout paths intact; without it a string ends at the first
+    # non-ASCII byte and file(SHA256) would be handed a truncated header path.
+    file(STRINGS "${CONJURE_ABI_IDENTITY_HEADER_LIST}" abiHeaders ENCODING UTF-8)
     set(digests "")
     foreach(header IN LISTS abiHeaders)
         file(RELATIVE_PATH relative "${CONJURE_ABI_IDENTITY_INCLUDE_ROOT}" "${header}")
