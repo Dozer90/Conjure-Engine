@@ -14,7 +14,8 @@
 
 // In-memory play/stop snapshots (docs/design/13_scene.md 2.5, 3.14): a typed entity_archive of every
 // entity in hierarchy order (TRANSIENT columns excluded) plus the root order, root owners, settings, name
-// and structure version. No file form; restore clears the scene and instantiates with kept guids.
+// and the structure version at capture (informational, not restored). No file form; restore clears the
+// scene and instantiates with kept guids.
 
 namespace conjure::scene {
 
@@ -27,6 +28,8 @@ namespace conjure::scene {
         std::vector<scene_id> rootOwners = {};         // parallel to rootEntries
         core::json::document settings = core::json::document::object();
         std::string name = {};
+        // source.structure_version() at capture; informational: restore() does not rewind the counter (its
+        // clear and instantiate bump it like any other structural change).
         u64 structureVersion = 0;
 
         explicit scene_snapshot(const ecs::component_registry &registry) noexcept;

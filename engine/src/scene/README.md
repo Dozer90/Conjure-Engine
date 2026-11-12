@@ -41,8 +41,8 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
 - **Hierarchy storage.** `parent {value, siblingIndex}` is the single serialised truth; `children`
   (TRANSIENT `small_vector<entity, 4>`) is the cache, added to a parent on its first child and kept sorted
   with dense sibling indices. Depth is one tag component per level (`depth_tag<D>`, roots carry none), so
-  `scene.propagate_transforms` runs `parallel_for_chunks` over one level at a time: the parent of every
-  entity in a level finished in the previous level's join.
+  `scene.propagate_transforms` dispatches its level jobs with `job_system::parallel_for` one level at a
+  time: the parent of every entity in a level finished in the previous level's join.
 - **Every structural change is one flush.** `create_entity` builds the final mask (guid, name,
   local_transform and its companions, transform_dirty, parent, depth tag, inactive) and creates once;
   `set_parent`, `set_enabled`, `add_transform` and the link pass record depth retags, dirty and inactive
@@ -96,36 +96,50 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
 - **Instantiation (3.9).** `instantiate_archive` validates the archive, its shape (pre-order, depths,
   cycles) and the guid policy before anything exists, then runs `world::instantiate_batch` once with its
   `outEntities` vector, which reports every created id copy-major in entry order (entries without
-  components included, so an empty entity in a file becomes a plain root). Guids are regenerated and rebound where the policy says so; the link pass gathers the children of every
-  new internal node in a side table, sorts them by the persisted sibling index, renumbers through the live
-  `parent` links and records the `children` component together with depth tags, companions, dirty and
-  inactive tags and the root overrides into one flush, so each entity of the archive moves once; archive
-  roots attach under `options.parent`, a live external parent or the root list. The bind pass then
-  resolves every `asset_ref` through `asset_manager::bind_slot`.
+  components included, so an empty entity in a file becomes a plain root). Guids are regenerated and
+  rebound where the policy says so (the two regenerate policies also give a null guid a fresh one; `KEEP`,
+  which snapshot restore and REPLACE loads use, leaves it null); the link pass gathers the children of
+  every new internal node in a side table, sorts them by the persisted sibling index, renumbers through the
+  live `parent` links and records the `children` component together with depth tags, companions, dirty
+  and inactive tags and the root overrides into one flush, so each entity of the archive moves once;
+  archive roots attach under `options.parent`, a live external parent or the root list. The bind pass
+  then resolves every `asset_ref` through `asset_manager::bind_slot`.
 - **Files.** Header keys `format`, `version`, `name`, `settings` (canonical), `roots` (guid strings),
   `archive` (`ecs::write_archive_json` of every entity in hierarchy order, component keys in id order).
   Unknown components survive through `unresolved_components`; save -> load -> save is byte-identical.
   `capture_subtree` drops the root's `parent` (unless external references are kept) so entry 0 of a
-  prefab is a true root; `parse_prefab` enforces a single root at entry 0.
+  prefab is a true root; `parse_prefab` enforces a single root at entry 0 (`detail::check_prefab_roots`,
+  shared with `build_document`, `instantiate_many` and `revert`: `BAD_FORMAT` for an empty archive,
+  `PREFAB_MULTIPLE_ROOTS` otherwise, naming the misplaced root or the root count; the message naming the
+  archive is formatted only on failure) and unique entry guids (`DUPLICATE_GUID`).
 - **Prefabs (S9).** Instances are fully materialised: `prefab_instance` on the root, `prefab_link` on every
   entity. `diff` matches entries by link guid, compares components as canonical JSON with the instance's
   local entity references remapped to the asset's indices (so an added entity never shifts the others),
-  and treats `parent` by parent guid plus sibling index. `revert` re-instantiates at the same place with
-  the old root guid; `apply` writes the link guids as entry guids and drops the root marker; `unpack`
-  stops at nested instance roots unless recursive. `prefab_builder` produces a document from nodes and
-  components by registered name (the engine's model converter uses it).
+  and treats `parent` by parent guid plus sibling index. `revert` first checks that the current asset still
+  fits at the instance's place (archive, single root, depth limit) and only then re-instantiates there with
+  the old root guid, so those failures leave the instance untouched; `apply` writes the link guids as entry
+  guids (a link guid already used by an earlier entity, as after a duplicate, gets a fresh one) and drops
+  the root marker; `unpack` stops at nested instance roots unless recursive. `prefab_builder` produces a
+  document from nodes and components by registered name (the engine's model converter uses it).
 - **Snapshots.** A `scene_snapshot` is the typed archive of every entity in hierarchy order plus the root
-  order, owners, settings, name and structure version; `restore` clears the scene and instantiates with
-  `KEEP` guids (an empty scene stays empty on failure).
+  order, owners, settings, name and the structure version at capture (informational: `restore` cannot
+  rewind the counter, its clear and instantiate bump it like any structural change); `restore` clears the
+  scene and instantiates with `KEEP` guids (an empty scene stays empty on failure).
 - **Scene manager.** `load` goes through `load_blocking` (dependencies first) and keeps the handle in the
   record's `asset_load_batch`; `load_file` parses from a `vfs::file_system` and loads the referenced assets
   as a batch; `request_load` queues a handle that `apply_pending_loads` (FRAME_BEGIN) applies once
   LOADED, in request order, dropping FAILED ones with ERROR and `on_load_failed`. `unload` emits
   `on_before_unload` with the roots still alive (scripting runs `destroy_all` there, R29), destroys them in
-  reverse, drops the handles and runs `collect()`. REPLACE first runs everything `instantiate_archive`
-  would reject (`detail::check_loadable`: validation, empty entries, shape, duplicate guids) so a bad file
-  leaves the current content in place, then unloads everything (`scene::clear()` last), takes the file's
-  settings and name and keeps guids; ADDITIVE regenerates colliding guids with one WARN. `info()` and
+  reverse, drops the handles and runs `collect()`. Handlers may load and unload scenes, so neither
+  `unload` nor `apply_document` holds a record pointer across an event: both look the record up again by
+  id, and a load whose scene a handler unloaded returns `SCENE_NOT_LOADED` without touching the newer
+  scene that took over its record slot. `unload_all` unloads every record in reverse load order and, when
+  any entity is left (authored content, raw entities), fires `on_before_unload` once more with
+  `SCENE_ID_AUTHORED` and the remaining roots before `scene::clear()`; a scene a handler loaded meanwhile
+  is cleared and retired with the rest. REPLACE first runs everything `instantiate_archive` would reject
+  (`detail::check_loadable`: validation, empty entries, shape, duplicate guids) so a bad file leaves the
+  current content in place, then unloads everything (`scene::clear()` last), takes the file's settings
+  and name and keeps guids; ADDITIVE regenerates colliding guids with one WARN. `info()` and
   `loaded_scenes()` gather a record's roots from the scene on every call (a `restore()` or a reparent
   changes them), so `loaded_scene_info::roots` is never stale.
 
@@ -151,6 +165,13 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   apply, in the pass and in the fresh walk alike.
 - The guid policy of a multi-copy instantiation is always `REGENERATE_ALL`.
 - `set_enabled` is not a structural change: it does not bump `structure_version()`.
+- `transform_dirty` is only added to entities that carry a `local_transform` (3.2 step 5 says "always"):
+  the propagation pass is the tag's only remover and never visits a transformless entity, which would keep
+  the tag forever. `set_parent`, `deferred_set_parent`, the repair pass and the link pass all skip them.
+- `create_entities` with a null template is one structural operation (one `structure_version()` bump, one
+  `on_structure_changed`) and atomic like the template path: when a creation fails, the entities the call
+  already made are destroyed again without a bump and the error is returned, so a failed call announces
+  nothing.
 - `transform_state` carries a `pending` byte (in the padding of 3.4's `{lastUpdateRun, flags}`, still 8
   bytes) that the parent's level writes and the child's level clears: the design's pull-only stamp made
   every level look up every row's parent (O(N) random reads per frame whatever the dirty set); the mark
@@ -178,10 +199,11 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   files on it), `importer_registry::find_for_path` picks the `.scene.json` / `.prefab.json` importers for
   the database, and `world::get_raw(entity, id) const` documents that grain jobs may read other
   entities' columns while the world is locked.
-- `tests/benchmarks/bench_scene.cpp` (`propagate_10k_flat`, `propagate_10k_depth8`,
-  `set_parent_subtree_1k`, `instantiate_prefab_100`, `snapshot_capture_restore_10k`,
-  `destroy_cascade_10k`; `13_scene.md` 10) guards the 0.3 ms propagation and 50 ms snapshot budgets; the
-  directory does not exist yet and is outside this module.
+- `tests/benchmarks/bench_scene.cpp` (`scene.transform_propagation_10k`,
+  `scene.transform_propagation_10k_sparse`, `scene.snapshot_capture_restore_10k`, `scene.load_10k`; limits
+  in `tests/benchmarks/thresholds.json`) guards the propagation and snapshot budgets of `13_scene.md` 10;
+  the design's `propagate_10k_depth8`, `set_parent_subtree_1k`, `instantiate_prefab_100` and
+  `destroy_cascade_10k` are not written.
 
 ## Threading
 
@@ -192,15 +214,16 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
 const random access (finished in the previous level), read their own rows' `children` lists and write
 the `transform_state::pending` byte of those children (rows of the next level, which no job touches
 until the level join; one parent per child, so no two jobs write the same byte; the mark goes through
-the non-const `world::get_raw(entity, id, false)`, which stamps nothing) and accumulate relaxed counters
-once per chunk. The pass takes `world::lock_iteration()` for the dispatch and records dirty-tag removals
-on the system thread only. Chunk parallelism follows `system_context::jobs()`: with a job system present the level jobs fan
-out even when the scheduler was built with `parallelChunks = false` (the flag has no accessor, requested
-from ecs as `system_context::parallel_chunks()`; every caller that disables it today also runs without a
-job system).
-The asset loaders and importers run on workers and touch only their inputs and `component_registry`
-lookups. Observers run synchronously inside structural calls on the owner thread and only enqueue into
-the deferred buffer or push into scene-side queues.
+the non-const `world::get_raw(entity, id, false)`, which stamps nothing) and add their totals to relaxed
+counters once per job range (a local tally per range, so the shared cache line is not written per chunk;
+`chunksSkipped` is counted by the serial collect step). The pass takes `world::lock_iteration()` for the
+dispatch and records dirty-tag removals on the system thread only. Chunk parallelism follows
+`system_context::jobs()`: with a job system present the level jobs fan out even when the scheduler was
+built with `parallelChunks = false` (the flag has no accessor, requested from ecs as
+`system_context::parallel_chunks()`; every caller that disables it today also runs without a job
+system). The asset loaders and importers run on workers and touch only their inputs and
+`component_registry` lookups. Observers run synchronously inside structural calls on the owner thread
+and only enqueue into the deferred buffer or push into scene-side queues.
 
 ## Testing
 
@@ -209,9 +232,12 @@ the deferred buffer or push into scene-side queues.
 `scene_test_fixture.h` provides the test components (`test_asset_holder`, `test_entity_holder`,
 `test_speed`), `scene_fixture` (registry, world, asset manager over a memory source, `scene_manager`,
 scheduler with the four scene systems, `step()`, validation in the destructor) and `for_each_job_mode`.
-The scheduler runs its stages inline (`parallelSystems = false`) so `parallel_for_chunks` is the
-parallel path under test; the allocation gate of the 10k propagation drives `transform_system::run`
-through a `system_context` directly, because the scheduler's own per-stage job vectors allocate.
+The scheduler runs its stages inline (`parallelSystems = false`); the pass fans its level jobs out with
+`job_system::parallel_for` when the fixture has a job system. The 10k allocation gate runs twice:
+`propagation - 10k entities allocation-free after frame 2 [parallel]` drives `transform_system::run`
+through a `system_context` directly, and
+`propagation - whole TRANSFORM phase through the scheduler allocation-free after frame 2 [parallel]`
+runs the whole phase through the scheduler, which keeps its per-stage bookkeeping in the phase state.
 
 ```
 python tools/build.py --build-dir build/mod_scene --target conjure_scene_tests --test -R scene

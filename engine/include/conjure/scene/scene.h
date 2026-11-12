@@ -80,8 +80,8 @@ namespace conjure::scene {
     /// What happens to the guids of an archive when it is instantiated.
     /// </summary>
     enum class guid_policy : u8 {
-        KEEP,                     // every guid kept; any collision is DUPLICATE_GUID and nothing is created
-        REGENERATE_ON_CONFLICT,   // colliding entries get fresh guids (one WARN per call)
+        KEEP,                     // every guid kept (a null one stays null); a collision is DUPLICATE_GUID
+        REGENERATE_ON_CONFLICT,   // colliding entries get fresh guids (one WARN per call), null guids too
         REGENERATE_ALL            // every entity gets a fresh guid (prefabs, duplicates, count > 1)
     };
 
@@ -152,6 +152,7 @@ namespace conjure::scene {
             u64 mStructureVersion = 1;
             std::vector<ecs::entity> mDestroyQueue = {};
             std::vector<repair_entry> mRepairQueue = {};
+            std::vector<repair_entry> mRepairSpare = {};   // the repair pass swaps the queue in; both keep capacity
             ecs::command_buffer mScratch;                  // no default: bound to the world in the constructor
             std::vector<ecs::entity> mScratchEntities = {};
             u8 mMaxDepthInUse = 0;
@@ -258,8 +259,9 @@ namespace conjure::scene {
 
             /// <summary>
             /// Creates 'count' copies of the template's subtree under 'parent' (fresh guids). A null
-            /// template creates plain entities exactly like create_entity (R55). 'out' receives the roots
-            /// and must hold at least 'count' entries.
+            /// template creates plain entities exactly like create_entity, as one structural operation
+            /// (R55). 'out' receives the roots and must hold at least 'count' entries. Fails atomically: on
+            /// an error no entity created by the call remains.
             /// </summary>
             [[nodiscard]] core::result<instantiate_report> create_entities(
               u32 count,
@@ -507,7 +509,9 @@ namespace conjure::scene {
             void find_by_tag(core::string_id value, std::vector<ecs::entity> &out) const;
 
             /// <summary>
-            /// Appends every entity whose layer index equals 'value' (entities without a layer are 0).
+            /// Appends every entity carrying a layer component whose index equals 'value' (world order, a scan
+            /// of the layer column). Entities that never received a layer are not listed, although layer_of()
+            /// reports 0 for them.
             /// </summary>
             void find_by_layer(u8 value, std::vector<ecs::entity> &out) const;
 
@@ -599,7 +603,12 @@ namespace conjure::scene {
             void bump_structure();
             [[nodiscard]] bool parent_chain_inactive(ecs::entity parentEntity) const noexcept;
             [[nodiscard]] core::result<void> check_reparent(ecs::entity child, ecs::entity newParent) const;
-            [[nodiscard]] core::result<void> destroy_internal(ecs::entity target, bool unlink);
+            [[nodiscard]] core::result<ecs::entity> create_entity_unannounced(
+              core::string_id entityName,
+              ecs::entity parentEntity,
+              u32 index
+            );
+            [[nodiscard]] core::result<void> destroy_unannounced(ecs::entity target);
 
             /*---------------------------------------------------------------*/
             // Repair (scene_link_pass.cpp)

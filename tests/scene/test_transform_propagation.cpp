@@ -368,7 +368,7 @@ TEST_SUITE("scene/transform_propagation") {
         // 13_scene.md 10: the scheduler keeps its per-stage bookkeeping in the phase state, so the phase
         // (apply_hierarchy_changes, propagate_transforms, the command buffer flushes) allocates nothing
         // once it has run twice. The fixture's scheduler runs its stages inline (parallelSystems = false);
-        // parallel_for_chunks still fans the pass out over the workers.
+        // the pass still dispatches its level jobs over the workers with job_system::parallel_for.
         for_each_job_mode([](core::jobs::job_system *jobs) {
             scene_fixture fixture(jobs);
             scene::scene &target = fixture.active();
@@ -631,5 +631,36 @@ TEST_SUITE("scene/transform_propagation") {
                 break;
             }
         }
+    }
+
+    TEST_CASE("propagation - stats are identical inline and parallel [parallel]") {
+        // The moved 5,000-entity subtree has levels of 900 and about 4,000 rows, above the inline limit, so
+        // the 4-worker run really dispatches and every job range adds its own tally to the counters.
+        std::vector<scene::propagation_stats> runs = {};
+        for (const u32 workers : {0u, 4u}) {
+            CAPTURE(workers);
+            core::jobs::job_system jobs = {};
+            core::jobs::job_system_desc desc = {};
+            desc.workerCount = workers;
+            REQUIRE(jobs.start(desc).has_value());
+            {
+                scene_fixture fixture(&jobs);
+                std::mt19937_64 engine(testing::environment().seed);
+                const two_trees trees = build_two_trees(fixture, engine);
+                fixture.step(2);
+                CONJURE_REQUIRE_OK(fixture.active().set_local_transform(trees.rootA, at(1.0f, 1.0f, 1.0f)));
+                fixture.step();
+                runs.push_back(fixture.manager.transforms().last_stats());
+            }
+            jobs.stop();
+        }
+        REQUIRE(runs.size() == 2);
+        CHECK(runs[0].worldRecomputed == 5000);
+        CHECK(runs[0].entitiesVisited == runs[1].entitiesVisited);
+        CHECK(runs[0].worldRecomputed == runs[1].worldRecomputed);
+        CHECK(runs[0].renderRecomputed == runs[1].renderRecomputed);
+        CHECK(runs[0].chunksVisited == runs[1].chunksVisited);
+        CHECK(runs[0].chunksSkipped == runs[1].chunksSkipped);
+        CHECK(runs[0].levels == runs[1].levels);
     }
 }

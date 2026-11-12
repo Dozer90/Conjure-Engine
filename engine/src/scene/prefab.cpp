@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace conjure::scene {
@@ -78,17 +79,39 @@ namespace {
         }
         return nullptr;
     }
+
+    /// <summary>
+    /// What instantiating 'asset' under 'parentEntity' (null = a scene root) would reject, checked before
+    /// revert destroys the instance it replaces: the archive, its single root and the depth limit.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_reinstantiable(
+      const scene &target,
+      const prefab_asset &asset,
+      ecs::entity parentEntity
+    ) {
+        const scene_component_ids &ids = target.ids();
+        CONJURE_TRY(asset.archive->validate());
+        CONJURE_TRY(detail::check_prefab_roots(*asset.archive, ids, "prefab {}", asset.id));
+        CONJURE_TRY_ASSIGN(const detail::archive_shape shape, detail::compute_archive_shape(*asset.archive, ids));
+        const u32 baseDepth =
+          parentEntity.is_null() ? 0u : static_cast<u32>(target.tree().depth_of(parentEntity)) + 1u;
+        u32 height = 0;
+        for (const u8 depth : shape.depth) {
+            height = std::max<u32>(height, depth);
+        }
+        if (baseDepth + height >= MAX_HIERARCHY_DEPTH) {
+            return core::make_error(scene_error::HIERARCHY_TOO_DEEP, "prefab {} would reach depth {} under entity {}",
+              asset.id, baseDepth + height, parentEntity);
+        }
+        return core::result<void>::success();
+    }
 }
 
 namespace prefab {
 
 core::result<prefab_document> build_document(const scene &source, ecs::entity root, std::string_view name) {
     CONJURE_TRY_ASSIGN(ecs::entity_archive archive, scene_serializer::capture_subtree(source, root));
-    const std::vector<u32> roots = detail::archive_roots(archive, source.ids());
-    if (roots.size() != 1 || roots.front() != 0) {
-        return core::make_error(scene_error::PREFAB_MULTIPLE_ROOTS, "the subtree of entity {} has {} roots", root,
-          roots.size());
-    }
+    CONJURE_TRY(detail::check_prefab_roots(archive, source.ids(), "the subtree of entity {}", root));
     prefab_document document = {};
     document.name = std::string(name);
     document.archive = std::make_shared<const ecs::entity_archive>(std::move(archive));
@@ -143,10 +166,7 @@ core::result<void> instantiate_many(
         return core::error(core::error_code::INVALID_ARGUMENT, "instantiate_many needs one root slot per instance");
     }
     const scene_component_ids &ids = target.ids();
-    const std::vector<u32> roots = detail::archive_roots(*asset.archive, ids);
-    if (roots.size() != 1 || roots.front() != 0) {
-        return core::make_error(scene_error::PREFAB_MULTIPLE_ROOTS, "prefab {} has {} roots", asset.id, roots.size());
-    }
+    CONJURE_TRY(detail::check_prefab_roots(*asset.archive, ids, "prefab {}", asset.id));
     instantiate_options fixed = options;
     fixed.guids = guid_policy::REGENERATE_ALL;
     CONJURE_TRY_ASSIGN(
@@ -340,6 +360,8 @@ core::result<void> revert(scene &target, ecs::entity root) {
             }
         }
     }
+    // Everything the re-instantiation could reject is checked while the instance still exists.
+    CONJURE_TRY(check_reinstantiable(target, *asset, parentEntity));
 
     // The asset payload stays resident across the destroy: keep the archive alive by value.
     const prefab_asset kept = *asset;
@@ -373,12 +395,16 @@ core::result<prefab_document> apply(const scene &source, ecs::entity root) {
     const ecs::component_registry &registry = world.registry();
     prefab_document document = {};
     document.name = captured.name;
+    // A link guid becomes an entry guid once: a duplicated entity still carries its source's link, and the
+    // first entity in hierarchy pre-order keeps it while later repeats get fresh guids.
+    std::unordered_set<core::uuid> usedLinks = {};
     document.archive = std::make_shared<const ecs::entity_archive>(
       detail::clone_archive(*captured.archive, [&](u32 index, ecs::archive_entry &entry) {
           const std::optional<prefab_link> link =
             detail::read_component<prefab_link>(*captured.archive, index, ids.prefabLink);
-          const core::uuid entryGuid =
-            link.has_value() && !link->assetGuid.is_null() ? link->assetGuid : core::uuid::generate();
+          const bool keepLink =
+            link.has_value() && !link->assetGuid.is_null() && usedLinks.insert(link->assetGuid).second;
+          const core::uuid entryGuid = keepLink ? link->assetGuid : core::uuid::generate();
           detail::set_entry_component(entry, ids.guid, guid{entryGuid});
           detail::set_entry_component(entry, ids.prefabLink, prefab_link{entryGuid});
           if (index == 0) {
@@ -478,7 +504,7 @@ core::result<void> prefab_builder::add_component_json(
         return core::make_error(scene_error::BUILDER_INVALID, "node {} does not exist", node);
     }
     const ecs::component_id id = mRegistry->find(component);
-    if (!id.is_valid() || id.value == 0) {
+    if (!id.is_valid() || id == detail::UNRESOLVED_COMPONENTS_ID) {
         return ecs::make_error(
           ecs::ecs_error::UNKNOWN_COMPONENT,
           "component '" + component.to_string() + "' is not registered"
@@ -521,7 +547,7 @@ core::result<void> prefab_builder::add_component_raw(
     if (node >= mNodes.size()) {
         return core::make_error(scene_error::BUILDER_INVALID, "node {} does not exist", node);
     }
-    if (!mRegistry->is_registered(component) || component.value == 0) {
+    if (!mRegistry->is_registered(component) || component == detail::UNRESOLVED_COMPONENTS_ID) {
         return ecs::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (is_reserved(component)) {
@@ -554,7 +580,7 @@ core::result<void> prefab_builder::add_tag(u32 node, ecs::component_id component
     if (node >= mNodes.size()) {
         return core::make_error(scene_error::BUILDER_INVALID, "node {} does not exist", node);
     }
-    if (!mRegistry->is_registered(component) || component.value == 0) {
+    if (!mRegistry->is_registered(component) || component == detail::UNRESOLVED_COMPONENTS_ID) {
         return ecs::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (is_reserved(component)) {

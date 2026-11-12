@@ -366,7 +366,8 @@ TEST_SUITE("scene/scene_manager") {
               order.push_back(id);
           });
         manager.unload_all();
-        CHECK(order == std::vector<scene::scene_id>{second.value(), first.value()});
+        // The authored entity left over after the records gets the event too, as SCENE_ID_AUTHORED.
+        CHECK(order == std::vector<scene::scene_id>{second.value(), first.value(), scene::SCENE_ID_AUTHORED});
         CHECK(manager.loaded_scenes().empty());
         CHECK_FALSE(fixture.scene().contains(authored));
         CHECK(fixture.base.world.entity_count() == 0);
@@ -375,6 +376,196 @@ TEST_SUITE("scene/scene_manager") {
         // The manager keeps working afterwards.
         CONJURE_REQUIRE_OK(manager.load(fixture.sceneA));
         CHECK(fixture.scene().roots().size() == 2);
+    }
+
+    TEST_CASE("scene_manager - unload_all fires on_before_unload for authored entities") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        const ecs::entity authored = fixture.base.create("authored");
+        const ecs::entity child = fixture.base.create("child", authored);
+        std::vector<scene::scene_id> ids = {};
+        std::vector<ecs::entity> seenRoots = {};
+        const core::event_subscription subscription =
+          manager.on_before_unload().subscribe([&](scene::scene_id id, std::span<const ecs::entity> roots) {
+              ids.push_back(id);
+              for (const ecs::entity root : roots) {
+                  // Still alive: handlers (scripting's destroy_all) run before the clear.
+                  CHECK(fixture.scene().contains(root));
+                  seenRoots.push_back(root);
+              }
+          });
+
+        // No record is loaded: the authored content alone gets the event before it dies.
+        manager.unload_all();
+        CHECK(ids == std::vector<scene::scene_id>{scene::SCENE_ID_AUTHORED});
+        CHECK(seenRoots == std::vector<ecs::entity>{authored});
+        CHECK_FALSE(fixture.scene().contains(authored));
+        CHECK_FALSE(fixture.scene().contains(child));
+        CHECK(fixture.base.world.entity_count() == 0);
+
+        // An empty world has nothing to announce.
+        manager.unload_all();
+        CHECK(ids.size() == 1);
+    }
+
+    TEST_CASE("regression - unload survives an on_before_unload handler that loads a scene") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        const core::result<scene::scene_id> first = manager.load(fixture.sceneA, scene::load_mode::ADDITIVE);
+        CONJURE_REQUIRE_OK(first);
+        // A one-shot handler loading another scene: the record list grows (and moves) under unload.
+        std::optional<scene::scene_id> second = std::nullopt;
+        bool fired = false;
+        const core::event_subscription subscription =
+          manager.on_before_unload().subscribe([&](scene::scene_id, std::span<const ecs::entity>) {
+              if (fired) {
+                  return;
+              }
+              fired = true;
+              const core::result<scene::scene_id> loaded = manager.load(fixture.sceneB, scene::load_mode::ADDITIVE);
+              CHECK(loaded.has_value());
+              if (loaded.has_value()) {
+                  second = loaded.value();
+              }
+          });
+
+        CONJURE_REQUIRE_OK(manager.unload(first.value()));
+        REQUIRE(second.has_value());
+        CHECK_FALSE(manager.is_loaded(first.value()));
+        CHECK(manager.is_loaded(*second));
+        CHECK(manager.loaded_scenes().size() == 1);
+        // Scene a's two roots and their children are gone; scene b's three pairs remain.
+        CHECK(fixture.base.world.entity_count() == 6);
+        CHECK(fixture.scene().roots().size() == 3);
+    }
+
+    TEST_CASE("regression - a load survives an on_structure_changed handler that loads a scene") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        core::vfs::memory_file_system fs = {};
+        const std::string text = make_scene_text("filed", "f", 2, 30, fixture.blob, "{}");
+        CONJURE_REQUIRE_OK(fs.write_text_file("scenes/filed.scene.json", text));
+        // A one-shot handler loading another scene while the file's entities are being linked in.
+        std::optional<scene::scene_id> nested = std::nullopt;
+        bool fired = false;
+        const core::event_subscription subscription = fixture.scene().on_structure_changed().subscribe([&]() {
+            if (fired) {
+                return;
+            }
+            fired = true;
+            const core::result<scene::scene_id> loaded = manager.load(fixture.sceneB, scene::load_mode::ADDITIVE);
+            CHECK(loaded.has_value());
+            if (loaded.has_value()) {
+                nested = loaded.value();
+            }
+        });
+
+        const core::result<scene::scene_id> filed =
+          manager.load_file(fs, "scenes/filed.scene.json", scene::load_mode::ADDITIVE);
+        CONJURE_REQUIRE_OK(filed);
+        REQUIRE(nested.has_value());
+        CHECK(manager.is_loaded(filed.value()));
+        CHECK(manager.is_loaded(*nested));
+        const std::optional<scene::loaded_scene_info> info = manager.info(filed.value());
+        REQUIRE(info.has_value());
+        CHECK(info->path == "scenes/filed.scene.json");
+        CHECK(info->roots.size() == 2);
+        CHECK(manager.loaded_scenes().size() == 2);
+        // Unloading the file's scene leaves scene b's three pairs alone.
+        CONJURE_REQUIRE_OK(manager.unload(filed.value()));
+        CHECK(manager.is_loaded(*nested));
+        CHECK(fixture.base.world.entity_count() == 6);
+    }
+
+    TEST_CASE("regression - a load unloaded by an on_structure_changed handler spares the slot's new scene") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        core::vfs::memory_file_system fs = {};
+        const std::string text = make_scene_text("filed", "f", 2, 30, fixture.blob, "{}");
+        CONJURE_REQUIRE_OK(fs.write_text_file("scenes/filed.scene.json", text));
+        std::vector<scene::scene_id> loadedEvents = {};
+        const core::event_subscription loadedSubscription = manager.on_loaded().subscribe([&](scene::scene_id id) {
+            loadedEvents.push_back(id);
+        });
+        // A one-shot handler that unloads everything, the file's scene in flight included, then loads scene b,
+        // which takes over the file scene's freed record slot.
+        std::optional<scene::scene_id> nested = std::nullopt;
+        bool fired = false;
+        const core::event_subscription subscription = fixture.scene().on_structure_changed().subscribe([&]() {
+            if (fired) {
+                return;
+            }
+            fired = true;
+            manager.unload_all();
+            const core::result<scene::scene_id> loaded = manager.load(fixture.sceneB, scene::load_mode::ADDITIVE);
+            CHECK(loaded.has_value());
+            if (loaded.has_value()) {
+                nested = loaded.value();
+            }
+        });
+
+        CONJURE_CHECK_ERROR(
+          manager.load_file(fs, "scenes/filed.scene.json", scene::load_mode::ADDITIVE),
+          scene_error::SCENE_NOT_LOADED
+        );
+        REQUIRE(nested.has_value());
+        CHECK(nested->index == 0);
+        CHECK(manager.is_loaded(*nested));
+        // The file's load neither announced itself nor took over scene b's record.
+        CHECK(loadedEvents == std::vector<scene::scene_id>{*nested});
+        const std::vector<scene::loaded_scene_info> scenes = manager.loaded_scenes();
+        REQUIRE(scenes.size() == 1);
+        CHECK(scenes.front().id == *nested);
+        CHECK(scenes.front().path.empty());
+        CHECK(scenes.front().roots.size() == 3);
+        CHECK(fixture.base.world.entity_count() == 6);
+        CONJURE_REQUIRE_OK(manager.unload(*nested));
+        CHECK(manager.loaded_scenes().empty());
+        CHECK(fixture.base.world.entity_count() == 0);
+    }
+
+    TEST_CASE("regression - unload_all retires a scene an on_before_unload handler loads") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        // Loads scene b once, from the first event that names 'trigger'.
+        scene::scene_id trigger = {};
+        std::optional<scene::scene_id> late = std::nullopt;
+        const core::event_subscription subscription =
+          manager.on_before_unload().subscribe([&](scene::scene_id id, std::span<const ecs::entity>) {
+              if (late.has_value() || !(id == trigger)) {
+                  return;
+              }
+              const core::result<scene::scene_id> loaded = manager.load(fixture.sceneB, scene::load_mode::ADDITIVE);
+              CHECK(loaded.has_value());
+              if (loaded.has_value()) {
+                  late = loaded.value();
+              }
+          });
+
+        SUBCASE("loaded while a record unloads") {
+            const core::result<scene::scene_id> first = manager.load(fixture.sceneA, scene::load_mode::ADDITIVE);
+            CONJURE_REQUIRE_OK(first);
+            trigger = first.value();
+        }
+        SUBCASE("loaded while the authored content unloads") {
+            const ecs::entity authored = fixture.base.create("authored");
+            REQUIRE(fixture.scene().contains(authored));
+            trigger = scene::SCENE_ID_AUTHORED;
+        }
+
+        manager.unload_all();
+        REQUIRE(late.has_value());
+        CHECK_FALSE(manager.is_loaded(*late));
+        CHECK(manager.loaded_scenes().empty());
+        CHECK_FALSE(manager.find_loaded(fixture.sceneB).has_value());
+        CHECK(fixture.scene().roots().empty());
+        CHECK(fixture.base.world.entity_count() == 0);
+
+        // The manager stays usable: scene b loads again into a fresh record.
+        const core::result<scene::scene_id> again = manager.load(fixture.sceneB, scene::load_mode::ADDITIVE);
+        CONJURE_REQUIRE_OK(again);
+        CHECK(manager.loaded_scenes().size() == 1);
+        CHECK(fixture.base.world.entity_count() == 6);
     }
 
     TEST_CASE("scene_manager - load_file from memory vfs") {

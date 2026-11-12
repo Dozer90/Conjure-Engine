@@ -49,7 +49,8 @@ namespace conjure::scene {
 
         private:
             /// <summary>
-            /// Relaxed counters the chunk jobs add to once per chunk; copied into mStats after the run.
+            /// Relaxed counters each job range adds its local tally to once (chunksSkipped comes from the
+            /// serial collect step); copied into mStats after the run.
             /// </summary>
             struct run_counters {
                 std::atomic<u32> entitiesVisited = 0;
@@ -57,6 +58,17 @@ namespace conjure::scene {
                 std::atomic<u32> renderRecomputed = 0;
                 std::atomic<u32> chunksVisited = 0;
                 std::atomic<u32> chunksSkipped = 0;
+            };
+
+            /// <summary>
+            /// One job range's counts, kept on its own stack so the shared counters' cache line is written
+            /// once per range instead of four times per chunk.
+            /// </summary>
+            struct chunk_tally {
+                u32 visited = 0;
+                u32 worldWrites = 0;
+                u32 renderWrites = 0;
+                u32 chunks = 0;
             };
 
             /// <summary>
@@ -133,7 +145,7 @@ namespace conjure::scene {
         private:
             void run_level(ecs::query &level, ecs::system_context &context, u32 runId, u64 since, f32 alpha);
             void collect_chunk(ecs::chunk_view &chunk, u64 since);
-            void process_chunk(const level_chunk &item, u32 runId, f32 alpha);
+            void process_chunk(const level_chunk &item, u32 runId, f32 alpha, chunk_tally &tally);
             void mark_children_pending(const children &list);
     };
 

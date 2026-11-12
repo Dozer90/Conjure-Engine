@@ -180,13 +180,14 @@ namespace conjure::scene {
 
             /// <summary>
             /// Loads a scene asset synchronously (load_blocking, dependencies included) and applies it.
-            /// LOAD_FAILED when the asset is not a scene or failed to load.
+            /// LOAD_FAILED when the asset is not a scene or failed to load; SCENE_NOT_LOADED when an
+            /// on_structure_changed handler unloads the scene before its load finishes.
             /// </summary>
             [[nodiscard]] core::result<scene_id> load(const assets::asset_id &id, load_mode mode = load_mode::REPLACE);
 
             /// <summary>
             /// Parses a scene file from the file system, applies it and loads the referenced assets as a
-            /// batch (the record keeps the handles).
+            /// batch (the record keeps the handles). SCENE_NOT_LOADED as for load.
             /// </summary>
             [[nodiscard]] core::result<scene_id> load_file(
               core::vfs::file_system &fs,
@@ -214,7 +215,10 @@ namespace conjure::scene {
             [[nodiscard]] core::result<void> unload(scene_id id);
 
             /// <summary>
-            /// Unloads every scene in reverse load order, then clears the remaining authored entities.
+            /// Unloads every scene in reverse load order, then clears the remaining authored entities;
+            /// unload_all fires on_before_unload once more with SCENE_ID_AUTHORED and the remaining roots when
+            /// any entity is left. A scene an on_before_unload handler loads meanwhile is cleared and retired
+            /// with the rest, so no scene is loaded afterwards.
             /// </summary>
             void unload_all();
 
@@ -265,7 +269,9 @@ namespace conjure::scene {
 
             /// <summary>
             /// Fires before a scene's entities die with the roots about to be destroyed (scripting runs
-            /// destroy_all here, R29).
+            /// destroy_all here, R29); unload_all fires it once more with SCENE_ID_AUTHORED and the remaining
+            /// roots when any entity is left. Handlers may load scenes; one loaded during unload_all is
+            /// cleared and retired with the rest.
             /// </summary>
             [[nodiscard]] core::event<scene_id, std::span<const ecs::entity>> &on_before_unload() noexcept {
                 return mOnBeforeUnload;

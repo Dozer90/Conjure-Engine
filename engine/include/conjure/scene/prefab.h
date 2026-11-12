@@ -102,7 +102,7 @@ namespace conjure::scene {
         /// Instantiates the prefab (every guid regenerated) and returns the root, which carries a
         /// prefab_instance bound to the asset; entities without a prefab_link receive their entry's guid.
         /// </summary>
-        [[nodiscard]] core::result<ecs::entity> instantiate(
+        [[nodiscard]] CONJURE_API core::result<ecs::entity> instantiate(
           scene &target,
           const prefab_asset &asset,
           const instantiate_options &options = {}
@@ -132,13 +132,16 @@ namespace conjure::scene {
 
         /// <summary>
         /// Replaces the instance with a fresh one at the same place, keeping the root's guid, name and
-        /// local transform. NOT_A_PREFAB_INSTANCE, PREFAB_NOT_LOADED.
+        /// local transform. NOT_A_PREFAB_INSTANCE, PREFAB_NOT_LOADED, and PREFAB_MULTIPLE_ROOTS or
+        /// HIERARCHY_TOO_DEEP when the current asset no longer fits at the instance's place; the instance is
+        /// left untouched on these errors.
         /// </summary>
         [[nodiscard]] CONJURE_API core::result<void> revert(scene &target, ecs::entity root);
 
         /// <summary>
         /// The instance as a new prefab document: prefab_link guids become entry guids (fresh ones for
-        /// new entities) and the root loses its prefab_instance. NOT_A_PREFAB_INSTANCE.
+        /// new entities and for a link guid an earlier entity already used) and the root loses its
+        /// prefab_instance. NOT_A_PREFAB_INSTANCE.
         /// </summary>
         [[nodiscard]] CONJURE_API core::result<prefab_document> apply(const scene &source, ecs::entity root);
 

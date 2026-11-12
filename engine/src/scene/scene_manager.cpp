@@ -116,12 +116,13 @@ void scene_manager::request_unload(scene_id id) {
 }
 
 core::result<void> scene_manager::unload(scene_id id) {
-    loaded_record *record = find_record(id);
-    if (record == nullptr) {
+    if (find_record(id) == nullptr) {
         return core::make_error(scene_error::SCENE_NOT_LOADED, "scene {}:{} is not loaded", id.index, id.generation);
     }
     std::vector<ecs::entity> roots = {};
     collect_owned_roots(id, roots);
+    // on_before_unload and on_structure_changed handlers may load scenes and grow mRecords, so no record
+    // pointer is held across them.
     mOnBeforeUnload.emit(id, std::span<const ecs::entity>(roots));
     for (usize index = roots.size(); index > 0; --index) {
         const ecs::entity root = roots[index - 1];
@@ -130,9 +131,14 @@ core::result<void> scene_manager::unload(scene_id id) {
             CONJURE_UNUSED(destroyed);
         }
     }
-    record->alive = false;
-    record->batch = assets::asset_load_batch();
-    mLoadOrder.erase(std::remove(mLoadOrder.begin(), mLoadOrder.end(), id.index), mLoadOrder.end());
+    // A handler that already unloaded this scene re-entrantly left nothing to retire (and its slot may
+    // already hold a newer scene, whose load-order entry must stay).
+    loaded_record *record = find_record(id);
+    if (record != nullptr) {
+        record->alive = false;
+        record->batch = assets::asset_load_batch();
+        mLoadOrder.erase(std::remove(mLoadOrder.begin(), mLoadOrder.end(), id.index), mLoadOrder.end());
+    }
     const u32 collected = mAssets->collect();
     CONJURE_UNUSED(collected);
     return core::result<void>::success();
@@ -147,7 +153,34 @@ void scene_manager::unload_all() {
             CONJURE_UNUSED(unloaded);
         }
     }
+    // Every record loaded before the call is gone: what remains is authored content (and raw entities that
+    // may carry script instances), which gets the same chance to clean up before clear() (R29), plus the
+    // content of any scene a handler loaded meanwhile.
+    if (mWorld->entity_count() > 0) {
+        std::vector<ecs::entity> remaining = {};
+        remaining.reserve(mScene.roots().size());
+        for (const root_entry &entry : mScene.roots()) {
+            remaining.push_back(entry.entity);
+        }
+        mOnBeforeUnload.emit(SCENE_ID_AUTHORED, std::span<const ecs::entity>(remaining));
+    }
     mScene.clear();
+
+    // A scene a handler loaded during the call lost its entities to clear(): retire its record too, so
+    // "unloads every scene" holds and its batch stops keeping the assets resident.
+    bool retired = false;
+    for (loaded_record &record : mRecords) {
+        if (record.alive) {
+            record.alive = false;
+            record.batch = assets::asset_load_batch();
+            retired = true;
+        }
+    }
+    mLoadOrder.clear();
+    if (retired) {
+        const u32 collected = mAssets->collect();
+        CONJURE_UNUSED(collected);
+    }
 }
 
 void scene_manager::apply_pending_loads() {
@@ -297,21 +330,30 @@ core::result<scene_id> scene_manager::apply_document(
     record.info.path = std::move(path);
     record.batch = std::move(batch);
     mLoadOrder.push_back(slot);
+    const scene_id id = record.info.id;
 
+    // on_structure_changed handlers run inside load_scene and may load or unload scenes themselves, which
+    // can grow mRecords or retire this record and hand its slot to a newer scene: the record is looked up
+    // again by id afterwards instead of through the reference above.
     const guid_policy policy = mode == load_mode::REPLACE ? guid_policy::KEEP : guid_policy::REGENERATE_ON_CONFLICT;
-    const core::result<instantiate_report> report =
-      scene_serializer::load_scene(mScene, document, record.info.id, policy);
+    const core::result<instantiate_report> report = scene_serializer::load_scene(mScene, document, id, policy);
+    loaded_record *landed = find_record(id);
     if (!report.has_value()) {
-        record.alive = false;
-        record.batch = assets::asset_load_batch();
-        mLoadOrder.erase(std::remove(mLoadOrder.begin(), mLoadOrder.end(), slot), mLoadOrder.end());
+        if (landed != nullptr) {
+            landed->alive = false;
+            landed->batch = assets::asset_load_batch();
+            mLoadOrder.erase(std::remove(mLoadOrder.begin(), mLoadOrder.end(), slot), mLoadOrder.end());
+        }
         return report.get_error();
+    }
+    if (landed == nullptr) {
+        return core::make_error(scene_error::SCENE_NOT_LOADED, "scene {}:{} was unloaded while it loaded", id.index,
+          id.generation);
     }
     if (asset.is_null() && !report.value().assetIds.empty()) {
         // A file load owns no scene asset: the referenced assets are kept resident through a batch.
-        record.batch = mAssets->load_batch(report.value().assetIds);
+        landed->batch = mAssets->load_batch(report.value().assetIds);
     }
-    const scene_id id = record.info.id;
     mOnLoaded.emit(id);
     return id;
 }

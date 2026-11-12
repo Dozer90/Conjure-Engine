@@ -133,7 +133,8 @@ namespace scene_test {
 
     /// <summary>
     /// The scene fixture: everything the module needs, headless. The scheduler runs stage systems
-    /// inline (parallelSystems = false) and fans parallel_for_chunks out over 'jobs' when given.
+    /// inline (parallelSystems = false); the transform pass dispatches its level jobs over 'jobs' with
+    /// job_system::parallel_for when given.
     /// </summary>
     class scene_fixture {
         public:

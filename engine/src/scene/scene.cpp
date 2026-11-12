@@ -98,53 +98,7 @@ void scene::set_settings(core::json::document value) {
 // Entities
 
 core::result<ecs::entity> scene::create_entity(core::string_id entityName, ecs::entity parentEntity, u32 index) {
-    u8 depth = 0;
-    bool parentInactive = false;
-    if (!parentEntity.is_null()) {
-        if (!mWorld->is_alive(parentEntity)) {
-            return not_alive("create_entity", parentEntity);
-        }
-        const u32 level = static_cast<u32>(mTree.depth_of(parentEntity)) + 1;
-        if (level >= MAX_HIERARCHY_DEPTH) {
-            return core::make_error(scene_error::HIERARCHY_TOO_DEEP, "a child of entity {} would sit at depth {}",
-              parentEntity, level);
-        }
-        depth = static_cast<u8>(level);
-        parentInactive = parent_chain_inactive(parentEntity);
-    }
-
-    ecs::component_mask mask = {};
-    mask.set(mIds.guid);
-    mask.set(mIds.name);
-    mask.set(mIds.localTransform);
-    mask.set(mIds.worldTransform);
-    mask.set(mIds.renderWorldTransform);
-    mask.set(mIds.transformState);
-    mask.set(mIds.transformDirty);
-    if (depth > 0) {
-        mask.set(mIds.parent);
-        mask.set(mIds.depth[depth]);
-    }
-    if (parentInactive) {
-        mask.set(mIds.inactive);
-    }
-
-    operation_scope operation(*this);
-    CONJURE_TRY_ASSIGN(const ecs::entity created, mWorld->create_entity(mask));
-
-    guid *identity = mWorld->get<guid>(created);
-    identity->value = core::uuid::generate();
-    const bool indexed = mGuids.insert(identity->value, created);
-    CONJURE_UNUSED(indexed);
-    mWorld->get<name_component>(created)->value = entityName;
-
-    if (depth > 0) {
-        mWorld->get<parent>(created)->value = parentEntity;
-        link_child(created, parentEntity, index);
-        mMaxDepthInUse = std::max(mMaxDepthInUse, depth);
-    } else {
-        insert_root(created, index, SCENE_ID_AUTHORED);
-    }
+    CONJURE_TRY_ASSIGN(const ecs::entity created, create_entity_unannounced(entityName, parentEntity, index));
     bump_structure();
     return created;
 }
@@ -162,8 +116,23 @@ core::result<instantiate_report> scene::create_entities(
         instantiate_report report = {};
         report.entities.reserve(count);
         for (u32 index = 0; index < count; ++index) {
-            CONJURE_TRY_ASSIGN(out[index], create_entity(core::string_id(), parentEntity, APPEND_CHILD));
-            report.entities.push_back(out[index]);
+            const core::result<ecs::entity> created =
+              create_entity_unannounced(core::string_id(), parentEntity, APPEND_CHILD);
+            if (!created.has_value()) {
+                // Atomic like the template path: nothing this call created outlives the failure, and the
+                // net change is none, so nothing is announced.
+                for (u32 undo = index; undo > 0; --undo) {
+                    const core::result<void> destroyed = destroy_unannounced(out[undo - 1]);
+                    CONJURE_UNUSED(destroyed);
+                }
+                std::fill(out.begin(), out.begin() + index, ecs::NULL_ENTITY);
+                return created.get_error();
+            }
+            out[index] = created.value();
+            report.entities.push_back(created.value());
+        }
+        if (count > 0) {
+            bump_structure();
         }
         report.entityCount = count;
         return report;
@@ -209,7 +178,9 @@ void scene::destroy(ecs::entity target) {
 }
 
 core::result<void> scene::destroy_now(ecs::entity target) {
-    return destroy_internal(target, true);
+    CONJURE_TRY(destroy_unannounced(target));
+    bump_structure();
+    return core::result<void>::success();
 }
 
 void scene::clear() {
@@ -231,6 +202,7 @@ void scene::clear() {
     mGuids.clear();
     mDestroyQueue.clear();
     mRepairQueue.clear();
+    mRepairSpare.clear();
     mScratchEntities.clear();
     mMaxDepthInUse = 0;
     mExpectedRepairs = 0;
@@ -336,7 +308,7 @@ core::result<void> scene::deferred_set_parent(
             commands.add_raw(child, mIds.parent, bytes_of(link));
         }
     }
-    if (!mWorld->has_raw(child, mIds.transformDirty)) {
+    if (mWorld->has_raw(child, mIds.localTransform) && !mWorld->has_raw(child, mIds.transformDirty)) {
         commands.add_raw(child, mIds.transformDirty);
     }
 
@@ -496,7 +468,10 @@ core::result<void> scene::add_transform(ecs::entity target, const local_transfor
         mScratch.add<local_transform>(target, value);
     }
     add_companions(target, mask);
-    add_dirty(target);
+    // The local_transform may still sit in mScratch, so add_dirty's live-mask test does not apply here.
+    if (!mask.test(mIds.transformDirty)) {
+        mScratch.add_raw(target, mIds.transformDirty);
+    }
     flush_scratch();
     return core::result<void>::success();
 }
@@ -763,7 +738,7 @@ void scene::destroy_pending() {
     std::swap(mScratchEntities, mDestroyQueue);
     for (const ecs::entity target : mScratchEntities) {
         if (mWorld->is_alive(target)) {
-            const core::result<void> destroyed = destroy_internal(target, true);
+            const core::result<void> destroyed = destroy_now(target);
             CONJURE_UNUSED(destroyed);
         }
     }
@@ -901,6 +876,75 @@ core::result<void> scene::validate() const {
 /*===========================================================================*/
 // Tree bookkeeping
 
+core::result<ecs::entity> scene::create_entity_unannounced(
+  core::string_id entityName,
+  ecs::entity parentEntity,
+  u32 index
+) {
+    u8 depth = 0;
+    bool parentInactive = false;
+    if (!parentEntity.is_null()) {
+        if (!mWorld->is_alive(parentEntity)) {
+            return not_alive("create_entity", parentEntity);
+        }
+        const u32 level = static_cast<u32>(mTree.depth_of(parentEntity)) + 1;
+        if (level >= MAX_HIERARCHY_DEPTH) {
+            return core::make_error(scene_error::HIERARCHY_TOO_DEEP, "a child of entity {} would sit at depth {}",
+              parentEntity, level);
+        }
+        depth = static_cast<u8>(level);
+        parentInactive = parent_chain_inactive(parentEntity);
+    }
+
+    ecs::component_mask mask = {};
+    mask.set(mIds.guid);
+    mask.set(mIds.name);
+    mask.set(mIds.localTransform);
+    mask.set(mIds.worldTransform);
+    mask.set(mIds.renderWorldTransform);
+    mask.set(mIds.transformState);
+    mask.set(mIds.transformDirty);
+    if (depth > 0) {
+        mask.set(mIds.parent);
+        mask.set(mIds.depth[depth]);
+    }
+    if (parentInactive) {
+        mask.set(mIds.inactive);
+    }
+
+    operation_scope operation(*this);
+    CONJURE_TRY_ASSIGN(const ecs::entity created, mWorld->create_entity(mask));
+
+    guid *identity = mWorld->get<guid>(created);
+    identity->value = core::uuid::generate();
+    const bool indexed = mGuids.insert(identity->value, created);
+    CONJURE_UNUSED(indexed);
+    mWorld->get<name_component>(created)->value = entityName;
+
+    if (depth > 0) {
+        mWorld->get<parent>(created)->value = parentEntity;
+        link_child(created, parentEntity, index);
+        mMaxDepthInUse = std::max(mMaxDepthInUse, depth);
+    } else {
+        insert_root(created, index, SCENE_ID_AUTHORED);
+    }
+    return created;
+}
+
+core::result<void> scene::destroy_unannounced(ecs::entity target) {
+    if (!mWorld->is_alive(target)) {
+        return not_alive("destroy_now", target);
+    }
+    operation_scope operation(*this);
+    const ecs::entity parentEntity = mTree.parent_of(target);
+    if (parentEntity.is_null()) {
+        erase_root(target);
+    } else {
+        unlink_child(target, parentEntity);
+    }
+    return mWorld->destroy_entity(target);
+}
+
 usize scene::root_index_of(ecs::entity target) const noexcept {
     for (usize index = 0; index < mRoots.size(); ++index) {
         if (mRoots[index].entity == target) {
@@ -1031,7 +1075,10 @@ void scene::refresh_inactive_subtree(ecs::entity root, bool ancestorInactive) {
 }
 
 void scene::add_dirty(ecs::entity target) {
-    if (!mWorld->has_raw(target, mIds.transformDirty)) {
+    // The propagation pass is the tag's only remover and never visits a transformless entity, so such an
+    // entity would keep the tag forever.
+    const ecs::component_mask mask = mWorld->mask_of(target);
+    if (mask.test(mIds.localTransform) && !mask.test(mIds.transformDirty)) {
         mScratch.add_raw(target, mIds.transformDirty);
     }
 }
@@ -1090,24 +1137,6 @@ core::result<void> scene::check_reparent(ecs::entity child, ecs::entity newParen
         return core::make_error(scene_error::HIERARCHY_TOO_DEEP, "entity {} would reach depth {} under entity {}",
           child, depth + height, newParent);
     }
-    return core::result<void>::success();
-}
-
-core::result<void> scene::destroy_internal(ecs::entity target, bool unlink) {
-    if (!mWorld->is_alive(target)) {
-        return not_alive("destroy_now", target);
-    }
-    operation_scope operation(*this);
-    if (unlink) {
-        const ecs::entity parentEntity = mTree.parent_of(target);
-        if (parentEntity.is_null()) {
-            erase_root(target);
-        } else {
-            unlink_child(target, parentEntity);
-        }
-    }
-    CONJURE_TRY(mWorld->destroy_entity(target));
-    bump_structure();
     return core::result<void>::success();
 }
 }

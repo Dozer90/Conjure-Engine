@@ -11,6 +11,7 @@
 #include "conjure/core/json/writer.h"
 #include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/ecs/ecs_error.h"
+#include "conjure/ecs/serialization.h"
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/register.h"
 #include "conjure/scene/scene.h"
@@ -18,7 +19,9 @@
 #include "conjure/scene/scene_serializer.h"
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -123,21 +126,29 @@ TEST_SUITE("scene/prefab") {
           "{\"components\":{\"conjure.scene.name\":{\"value\":\"b\"}}}]}}";
         const core::result<core::json::document> parsed = core::json::document::parse(text);
         REQUIRE(parsed.has_value());
-        CONJURE_CHECK_ERROR(scene::scene_serializer::parse_prefab(parsed.value().root(), fixture.registry),
-          scene_error::PREFAB_MULTIPLE_ROOTS);
+        const core::result<scene::prefab_document> twoRoots =
+          scene::scene_serializer::parse_prefab(parsed.value().root(), fixture.registry);
+        REQUIRE_FALSE(twoRoots.has_value());
+        CHECK(twoRoots.get_error().is(scene_error::PREFAB_MULTIPLE_ROOTS));
+        CHECK(twoRoots.get_error().message().find("found 2 roots") != std::string::npos);
         const std::string rootLater = "{\"format\":\"conjure.prefab\",\"version\":1,\"name\":\"two\","
           "\"archive\":{\"entities\":[{\"components\":{\"conjure.scene.parent\":{\"value\":1,\"siblingIndex\":0}}},"
           "{\"components\":{\"conjure.scene.name\":{\"value\":\"b\"}}}]}}";
         const core::result<core::json::document> parsedLater = core::json::document::parse(rootLater);
         REQUIRE(parsedLater.has_value());
-        CONJURE_CHECK_ERROR(scene::scene_serializer::parse_prefab(parsedLater.value().root(), fixture.registry),
-          scene_error::PREFAB_MULTIPLE_ROOTS);
+        // One root, but at the wrong entry: the message says which one.
+        const core::result<scene::prefab_document> lateRoot =
+          scene::scene_serializer::parse_prefab(parsedLater.value().root(), fixture.registry);
+        REQUIRE_FALSE(lateRoot.has_value());
+        CHECK(lateRoot.get_error().is(scene_error::PREFAB_MULTIPLE_ROOTS));
+        CHECK(lateRoot.get_error().message().find("entry 1") != std::string::npos);
+        // An empty archive has no root at all: a malformed file rather than a second root.
         const std::string empty =
           "{\"format\":\"conjure.prefab\",\"version\":1,\"name\":\"two\",\"archive\":{\"entities\":[]}}";
         const core::result<core::json::document> parsedEmpty = core::json::document::parse(empty);
         REQUIRE(parsedEmpty.has_value());
         CONJURE_CHECK_ERROR(scene::scene_serializer::parse_prefab(parsedEmpty.value().root(), fixture.registry),
-          scene_error::PREFAB_MULTIPLE_ROOTS);
+          scene_error::BAD_FORMAT);
         const std::string wrong = "{\"format\":\"conjure.scene\",\"version\":1,\"archive\":{\"entities\":[]}}";
         const core::result<core::json::document> parsedWrong = core::json::document::parse(wrong);
         REQUIRE(parsedWrong.has_value());
@@ -157,6 +168,9 @@ TEST_SUITE("scene/prefab") {
         }
         asset.archive = std::make_shared<const ecs::entity_archive>(std::move(archive));
         CONJURE_CHECK_ERROR(scene::prefab::instantiate(fixture.active(), asset), scene_error::PREFAB_MULTIPLE_ROOTS);
+        scene::prefab_asset hollow = {};
+        hollow.archive = std::make_shared<const ecs::entity_archive>(fixture.registry);
+        CONJURE_CHECK_ERROR(scene::prefab::instantiate(fixture.active(), hollow), scene_error::BAD_FORMAT);
         scene::prefab_asset unloaded = {};
         CONJURE_CHECK_ERROR(scene::prefab::instantiate(fixture.active(), unloaded), scene_error::PREFAB_NOT_LOADED);
     }
@@ -901,5 +915,128 @@ TEST_SUITE("scene/prefab") {
             }
             jobs.stop();
         }
+    }
+
+    TEST_CASE("prefab - apply gives a repeated link guid a fresh entry guid") {
+        scene_fixture fixture = {};
+        register_prefab_types(fixture);
+        scene::scene &target = fixture.active();
+        const lamp_parts lamp = build_lamp(fixture);
+        const core::result<scene::prefab_document> document = scene::prefab::build_document(target, lamp.root, "lamp");
+        CONJURE_REQUIRE_OK(document);
+        const assets::asset_id id = publish_prefab(fixture, document.value(), 43);
+        const core::result<assets::asset_handle> loaded = fixture.assets.load_blocking(id);
+        CONJURE_REQUIRE_OK(loaded);
+        const scene::prefab_asset *asset = loaded.value().get<scene::prefab_asset>();
+        REQUIRE(asset != nullptr);
+        const core::result<ecs::entity> instance = scene::prefab::instantiate(target, *asset);
+        CONJURE_REQUIRE_OK(instance);
+
+        // A duplicated bulb (appended under the same parent) still carries the original bulb's link.
+        const ecs::entity bulb = target.tree().children_of(instance.value())[0];
+        const core::result<ecs::entity> twin = target.duplicate_subtree(bulb);
+        CONJURE_REQUIRE_OK(twin);
+        const core::uuid bulbGuid = target.guid_of(lamp.bulb).value();
+        CHECK(fixture.world.get<scene::prefab_link>(twin.value())->assetGuid == bulbGuid);
+
+        const core::result<scene::prefab_document> applied = scene::prefab::apply(target, instance.value());
+        CONJURE_REQUIRE_OK(applied);
+        const ecs::entity_archive &archive = *applied.value().archive;
+        REQUIRE(archive.entity_count() == 3);
+        const scene::scene_component_ids &ids = target.ids();
+        const auto entryGuid = [&](u32 entry) {
+            scene::guid value = {};
+            const std::span<const std::byte> bytes = archive.component_bytes(entry, ids.guid);
+            REQUIRE(bytes.size() == sizeof(value));
+            std::memcpy(&value, bytes.data(), sizeof(value));
+            return value.value;
+        };
+        const core::uuid rootEntry = entryGuid(0);
+        const core::uuid bulbEntry = entryGuid(1);
+        const core::uuid twinEntry = entryGuid(2);
+        CHECK(rootEntry != bulbEntry);
+        CHECK(rootEntry != twinEntry);
+        CHECK(bulbEntry != twinEntry);
+        // The first entity in hierarchy order keeps the link guid, the repeat gets a fresh one it links to.
+        CHECK(bulbEntry == bulbGuid);
+        scene::prefab_link twinLink = {};
+        std::memcpy(&twinLink, archive.component_bytes(2, ids.prefabLink).data(), sizeof(twinLink));
+        CHECK(twinLink.assetGuid == twinEntry);
+
+        // The applied document loads and instantiates into an instance without differences.
+        const assets::asset_id appliedId = publish_prefab(fixture, applied.value(), 44);
+        const core::result<assets::asset_handle> appliedLoaded = fixture.assets.load_blocking(appliedId);
+        CONJURE_REQUIRE_OK(appliedLoaded);
+        const scene::prefab_asset *appliedAsset = appliedLoaded.value().get<scene::prefab_asset>();
+        REQUIRE(appliedAsset != nullptr);
+        const core::result<ecs::entity> fresh = scene::prefab::instantiate(target, *appliedAsset);
+        CONJURE_REQUIRE_OK(fresh);
+        CHECK(target.tree().children_of(fresh.value()).size() == 2);
+        const core::result<scene::prefab_diff> clean = scene::prefab::diff(target, fresh.value());
+        CONJURE_REQUIRE_OK(clean);
+        CHECK(clean.value().empty());
+        fixture.step();
+    }
+
+    TEST_CASE("prefab - revert that would exceed the depth limit keeps the instance") {
+        scene_fixture fixture = {};
+        register_prefab_types(fixture);
+        scene::scene &target = fixture.active();
+        const lamp_parts lamp = build_lamp(fixture);
+        const core::result<scene::prefab_document> document = scene::prefab::build_document(target, lamp.root, "lamp");
+        CONJURE_REQUIRE_OK(document);
+        const assets::asset_id id = publish_prefab(fixture, document.value(), 45);
+        const core::result<assets::asset_handle> loaded = fixture.assets.load_blocking(id);
+        CONJURE_REQUIRE_OK(loaded);
+        const scene::prefab_asset *asset = loaded.value().get<scene::prefab_asset>();
+        REQUIRE(asset != nullptr);
+
+        // A chain at depths 0 .. 30: the lamp (root and bulb) fits under depth 29.
+        std::vector<ecs::entity> chain = {fixture.create("link")};
+        for (u32 level = 1; level + 1 < scene::MAX_HIERARCHY_DEPTH; ++level) {
+            chain.push_back(fixture.create("link", chain.back()));
+        }
+        REQUIRE(chain.size() == 31);
+        scene::instantiate_options options = {};
+        options.parent = chain[29];
+        const core::result<ecs::entity> instance = scene::prefab::instantiate(target, *asset, options);
+        CONJURE_REQUIRE_OK(instance);
+        const ecs::entity root = instance.value();
+
+        // Without its bulb the instance fits at depth 31, where a fresh copy of the asset no longer does.
+        REQUIRE(target.tree().children_of(root).size() == 1);
+        CONJURE_REQUIRE_OK(target.destroy_now(target.tree().children_of(root)[0]));
+        CONJURE_REQUIRE_OK(target.set_parent(root, chain[30]));
+        CHECK(target.tree().depth_of(root) == 31);
+        const core::uuid rootGuid = target.guid_of(root).value();
+
+        CONJURE_CHECK_ERROR(scene::prefab::revert(target, root), scene_error::HIERARCHY_TOO_DEEP);
+        REQUIRE(target.contains(root));
+        CHECK(target.guid_of(root).value() == rootGuid);
+        CHECK(fixture.world.has<scene::prefab_instance>(root));
+        CHECK(target.tree().parent_of(root) == chain[30]);
+        CHECK(scene::prefab::refresh_instances(target, id, false) == 0);
+        CHECK(target.contains(root));
+        fixture.step();
+    }
+
+    TEST_CASE("prefab_builder - unresolved_components id is refused") {
+        scene_fixture fixture = {};
+        scene::prefab_builder builder(fixture.registry);
+        const u32 root = builder.add_node(scene::prefab_builder::NO_PARENT, "Root");
+        const core::string_id unresolvedName(ecs::UNRESOLVED_COMPONENTS_NAME);
+        const ecs::component_id unresolved = fixture.registry.find(unresolvedName);
+        REQUIRE(fixture.registry.is_registered(unresolved));
+        // The registry's placeholder for unknown file components is never a builder component.
+        CONJURE_CHECK_ERROR(
+          builder.add_component_raw(root, unresolved, std::span<const std::byte>()),
+          ecs::ecs_error::UNKNOWN_COMPONENT
+        );
+        CONJURE_CHECK_ERROR(builder.add_tag(root, unresolved), ecs::ecs_error::UNKNOWN_COMPONENT);
+        CONJURE_CHECK_ERROR(
+          builder.add_component_json(root, unresolvedName, core::json::document::object().root()),
+          ecs::ecs_error::UNKNOWN_COMPONENT
+        );
+        CONJURE_CHECK_OK(builder.build("root"));
     }
 }

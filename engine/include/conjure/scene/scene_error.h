@@ -30,7 +30,7 @@ namespace conjure::scene {
         GUID_NOT_FOUND,           // no entity carries the guid
         BAD_FORMAT,               // header "format" missing or wrong, or an entity without components
         UNSUPPORTED_VERSION,      // header "version" newer than SCENE_FORMAT_VERSION
-        PREFAB_MULTIPLE_ROOTS,    // a prefab archive has several entries without a parent
+        PREFAB_MULTIPLE_ROOTS,    // a prefab archive does not have exactly one root, at entry 0
         PREFAB_NOT_LOADED,        // the prefab asset of an instance is not resident
         NOT_A_PREFAB_INSTANCE,    // the entity carries no prefab_instance
         SCENE_NOT_LOADED,         // the scene_id names no loaded scene

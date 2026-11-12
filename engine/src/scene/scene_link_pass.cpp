@@ -130,7 +130,18 @@ core::result<instantiate_report> scene::instantiate_archive(
         u32 conflicts = 0;
         for (const ecs::entity spawned : entities) {
             guid *identity = mWorld->get<guid>(spawned);
-            if (identity == nullptr || identity->value.is_null()) {
+            if (identity == nullptr) {
+                continue;
+            }
+            if (identity->value.is_null()) {
+                // A null guid identifies nothing: the regenerate policies give it a fresh one, not counted
+                // as a conflict. KEEP leaves the archive as it is (snapshot restore relies on that).
+                if (policy == guid_policy::KEEP) {
+                    continue;
+                }
+                identity->value = core::uuid::generate();
+                const bool indexed = mGuids.insert(identity->value, spawned);
+                CONJURE_UNUSED(indexed);
                 continue;
             }
             const bool regenerate = policy == guid_policy::REGENERATE_ALL
@@ -251,10 +262,12 @@ void scene::link_instantiated(
                 mScratch.add_raw(created, mIds.depth[depth]);
                 mMaxDepthInUse = std::max(mMaxDepthInUse, depth);
             }
+            // Only an entity with a transform gets the dirty tag: the pass, its only remover, never visits
+            // a transformless one.
             if (mask.test(mIds.localTransform) || (options.rootTransform.has_value() && localParent == NO_ENTRY)) {
                 add_companions(created, mask);
+                mScratch.add_raw(created, mIds.transformDirty);
             }
-            mScratch.add_raw(created, mIds.transformDirty);
             if (ancestorInactive && !mask.test(mIds.inactive)) {
                 mScratch.add_raw(created, mIds.inactive);
             }
@@ -313,10 +326,12 @@ void scene::apply_hierarchy_changes() {
         return;
     }
     operation_scope operation(*this);
-    std::vector<repair_entry> queue = std::move(mRepairQueue);
-    mRepairQueue.clear();
+    // A swap rather than a move: both vectors keep their capacity, so a waiting entry pushed back every
+    // pass does not allocate in steady state.
+    mRepairSpare.clear();
+    std::swap(mRepairSpare, mRepairQueue);
     bool repaired = false;
-    for (const repair_entry &entry : queue) {
+    for (const repair_entry &entry : mRepairSpare) {
         if (!mWorld->is_alive(entry.entity)) {
             continue;
         }
@@ -332,6 +347,7 @@ void scene::apply_hierarchy_changes() {
         flush_scratch();
         repaired = true;
     }
+    mRepairSpare.clear();
     if (mRawEdits > 0) {
         CONJURE_LOG_WARN(LOG_SCENE, "{} raw parent edit(s) repaired by scene.apply_hierarchy_changes; use set_parent",
           mRawEdits);

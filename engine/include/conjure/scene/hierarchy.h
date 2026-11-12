@@ -43,7 +43,8 @@ namespace conjure::scene {
             [[nodiscard]] std::span<const ecs::entity> children_of(ecs::entity target) const noexcept;
 
             /// <summary>
-            /// Position among the siblings (or among the roots for a root); 0 for a dead entity.
+            /// Position among the parent's children; 0 for roots (their order is scene::roots()) and for
+            /// dead entities.
             /// </summary>
             [[nodiscard]] u32 sibling_index(ecs::entity target) const noexcept;
 

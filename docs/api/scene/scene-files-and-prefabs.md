@@ -69,7 +69,8 @@ Errors: `BAD_FORMAT` (wrong format name, missing archive, malformed roots or set
 `SERIALIZATION_FAILED` for a malformed component. Nothing is created when a load fails.
 
 `guid_policy` says what happens to the file's guids: `KEEP` (a collision fails the load), `REGENERATE_ON_CONFLICT`
-(colliding entries get fresh guids with one WARN) or `REGENERATE_ALL` (prefabs and copies).
+(colliding entries get fresh guids with one WARN) or `REGENERATE_ALL` (prefabs and copies). Both regenerate
+policies also give an entity whose guid is the null uuid a fresh one; `KEEP` leaves it null.
 
 > [!IMPORTANT]
 > Scripts, bodies and renderer components in a file are just components to the scene. A component that owns
@@ -88,16 +89,18 @@ system the scheduler runs.
 | `load_file(fs, path, mode)` | parses a file, applies it, and loads the referenced assets as a batch |
 | `request_load(assetId, mode)` | queues; `apply_pending_loads()` (the FRAME_BEGIN system) applies it once the asset is `LOADED`, in request order; a `FAILED` asset drops the request with ERROR and `on_load_failed` |
 | `unload(sceneId)` | fires `on_before_unload(id, roots)` with the roots still alive, destroys them in reverse order, drops the handles and runs `asset_manager::collect()` |
-| `unload_all()` | every scene in reverse load order, then the remaining authored entities |
+| `unload_all()` | every scene in reverse load order, then the remaining authored entities; when any entity is left, `on_before_unload` fires once more with `SCENE_ID_AUTHORED` and the remaining roots before they are cleared; a scene a handler loads meanwhile is cleared and unloaded with the rest |
 | `is_loaded(id)`, `find_loaded(assetId)`, `loaded_scenes()`, `info(id)`, `is_load_pending(assetId)` | queries; `loaded_scene_info` lists the current roots on every call |
 
 `load_mode::REPLACE` first checks that the new file would load (so a bad file leaves the current content in
 place), unloads everything, and takes the file's name and settings; `ADDITIVE` keeps what is there and regenerates
-colliding guids with one WARN. Ids retired by an unload or a REPLACE are never reused.
+colliding guids with one WARN. Ids retired by an unload or a REPLACE are never reused. A load whose scene an
+`on_structure_changed` handler unloads before the load finishes returns `SCENE_NOT_LOADED`.
 
 > [!WARNING]
 > `on_before_unload` is where modules that own per-entity state outside the ECS (scripting's managed instances)
-> clean up. Subscribe before the first load; the event fires on the main thread inside `unload`.
+> clean up. Subscribe before the first load; the event fires on the main thread inside `unload` and `unload_all`
+> (a REPLACE load runs `unload_all`).
 
 ## Prefabs
 
@@ -115,14 +118,15 @@ transform, and can skip the bind pass.
 |---|---|
 | `prefab::instance_root_of(scene, entity)` | the nearest ancestor (itself included) carrying `prefab_instance` |
 | `prefab::diff(scene, root)` | `prefab_diff` of `entity_diff {assetGuid, instanceEntity, kind, components}` entries: `ADDED`, `REMOVED` or `MODIFIED` with the component names; components are compared as canonical JSON with local references remapped, and the parent link by parent guid and sibling index |
-| `prefab::revert(scene, root)` | replaces the instance with a fresh one at the same place, keeping the root's guid, name and transform |
-| `prefab::apply(scene, root)` | the instance as a new document: link guids become entry guids, the root loses its marker |
+| `prefab::revert(scene, root)` | replaces the instance with a fresh one at the same place, keeping the root's guid, name and transform; when the current asset no longer fits there (`HIERARCHY_TOO_DEEP`, `PREFAB_MULTIPLE_ROOTS`) the instance is left untouched |
+| `prefab::apply(scene, root)` | the instance as a new document: link guids become entry guids (a link guid already used by an earlier entity gets a fresh one), the root loses its marker |
 | `prefab::refresh_instances(scene, prefabId, onlyUnmodified = true)` | reverts every instance of the asset; returns how many |
 | `prefab::unpack(scene, root, recursive = false)` | removes the markers, stopping at nested instance roots unless recursive |
 | `prefab::mark_instance(scene, root, asset_ref)` | marks an existing subtree as an instance (guids generated where missing) |
 
 Errors: `NOT_A_PREFAB_INSTANCE`, `PREFAB_NOT_LOADED` (the root's `prefab_instance` reference is not resident),
-`PREFAB_MULTIPLE_ROOTS` for a document whose entry 0 is not the only root.
+`PREFAB_MULTIPLE_ROOTS` for a document whose entry 0 is not the only root, `BAD_FORMAT` for a document with an
+empty archive, and `DUPLICATE_GUID` from `parse_prefab` when two entries share a guid.
 
 `prefab_builder(registry)` builds a document without naming any C++ component type: `add_node(parentIndex, name,
 transform)`, then `add_component_json(node, componentName, value)`, `add_component_raw(node, id, bytes)` or
@@ -133,7 +137,9 @@ transform)`, then `add_component_json(node, componentName, value)`, `add_compone
 ## Snapshots
 
 `capture(scene)` returns a `scene_snapshot`: the typed archive of every entity in hierarchy order plus the root
-order, owners, settings, name and structure version; no JSON is involved, so it is fast enough for play and stop.
+order, owners, settings, name and the structure version at capture; no JSON is involved, so it is fast enough for
+play and stop. The structure version is informational: `restore` cannot rewind the counter, which keeps counting
+up through the restore like through any other structural change.
 `restore(scene, snapshot)` clears the scene and instantiates the snapshot with the guids kept; on failure the
 scene is left empty rather than half-restored. `snapshot.entity_count()` says how much it holds.
 

@@ -250,6 +250,22 @@ TEST_SUITE("scene/hierarchy") {
         CONJURE_CHECK_ERROR(target.set_sibling_index(a, 0), scene_error::INVALID_ENTITY);
     }
 
+    TEST_CASE("hierarchy - sibling_index is 0 for roots and dead entities") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const scene::hierarchy &tree = target.tree();
+        const ecs::entity first = fixture.create("first");
+        const ecs::entity second = fixture.create("second");
+        const ecs::entity third = fixture.create("third");
+        REQUIRE(target.roots().size() == 3);
+        CHECK(target.roots()[2].entity == third);
+        // A root's position lives in scene::roots(), not in the hierarchy.
+        CHECK(tree.sibling_index(first) == 0);
+        CHECK(tree.sibling_index(second) == 0);
+        CHECK(tree.sibling_index(third) == 0);
+        CHECK(tree.sibling_index(ecs::entity{900, 1}) == 0);
+    }
+
     TEST_CASE("hierarchy - root order after reparent to null") {
         scene_fixture fixture = {};
         scene::scene &target = fixture.active();

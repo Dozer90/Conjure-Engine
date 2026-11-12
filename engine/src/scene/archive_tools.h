@@ -3,6 +3,7 @@
 #include "conjure/scene/components.h"
 
 #include "conjure/assets/asset_types.h"
+#include "conjure/core/error.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
@@ -13,12 +14,15 @@
 
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // Helpers over ecs::entity_archive shared by the serializer, the prefab functions, the snapshot and the
@@ -31,6 +35,12 @@ namespace conjure::scene::detail {
     /// Index meaning "no archive-local parent".
     /// </summary>
     inline constexpr u32 NO_ENTRY = 0xFFFFFFFFu;
+
+    /// <summary>
+    /// Id of ecs::unresolved_components: every component_registry registers it first and asserts id 0
+    /// (ecs/component_registry.h). It is not a named component, so registry.id_of cannot name it.
+    /// </summary>
+    inline constexpr ecs::component_id UNRESOLVED_COMPONENTS_ID{0};
 
     /// <summary>
     /// The trivially copyable component of one entry, when present.
@@ -186,6 +196,57 @@ namespace conjure::scene::detail {
       const ecs::entity_archive &archive,
       const scene_component_ids &ids
     );
+
+    /// <summary>
+    /// What keeps an archive from having the prefab shape (one root, at entry 0).
+    /// </summary>
+    enum class prefab_root_problem : u8 {
+        NONE,
+        EMPTY,                    // no entries at all
+        MISPLACED_ROOT,           // a single root that is not entry 0
+        ROOT_COUNT                // several roots, or none (a parent cycle)
+    };
+
+    /// <summary>
+    /// The outcome of inspect_prefab_roots.
+    /// </summary>
+    struct prefab_root_report {
+        prefab_root_problem problem = prefab_root_problem::NONE;
+        u32 value = 0;            // the misplaced root's entry, or the number of roots
+    };
+
+    /// <summary>
+    /// Checks the prefab shape without allocating: entry 0 must be the only entry without an archive-local
+    /// parent.
+    /// </summary>
+    [[nodiscard]] prefab_root_report inspect_prefab_roots(
+      const ecs::entity_archive &archive,
+      const scene_component_ids &ids
+    ) noexcept;
+
+    /// <summary>
+    /// The error of a failed inspect_prefab_roots: BAD_FORMAT for an empty archive, PREFAB_MULTIPLE_ROOTS
+    /// naming the misplaced root or the root count otherwise. 'what' names the archive in the message.
+    /// </summary>
+    [[nodiscard]] core::error prefab_roots_error(const prefab_root_report &report, std::string_view what);
+
+    /// <summary>
+    /// The prefab shape check of parse_prefab, build_document, instantiate_many and revert. The message
+    /// naming the archive is formatted only when the check fails, so a passing check allocates nothing.
+    /// </summary>
+    template <typename... Args>
+    [[nodiscard]] core::result<void> check_prefab_roots(
+      const ecs::entity_archive &archive,
+      const scene_component_ids &ids,
+      std::format_string<Args...> what,
+      Args &&...args
+    ) {
+        const prefab_root_report report = inspect_prefab_roots(archive, ids);
+        if (report.problem == prefab_root_problem::NONE) {
+            return core::result<void>::success();
+        }
+        return prefab_roots_error(report, std::format(what, std::forward<Args>(args)...));
+    }
 
     /// <summary>
     /// Everything instantiate_archive rejects before creating anything, evaluated for an archive whose

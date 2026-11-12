@@ -93,8 +93,9 @@ namespace conjure::scene {
             );
 
             /// <summary>
-            /// Like parse_document for the prefab format; PREFAB_MULTIPLE_ROOTS unless entry 0 is the
-            /// only entry without a parent.
+            /// Like parse_document for the prefab format; BAD_FORMAT for an empty archive,
+            /// PREFAB_MULTIPLE_ROOTS unless entry 0 is the only entry without a parent, DUPLICATE_GUID when
+            /// two entries share a guid.
             /// </summary>
             [[nodiscard]] static core::result<prefab_document> parse_prefab(
               const core::json::value &in,

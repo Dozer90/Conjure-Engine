@@ -60,9 +60,10 @@ collection, `check_loadable`), `asset_ref_raw.h` (the `{uuid, slot}` view the bi
 so R55's 16 does not apply; the C# mirror follows `type_info::layout_hash()`). `children` (TRANSIENT
 `small_vector<entity, 4>`) is the cache, added to a parent on its first child and kept sorted with dense sibling
 indices. Depth is one tag component per level (`depth_tag<D>`, `"conjure.scene.depth_DD"`, roots carry none), so
-`scene.propagate_transforms` runs `parallel_for_chunks` over one level at a time and every parent is finished in
-the previous level's join. `scene` itself holds the ordered roots (`root_entry {entity, owner}`), the guid index,
-the opaque settings document, the name, the destroy and repair queues and a scratch `command_buffer`.
+`scene.propagate_transforms` dispatches its level jobs with `job_system::parallel_for` one level at a time and
+every parent is finished in the previous level's join. `scene` itself holds the ordered roots
+(`root_entry {entity, owner}`), the guid index, the opaque settings document, the name, the destroy and repair
+queues and a scratch `command_buffer`.
 
 Membership of a loaded scene asset is "the root it hangs under": a root reparented under another scene's root
 changes owner implicitly; detaching it again gives it the owner of the tree it came from.
@@ -73,7 +74,10 @@ changes owner implicitly; detaching it again gives it the owner of the tree it c
 `parent`, depth tag, `inactive`) and creates once. `set_parent`, `set_enabled`, `add_transform` and the link pass
 record depth retags, dirty and inactive changes into the scratch buffer and flush once, so every touched entity
 moves at most once. Failures (`SELF_PARENT`, `HIERARCHY_CYCLE`, `HIERARCHY_TOO_DEEP`, `INVALID_ENTITY`,
-`DUPLICATE_GUID`) are checked before anything changes.
+`DUPLICATE_GUID`) are checked before anything changes. `transform_dirty` goes only to entities that carry a
+`local_transform`: the propagation pass is its only remover and never visits a transformless entity. A
+null-template `create_entities` is one structural operation (one `structure_version()` bump) and, like the
+template path, leaves nothing behind and announces nothing when a creation fails.
 
 Observers tolerate the raw ECS: `observe_destroyed` enqueues `destroy_entity(child)` per child so a subtree dies
 without recursion; a raw `add/remove<parent>` unlinks where it can and queues a repair that
@@ -105,12 +109,13 @@ join guarantees it.
 `instantiate_archive` validates the archive, its shape (pre-order, depths, cycles) and the guid policy before
 anything exists, then runs `world::instantiate_batch` once with an `outEntities` vector, which reports every
 created id copy-major in entry order (entries without components included, so an empty entity in a file is a
-plain root). Guids are regenerated and rebound where the policy says so; the link pass gathers the children of
-every new internal node in a side table, sorts them by the persisted sibling index, renumbers through the live
-`parent` links and records the `children` component together with depth tags, companions, dirty and inactive tags
-and the root overrides into one flush. Archive roots attach under `options.parent`, a live external parent or
-the root list. The bind pass then resolves every `asset_ref` through `asset_manager::bind_slot` (R25) and lists
-the bound ids in the report.
+plain root). Guids are regenerated and rebound where the policy says so (both regenerate policies also give a
+null guid a fresh one; `KEEP` leaves it null); the link pass gathers the children of every new internal node in
+a side table, sorts them by the persisted sibling index, renumbers through the live `parent` links and records
+the `children` component together with depth tags, companions, dirty and inactive tags and the root overrides
+into one flush. Archive roots attach under `options.parent`, a live external parent or the root list. The bind
+pass then resolves every `asset_ref` through `asset_manager::bind_slot` (R25) and lists the bound ids in the
+report.
 
 ## 6. Files, prefabs and snapshots
 
@@ -118,17 +123,22 @@ Header keys `format`, `version`, `name`, `settings` (canonical), `roots` (guid s
 (`ecs::write_archive_json` of every entity in hierarchy order, component keys in id order). Unknown components
 survive through `unresolved_components`; save, load, save is byte-identical. `capture_subtree` drops the root's
 `parent` (unless external references are kept) so entry 0 of a prefab is a true root; `parse_prefab` enforces a
-single root at entry 0.
+single root at entry 0 (`BAD_FORMAT` for an empty archive, `PREFAB_MULTIPLE_ROOTS` otherwise, one helper shared
+with `build_document`, `instantiate_many` and `revert` that formats its message only on failure) and unique entry
+guids (`DUPLICATE_GUID`).
 
 Prefab instances are fully materialised (S9): `prefab_instance` on the root, `prefab_link` on every entity.
 `diff` matches entries by link guid, compares components as canonical JSON with the instance's local references
-remapped to the asset's indices, and treats `parent` by parent guid plus sibling index. `revert` re-instantiates
-at the same place with the old root guid; `apply` writes the link guids as entry guids and drops the root marker;
-`unpack` stops at nested instance roots unless recursive. `prefab_builder` produces a document from nodes and
-components by registered name (also reserving `name` and `local_transform`, which come from `add_node`).
+remapped to the asset's indices, and treats `parent` by parent guid plus sibling index. `revert` checks that the
+asset still fits at the instance's place (archive, single root, depth limit) before it destroys anything, then
+re-instantiates there with the old root guid; `apply` writes the link guids as entry guids (a repeated link guid,
+as a duplicated entity carries, gets a fresh one) and drops the root marker; `unpack` stops at nested instance
+roots unless recursive. `prefab_builder` produces a document from nodes and components by registered name (also
+reserving `name` and `local_transform`, which come from `add_node`).
 
 A `scene_snapshot` is the typed archive of every entity in hierarchy order plus the root order, owners, settings,
-name and structure version; `restore` clears the scene and instantiates with `KEEP` guids.
+name and the structure version at capture (informational, not restored); `restore` clears the scene and
+instantiates with `KEEP` guids.
 
 The importers (`conjure.scene.scene_importer`, `conjure.scene.prefab_importer`) canonicalise the file and record
 every asset reference as a dependency, so a `scene_manager::load` brings the referenced assets first. The asset
@@ -141,10 +151,14 @@ registered suffix, R45).
 `load_file` parses from a `vfs::file_system` and loads the referenced assets as a batch; `request_load` queues a
 handle that `apply_pending_loads` (FRAME_BEGIN) applies once LOADED, in request order, dropping FAILED ones with
 ERROR and `on_load_failed`. `unload` emits `on_before_unload` with the roots still alive (scripting runs
-`destroy_all` there, R29), destroys them in reverse, drops the handles and runs `collect()`. REPLACE first runs
-everything `instantiate_archive` would reject (`detail::check_loadable`) so a bad file leaves the current content
-in place, then unloads everything, takes the file's settings and name and keeps guids; ADDITIVE regenerates
-colliding guids with one WARN. `info()` and `loaded_scenes()` gather a record's roots on every call.
+`destroy_all` there, R29), destroys them in reverse, drops the handles and runs `collect()`. No record pointer is
+held across an event, because a handler may load or unload scenes: the record is looked up again by id, and a load
+whose scene a handler unloaded returns `SCENE_NOT_LOADED` without touching the newer scene in its slot.
+`unload_all` fires the event once more with `SCENE_ID_AUTHORED` and the remaining roots when entities outlive the
+records (authored content), before `scene::clear()`, and retires any scene a handler loaded meanwhile. REPLACE
+first runs everything `instantiate_archive` would reject (`detail::check_loadable`) so a bad file leaves the
+current content in place, then unloads everything, takes the file's settings and name and keeps guids; ADDITIVE
+regenerates colliding guids with one WARN. `info()` and `loaded_scenes()` gather a record's roots on every call.
 
 ## 8. Threading model
 
@@ -152,9 +166,9 @@ colliding guids with one WARN. `info()` and `loaded_scenes()` gather a record's 
 world's rules apply and return `WRONG_THREAD` / `STRUCTURE_LOCKED`); events fire on that thread.
 `scene.propagate_transforms` is the only parallel code: grain jobs write `world_transform`,
 `render_world_transform` and `transform_state` of their own rows, read their parents' columns through const
-random access and accumulate relaxed counters once per chunk. The asset loaders and importers run on workers and
-touch only their inputs and `component_registry` lookups. Observers run synchronously inside structural calls on
-the owner thread and only enqueue into the deferred buffer or push into scene-side queues.
+random access and add a local tally to relaxed counters once per job range. The asset loaders and importers run
+on workers and touch only their inputs and `component_registry` lookups. Observers run synchronously inside
+structural calls on the owner thread and only enqueue into the deferred buffer or push into scene-side queues.
 
 ## 9. Extension points
 

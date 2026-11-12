@@ -156,13 +156,18 @@ void transform_system::run_level(ecs::query &level, ecs::system_context &context
     dispatch.alpha = alpha;
     const std::function<void(usize, usize)> body = [&dispatch](usize begin, usize end) {
         transform_system &self = *dispatch.system;
+        chunk_tally tally = {};
         for (usize job = begin; job < end; ++job) {
             const u32 first = self.mJobBounds[job];
             const u32 last = self.mJobBounds[job + 1];
             for (u32 index = first; index < last; ++index) {
-                self.process_chunk(self.mLevelChunks[index], dispatch.runId, dispatch.alpha);
+                self.process_chunk(self.mLevelChunks[index], dispatch.runId, dispatch.alpha, tally);
             }
         }
+        self.mCounters.entitiesVisited.fetch_add(tally.visited, std::memory_order_relaxed);
+        self.mCounters.worldRecomputed.fetch_add(tally.worldWrites, std::memory_order_relaxed);
+        self.mCounters.renderRecomputed.fetch_add(tally.renderWrites, std::memory_order_relaxed);
+        self.mCounters.chunksVisited.fetch_add(tally.chunks, std::memory_order_relaxed);
     };
     ecs::iteration_scope lock = mScene->world().lock_iteration();
     core::jobs::job_system *jobs = context.jobs();
@@ -221,7 +226,7 @@ void transform_system::collect_chunk(ecs::chunk_view &chunk, u64 since) {
     mLevelChunks.push_back(item);
 }
 
-void transform_system::process_chunk(const level_chunk &item, u32 runId, f32 alpha) {
+void transform_system::process_chunk(const level_chunk &item, u32 runId, f32 alpha, chunk_tally &tally) {
     const scene_component_ids &ids = mScene->ids();
     const ecs::world &world = mScene->world();
     ecs::chunk_view chunk = item.view;
@@ -289,10 +294,10 @@ void transform_system::process_chunk(const level_chunk &item, u32 runId, f32 alp
             mark_children_pending(childLists[row]);
         }
     }
-    mCounters.entitiesVisited.fetch_add(visited, std::memory_order_relaxed);
-    mCounters.worldRecomputed.fetch_add(worldWrites, std::memory_order_relaxed);
-    mCounters.renderRecomputed.fetch_add(renderWrites, std::memory_order_relaxed);
-    mCounters.chunksVisited.fetch_add(1, std::memory_order_relaxed);
+    tally.visited += visited;
+    tally.worldWrites += worldWrites;
+    tally.renderWrites += renderWrites;
+    ++tally.chunks;
 }
 
 void transform_system::mark_children_pending(const children &list) {

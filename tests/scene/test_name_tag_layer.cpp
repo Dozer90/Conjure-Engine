@@ -93,6 +93,20 @@ TEST_SUITE("scene/name_tag_layer") {
         CHECK(found.size() == 1);
     }
 
+    TEST_CASE("layer - find_by_layer lists only entities carrying a layer") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity a = fixture.create("a");
+        const ecs::entity b = fixture.create("b");
+        CONJURE_REQUIRE_OK(target.set_layer(a, 0));
+        std::vector<ecs::entity> found = {};
+        target.find_by_layer(0, found);
+        CHECK(found == std::vector<ecs::entity>{a});
+        // b reads as layer 0 but carries no layer component, so the column scan does not see it.
+        CHECK(target.layer_of(b) == 0);
+        CHECK_FALSE(fixture.world.has<scene::layer>(b));
+    }
+
     TEST_CASE("layer_table - lookup") {
         scene::layer_table table = {};
         for (u32 index = 0; index < scene::layer_table::LAYER_COUNT; ++index) {

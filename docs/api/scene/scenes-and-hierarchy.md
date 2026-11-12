@@ -95,8 +95,9 @@ subtree immediately, without recursion, through the ECS deferred buffer. `clear(
 keeps the settings and name.
 
 `create_entities(count, templateEntity, parent, out)` stamps `count` copies of a template subtree with fresh
-guids (`NULL_ENTITY` as template gives plain entities); `duplicate_subtree(root, parent, index)` copies one
-subtree, deep-copying components that have their own copy hooks (scripts included).
+guids (`NULL_ENTITY` as template gives plain entities); either way it is one structural change, and a failure
+leaves no entity of the call behind. `duplicate_subtree(root, parent, index)` copies one subtree, deep-copying
+components that have their own copy hooks (scripts included).
 
 > [!WARNING]
 > Every method of `scene` is for the world's owner thread while the world is unlocked, exactly like structural
@@ -107,7 +108,7 @@ subtree, deep-copying components that have their own copy hooks (scripts include
 | Function | Returns |
 |---|---|
 | `find_path("Root/Child/Leaf")` | the entity by names, first among the roots, then down the children; `NULL_ENTITY` on a miss |
-| `find_by_name(id, out)`, `find_by_tag(id, out)`, `find_by_layer(index, out)` | appends every match in world order (a full scan of that column) |
+| `find_by_name(id, out)`, `find_by_tag(id, out)`, `find_by_layer(index, out)` | appends every match in world order (a full scan of that column); `find_by_layer(0, ...)` lists only entities carrying a `layer` component, although `layer_of` reports 0 for the others |
 | `find_guid(uuid)` / `resolve_guid(uuid)` | the entity, or `NULL_ENTITY` / `GUID_NOT_FOUND` |
 | `guid_of(e)`, `ensure_guid(e)` | the guid; `ensure_guid` generates and indexes one when missing |
 | `roots()` | every root in order with its owner (`root_entry {entity, owner}`) |
@@ -119,9 +120,10 @@ observers, so you only read it.
 ## Walking the tree
 
 `scene.tree()` returns the `hierarchy`, a read-only view over the `parent` and `children` columns:
-`parent_of(e)`, `children_of(e)` (a span in sibling order), `sibling_index(e)`, `depth_of(e)`,
-`is_ancestor_of(a, e)`, `root_of(e)`, `subtree_height(e)`, `subtree_size(e)`, `collect_subtree(e, out)` and
-`for_each_in_subtree(e, fn)`. Every walk is iterative, so a 10,000-entity chain is fine.
+`parent_of(e)`, `children_of(e)` (a span in sibling order), `sibling_index(e)` (0 for a root: the root order is
+`scene.roots()`), `depth_of(e)`, `is_ancestor_of(a, e)`, `root_of(e)`, `subtree_height(e)`, `subtree_size(e)`,
+`collect_subtree(e, out)` and `for_each_in_subtree(e, fn)`. Every walk is iterative, so a 10,000-entity chain is
+fine.
 
 ## Transforms every frame
 

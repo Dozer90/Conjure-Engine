@@ -2,6 +2,7 @@
 
 #include "conjure/scene/scene_error.h"
 
+#include "conjure/core/assert.h"
 #include "conjure/core/error.h"
 #include "conjure/ecs/serialization.h"
 
@@ -12,6 +13,24 @@
 using namespace conjure;
 using namespace conjure::scene;
 using namespace conjure::scene::detail;
+
+namespace {
+
+    /// <summary>
+    /// The archive-local parent entry of one entry, or NO_ENTRY for an absent, null or external parent.
+    /// </summary>
+    [[nodiscard]] u32 local_parent(
+      const ecs::entity_archive &archive,
+      u32 entryIndex,
+      const scene_component_ids &ids
+    ) noexcept {
+        const std::optional<parent> link = read_component<parent>(archive, entryIndex, ids.parent);
+        if (!link.has_value() || !link->value.is_archive_local() || link->value.index >= archive.entity_count()) {
+            return NO_ENTRY;
+        }
+        return link->value.index;
+    }
+}
 
 /*===========================================================================*/
 /*===========================================================================*/
@@ -148,11 +167,7 @@ std::vector<u32> conjure::scene::detail::archive_parents(
     const u32 count = archive.entity_count();
     std::vector<u32> parents(count, NO_ENTRY);
     for (u32 index = 0; index < count; ++index) {
-        const std::optional<parent> link = read_component<parent>(archive, index, ids.parent);
-        if (!link.has_value() || !link->value.is_archive_local() || link->value.index >= count) {
-            continue;
-        }
-        parents[index] = link->value.index;
+        parents[index] = local_parent(archive, index, ids);
     }
     return parents;
 }
@@ -248,6 +263,51 @@ core::result<void> conjure::scene::detail::check_unique_guids(
     return core::result<void>::success();
 }
 
+prefab_root_report conjure::scene::detail::inspect_prefab_roots(
+  const ecs::entity_archive &archive,
+  const scene_component_ids &ids
+) noexcept {
+    prefab_root_report report = {};
+    const u32 count = archive.entity_count();
+    if (count == 0) {
+        report.problem = prefab_root_problem::EMPTY;
+        return report;
+    }
+    u32 rootCount = 0;
+    u32 firstRoot = NO_ENTRY;
+    for (u32 index = 0; index < count; ++index) {
+        if (local_parent(archive, index, ids) != NO_ENTRY) {
+            continue;
+        }
+        if (rootCount == 0) {
+            firstRoot = index;
+        }
+        ++rootCount;
+    }
+    if (rootCount == 1 && firstRoot != 0) {
+        report.problem = prefab_root_problem::MISPLACED_ROOT;
+        report.value = firstRoot;
+    } else if (rootCount != 1) {
+        report.problem = prefab_root_problem::ROOT_COUNT;
+        report.value = rootCount;
+    }
+    return report;
+}
+
+core::error conjure::scene::detail::prefab_roots_error(const prefab_root_report &report, std::string_view what) {
+    CONJURE_ASSERT(report.problem != prefab_root_problem::NONE, "prefab_roots_error: '{}' has the prefab shape", what);
+    if (report.problem == prefab_root_problem::EMPTY) {
+        return core::make_error(scene_error::BAD_FORMAT, "{}: the archive is empty; a prefab needs one root entry",
+          what);
+    }
+    if (report.problem == prefab_root_problem::MISPLACED_ROOT) {
+        return core::make_error(scene_error::PREFAB_MULTIPLE_ROOTS,
+          "{}: the only root is entry {}; a prefab's root must be entry 0", what, report.value);
+    }
+    return core::make_error(scene_error::PREFAB_MULTIPLE_ROOTS,
+      "{}: a prefab needs exactly one root at entry 0; found {} roots", what, report.value);
+}
+
 core::result<void> conjure::scene::detail::check_loadable(
   const ecs::entity_archive &archive,
   const scene_component_ids &ids
@@ -260,7 +320,7 @@ core::result<void> conjure::scene::detail::check_loadable(
 u32 conjure::scene::detail::count_unresolved(const ecs::entity_archive &archive) {
     u32 total = 0;
     for (u32 index = 0; index < archive.entity_count(); ++index) {
-        const std::span<const std::byte> bytes = archive.component_bytes(index, ecs::component_id{0});
+        const std::span<const std::byte> bytes = archive.component_bytes(index, UNRESOLVED_COMPONENTS_ID);
         if (bytes.size() != sizeof(ecs::unresolved_components)) {
             continue;
         }
@@ -274,7 +334,7 @@ u32 conjure::scene::detail::count_unresolved(const ecs::entity_archive &archive)
 std::vector<std::string> conjure::scene::detail::unresolved_names(const ecs::entity_archive &archive) {
     std::vector<std::string> names = {};
     for (u32 index = 0; index < archive.entity_count(); ++index) {
-        const std::span<const std::byte> bytes = archive.component_bytes(index, ecs::component_id{0});
+        const std::span<const std::byte> bytes = archive.component_bytes(index, UNRESOLVED_COMPONENTS_ID);
         if (bytes.size() != sizeof(ecs::unresolved_components)) {
             continue;
         }

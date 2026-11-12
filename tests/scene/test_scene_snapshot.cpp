@@ -194,6 +194,22 @@ TEST_SUITE("scene/scene_snapshot") {
         CHECK(fixture.world.entity_count() == 1);
     }
 
+    TEST_CASE("scene_snapshot - restore advances structure_version past the captured value") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity root = fixture.create("root");
+        const ecs::entity child = fixture.create("child", root);
+        const core::result<scene::scene_snapshot> captured = scene::capture(target);
+        CONJURE_REQUIRE_OK(captured);
+        CHECK(captured.value().structureVersion == target.structure_version());
+
+        // The field is informational: the counter only moves forward, restore included.
+        CONJURE_REQUIRE_OK(scene::restore(target, captured.value()));
+        CHECK(target.structure_version() > captured.value().structureVersion);
+        CHECK(fixture.world.entity_count() == 2);
+        CONJURE_UNUSED(child);
+    }
+
     TEST_CASE("scene_snapshot - roots owners preserved") {
         scene_fixture fixture = {};
         scene::scene &target = fixture.active();

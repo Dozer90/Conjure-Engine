@@ -1,15 +1,24 @@
 #include "conjure/testing/doctest.h"
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/approx.h"
 #include "conjure/testing/log_capture.h"
 #include "scene_test_fixture.h"
 
 #include "conjure/core/json/document.h"
 #include "conjure/ecs/command_buffer.h"
+#include "conjure/ecs/ecs_error.h"
+#include "conjure/ecs/entity_archive.h"
+#include "conjure/scene/register.h"
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_error.h"
+#include "conjure/scene/scene_serializer.h"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -772,5 +781,171 @@ TEST_SUITE("scene/scene") {
         CONJURE_REQUIRE_OK(fixture.world.destroy_entity(raw.value()));
         CHECK(target.find_guid(test_uuid(2)).is_null());
         CONJURE_CHECK_ERROR(target.resolve_guid(test_uuid(2)), scene_error::GUID_NOT_FOUND);
+    }
+
+    TEST_CASE("scene - create_entities without a template is one structural operation") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        u32 emitted = 0;
+        const core::event_subscription subscription = target.on_structure_changed().subscribe([&emitted]() {
+            ++emitted;
+        });
+        const u64 start = target.structure_version();
+        std::vector<ecs::entity> out(100);
+        CONJURE_REQUIRE_OK(target.create_entities(100, ecs::NULL_ENTITY, ecs::NULL_ENTITY, out));
+        CHECK(target.structure_version() == start + 1);
+        CHECK(emitted == 1);
+        CHECK(target.roots().size() == 100);
+        // A count of zero creates nothing and announces nothing.
+        CONJURE_REQUIRE_OK(target.create_entities(0, ecs::NULL_ENTITY, ecs::NULL_ENTITY, out));
+        CHECK(target.structure_version() == start + 1);
+        CHECK(emitted == 1);
+    }
+
+    TEST_CASE("scene - create_entities without a template leaves nothing behind on failure") {
+        // One slab of one chunk: the chunk fills up long before the thousandth entity.
+        ecs::component_registry registry = {};
+        CONJURE_REQUIRE_OK(scene::register_components(registry));
+        ecs::world_desc desc = {};
+        desc.chunksPerSlab = 1;
+        desc.maxChunkSlabs = 1;
+        ecs::world world(registry, desc);
+        scene::scene target(world, nullptr);
+        u32 emitted = 0;
+        const core::event_subscription subscription = target.on_structure_changed().subscribe([&emitted]() {
+            ++emitted;
+        });
+        const u64 start = target.structure_version();
+        std::vector<ecs::entity> out(1000);
+        CONJURE_CHECK_ERROR(
+          target.create_entities(1000, ecs::NULL_ENTITY, ecs::NULL_ENTITY, out),
+          ecs::ecs_error::OUT_OF_MEMORY
+        );
+        // The call created and destroyed again with no net change, so it announces nothing.
+        CHECK(target.structure_version() == start);
+        CHECK(emitted == 0);
+        CHECK(world.entity_count() == 0);
+        CHECK(target.roots().empty());
+        CHECK(target.guids().size() == 0);
+        CHECK(std::all_of(out.begin(), out.end(), [](ecs::entity entity) { return entity.is_null(); }));
+        CONJURE_CHECK_OK(target.validate());
+    }
+
+    TEST_CASE("regression - transformless entities never keep transform_dirty") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity root = fixture.create("root");
+
+        // set_parent of a raw entity.
+        const core::result<ecs::entity> raw = fixture.world.create_entity();
+        CONJURE_REQUIRE_OK(raw);
+        CONJURE_REQUIRE_OK(target.set_parent(raw.value(), root));
+        CHECK_FALSE(fixture.world.has<scene::transform_dirty>(raw.value()));
+
+        // deferred_set_parent through a flushed buffer.
+        const core::result<ecs::entity> deferred = fixture.world.create_entity();
+        CONJURE_REQUIRE_OK(deferred);
+        ecs::command_buffer commands(fixture.world);
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, deferred.value(), root, false));
+        CHECK(fixture.world.flush(commands).applied >= 1);
+
+        // A loaded entry without components.
+        const std::string text = "{\"format\":\"conjure.scene\",\"version\":1,\"name\":\"plain\",\"settings\":{},"
+          "\"roots\":[],\"archive\":{\"entities\":[{\"components\":{}}]}}";
+        const core::result<core::json::document> parsed = core::json::document::parse(text);
+        REQUIRE(parsed.has_value());
+        const core::result<scene::scene_document> document =
+          scene::scene_serializer::parse_document(parsed.value().root(), fixture.registry);
+        CONJURE_REQUIRE_OK(document);
+        const core::result<scene::instantiate_report> loaded = scene::scene_serializer::load_scene(
+          target,
+          document.value(),
+          scene::SCENE_ID_AUTHORED,
+          scene::guid_policy::KEEP
+        );
+        CONJURE_REQUIRE_OK(loaded);
+        REQUIRE(loaded.value().entities.size() == 1);
+        const ecs::entity plain = loaded.value().entities[0];
+        CHECK_FALSE(fixture.world.has<scene::transform_dirty>(plain));
+
+        // The pass never visits them, so nothing would ever take a tag away again.
+        fixture.step();
+        CHECK(target.tree().parent_of(deferred.value()) == root);
+        for (const ecs::entity entity : {raw.value(), deferred.value(), plain}) {
+            CAPTURE(entity.index);
+            CHECK_FALSE(fixture.world.has<scene::transform_dirty>(entity));
+        }
+
+        // Positive control: a transform brings the tag and the next pass removes it.
+        CONJURE_REQUIRE_OK(target.add_transform(raw.value()));
+        CHECK(fixture.world.has<scene::transform_dirty>(raw.value()));
+        fixture.step();
+        CHECK_FALSE(fixture.world.has<scene::transform_dirty>(raw.value()));
+        CONJURE_CHECK_OK(target.validate());
+    }
+
+    TEST_CASE("regression - a waiting deferred repair keeps the repair queue's storage") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity root = fixture.create("root");
+        const ecs::entity loose = fixture.create("loose");
+        ecs::command_buffer commands(fixture.world);
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, false, 0));
+
+        // The buffer stays unflushed, so every pass puts the waiting entry back; after two warm-up passes
+        // that costs no allocation.
+        target.apply_hierarchy_changes();
+        target.apply_hierarchy_changes();
+        CONJURE_CHECK_NO_ALLOCATIONS(target.apply_hierarchy_changes());
+        CHECK(target.pending_repair_count() == 1);
+
+        CHECK(fixture.world.flush(commands).applied >= 1);
+        fixture.step();
+        CHECK(target.pending_repair_count() == 0);
+        CHECK(target.tree().parent_of(loose) == root);
+        CONJURE_CHECK_OK(target.validate());
+    }
+
+    TEST_CASE("scene - instantiate_archive attaches a kept external parent") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity outer = fixture.create("P");
+        const ecs::entity first = fixture.create("A", outer);
+        const ecs::entity branch = fixture.create("B", outer);
+        const ecs::entity leaf = fixture.create("C", branch);
+        CONJURE_REQUIRE_OK(target.set_enabled(outer, false));
+        CONJURE_UNUSED(leaf);
+
+        // An undo payload: the branch captured with its link to the outside parent.
+        ecs::archive_options options = {};
+        options.keepExternalReferences = true;
+        core::result<ecs::entity_archive> captured = scene::scene_serializer::capture_subtree(target, branch, options);
+        CONJURE_REQUIRE_OK(captured);
+        CHECK_FALSE(captured.value().component_bytes(0, target.ids().parent).empty());
+        CONJURE_REQUIRE_OK(target.destroy_now(branch));
+
+        // A null options.parent: the archive root goes back under its live external parent.
+        ecs::entity restored = {};
+        const core::result<scene::instantiate_report> report = target.instantiate_archive(
+          std::make_shared<const ecs::entity_archive>(std::move(captured).value()),
+          1,
+          scene::instantiate_options{},
+          std::span<ecs::entity>(&restored, 1)
+        );
+        CONJURE_REQUIRE_OK(report);
+        REQUIRE(report.value().entities.size() == 2);
+        const ecs::entity restoredLeaf = report.value().entities[1];
+        CHECK(target.tree().parent_of(restored) == outer);
+        CHECK(target.tree().sibling_index(restored) == 1);
+        REQUIRE(target.tree().children_of(outer).size() == 2);
+        CHECK(target.tree().children_of(outer)[0] == first);
+        CHECK(target.tree().children_of(outer)[1] == restored);
+        CHECK_FALSE(target.root_owner(restored).has_value());
+        CHECK(fixture.world.has_raw(restored, target.ids().depth[1]));
+        CHECK(fixture.world.has_raw(restoredLeaf, target.ids().depth[2]));
+        CHECK(fixture.world.has<scene::inactive>(restored));
+        CHECK(fixture.world.has<scene::inactive>(restoredLeaf));
+        CHECK(target.tree().parent_of(restoredLeaf) == restored);
+        CONJURE_CHECK_OK(target.validate());
     }
 }

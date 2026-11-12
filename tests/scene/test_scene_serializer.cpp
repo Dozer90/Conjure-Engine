@@ -15,6 +15,7 @@
 #include "conjure/scene/scene_error.h"
 #include "conjure/scene/scene_serializer.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -127,8 +128,10 @@ TEST_SUITE("scene/scene_serializer") {
         REQUIRE(loaded.value().entities.size() == 2);
         const ecs::entity plain = loaded.value().entities[0];
         CHECK(fixture.world.is_alive(plain));
-        // Linked as a root like any other entry (dirty tag, root list) but given nothing of its own.
+        // Linked as a root like any other entry (root list) but given nothing of its own, not even the
+        // dirty tag the transform pass would never take away.
         CHECK_FALSE(fixture.world.has<scene::parent>(plain));
+        CHECK_FALSE(fixture.world.has<scene::transform_dirty>(plain));
         CHECK_FALSE(fixture.world.has<scene::name>(plain));
         CHECK_FALSE(fixture.world.has<scene::guid>(plain));
         CHECK_FALSE(fixture.world.has<scene::local_transform>(plain));
@@ -474,5 +477,70 @@ TEST_SUITE("scene/scene_serializer") {
         REQUIRE(duplicated != nullptr);
         CHECK(duplicated->text == "spin fast");
         CHECK(duplicated->target == copy.value());
+    }
+
+    TEST_CASE("scene_serializer - parse_prefab rejects duplicate entry guids") {
+        scene_fixture fixture = {};
+        const std::string guidText = test_uuid(7).to_string();
+        const std::string text = "{\"format\":\"conjure.prefab\",\"version\":1,\"name\":\"twins\",\"archive\":{"
+          "\"entities\":[{\"components\":{\"conjure.scene.guid\":{\"value\":\"" + guidText + "\"}}},"
+          "{\"components\":{\"conjure.scene.guid\":{\"value\":\"" + guidText + "\"},"
+          "\"conjure.scene.parent\":{\"value\":0,\"siblingIndex\":0}}}]}}";
+        const core::result<core::json::document> parsed = core::json::document::parse(text);
+        REQUIRE(parsed.has_value());
+        CONJURE_CHECK_ERROR(
+          scene::scene_serializer::parse_prefab(parsed.value().root(), fixture.registry),
+          scene_error::DUPLICATE_GUID
+        );
+        // instantiate_subtree parses first, so even a regenerating instantiation creates nothing.
+        scene::scene &target = fixture.active();
+        CONJURE_CHECK_ERROR(
+          scene::scene_serializer::instantiate_subtree(target, parsed.value().root(), ecs::NULL_ENTITY, false),
+          scene_error::DUPLICATE_GUID
+        );
+        CHECK(fixture.world.entity_count() == 0);
+    }
+
+    TEST_CASE("scene_serializer - a null guid gets a fresh guid under the regenerate policies") {
+        const std::string nullGuid = "\"conjure.scene.guid\":{\"value\":\"00000000-0000-0000-0000-000000000000\"}";
+        const std::string entities = "\"archive\":{\"entities\":[{\"components\":{" + nullGuid
+          + ",\"conjure.scene.name\":{\"value\":\"blank\"}}}]}}";
+        const std::string sceneText =
+          "{\"format\":\"conjure.scene\",\"version\":1,\"name\":\"nulls\",\"settings\":{},\"roots\":[]," + entities;
+        const std::string prefabText = "{\"format\":\"conjure.prefab\",\"version\":1,\"name\":\"blank\"," + entities;
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        testing::log_capture logs = {};
+
+        SUBCASE("REGENERATE_ON_CONFLICT") {
+            const core::result<scene::instantiate_report> loaded =
+              load_text(fixture, sceneText, scene::guid_policy::REGENERATE_ON_CONFLICT);
+            CONJURE_REQUIRE_OK(loaded);
+            const ecs::entity blank = loaded.value().entities[0];
+            const std::optional<core::uuid> id = target.guid_of(blank);
+            REQUIRE(id.has_value());
+            CHECK(target.find_guid(*id) == blank);
+            // A missing identity is not a collision (the one WARN is the root the header cannot list).
+            CHECK_FALSE(logs.contains(core::log_level::WARN, "collision"));
+        }
+        SUBCASE("REGENERATE_ALL through instantiate_subtree") {
+            const core::result<core::json::document> parsed = core::json::document::parse(prefabText);
+            REQUIRE(parsed.has_value());
+            const core::result<ecs::entity> blank =
+              scene::scene_serializer::instantiate_subtree(target, parsed.value().root(), ecs::NULL_ENTITY, false);
+            CONJURE_REQUIRE_OK(blank);
+            const std::optional<core::uuid> id = target.guid_of(blank.value());
+            REQUIRE(id.has_value());
+            CHECK(target.find_guid(*id) == blank.value());
+        }
+        SUBCASE("KEEP leaves it null") {
+            const core::result<scene::instantiate_report> loaded = load_text(fixture, sceneText);
+            CONJURE_REQUIRE_OK(loaded);
+            const ecs::entity blank = loaded.value().entities[0];
+            CHECK(fixture.world.has<scene::guid>(blank));
+            CHECK_FALSE(target.guid_of(blank).has_value());
+            CHECK(target.guids().size() == 0);
+        }
+        CONJURE_CHECK_OK(target.validate());
     }
 }

@@ -169,19 +169,11 @@ core::result<prefab_document> scene_serializer::parse_prefab(
         return core::make_error(scene_error::BAD_FORMAT, "the file has no \"archive\" object");
     }
     CONJURE_TRY_ASSIGN(ecs::entity_archive parsed, ecs::read_archive_json(archive, registry));
-    if (parsed.entity_count() == 0) {
-        return core::make_error(scene_error::PREFAB_MULTIPLE_ROOTS,
-          "a prefab needs exactly one root entry; the archive is empty");
-    }
     const scene_component_ids ids = scene_component_ids::resolve(registry);
-    const std::vector<u32> roots = detail::archive_roots(parsed, ids);
-    if (roots.size() != 1 || roots.front() != 0) {
-        return core::make_error(
-          scene_error::PREFAB_MULTIPLE_ROOTS,
-          "a prefab needs exactly one root at entry 0; found {} root(s)",
-          roots.size()
-        );
-    }
+    CONJURE_TRY(detail::check_prefab_roots(parsed, ids, "prefab '{}'", document.name));
+    // Entry guids are the identities prefab_link points at: two entries sharing one would make diff and
+    // apply match the wrong entity.
+    CONJURE_TRY(detail::check_unique_guids(parsed, ids));
     const u32 unknown = detail::count_unresolved(parsed);
     if (unknown > 0) {
         CONJURE_LOG_WARN(LOG_SCENE, "prefab '{}' preserves {} unknown component(s)", document.name, unknown);
