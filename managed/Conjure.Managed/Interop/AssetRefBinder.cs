@@ -87,6 +87,8 @@ public static unsafe class AssetRefBinder<T> where T : unmanaged
                     *slot = bound;
                     continue;
                 }
+                // A stale pointer the value carried (one read back with GetComponent) must not land bound.
+                *slot = null;
                 if (NativeCheck.Is(status, BindingStatus.AssetTypeMismatch) && !field.MismatchLogged)
                 {
                     field.MismatchLogged = true;
@@ -128,14 +130,16 @@ public static unsafe class AssetRefBinder<T> where T : unmanaged
         {
             return Array.Empty<AssetRefField>();
         }
-        // LayoutHash.Describe lists the non-padding fields in metadata order, one entry per field; the same
-        // walk here pairs every AssetRef entry with its FieldInfo to read the type argument.
+        // LayoutHash.Describe lists the fields in metadata order, one entry per field (a [NativeComponent]
+        // mirror's padding excluded); the same walk here pairs every AssetRef entry with its FieldInfo to read
+        // the type argument.
         FieldInfo[] fields = typeof(T).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Array.Sort(fields, (left, right) => left.MetadataToken.CompareTo(right.MetadataToken));
         Dictionary<string, FieldInfo> byNativeName = new Dictionary<string, FieldInfo>(fields.Length);
+        bool skipPadding = LayoutHash.SkipsPadding(typeof(T));
         foreach (FieldInfo field in fields)
         {
-            if (!LayoutHash.IsPaddingName(field.Name))
+            if (!skipPadding || !LayoutHash.IsPaddingName(field.Name))
             {
                 byNativeName[LayoutHash.NativeName(field.Name)] = field;
             }

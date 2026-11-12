@@ -22,7 +22,8 @@ public sealed class WrongThreadProbe : ScriptBehaviour
         {
             try
             {
-                return entity.IsAlive ? "none" : "none";
+                _ = entity.IsAlive;     // off the main thread this throws InvalidOperationException
+                return "none";
             }
             catch (Exception exception)
             {

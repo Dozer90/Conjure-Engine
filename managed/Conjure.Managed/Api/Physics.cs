@@ -7,7 +7,8 @@ namespace Conjure;
 /// <summary>
 /// Scene queries, gravity and the layer table through the physics_* entries (docs/design/15_bindings.md
 /// 2.5). NotSupportedException when the build or the configuration has no physics. Queries return what
-/// they hit and never throw for "nothing hit"; a short span truncates and the full count comes back.
+/// they hit and never throw for "nothing hit"; a short span truncates and the full count comes back. A query
+/// without a mask tests every layer; an explicit mask is used as given, so LayerMask.None hits nothing.
 /// </summary>
 public static unsafe class Physics
 {
@@ -19,7 +20,7 @@ public static unsafe class Physics
         Vector3 direction,
         float maxDistance,
         out RaycastHit hit,
-        LayerMask mask = default,
+        LayerMask? mask = null,
         Entity ignore = default)
     {
         NativeApi* api = NativeBridge.RequireApi();
@@ -41,7 +42,7 @@ public static unsafe class Physics
         Vector3 direction,
         float maxDistance,
         Span<RaycastHit> hits,
-        LayerMask mask = default,
+        LayerMask? mask = null,
         Entity ignore = default)
     {
         NativeApi* api = NativeBridge.RequireApi();
@@ -64,7 +65,7 @@ public static unsafe class Physics
         Vector3 direction,
         float maxDistance,
         out RaycastHit hit,
-        LayerMask mask = default,
+        LayerMask? mask = null,
         Entity ignore = default)
     {
         ShapeQuery query = default;
@@ -85,7 +86,7 @@ public static unsafe class Physics
         Vector3 direction,
         float maxDistance,
         out RaycastHit hit,
-        LayerMask mask = default,
+        LayerMask? mask = null,
         Entity ignore = default)
     {
         ShapeQuery query = default;
@@ -107,7 +108,7 @@ public static unsafe class Physics
         Vector3 direction,
         float maxDistance,
         out RaycastHit hit,
-        LayerMask mask = default,
+        LayerMask? mask = null,
         Entity ignore = default)
     {
         ShapeQuery query = default;
@@ -123,7 +124,7 @@ public static unsafe class Physics
     /// The bodies overlapping a sphere, up to 'entities.Length'; returns the total count (exact up to 1024 for
     /// a count query with an empty span; a longer span is always filled completely).
     /// </summary>
-    public static int OverlapSphere(Vector3 center, float radius, Span<Entity> entities, LayerMask mask = default)
+    public static int OverlapSphere(Vector3 center, float radius, Span<Entity> entities, LayerMask? mask = null)
     {
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsOverlapSphere, NativeFunction.PhysicsOverlapSphere);
@@ -144,7 +145,7 @@ public static unsafe class Physics
         Vector3 halfExtents,
         Quaternion rotation,
         Span<Entity> entities,
-        LayerMask mask = default)
+        LayerMask? mask = null)
     {
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsOverlapBox, NativeFunction.PhysicsOverlapBox);
@@ -242,7 +243,12 @@ public static unsafe class Physics
         return status > 0;
     }
 
-    private static RayQuery MakeRay(Vector3 origin, Vector3 direction, float maxDistance, LayerMask mask, Entity ignore)
+    private static RayQuery MakeRay(
+        Vector3 origin,
+        Vector3 direction,
+        float maxDistance,
+        LayerMask? mask,
+        Entity ignore)
     {
         RayQuery query = default;
         query.Origin = origin;
@@ -253,8 +259,7 @@ public static unsafe class Physics
         return query;
     }
 
-    /// <summary>
-    /// A default (empty) mask means "every layer": the facades' default argument.
-    /// </summary>
-    private static uint MaskBits(LayerMask mask) => mask.IsEmpty ? LayerMask.All.Bits : mask.Bits;
+    // No mask (null, the default argument) means every layer; an explicit mask is passed through, so
+    // LayerMask.None matches nothing.
+    private static uint MaskBits(LayerMask? mask) => mask.HasValue ? mask.Value.Bits : LayerMask.All.Bits;
 }

@@ -168,6 +168,28 @@ TEST_SUITE("scripting/script_hot_reload") {
         CHECK(fixture.runtime.host().managed_api().collect_garbage() == 0);
     }
 
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F066: a reload before a young instance's first phase leaves no zombie [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        fixture.run_frame();
+
+        // Created by a flush outside any phase: the v1 instance still waits for its OnStart when it is destroyed.
+        const script_entry_id young = fixture.add_script(fixture.create_entity(), RELOAD_PROBE);
+        CHECK(fixture.field_i64(young, "StartCalls") == 0);
+        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly(test_scripts_assembly("v2")));
+        CHECK(fixture.runtime.stats().zombieAssemblies == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+
+        fixture.run_frame();
+        CHECK(fixture.field_i64(young, "StartCalls") == 1);
+        CHECK(fixture.field_i64(young, "CreateCalls") == 2);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
     TEST_CASE("hot reload - a missing assembly file fails and keeps the running one [dotnet]" * doctest::timeout(120)) {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};

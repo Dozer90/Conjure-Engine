@@ -35,4 +35,14 @@ public struct Color : IEquatable<Color>
     public override int GetHashCode() => HashCode.Combine(R, G, B, A);
 
     public override string ToString() => "(" + R + ", " + G + ", " + B + ", " + A + ")";
+
+    /// <summary>
+    /// Component-wise equality, like Equals.
+    /// </summary>
+    public static bool operator ==(Color left, Color right) => left.Equals(right);
+
+    /// <summary>
+    /// Component-wise inequality, like !Equals.
+    /// </summary>
+    public static bool operator !=(Color left, Color right) => !left.Equals(right);
 }

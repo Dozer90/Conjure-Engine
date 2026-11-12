@@ -11,6 +11,7 @@
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,8 @@ namespace {
 
     constexpr std::string_view INSPECTOR_PROBE = "Conjure.TestScripts.InspectorProbe";
     constexpr std::string_view FIELD_KINDS = "Conjure.TestScripts.FieldKinds";
+    constexpr std::string_view WIDE_ENUM_FIELDS = "Conjure.TestScripts.WideEnumFields";
+    constexpr std::string_view NON_FINITE_DEFAULTS = "Conjure.TestScripts.NonFiniteDefaults";
 }
 
 TEST_SUITE("scripting/script_fields_inspector") {
@@ -200,6 +203,62 @@ TEST_SUITE("scripting/script_fields_inspector") {
         CHECK(rejected == 2);                                           // both fields counted as not applied
         CHECK(fixture.fields_of(kinds).root()["Ints"].size() == 3);     // defaults kept
         CHECK(fixture.fields_of(kinds).root()["Names"].size() == 2);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F671: 64-bit enums are skipped and a uint enum default fits its blob [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        // Without the fix the ulong default overflowed while the catalog was built and the whole assembly failed.
+        const script_class_info *wide = fixture.runtime.classes().find(WIDE_ENUM_FIELDS);
+        REQUIRE(wide != nullptr);
+        CHECK(wide->find_field("Mask") == nullptr);
+        CHECK(wide->find_field("Long") == nullptr);
+        const script_field_info *highUnsigned = wide->find_field("Unsigned");
+        REQUIRE(highUnsigned != nullptr);
+        CHECK(highUnsigned->kind == script_field_kind::ENUM);
+        CHECK(highUnsigned->defaultValue.root().as_i64() == -1);       // 0xFFFFFFFF as the int32 the blob carries
+        CHECK(logs.contains(core::log_level::INFO, "WideEnumFields.Mask"));
+        CHECK(logs.contains(core::log_level::INFO, "WideEnumFields.Long"));
+
+        const script_entry_id entry = fixture.add_script(fixture.create_entity(), WIDE_ENUM_FIELDS);
+        CHECK(fixture.field_i64(entry, "Unsigned") == -1);
+        CHECK(fixture.field_i64(entry, "Plain") == 3);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F672: infinite defaults and range bounds reach native as finite JSON [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        const script_class_info *probe = fixture.runtime.classes().find(NON_FINITE_DEFAULTS);
+        REQUIRE(probe != nullptr);
+        const script_field_info *maxRange = probe->find_field("MaxRange");
+        REQUIRE(maxRange != nullptr);
+        CHECK(maxRange->defaultValue.root().as_f64() == doctest::Approx(std::numeric_limits<f32>::max()));
+        const script_field_info *floorField = probe->find_field("Floor");
+        REQUIRE(floorField != nullptr);
+        CHECK(floorField->defaultValue.root().as_f64() == -std::numeric_limits<f64>::max());
+        const script_field_info *reach = probe->find_field("Reach");
+        REQUIRE(reach != nullptr);
+        CHECK(reach->meta.root()["min"].as_f64(-1.0) == doctest::Approx(0.0));
+        CHECK_FALSE(reach->meta.root().contains("max"));
+        CHECK(logs.contains(core::log_level::INFO, "NonFiniteDefaults.MaxRange"));
+        CHECK(logs.contains(core::log_level::INFO, "NonFiniteDefaults.Floor"));
+
+        // A field missing from the entry JSON starts from the registered default: the float max, not 0.
+        const script_entry_id entry = fixture.add_script(fixture.create_entity(), NON_FINITE_DEFAULTS);
+        CHECK(fixture.field_f64(entry, "MaxRange") == doctest::Approx(std::numeric_limits<f32>::max()));
+        CHECK(fixture.field_f64(entry, "Floor") == -std::numeric_limits<f64>::max());
+        CHECK(logs.count(core::log_level::WARN) == 0);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

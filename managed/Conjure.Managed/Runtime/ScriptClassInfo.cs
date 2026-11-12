@@ -21,8 +21,8 @@ public sealed class FieldAccessor
     }
 
     /// <summary>
-    /// An accessor serialised under 'name' (the bare field name, or "<DeclaringType>.<name>" for a base
-    /// field hidden by a derived one).
+    /// An accessor serialised under 'name' (the bare field name, or "&lt;DeclaringType&gt;.&lt;name&gt;" for a
+    /// base field hidden by a derived one).
     /// </summary>
     public FieldAccessor(FieldInfo field, string name, ScriptFieldKind kind, ScriptFieldKind elementKind, Type elementType)
     {
@@ -178,11 +178,21 @@ public sealed class FieldAccessor
     /// </summary>
     public string DefaultJson(ScriptBehaviour defaults)
     {
-        return JsonText.Value(Field.GetValue(defaults), Kind, ElementKind);
+        return DefaultJson(defaults, out _);
     }
 
     /// <summary>
-    /// {"tooltip","min","max","enumNames","assetType","hidden"} from the attributes (3.7).
+    /// DefaultJson, and whether a NaN or infinite float in the value was replaced (JSON has neither): NaN by 0,
+    /// an infinity by the largest finite value of its sign.
+    /// </summary>
+    public string DefaultJson(ScriptBehaviour defaults, out bool clamped)
+    {
+        return JsonText.Value(Field.GetValue(defaults), Kind, ElementKind, out clamped);
+    }
+
+    /// <summary>
+    /// {"tooltip","min","max","enumNames","assetType","hidden"} from the attributes (3.7). A [Range] bound
+    /// that is not finite is left out: the slider is open on that side.
     /// </summary>
     public string MetaJson()
     {
@@ -206,11 +216,16 @@ public sealed class FieldAccessor
             JsonText.AppendString(builder, tooltip.Text);
         }
         RangeAttribute? range = Field.GetCustomAttribute<RangeAttribute>();
-        if (range != null)
+        bool boundClamped = false;      // stays false: only finite bounds are written
+        if (range != null && double.IsFinite(range.Min))
         {
             Separator();
-            builder.Append("\"min\":").Append(JsonText.Number(range.Min));
-            builder.Append(",\"max\":").Append(JsonText.Number(range.Max));
+            builder.Append("\"min\":").Append(JsonText.Number(range.Min, ref boundClamped));
+        }
+        if (range != null && double.IsFinite(range.Max))
+        {
+            Separator();
+            builder.Append("\"max\":").Append(JsonText.Number(range.Max, ref boundClamped));
         }
         Type enumType = Kind == ScriptFieldKind.Enum ? Field.FieldType : ElementKind == ScriptFieldKind.Enum ? ElementType : typeof(void);
         if (enumType.IsEnum)
@@ -288,7 +303,18 @@ public sealed class FieldAccessor
         if (type == typeof(Quaternion)) { kind = ScriptFieldKind.Quat; return true; }
         if (type == typeof(Color)) { kind = ScriptFieldKind.Color; return true; }
         if (type == typeof(Entity)) { kind = ScriptFieldKind.Entity; return true; }
-        if (type.IsEnum) { kind = ScriptFieldKind.Enum; return true; }
+        if (type.IsEnum)
+        {
+            // The ENUM payload is an int32 (03_scripting.md 3.6): a 64-bit enum would be truncated, so it is
+            // not serialised and the catalog logs the skipped field at INFO.
+            Type underlying = Enum.GetUnderlyingType(type);
+            if (underlying == typeof(long) || underlying == typeof(ulong))
+            {
+                return false;
+            }
+            kind = ScriptFieldKind.Enum;
+            return true;
+        }
         if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(AssetRef<>)) { kind = ScriptFieldKind.Asset; return true; }
         return false;
     }

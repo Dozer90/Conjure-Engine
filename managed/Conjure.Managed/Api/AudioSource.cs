@@ -1,4 +1,5 @@
 using Conjure.Components;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -7,7 +8,9 @@ namespace Conjure;
 /// The audio source facade of an entity (docs/design/15_bindings.md 2.5, B8): playback commands land in
 /// audio.audio_source.playbackRequest and the engine's audio sync system applies them at the end of the
 /// frame; IsPlaying is what the engine wrote back last frame and never throws (B11). Volume, Pitch and Loop
-/// edit the component through component_get / component_set (InvalidOperationException without one).
+/// edit the component through component_get / component_set (InvalidOperationException without one): one
+/// component_get and one component_set each, with no asset bind once the clip is bound; edit many sources
+/// through a ComponentQuery span.
 /// </summary>
 public readonly struct AudioSource
 {
@@ -72,7 +75,7 @@ public readonly struct AudioSource
         {
             AudioSourceData data = Data;
             data.Volume = value;
-            Data = data;
+            WriteFields(in data);
         }
     }
 
@@ -83,7 +86,7 @@ public readonly struct AudioSource
         {
             AudioSourceData data = Data;
             data.Pitch = value;
-            Data = data;
+            WriteFields(in data);
         }
     }
 
@@ -94,7 +97,7 @@ public readonly struct AudioSource
         {
             AudioSourceData data = Data;
             data.Loop = value;
-            Data = data;
+            WriteFields(in data);
         }
     }
 
@@ -119,5 +122,24 @@ public readonly struct AudioSource
     {
         get => Entity.GetComponent<AudioSourceData>();
         set => Entity.SetComponent(in value);
+    }
+
+    /// <summary>
+    /// Writes back a Volume, Pitch or Loop edit of 'data', which was just read through Data.
+    /// </summary>
+    private unsafe void WriteFields(in AudioSourceData data)
+    {
+        if (!data.Clip.IsNull && !data.Clip.IsBound)
+        {
+            // Native holds the clip id with an unbound slot (asset_ref(id) reads nullptr until bound): the R25
+            // bind pass of SetComponent binds it, as every write did before.
+            Entity.SetComponent(in data);
+            return;
+        }
+        // Read back through component_get, a non-null slot is the one native bound: the bind pass
+        // (asset_ref_bind) would have nothing to do.
+        NativeApi* api = NativeBridge.RequireApi();
+        AudioSourceData copy = data;
+        api->ComponentSet(Entity.Id, ComponentType<AudioSourceData>.RequireId(), &copy);
     }
 }

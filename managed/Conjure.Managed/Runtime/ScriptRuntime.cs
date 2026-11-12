@@ -48,10 +48,13 @@ public static unsafe class ScriptRuntime
     }
 
     /// <summary>
-    /// 0 when the previous context was collected, 1 when it leaked (D8).
+    /// 0 when the previous context was collected, 1 when it leaked (D8). Native destroyed every instance of
+    /// that context first, so the destroyed ones still waiting for OnStart are pruned here: they would keep
+    /// its types reachable and turn the unload into a zombie.
     /// </summary>
     public static int UnloadGameAssembly()
     {
+        _pendingStart.RemoveAll(instance => instance.Slot < 0);
         return AssemblyLoader.UnloadPrevious();
     }
 
@@ -137,7 +140,8 @@ public static unsafe class ScriptRuntime
             }
             RemoveFromLists(instance);
             // Not removed from _pendingStart (an O(n) scan per instance): DrainPendingStart skips instances
-            // whose slot was freed, which Remove below marks with Slot = -1.
+            // whose slot was freed, which Remove below marks with Slot = -1, and UnloadGameAssembly prunes them
+            // in one pass before a reload retires their load context.
             _instances.Remove(slots[index]);
             instance.EntityValue = default;
             ++destroyed;
@@ -147,7 +151,8 @@ public static unsafe class ScriptRuntime
 
     /// <summary>
     /// One call per phase (D5): pending OnStart first (FIXED_UPDATE and UPDATE), then every class's list.
-    /// Returns the number of instances visited.
+    /// Instances not yet started (created by the flush after this frame's UPDATE) are skipped until their
+    /// OnStart ran. Returns the number of instances visited.
     /// </summary>
     public static int RunPhase(ScriptPhase phase, float deltaTime)
     {
@@ -173,6 +178,11 @@ public static unsafe class ScriptRuntime
             for (int index = 0; index < list.Count; ++index)
             {
                 ScriptBehaviour instance = list.Items[index];
+                if (!instance.Started)
+                {
+                    // Created after this frame's FIXED_UPDATE/UPDATE drain: OnStart runs first (03_scripting.md 3.2).
+                    continue;
+                }
                 instance.Run(callback, deltaTime);
                 ++visited;
                 // A swap-remove of the current instance moved another one into this index: visit it too.

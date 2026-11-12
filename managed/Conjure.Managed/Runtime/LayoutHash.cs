@@ -52,7 +52,8 @@ public readonly struct ComponentFieldLayout
 /// <summary>
 /// The layout of an unmanaged struct as core::reflect describes it, and its layout hash: FNV-1a 64 over
 /// (name bytes, kind byte, offset u32 LE, size u32 LE) per field in declaration order, exactly as
-/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad<digits> are padding and excluded.
+/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad&lt;digits&gt; of a [NativeComponent]
+/// mirror are padding and excluded; an [EcsComponent] struct keeps every field.
 ///
 /// Offsets and sizes are those of the managed (blittable) layout that Span&lt;T&gt;, sizeof(T) and the
 /// component_get/set copies use, never the marshalled one: Marshal.OffsetOf/SizeOf widen bool to 4 bytes
@@ -196,8 +197,9 @@ public static class LayoutHash
     }
 
     /// <summary>
-    /// The fields of an unmanaged struct in declaration order (Pad<digits> excluded). Throws
-    /// InvalidOperationException for a field type that cannot be described.
+    /// The fields of an unmanaged struct in declaration order (the Pad&lt;digits&gt; fields of a
+    /// [NativeComponent] mirror excluded, see SkipsPadding). Throws InvalidOperationException for a field
+    /// type that cannot be described.
     /// </summary>
     public static List<ComponentFieldLayout> Describe(Type structType)
     {
@@ -225,6 +227,7 @@ public static class LayoutHash
                 structType.FullName + " needs [StructLayout(LayoutKind.Sequential)]: an auto layout may be reordered");
         }
         int pack = layoutAttribute == null || layoutAttribute.Pack <= 0 ? int.MaxValue : layoutAttribute.Pack;
+        bool skipPadding = SkipsPadding(structType);
 
         FieldInfo[] fields = structType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Array.Sort(fields, (left, right) => left.MetadataToken.CompareTo(right.MetadataToken));
@@ -261,7 +264,7 @@ public static class LayoutHash
             }
             cursor = Math.Max(cursor, offset + fieldSize);
             structAlignment = Math.Max(structAlignment, alignment);
-            if (!IsPaddingName(field.Name))
+            if (!skipPadding || !IsPaddingName(field.Name))
             {
                 layout.Add(new ComponentFieldLayout(NativeName(field.Name), typeName, kind, offset, fieldSize, alignment));
             }
@@ -283,8 +286,15 @@ public static class LayoutHash
     }
 
     /// <summary>
-    /// True for the padding fields excluded from the layout (R61): "Pad" followed by digits only, so a real
-    /// field such as character_controller.padding keeps its place in the hash.
+    /// True when the struct's Pad&lt;digits&gt; fields are padding (R61): only a [NativeComponent] mirror
+    /// spells out a native type's padding. An [EcsComponent] (or any other) struct keeps every field in its
+    /// layout, so a user field named Pad1 is stored, saved and counted in the alignment like any other.
+    /// </summary>
+    public static bool SkipsPadding(Type structType) => structType.IsDefined(typeof(NativeComponentAttribute), false);
+
+    /// <summary>
+    /// True for the padding fields excluded from a mirror's layout (R61): "Pad" followed by digits only, so a
+    /// real field such as character_controller.padding keeps its place in the hash.
     /// </summary>
     public static bool IsPaddingName(string fieldName)
     {
@@ -372,6 +382,71 @@ public static class LayoutHash
     /// </summary>
     public static string SchemaJson(IReadOnlyList<ComponentFieldLayout> layout)
     {
+        string[] typeNames = new string[layout.Count];
+        for (int index = 0; index < layout.Count; ++index)
+        {
+            typeNames[index] = layout[index].TypeName;
+        }
+        return WriteSchema(layout, typeNames);
+    }
+
+    /// <summary>
+    /// The schema JSON of an [EcsComponent] struct for component_register_managed. Its dynamic fields only
+    /// know primitives, math types, string_id, uuid and entity (01_ecs.md 2.2), so an enum field is described
+    /// as its underlying integer. Returns null, with 'refusal' naming the field, for an AssetRef or nested
+    /// struct field, which a dynamic component cannot hold. 'layout' must be Describe(structType).
+    /// </summary>
+    public static string? DynamicSchemaJson(
+        Type structType,
+        IReadOnlyList<ComponentFieldLayout> layout,
+        out string refusal)
+    {
+        refusal = "";
+        // Describe emits one entry per kept field in metadata order: the same walk pairs them.
+        bool skipPadding = SkipsPadding(structType);
+        FieldInfo[] fields = structType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Array.Sort(fields, (left, right) => left.MetadataToken.CompareTo(right.MetadataToken));
+        List<FieldInfo> kept = new List<FieldInfo>(fields.Length);
+        foreach (FieldInfo field in fields)
+        {
+            if (!skipPadding || !IsPaddingName(field.Name))
+            {
+                kept.Add(field);
+            }
+        }
+        if (kept.Count != layout.Count)
+        {
+            throw new ArgumentException("the layout is not the one of " + structType.FullName, nameof(layout));
+        }
+
+        string[] typeNames = new string[layout.Count];
+        for (int index = 0; index < layout.Count; ++index)
+        {
+            Type fieldType = kept[index].FieldType;
+            byte kind = layout[index].Kind;
+            if (kind == KindAssetRef || kind == KindStruct)
+            {
+                string shownType = fieldType.IsGenericType ? fieldType.Name.Split('`')[0] : fieldType.Name;
+                refusal = structType.FullName + "." + kept[index].Name + ": " + shownType + " fields cannot be " +
+                    "stored in an [EcsComponent]; use bool, integers, float, double, Vector2/3/4, Quaternion, " +
+                    "Matrix4x4, TransformData, Entity/EntityHandle, StringId, AssetId, NativeBool or an enum";
+                return null;
+            }
+            typeNames[index] = layout[index].TypeName;
+            if (kind != KindEnum)
+            {
+                continue;
+            }
+            if (TryDescribeFixed(Enum.GetUnderlyingType(fieldType), out string integer, out _, out _))
+            {
+                typeNames[index] = integer;
+            }
+        }
+        return WriteSchema(layout, typeNames);
+    }
+
+    private static string WriteSchema(IReadOnlyList<ComponentFieldLayout> layout, string[] typeNames)
+    {
         StringBuilder builder = new StringBuilder();
         builder.Append("{\"fields\":[");
         for (int index = 0; index < layout.Count; ++index)
@@ -383,7 +458,7 @@ public static class LayoutHash
             builder.Append("{\"name\":");
             JsonText.AppendString(builder, layout[index].Name);
             builder.Append(",\"type\":");
-            JsonText.AppendString(builder, layout[index].TypeName);
+            JsonText.AppendString(builder, typeNames[index]);
             builder.Append(",\"offset\":").Append(layout[index].Offset).Append('}');
         }
         builder.Append("]}");

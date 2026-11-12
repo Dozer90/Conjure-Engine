@@ -120,6 +120,33 @@ TEST_SUITE("scripting/script_lifecycle") {
     }
 
     TEST_CASE(
+      "regression - sweep-2026-11-12 F068: a script created in UPDATE gets no OnLateUpdate before OnStart [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        const script_entry_id spawner = fixture.add_script(fixture.create_entity(), SPAWNER);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.runtime.run_phase(script_phase::LATE_UPDATE, 0.1f);
+        const ecs::entity spawned = ecs::entity::from_u64(fixture.fields_of(spawner).root()["Spawned"].as_u64());
+        const std::vector<script_entry_id> scripts = fixture.runtime.scripts_of(spawned);
+        REQUIRE(scripts.size() == 1);
+        CHECK(fixture.field_i64(scripts[0], "Created") == 1);
+        CHECK(fixture.field_i64(scripts[0], "Started") == 0);
+        CHECK(fixture.field_i64(scripts[0], "LateUpdates") == 0);     // skipped: OnStart has not run yet
+
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.runtime.run_phase(script_phase::LATE_UPDATE, 0.1f);
+        CHECK(fixture.field_i64(scripts[0], "Started") == 1);
+        CHECK(fixture.field_i64(scripts[0], "Updates") == 1);
+        CHECK(fixture.field_i64(scripts[0], "LateUpdates") == 1);
+        CHECK(fixture.field_i64(scripts[0], "StartedBeforeUpdate") == 1);
+        CHECK(fixture.field_i64(scripts[0], "UpdateBeforeLate") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
       "script lifecycle - 10k instances update in one call well under the frame budget [dotnet]" * doctest::timeout(120)
     ) {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);

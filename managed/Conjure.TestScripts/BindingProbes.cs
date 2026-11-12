@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Conjure;
 using Conjure.Components;
 using Conjure.Dod;
@@ -90,7 +91,7 @@ public sealed class BindingFacadeProbe : ScriptBehaviour
             GravityNegative = Physics.Gravity.Y < 0.0f ? 1 : 0;
             MasterGainPercent = (int)MathF.Round(Audio.MasterGain * 100.0f);
 
-            Input.CursorMode = Interop.CursorMode.Hidden;
+            Input.CursorMode = Conjure.CursorMode.Hidden;
             CursorMode = (int)Input.CursorMode;
 
             ModuleCount = Modules.Registry.Count;
@@ -330,7 +331,8 @@ public sealed class BindingAssetBindProbe : ScriptBehaviour
 /// <summary>
 /// Records the managed size of every ABI record of 15_bindings.md 2.4 (and of AssetRef&lt;T&gt;) plus the
 /// NativeFunction enum's extent, so the native test compares them with the C++ static_asserts: the
-/// BindingRecordSizesMatchDocumented and NativeFunctionEnumMatchesManifest cases of design 10.
+/// BindingRecordSizesMatchDocumented and NativeFunctionEnumMatchesManifest cases of design 10. Offsets lists
+/// every field of every record as "Record.Field=offset;", so a swap of two same-size fields shows too.
 /// </summary>
 public sealed class BindingRecordSizeProbe : ScriptBehaviour
 {
@@ -347,6 +349,7 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
     public int NativeFunctionCount;
     public int EntryCount;
     public int LastFunction;
+    public string Offsets = "";
     public int Ran;
 
     protected override void OnUpdate(float deltaTime)
@@ -356,6 +359,12 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
             return;
         }
         Ran = 1;
+        RecordSizes();
+        RecordOffsets();
+    }
+
+    private void RecordSizes()
+    {
         RayQuery = Unsafe.SizeOf<RayQuery>();
         ShapeQuery = Unsafe.SizeOf<ShapeQuery>();
         RaycastHit = Unsafe.SizeOf<Interop.RaycastHit>();
@@ -369,6 +378,46 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
         NativeFunctionCount = Enum.GetValues(typeof(NativeFunction)).Length;
         EntryCount = NativeApi.EntryCount;
         LastFunction = (int)NativeFunction.ModulesName;
+    }
+
+    // Field names are string literals, not nameof: several are pointers or fixed buffers, which this project
+    // (no unsafe blocks) cannot name. Marshal offsets equal the managed ones: these records hold no bool or char.
+    private void RecordOffsets()
+    {
+        Add<RayQuery>("RayQuery", "Origin", "Direction", "MaxDistance", "LayerMask", "IgnoreEntity");
+        Add<ShapeQuery>(
+            "ShapeQuery", "Ray", "Shape", "Pad0", "Pad1", "Pad2", "HalfExtents", "Radius", "Rotation");
+        Add<Interop.RaycastHit>("RaycastHit", "Entity", "Point", "Normal", "Distance", "Layer");
+        Add<AssetInfo>("AssetInfo", "State", "Pad0", "Pad1", "Pad2", "Version", "TypeId");
+        Add<ModuleRecord>("ModuleRecord",
+            "VersionMajor", "VersionMinor", "VersionPatch", "State", "Kind", "Pad0", "Pad1", "FeatureFlags");
+        Add<FrameStatsBlock>("FrameStatsBlock",
+            "FrameMs", "PhaseMs", "SubmitMs", "FixedSteps", "JobsExecuted", "FrameMemoryHighWater");
+        Add<TransformData>("TransformData", "Position", "Rotation", "Scale");
+        Add<UuidData>("UuidData", "High", "Low");
+        Add<CollisionRecord>("CollisionRecord", "Slot", "Other", "Point", "Normal", "Impulse", "Kind");
+        Add<CreateRequest>("CreateRequest", "Entity", "ClassHash", "Fields", "FieldsSize", "Flags", "OutSlot");
+        Add<ScriptClassDesc>("ScriptClassDesc", "Hash", "FullName", "NameLength", "CallbackMask", "FieldCount");
+        Add<ScriptFieldDesc>("ScriptFieldDesc", "Hash", "Name", "NameLength", "Kind", "ElementKind",
+            "DefaultJson", "DefaultLength", "MetaJson", "MetaLength");
+        Add<ManagedComponentDesc>("ManagedComponentDesc", "NameHash", "FullName", "NameLength", "Size",
+            "Alignment", "LayoutHash", "SchemaJson", "SchemaLength");
+        Add<QueryScope>("QueryScope", "ScopeId", "ChunkCount", "Chunks");
+        Add<ChunkViewData>("ChunkViewData", "Entities", "Columns", "Count");
+        Add<GamepadState>("GamepadState", "ButtonsDown", "ButtonsPressed", "ButtonsReleased", "Axes", "Connected");
+        Add<InputBlock>("InputBlock", "KeysDown", "KeysPressed", "KeysReleased", "MouseX", "MouseY", "MouseDx",
+            "MouseDy", "ScrollX", "ScrollY", "MouseButtonsDown", "MouseButtonsPressed", "MouseButtonsReleased",
+            "Gamepads");
+        Add<FrameBlock>("FrameBlock", "TimeSeconds", "UnscaledTimeSeconds", "DeltaTime", "FixedDeltaTime",
+            "TimeScale", "FrameIndex", "FixedStepIndex", "CurrentPhase", "InPlayMode", "Input");
+    }
+
+    private void Add<T>(string record, params string[] fields)
+    {
+        foreach (string field in fields)
+        {
+            Offsets += record + "." + field + "=" + Marshal.OffsetOf<T>(field).ToInt32() + ";";
+        }
     }
 }
 
@@ -447,6 +496,137 @@ public sealed class BindingInputProbe : ScriptBehaviour
             {
                 ReleasedLater = Input.IsKeyReleased(Key.Space) ? 1 : 0;
             }
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// Casts the same ray down onto the test's static box without a mask and with LayerMask.None.
+/// </summary>
+public sealed class BindingLayerMaskProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public int HitDefault = -1;
+    public int HitNone = -1;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Vector3 origin = new Vector3(0.0f, 5.0f, 0.0f);
+            HitDefault = Physics.Raycast(origin, -Vector3.UnitY, 10.0f, out _) ? 1 : 0;
+            HitNone = Physics.Raycast(origin, -Vector3.UnitY, 10.0f, out _, LayerMask.None) ? 1 : 0;
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// Sets Volume, Pitch and Loop of its entity's audio source once and counts the asset_ref_bind calls they
+/// cost.
+/// </summary>
+public sealed class BindingAudioFieldsProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public int BindCalls = -1;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            int before = Diagnostics.CallCount(NativeFunction.AssetRefBind);
+            AudioSource source = Entity.AudioSource;
+            source.Volume = 0.25f;
+            source.Pitch = 1.5f;
+            source.Loop = true;
+            BindCalls = Diagnostics.CallCount(NativeFunction.AssetRefBind) - before;
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// Compares colors with the == and != operators (compiling this is half the test).
+/// </summary>
+public sealed class BindingColorProbe : ScriptBehaviour
+{
+    public int EqualWhite = -1;
+    public int DifferentBlack = -1;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        EqualWhite = Color.White == new Color(1.0f, 1.0f, 1.0f) ? 1 : 0;
+        DifferentBlack = Color.White != Color.Black ? 1 : 0;
+    }
+}
+
+/// <summary>
+/// Records the EnginePhase names in declaration order and whether there is one per FrameStats phase.
+/// </summary>
+public sealed class BindingEnginePhaseProbe : ScriptBehaviour
+{
+    public string Names = "";
+    public int MatchesPhaseCount = -1;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        Names = string.Join(",", Enum.GetNames(typeof(EnginePhase))).ToUpperInvariant();
+        MatchesPhaseCount = Enum.GetValues(typeof(EnginePhase)).Length == FrameStats.PhaseCount ? 1 : 0;
+    }
+}
+
+/// <summary>
+/// Reads back a bound audio source, swaps only the clip id for a prefab's (keeping the stale slot pointer) and
+/// writes it again: the mismatched reference must land unbound.
+/// </summary>
+public sealed class BindingAssetMismatchProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public int BoundBefore = -1;
+    public int StillBound = -1;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            AudioSourceData source = AudioSourceData.Default;
+            source.Clip = AssetRef<AudioClipAsset>.Find("assets://audio/tone.wav");
+            source.PlayOnStart = false;
+            Entity.AddComponent(in source);
+            AudioSourceData readBack = GetComponent<AudioSourceData>();
+            BoundBefore = readBack.Clip.IsBound ? 1 : 0;
+            AssetId prefab = AssetRef<PrefabAsset>.Find("assets://prefabs/other.prefab").Id;
+            Unsafe.As<AssetRef<AudioClipAsset>, AssetId>(ref readBack.Clip) = prefab;
+            SetComponent(in readBack);
+            StillBound = GetComponent<AudioSourceData>().Clip.IsBound ? 1 : 0;
         }
         catch (Exception exception)
         {

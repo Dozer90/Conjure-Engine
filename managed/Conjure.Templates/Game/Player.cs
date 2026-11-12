@@ -14,7 +14,7 @@ public sealed class Player : ScriptBehaviour
     [Range(0.0, 20.0)]
     public float Speed = 5.0f;
 
-    public Vector3 Spawn = Vector3.Zero;
+    public Vector3 StartOffset = Vector3.Zero;
 
     public Color Tint = Color.White;
 
@@ -34,7 +34,7 @@ public sealed class Player : ScriptBehaviour
     {
         // Transform is a readonly struct returned by value: copy it to a local before writing a property.
         Transform transform = Transform;
-        transform.Position = Spawn;
+        transform.Position += StartOffset;      // zero leaves a placed entity where the scene put it
     }
 
     protected override void OnUpdate(float deltaTime)

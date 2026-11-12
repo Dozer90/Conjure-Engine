@@ -1,7 +1,17 @@
 using System;
+using System.Runtime.CompilerServices;
 using Conjure.Interop;
 
 namespace Conjure.Dod;
+
+/// <summary>
+/// The component ids a ComponentQuery was opened with, one per column (at most 8, like conjure_chunk_view).
+/// </summary>
+[InlineArray(8)]
+internal struct ColumnIds
+{
+    private uint _element0;
+}
 
 /// <summary>
 /// One chunk of a ComponentQuery: spans over the native columns, valid only inside the query scope
@@ -10,10 +20,12 @@ namespace Conjure.Dod;
 public readonly unsafe ref struct ChunkView
 {
     private readonly ChunkViewData* _data;
+    private readonly ColumnIds _ids;
 
-    internal ChunkView(ChunkViewData* data)
+    internal ChunkView(ChunkViewData* data, ColumnIds ids)
     {
         _data = data;
+        _ids = ids;
     }
 
     /// <summary>
@@ -27,7 +39,9 @@ public readonly unsafe ref struct ChunkView
     public ReadOnlySpan<Entity> Entities => _data == null ? default : new ReadOnlySpan<Entity>(_data->Entities, _data->Count);
 
     /// <summary>
-    /// The column of the component at position 'column' of the Begin call, writable.
+    /// The column of the component at position 'column' of the Begin call, writable. Throws
+    /// InvalidOperationException when T is not the component requested at that position of Begin (a wrong
+    /// type or index would read and write another component's memory).
     /// </summary>
     public Span<T> Get<T>(int column) where T : unmanaged
     {
@@ -40,11 +54,17 @@ public readonly unsafe ref struct ChunkView
         {
             throw new InvalidOperationException("the chunk has no column " + column);
         }
+        uint expected = _ids[column];
+        if (ComponentType<T>.Id != expected)
+        {
+            throw new InvalidOperationException(
+                typeof(T).FullName + " is not the component at column " + column + " of this query");
+        }
         return new Span<T>(pointer, _data->Count);
     }
 
     /// <summary>
-    /// The column at 'column', read-only.
+    /// The column at 'column', read-only; throws like Get when T is not the component of that column.
     /// </summary>
     public ReadOnlySpan<T> GetReadOnly<T>(int column) where T : unmanaged => Get<T>(column);
 }

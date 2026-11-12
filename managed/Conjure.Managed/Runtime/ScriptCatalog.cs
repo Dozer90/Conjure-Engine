@@ -225,9 +225,15 @@ public sealed class ScriptCatalog
                 NativeBridge.Log(LogLevel.Warn, "[EcsComponent] " + type.FullName + " skipped: " + exception.Message);
                 continue;
             }
+            string? schemaJson = LayoutHash.DynamicSchemaJson(type, layout, out string refusal);
+            if (schemaJson == null)
+            {
+                NativeBridge.Log(LogLevel.Warn, "[EcsComponent] " + type.FullName + " skipped: " + refusal);
+                continue;
+            }
             string fullName = type.FullName ?? type.Name;
             byte[] nameBytes = Encoding.UTF8.GetBytes(fullName);
-            byte[] schemaBytes = Encoding.UTF8.GetBytes(LayoutHash.SchemaJson(layout));
+            byte[] schemaBytes = Encoding.UTF8.GetBytes(schemaJson);
             fixed (byte* name = nameBytes)
             fixed (byte* schema = schemaBytes)
             {
@@ -292,7 +298,14 @@ public sealed class ScriptCatalog
             }
             foreach (FieldAccessor accessor in info.Fields)
             {
-                string defaultJson = defaults == null ? "" : accessor.DefaultJson(defaults);
+                bool clamped = false;
+                string defaultJson = defaults == null ? "" : accessor.DefaultJson(defaults, out clamped);
+                if (clamped)
+                {
+                    // INFO, not WARN: a deliberate float.PositiveInfinity default is legitimate game code.
+                    NativeBridge.Log(LogLevel.Info, info.FullName + "." + accessor.Name +
+                        ": a NaN or infinite default cannot be stored in JSON; stored as 0 / the largest finite value");
+                }
                 byte[] fieldName = Encoding.UTF8.GetBytes(accessor.Name);
                 byte[] defaultBytes = Encoding.UTF8.GetBytes(defaultJson);
                 byte[] metaBytes = Encoding.UTF8.GetBytes(accessor.MetaJson());

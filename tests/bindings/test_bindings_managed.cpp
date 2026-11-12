@@ -16,6 +16,7 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/string_id.h"
+#include "conjure/ecs/system_phase.h"
 #include "conjure/engine/application.h"
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/scene.h"
@@ -24,6 +25,12 @@
 #include "conjure/scripting/script_runtime.h"
 #include "engine/subsystems/audio_components.h"
 
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    #include "conjure/physics/components.h"
+#endif
+
+#include <cstddef>
+#include <format>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -49,7 +56,14 @@ namespace {
     constexpr std::string_view MODULES_PROBE = "Conjure.TestScripts.BindingModulesProbe";
     constexpr std::string_view INPUT_PROBE = "Conjure.TestScripts.BindingInputProbe";
     constexpr std::string_view RECORD_SIZE_PROBE = "Conjure.TestScripts.BindingRecordSizeProbe";
+    constexpr std::string_view LAYER_MASK_PROBE = "Conjure.TestScripts.BindingLayerMaskProbe";
+    constexpr std::string_view AUDIO_FIELDS_PROBE = "Conjure.TestScripts.BindingAudioFieldsProbe";
+    constexpr std::string_view COLOR_PROBE = "Conjure.TestScripts.BindingColorProbe";
+    constexpr std::string_view ENGINE_PHASE_PROBE = "Conjure.TestScripts.BindingEnginePhaseProbe";
+    constexpr std::string_view ASSET_MISMATCH_PROBE = "Conjure.TestScripts.BindingAssetMismatchProbe";
+    constexpr std::string_view PUBLIC_TYPES_PROBE = "Conjure.TestScripts.PublicTypesProbe";
     constexpr std::string_view CLIP_PATH = "assets://audio/tone.wav";
+    constexpr std::string_view OTHER_PREFAB_PATH = "assets://prefabs/other.prefab";
 
     /// <summary>
     /// A headless application over the real CLR with the test scripts loaded in PLAY mode and a clip asset
@@ -137,6 +151,130 @@ namespace {
             return std::string(fields_of(id).root()[name].as_string());
         }
     };
+
+    /// <summary>
+    /// "Record.Field=offset;" for every field of the C records the managed side mirrors, in the order
+    /// BindingRecordSizeProbe.RecordOffsets lists them. A managed PadN is byte N of the C 'pad' array, and the
+    /// frame block's tail 'padding' has no managed field.
+    /// </summary>
+    [[nodiscard]] std::string native_record_offsets() {
+        std::string text = {};
+        const auto add = [&text](std::string_view record, std::string_view field, usize offset) {
+            text += std::format("{}.{}={};", record, field, offset);
+        };
+        add("RayQuery", "Origin", offsetof(conjure_ray_query, origin));
+        add("RayQuery", "Direction", offsetof(conjure_ray_query, direction));
+        add("RayQuery", "MaxDistance", offsetof(conjure_ray_query, max_distance));
+        add("RayQuery", "LayerMask", offsetof(conjure_ray_query, layer_mask));
+        add("RayQuery", "IgnoreEntity", offsetof(conjure_ray_query, ignore_entity));
+        add("ShapeQuery", "Ray", offsetof(conjure_shape_query, ray));
+        add("ShapeQuery", "Shape", offsetof(conjure_shape_query, shape));
+        add("ShapeQuery", "Pad0", offsetof(conjure_shape_query, pad) + 0);
+        add("ShapeQuery", "Pad1", offsetof(conjure_shape_query, pad) + 1);
+        add("ShapeQuery", "Pad2", offsetof(conjure_shape_query, pad) + 2);
+        add("ShapeQuery", "HalfExtents", offsetof(conjure_shape_query, half_extents));
+        add("ShapeQuery", "Radius", offsetof(conjure_shape_query, radius));
+        add("ShapeQuery", "Rotation", offsetof(conjure_shape_query, rotation));
+        add("RaycastHit", "Entity", offsetof(conjure_raycast_hit, entity));
+        add("RaycastHit", "Point", offsetof(conjure_raycast_hit, point));
+        add("RaycastHit", "Normal", offsetof(conjure_raycast_hit, normal));
+        add("RaycastHit", "Distance", offsetof(conjure_raycast_hit, distance));
+        add("RaycastHit", "Layer", offsetof(conjure_raycast_hit, layer));
+        add("AssetInfo", "State", offsetof(conjure_asset_info, state));
+        add("AssetInfo", "Pad0", offsetof(conjure_asset_info, pad) + 0);
+        add("AssetInfo", "Pad1", offsetof(conjure_asset_info, pad) + 1);
+        add("AssetInfo", "Pad2", offsetof(conjure_asset_info, pad) + 2);
+        add("AssetInfo", "Version", offsetof(conjure_asset_info, version));
+        add("AssetInfo", "TypeId", offsetof(conjure_asset_info, type_id));
+        add("ModuleRecord", "VersionMajor", offsetof(conjure_module_record, version_major));
+        add("ModuleRecord", "VersionMinor", offsetof(conjure_module_record, version_minor));
+        add("ModuleRecord", "VersionPatch", offsetof(conjure_module_record, version_patch));
+        add("ModuleRecord", "State", offsetof(conjure_module_record, state));
+        add("ModuleRecord", "Kind", offsetof(conjure_module_record, kind));
+        add("ModuleRecord", "Pad0", offsetof(conjure_module_record, pad) + 0);
+        add("ModuleRecord", "Pad1", offsetof(conjure_module_record, pad) + 1);
+        add("ModuleRecord", "FeatureFlags", offsetof(conjure_module_record, feature_flags));
+        add("FrameStatsBlock", "FrameMs", offsetof(conjure_frame_stats_block, frame_ms));
+        add("FrameStatsBlock", "PhaseMs", offsetof(conjure_frame_stats_block, phase_ms));
+        add("FrameStatsBlock", "SubmitMs", offsetof(conjure_frame_stats_block, submit_ms));
+        add("FrameStatsBlock", "FixedSteps", offsetof(conjure_frame_stats_block, fixed_steps));
+        add("FrameStatsBlock", "JobsExecuted", offsetof(conjure_frame_stats_block, jobs_executed));
+        add("FrameStatsBlock", "FrameMemoryHighWater", offsetof(conjure_frame_stats_block, frame_memory_high_water));
+        add("TransformData", "Position", offsetof(conjure_transform, position));
+        add("TransformData", "Rotation", offsetof(conjure_transform, rotation));
+        add("TransformData", "Scale", offsetof(conjure_transform, scale));
+        add("UuidData", "High", offsetof(conjure_uuid, high));
+        add("UuidData", "Low", offsetof(conjure_uuid, low));
+        add("CollisionRecord", "Slot", offsetof(conjure_collision_record, slot));
+        add("CollisionRecord", "Other", offsetof(conjure_collision_record, other));
+        add("CollisionRecord", "Point", offsetof(conjure_collision_record, point));
+        add("CollisionRecord", "Normal", offsetof(conjure_collision_record, normal));
+        add("CollisionRecord", "Impulse", offsetof(conjure_collision_record, impulse));
+        add("CollisionRecord", "Kind", offsetof(conjure_collision_record, kind));
+        add("CreateRequest", "Entity", offsetof(conjure_create_request, entity));
+        add("CreateRequest", "ClassHash", offsetof(conjure_create_request, class_hash));
+        add("CreateRequest", "Fields", offsetof(conjure_create_request, fields));
+        add("CreateRequest", "FieldsSize", offsetof(conjure_create_request, fields_size));
+        add("CreateRequest", "Flags", offsetof(conjure_create_request, flags));
+        add("CreateRequest", "OutSlot", offsetof(conjure_create_request, out_slot));
+        add("ScriptClassDesc", "Hash", offsetof(conjure_script_class_desc, hash));
+        add("ScriptClassDesc", "FullName", offsetof(conjure_script_class_desc, full_name));
+        add("ScriptClassDesc", "NameLength", offsetof(conjure_script_class_desc, name_length));
+        add("ScriptClassDesc", "CallbackMask", offsetof(conjure_script_class_desc, callback_mask));
+        add("ScriptClassDesc", "FieldCount", offsetof(conjure_script_class_desc, field_count));
+        add("ScriptFieldDesc", "Hash", offsetof(conjure_script_field_desc, hash));
+        add("ScriptFieldDesc", "Name", offsetof(conjure_script_field_desc, name));
+        add("ScriptFieldDesc", "NameLength", offsetof(conjure_script_field_desc, name_length));
+        add("ScriptFieldDesc", "Kind", offsetof(conjure_script_field_desc, kind));
+        add("ScriptFieldDesc", "ElementKind", offsetof(conjure_script_field_desc, element_kind));
+        add("ScriptFieldDesc", "DefaultJson", offsetof(conjure_script_field_desc, default_json));
+        add("ScriptFieldDesc", "DefaultLength", offsetof(conjure_script_field_desc, default_length));
+        add("ScriptFieldDesc", "MetaJson", offsetof(conjure_script_field_desc, meta_json));
+        add("ScriptFieldDesc", "MetaLength", offsetof(conjure_script_field_desc, meta_length));
+        add("ManagedComponentDesc", "NameHash", offsetof(conjure_managed_component_desc, name_hash));
+        add("ManagedComponentDesc", "FullName", offsetof(conjure_managed_component_desc, full_name));
+        add("ManagedComponentDesc", "NameLength", offsetof(conjure_managed_component_desc, name_length));
+        add("ManagedComponentDesc", "Size", offsetof(conjure_managed_component_desc, size));
+        add("ManagedComponentDesc", "Alignment", offsetof(conjure_managed_component_desc, alignment));
+        add("ManagedComponentDesc", "LayoutHash", offsetof(conjure_managed_component_desc, layout_hash));
+        add("ManagedComponentDesc", "SchemaJson", offsetof(conjure_managed_component_desc, schema_json));
+        add("ManagedComponentDesc", "SchemaLength", offsetof(conjure_managed_component_desc, schema_length));
+        add("QueryScope", "ScopeId", offsetof(conjure_query_scope, scope_id));
+        add("QueryScope", "ChunkCount", offsetof(conjure_query_scope, chunk_count));
+        add("QueryScope", "Chunks", offsetof(conjure_query_scope, chunks));
+        add("ChunkViewData", "Entities", offsetof(conjure_chunk_view, entities));
+        add("ChunkViewData", "Columns", offsetof(conjure_chunk_view, columns));
+        add("ChunkViewData", "Count", offsetof(conjure_chunk_view, count));
+        add("GamepadState", "ButtonsDown", offsetof(conjure_gamepad_state, buttons_down));
+        add("GamepadState", "ButtonsPressed", offsetof(conjure_gamepad_state, buttons_pressed));
+        add("GamepadState", "ButtonsReleased", offsetof(conjure_gamepad_state, buttons_released));
+        add("GamepadState", "Axes", offsetof(conjure_gamepad_state, axes));
+        add("GamepadState", "Connected", offsetof(conjure_gamepad_state, connected));
+        add("InputBlock", "KeysDown", offsetof(conjure_input_block, keys_down));
+        add("InputBlock", "KeysPressed", offsetof(conjure_input_block, keys_pressed));
+        add("InputBlock", "KeysReleased", offsetof(conjure_input_block, keys_released));
+        add("InputBlock", "MouseX", offsetof(conjure_input_block, mouse_x));
+        add("InputBlock", "MouseY", offsetof(conjure_input_block, mouse_y));
+        add("InputBlock", "MouseDx", offsetof(conjure_input_block, mouse_dx));
+        add("InputBlock", "MouseDy", offsetof(conjure_input_block, mouse_dy));
+        add("InputBlock", "ScrollX", offsetof(conjure_input_block, scroll_x));
+        add("InputBlock", "ScrollY", offsetof(conjure_input_block, scroll_y));
+        add("InputBlock", "MouseButtonsDown", offsetof(conjure_input_block, mouse_buttons_down));
+        add("InputBlock", "MouseButtonsPressed", offsetof(conjure_input_block, mouse_buttons_pressed));
+        add("InputBlock", "MouseButtonsReleased", offsetof(conjure_input_block, mouse_buttons_released));
+        add("InputBlock", "Gamepads", offsetof(conjure_input_block, gamepads));
+        add("FrameBlock", "TimeSeconds", offsetof(conjure_frame_block, time_seconds));
+        add("FrameBlock", "UnscaledTimeSeconds", offsetof(conjure_frame_block, unscaled_time_seconds));
+        add("FrameBlock", "DeltaTime", offsetof(conjure_frame_block, delta_time));
+        add("FrameBlock", "FixedDeltaTime", offsetof(conjure_frame_block, fixed_delta_time));
+        add("FrameBlock", "TimeScale", offsetof(conjure_frame_block, time_scale));
+        add("FrameBlock", "FrameIndex", offsetof(conjure_frame_block, frame_index));
+        add("FrameBlock", "FixedStepIndex", offsetof(conjure_frame_block, fixed_step_index));
+        add("FrameBlock", "CurrentPhase", offsetof(conjure_frame_block, current_phase));
+        add("FrameBlock", "InPlayMode", offsetof(conjure_frame_block, in_play_mode));
+        add("FrameBlock", "Input", offsetof(conjure_frame_block, input));
+        return text;
+    }
 }
 
 TEST_SUITE("bindings/bindings_managed") {
@@ -284,8 +422,9 @@ TEST_SUITE("bindings/bindings_managed") {
       "bindings_managed - the C# records and NativeFunction match the native layouts [dotnet]" * doctest::timeout(120)
     ) {
         // Design 10's BindingRecordSizesMatchDocumented and NativeFunctionEnumMatchesManifest, run from here
-        // because the repository has no Conjure.Managed.Tests project: a Records.cs edit that drifts from the
-        // native static_asserts fails this case instead of producing garbage query results.
+        // because the repository has no Conjure.Managed.Tests project: a Records.cs edit whose sizes drift from
+        // the native static_asserts fails this case (the field offsets are compared by the F670 case below)
+        // instead of producing garbage query results.
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
         managed_fixture fixture = {};
@@ -320,6 +459,164 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(fixture.field_i64(probe, "ReleasedLater") == 1);
         CHECK(fixture.field_string(probe, "Clipboard") == "managed clipboard");
         CHECK(fixture.field_i64(probe, "GamepadNameEmpty") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F670: every C# record field sits at its native offset [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), RECORD_SIZE_PROBE);
+        const std::string managed = fixture.field_string(probe, "Offsets");
+        const std::string native = native_record_offsets();
+        CHECK_MESSAGE(managed == native, "managed: ", managed, "\nnative:  ", native);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F437: Physics queries with LayerMask.None hit nothing [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const ecs::entity ground = fixture.create("ground");
+        physics::rigid_body body = {};
+        body.motionType = physics::motion_type::STATIC;
+        CONJURE_REQUIRE_OK(fixture.app->context().world->add<physics::rigid_body>(ground, body));
+        physics::box_collider collider = {};
+        collider.halfExtents = math::vec3(1.0f);
+        CONJURE_REQUIRE_OK(fixture.app->context().world->add<physics::box_collider>(ground, collider));
+        fixture.step(1);
+
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), LAYER_MASK_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "HitDefault") == 1);            // no mask: every layer
+        CHECK(fixture.field_i64(probe, "HitNone") == 0);               // LayerMask.None: no layer
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+#endif
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F630: the gameplay enums and TransformData live in namespace Conjure [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), PUBLIC_TYPES_PROBE);
+        CHECK(fixture.field_string(probe, "Namespaces") == "Conjure,Conjure,Conjure,Conjure,Conjure");
+        CHECK(fixture.field_i64(probe, "Sum") == 5);                    // Impulse 1, Normal 0, Press 1, High 2, scale 1
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F675: AudioSource volume, pitch and loop setters skip the asset bind [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        ecs::world &world = *fixture.app->context().world;
+
+        // A source whose clip native already bound: the three setters cost no asset_ref_bind.
+        const ecs::entity speaker = fixture.create("speaker");
+        static_cast<void>(fixture.attach(speaker, BIND_PROBE));
+        const scripting::script_entry_id probe = fixture.attach(speaker, AUDIO_FIELDS_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "BindCalls") == 0);
+        const audio::audio_source *source = world.get<audio::audio_source>(speaker);
+        REQUIRE(source != nullptr);
+        CHECK(source->volume == 0.25f);
+        CHECK(source->pitch == 1.5f);
+        CHECK(source->loop);
+        CHECK(source->clip.id() == fixture.clip);
+        CHECK(source->clip.is_bound());
+
+        // A source holding an unbound clip id: the setter still binds it, as every write did before.
+        const ecs::entity unbound = fixture.create("unbound");
+        audio::audio_source authored = {};
+        authored.clip = assets::asset_ref<audio::audio_clip>(fixture.clip);
+        authored.playOnStart = false;
+        CONJURE_REQUIRE_OK(world.add<audio::audio_source>(unbound, authored));
+        CHECK_FALSE(world.get<audio::audio_source>(unbound)->clip.is_bound());
+        const scripting::script_entry_id fallback = fixture.attach(unbound, AUDIO_FIELDS_PROBE);
+        CHECK(fixture.field_string(fallback, "Errors").empty());
+        // Volume binds through SetComponent; Pitch and Loop then read a bound slot and skip the bind.
+        CHECK(fixture.field_i64(fallback, "BindCalls") == 1);
+        const audio::audio_source *rebound = world.get<audio::audio_source>(unbound);
+        REQUIRE(rebound != nullptr);
+        CHECK(rebound->volume == 0.25f);
+        CHECK(rebound->clip.id() == fixture.clip);
+        CHECK(rebound->clip.is_bound());
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F677: Color compares with == and != [dotnet]" * doctest::timeout(120)) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), COLOR_PROBE);
+        CHECK(fixture.field_i64(probe, "EqualWhite") == 1);
+        CHECK(fixture.field_i64(probe, "DifferentBlack") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F679: EnginePhase mirrors ecs::system_phase [dotnet]" * doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), ENGINE_PHASE_PROBE);
+        std::string expected = {};
+        for (u32 index = 0; index < ecs::SYSTEM_PHASE_COUNT; ++index) {
+            if (index > 0) {
+                expected += ',';
+            }
+            for (const char character : ecs::to_string(static_cast<ecs::system_phase>(index))) {
+                if (character != '_') {
+                    expected += character;
+                }
+            }
+        }
+        CHECK(fixture.field_string(probe, "Names") == expected);
+        CHECK(fixture.field_i64(probe, "MatchesPhaseCount") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F681: a mismatched AssetRef on SetComponent lands unbound [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        // A prefab the sources know by its header only: never loaded, its type is what refuses the bind.
+        const assets::asset_id prefab = test_uuid(4);
+        std::unique_ptr<assets::memory_asset_source> owned = std::make_unique<assets::memory_asset_source>();
+        assets::cooked_blob_header header = {};
+        header.type = assets::asset_type_traits<scene::prefab_asset>::id();
+        header.typeVersion = 1;
+        header.importerVersion = 1;
+        header.id = prefab;
+        owned->add(assets::make_cooked_blob(header, {}, std::vector<std::byte>(16)), OTHER_PREFAB_PATH);
+        fixture.app->context().assets->add_source(std::move(owned));
+
+        const ecs::entity speaker = fixture.create("speaker");
+        const scripting::script_entry_id probe = fixture.attach(speaker, ASSET_MISMATCH_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "BoundBefore") == 1);
+        CHECK(fixture.field_i64(probe, "StillBound") == 0);
+        const audio::audio_source *source = fixture.app->context().world->get<audio::audio_source>(speaker);
+        REQUIRE(source != nullptr);
+        CHECK(source->clip.id() == prefab);
+        CHECK_FALSE(source->clip.is_bound());
+        CHECK(logs.contains(core::log_level::WARN, "is not of the field's asset type"));
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

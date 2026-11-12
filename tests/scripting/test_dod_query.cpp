@@ -41,6 +41,11 @@ namespace {
     constexpr std::string_view SCORE_USER = "Conjure.TestScripts.ScoreUser";
     constexpr std::string_view FLAGS_USER = "Conjure.TestScripts.FlagsMirrorUser";
     constexpr std::string_view TOGGLE_USER = "Conjure.TestScripts.ToggleUser";
+    constexpr std::string_view WRONG_COLUMN_USER = "Conjure.TestScripts.WrongColumnUser";
+    constexpr std::string_view QUERY_IN_CREATE = "Conjure.TestScripts.QueryInCreate";
+    constexpr std::string_view UNDESCRIBABLE_MIRROR_USER = "Conjure.TestScripts.UndescribableMirrorUser";
+    constexpr std::string_view SQUAD_USER = "Conjure.TestScripts.SquadUser";
+    constexpr std::string_view DYNAMIC_SCHEMA_PROBE = "Conjure.TestScripts.DynamicSchemaProbe";
 }
 
 TEST_SUITE("scripting/dod_query") {
@@ -292,6 +297,125 @@ TEST_SUITE("scripting/dod_query") {
         runtime.destroy_all(false);
         runtime.shutdown();
         runtime.attach_world(nullptr);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F161: ChunkView.Get with the wrong component type throws [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        std::vector<ecs::entity> entities = {};
+        for (u32 index = 0; index < 3; ++index) {
+            const ecs::entity entity = fixture.create_entity();
+            const test_position position{static_cast<f32>(index) + 0.5f, 2.0f, 3.0f};
+            CONJURE_REQUIRE_OK(fixture.world.add<test_position>(entity, position));
+            entities.push_back(entity);
+        }
+        const script_entry_id user = fixture.add_script(fixture.create_entity(), WRONG_COLUMN_USER);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_string(user, "Caught") == "InvalidOperationException");
+        for (u32 index = 0; index < entities.size(); ++index) {
+            CAPTURE(index);
+            const test_position *position = std::as_const(fixture.world).get<test_position>(entities[index]);
+            REQUIRE(position != nullptr);
+            CHECK(*position == test_position{static_cast<f32>(index) + 0.5f, 2.0f, 3.0f});
+        }
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK_FALSE(fixture.world.is_locked());
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F448: ComponentQuery.Begin outside a script phase names NOT_IN_PHASE [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        // add_script flushes outside any phase: OnCreate runs there and the scope is refused.
+        const script_entry_id probe = fixture.add_script(fixture.create_entity(), QUERY_IN_CREATE);
+        const std::string message = fixture.field_string(probe, "Message");
+        CHECK(message.find("NOT_IN_PHASE") != std::string::npos);
+        CHECK(message.find("OnUpdate") != std::string::npos);
+        CHECK(message.find("scripting status") == std::string::npos);
+        CHECK(fixture.runtime.open_query_scope_count() == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F449: an undescribable mirror is reflected and logged once [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        logs.allow_errors();
+        dotnet_fixture fixture = {};
+        const script_entry_id user = fixture.add_script(fixture.create_entity(), UNDESCRIBABLE_MIRROR_USER);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(user, "Zeros") == 6);
+        u32 describeErrors = 0;
+        for (const std::string &message : logs.messages(core::log_level::ERR)) {
+            if (message.find("AutoLayoutPosition") != std::string::npos) {
+                ++describeErrors;
+            }
+        }
+        CHECK(describeErrors == 1);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F662: an [EcsComponent] enum field registers as its integer [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        const ecs::component_id squadId = fixture.registry.find(core::string_id("Conjure.TestScripts.Squad"));
+        REQUIRE(squadId.is_valid());
+        const ecs::component_info &info = fixture.registry.info(squadId);
+        CHECK(info.size == 8);
+        REQUIRE(info.reflection != nullptr);
+        REQUIRE(info.reflection->fields.size() == 2);
+        CHECK(info.reflection->fields[1].name == "team");
+        CHECK(info.reflection->fields[1].kind == core::reflect::field_kind::I32);
+        CHECK(info.reflection->fields[1].offset == 4);
+
+        const script_entry_id user = fixture.add_script(fixture.create_entity(), SQUAD_USER);
+        const script_entry_id probe = fixture.add_script(fixture.create_entity(), DYNAMIC_SCHEMA_PROBE);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(user, "LastTeam") == 2);               // Mode.Jump
+        // A field a dynamic component cannot hold is refused by name before it reaches native.
+        CHECK(fixture.field_i64(probe, "SchemaIsNull") == 1);
+        const std::string refusal = fixture.field_string(probe, "Refusal");
+        CHECK(refusal.find("Clip") != std::string::npos);
+        CHECK(refusal.find("AssetRef") != std::string::npos);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F663: an [EcsComponent] keeps Pad<digits> fields and their alignment [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        const ecs::component_id seatsId = fixture.registry.find(core::string_id("Conjure.TestScripts.Seats"));
+        REQUIRE(seatsId.is_valid());
+        const ecs::component_info &info = fixture.registry.info(seatsId);
+        CHECK(info.size == 16);
+        CHECK(info.alignment == 8);
+        REQUIRE(info.reflection != nullptr);
+        REQUIRE(info.reflection->fields.size() == 2);
+        CHECK(info.reflection->fields[0].name == "row");
+        CHECK(info.reflection->fields[1].name == "pad1");
+        CHECK(info.reflection->fields[1].offset == 8);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("dod query - reopening a scope over the same types allocates nothing after warm-up") {

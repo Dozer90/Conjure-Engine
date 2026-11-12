@@ -1,6 +1,8 @@
+using System;
 using System.Runtime.InteropServices;
 using Conjure;
 using Conjure.Dod;
+using Conjure.Runtime;
 
 namespace Conjure.TestScripts;
 
@@ -221,4 +223,152 @@ public sealed class ScoreUser : ScriptBehaviour
         LastValue = score.Value;
         LastBonus = score.Bonus;
     }
+}
+
+/// <summary>
+/// Opens a query over TestPosition and asks its first column for a Score span: Get throws instead of
+/// handing out a span of the wrong type over the position column.
+/// </summary>
+public sealed class WrongColumnUser : ScriptBehaviour
+{
+    public string Caught = "";
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        using ComponentQuery query = ComponentQuery.Begin<TestPosition>();
+        if (!query.NextChunk(out ChunkView chunk))
+        {
+            return;
+        }
+        try
+        {
+            Span<Score> wrong = chunk.Get<Score>(0);
+            wrong[0].Value = 99;
+            Caught = "none";
+        }
+        catch (InvalidOperationException exception)
+        {
+            Caught = exception.GetType().Name;
+        }
+    }
+}
+
+/// <summary>
+/// Opens a query from OnCreate: created by a flush outside any script phase, Begin is refused (NOT_IN_PHASE)
+/// and the exception message names the reason.
+/// </summary>
+public sealed class QueryInCreate : ScriptBehaviour
+{
+    public string Message = "";
+
+    protected override void OnCreate()
+    {
+        try
+        {
+            using ComponentQuery query = ComponentQuery.Begin<TestPosition>();
+            Message = "opened";
+        }
+        catch (InvalidOperationException exception)
+        {
+            Message = exception.Message;
+        }
+    }
+}
+
+/// <summary>
+/// A mirror the layout rule cannot describe (an auto layout may be reordered): its id is always 0.
+/// </summary>
+[NativeComponent("test.scripting.position")]
+[StructLayout(LayoutKind.Auto)]
+public struct AutoLayoutPosition
+{
+    public float X;
+    public float Y;
+    public float Z;
+}
+
+/// <summary>
+/// Reads the id of the undescribable mirror three times per update and counts the zeros.
+/// </summary>
+public sealed class UndescribableMirrorUser : ScriptBehaviour
+{
+    public int Zeros;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        for (int read = 0; read < 3; ++read)
+        {
+            if (ComponentType<AutoLayoutPosition>.Id == 0)
+            {
+                ++Zeros;
+            }
+        }
+    }
+}
+
+/// <summary>
+/// An [EcsComponent] with an enum field: registered with the enum's underlying integer.
+/// </summary>
+[EcsComponent]
+[StructLayout(LayoutKind.Sequential)]
+public struct Squad
+{
+    public int Size;
+    public Mode Team;
+}
+
+/// <summary>
+/// Adds a Squad in OnCreate and reads its team back every update.
+/// </summary>
+public sealed class SquadUser : ScriptBehaviour
+{
+    public int LastTeam = -1;
+
+    protected override void OnCreate()
+    {
+        AddComponent(new Squad { Size = 4, Team = Mode.Jump });
+    }
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        LastTeam = (int)GetComponent<Squad>().Team;
+    }
+}
+
+/// <summary>
+/// A struct with an AssetRef field. Not an [EcsComponent] (that would warn at every load): DynamicSchemaProbe
+/// asks LayoutHash for the schema it would register.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct AssetHolder
+{
+    public AssetRef<AudioClipAsset> Clip;
+}
+
+/// <summary>
+/// Records why AssetHolder cannot become a dynamic component.
+/// </summary>
+public sealed class DynamicSchemaProbe : ScriptBehaviour
+{
+    public string Refusal = "";
+    public int SchemaIsNull;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        string? schema = LayoutHash.DynamicSchemaJson(typeof(AssetHolder), LayoutHash.Describe(typeof(AssetHolder)),
+            out string refusal);
+        SchemaIsNull = schema == null ? 1 : 0;
+        Refusal = refusal;
+    }
+}
+
+/// <summary>
+/// An [EcsComponent] with a user field named like mirror padding: it is a real field, stored and aligned.
+/// </summary>
+[EcsComponent]
+[StructLayout(LayoutKind.Sequential)]
+public struct Seats
+{
+    public byte Row;
+    public long Pad1;
 }

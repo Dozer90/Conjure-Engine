@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -239,4 +240,27 @@ public readonly struct Transform
         world.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(basis));
         World = world;
     }
+}
+
+/// <summary>
+/// A pose as the native side stores it (conjure_transform, 40 bytes): position, rotation as x,y,z,w, scale.
+/// Transform.Local, World and Interpolated, Rigidbody.MoveKinematic and Teleport, and Prefab.Instantiate take
+/// and return it.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct TransformData
+{
+    public Vector3 Position;
+    public Quaternion Rotation;
+    public Vector3 Scale;
+
+    /// <summary>
+    /// The origin, no rotation, unit scale.
+    /// </summary>
+    public static TransformData Identity => new TransformData
+    {
+        Position = Vector3.Zero,
+        Rotation = Quaternion.Identity,
+        Scale = Vector3.One,
+    };
 }

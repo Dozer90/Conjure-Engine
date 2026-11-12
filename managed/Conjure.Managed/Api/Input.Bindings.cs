@@ -119,3 +119,26 @@ public static unsafe partial class Input
         }
     }
 }
+
+/// <summary>
+/// The cursor mode of the main window (Input.CursorMode, platform::cursor_mode): Normal shows the cursor,
+/// Hidden hides it over the window, Disabled hides and locks it for mouse look, Captured keeps it visible but
+/// confined to the window.
+/// </summary>
+public enum CursorMode : byte
+{
+    Normal,
+    Hidden,
+    Disabled,
+    Captured,
+}
+
+/// <summary>
+/// The action of an injected key, mouse or gamepad button event (Input.Inject, platform::button_action).
+/// </summary>
+public enum ButtonAction : byte
+{
+    Release,
+    Press,
+    Repeat,
+}

@@ -67,59 +67,14 @@ public enum CollisionKind : byte
     TriggerExit,
 }
 
-public enum ForceMode : byte
-{
-    Force,
-    Impulse,
-    VelocityChange,
-    Acceleration,
-}
-
+/// <summary>
+/// conjure_cast_shape: the shape a ShapeQuery sweeps (internal to the Physics casts).
+/// </summary>
 public enum CastShape : byte
 {
     Sphere,
     Box,
     Capsule,
-}
-
-public enum CursorMode : byte
-{
-    Normal,
-    Hidden,
-    Disabled,
-    Captured,
-}
-
-public enum ButtonAction : byte
-{
-    Release,
-    Press,
-    Repeat,
-}
-
-public enum AssetLoadPriority : byte
-{
-    Low,
-    Normal,
-    High,
-}
-
-/// <summary>
-/// conjure_transform (40 bytes): position, rotation as x,y,z,w, scale.
-/// </summary>
-[StructLayout(LayoutKind.Sequential)]
-public struct TransformData
-{
-    public Vector3 Position;
-    public Quaternion Rotation;
-    public Vector3 Scale;
-
-    public static TransformData Identity => new TransformData
-    {
-        Position = Vector3.Zero,
-        Rotation = Quaternion.Identity,
-        Scale = Vector3.One,
-    };
 }
 
 /// <summary>

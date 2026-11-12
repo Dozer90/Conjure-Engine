@@ -29,7 +29,8 @@ public readonly unsafe struct FrameStats
     public ulong FrameMemoryHighWater => _block.FrameMemoryHighWater;
 
     /// <summary>
-    /// Milliseconds spent in engine phase 'phase' (0..9); ArgumentOutOfRangeException otherwise.
+    /// Milliseconds spent in engine phase index 'phase' (0..9, see EnginePhase); ArgumentOutOfRangeException
+    /// otherwise.
     /// </summary>
     public float PhaseMs(int phase)
     {
@@ -40,6 +41,29 @@ public readonly unsafe struct FrameStats
         FrameStatsBlock copy = _block;
         return copy.PhaseMs[phase];
     }
+
+    /// <summary>
+    /// Milliseconds spent in the named engine phase.
+    /// </summary>
+    public float PhaseMs(EnginePhase phase) => PhaseMs((int)phase);
+}
+
+/// <summary>
+/// The engine's system phases in execution order (ecs::system_phase, engine/include/conjure/ecs/system_phase.h);
+/// the index of FrameStats.PhaseMs.
+/// </summary>
+public enum EnginePhase : byte
+{
+    FrameBegin,
+    FixedUpdate,
+    PhysicsStep,
+    FixedEnd,
+    Update,
+    LateUpdate,
+    Transform,
+    Sync,
+    Extract,
+    FrameEnd,
 }
 
 /// <summary>

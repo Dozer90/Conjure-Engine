@@ -57,7 +57,8 @@ public readonly struct AssetRef<T> : IAssetRef, IEquatable<AssetRef<T>>
     public static ulong TypeId => AssetTypeId<T>.Value;
 
     /// <summary>
-    /// The slot state; Unloaded for a null id or an unknown asset.
+    /// The slot state; Unloaded for a null id or an unknown asset; throws like IsLoaded on a type mismatch or
+    /// without an asset manager.
     /// </summary>
     public unsafe AssetState State
     {
@@ -73,12 +74,16 @@ public readonly struct AssetRef<T> : IAssetRef, IEquatable<AssetRef<T>>
     }
 
     /// <summary>
-    /// True when the asset is resident (never throws, B11).
+    /// True when the slot is LOADED; false for a null id or an asset no source knows. Like State and Version it
+    /// throws ConjureNativeException (AssetTypeMismatch) when the id names an asset of another type than T, and
+    /// NotSupportedException when no asset manager runs (every call goes through ThrowIfFailed,
+    /// docs/design/15_bindings.md 2.5; B11 only exempts predicates on dead entities).
     /// </summary>
     public bool IsLoaded => State == AssetState.Loaded;
 
     /// <summary>
-    /// The slot's reload counter (0 for a null id).
+    /// The slot's reload counter; 0 for a null id or an asset no source knows. Throws like IsLoaded on a type
+    /// mismatch or without an asset manager.
     /// </summary>
     public unsafe uint Version
     {
@@ -125,7 +130,10 @@ public readonly struct AssetRef<T> : IAssetRef, IEquatable<AssetRef<T>>
     }
 
     /// <summary>
-    /// The asset path ("" when unknown to every source or without a database).
+    /// The asset path; "" when no source knows the id. Throws NotSupportedException where there is no asset
+    /// database: a cooked or exported project has no path table and asset_path_of answers NOT_SUPPORTED
+    /// (docs/design/15_bindings.md 6). Use it for editor tooling and logging, not for gameplay logic that must
+    /// run in a shipped build.
     /// </summary>
     public unsafe string Path
     {
@@ -217,4 +225,14 @@ internal static class AssetRefFactory
         }
         return Activator.CreateInstance(assetRefType, id);
     }
+}
+
+/// <summary>
+/// The queue position of an asynchronous AssetRef.Load or Prefab.Load (assets::asset_load_priority).
+/// </summary>
+public enum AssetLoadPriority : byte
+{
+    Low,
+    Normal,
+    High,
 }

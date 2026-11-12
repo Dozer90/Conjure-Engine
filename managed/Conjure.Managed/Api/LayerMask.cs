@@ -7,7 +7,14 @@ namespace Conjure;
 /// </summary>
 public readonly struct LayerMask : IEquatable<LayerMask>
 {
+    /// <summary>
+    /// Every layer; what a physics query without a mask argument tests.
+    /// </summary>
     public static readonly LayerMask All = new LayerMask(0xFFFFFFFFu);
+
+    /// <summary>
+    /// No layer: a physics query with it hits nothing.
+    /// </summary>
     public static readonly LayerMask None = default;
 
     public readonly uint Bits;

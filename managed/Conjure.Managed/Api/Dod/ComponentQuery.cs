@@ -16,6 +16,7 @@ public unsafe ref struct ComponentQuery
     private ChunkViewData* _chunks;
     private int _next;
     private bool _open;
+    private ColumnIds _ids;
 
     public static ComponentQuery Begin<T1>() where T1 : unmanaged
     {
@@ -53,7 +54,8 @@ public unsafe ref struct ComponentQuery
     }
 
     /// <summary>
-    /// Opens a scope over explicit component ids (1..8).
+    /// Opens a scope over explicit component ids (1..8). A refused scope throws InvalidOperationException
+    /// naming the reason, for example NOT_IN_PHASE outside the script phases and their flushes.
     /// </summary>
     public static ComponentQuery Begin(uint* ids, int count)
     {
@@ -63,9 +65,14 @@ public unsafe ref struct ComponentQuery
         int status = api->QueryBegin(ids, count, &scope);
         if (status < 0)
         {
-            throw new InvalidOperationException("ComponentQuery.Begin failed with scripting status " + status);
+            throw new InvalidOperationException(BeginFailure(status));
         }
         ComponentQuery query = default;
+        // Kept so ChunkView.Get can check that its T is the component of the column it asks for.
+        for (int index = 0; index < count && index < 8; ++index)
+        {
+            query._ids[index] = ids[index];
+        }
         query._scopeId = scope.ScopeId;
         query._chunkCount = scope.ChunkCount;
         query._chunks = scope.Chunks;
@@ -73,6 +80,19 @@ public unsafe ref struct ComponentQuery
         query._open = true;
         return query;
     }
+
+    // The statuses are negated script_error codes (engine/include/conjure/scripting/scripting_error.h).
+    private static string BeginFailure(int status) => (-status) switch
+    {
+        13 => "ComponentQuery.Begin must run on the main thread (WRONG_THREAD)",
+        14 => "ComponentQuery.Begin is only available inside OnFixedUpdate, OnUpdate, OnLateUpdate, the collision " +
+            "callbacks and OnCreate/OnDestroy run by the flush at the end of those phases; OnCreate/OnDestroy at " +
+            "scene start, frame end or a mode change run outside a script phase (NOT_IN_PHASE)",
+        16 => "ComponentQuery.Begin needs a running script runtime (NOT_INITIALIZED)",
+        17 => "ComponentQuery.Begin was refused: it needs 1..8 registered component ids and an attached world " +
+            "(NOT_SUPPORTED, see the log)",
+        _ => "ComponentQuery.Begin failed with scripting status " + status,
+    };
 
     public int ChunkCount => _chunkCount;
 
@@ -88,7 +108,7 @@ public unsafe ref struct ComponentQuery
             chunk = default;
             return false;
         }
-        chunk = new ChunkView(_chunks + _next);
+        chunk = new ChunkView(_chunks + _next, _ids);
         ++_next;
         return true;
     }

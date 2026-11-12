@@ -152,3 +152,17 @@ public readonly struct Rigidbody
         set => Entity.SetComponent(in value);
     }
 }
+
+/// <summary>
+/// How Rigidbody.AddForce, AddForceAtPosition and AddTorque apply their vector (conjure_force_mode): Force
+/// and Acceleration act over the next fixed step, Impulse and VelocityChange at once. The effect of Force and
+/// Impulse depends on the body's mass; Acceleration and VelocityChange ignore it and need an explicit
+/// rigid_body mass. AddTorque takes Force and Impulse only.
+/// </summary>
+public enum ForceMode : byte
+{
+    Force,
+    Impulse,
+    VelocityChange,
+    Acceleration,
+}

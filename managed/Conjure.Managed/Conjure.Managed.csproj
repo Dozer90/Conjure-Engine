@@ -7,6 +7,10 @@
     <AssemblyName>Conjure.Managed</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DebugType>portable</DebugType>
+    <!-- Conjure.Managed.xml ships beside the dll so IDEs show the /// summaries to game projects. An
+         undocumented member is allowed (CS1591); a malformed comment still fails the build. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Generated/NativeApi.g.cs" />

@@ -30,14 +30,19 @@ behind them are declared by `conjure/bindings/native_api_entries.h` and counted 
 
 A script is a class deriving from `ScriptBehaviour`. The engine instantiates it when its entity gets the
 script component (from a scene file, a prefab or `entity.AddScript<T>()`) and calls, in order, `OnCreate` (once,
-also after a hot reload), `OnStart` (once, before the first `OnUpdate`), then per fixed step `OnFixedUpdate`,
-per frame `OnUpdate` and `OnLateUpdate`, and `OnDestroy` when the entity or the script goes away. Collision
-callbacks (`OnCollisionEnter(in Collision)`, `OnCollisionExit(in Collision)`, `OnTriggerEnter(Entity other)`,
-`OnTriggerExit(Entity other)`) deliver the contacts of the previous fixed step, one step after they happened. `Entity`, `Transform`, `GetComponent<T>()`, `HasComponent<T>()`
-and `Destroy()` are available on the base class.
+also after a hot reload), `OnStart` (once, before the first `OnFixedUpdate`, `OnUpdate` or `OnLateUpdate`), then
+per fixed step `OnFixedUpdate`, per frame `OnUpdate` and `OnLateUpdate`, and `OnDestroy` when the entity or the
+script goes away. A script created during `OnUpdate` therefore skips that frame's `OnLateUpdate`: its `OnStart`
+runs at the next fixed step or update, its first `OnLateUpdate` after that. Collision callbacks
+(`OnCollisionEnter(in Collision)`, `OnCollisionExit(in Collision)`, `OnTriggerEnter(Entity other)`,
+`OnTriggerExit(Entity other)`) deliver the contacts of the previous fixed step, one step after they happened.
+`Entity`, `Transform`, `GetComponent<T>()`, `HasComponent<T>()` and `Destroy()` are available on the base class.
 
 Public fields and `[SerializeField]` private fields are saved with the scene, shown in the inspector
-(`[Range]`, `[Tooltip]`, `[HideInInspector]`) and preserved across hot reloads; everything else resets.
+(`[Range]`, `[Tooltip]`, `[HideInInspector]`) and preserved across hot reloads; everything else resets. An enum
+field is stored as a 32-bit integer, so an enum backed by `long` or `ulong` is not serialised (an INFO log names
+the field). JSON has no NaN or infinity: a NaN default is stored as 0 and an infinite one as the largest finite
+value of its type (an INFO log names the field), and a `[Range]` bound that is not finite leaves that side open.
 
 ```csharp
 public sealed class Spinner : ScriptBehaviour
@@ -74,14 +79,22 @@ a transform and a guid; `Destroy()` queues it for the end of the phase (`OnDestr
 ## Components and mirrors
 
 A `[NativeComponent("conjure.scene.local_transform")]` struct mirrors a native component field for field;
-the engine verifies the layout hash at start-up and refuses a mismatched assembly. The mirrors shipped:
+the size and layout hash are checked against the native registry the first time the mirror is used, and again
+after every runtime re-initialisation (`ComponentType<T>`). A mismatch is logged and never cached: `HasComponent`,
+`GetComponent`, `TryGetComponent`, `AddComponent`, `SetComponent`, `RemoveComponent` and `ComponentQuery.Begin`
+then throw `InvalidOperationException` naming the struct. The assembly itself loads, so a stale mirror fails when
+a script first touches it, not at start-up. The mirrors shipped:
 `LocalTransform`, `WorldTransform`, `InterpolatedTransform`, `Parent`, `Name`, `Tag`, `Layer`, `EntityGuid`,
 `Disabled`, `TransformDirty`, `PrefabInstance` (scene); `RigidBodyData`, `BoxColliderData`, `SphereColliderData`,
 `CapsuleColliderData`, `ConvexColliderData`, `MeshColliderData`, `PhysicsMaterialData`, `CharacterControllerData`
 (physics); `AudioSourceData`, `AudioListenerData` (audio). `GetComponent<T>()` copies the struct out,
 `SetComponent(in value)` copies it back, `AddComponent` / `RemoveComponent` change the archetype at once outside a
 query scope and at the end of the phase inside one. A struct of your own marked `[EcsComponent]` becomes a
-dynamic ECS component the editor can show and scene files can save.
+dynamic ECS component the editor can show and scene files can save. Its fields may be `bool`, the integers,
+`float`, `double`, `Vector2/3/4`, `Quaternion`, `Matrix4x4`, `TransformData`, `Entity` / `EntityHandle`,
+`StringId`, `AssetId`, `NativeBool` or an enum (stored as its underlying integer); a struct with an `AssetRef<T>`
+or a nested struct field is skipped at load with a warning naming the field. Every field counts, including one
+named like mirror padding (`Pad1`): only a `[NativeComponent]` mirror treats `Pad<digits>` fields as padding.
 
 > [!CAUTION]
 > `WorldTransform`, `InterpolatedTransform` and the `[runtime]` fields of `RigidBodyData` (velocities,
@@ -96,11 +109,19 @@ dynamic ECS component the editor can show and scene files can save.
 `CharacterController`: `Move(velocity)`, `IsGrounded`, `Velocity`. The static `Physics` class queries the world:
 `Raycast(origin, direction, maxDistance, out RaycastHit, LayerMask)`, `RaycastAll`, the shape casts,
 `OverlapSphere`, `OverlapBox`, `Gravity` (get and set), `Layer(name)`, `LayerIndex`, `LayerName`, `LayersCollide`.
+A query without a mask tests every layer; a mask you pass is used as given, so `LayerMask.None` (or a computed
+empty mask) hits nothing. `maxDistance` must be finite and non-negative (`ArgumentException` otherwise); there is no
+infinite ray, pass a world-sized distance. A layer index outside the project's layer table throws
+`KeyNotFoundException` from `LayerName` and `LayersCollide` alike. Setting `LinearVelocity` or `AngularVelocity`, or
+calling `CharacterController.Move`, changes the value the matching getter reads only when the physics world accepted
+the request: a refused one (a non-finite vector, a full command queue) throws and leaves the old value in place.
 
 `AudioSource` plays the clip of an `audio_source` component: `Play`, `Stop`, `Pause`, `Resume`, `IsPlaying`,
 `Volume`, `Pitch`, `Loop`, `Clip`. The static `Audio` class offers `PlayOneShot(clip, position, volume, group)`,
 `MasterGain`, `GetGroupGain` / `SetGroupGain` and `ClipDuration`. Playback requests are consumed by the engine's
-`engine.audio_sync` system in the same frame; `IsPlaying` is one frame old.
+`engine.audio_sync` system in the same frame; `IsPlaying` is one frame old. Setting `Volume`, `Pitch` or `Loop`
+costs one `component_get` and one `component_set` (no asset bind once the clip is bound); to edit many sources,
+write the spans of a `ComponentQuery` over `AudioSourceData`.
 
 `Input` reads the frame's snapshot: `IsKeyDown` (held), `IsKeyPressed` (this frame), `IsKeyReleased`,
 `MousePosition`, `MouseDelta`, `ScrollDelta`, `IsMouseButtonDown`, the gamepad buttons and axes; the bindings
@@ -112,8 +133,13 @@ gamepad events a script or a test feeds into the next frame).
 `AssetRef<T>` is a uuid plus a lazily bound slot: `Load(priority)`, `LoadBlocking()`, `Release()`, `IsValid`,
 `IsLoaded`, `State`, `AssetRef<T>.Find(path)`; `T` is one of the asset tags (`PrefabAsset`, `SceneAsset`,
 `AudioClipAsset`, `TextureAsset`, `MeshAsset`, `MaterialAsset`, `ModelAsset`, `EnvironmentAsset`,
-`CollisionMeshAsset`, `BinaryAsset`). A public `AssetRef<T>` field is serialised as the uuid and bound when the
-scene loads. `Prefab` wraps `AssetRef<PrefabAsset>`: `Instantiate(parent, local)`, `InstantiateMany(count, roots,
+`CollisionMeshAsset`). A public `AssetRef<T>` field is serialised as the uuid and bound when the
+scene loads. `IsLoaded`, `State` and `Version` answer false, `Unloaded` and 0 for a null id or an asset no source
+knows, but throw `ConjureNativeException` (`AssetTypeMismatch`) when the id names an asset of another type than
+`T` and `NotSupportedException` when no asset manager runs. `Path` is `""` for an unknown id and throws
+`NotSupportedException` in a cooked or exported game, which has no path table: use it for tooling and logs, not
+for gameplay that must run in a shipped build.
+`Prefab` wraps `AssetRef<PrefabAsset>`: `Instantiate(parent, local)`, `InstantiateMany(count, roots,
 parent)`, `Prefab.SourceOf(entity)`, `IsInstanceRoot`. The static `Scene` class loads and unloads scene assets by
 path or reference (`Load(path, additive)`, `Unload`, `IsLoaded`, `IsLoadPending`, `ActivePath`, `LoadedCount`,
 `LoadedPath(index)`, `EntityCount`, `StructureVersion`, `GetRoots`); loads complete at the next `FRAME_BEGIN`.
@@ -123,17 +149,28 @@ path or reference (`Load(path, additive)`, `Unload`, `IsLoaded`, `IsLoadPending`
 `Diagnostics.Check(name, passed, detail)` records a verdict in the engine's check registry (📘 API: [Export and
 diagnostics](../engine/export-and-diagnostics.md)); the test harness and the feature-test scene read them back.
 `Diagnostics.Stats` is the last frame's `FrameStats` (`FrameMs`, `SubmitMs`, `FixedSteps`, `JobsExecuted`,
-`FrameMemoryHighWater`, `PhaseMs(phase)`); `Diagnostics.LastError(out status)` reads the native last-error text.
-`Diagnostics.Draw.*` (lines, boxes, spheres, text) reaches the debug-draw overlay when the renderer runs.
+`FrameMemoryHighWater`, `PhaseMs(EnginePhase)` or `PhaseMs(index)` with the index 0..9 of an `EnginePhase`, in
+execution order `FrameBegin` to `FrameEnd`); `Diagnostics.LastError(out status)` reads the native last-error text.
 `Modules.Registry` lists every discovered module as `ModuleInfo { Name, Version, State, Kind, FeatureFlags,
 IsLoaded }`; it is read-only, loading is the editor's and the project's business.
+
+> [!NOTE]
+> `Diagnostics.Draw.Line`, `Box` and `Sphere` validate their arguments and are counted, but draw nothing in an
+> application yet: the engine does not publish its `renderer::debug_draw` to the bindings
+> (`09_cross_area_resolutions.md` section 4 item 15(e)). A hand-built `binding_context` with `debugDraw` set does
+> draw. `Diagnostics.Draw.Text` draws nothing in any configuration (no world-space text renderer in v1).
 
 ## Data-oriented scopes
 
 `ComponentQuery.Begin<T1, T2>()` locks the world and walks every chunk that holds the requested components:
 `NextChunk(out ChunkView chunk)`, then `chunk.Get<T1>(0)`, `chunk.Get<T2>(1)` as `Span<T>` and
-`chunk.Entities`. Writes through the spans are writes into the engine's memory, no copies. The scope ends with
-`Dispose()` (a `using` block), which also flushes every structural request made meanwhile.
+`chunk.Entities`. Writes through the spans are writes into the engine's memory, no copies. `Get<T>(column)`
+throws `InvalidOperationException` when `T` is not the component requested at that position of `Begin`, so a wrong
+type or index never reinterprets another component's memory. The scope ends with `Dispose()` (a `using` block),
+which also flushes every structural request made meanwhile. `Begin` is available inside `OnFixedUpdate`,
+`OnUpdate`, `OnLateUpdate`, the collision callbacks and the `OnCreate` / `OnDestroy` the end of those phases runs;
+elsewhere (an `OnCreate` at scene start, frame end or a mode change) it throws `InvalidOperationException` naming
+`NOT_IN_PHASE`.
 
 ```csharp
 using (ComponentQuery query = ComponentQuery.Begin<LocalTransform, RigidBodyData>())
@@ -150,9 +187,13 @@ using (ComponentQuery query = ComponentQuery.Begin<LocalTransform, RigidBodyData
 ```
 
 > [!WARNING]
-> Inside a scope `Entity.Create`, `Destroy`, `AddComponent`, `RemoveComponent`, `SetParent` and
+> Inside a scope `Entity.Create`, `Destroy`, `AddComponent`, `RemoveComponent`, `SetParent`, `Enabled` and
 > `Prefab.Instantiate` are deferred to the end of the scope (the handles they return are valid at once); a
-> `Duplicate()` cannot be deferred and throws `InvalidOperationException` (`STRUCTURE_LOCKED`).
+> `Duplicate()` cannot be deferred and throws `InvalidOperationException` (`STRUCTURE_LOCKED`). Deferred requests
+> apply in call order and the getters keep answering the old state until then: `Enabled = false` then
+> `Enabled = true` ends enabled, while `Enabled` reads its old value inside the scope. `SetParent` to the entity
+> itself throws `ArgumentException` at once; a reparent the scene refuses when it is applied (a cycle, the depth
+> limit) already returned and is logged as a warning.
 
 ## Hot reload
 
@@ -168,12 +209,12 @@ its initialisers. Plugin assemblies share the game load context, so a leaky plug
 |---|---|
 | `ScriptBehaviour`: `OnCreate`, `OnStart`, `OnFixedUpdate(float)`, `OnUpdate(float)`, `OnLateUpdate(float)`, `OnDestroy`, `OnCollisionEnter/Exit(in Collision)`, `OnTriggerEnter/Exit(Entity)` | the callbacks |
 | `Entity`: `Create`, `Find`, `FindByGuid`, `FindByTag`, `FindByLayer`, `CreateMany`, `IsAlive`, `Name`, `Destroy`, `AddScript<T>`, `GetScript<T>`, component accessors, `Parent`, `Root`, `Enabled`, `Tag`, `Layer`, `Guid`, `Duplicate` | entities |
-| `Transform`: `Position`, `Rotation`, `Scale`, `Local`, `World`, `WorldMatrix`, `Forward/Right/Up`, `SetParent`, `GetChildren`, `Translate`, `Rotate`, `LookAt`, `Interpolated` | transforms |
-| `Rigidbody`, `CharacterController`, `Physics`, `LayerMask`, `RaycastHit` | physics |
+| `Transform`: `Position`, `Rotation`, `Scale`, `Local`, `World`, `WorldMatrix`, `Forward/Right/Up`, `SetParent`, `GetChildren`, `Translate`, `Rotate`, `LookAt`, `Interpolated`; `TransformData` | transforms |
+| `Rigidbody`, `ForceMode`, `CharacterController`, `Physics`, `LayerMask`, `RaycastHit` | physics |
 | `AudioSource`, `Audio` | audio |
-| `Input` (+ `Input.Inject`), `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis`, `CursorMode` | input |
-| `AssetRef<T>`, `AssetId`, `AssetState`, the asset tags, `Prefab`, `Scene` | assets, scenes, prefabs |
-| `Diagnostics`, `FrameStats`, `Modules.Registry`, `ModuleInfo`, `Log`, `Time` | diagnostics and services |
+| `Input` (+ `Input.Inject`, `ButtonAction`), `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis`, `CursorMode` | input |
+| `AssetRef<T>`, `AssetId`, `AssetState`, `AssetLoadPriority`, the asset tags, `Prefab`, `Scene` | assets, scenes, prefabs |
+| `Diagnostics`, `FrameStats`, `EnginePhase`, `Modules.Registry`, `ModuleInfo`, `Log`, `Time` | diagnostics and services |
 | `ComponentQuery`, `ChunkView`, `ComponentType<T>` | the DOD escape hatch |
 
 ## See also
