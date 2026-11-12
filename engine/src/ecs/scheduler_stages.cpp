@@ -30,9 +30,14 @@ namespace {
 /*===========================================================================*/
 // Private methods
 
-void scheduler::resolve_edges(system_phase target, std::vector<std::vector<u32>> &predecessors, bool logUnknown) {
+void scheduler::resolve_edges(
+  system_phase target,
+  std::vector<std::vector<u32>> &predecessors,
+  const system_record *logFor
+) {
     // Members: every alive system of the phase in registration order (disabled ones included so a
-    // latent cycle is still refused). Positions in 'members' index the predecessor lists.
+    // latent cycle is still refused). Positions in 'members' index the predecessor lists. Only the
+    // unknown names of 'logFor' (the system being added) are logged, so each is logged once.
     std::vector<u32> members = {};
     for (u32 index = 0; index < mSystems.size(); ++index) {
         const system_record *record = mSystems[index].get();
@@ -56,6 +61,7 @@ void scheduler::resolve_edges(system_phase target, std::vector<std::vector<u32>>
 
     for (usize position = 0; position < members.size(); ++position) {
         const system_desc &desc = mSystems[members[position]]->desc;
+        const bool logUnknown = mSystems[members[position]].get() == logFor;
         for (const core::string_id &name : desc.after) {
             const usize other = position_of(name);
             if (other == members.size()) {
@@ -138,7 +144,7 @@ core::result<void> scheduler::build_stages(system_phase target) {
     state.timings.clear();
 
     std::vector<std::vector<u32>> predecessors = {};
-    resolve_edges(target, predecessors, true);
+    resolve_edges(target, predecessors, nullptr);
     CONJURE_TRY_ASSIGN(const std::vector<u32> order, topological_order(target, predecessors));
 
     // Position of each record in the predecessor lists, for the "predecessor in an earlier stage" rule.

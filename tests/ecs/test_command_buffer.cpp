@@ -10,10 +10,16 @@
 #include "conjure/core/log.h"
 #include "conjure/ecs/command_buffer.h"
 #include "conjure/ecs/ecs_error.h"
+#include "conjure/ecs/entity_archive.h"
+#include "conjure/ecs/observer.h"
 #include "conjure/ecs/world.h"
 
+#include <array>
 #include <cstddef>
+#include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -127,6 +133,159 @@ TEST_SUITE("ecs/command_buffer") {
         CHECK(world.flush(commands).applied == 2);
         CHECK(world.has<position>(created.value()));
         CHECK(*world.get<position>(created.value()) == position{2.0f, 2.0f, 2.0f});
+    }
+
+    TEST_CASE("command_buffer - remove_raw then add_raw without payload keeps the held value") {
+        // An untyped add without bytes records no value: an entity that holds the component at flush
+        // keeps its value, and since its mask does not change no observer fires. The typed pair carries a
+        // default-constructed payload and resets the value, still without observers.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::result<entity> created = world.create_entity(fixture.mask<health>());
+        CONJURE_REQUIRE_OK(created);
+        const entity id = created.value();
+        CONJURE_REQUIRE_OK(world.set(id, health{7, 50}));
+        u32 removed = 0;
+        u32 added = 0;
+        CHECK(world.observe(fixture.id<health>(), component_event::REMOVED,
+          [&](ecs::world &, entity, component_id, command_buffer &) {
+              ++removed;
+          }).is_valid());
+        CHECK(world.observe(fixture.id<health>(), component_event::ADDED,
+          [&](ecs::world &, entity, component_id, command_buffer &) {
+              ++added;
+          }).is_valid());
+
+        command_buffer commands(world);
+        commands.remove_raw(id, fixture.id<health>());
+        commands.add_raw(id, fixture.id<health>());
+        const flush_report report = world.flush(commands);
+        CHECK(report.applied == 2);
+        CHECK(report.skipped == 0);
+        CHECK(*world.get<const health>(id) == health{7, 50});
+        CHECK(removed == 0);
+        CHECK(added == 0);
+
+        commands.remove<health>(id);
+        commands.add<health>(id);
+        CHECK(world.flush(commands).applied == 2);
+        CHECK(*world.get<const health>(id) == health{});
+        CHECK(removed == 0);
+        CHECK(added == 0);
+    }
+
+    TEST_CASE("command_buffer - a discarded instantiate never lets its root alias a new entity") {
+        // instantiate() hands out the root at once. When the instantiation never applies (the buffer is
+        // cleared, or destroyed unflushed) its ids come back with a bumped generation; returned unused,
+        // the next reservations would reissue exactly the handle the caller still holds.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::array<entity, 3> sources = {};
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), sources));
+        core::result<entity_archive> captured = entity_archive::capture(world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+
+        // Fresh indices past the record table: the release must grow the table to record the generation.
+        command_buffer commands(world);
+        const core::result<entity> cleared = commands.instantiate(archive);
+        CONJURE_REQUIRE_OK(cleared);
+        commands.clear();
+        CHECK(commands.empty());
+        CHECK_FALSE(world.is_alive(cleared.value()));
+        CONJURE_CHECK_OK(world.validate());
+
+        entity destroyed = {};
+        {
+            testing::log_capture logs = {};
+            command_buffer unflushed(world);
+            const core::result<entity> root = unflushed.instantiate(archive);
+            CONJURE_REQUIRE_OK(root);
+            destroyed = root.value();
+        }
+        // Reusing part of the released indices keeps the record table and the free list in step.
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+        CONJURE_CHECK_OK(world.validate());
+
+        std::vector<entity> fresh(64);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), fresh));
+        CHECK_FALSE(world.is_alive(cleared.value()));
+        CHECK_FALSE(world.is_alive(destroyed));
+        for (const entity id : fresh) {
+            CHECK(id != cleared.value());
+            CHECK(id != destroyed);
+        }
+        CHECK(world.entity_count() == 3 + 1 + 64);
+        CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("command_buffer - discarding an instantiate off the owner thread asserts and keeps its ids") {
+        // Releasing the ids writes the world's record table, which belongs to the owner thread: off it,
+        // clear() asserts and leaves them reserved, so nothing races and the root still never aliases.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::array<entity, 2> sources = {};
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), sources));
+        core::result<entity_archive> captured = entity_archive::capture(world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+
+        command_buffer commands(world);
+        const core::result<entity> root = commands.instantiate(archive);
+        CONJURE_REQUIRE_OK(root);
+        const std::thread::id owner = world.owner_thread();
+        CONJURE_REQUIRE_OK(world.set_owner_thread(std::thread::id()));
+        {
+            testing::expect_assert guard = {};
+            commands.clear();
+            CHECK(guard.count() == ASSERTS_PER_VIOLATION);
+        }
+        CHECK(commands.empty());
+        CONJURE_REQUIRE_OK(world.set_owner_thread(owner));
+
+        // The ids stayed reserved: no fresh entity reuses the root's index.
+        std::vector<entity> fresh(64);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), fresh));
+        CHECK_FALSE(world.is_alive(root.value()));
+        for (const entity id : fresh) {
+            CHECK(id.index != root.value().index);
+        }
+        CHECK(world.entity_count() == 2 + 64);
+        CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("command_buffer - instantiate entry points still refuse a corrupt archive") {
+        // push_instantiate trusts its callers to validate; both entry points still do, before any id is
+        // reserved or any command recorded.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        entity_archive corrupt(fixture.registry);
+        archive_entry entry = {};
+        entry.mask = fixture.mask<link>();
+        archive_component linkBytes = {};
+        linkBytes.id = fixture.id<link>();
+        const link outOfRange{entity::archive_local(5), NULL_ENTITY};
+        linkBytes.bytes.resize(sizeof(link));
+        std::memcpy(linkBytes.bytes.data(), &outOfRange, sizeof(link));
+        entry.components.push_back(std::move(linkBytes));
+        corrupt.push_entry(std::move(entry));
+        const std::shared_ptr<const entity_archive> shared = std::make_shared<const entity_archive>(std::move(corrupt));
+
+        command_buffer commands(world);
+        const u32 reservedBefore = commands.reserved_count();
+        CONJURE_CHECK_ERROR(commands.instantiate(shared), ecs_error::ARCHIVE_CORRUPT);
+        CONJURE_CHECK_ERROR(world.instantiate(shared, &commands), ecs_error::ARCHIVE_CORRUPT);
+        CHECK(commands.empty());
+        CHECK(commands.reserved_count() == reservedBefore);
+        CHECK(world.flush(commands).applied == 0);
+
+        // No id was reserved: the first entity still gets index 0.
+        const core::result<entity> next = world.create_entity();
+        CONJURE_REQUIRE_OK(next);
+        CHECK(next.value() == entity{0, 1});
+        CHECK(world.entity_count() == 1);
     }
 
     TEST_CASE("command_buffer - destroy wins over later add") {

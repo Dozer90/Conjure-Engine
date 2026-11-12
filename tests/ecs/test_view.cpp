@@ -112,6 +112,27 @@ TEST_SUITE("ecs/view") {
         CHECK(desc.writes == fixture.mask<velocity, name_component>());
     }
 
+    TEST_CASE("view - a tag in the pack is rejected at compile time") {
+        // A tag has no column to hand to the callback; view<player_tag> used to compile and index an
+        // empty span. The pack rejects it (plain or optional), and with<Tag>() is the way to require it.
+        static_assert(!conjure::ecs::detail::HAS_COLUMN<player_tag>);
+        static_assert(!conjure::ecs::detail::HAS_COLUMN<const player_tag>);
+        static_assert(!conjure::ecs::detail::HAS_COLUMN<maybe<const player_tag>>);
+        static_assert(!conjure::ecs::detail::HAS_COLUMN<maybe<frozen_tag>>);
+        static_assert(conjure::ecs::detail::HAS_COLUMN<const position>);
+        static_assert(conjure::ecs::detail::HAS_COLUMN<maybe<velocity>>);
+
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+        u32 tagged = 0;
+        world.view<const position>().with<player_tag>().for_each([&](entity, const position &) {
+            ++tagged;
+        });
+        CHECK(tagged == 1);
+    }
+
     TEST_CASE("view - structural change during for_each is STRUCTURE_LOCKED") {
         ecs_fixture fixture = {};
         world &world = fixture.world;

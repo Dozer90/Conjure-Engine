@@ -77,9 +77,12 @@ void *chunk_view::column_data(component_id id, bool forWrite) noexcept {
         return nullptr;
     }
     if (forWrite) {
+#if CONJURE_ASSERTS_ENABLED
+        // The declared-write check is Debug and Development validation (01_ecs.md 3.5); the stamp is not.
         if (mContext != nullptr && !detail::context_declares_write(*mContext, id)) {
             detail::report_undeclared_write(*mContext, id);
         }
+#endif
         mChunk->stamp(column, mStampVersion);
     }
     return mChunk->column(layout, column);

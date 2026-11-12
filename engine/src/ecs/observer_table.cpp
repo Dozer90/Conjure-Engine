@@ -33,6 +33,8 @@ observer_id observer_table::add_component_observer(component_id id, component_ev
     entry.event = event;
     entry.componentFn = std::move(fn);
     ++mComponentObserverCount;
+    ++mObserverCounts[interest_index(id, event)];
+    mObserved[static_cast<usize>(event)].set(id);
     return observer_id{index, entry.generation};
 }
 
@@ -64,6 +66,11 @@ bool observer_table::remove(observer_id id) {
         --mEntityObserverCount;
     } else {
         --mComponentObserverCount;
+        u32 &interested = mObserverCounts[interest_index(entry.id, entry.event)];
+        --interested;
+        if (interested == 0) {
+            mObserved[static_cast<usize>(entry.event)].clear(entry.id);
+        }
     }
 
     // The handler may be the one running right now: destroy it once every fire has returned.
@@ -83,6 +90,11 @@ void observer_table::fire_component(
   command_buffer &deferred
 ) {
     if (mComponentObserverCount == 0) {
+        return;
+    }
+    // Checked per call, so an observer registered by a handler of an earlier bit of the same mask is
+    // still invoked for a later bit, exactly as the full scan does.
+    if (!mObserved[static_cast<usize>(event)].test(id)) {
         return;
     }
     ++mFiringDepth;
@@ -115,18 +127,6 @@ void observer_table::fire_destroyed(world &owner, entity target, command_buffer 
     }
     --mFiringDepth;
     finish_fire();
-}
-
-void observer_table::clear() {
-    CONJURE_ASSERT(mFiringDepth == 0, "observer_table::clear during a fire");
-    if (mFiringDepth > 0) {
-        return;
-    }
-    mSlots.clear();
-    mFree.clear();
-    mPendingRelease.clear();
-    mComponentObserverCount = 0;
-    mEntityObserverCount = 0;
 }
 
 
@@ -171,4 +171,8 @@ void observer_table::finish_fire() {
     for (const u32 index : pending) {
         release_slot(index);
     }
+}
+
+usize observer_table::interest_index(component_id id, component_event event) noexcept {
+    return static_cast<usize>(event) * MAX_COMPONENTS + id.value;
 }

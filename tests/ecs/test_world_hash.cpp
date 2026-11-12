@@ -4,9 +4,12 @@
 
 #include "conjure/testing/allocation_scope.h"
 
+#include "conjure/core/json/value.h"
+#include "conjure/core/json/writer.h"
 #include "conjure/core/reflect/reflect.h"
 #include "conjure/core/uuid.h"
 #include "conjure/ecs/component.h"
+#include "conjure/ecs/component_type_desc.h"
 #include "conjure/ecs/world.h"
 #include "conjure/ecs/world_hash.h"
 
@@ -74,6 +77,13 @@ namespace hash_test {
 
     struct bare_ref_component {
         bare_asset_ref clip = {};
+    };
+
+    /// <summary>
+    /// Registered by hand without TRIVIAL, so world_hash hashes its serialised text.
+    /// </summary>
+    struct long_text_component {
+        u32 value = 0;
     };
 }
 
@@ -398,6 +408,69 @@ TEST_SUITE("ecs/world_hash") {
         value.clip.id = *lastByte;
         CONJURE_REQUIRE_OK(b.world.set(second.value(), value));
         CHECK(world_hash(a.world) != world_hash(b.world));
+    }
+
+    TEST_CASE("world_hash - row order within an archetype is part of the hash") {
+        // Same entities with the same bytes, but one world moved e0 out of its archetype and back: the
+        // swap-remove filled its row with the last one, so the rows are e2, e1, e0 instead of e0, e1, e2.
+        ecs_fixture a = {};
+        ecs_fixture b = {};
+        std::array<entity, 3> first = {};
+        std::array<entity, 3> second = {};
+        CONJURE_REQUIRE_OK(a.world.create_entities(a.mask<position>(), first));
+        CONJURE_REQUIRE_OK(b.world.create_entities(b.mask<position>(), second));
+        for (u32 index = 0; index < 3; ++index) {
+            const position value{static_cast<f32>(index), 1.0f, 2.0f};
+            CONJURE_REQUIRE_OK(a.world.set(first[index], value));
+            CONJURE_REQUIRE_OK(b.world.set(second[index], value));
+        }
+        CHECK(first == second);
+        CHECK(world_hash(a.world) == world_hash(b.world));
+
+        CONJURE_REQUIRE_OK(b.world.add<velocity>(second[0]));
+        CONJURE_REQUIRE_OK(b.world.remove<velocity>(second[0]));
+        CHECK(b.world.mask_of(second[0]) == a.world.mask_of(first[0]));
+        CHECK(*b.world.get<const position>(second[0]) == position{0.0f, 1.0f, 2.0f});
+        CHECK(world_hash(a.world) != world_hash(b.world));
+        CONJURE_CHECK_OK(b.world.validate());
+    }
+
+    TEST_CASE("world_hash - non-trivial components share one json writer") {
+        // Every non-trivial component used to get a fresh writer and a fresh string. This hook allocates
+        // in a fresh writer in every configuration: the object pushes a frame on the writer's stack and
+        // the 40-character string outgrows any small-string buffer.
+        static constexpr auto writeHook = [](const void *, core::json::writer &out) -> core::result<void> {
+            out.begin_object();
+            out.key("text");
+            out.value(std::string_view("a forty character string for the writers"));
+            out.end_object();
+            return core::result<void>::success();
+        };
+        static constexpr auto readHook = [](void *, const core::json::value &) -> core::result<void> {
+            return core::result<void>::success();
+        };
+        ecs_fixture fixture = {};
+        component_type_desc desc = {};
+        desc.name = "test.hash_long_text";
+        desc.size = sizeof(hash_test::long_text_component);
+        desc.alignment = alignof(hash_test::long_text_component);
+        desc.serializer.writeJson = writeHook;
+        desc.serializer.readJson = readHook;
+        const core::result<component_id> id = fixture.registry.register_described(desc);
+        CONJURE_REQUIRE_OK(id);
+        REQUIRE_FALSE(fixture.registry.info(id.value()).is_trivial());
+        component_mask mask = {};
+        mask.set(id.value());
+        std::vector<entity> ids(1000);
+        CONJURE_REQUIRE_OK(fixture.world.create_entities(mask, ids));
+
+        const u64 warmUp = world_hash(fixture.world);
+        testing::allocation_scope allocations = {};
+        const u64 hash = world_hash(fixture.world);
+        const u64 allocated = allocations.allocation_count();
+        CAPTURE(allocated);
+        CHECK(allocated <= 8);
+        CHECK(hash == warmUp);
     }
 
     TEST_CASE("world_hash - allocation free for trivial worlds") {

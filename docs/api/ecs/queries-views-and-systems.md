@@ -58,7 +58,7 @@ void regenerate_players(world &game) {
 `view<Pack...>` is a typed iterator over every entity holding the required components of its pack. The pack also
 declares the access: `const T` reads, `T` writes (and marks the column as changed), `maybe<T>` / `maybe<const T>`
 is optional. `world.view<Pack...>()` builds one; builder calls return the same view so they chain. A tag has no
-data, so it belongs in `with<Tag>()` rather than in the pack (a `maybe<Tag>` would always arrive as null).
+data, so it belongs in `with<Tag>()`: a tag in the pack, plain or as `maybe<Tag>`, is a compile error.
 
 | Member | Purpose |
 |---|---|
@@ -88,7 +88,9 @@ build it fresh each frame.
 ## Chunk by chunk: `query` and `chunk_view`
 
 Views are built on `query`, an untyped match described by a `query_desc` (`with`, `without`, `optional`,
-`writes`, `changed` masks and `sinceVersion`) that `world.create_query(desc)` returns. Its `for_each_chunk(fn)`
+`writes`, `changed` masks and `sinceVersion`) that `world.create_query(desc)` returns. Matching uses `with`,
+`without` and the `changed` filter; `optional` and `writes` only record what a view's pack reads optionally and
+writes (stamping follows the constness of each span you take). Its `for_each_chunk(fn)`
 hands out a `chunk_view` per non-empty matching chunk; `chunk_count()`, `entity_count()`, `chunk(index)` (a flat
 index for bindings; hold `world.lock_iteration()` while using the result), `matches()`, `desc()`, `reset(desc)`
 and `refresh()` complete it.
@@ -114,8 +116,8 @@ void integrate_chunks(world &game, f32 deltaSeconds) {
 | `chunk_view` member | Purpose |
 |---|---|
 | `count()`, `entities()` | rows in the chunk and their ids |
-| `get<T>()` | the column as `std::span<T>`; `const T` never stamps; asserts when the archetype lacks `T` |
-| `get_optional<T>()` | like `get`, but an absent component yields an empty span |
+| `get<T>()` | the column as `std::span<T>`; `const T` never stamps; asserts when the archetype lacks `T`; a tag does not compile (test it with `has(id)`) |
+| `get_optional<T>()` | like `get`, but an absent component yields an empty span; a tag does not compile either |
 | `has(id)`, `column_data(id, forWrite)`, `column_stride(id)`, `column_version(id)` | untyped access for bindings |
 | `owner()`, `chunk_index()`, `stamp_version()`, `is_valid()` | where the chunk lives and which version a write stamps |
 
@@ -154,9 +156,9 @@ Inside `run`, `system_context` is everything the system may touch:
 |---|---|
 | `world()` | the world, **locked** (unless the system is `EXCLUSIVE`) |
 | `delta_time()`, `frame()` | `frame_info::deltaTime` and the full timing block |
-| `since_version()` | the world version at the start of this system's previous run: `changed<T>(context.since_version())` sees every write since, never the system's own previous writes |
+| `since_version()` | the world version at the start of this system's previous run: `changed<T>(context.since_version())` sees every write since, never the system's own previous writes made through `view<...>()` or `parallel_for_chunks` (those stamp `run_version()`); writes through `world().get<T>()`, `set` or `component_ref` stamp the current world version, which a sibling or a structural call may have bumped, so the next run can see them |
 | `commands()` | the system's `command_buffer`, flushed when its stage ends |
-| `view<Pack...>()` | a view checked against the declared access in Debug and Development (an undeclared component asserts naming the system) |
+| `view<Pack...>()` | a view checked against the declared access in Debug and Development (an undeclared component asserts naming the system; the checks compile out in Distribution); its writes stamp `run_version()` in every build |
 | `parallel_for_chunks(query, fn)` | `fn(chunk_view &, command_buffer &)` per chunk over the job system (below) |
 | `jobs()`, `desc()`, `run_version()`, `last_grain_count()` | the job system (nullptr when inline), the description, the stamp version, the grain count of the last dispatch |
 
@@ -180,7 +182,8 @@ so it may make structural changes directly; `DISABLED` skips it; `RUNS_WHILE_PAU
 
 `scheduler(world, jobs, scheduler_desc = {})` owns the systems. `add_system(desc)` returns a `system_id`
 (`SYSTEM_CYCLE` when `after`/`before` would loop; unknown names in those lists are ignored because the module may
-be compiled out), `remove_system(id)` and `set_enabled(id, bool)` take it back, `finalise()` builds every
+be compiled out, with one `DEBUG` log each when the system is added), `remove_system(id)` and
+`set_enabled(id, bool)` take it back, `finalise()` builds every
 phase's stages now, and `run_phase(phase, frame)` runs the phase. `stages(phase)` shows the `stage_info` groups,
 `last_timings(phase)` the microseconds per system, `system(id)` and `system_count()` the registrations.
 
@@ -240,10 +243,15 @@ with different worker counts; gameplay must not depend on them.
 
 The world has a `version()` counter that is bumped before every system run, every flush and every direct
 structural change (`bump_version()` does it by hand). Writing a column through a non-const span,
-`world::get<T>()`, `component_ref::write()`, `set` or a row moving into the chunk stamps that chunk's column with
-the current version. `changed<T>(since)` visits a chunk when its stamp is greater than `since`: never a false
-negative, at most one chunk of false positives per real write. In a system, use `context.since_version()`; outside
-one, remember `world.version()` from the previous pass.
+`world::get<T>()` with a non-const `T` (`get<const T>()` only reads and never stamps), `component_ref::write()`,
+`set` or a row moving into the chunk stamps that chunk's column. Outside a system the stamp is the current
+version; inside one, the chunk views of `context.view<...>()` and `parallel_for_chunks` stamp the system's
+`run_version()`, so its own writes never pass its next `since_version()` even when a structural call or a sibling
+system bumped the world version during the run. Writes a system makes through `context.world()` (`get<T>()`, `set`,
+`component_ref::write()`) still stamp the current world version and can show up in its next run when the version
+moved on meanwhile; write through the context's views to stay invisible to yourself. `changed<T>(since)` visits a chunk when its stamp is greater than
+`since`: never a false negative, at most one chunk of false positives per real write. In a system, use
+`context.since_version()`; outside one, remember `world.version()` from the previous pass.
 
 ## API summary
 

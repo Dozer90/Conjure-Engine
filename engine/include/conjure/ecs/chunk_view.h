@@ -41,7 +41,7 @@ namespace conjure::ecs {
             chunk *mChunk = nullptr;
             const component_registry *mRegistry = nullptr;
             u64 mStampVersion = 0;
-            const system_context *mContext = nullptr;
+            [[maybe_unused]] const system_context *mContext = nullptr;   // read only by the Debug/Dev write check
             u32 mChunkIndex = 0;
 
         public:
@@ -109,10 +109,12 @@ namespace conjure::ecs {
 
             /// <summary>
             /// The column of a required component: a non-const T stamps the column version once, a
-            /// const T never does. A component the archetype lacks (or a tag) asserts and yields an
-            /// empty span; use has() or get_optional() for optional components.
+            /// const T never does. A component the archetype lacks asserts and yields an empty span;
+            /// use has() or get_optional() for optional components. A tag has no column and does not
+            /// compile; test it with has().
             /// </summary>
             template <typename ComponentType>
+                requires (!std::is_empty_v<std::remove_cv_t<ComponentType>>)
             [[nodiscard]] std::span<ComponentType> get() noexcept {
                 using plain_type = std::remove_cv_t<ComponentType>;
                 const component_id id = mRegistry == nullptr ? component_id{} : mRegistry->id_of<plain_type>();
@@ -125,9 +127,11 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Like get(), but an absent component yields an empty span without asserting.
+            /// Like get(), but an absent component yields an empty span without asserting. A tag does
+            /// not compile here either.
             /// </summary>
             template <typename ComponentType>
+                requires (!std::is_empty_v<std::remove_cv_t<ComponentType>>)
             [[nodiscard]] std::span<ComponentType> get_optional() noexcept {
                 using plain_type = std::remove_cv_t<ComponentType>;
                 const component_id id = mRegistry == nullptr ? component_id{} : mRegistry->id_of<plain_type>();

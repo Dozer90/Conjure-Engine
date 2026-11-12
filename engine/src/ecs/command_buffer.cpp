@@ -10,6 +10,7 @@
 #include "conjure/core/log.h"
 
 #include <cstring>
+#include <thread>
 #include <utility>
 
 using namespace conjure;
@@ -224,9 +225,20 @@ void command_buffer::append(command_buffer &&other) {
 
 void command_buffer::clear() noexcept {
     destroy_payloads();
+    // instantiate() handed the root of every pending copy to the caller, so the ids go back with a bumped
+    // generation: returned unused, the next reservation would reissue the handle the caller still holds.
+    // release_reserved writes the world's record table, so this is owner-thread work (a flushed entry has no
+    // ids left). Off the owner thread the ids stay reserved: leaked, but never racing the table or aliasing.
     for (instantiate_entry &entry : mInstantiates) {
-        if (!entry.ids.empty()) {
-            mWorld->mAllocator->return_unused(entry.ids);
+        if (entry.ids.empty()) {
+            continue;
+        }
+        if (std::this_thread::get_id() != mWorld->owner_thread()) {
+            CONJURE_ASSERT(false, "command_buffer::clear of a pending instantiation off the world's owner thread");
+            continue;
+        }
+        for (const entity id : entry.ids) {
+            mWorld->release_reserved(id);
         }
     }
     mInstantiates.clear();
@@ -296,7 +308,6 @@ core::result<std::span<const entity>> command_buffer::push_instantiate(
     if (&archive->registry() != mRegistry) {
         return make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
     }
-    CONJURE_TRY(archive->validate());
 
     instantiate_entry entry = {};
     entry.copies = copies;

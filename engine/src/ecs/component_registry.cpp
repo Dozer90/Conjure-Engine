@@ -73,9 +73,41 @@ namespace {
         return core::reflect::kind_size(kind);
     }
 
+    /// <summary>
+    /// True when two descriptions list the same fields in the same order: name, type, kind, offset and
+    /// size. Two null descriptions match; a null and a non-null one do not.
+    /// </summary>
+    bool same_fields(const core::reflect::type_info *existing, const core::reflect::type_info *candidate) noexcept {
+        if (existing == nullptr || candidate == nullptr) {
+            return existing == candidate;
+        }
+        if (existing->fields.size() != candidate->fields.size()) {
+            return false;
+        }
+        for (usize index = 0; index < existing->fields.size(); ++index) {
+            const core::reflect::field_info &left = existing->fields[index];
+            const core::reflect::field_info &right = candidate->fields[index];
+            if (left.name != right.name || left.type != right.type || left.kind != right.kind ||
+              left.offset != right.offset || left.size != right.size) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool same_layout(const component_info &existing, const component_info &candidate) noexcept {
-        return existing.size == candidate.size && existing.alignment == candidate.alignment &&
-          existing.flags == candidate.flags;
+        if (existing.size != candidate.size || existing.alignment != candidate.alignment ||
+          existing.flags != candidate.flags) {
+            return false;
+        }
+        // A runtime-described (C#) type is defined by its fields: the same name and size with reordered,
+        // renamed or retyped fields is another layout, which redefine_dynamic replaces.
+        const bool bothDynamic =
+          has_flag(existing.flags, component_flags::DYNAMIC) && has_flag(candidate.flags, component_flags::DYNAMIC);
+        if (bothDynamic && !same_fields(existing.reflection, candidate.reflection)) {
+            return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -410,10 +442,16 @@ core::result<void> component_registry::validate_layout(const component_info &inf
         return make_error(ecs_error::BAD_ALIGNMENT, "non-trivial components must not need more than 16 byte alignment");
     }
     if (info.is_tag() && info.size != 0) {
-        return make_error(ecs_error::BAD_ALIGNMENT, "a TAG component must have size 0");
+        return core::error(
+          core::error_code::INVALID_ARGUMENT,
+          "component '" + info.name.to_string() + "': a TAG component must have size 0"
+        );
     }
     if (!info.is_tag() && info.size == 0) {
-        return make_error(ecs_error::BAD_ALIGNMENT, "a component with size 0 must be a TAG");
+        return core::error(
+          core::error_code::INVALID_ARGUMENT,
+          "component '" + info.name.to_string() + "': a component with size 0 must be a TAG"
+        );
     }
     if (!info.defaultValue.empty() && info.defaultValue.size() != info.size) {
         return core::error(core::error_code::INVALID_ARGUMENT, "default value size differs from the component size");

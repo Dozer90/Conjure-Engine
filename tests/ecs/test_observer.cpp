@@ -317,7 +317,99 @@ TEST_SUITE("ecs/observer") {
         CONJURE_CHECK_OK(world.validate());
     }
 
-    TEST_CASE("observer - unregistered component or empty callable is refused") {
+    TEST_CASE("observer - interest tracking follows observe and unobserve") {
+        // An event for a component nobody observes skips the slot scan; the interest the table keeps per
+        // (event, component) must follow every observe and unobserve.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const auto counter = [](u32 &count) {
+            return [&count](ecs::world &, entity, component_id, command_buffer &) {
+                ++count;
+            };
+        };
+        u32 first = 0;
+        u32 second = 0;
+        u32 removedFired = 0;
+        const observer_id firstId = world.observe(fixture.id<health>(), component_event::ADDED, counter(first));
+        const observer_id secondId = world.observe(fixture.id<health>(), component_event::ADDED, counter(second));
+        CHECK(world.observe(fixture.id<health>(), component_event::REMOVED, counter(removedFired)).is_valid());
+
+        // Unobserved components and the other event fire nothing.
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+        CHECK(first == 0);
+        CHECK(second == 0);
+        const core::result<entity> healthy = world.create_entity(fixture.mask<health>());
+        CONJURE_REQUIRE_OK(healthy);
+        CHECK(first == 1);
+        CHECK(second == 1);
+        CHECK(removedFired == 0);
+
+        // One of two observers gone: the interest stays and the other still fires.
+        world.unobserve(firstId);
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<health>()));
+        CHECK(first == 1);
+        CHECK(second == 2);
+
+        // The last ADDED observer gone: ADDED fires nothing, REMOVED still does.
+        world.unobserve(secondId);
+        const core::result<entity> both = world.create_entity(fixture.mask<position, health>());
+        CONJURE_REQUIRE_OK(both);
+        CHECK(second == 2);
+        CONJURE_REQUIRE_OK(world.remove<health>(both.value()));
+        CHECK(removedFired == 1);
+
+        // Observing again restores the interest.
+        u32 third = 0;
+        CHECK(world.observe(fixture.id<health>(), component_event::ADDED, counter(third)).is_valid());
+        CONJURE_REQUIRE_OK(world.add<health>(both.value()));
+        CHECK(third == 1);
+        CHECK(first == 1);
+        CHECK(second == 2);
+
+        // An observer registered by a handler for an earlier bit of one mask fires for a later bit.
+        u32 lateVelocity = 0;
+        bool registeredLate = false;
+        CHECK(world.observe(fixture.id<position>(), component_event::ADDED,
+          [&](ecs::world &owner, entity, component_id, command_buffer &) {
+              if (registeredLate) {
+                  return;
+              }
+              registeredLate = true;
+              CHECK(owner.observe(fixture.id<velocity>(), component_event::ADDED, counter(lateVelocity)).is_valid());
+          }).is_valid());
+        REQUIRE(fixture.id<position>().value < fixture.id<velocity>().value);
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, velocity>()));
+        CHECK(registeredLate);
+        CHECK(lateVelocity == 1);
+    }
+
+    TEST_CASE("observer - add returns null when an ADDED observer destroys the target") {
+        // add<T> and add_raw drain the deferred buffer before reading the component back, so an ADDED
+        // observer that destroys the entity leaves a completed add with a null result.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        CHECK(world.observe(fixture.id<health>(), component_event::ADDED,
+          [](ecs::world &, entity target, component_id, command_buffer &deferred) {
+              deferred.destroy_entity(target);
+          }).is_valid());
+
+        const core::result<entity> typed = world.create_entity();
+        CONJURE_REQUIRE_OK(typed);
+        const core::result<health *> added = world.add<health>(typed.value());
+        REQUIRE(added.has_value());
+        CHECK(added.value() == nullptr);
+        CHECK_FALSE(world.is_alive(typed.value()));
+
+        const core::result<entity> untyped = world.create_entity();
+        CONJURE_REQUIRE_OK(untyped);
+        const core::result<void *> raw = world.add_raw(untyped.value(), fixture.id<health>());
+        REQUIRE(raw.has_value());
+        CHECK(raw.value() == nullptr);
+        CHECK_FALSE(world.is_alive(untyped.value()));
+        CHECK(world.entity_count() == 0);
+    }
+
+    TEST_CASE("observer - unregistered component, invalid event or empty callable is refused") {
         ecs_fixture fixture = {};
         testing::expect_assert guard = {};
         CHECK_FALSE(fixture.world.observe(component_id{800}, component_event::ADDED,
@@ -325,6 +417,17 @@ TEST_SUITE("ecs/observer") {
         const component_id positionId = fixture.id<position>();
         CHECK_FALSE(fixture.world.observe(positionId, component_event::ADDED, component_observer_fn()).is_valid());
         CHECK_FALSE(fixture.world.observe_destroyed(entity_observer_fn()).is_valid());
-        CHECK(guard.count() == 3 * ASSERTS_PER_VIOLATION);
+
+        // An event past REMOVED (an integer cast) is refused before the observer table indexes by it.
+        u32 fired = 0;
+        const u8 pastRemoved = static_cast<u8>(static_cast<u8>(component_event::REMOVED) + 1);
+        const component_event invalidEvent = static_cast<component_event>(pastRemoved);
+        CHECK_FALSE(fixture.world.observe(positionId, invalidEvent,
+          [&fired](ecs::world &, entity, component_id, command_buffer &) {
+              ++fired;
+          }).is_valid());
+        CHECK(guard.count() == 4 * ASSERTS_PER_VIOLATION);
+        CONJURE_REQUIRE_OK(fixture.world.create_entity(fixture.mask<position>()));
+        CHECK(fired == 0);
     }
 }

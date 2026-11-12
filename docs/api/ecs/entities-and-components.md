@@ -106,8 +106,10 @@ non-movable, thread-safe, and must be destroyed after every world created on it.
 | Know when a type appears | `on_registered()` is an `event<const component_info &>` |
 | Ask whether any world still uses a type | `has_instances(id)` |
 
-Errors: `NAME_CONFLICT` (same name, different layout or flags), `COMPONENT_LIMIT_REACHED`, `COMPONENT_TOO_LARGE`,
-`BAD_ALIGNMENT`, `UNSUPPORTED_FIELD`. Every registry starts with one built-in type at id 0,
+Errors: `NAME_CONFLICT` (same name, different layout or flags; for a runtime-described type also different
+fields), `COMPONENT_LIMIT_REACHED`, `COMPONENT_TOO_LARGE`, `BAD_ALIGNMENT`, `UNSUPPORTED_FIELD`, and
+`INVALID_ARGUMENT` for a hand-filled `component_type_desc` whose size and `TAG` flag disagree. Every registry
+starts with one built-in type at id 0,
 `unresolved_components`, which preserves data saved by modules that are not loaded.
 
 > [!TIP]
@@ -144,9 +146,9 @@ mutating calls return `ENTITY_NOT_ALIVE`.
 
 | You want to... | Use | Notes |
 |---|---|---|
-| Attach with a value | `add<T>(id, value = {})` returns `result<T *>` | `COMPONENT_ALREADY_PRESENT` if it is there; nullptr result for a tag |
-| Read | `get<T>(id)` on a `const world &` returns `const T *` | nullptr when dead or absent |
-| Write in place | `get<T>(id)` on a non-const world returns `T *` | marks the chunk column as changed |
+| Attach with a value | `add<T>(id, value = {})` returns `result<T *>` | `COMPONENT_ALREADY_PRESENT` if it is there; nullptr result for a tag, or when an `ADDED` observer's deferred work removed it again or destroyed the entity |
+| Read | `get<T>(id)` on a `const world &`, or `get<const T>(id)` on any world, returns `const T *` | nullptr when dead or absent; never marks the column as changed |
+| Write in place | `get<T>(id)` with a non-const `T` on a non-const world returns `T *` | marks the chunk column as changed |
 | Replace the whole value | `set(id, value)` | `COMPONENT_NOT_PRESENT` when absent; not structural |
 | Ask | `has<T>(id)` | false for a dead entity |
 | Detach | `remove<T>(id)` | `COMPONENT_NOT_PRESENT` when absent |
@@ -157,8 +159,8 @@ mutating calls return `ENTITY_NOT_ALIVE`.
 > `component_ref<T>`) instead and look the component up again.
 
 > [!TIP]
-> Call `get<T>` through a `const world &` (or `component_ref::read()`) when you only read. The non-const overload
-> stamps the chunk as changed, which makes every `changed<T>` filter downstream revisit it.
+> Call `get<const T>` (or `get<T>` through a `const world &`, or `component_ref::read()`) when you only read. A
+> non-const `T` stamps the chunk as changed, which makes every `changed<T>` filter downstream revisit it.
 
 ## The handle facade: `entity_handle` and `component_ref`
 
@@ -193,7 +195,8 @@ component is removed and valid again when it is re-added. Both types are small v
 ## Untyped access by `component_id`
 
 Bindings, serialisers and editor tools work with ids instead of types: `add_raw(id, componentId, bytes = {})`
-(empty bytes mean the default value) returns `result<void *>`, `set_raw` lives on command buffers, `get_raw(id,
+(empty bytes mean the default value) returns `result<void *>` (nullptr for a tag, or when an `ADDED` observer's
+deferred work removed the component again or destroyed the entity), `set_raw` lives on command buffers, `get_raw(id,
 componentId, forWrite)` returns `void *`, `has_raw`, `remove_raw`, `instance_count(componentId)` counts holders in
 this world and `remove_from_all(componentId)` strips a type from every entity (module unload, hot reload). The
 byte span passed to `add_raw` must be a complete object image of the registered size.
@@ -224,8 +227,10 @@ as arrays of system names, and a plain function pointer `run(system_context &)`.
 
 Scripts register components without a C++ type through `register_dynamic(dynamic_component_desc)` (name, size,
 alignment 1 to 16, a field list of primitive, math or `entity` kinds, optional default bytes); the result is always
-`DYNAMIC | TRIVIAL`, accessed with the raw functions above. `redefine_dynamic(id, desc)` changes the layout while
-keeping the id, and refuses with `COMPONENT_IN_USE` while a world still holds an instance. The hot-reload sequence
+`DYNAMIC | TRIVIAL`, accessed with the raw functions above. Registering a known name again returns the same id
+only when the fields match too: other fields (order, names, types or offsets) at the same size are
+`NAME_CONFLICT`. `redefine_dynamic(id, desc)` changes the layout and fields while keeping the id, and refuses with
+`COMPONENT_IN_USE` while a world still holds an instance. The hot-reload sequence
 is on the 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) page.
 
 ## API summary

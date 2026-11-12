@@ -2,6 +2,7 @@
 
 #include "conjure/ecs/system_phase.h"
 
+#include <array>
 #include <string_view>
 #include <type_traits>
 
@@ -24,7 +25,26 @@ TEST_SUITE("ecs/system_phase") {
         static_assert(static_cast<u8>(system_phase::COUNT) == 10);
         static_assert(SYSTEM_PHASE_COUNT == 10);
         static_assert(std::is_same_v<std::underlying_type_t<system_phase>, u8>);
-        CHECK(true);
+
+        // The same order at run time, phase by phase.
+        constexpr std::array<system_phase, 10> expected = {
+            system_phase::FRAME_BEGIN,
+            system_phase::FIXED_UPDATE,
+            system_phase::PHYSICS_STEP,
+            system_phase::FIXED_END,
+            system_phase::UPDATE,
+            system_phase::LATE_UPDATE,
+            system_phase::TRANSFORM,
+            system_phase::SYNC,
+            system_phase::EXTRACT,
+            system_phase::FRAME_END,
+        };
+        for (usize index = 0; index < expected.size(); ++index) {
+            CAPTURE(index);
+            CHECK(static_cast<usize>(expected[index]) == index);
+        }
+        CHECK(SYSTEM_PHASE_COUNT == expected.size());
+        CHECK(static_cast<usize>(system_phase::COUNT) == expected.size());
     }
 
     TEST_CASE("system_phase - to_string names every phase") {

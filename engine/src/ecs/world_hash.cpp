@@ -14,8 +14,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <span>
-#include <string>
+#include <string_view>
 
 using namespace conjure;
 using namespace conjure::ecs;
@@ -52,7 +53,14 @@ namespace {
         return hash;
     }
 
-    u64 hash_component(const component_info &info, const void *data) {
+    /// <summary>
+    /// Hash of one component. 'scratch' is the writer non-trivial types serialise into: built on the
+    /// first one (a trivial world never constructs it, so it stays allocation-free), then reset per
+    /// component with its capacity kept, so one writer serves the whole world_hash call. For complete
+    /// output its text() is exactly what finish() would return, so the hashed bytes do not depend on
+    /// the reuse.
+    /// </summary>
+    u64 hash_component(const component_info &info, const void *data, std::optional<core::json::writer> &scratch) {
         if (info.is_tag()) {
             return info.name.hash();
         }
@@ -66,10 +74,14 @@ namespace {
             }
         } else {
             // Non-trivial types hash their serialised text (written in field order, so deterministic).
-            core::json::writer out = {};
+            if (!scratch.has_value()) {
+                scratch.emplace();
+            }
+            core::json::writer &out = scratch.value();
+            out.reset();
             const core::result<void> written = write_component_json(info, data, out);
-            const std::string text = written.has_value() ? out.finish() : std::string("<unserialisable>");
-            bytesHash = core::hash::fnv1a64(std::string_view(text));
+            const std::string_view text = written.has_value() ? out.text() : std::string_view("<unserialisable>");
+            bytesHash = core::hash::fnv1a64(text);
         }
         return core::hash::combine(info.name.hash(), bytesHash);
     }
@@ -96,6 +108,7 @@ u64 conjure::ecs::world_hash(const world &source) {
     });
 
     u64 hash = core::hash::FNV1A64_OFFSET_BASIS;
+    std::optional<core::json::writer> scratch = std::nullopt;
     for (const archetype *owner : ordered) {
         const chunk_layout &layout = owner->layout();
         for (u32 chunkIndex = 0; chunkIndex < owner->chunk_count(); ++chunkIndex) {
@@ -113,7 +126,7 @@ u64 conjure::ecs::world_hash(const world &source) {
                           static_cast<const std::byte *>(owner->chunk_column(chunkIndex, id));
                         data = columnStart + static_cast<usize>(layout.columnSizes[column]) * row;
                     }
-                    entityHash = core::hash::combine(entityHash, hash_component(info, data));
+                    entityHash = core::hash::combine(entityHash, hash_component(info, data, scratch));
                 });
                 hash = core::hash::combine(hash, entityHash);
             }

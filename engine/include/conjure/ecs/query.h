@@ -38,10 +38,11 @@ namespace conjure::ecs {
     }
 
     /// <summary>
-    /// What a query matches: archetypes containing every bit of 'with' and none of 'without'.
-    /// 'optional' lists components a view reads when present; 'writes' is the subset of with | optional
-    /// the caller intends to write (drives stamping and Debug validation); with a non-empty 'changed'
-    /// mask a chunk is visited only when one of the listed columns changed after sinceVersion.
+    /// What a query matches: archetypes containing every bit of 'with' and none of 'without'; with a
+    /// non-empty 'changed' mask a chunk is visited only when one of the listed columns changed after
+    /// sinceVersion. 'optional' and 'writes' record what a view's pack reads when present and what it
+    /// writes; the query itself does not consult them. Stamping follows the constness of the span a
+    /// chunk_view hands out, and Debug write validation uses the bound system's system_desc.
     /// </summary>
     struct query_desc {
         component_mask with = {};
@@ -56,7 +57,7 @@ namespace conjure::ecs {
         private:
             world *mWorld = nullptr;
             const component_registry *mRegistry = nullptr;
-            const system_context *mContext = nullptr;       // the running system, for Debug write validation
+            const system_context *mContext = nullptr;       // the running system: stamp version, write checks
             query_desc mDesc = {};
             core::small_vector<archetype *, QUERY_INLINE_MATCHES> mMatches = {};
             u32 mSeenArchetypeCount = 0;
@@ -74,7 +75,8 @@ namespace conjure::ecs {
             /// <summary>
             /// Invokes callable(chunk_view &) for every non-empty chunk of every matching archetype that
             /// passes the changed filter, under an iteration lock. Non-const spans acquired from the
-            /// view stamp the world version current when the iteration started.
+            /// view stamp the run version of the system bound with bind_context(), otherwise the world
+            /// version current when the iteration started.
             /// </summary>
             template <typename Callable>
             void for_each_chunk(Callable &&callable) {
@@ -100,7 +102,8 @@ namespace conjure::ecs {
 
             /// <summary>
             /// The chunk at a flat index over the visited chunks (bindings). An out-of-range index yields
-            /// an invalid view. The caller holds world::lock_iteration() while using the result.
+            /// an invalid view. The caller holds world::lock_iteration() while using the result. The view
+            /// stamps like for_each_chunk: the bound system's run version, else the current world version.
             /// </summary>
             [[nodiscard]] chunk_view chunk(u32 index);
 
@@ -143,8 +146,10 @@ namespace conjure::ecs {
             /// <summary>
             /// Attaches the running system: every chunk_view this query builds carries it, so a
             /// non-const span of a component the system did not declare as written asserts (Debug
-            /// validation, 01_ecs.md 3.5). Set by system_context::view(); nullptr for plain world
-            /// queries. The context must outlive the query's iterations.
+            /// validation, 01_ecs.md 3.5), and non-const spans stamp the system's run version instead
+            /// of the current world version, so the system never sees its own writes through its next
+            /// since_version(). Set by system_context::view(); nullptr for plain world queries. The
+            /// context must outlive the query's iterations.
             /// </summary>
             void bind_context(const system_context *context) noexcept {
                 mContext = context;

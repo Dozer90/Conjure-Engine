@@ -2,6 +2,7 @@
 
 #include "ecs_test_fixture.h"
 
+#include "conjure/testing/assert_capture.h"
 #include "conjure/testing/memory_guard.h"
 
 #include "conjure/ecs/command_buffer.h"
@@ -296,7 +297,8 @@ TEST_SUITE("ecs/entity_archive") {
         CHECK_FALSE(world.is_alive(deferredRoot.value()));
         CONJURE_CHECK_OK(world.validate());
 
-        // Every returned id is handed out exactly once again: no index is alive twice.
+        // Every returned id is handed out exactly once again: no index is alive twice, and the deferred
+        // root the caller still holds never names one of the new entities (bumped generation).
         std::vector<entity> fresh(12);
         CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), fresh));
         std::unordered_set<u32> indices = {};
@@ -305,7 +307,51 @@ TEST_SUITE("ecs/entity_archive") {
             CHECK(world.is_alive(id));
         }
         CHECK(world.entity_count() == 12);
+        CHECK_FALSE(world.is_alive(deferredRoot.value()));
         CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("entity_archive - instantiate with a command buffer of another world is refused") {
+        // The ids would be reserved from, and placed in, the buffer's world instead of this one.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::result<entity> prototype = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(prototype);
+        core::result<entity_archive> captured =
+          entity_archive::capture(world, std::span<const entity>(&prototype.value(), 1));
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+
+        ecs::world other(fixture.registry);
+        command_buffer otherCommands(other);
+        const u32 reservedBefore = otherCommands.reserved_count();
+        std::array<entity, 2> roots = {};
+        std::vector<entity> everything = {entity{1, 1}};
+        {
+            testing::expect_assert guard = {};
+            CONJURE_CHECK_ERROR(world.instantiate(archive, &otherCommands), core::error_code::INVALID_ARGUMENT);
+            CONJURE_CHECK_ERROR(
+              world.instantiate_batch(archive, roots, &otherCommands, &everything),
+              core::error_code::INVALID_ARGUMENT
+            );
+            CHECK(guard.count() == 2 * ASSERTS_PER_VIOLATION);
+        }
+        CHECK(everything.empty());
+        CHECK(otherCommands.empty());
+        CHECK(otherCommands.reserved_count() == reservedBefore);
+
+        // Neither world gains an entity when the buffer is flushed into its own world.
+        CHECK(other.flush(otherCommands).applied == 0);
+        CHECK(other.entity_count() == 0);
+        CHECK(world.entity_count() == 1);
+        CONJURE_CHECK_OK(other.validate());
+
+        // The same buffer type on the right world still works.
+        command_buffer commands(world);
+        CONJURE_REQUIRE_OK(world.instantiate(archive, &commands));
+        CHECK(world.flush(commands).applied == 1);
+        CHECK(world.entity_count() == 2);
     }
 
     TEST_CASE("regression - review 3 instantiate_batch empties outEntities on every failure path") {

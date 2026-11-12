@@ -191,6 +191,11 @@ observer_id world::observe(component_id id, component_event event, component_obs
         CONJURE_ASSERT(false, "world::observe with an unregistered component id");
         return observer_id{};
     }
+    if (static_cast<u8>(event) > static_cast<u8>(component_event::REMOVED)) {
+        // The observer table indexes its interest arrays by event; an out-of-range value would write past them.
+        CONJURE_ASSERT(false, "world::observe with an invalid component_event");
+        return observer_id{};
+    }
     return mObservers->add_component_observer(id, event, std::move(fn));
 }
 
@@ -487,6 +492,11 @@ core::result<void> world::ensure_records(u32 highestIndex) {
 }
 
 core::result<archetype *> world::archetype_for(const component_mask &mask) {
+    // The empty archetype is resolved once by the constructor (null until then): an entity without
+    // components, the commonest creation, skips the hash lookup of the mask.
+    if (mask.none() && mEmptyArchetype != nullptr) {
+        return mEmptyArchetype;
+    }
     const auto found = mArchetypeByMask.find(mask);
     if (found != mArchetypeByMask.end()) {
         return found->second;

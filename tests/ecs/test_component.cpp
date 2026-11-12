@@ -65,7 +65,13 @@ TEST_SUITE("ecs/component") {
         static_assert(has_flag(trivial, component_flags::TRIVIAL) && has_flag(trivial, component_flags::TRANSIENT));
         static_assert(!has_flag(trivial, component_flags::TAG));
         static_assert(!has_flag(nonTrivial, component_flags::TRIVIAL));
-        CHECK(true);
+        CHECK(has_flag(tag, component_flags::TAG));
+        CHECK(has_flag(tag, component_flags::TRIVIAL));
+        CHECK(has_flag(trivial, component_flags::TRIVIAL));
+        CHECK(has_flag(trivial, component_flags::TRANSIENT));
+        CHECK_FALSE(has_flag(trivial, component_flags::TAG));
+        CHECK_FALSE(has_flag(nonTrivial, component_flags::TRIVIAL));
+        CHECK_FALSE(has_flag(nonTrivial, component_flags::TAG));
     }
 
     TEST_CASE("make_component_ops - trivial types use the memcpy path") {

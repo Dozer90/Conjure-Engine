@@ -256,7 +256,9 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Adds a component with an initial value and fires ADDED observers once the value is in
-            /// place. Returns the stored component (nullptr for a tag). ENTITY_NOT_ALIVE,
+            /// place. Returns the stored component: nullptr for a tag, and also when an ADDED observer's
+            /// deferred work (drained before add returns) removed the component again or destroyed the
+            /// entity; check the pointer when observers may do that. ENTITY_NOT_ALIVE,
             /// COMPONENT_ALREADY_PRESENT, UNKNOWN_COMPONENT, structural errors.
             /// </summary>
             template <typename ComponentType>
@@ -314,11 +316,13 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// The component for writing: stamps its chunk column. nullptr when dead or absent.
+            /// The component; a non-const T is for writing and stamps its chunk column, a const T never
+            /// stamps. nullptr when dead or absent.
             /// </summary>
             template <typename ComponentType>
             [[nodiscard]] ComponentType *get(entity target) noexcept {
-                return static_cast<ComponentType *>(get_raw(target, mRegistry->id_of<ComponentType>(), true));
+                const component_id id = mRegistry->id_of<ComponentType>();
+                return static_cast<ComponentType *>(get_raw(target, id, !std::is_const_v<ComponentType>));
             }
 
             /// <summary>
@@ -342,7 +346,8 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Adds a component from bytes (ops.copy or memcpy; empty = default value) and returns the
-            /// stored data (nullptr for a tag). Same errors as add().
+            /// stored data: nullptr for a tag, and also when an ADDED observer's deferred work removed
+            /// the component again or destroyed the entity, as with add(). Same errors as add().
             /// </summary>
             [[nodiscard]] core::result<void *> add_raw(
               entity target,
@@ -449,7 +454,8 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Instantiates one copy of an archive and returns its root (entry 0). With a command buffer
-            /// the copy is recorded and applied at flush; the root id is still returned now.
+            /// the copy is recorded and applied at flush; the root id is still returned now. The buffer
+            /// must target this world (INVALID_ARGUMENT otherwise, as instantiate_batch).
             /// </summary>
             [[nodiscard]] core::result<entity> instantiate(
               const std::shared_ptr<const entity_archive> &archive,
@@ -462,7 +468,9 @@ namespace conjure::ecs {
             /// is created when the archive does not validate against this world's registry. When given,
             /// outEntities receives every created id, copy-major in entry order (copies x entity_count()
             /// entries, entries without components included); with a command buffer those are the ids
-            /// reserved for the flush. After a failed call outEntities is empty.
+            /// reserved for the flush. After a failed call outEntities is empty. INVALID_ARGUMENT
+            /// (asserted in Debug and Development) when the command buffer targets another world;
+            /// nothing is reserved then.
             /// </summary>
             [[nodiscard]] core::result<void> instantiate_batch(
               const std::shared_ptr<const entity_archive> &archive,
@@ -476,7 +484,9 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Registers a component observer. Observers run on the owner thread inside the structural
-            /// operation and may only enqueue into the deferred buffer they receive.
+            /// operation and may only enqueue into the deferred buffer they receive. Off the owner thread,
+            /// an unregistered id, an event past REMOVED or an empty callable asserts and returns an
+            /// invalid observer_id.
             /// </summary>
             [[nodiscard]] observer_id observe(component_id id, component_event event, component_observer_fn fn);
 
@@ -578,7 +588,6 @@ namespace conjure::ecs {
             void drain_deferred();
             void construct_column_default(const component_info &info, void *destination, u32 count) noexcept;
             void destruct_column(const component_info &info, void *object, u32 count) noexcept;
-            void stamp_chunk(archetype &owner, u32 chunkIndex) noexcept;
 
             /*---------------------------------------------------------------*/
             // Flush and archives (world_structural.cpp, world_archive.cpp)

@@ -273,8 +273,10 @@ void world::discard_placed(entity target) {
 
 void world::release_reserved(entity target) {
     // A reserved id that never became alive: hand it back with a bumped generation so the handle the
-    // caller still holds can never alias the next occupant of the index.
-    if (target.index < mRecords.size()) {
+    // caller still holds can never alias the next occupant of the index. An index the record table has
+    // not reached yet (a discarded deferred instantiation) is added first: a table grown later would
+    // start it at generation 1 while the free list holds the bumped one.
+    if (ensure_records(target.index).has_value()) {
         entity_record &reserved = mRecords[target.index];
         const u32 next = target.generation + 1;
         reserved.generation = (next >= ARCHIVE_LOCAL_GENERATION || next == 0) ? ARCHIVE_LOCAL_GENERATION : next;
@@ -497,10 +499,6 @@ void world::destruct_column(const component_info &info, void *object, u32 count)
     }
 }
 
-void world::stamp_chunk(archetype &owner, u32 chunkIndex) noexcept {
-    owner.mChunks[chunkIndex]->stamp_all(version());
-}
-
 
 /*===========================================================================*/
 /*===========================================================================*/
@@ -537,6 +535,8 @@ flush_report world::flush_internal(command_buffer &commands) {
         const core::result<void> records = ensure_records(highest);
         if (!records.has_value()) {
             CONJURE_LOG_WARN(LOG_ECS, "flush could not grow the record table: {}", records.get_error().message());
+            // Nothing has run yet, instantiations included: every recorded command is skipped.
+            report.skipped = commands.command_count();
             commands.clear();
             return report;
         }

@@ -502,10 +502,7 @@ core::result<void> conjure::ecs::write_archive_json(const entity_archive &archiv
         out.begin_object();
         for (const archive_component &component : entry.components) {
             if (!registry.is_registered(component.id)) {
-                out.end_object();
-                out.end_object();
-                out.end_array();
-                out.end_object();
+                // Like a failed component write: the writer keeps the partial output (see the summary).
                 return make_error(ecs_error::ARCHIVE_CORRUPT, "archive names an unregistered component id");
             }
             const component_info &info = registry.info(component.id);
@@ -513,10 +510,17 @@ core::result<void> conjure::ecs::write_archive_json(const entity_archive &archiv
                 continue;
             }
             if (component.id.value == 0) {
-                // Unresolved data goes back under its original names, exactly as it was read.
+                // Unresolved data goes back under its original names, exactly as it was read, unless the
+                // name now resolves to a component the entity holds: that one is written under the same
+                // key, and a second key would make the file fail to load ("component listed twice").
                 const unresolved_components &unresolved =
                   *reinterpret_cast<const unresolved_components *>(component.bytes.data());
                 for (const unresolved_component &preserved : unresolved.entries) {
+                    const component_id resolved = registry.find(core::string_id(preserved.name));
+                    if (resolved.is_valid() && resolved.value != 0 && entry.mask.test(resolved) &&
+                      !registry.info(resolved).is_transient()) {
+                        continue;
+                    }
                     out.key(preserved.name);
                     out.write_raw_json(preserved.json);
                 }

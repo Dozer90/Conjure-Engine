@@ -8,7 +8,10 @@
 #include "conjure/core/json/json.h"
 #include "conjure/core/json/writer.h"
 #include "conjure/core/log.h"
+#include "conjure/core/reflect/type_id.h"
 #include "conjure/core/string_id.h"
+#include "conjure/ecs/component_registry.h"
+#include "conjure/ecs/component_type_desc.h"
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/entity_archive.h"
 #include "conjure/ecs/serialization.h"
@@ -17,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -190,6 +194,120 @@ TEST_SUITE("ecs/serialization") {
         CONJURE_REQUIRE_OK(component_to_json(world, roots[0], component_id{0}, out));
         const std::string expectedLive = R"({"com.plugin.spinner":{"speed":2.5,"axis":[0,1,0],"name":"wheel"}})";
         CHECK(canonical(out.finish()) == canonical(expectedLive));
+    }
+
+    TEST_CASE("serialization - a preserved component shadowed by a registered one round trips") {
+        // Data read while 'test.late' was unknown is preserved. Once the type is registered and the entity
+        // holds it, writing must emit the name once (the live value): a second key would make the file
+        // fail to load with "component listed twice".
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::json::document input = parse(R"({"entities":[{"components":{"test.late":{"value":1}}}]})");
+        core::result<entity_archive> loaded = read_archive_json(input.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(loaded);
+        const std::shared_ptr<const entity_archive> shared =
+          std::make_shared<const entity_archive>(std::move(loaded).value());
+        const core::result<entity> instantiated = world.instantiate(shared);
+        CONJURE_REQUIRE_OK(instantiated);
+        const entity id = instantiated.value();
+        REQUIRE(world.has_raw(id, component_id{0}));
+
+        const std::array<dynamic_field_desc, 1> fields = {
+            dynamic_field_desc{core::string_id("value"), core::reflect::type_id_of<i32>(), 0},
+        };
+        dynamic_component_desc late = {};
+        late.name = core::string_id("test.late");
+        late.fields = fields;
+        late.size = sizeof(i32);
+        late.alignment = alignof(i32);
+        const core::result<component_id> lateId = fixture.registry.register_dynamic(late);
+        CONJURE_REQUIRE_OK(lateId);
+        CONJURE_REQUIRE_OK(world.add_raw(id, lateId.value()));
+        const core::json::document seven = parse(R"({"value":7})");
+        CONJURE_REQUIRE_OK(component_from_json(world, id, lateId.value(), seven.root()));
+
+        const core::result<entity_archive> captured = entity_archive::capture(world, std::span<const entity>(&id, 1));
+        CONJURE_REQUIRE_OK(captured);
+        const std::string text = archive_text(captured.value());
+        const usize first = text.find("\"test.late\"");
+        REQUIRE(first != std::string::npos);
+        CHECK(text.find("\"test.late\"", first + 1) == std::string::npos);
+        const core::json::document written = parse(text);
+        CHECK(written.root()["entities"][0]["components"]["test.late"]["value"].as_i64() == 7);
+
+        core::result<entity_archive> reloaded = read_archive_json(written.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(reloaded);
+        const std::shared_ptr<const entity_archive> reshared =
+          std::make_shared<const entity_archive>(std::move(reloaded).value());
+        const core::result<entity> copy = world.instantiate(reshared);
+        CONJURE_REQUIRE_OK(copy);
+        const i32 *value = static_cast<const i32 *>(world.get_raw(copy.value(), lateId.value()));
+        REQUIRE(value != nullptr);
+        CHECK(*value == 7);
+        CHECK_FALSE(world.has_raw(copy.value(), component_id{0}));
+    }
+
+    TEST_CASE("serialization - a failed archive write leaves partial output until reset") {
+        // Neither failure path closes the scopes it opened (a caller nesting the archive in its own object
+        // could not be balanced anyway): the writer holds partial output until it is reset.
+        struct failing_component {
+            u32 value = 0;
+        };
+        static constexpr auto writeHook = [](const void *, core::json::writer &) -> core::result<void> {
+            return make_error(ecs_error::SERIALIZATION_FAILED, "this component refuses to serialise");
+        };
+        static constexpr auto readHook = [](void *, const core::json::value &) -> core::result<void> {
+            return core::result<void>::success();
+        };
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        component_type_desc desc = {};
+        desc.name = "test.failing";
+        desc.size = sizeof(failing_component);
+        desc.alignment = alignof(failing_component);
+        desc.flags = component_flags::TRIVIAL;
+        desc.serializer.writeJson = writeHook;
+        desc.serializer.readJson = readHook;
+        const core::result<component_id> failing = fixture.registry.register_described(desc);
+        CONJURE_REQUIRE_OK(failing);
+        component_mask mask = fixture.mask<position>();
+        mask.set(failing.value());
+        const core::result<entity> refusing = world.create_entity(mask);
+        CONJURE_REQUIRE_OK(refusing);
+        const core::result<entity_archive> unwritable =
+          entity_archive::capture(world, std::span<const entity>(&refusing.value(), 1));
+        CONJURE_REQUIRE_OK(unwritable);
+
+        core::json::writer out = {};
+        CONJURE_CHECK_ERROR(write_archive_json(unwritable.value(), out), ecs_error::SERIALIZATION_FAILED);
+        CHECK_FALSE(out.is_complete());
+        CHECK(out.depth() > 0);
+
+        // The unregistered-id path leaves partial output the same way.
+        entity_archive unregistered(fixture.registry);
+        archive_entry entry = {};
+        entry.mask.set(component_id{900});
+        archive_component component = {};
+        component.id = component_id{900};
+        entry.components.push_back(std::move(component));
+        unregistered.push_entry(std::move(entry));
+        out.reset();
+        CONJURE_CHECK_ERROR(write_archive_json(unregistered, out), ecs_error::ARCHIVE_CORRUPT);
+        CHECK_FALSE(out.is_complete());
+        CHECK(out.depth() == 4);
+
+        // After reset() the writer serves a valid archive.
+        const core::result<entity> plain = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(plain);
+        const core::result<entity_archive> writable =
+          entity_archive::capture(world, std::span<const entity>(&plain.value(), 1));
+        CONJURE_REQUIRE_OK(writable);
+        out.reset();
+        CONJURE_REQUIRE_OK(write_archive_json(writable.value(), out));
+        CHECK(out.is_complete());
+        const std::string text = out.finish();
+        const core::json::document parsed = parse(text);
+        CHECK(parsed.root()["entities"].size() == 1);
     }
 
     TEST_CASE("serialization - malformed json fails with field path") {

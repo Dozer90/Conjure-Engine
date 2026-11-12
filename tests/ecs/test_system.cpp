@@ -139,6 +139,42 @@ TEST_SUITE("ecs/system") {
         });
     }
 
+    TEST_CASE("system_context - a view is bound to its context in every configuration") {
+        // The access checks compile out in Distribution; the binding must not, because the view's chunk
+        // views stamp the run version through it, whatever the world version has become by then.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const frame_info frame = {};
+        system_desc desc =
+          make_system<position>(core::string_id("test.bound"), system_phase::UPDATE, [](system_context &) {});
+        desc.resolveAccess(fixture.registry, desc.reads, desc.writes);
+        system_scratch scratch = {};
+        command_buffer commands(world);
+        const u64 runVersion = world.bump_version();
+        system_context context(world, frame, 0, runVersion, commands, nullptr, desc, scratch, false, 512);
+        CHECK(context.view<const position>().underlying().context() == &context);
+        CHECK(world.view<const position>().underlying().context() == nullptr);
+
+        // A structural call after the run started moves the world version past the run version.
+        const core::result<entity> created = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(created);
+        REQUIRE(world.version() > runVersion);
+        u64 stamped = 0;
+        context.view<position>().for_each_chunk([&](chunk_view &chunk) {
+            CHECK(chunk.stamp_version() == runVersion);
+            static_cast<void>(chunk.get<position>());
+            stamped = chunk.column_version(fixture.id<position>());
+        });
+        CHECK(stamped == runVersion);
+
+        // A plain world view stamps the current world version.
+        world.view<position>().for_each_chunk([&](chunk_view &chunk) {
+            static_cast<void>(chunk.get<position>());
+            stamped = chunk.column_version(fixture.id<position>());
+        });
+        CHECK(stamped == world.version());
+    }
+
     TEST_CASE("system_scratch - grain buffers are retained across dispatches") {
         ecs_fixture fixture = {};
         world &world = fixture.world;

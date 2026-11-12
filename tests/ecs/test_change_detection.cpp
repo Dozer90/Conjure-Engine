@@ -75,6 +75,28 @@ TEST_SUITE("ecs/change_detection") {
         CHECK(column_version(world, created.value(), fixture.id<position>()) < since);
     }
 
+    TEST_CASE("change_detection - world get of a const type does not stamp") {
+        // A read through world.get<const T>() on a non-const world used to stamp like a write.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::result<entity> created = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(created);
+        CONJURE_REQUIRE_OK(world.set(created.value(), position{4.0f, 5.0f, 6.0f}));
+        world.bump_version();
+        const u64 since = world.version();
+        world.bump_version();
+
+        const position *read = world.get<const position>(created.value());
+        REQUIRE(read != nullptr);
+        CHECK(*read == position{4.0f, 5.0f, 6.0f});
+        CHECK(count_changed(fixture, since) == 0);
+        CHECK(column_version(world, created.value(), fixture.id<position>()) < since);
+
+        // The non-const form is for writing and stamps.
+        CHECK(world.get<position>(created.value()) != nullptr);
+        CHECK(count_changed(fixture, since) == 1);
+    }
+
     TEST_CASE("change_detection - changed filter sees chunk once") {
         ecs_fixture fixture = {};
         world &world = fixture.world;

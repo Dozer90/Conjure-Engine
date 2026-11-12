@@ -123,13 +123,18 @@ namespace conjure::ecs {
             /// null for a reflected type (describe_component leaves them null and the registry's
             /// reflection walker serialises the deep copy, so nothing points into the module), while a
             /// type without reflection must supply writeJson and readJson (UNSUPPORTED_FIELD otherwise).
+            /// A record whose size and TAG flag disagree (size 0 without TAG, or TAG with a non-zero
+            /// size) is INVALID_ARGUMENT.
             /// </summary>
             [[nodiscard]] core::result<component_id> register_described(const component_type_desc &desc);
 
             /// <summary>
             /// Registers a runtime-described type. Builds a reflection description from the fields,
             /// forces DYNAMIC | TRIVIAL and accepts an alignment in {1, 2, 4, 8, 16}. Same conflict
-            /// and limit rules as register_component.
+            /// and limit rules as register_component; for a dynamic type the fields are part of the
+            /// layout, so re-registering a known name whose fields differ (order, name, type or offset)
+            /// is NAME_CONFLICT even with the same size and alignment. redefine_dynamic replaces the
+            /// description of such a type.
             /// </summary>
             [[nodiscard]] core::result<component_id> register_dynamic(const dynamic_component_desc &desc);
 

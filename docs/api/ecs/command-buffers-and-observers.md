@@ -81,8 +81,8 @@ belongs to one thread at a time, but different threads may each own a buffer on 
 | `add<T>(id, value = {})` | adding `T` with a value (moved in); on an entity that already has `T` it acts like `set` |
 | `set<T>(id, value)` | replacing the value of a `T` the entity has at flush |
 | `remove<T>(id)` | removing `T`; cancels a pending `add<T>` in this buffer |
-| `add_raw(id, componentId, bytes = {})`, `set_raw(...)`, `remove_raw(id, componentId)` | the same by id |
-| `instantiate(archive)` | one copy of an `entity_archive`; the root id is returned now |
+| `add_raw(id, componentId, bytes = {})`, `set_raw(...)`, `remove_raw(id, componentId)` | the same by id; with empty bytes, `add_raw` records no value: a component the entity already holds at flush keeps its value (pass the default bytes to reset it) |
+| `instantiate(archive)` | one copy of an `entity_archive`; the root id is returned now (and stays dead for good if the copy never applies) |
 | `append(std::move(other))` | every command of `other`, in order, behind this buffer's |
 | `empty()`, `command_count()`, `reserved_count()`, `clear()`, `target()` | inspection and reset |
 
@@ -94,7 +94,10 @@ threads costs one lock per 64 entities.
 > [!WARNING]
 > A buffer destroyed with commands still in it logs a `WARN`, destroys the payloads and applies nothing. Flush
 > it, or `clear()` it on purpose. Typed `add`/`set`/`remove` of a type the registry does not know assert and
-> record nothing.
+> record nothing. The ids of an `instantiate` that never applies (cleared, destroyed, or skipped by a failed
+> flush) are released with a bumped generation, so the root you were handed never names a later entity; clear or
+> destroy such a buffer on the world's owner thread. Off it, the buffer asserts and keeps those ids reserved for
+> good instead of touching the world's record table.
 
 ## Applying: `world::flush`
 
@@ -108,11 +111,12 @@ What a flush does with the commands on one entity, whatever their order:
 |---|---|
 | Several adds and removes | **one** move to the final archetype, observers fire for the net difference only |
 | `add<T>` then `remove<T>` | cancelled; the payload is destroyed, nothing moves |
-| `remove<T>` then `add<T>` | the component ends up present with the new value |
+| `remove<T>` then `add<T>` | the component ends up present with the new value; no `REMOVED`/`ADDED` observer fires when the entity held `T` before the flush |
 | `destroy_entity` anywhere | the entity is destroyed; every other command on it is dropped |
 | `set<T>` on an entity without `T` at flush | skipped and counted |
 | any command on a dead or stale entity | skipped, counted in `skipped`, logged at `DEBUG` |
 | placement fails (`ARCHETYPE_TOO_LARGE`, `OUT_OF_MEMORY`) | that entity's commands are all counted as skipped; a reserved-only id is released |
+| the record table cannot grow (the id space is exhausted) | nothing is applied; every command is counted in `skipped` |
 
 Order between entities is the recording order; destroys run last; archive instantiations run before the commands
 that use their root ids.
@@ -157,7 +161,9 @@ observer_id cascade_links(world &game) {
 }
 ```
 
-Keep the returned `observer_id`s to `unobserve()` them later (a module's detach, a level's teardown).
+Keep the returned `observer_id`s to `unobserve()` them later (a module's detach, a level's teardown). A call off
+the owner thread, with an unregistered component id, an event other than `ADDED` or `REMOVED` (an integer cast)
+or an empty callable asserts and returns an invalid `observer_id`.
 
 | Member | Purpose |
 |---|---|
@@ -169,7 +175,13 @@ Keep the returned `observer_id`s to `unobserve()` them later (a module's detach,
 The `deferred` buffer is the only way an observer may change structure. The world drains it in a loop once the
 outermost structural call has finished, so an observer that destroys a child, whose observer destroys a
 grandchild, costs one flush per level and never recurses. An observer may read any component (`get` const),
-write values (`set`, non-const `get`) and register or remove observers.
+write values (`set`, non-const `get`) and register or remove observers. An event for a component nobody observes
+costs one bit test, so observers on rare components do not slow down every other change.
+
+> [!NOTE]
+> `add<T>` and `add_raw` drain the deferred buffer before they read the component back. When an `ADDED`
+> observer's deferred work removed the component again or destroyed the entity, the add still succeeded and
+> returns nullptr; check the pointer when your observers may do that.
 
 > [!CAUTION]
 > Calling `destroy_entity`, `add`, `remove` or `flush` on the world from inside an observer asserts and returns
@@ -202,11 +214,15 @@ The owner thread is captured when the world is constructed and `set_owner_thread
 ## Determinism tests: `world_hash`
 
 `world_hash(const world &)` returns a `u64` over every alive entity and every component value, visiting
-archetypes in an order that does not depend on when they were created. Equal worlds hash equal; one flipped float
-bit changes the result. It is the tool for "serial and parallel runs agree" tests: run the same systems with
+archetypes in an order that does not depend on when they were created. Equal worlds (same entities in the same
+row order, same bytes) hash equal; one flipped float bit changes the result. Row order inside an archetype follows
+the structural history (a removed row is filled by the archetype's last one), so compare worlds built by the same
+sequence of structural calls or loaded from the same file. It is the tool for "serial and parallel runs agree"
+tests: run the same systems with
 `scheduler_desc{parallelSystems = false, parallelChunks = false}` and with a job system, compare the hashes.
 Trivially copyable components contribute their reflected fields (padding never takes part), non-trivial ones
-their serialised JSON, tags their name only. An asset reference field contributes its uuid alone, never its bound
+their serialised JSON (a constant when their serializer fails), tags their name only. An asset reference field
+contributes its uuid alone, never its bound
 slot, so the hash is the same in every process and whether or not references are bound yet. Entity ids are part of
 the hash: ids created through command buffers from parallel chunks or from systems that run concurrently are not
 reproducible between runs, so create from `EXCLUSIVE` or `MAIN_THREAD` systems when hashes are compared across

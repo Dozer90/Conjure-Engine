@@ -102,6 +102,58 @@ TEST_SUITE("ecs/entity") {
         CHECK(entity_remap().remap(entity{5, 5}) == entity{5, 5});
     }
 
+    TEST_CASE("entity_remap - indexed remap matches the linear lookup") {
+        // index_targets() replaces the linear scan of remap() by a binary search; every answer must stay
+        // the same, a duplicate target included (its first local index wins, as in the scan).
+        std::vector<entity> targets = {};
+        targets.reserve(1000);
+        for (u32 index = 0; index < 1000; ++index) {
+            // 1009 is prime and 37 coprime to it: distinct indices, in an order sorting has to fix.
+            targets.push_back(entity{(index * 37u) % 1009u + 1u, index % 3u + 1u});
+        }
+        targets[400] = NULL_ENTITY;
+        targets[700] = targets[100];
+        entity_remap map(targets);
+
+        std::vector<entity> probes = targets;
+        probes.push_back(entity{5000, 1});
+        probes.push_back(NULL_ENTITY);
+        probes.push_back(entity::archive_local(3));
+        probes.push_back(entity::archive_local(5000));
+        std::vector<entity> linear = {};
+        for (const entity probe : probes) {
+            linear.push_back(map.remap(probe));
+        }
+        map.index_targets();
+        for (usize index = 0; index < probes.size(); ++index) {
+            CAPTURE(index);
+            CHECK(map.remap(probes[index]) == linear[index]);
+        }
+        CHECK(map.remap(targets[100]) == entity::archive_local(100));
+        CHECK(map.remap(targets[999]) == entity::archive_local(999));
+        CHECK(map.remap(entity{5000, 1}) == entity{5000, 1});
+        CHECK(map.remap(NULL_ENTITY) == NULL_ENTITY);
+        CHECK(map.remap(entity::archive_local(3)) == targets[3]);
+
+        // set() drops the index, so a new target is found at once, and again after re-indexing.
+        const entity replacement{6000, 2};
+        const entity replaced = targets[5];
+        map.set(5, replacement);
+        CHECK(map.remap(replacement) == entity::archive_local(5));
+        CHECK(map.remap(replaced) == replaced);
+        map.index_targets();
+        CHECK(map.remap(replacement) == entity::archive_local(5));
+        CHECK(map.remap(replaced) == replaced);
+
+        // A table of null targets only indexes nothing and still answers through the scan.
+        entity_remap empty = {};
+        empty.resize(3);
+        empty.index_targets();
+        CHECK(empty.remap(entity{1, 1}) == entity{1, 1});
+        empty.clear();
+        CHECK(empty.size() == 0);
+    }
+
     TEST_CASE("entity - reflects as the ENTITY field kind") {
         static_assert(core::reflect::kind_of<entity>() == core::reflect::field_kind::ENTITY);
         CHECK(core::reflect::type_id_of<entity>() == core::reflect::type_id::from_name("conjure.ecs.entity"));

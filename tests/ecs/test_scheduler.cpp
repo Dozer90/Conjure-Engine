@@ -160,6 +160,38 @@ TEST_SUITE("ecs/scheduler") {
         CHECK(logs.count(core::log_level::WARN) == 0);
     }
 
+    TEST_CASE("scheduler - unknown names are logged once when the system is added") {
+        // add_system logs the new system's unknown after/before names; adding other systems, finalise()
+        // and the lazy rebuilds of run_phase resolve the same edges without logging them again.
+        ecs_fixture fixture = {};
+        scheduler scheduler(fixture.world, nullptr);
+        std::vector<std::string> log = {};
+        std::mutex mutex = {};
+        testing::log_capture logs = {};
+        system_desc dangling = logging_system("dangling", log, mutex);
+        dangling.after.push_back(sid("module.compiled_out"));
+        dangling.before.push_back(sid("also.missing"));
+        const core::result<system_id> danglingId = scheduler.add_system(std::move(dangling));
+        CONJURE_REQUIRE_OK(danglingId);
+        CONJURE_REQUIRE_OK(scheduler.add_system(logging_system("second", log, mutex)));
+        CONJURE_REQUIRE_OK(scheduler.add_system(logging_system("third", log, mutex)));
+        CONJURE_REQUIRE_OK(scheduler.finalise());
+        const frame_info frame = {};
+        scheduler.run_phase(system_phase::UPDATE, frame);
+        CONJURE_REQUIRE_OK(scheduler.set_enabled(danglingId.value(), false));
+        scheduler.run_phase(system_phase::UPDATE, frame);
+        CHECK(log.size() == 5);
+#if !CONJURE_DISTRIBUTION
+        u32 unknownLogs = 0;
+        for (const std::string &message : logs.messages(core::log_level::DEBUG)) {
+            if (message.find("unknown system") != std::string::npos) {
+                ++unknownLogs;
+            }
+        }
+        CHECK(unknownLogs == 2);
+#endif
+    }
+
     TEST_CASE("scheduler - two readers share a stage") {
         ecs_fixture fixture = {};
         scheduler scheduler(fixture.world, nullptr);
@@ -476,6 +508,39 @@ TEST_SUITE("ecs/scheduler") {
         CHECK(changedCounts[2] == 0);
         // The other system's writes to velocity never count as position changes.
         CHECK(world.get<velocity>(ids[0])->x == 3.0f);
+    }
+
+    TEST_CASE("scheduler - since_version excludes own writes after a version bump inside the run") {
+        // A structural call inside an EXCLUSIVE system bumps the world version in the middle of the run;
+        // the system's views still stamp its run version, so its own writes never pass its next
+        // since_version().
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::vector<entity> ids(100);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position, velocity>(), ids));
+        scheduler scheduler(world, nullptr);
+        std::vector<u32> changedCounts = {};
+        system_desc writer = make_system<position>(sid("bumping.writer"), system_phase::UPDATE,
+          [&](system_context &context) {
+              // The new entity lands in another archetype, so the visited chunks are the position ones.
+              CONJURE_CHECK_OK(context.world().create_entity(fixture.mask<velocity>()));
+              u32 changed = 0;
+              context.view<position>().changed<position>(context.since_version()).for_each(
+                [&](entity, position &value) {
+                    value.x += 1.0f;
+                    ++changed;
+                });
+              changedCounts.push_back(changed);
+          });
+        writer.flags = system_flags::EXCLUSIVE;
+        CONJURE_REQUIRE_OK(scheduler.add_system(std::move(writer)));
+
+        const frame_info frame = {};
+        for (u32 run = 0; run < 3; ++run) {
+            scheduler.run_phase(system_phase::UPDATE, frame);
+        }
+        CHECK(changedCounts == std::vector<u32>{100, 0, 0});
+        CHECK(world.entity_count() == 103);
     }
 
     TEST_CASE("scheduler - undeclared write asserts") {

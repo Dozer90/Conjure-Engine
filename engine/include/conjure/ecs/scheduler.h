@@ -104,7 +104,8 @@ namespace conjure::ecs {
             /// <summary>
             /// Adds a system; its phase's stages are rebuilt lazily. SYSTEM_CYCLE (and the system is not
             /// added) when its after/before edges close a cycle; unknown names in those lists are
-            /// ignored with one DEBUG log each. Owner thread.
+            /// ignored with one DEBUG log each, written here and never again by later additions,
+            /// finalise() or the lazy rebuilds. Owner thread.
             /// </summary>
             [[nodiscard]] core::result<system_id> add_system(system_desc desc);
 
@@ -173,7 +174,7 @@ namespace conjure::ecs {
             void resolve_edges(
               system_phase target,
               std::vector<std::vector<u32>> &predecessors,
-              bool logUnknown
+              const system_record *logFor
             );
             [[nodiscard]] core::result<std::vector<u32>> topological_order(
               system_phase target,

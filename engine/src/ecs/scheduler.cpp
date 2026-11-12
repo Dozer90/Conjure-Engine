@@ -79,9 +79,10 @@ core::result<system_id> scheduler::add_system(system_desc desc) {
     record.lastMicroseconds = 0;
 
     // A cycle through the new system is refused before it becomes visible. Unknown names in after/before
-    // are not an error (the module may be compiled out), so edge resolution cannot fail.
+    // are not an error (the module may be compiled out), so edge resolution cannot fail; they are logged
+    // once, here, for the new system only (finalise and the lazy rebuilds resolve without logging).
     std::vector<std::vector<u32>> predecessors = {};
-    resolve_edges(record.desc.phase, predecessors, true);
+    resolve_edges(record.desc.phase, predecessors, &record);
     const core::result<std::vector<u32>> order = topological_order(record.desc.phase, predecessors);
     if (!order.has_value()) {
         record.alive = false;

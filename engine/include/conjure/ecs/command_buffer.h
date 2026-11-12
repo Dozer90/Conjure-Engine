@@ -97,7 +97,8 @@ namespace conjure::ecs {
             explicit command_buffer(world &target);
 
             /// <summary>
-            /// Discards pending commands with a WARN (payloads are destroyed) and returns unused ids.
+            /// Discards pending commands with a WARN (payloads are destroyed) and returns unused ids. The
+            /// ids of a pending instantiation are released with a bumped generation, as in clear().
             /// </summary>
             ~command_buffer();
 
@@ -176,7 +177,9 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Untyped add: the payload bytes are copy-constructed into the record (ops.copy or memcpy). An
-            /// empty payload means the default value.
+            /// empty payload records no value: an entity that gains the component at flush gets its default
+            /// value; one that holds it at flush (a remove_raw earlier in the same buffer included) keeps its
+            /// current value, and no observer fires for it. Pass the default bytes to reset a held component.
             /// </summary>
             void add_raw(entity target, component_id id, std::span<const std::byte> payload = {});
 
@@ -225,7 +228,12 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Drops every command, destroying payloads that were not applied. Unused reserved ids are kept,
+            /// Drops every command, destroying payloads that were not applied. The ids reserved by an
+            /// instantiation that was never applied (cleared, or skipped by a failed flush) are released
+            /// with a bumped generation, so the root instantiate() handed out stays dead and never aliases
+            /// a later entity. That writes the world's record table, so clear a buffer holding an
+            /// instantiation on the world's owner thread: off it, clear() asserts and leaves those ids
+            /// reserved for good (the root still never aliases). Unused reserved ids are kept,
             /// and so is room for the records: a recording that outgrew the arena's 16 KiB block makes the
             /// buffer keep one block spanning the blocks that recording used (its bytes rounded up to whole
             /// 16 KiB blocks, like a vector's capacity: at most one block more than it needed), so repeating
@@ -262,6 +270,7 @@ namespace conjure::ecs {
 
             [[nodiscard]] void *push_record(opcode op, entity target, component_id id, u32 payloadSize, u32 alignment);
             record *push_plain_record(opcode op, entity target, component_id id);
+            // The archive has been validated by the caller (instantiate, world::instantiate_batch).
             [[nodiscard]] core::result<std::span<const entity>> push_instantiate(
               std::shared_ptr<const entity_archive> archive,
               u32 copies

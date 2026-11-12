@@ -58,8 +58,8 @@ CONJURE_TRY(world.add<position>(player, position{0.0f, 1.0f, 0.0f}));
 world.view<const velocity, position>().for_each([](entity, const velocity &v, position &p) { p.x += v.x; });
 
 scheduler scheduler(world, &jobs);
-CONJURE_TRY(scheduler.add_system(make_system<const velocity, position>("game.integrate", system_phase::UPDATE,
-    [](system_context &context) { ... context.commands().destroy_entity(id); ... })));
+CONJURE_TRY(scheduler.add_system(make_system<const velocity, position>(core::string_id("game.integrate"),
+    system_phase::UPDATE, [](system_context &context) { ... context.commands().destroy_entity(id); ... })));
 CONJURE_TRY(scheduler.finalise());
 scheduler.run_phase(system_phase::UPDATE, frame);
 ```
@@ -104,14 +104,21 @@ reused, so a stale id can never alias another type and every world on the same r
   before the components go. They may only enqueue into the `command_buffer &deferred` they receive;
   the world drains that buffer in a loop once the outermost structural call has finished (1024 passes
   assert: a cycle in caller data), so destroy chains are loops over flushes. An observer may register
-  or remove observers: one registered during a delivery is first invoked by the next one.
+  or remove observers: one registered during a delivery is first invoked by the next one. The observer
+  table keeps a per-event interest mask, so an event for a component nobody observes costs one bit test
+  instead of a scan over every observer slot. `add<T>` / `add_raw` return nullptr when an `ADDED`
+  observer's deferred work removed the component again or destroyed the entity.
 - **Change detection** is chunk-granular. The world version starts at 1 and is bumped at the start of
   every structural call, every flush and every system run. Non-const spans from `chunk_view`,
   `world::get<T>()`, `get_raw(..., true)`, `component_ref::write()`, `set` and `component_from_json`
   stamp the column; a row moving into or out of a chunk stamps all columns of the chunks involved.
   `changed<T>(since)` visits a chunk when its column version is greater than `since`; a system's
-  `since_version()` is the version observed at the start of its previous run, so it never sees its
-  own previous writes.
+  `since_version()` is the version observed at the start of its previous run, and the chunk views of
+  its `context.view<...>()` and `parallel_for_chunks` stamp that run's version (`run_version()`, not the
+  current world version, which a structural call or a sibling system may bump mid-run), so it never
+  sees its own previous view writes. Its writes through `context.world()` (`get<T>()`, `set`,
+  `component_ref::write()`) stamp the current version and may pass its next `since_version()`.
+  `world::get<const T>()` on a non-const world does not stamp.
 - **Command buffers** record into an arena (payloads moved in, destroyed on apply or `clear()`) and
   own a block of 64 reserved ids, so `create_entity()` returns a real id usable in later commands and
   from job threads. `flush` plans one archetype move per touched entity (add then remove cancels,
@@ -133,7 +140,13 @@ reused, so a stale id can never alias another type and every world on the same r
   up to whole 16 KiB blocks, vector-style: at most one block more than it needed; one allocation on the
   next recording, none afterwards). Typed `add<T>`/`set<T>`/`remove<T>` of an unregistered type assert
   and record nothing. Unused reserved ids survive `clear()` and go back to the allocator when the buffer
-  is destroyed; a buffer destroyed with pending commands logs `WARN`.
+  is destroyed; a buffer destroyed with pending commands logs `WARN`. The ids of an instantiation that
+  never applied (cleared, destroyed, or skipped by a failed flush) were already handed out as roots, so
+  `clear()` releases them through `world::release_reserved` with a bumped generation (growing the
+  record table first when the world never saw the index) instead of returning them unused; off the owner
+  thread `clear()` asserts and leaves them reserved rather than racing on the record table. An untyped
+  `add_raw` with no payload records no value: a component the entity already holds at flush keeps its
+  value and fires no observer. A record table that cannot grow skips (and counts) every command.
 - **Retention.** The scratch above is sized by the peak it has seen and kept for the owner's lifetime:
   the world's flush plan (about 330 bytes per entity the largest flush touched) and placement list, every
   archetype's parked chunk metadata (`spare_chunk_count()`, bounded by its peak chunk count) and every
@@ -145,7 +158,8 @@ reused, so a stale id can never alias another type and every world on the same r
   that plan until it is cleared or destroyed.
 - **Scheduler.** Systems are packed per phase into stages: Kahn's topological sort over the
   `after`/`before` edges (registration order as the tiebreak; a cycle is `SYSTEM_CYCLE` at `add_system`
-  and the system is not added; unknown names are ignored with a `DEBUG` log), then greedy append-only
+  and the system is not added; unknown names are ignored with one `DEBUG` log each, written by
+  `add_system` for the system being added and never by later additions or rebuilds), then greedy append-only
   packing where a system joins the current stage when no predecessor is in it, it is not `EXCLUSIVE`,
   and its `writes` touch no member's reads or writes and its `reads` touch no member's writes. A stage
   runs its systems as jobs over a locked world (main-thread systems last on the caller, everything
@@ -165,29 +179,38 @@ reused, so a stale id can never alias another type and every world on the same r
   the declared `reads | writes` and its writes inside the declared `writes`; a `chunk_view` handed out by
   `parallel_for_chunks` or by a system view's `for_each` / `for_each_chunk` (the view's query carries the
   context, `query::bind_context`) asserts on a non-const span (or `column_data(id, true)`) of a component
-  the system did not declare as written. Both name the system. A view that requires an unregistered
-  type (pack or builder call) asserts naming the type and matches nothing; an unregistered `maybe<T>`
-  is simply absent everywhere.
+  the system did not declare as written. Both name the system. Both checks compile out in Distribution
+  (`CONJURE_ASSERTS_ENABLED`); the context binding stays, because the views stamp its run version. A
+  view that requires an unregistered type (pack or builder call) asserts naming the type and matches
+  nothing; an unregistered `maybe<T>` is simply absent everywhere. A tag in a view pack (plain or
+  `maybe<Tag>`) and `chunk_view::get<Tag>()` / `get_optional<Tag>()` do not compile: a tag has no
+  column, so it is required with `with<Tag>()`.
 - **Archives.** `entity_archive::capture` copies every non-`TRANSIENT` component with `ops.copy` (or
   memcpy) and rewrites entity fields: inside the set they become `entity::archive_local(index)`, outside
   `NULL_ENTITY` unless `keepExternalReferences`. A reflection-less type with a `serializer.remapEntities`
   hook (the script set, R29) rewrites its own references through `entity_remap::remap` with a table whose
-  targets are the captured entities; `instantiate_batch` hands the same hook the table of the copy, so one
-  symmetric call serves both directions. `instantiate_batch` validates first (`ARCHIVE_CORRUPT`
-  before anything is created), resolves every archetype, places all copies of an entry together, copies
-  payloads, remaps entity fields through an `entity_remap` per copy and fires `ADDED` last. A placement
-  that fails part-way discards the rows placed so far and returns every id unused, so the world and the
-  id space are as before. With a command buffer the ids are reserved immediately and the roots returned
-  now. The optional `outEntities` vector receives every created id, copy-major in entry order (entries
-  without components included), in both paths; the scene's link pass relies on it.
+  targets are the captured entities; capture calls `index_targets()` on that table, so each lookup of a
+  hook is a binary search instead of a scan over the captured set. `instantiate_batch` hands the same
+  hook the table of the copy, so one symmetric call serves both directions. `instantiate_batch` refuses a
+  command buffer of another world (`INVALID_ARGUMENT`, asserted), validates once (`ARCHIVE_CORRUPT`
+  before anything is created; `push_instantiate` trusts its callers), resolves every archetype, places
+  all copies of an entry together, copies payloads, remaps entity fields through an `entity_remap` per
+  copy and fires `ADDED` last. A placement that fails part-way discards the rows placed so far and
+  returns every id unused, so the world and the id space are as before. With a command buffer the ids
+  are reserved immediately and the roots returned now. The optional `outEntities` vector receives every
+  created id, copy-major in entry order (entries without components included), in both paths; the
+  scene's link pass relies on it.
 - **Serialisation.** Archives serialise as `{"entities":[{"components":{"<name>":{...}}}]}`. Entity
   fields are the integer local index, `null`, or `{"external":"<index>:<generation>"}`; the live
   `component_to_json` uses the external form. Scalars, strings, `string_id`, `uuid`, math types, enums
   and arrays of those go through `core::reflect`; nested structs, entity fields and asset references
   (`ASSET_REF`: the uuid in the first 16 bytes of the handle, rest zeroed on read) are handled here.
   Unknown component names on load are kept verbatim in the built-in `unresolved_components` (id 0,
-  `EDITOR_HIDDEN`) and re-emitted under their original names; malformed component JSON fails the whole
-  load with `SERIALIZATION_FAILED` and an `<entity index>/<component>/<field path>: detail` message.
+  `EDITOR_HIDDEN`) and re-emitted under their original names, except one whose name now resolves to a
+  component the entity holds (the live component is written instead, so no key appears twice);
+  malformed component JSON fails the whole load with `SERIALIZATION_FAILED` and an
+  `<entity index>/<component>/<field path>: detail` message. A failed `write_archive_json` leaves the
+  writer with partial, unbalanced output.
   Types without custom hooks serialise through their reflection description (dynamic types included);
   `make_default_serializer<T>` wraps the same walker for C++ types.
 - **Reflection constraint.** `core::reflect` demands of an `entity` field the alignment the owning
@@ -198,7 +221,10 @@ reused, so a stale id can never alias another type and every world on the same r
   (`BAD_ALIGNMENT`): archive payloads live in `std::vector<std::byte>` storage.
 - **Dynamic types** (`register_dynamic`) are always `DYNAMIC | TRIVIAL`, accept alignment 1..16 and
   fields of the primitive, math and `entity` kinds (`UNSUPPORTED_FIELD` otherwise, including misaligned
-  offsets); the registry owns their `type_info`. `redefine_dynamic` keeps the id, refuses while any
+  offsets); the registry owns their `type_info`. Their fields are part of the layout: re-registering a
+  name with other fields (order, name, type, offset) is `NAME_CONFLICT` even at the same size, which
+  sends scripting's hot reload to `redefine_dynamic`. A described record whose size and `TAG` flag
+  disagree is `INVALID_ARGUMENT`. `redefine_dynamic` keeps the id, refuses while any
   live world holds an instance (`COMPONENT_IN_USE`) or when the name changes (`NAME_CONFLICT`), and
   re-lays out the now empty archetypes that contain the type (an archetype whose rows no longer fit
   gets capacity 0 and answers every placement with `ARCHETYPE_TOO_LARGE`). The hot-reload flow is
@@ -217,8 +243,11 @@ reused, so a stale id can never alias another type and every world on the same r
   world hashes the same in every process, bound or not; with the raw bytes for
   trivial types without a description, padding and pointers included, so such a type must not hold a
   bound reference or any other process-dependent value in a world whose hash is recorded; with the
-  serialised text for non-trivial ones; the name alone for tags). It allocates nothing below 64
-  archetypes for trivial worlds. Entity ids and TRANSIENT components are hashed too: ids created
+  serialised text for non-trivial ones, written into one JSON writer reused across the whole hash, and
+  a constant for one whose serializer fails; the name alone for tags). It allocates nothing below 64
+  archetypes for trivial worlds. Row order inside an archetype takes part (a removed row is filled by
+  the archetype's last one), so equal content reached through different structural histories can hash
+  differently. Entity ids and TRANSIENT components are hashed too: ids created
   through command buffers from parallel grains or concurrently running systems come in thread-timing
   order, and bookkeeping such as `transform_state::lastUpdateRun` counts passes, so recorded hashes
   compare only for runs that create from EXCLUSIVE or MAIN_THREAD systems and at equal frame counts.

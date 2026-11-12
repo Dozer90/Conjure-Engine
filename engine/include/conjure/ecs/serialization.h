@@ -166,7 +166,11 @@ namespace conjure::ecs {
 
     /// <summary>
     /// Emits {"entities":[{"components":{"<name>":{...}}}]} for the archive. Unresolved components are
-    /// re-emitted verbatim under their original names.
+    /// re-emitted verbatim under their original names, except a preserved entry whose name now resolves
+    /// to a (non-transient) component the entity holds: it is dropped in favour of that component, so
+    /// the name is written once. ARCHIVE_CORRUPT for an unregistered component id, or the component
+    /// serializer's error. On failure the writer holds partial, unbalanced output; reset() or discard it
+    /// before reuse.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> write_archive_json(
       const entity_archive &archive,

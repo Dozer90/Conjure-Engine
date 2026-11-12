@@ -50,6 +50,11 @@ core::result<void> world::instantiate_batch(
     if (&archive->registry() != mRegistry) {
         return make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
     }
+    if (commands != nullptr && &commands->target() != this) {
+        // The ids would be reserved from, and placed in, the buffer's world instead of this one.
+        CONJURE_ASSERT(false, "instantiate_batch with a command buffer of another world");
+        return core::error(core::error_code::INVALID_ARGUMENT, "the command buffer targets another world");
+    }
     CONJURE_TRY(archive->validate());
     const u32 count = archive->entity_count();
     const u32 copies = static_cast<u32>(outRoots.size());

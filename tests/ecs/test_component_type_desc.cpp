@@ -195,6 +195,37 @@ TEST_SUITE("ecs/component_type_desc") {
         CONJURE_CHECK_ERROR(registry.register_described(bare), ecs_error::UNSUPPORTED_FIELD);
     }
 
+    TEST_CASE("component_type_desc - size and TAG mismatch is INVALID_ARGUMENT") {
+        // A hand-filled record whose size and TAG flag disagree is a bad argument, not an alignment
+        // problem; every other check of the records passes (TRANSIENT, so no serializer is needed).
+        component_registry registry = {};
+        component_type_desc sizedTag = {};
+        sizedTag.name = "test.sized_tag";
+        sizedTag.size = 4;
+        sizedTag.alignment = 4;
+        sizedTag.flags = component_flags::TAG | component_flags::TRIVIAL | component_flags::TRANSIENT;
+        const core::result<component_id> tagged = registry.register_described(sizedTag);
+        CONJURE_CHECK_ERROR(tagged, core::error_code::INVALID_ARGUMENT);
+        CHECK(tagged.get_error().message().find("TAG") != std::string::npos);
+
+        component_type_desc emptyValue = {};
+        emptyValue.name = "test.empty_value";
+        emptyValue.size = 0;
+        emptyValue.alignment = 1;
+        emptyValue.flags = component_flags::TRIVIAL | component_flags::TRANSIENT;
+        CONJURE_CHECK_ERROR(registry.register_described(emptyValue), core::error_code::INVALID_ARGUMENT);
+        CHECK(registry.count() == 1);
+
+        // The consistent forms register.
+        sizedTag.size = 0;
+        sizedTag.alignment = 1;
+        CONJURE_CHECK_OK(registry.register_described(sizedTag));
+        emptyValue.size = 4;
+        emptyValue.alignment = 4;
+        CONJURE_CHECK_OK(registry.register_described(emptyValue));
+        CHECK(registry.count() == 3);
+    }
+
     TEST_CASE("system_extension_desc - carries name lists by pointer") {
         const std::array<core::string_id, 2> reads = {
             core::string_id("test.position"),

@@ -26,12 +26,14 @@
 
 // Systems (docs/design/01_ecs.md 3.5, 4.7).
 //
-//   scheduler.add_system(make_system<const velocity, position>("game.integrate", system_phase::UPDATE,
+//   CONJURE_TRY(scheduler.add_system(make_system<const velocity, position>(
+//       core::string_id("game.integrate"),
+//       system_phase::UPDATE,
 //       [](system_context &context) {
 //           context.view<const velocity, position>().for_each([&](entity, const velocity &v, position &p) {
 //               p.x += v.x * context.delta_time();
 //           });
-//       }));
+//       })));
 //
 // A system declares the components it reads and writes; the scheduler packs systems with disjoint
 // access into one stage and runs a stage's systems as jobs over a locked world. Inside a system,
@@ -166,7 +168,10 @@ namespace conjure::ecs {
 
             /// <summary>
             /// The world version at the start of this system's previous run: a changed&lt;T&gt; filter
-            /// against it sees every write since, but never the system's own previous writes.
+            /// against it sees every write since, but never the system's own previous writes made through
+            /// view() or parallel_for_chunks (those stamp run_version()). Writes through world().get&lt;T&gt;(),
+            /// set() or component_ref stamp the current world version, which a sibling's run or a structural
+            /// call may have bumped past run_version(), so the next run can see those.
             /// </summary>
             [[nodiscard]] u64 since_version() const noexcept {
                 return mSinceVersion;
@@ -206,12 +211,15 @@ namespace conjure::ecs {
             /// required or optional component must be in reads | writes and every written one in writes.
             /// Violations assert naming the system. The chunk views the result hands out carry this
             /// context, so a non-const span of an undeclared component asserts too (3.5); the view must
-            /// not outlive the system run.
+            /// not outlive the system run. The checks compile out in Distribution; the view is bound to
+            /// this context in every configuration, so its writes stamp run_version().
             /// </summary>
             template <typename... ComponentTypes>
             [[nodiscard]] ecs::view<ComponentTypes...> view() {
                 ecs::view<ComponentTypes...> result(*mWorld);
+#if CONJURE_ASSERTS_ENABLED
                 validate_access(result.access());
+#endif
                 result.underlying().bind_context(this);
                 return result;
             }

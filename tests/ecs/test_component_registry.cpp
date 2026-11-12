@@ -351,6 +351,62 @@ TEST_SUITE("ecs/component_registry") {
         );
     }
 
+    TEST_CASE("component_registry - same dynamic name and size with different fields is NAME_CONFLICT") {
+        // A C# struct whose fields were reordered, renamed or retyped keeps its size and alignment; the
+        // registry must not hand back the old id with the old description (scripting then redefines it).
+        component_registry registry = {};
+        const std::array<dynamic_field_desc, 2> original = {
+            dynamic_field_desc{core::string_id("speed"), core::reflect::type_id_of<f32>(), 0},
+            dynamic_field_desc{core::string_id("hits"), core::reflect::type_id_of<i32>(), 4},
+        };
+        const core::result<component_id> id = registry.register_dynamic(make_dynamic("dyn.swap", original, 8, 4));
+        CONJURE_REQUIRE_OK(id);
+
+        const std::array<dynamic_field_desc, 2> swapped = {
+            dynamic_field_desc{core::string_id("hits"), core::reflect::type_id_of<i32>(), 0},
+            dynamic_field_desc{core::string_id("speed"), core::reflect::type_id_of<f32>(), 4},
+        };
+        CONJURE_CHECK_ERROR(
+          registry.register_dynamic(make_dynamic("dyn.swap", swapped, 8, 4)),
+          ecs_error::NAME_CONFLICT
+        );
+        const std::array<dynamic_field_desc, 2> renamed = {
+            dynamic_field_desc{core::string_id("velocity"), core::reflect::type_id_of<f32>(), 0},
+            dynamic_field_desc{core::string_id("hits"), core::reflect::type_id_of<i32>(), 4},
+        };
+        CONJURE_CHECK_ERROR(
+          registry.register_dynamic(make_dynamic("dyn.swap", renamed, 8, 4)),
+          ecs_error::NAME_CONFLICT
+        );
+        const std::array<dynamic_field_desc, 2> retyped = {
+            dynamic_field_desc{core::string_id("speed"), core::reflect::type_id_of<u32>(), 0},
+            dynamic_field_desc{core::string_id("hits"), core::reflect::type_id_of<i32>(), 4},
+        };
+        CONJURE_CHECK_ERROR(
+          registry.register_dynamic(make_dynamic("dyn.swap", retyped, 8, 4)),
+          ecs_error::NAME_CONFLICT
+        );
+        const std::array<dynamic_field_desc, 1> fewer = {
+            dynamic_field_desc{core::string_id("speed"), core::reflect::type_id_of<f32>(), 0},
+        };
+        CONJURE_CHECK_ERROR(registry.register_dynamic(make_dynamic("dyn.swap", fewer, 8, 4)), ecs_error::NAME_CONFLICT);
+        REQUIRE(registry.info(id.value()).reflection != nullptr);
+        CHECK(registry.info(id.value()).reflection->fields[0].name == "speed");
+
+        // Identical fields are the same type and the same id.
+        const core::result<component_id> again = registry.register_dynamic(make_dynamic("dyn.swap", original, 8, 4));
+        CONJURE_REQUIRE_OK(again);
+        CHECK(again.value() == id.value());
+        CHECK(registry.count() == 2);
+
+        CONJURE_REQUIRE_OK(registry.redefine_dynamic(id.value(), make_dynamic("dyn.swap", swapped, 8, 4)));
+        REQUIRE(registry.info(id.value()).reflection != nullptr);
+        CHECK(registry.info(id.value()).reflection->fields[0].name == "hits");
+        const core::result<component_id> redefined = registry.register_dynamic(make_dynamic("dyn.swap", swapped, 8, 4));
+        CONJURE_REQUIRE_OK(redefined);
+        CHECK(redefined.value() == id.value());
+    }
+
     TEST_CASE("component_registry - unsupported field fails registration") {
         component_registry registry = {};
         CONJURE_CHECK_ERROR(

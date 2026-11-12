@@ -85,7 +85,10 @@ copy's entities are placed directly in their final archetypes, internal referenc
 
 With a command buffer (`world.instantiate(archive, &commands)` or `commands.instantiate(archive)`), the ids are
 reserved immediately and the root is returned now; the copy is made at flush. This is how a system spawns a
-prefab.
+prefab. The buffer must belong to the same world: one created on another world is refused with
+`INVALID_ARGUMENT` (asserted in Debug and Development) and nothing is reserved. If the copy never applies (the
+buffer is cleared or destroyed, or the flush fails to place it), its ids are released with a bumped generation,
+so the root you were handed stays dead instead of naming a later entity.
 
 > [!WARNING]
 > An archive is validated against the world's registry before anything is created: `ARCHIVE_CORRUPT` means the
@@ -126,7 +129,7 @@ type.
 
 | Function | Purpose |
 |---|---|
-| `write_archive_json(archive, writer)` | emits the document above |
+| `write_archive_json(archive, writer)` | emits the document above; on failure (`ARCHIVE_CORRUPT`, or a component serialiser's error) the writer holds partial, unbalanced output: `reset()` or discard it before reuse |
 | `read_archive_json(value, registry)` | parses it into an `entity_archive`; `SERIALIZATION_FAILED` with an `<entity index>/<component>/<field>` path on malformed input, `ARCHIVE_CORRUPT` on a bad reference |
 | `write_component_json(info, component, writer)` / `read_component_json(info, component, value)` | one component instance through its serialiser (tools working on raw bytes) |
 | `component_to_json(world, entity, componentId, writer)` | one live component; outside references as `{"external": ...}` |
@@ -136,7 +139,9 @@ type.
 > A component name no registered type resolves is kept **verbatim** in the built-in `unresolved_components`
 > component (id 0, hidden in the editor) and written back under its original name, so a scene authored with a
 > module that is not loaded today survives a load and save round trip. One `INFO` log per unknown name tells you
-> it happened. `TRANSIENT` components are skipped on save and ignored on load.
+> it happened. The one exception: once that name is registered and the entity holds the live component, the live
+> value is written and the preserved copy is dropped, so the name never appears twice in one entity. `TRANSIENT`
+> components are skipped on save and ignored on load.
 
 ## Archetypes and chunks
 
@@ -177,7 +182,7 @@ set; fewer than `SMALL_CAPACITY_WARNING` (8) rows per chunk logs a `WARN` becaus
 | `result<void> component_to_json(const world &, entity, component_id, json::writer &)` / `component_from_json(world &, entity, component_id, const json::value &)` | one live component |
 | `component_serializer make_default_serializer<T>()`; `struct component_serializer { writeJson, readJson, remapEntities }` | custom serialisation |
 | `struct unresolved_components { vector<unresolved_component> entries; }`; `UNRESOLVED_COMPONENTS_NAME` | preserved unknown data |
-| `class entity_remap`: `resolve(entity)`, `target(u32)`, `set(u32, entity)`, `size()` | local index to real entity |
+| `class entity_remap`: `resolve(entity)`, `remap(entity)`, `target(u32)`, `set(u32, entity)`, `size()`, `index_targets()` | local index to real entity, and back (`remap`); `index_targets()` makes the real-to-local lookups of `remap` a binary search |
 | `span<archetype *const> world::archetypes()`; `archetype::mask()` / `layout()` / `entity_count()` / `chunk_count()` / `chunk_entities(u32)` / `chunk_column(u32, id)` | storage inspection |
 | `struct chunk_layout`; `static result<chunk_layout> compute(const component_mask &, const component_registry &)`; `CHUNK_SIZE`, `CHUNK_ALIGNMENT`, `COLUMN_ALIGNMENT`, `SMALL_CAPACITY_WARNING` | layout |
 

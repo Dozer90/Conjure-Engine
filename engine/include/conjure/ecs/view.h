@@ -21,11 +21,12 @@
 //   world.view<position, maybe<const health>>().for_each([](entity, position &p, const health *h) { ... });
 //
 // A const type in the pack is read, a non-const type is written (its column is stamped), maybe<T> is
-// optional and arrives as a pointer that is null when the archetype lacks it. Builder methods narrow
-// the match: with<Tag>() requires a tag, without<T>() excludes a component, changed<T>(since) visits
-// only chunks whose T column changed after 'since'. A required type (pack or builder) that is not
-// registered asserts naming the type and makes the view match nothing; an unregistered maybe<T> is
-// simply absent everywhere.
+// optional and arrives as a pointer that is null when the archetype lacks it. A tag has no column, so
+// a tag in the pack (plain or maybe<Tag>) does not compile. Builder methods narrow the match:
+// with<Tag>() requires a tag, without<T>() excludes a component, changed<T>(since) visits only chunks
+// whose T column changed after 'since'. A required type (pack or builder) that is not registered
+// asserts naming the type and makes the view match nothing; an unregistered maybe<T> is simply absent
+// everywhere.
 
 namespace conjure::ecs {
 
@@ -66,6 +67,13 @@ namespace conjure::ecs {
             static constexpr bool IS_OPTIONAL = true;
         };
 
+        /// <summary>
+        /// False for a tag (an empty type, plain or in maybe&lt;&gt;): it has no column a view could
+        /// hand to the callback, so it is required with view::with&lt;Tag&gt;() instead.
+        /// </summary>
+        template <typename PackType>
+        inline constexpr bool HAS_COLUMN = !std::is_empty_v<typename view_arg_traits<PackType>::component_type>;
+
         template <typename PackType>
         [[nodiscard]] typename view_arg_traits<PackType>::span_type fetch_column(chunk_view &view) noexcept {
             using traits = view_arg_traits<PackType>;
@@ -93,6 +101,11 @@ namespace conjure::ecs {
     template <typename... ComponentTypes>
     class view {
         private:
+            static_assert(
+              (detail::HAS_COLUMN<ComponentTypes> && ...),
+              "a tag has no column: require it with view::with<Tag>() instead of the pack"
+            );
+
             static constexpr usize PACK_SIZE = sizeof...(ComponentTypes);
 
             query mQuery;                    // no default: built from the world in the constructor

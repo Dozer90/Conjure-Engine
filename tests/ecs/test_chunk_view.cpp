@@ -8,6 +8,8 @@
 #include "conjure/ecs/query.h"
 #include "conjure/ecs/world.h"
 
+#include <concepts>
+#include <span>
 #include <vector>
 
 using namespace conjure;
@@ -20,6 +22,17 @@ namespace {
         desc.with = fixture.mask<position>();
         return fixture.world.create_query(desc);
     }
+
+    // Templated so the requirement is checked per type instead of making the program ill-formed.
+    template <typename ComponentType>
+    concept chunk_get_compiles = requires(chunk_view &chunk) {
+        { chunk.get<ComponentType>() } -> std::same_as<std::span<ComponentType>>;
+    };
+
+    template <typename ComponentType>
+    concept chunk_get_optional_compiles = requires(chunk_view &chunk) {
+        { chunk.get_optional<ComponentType>() } -> std::same_as<std::span<ComponentType>>;
+    };
 }
 
 TEST_SUITE("ecs/chunk_view") {
@@ -83,12 +96,32 @@ TEST_SUITE("ecs/chunk_view") {
             testing::expect_assert guard = {};
             const std::span<velocity> missing = chunk.get<velocity>();
             CHECK(missing.empty());
-            const std::span<player_tag> tag = chunk.get<player_tag>();
-            CHECK(tag.empty());
-            CHECK(guard.count() == 2 * ASSERTS_PER_VIOLATION);
+            CHECK(guard.count() == ASSERTS_PER_VIOLATION);
             CHECK(chunk.get_optional<velocity>().empty());
             CHECK(chunk.column_data(fixture.id<velocity>(), false) == nullptr);
         });
+    }
+
+    TEST_CASE("chunk_view - get of a tag does not compile") {
+        // A tag has no column: get<Tag>() used to compile, assert and hand out an empty span that a
+        // caller indexed. It is rejected at compile time now; has() is the way to test a tag.
+        static_assert(!chunk_get_compiles<player_tag>);
+        static_assert(!chunk_get_compiles<const player_tag>);
+        static_assert(!chunk_get_optional_compiles<player_tag>);
+        static_assert(chunk_get_compiles<const position>);
+        static_assert(chunk_get_compiles<position>);
+        static_assert(chunk_get_optional_compiles<velocity>);
+
+        ecs_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.world.create_entity(fixture.mask<position, player_tag>()));
+        query positions = position_query(fixture);
+        u32 tagged = 0;
+        positions.for_each_chunk([&](chunk_view &chunk) {
+            if (chunk.has(fixture.id<player_tag>())) {
+                ++tagged;
+            }
+        });
+        CHECK(tagged == 1);
     }
 
     TEST_CASE("chunk_view - column_data stamps only for write") {

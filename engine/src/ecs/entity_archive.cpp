@@ -92,8 +92,10 @@ core::result<entity_archive> entity_archive::capture(
 
     // Internal references become local indices; external ones null unless kept. Reflection-less types
     // that store references of their own (R29 script sets) rewrite them through their hook with the
-    // same table world::instantiate applies on the way back.
-    const entity_remap table(std::vector<entity>(entities.begin(), entities.end()));
+    // same table world::instantiate applies on the way back. Indexed, so each hook lookup is a binary
+    // search instead of a scan over every captured entity.
+    entity_remap table(std::vector<entity>(entities.begin(), entities.end()));
+    table.index_targets();
     for (archive_entry &entry : archive.mEntries) {
         for (archive_component &component : entry.components) {
             const component_info &info = registry.info(component.id);

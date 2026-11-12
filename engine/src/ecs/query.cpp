@@ -3,12 +3,27 @@
 #include "ecs/chunk.h"
 
 #include "conjure/ecs/component_registry.h"
+#include "conjure/ecs/system.h"
 #include "conjure/ecs/world.h"
 
 #include <utility>
 
 using namespace conjure;
 using namespace conjure::ecs;
+
+namespace {
+    /// <summary>
+    /// The version non-const spans stamp: the run version of the bound system, so a structural call or
+    /// a sibling system bumping the world version inside the run never makes the system's own writes
+    /// pass its next since_version(); the current world version for a plain world query.
+    /// </summary>
+    u64 stamp_version(const world &target, const system_context *context) noexcept {
+        if (context != nullptr) {
+            return context->run_version();
+        }
+        return target.version();
+    }
+}
 
 /*===========================================================================*/
 /*===========================================================================*/
@@ -64,7 +79,7 @@ u32 query::entity_count() {
 chunk_view query::chunk(u32 index) {
     refresh();
     u32 seen = 0;
-    const u64 stamp = mWorld->version();
+    const u64 stamp = stamp_version(*mWorld, mContext);
     for (archetype *owner : mMatches) {
         for (u32 chunkIndex = 0; chunkIndex < owner->chunk_count(); ++chunkIndex) {
             if (!chunk_passes(*owner, chunkIndex)) {
@@ -121,7 +136,7 @@ bool query::chunk_passes(const archetype &owner, u32 chunkIndex) const noexcept 
 void query::visit_chunks(void (*visit)(void *context, chunk_view &view), void *context) {
     refresh();
     const iteration_scope scope = mWorld->lock_iteration();
-    const u64 stamp = mWorld->version();
+    const u64 stamp = stamp_version(*mWorld, mContext);
     for (archetype *owner : mMatches) {
         if (owner->entity_count() == 0) {
             continue;

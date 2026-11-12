@@ -6,6 +6,7 @@
 
 #include "conjure/core/types.h"
 
+#include <array>
 #include <deque>
 #include <vector>
 
@@ -13,7 +14,9 @@
 // observer_id never removes a newer observer; unobserve() during a fire only marks the slot and the
 // handler is destroyed once the fire has returned. Observers may register observers: the slots live in
 // a deque, whose push_back keeps the running handler's slot in place, and a fire never reuses a freed
-// slot, so a handler registered during a fire is first invoked by the next one.
+// slot, so a handler registered during a fire is first invoked by the next one. A per-event interest
+// mask (with an observer count per (event, component)) lets a component nobody observes skip the slot
+// scan entirely.
 
 namespace conjure::ecs {
 
@@ -22,6 +25,11 @@ namespace conjure::ecs {
 
     class observer_table {
         private:
+            /// <summary>
+            /// Number of component_event values (REMOVED is the last one).
+            /// </summary>
+            static constexpr usize EVENT_COUNT = static_cast<usize>(component_event::REMOVED) + 1;
+
             struct slot {
                 u32 generation = 0;
                 bool alive = false;
@@ -39,6 +47,8 @@ namespace conjure::ecs {
             u32 mFiringDepth = 0;
             u32 mComponentObserverCount = 0;
             u32 mEntityObserverCount = 0;
+            std::array<component_mask, EVENT_COUNT> mObserved = {};                 // per event: ids with an observer
+            std::array<u32, EVENT_COUNT * MAX_COMPONENTS> mObserverCounts = {};     // event * MAX_COMPONENTS + id
 
         public:
             observer_table();
@@ -68,10 +78,6 @@ namespace conjure::ecs {
                 return mEntityObserverCount > 0;
             }
 
-            [[nodiscard]] u32 count() const noexcept {
-                return mComponentObserverCount + mEntityObserverCount;
-            }
-
             void fire_component(
               world &owner,
               entity target,
@@ -81,14 +87,10 @@ namespace conjure::ecs {
             );
             void fire_destroyed(world &owner, entity target, command_buffer &deferred);
 
-            /// <summary>
-            /// Removes every observer.
-            /// </summary>
-            void clear();
-
         private:
             [[nodiscard]] u32 acquire_slot();
             void release_slot(u32 index);
             void finish_fire();
+            [[nodiscard]] static usize interest_index(component_id id, component_event event) noexcept;
     };
 }

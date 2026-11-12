@@ -5,6 +5,7 @@
 #include "conjure/core/reflect/type_id.h"
 #include "conjure/core/types.h"
 
+#include <algorithm>
 #include <format>
 #include <functional>
 #include <span>
@@ -98,6 +99,7 @@ namespace conjure::ecs {
     class entity_remap {
         private:
             std::vector<entity> mTargets = {};
+            std::vector<std::pair<u64, u32>> mIndex = {};      // (target.to_u64(), local index), sorted by key
 
         public:
             entity_remap() = default;
@@ -124,20 +126,48 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Resizes the table; new entries are NULL_ENTITY.
+            /// Resizes the table; new entries are NULL_ENTITY. Drops the index_targets() index.
             /// </summary>
             void resize(u32 count) {
                 mTargets.resize(count);
+                mIndex.clear();
             }
 
             /// <summary>
-            /// Sets the real entity of a local index, growing the table when needed.
+            /// Sets the real entity of a local index, growing the table when needed. Drops the
+            /// index_targets() index.
             /// </summary>
             void set(u32 localIndex, entity target) {
                 if (localIndex >= mTargets.size()) {
                     mTargets.resize(static_cast<usize>(localIndex) + 1);
                 }
                 mTargets[localIndex] = target;
+                mIndex.clear();
+            }
+
+            /// <summary>
+            /// Optional: builds a sorted index of the targets so remap() turns a real entity into its
+            /// local index by binary search instead of a linear scan. Worth calling once the table is
+            /// complete and many real -> local lookups follow (entity_archive::capture does). A target
+            /// listed twice maps to its first local index, as the linear scan does. set(), resize() and
+            /// clear() drop the index, after which remap() scans again until the next call.
+            /// </summary>
+            void index_targets() {
+                mIndex.clear();
+                mIndex.reserve(mTargets.size());
+                for (u32 index = 0; index < mTargets.size(); ++index) {
+                    if (!mTargets[index].is_null()) {
+                        mIndex.emplace_back(mTargets[index].to_u64(), index);
+                    }
+                }
+                const auto byKey = [](const std::pair<u64, u32> &left, const std::pair<u64, u32> &right) {
+                    return left.first < right.first;
+                };
+                const auto sameKey = [](const std::pair<u64, u32> &left, const std::pair<u64, u32> &right) {
+                    return left.first == right.first;
+                };
+                std::stable_sort(mIndex.begin(), mIndex.end(), byKey);
+                mIndex.erase(std::unique(mIndex.begin(), mIndex.end(), sameKey), mIndex.end());
             }
 
             /// <summary>
@@ -167,13 +197,29 @@ namespace conjure::ecs {
             /// archive-local index of that target, and every other value is returned unchanged. The same
             /// table therefore serves entity_archive::capture (real -> local, targets = the captured
             /// entities) and world::instantiate (local -> real): a live world never holds archive-local
-            /// ids and an archive never holds a real id that is also one of its own targets.
+            /// ids and an archive never holds a real id that is also one of its own targets. A real
+            /// value is found by binary search after index_targets(), by a linear scan otherwise.
             /// </summary>
             [[nodiscard]] entity remap(entity value) const noexcept {
                 if (value.is_archive_local()) {
                     return target(value.index);
                 }
                 if (value.is_null()) {
+                    return value;
+                }
+                if (!mIndex.empty()) {
+                    const u64 key = value.to_u64();
+                    const auto found = std::lower_bound(
+                      mIndex.begin(),
+                      mIndex.end(),
+                      key,
+                      [](const std::pair<u64, u32> &entry, u64 wanted) {
+                          return entry.first < wanted;
+                      }
+                    );
+                    if (found != mIndex.end() && found->first == key) {
+                        return entity::archive_local(found->second);
+                    }
                     return value;
                 }
                 for (u32 index = 0; index < mTargets.size(); ++index) {
@@ -192,10 +238,11 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Empties the table.
+            /// Empties the table and its index.
             /// </summary>
             void clear() noexcept {
                 mTargets.clear();
+                mIndex.clear();
             }
     };
 }
