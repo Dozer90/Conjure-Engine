@@ -1,4 +1,5 @@
 #include "conjure/testing/doctest.h"
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "assets_test_support.h"
 
@@ -7,9 +8,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <format>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace conjure;
@@ -680,5 +683,210 @@ TEST_SUITE("assets/asset_database") {
         fixture.jobs.wait(readers);
         CHECK(mismatches.load() == 0);
         CHECK(lookups.load() > 0);
+    }
+
+    TEST_CASE("regression - a source re-created with a fresh meta at a known path takes the meta's uuid") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.write_source("a.ta", "A");
+        fixture.scan_and_import();
+        const asset_id original = fixture.id_of("a.ta");
+        CONJURE_REQUIRE_OK(fixture.fileSystem->remove("assets/a.ta"));
+        CONJURE_REQUIRE_OK(fixture.fileSystem->remove("assets/a.ta.meta"));
+        fixture.write_source("a.ta", "a new asset");
+
+        core::result<scan_report> report = fixture.database->scan();
+        CONJURE_REQUIRE_OK(report);
+        const core::result<asset_meta> meta = read_asset_meta(*fixture.fileSystem, "assets/a.ta.meta");
+        CONJURE_REQUIRE_OK(meta);
+        CHECK(meta.value().id != original);
+        CHECK(fixture.id_of("a.ta") == meta.value().id);
+        CHECK(report.value().metasCreated == 1);
+        CHECK(report.value().recordsAdded == 1);
+        CHECK(fixture.database->find(original)->status == asset_record_status::MISSING_SOURCE);
+        const std::optional<asset_record> fresh = fixture.database->find(meta.value().id);
+        REQUIRE(fresh.has_value());
+        CHECK(fresh->type == asset_type_id::INVALID);   // inherits nothing from the previous asset
+        CHECK(fixture.database->stale_ids() == std::vector<asset_id>{meta.value().id});
+        CHECK_FALSE(logs.contains(core::log_level::ERR, "uuid changed"));
+
+        // The broken identity is named once, by both uuids.
+        CHECK(logs.contains(core::log_level::WARN, "its .meta was missing, so it is a new asset"));
+        CHECK(logs.contains(core::log_level::WARN, std::format("{}", original)));
+        CHECK(logs.contains(core::log_level::WARN, std::format("{}", meta.value().id)));
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(logs.count(core::log_level::WARN) == 1);
+    }
+
+    TEST_CASE("regression - a source and meta moved onto a known path keep their own uuid") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.write_source("a.ta", "A");
+        fixture.write_source("b.ta", "B");
+        fixture.scan_and_import();
+        const asset_id a = fixture.id_of("a.ta");
+        const asset_id b = fixture.id_of("b.ta");
+        CONJURE_REQUIRE_OK(fixture.fileSystem->remove("assets/a.ta"));
+        CONJURE_REQUIRE_OK(fixture.fileSystem->remove("assets/a.ta.meta"));
+        CONJURE_REQUIRE_OK(fixture.fileSystem->rename("assets/b.ta", "assets/a.ta"));
+        CONJURE_REQUIRE_OK(fixture.fileSystem->rename("assets/b.ta.meta", "assets/a.ta.meta"));
+
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.id_of("a.ta") == b);
+        CHECK(fixture.database->find(b)->status == asset_record_status::OK);
+        CHECK(fixture.database->find(b)->type == asset_type_traits<test_asset>::id());   // the moved asset's state
+        CHECK(fixture.database->find(a)->status == asset_record_status::MISSING_SOURCE);
+        CHECK_FALSE(fixture.database->find_by_path("assets://b.ta").has_value());
+        CHECK_FALSE(logs.contains(core::log_level::ERR, "uuid changed"));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "its .meta was missing"));
+    }
+
+    TEST_CASE("regression - a missing meta at a known path is not reported when its uuid moved elsewhere") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.write_source("a.ta", "A");
+        fixture.scan_and_import();
+        const asset_id a = fixture.id_of("a.ta");
+        CONJURE_REQUIRE_OK(fixture.fileSystem->rename("assets/a.ta", "assets/b.ta"));
+        CONJURE_REQUIRE_OK(fixture.fileSystem->rename("assets/a.ta.meta", "assets/b.ta.meta"));
+        fixture.write_source("a.ta", "a new asset");
+
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.id_of("b.ta") == a);
+        CHECK(fixture.id_of("a.ta") != a);
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "its .meta was missing"));
+    }
+
+    TEST_CASE("regression - a meta hand-edited to the uuid of another live asset is still refused") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        fixture.write_source("a.ta", "A");
+        fixture.write_source("b.ta", "B");
+        fixture.scan_and_import();
+        const asset_id a = fixture.id_of("a.ta");
+        const asset_id b = fixture.id_of("b.ta");
+        core::result<asset_meta> meta = read_asset_meta(*fixture.fileSystem, "assets/a.ta.meta");
+        CONJURE_REQUIRE_OK(meta);
+        asset_meta edited = meta.value();
+        edited.id = b;
+        CONJURE_REQUIRE_OK(write_asset_meta(*fixture.fileSystem, "assets/a.ta.meta", edited));
+
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.id_of("a.ta") == a);
+        CHECK(fixture.id_of("b.ta") == b);
+        CHECK(fixture.database->find(a)->status == asset_record_status::OK);
+        CHECK(fixture.database->find(b)->status == asset_record_status::OK);
+        CHECK(logs.count(core::log_level::ERR) == 1);
+        CHECK(logs.contains(core::log_level::ERR, "uuid changed"));
+    }
+
+    TEST_CASE("asset_database - a snapshot whose record count exceeds its bytes is ignored without reserving for it") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.write_source("a.ta", "A");
+
+        // "CJDB", format version 1, no mounts, then a record count of 2^24 and nothing else.
+        const std::vector<std::byte> forged = {
+          std::byte{'C'}, std::byte{'J'}, std::byte{'D'}, std::byte{'B'},
+          std::byte{1}, std::byte{0}, std::byte{0}, std::byte{0},
+          std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0},
+          std::byte{0}, std::byte{0}, std::byte{0}, std::byte{1}
+        };
+        CONJURE_REQUIRE_OK(fixture.fileSystem->write_file(".conjure/cache/db.bin", forged));
+        asset_database forgedCount(*fixture.fileSystem, fixture.importers, fixture.manager->types());
+        CONJURE_REQUIRE_OK(forgedCount.add_mount("assets", "assets"));
+        CONJURE_REQUIRE_OK(forgedCount.add_mount("engine", "engine"));
+
+        conjure::testing::allocation_scope scope = {};
+        CONJURE_REQUIRE_OK(forgedCount.open(".conjure/cache", "test"));
+        const u64 allocatedBytes = scope.allocated_bytes();
+        CHECK(allocatedBytes < 16ull * 1024 * 1024);
+        CHECK(forgedCount.record_count() == 0);
+        CHECK(logs.contains(core::log_level::INFO, "snapshot not used"));
+        CONJURE_REQUIRE_OK(forgedCount.scan());
+        CHECK(forgedCount.record_count() == 1);
+    }
+
+    TEST_CASE("regression - add_file, create_asset and move_asset refuse paths that leave the mount") {
+        pipeline_fixture fixture = {};
+        fixture.write_source("a.ta", "A");
+        fixture.scan_and_import();
+        const asset_id a = fixture.id_of("a.ta");
+        CONJURE_REQUIRE_OK(fixture.fileSystem->write_file("present.ta", bytes_of("outside the mount")));
+        CONJURE_CHECK_ERROR(fixture.database->add_file("assets://../present.ta"), core::error_code::INVALID_ARGUMENT);
+        CHECK_FALSE(fixture.fileSystem->exists("present.ta.meta"));
+
+        const std::vector<std::string> escaping = {
+          "assets://../outside.ta",
+          "assets://a/../../outside.ta",
+          "assets:///abs.ta",
+          "assets://C:/abs.ta",
+          "assets://..",
+        };
+        for (const std::string &path : escaping) {
+            CAPTURE(path);
+            CONJURE_CHECK_ERROR(fixture.database->add_file(path), core::error_code::INVALID_ARGUMENT);
+            CONJURE_CHECK_ERROR(
+              fixture.database->create_asset(path, test_importer::ID, bytes_of("x")),
+              core::error_code::INVALID_ARGUMENT
+            );
+            CONJURE_CHECK_ERROR(fixture.database->move_asset(a, path), core::error_code::INVALID_ARGUMENT);
+        }
+        CHECK_FALSE(fixture.fileSystem->exists("outside.ta"));
+        CHECK_FALSE(fixture.fileSystem->exists("outside.ta.meta"));
+        CHECK(fixture.fileSystem->exists("assets/a.ta"));
+        CHECK(fixture.fileSystem->exists("assets/a.ta.meta"));
+        CHECK(fixture.database->asset_path_of(a) == "assets://a.ta");
+
+        // A path that only passes through a parent directory stays inside and is fine.
+        const std::string_view inside = "assets://sub/../inside.ta";
+        CONJURE_REQUIRE_OK(fixture.database->create_asset(inside, test_importer::ID, bytes_of("x")));
+        CHECK(fixture.fileSystem->exists("assets/inside.ta"));
+    }
+
+    TEST_CASE("regression - a meta that cannot be written leaves its source META_INVALID and the scan succeeds") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.write_source("a.ta", "A");
+        fixture.fileSystem->set_read_only(true);
+        core::result<scan_report> report = fixture.database->scan();
+        CONJURE_REQUIRE_OK(report);
+        CHECK(report.value().invalidMetas == 1);
+        CHECK(fixture.database->find(fixture.id_of("a.ta"))->status == asset_record_status::META_INVALID);
+        CHECK_FALSE(fixture.fileSystem->exists("assets/a.ta.meta"));
+        CHECK(logs.contains(core::log_level::WARN, "cannot write its meta"));
+
+        fixture.fileSystem->set_read_only(false);
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        const core::result<asset_meta> meta = read_asset_meta(*fixture.fileSystem, "assets/a.ta.meta");
+        CONJURE_REQUIRE_OK(meta);
+        CHECK(fixture.id_of("a.ta") == meta.value().id);
+        CHECK(fixture.database->find(meta.value().id)->status == asset_record_status::OK);
+
+        // A meta naming no importer cannot be given one while the files are read-only: NO_IMPORTER,
+        // which is what an import would conclude from the meta on disk, until a writable scan.
+        asset_meta bare = {};
+        bare.id = test_id(5);
+        fixture.write_source("b.ta", "B");
+        CONJURE_REQUIRE_OK(write_asset_meta(*fixture.fileSystem, "assets/b.ta.meta", bare));
+        fixture.fileSystem->set_read_only(true);
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->find(test_id(5))->status == asset_record_status::NO_IMPORTER);
+        CHECK(logs.contains(core::log_level::WARN, "cannot record importer"));
+        fixture.fileSystem->set_read_only(false);
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->find(test_id(5))->status == asset_record_status::OK);
+        CHECK(fixture.database->read_meta(test_id(5)).value().importerId == test_importer::ID);
+    }
+
+    TEST_CASE("regression - create_asset removes its source when the meta cannot be written") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CONJURE_REQUIRE_OK(fixture.fileSystem->create_directories("assets/new.ta.meta"));
+        CHECK_FALSE(fixture.database->create_asset("assets://new.ta", test_importer::ID, bytes_of("new")).has_value());
+        CHECK_FALSE(fixture.fileSystem->exists("assets/new.ta"));
+        CHECK_FALSE(fixture.database->find_by_path("assets://new.ta").has_value());
     }
 }

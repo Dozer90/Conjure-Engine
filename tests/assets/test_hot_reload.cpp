@@ -6,10 +6,13 @@
 #include "conjure/assets/hot_reload.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -18,6 +21,56 @@ using namespace conjure::assets;
 using namespace conjure::assets::testing;
 
 namespace {
+    constexpr std::array<std::string_view, 1> ALTERNATE_EXTENSIONS = {".alt"};
+
+    /// <summary>
+    /// test_importer under another id, with its version and default settings: a switch between the
+    /// two leaves every blob header input unchanged. The meta names it by id, so its extension
+    /// does not matter.
+    /// </summary>
+    class alternate_text_importer final : public asset_importer {
+        public:
+            static constexpr std::string_view ID = "conjure.test.text.alternate";
+
+        private:
+            test_importer mInner = {};
+
+        public:
+            alternate_text_importer();
+            ~alternate_text_importer() override;
+
+        public:
+            [[nodiscard]] std::string_view id() const noexcept override;
+            [[nodiscard]] u32 version() const noexcept override;
+            [[nodiscard]] std::span<const std::string_view> extensions() const noexcept override;
+            [[nodiscard]] core::json::document default_settings() const override;
+            [[nodiscard]] core::result<import_output> import(import_context &context) const override;
+    };
+
+    alternate_text_importer::alternate_text_importer() {}
+
+    alternate_text_importer::~alternate_text_importer() {}
+
+    std::string_view alternate_text_importer::id() const noexcept {
+        return ID;
+    }
+
+    u32 alternate_text_importer::version() const noexcept {
+        return mInner.version();
+    }
+
+    std::span<const std::string_view> alternate_text_importer::extensions() const noexcept {
+        return ALTERNATE_EXTENSIONS;
+    }
+
+    core::json::document alternate_text_importer::default_settings() const {
+        return mInner.default_settings();
+    }
+
+    core::result<import_output> alternate_text_importer::import(import_context &context) const {
+        return mInner.import(context);
+    }
+
     /// <summary>
     /// texture -> material (flagged RELOAD_WITH_DEPENDENCIES) -> consumer (unflagged) over the
     /// pipeline fixture, with a watcher and controller wired up and everything loaded.
@@ -262,6 +315,46 @@ TEST_SUITE("assets/hot_reload") {
         CHECK(fixture.textureHandle.get<test_asset>()->content == "PIXELS V1");
     }
 
+    TEST_CASE("regression - an importer switch through write_meta re-imports even at the same version") {
+        reload_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.pipeline.importers.register_importer(std::make_unique<alternate_text_importer>()));
+        asset_meta meta = fixture.pipeline.database->read_meta(fixture.texture).value();
+        meta.importerId = std::string(alternate_text_importer::ID);
+        CONJURE_REQUIRE_OK(fixture.pipeline.database->write_meta(fixture.texture, meta));
+
+        // Version, settings and source are what the blob was built from; the switch alone makes it
+        // stale, so import_stale and a cook see it as well as hot reload.
+        CHECK(fixture.pipeline.database->stale_ids() == std::vector<asset_id>{fixture.texture});
+        fixture.tick();
+        CHECK(fixture.controller.last_report().sourcesReimported == 1);
+        const std::optional<asset_record> record = fixture.pipeline.database->find(fixture.texture);
+        REQUIRE(record.has_value());
+        CHECK(record->status == asset_record_status::OK);
+        CHECK(record->importerId == alternate_text_importer::ID);
+        CHECK(fixture.pipeline.database->stale_ids().empty());
+
+        // The import cleared the switch: nothing re-imports again.
+        fixture.tick();
+        CHECK(fixture.controller.last_report().sourcesReimported == 0);
+    }
+
+    TEST_CASE("regression - an importer switch made while the editor was closed is re-imported at startup") {
+        // Startup is scan() + import_stale(): the scan compares the meta with the previous record.
+        reload_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.pipeline.importers.register_importer(std::make_unique<alternate_text_importer>()));
+        asset_meta meta = fixture.pipeline.database->read_meta(fixture.texture).value();
+        meta.importerId = std::string(alternate_text_importer::ID);
+        CONJURE_REQUIRE_OK(write_asset_meta(*fixture.pipeline.fileSystem, "assets/texture.ta.meta", meta));
+
+        core::result<scan_report> scanned = fixture.pipeline.database->scan();
+        CONJURE_REQUIRE_OK(scanned);
+        CHECK(scanned.value().stale == std::vector<asset_id>{fixture.texture});
+        core::result<import_report> imported = fixture.pipeline.database->import_stale(fixture.pipeline.jobs);
+        CONJURE_REQUIRE_OK(imported);
+        CHECK(imported.value().sourcesImported == 1);
+        CHECK(fixture.pipeline.database->stale_ids().empty());
+    }
+
     TEST_CASE("regression - a source changed while its slot is LOADING is reloaded once the load finishes [parallel]") {
         pipeline_fixture pipeline(4, asset_type_flags::NONE);
         polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, std::chrono::milliseconds(0));
@@ -384,6 +477,79 @@ TEST_SUITE("assets/hot_reload") {
         CHECK(fixture.controller.reloads_this_frame() == 1);
         CHECK(handle.state() == asset_state::LOADED);
         CHECK(handle.get<test_asset>()->content == "late");
+    }
+
+    TEST_CASE("hot_reload - a CACHE_MISS failure whose import fails is not re-imported on every update") {
+        reload_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        fixture.pipeline.write_source("broken.ta", "fail\nbroken");
+        CONJURE_REQUIRE_OK(fixture.pipeline.database->scan());   // known to the database, never imported
+        CONJURE_REQUIRE_OK(fixture.watcher.snapshot());
+        const asset_id broken = fixture.pipeline.id_of("broken.ta");
+        asset_handle handle = fixture.pipeline.manager->load(broken);
+        fixture.pipeline.manager->flush();
+        REQUIRE(handle.state() == asset_state::FAILED);
+        CHECK(fixture.pipeline.manager->last_error(broken)->is(asset_error_code::CACHE_MISS));
+
+        // The first update tries the repair, which fails: the record says so.
+        fixture.controller.update();
+        fixture.pipeline.manager->flush();
+        CHECK(fixture.pipeline.database->find(broken)->status == asset_record_status::IMPORT_FAILED);
+        CHECK(logs.count(core::log_level::ERR) == 1);
+        const u32 loadCpuCalls = controls().loadCpuCalls.load();
+
+        // Nothing changed since: no import, no retry, no log line, however many frames pass.
+        for (u32 frame = 0; frame < 2; ++frame) {
+            CAPTURE(frame);
+            fixture.controller.update();
+            fixture.pipeline.manager->flush();
+            CHECK(fixture.controller.last_report().sourcesReimported == 0);
+            CHECK(fixture.controller.reloads_this_frame() == 0);
+            CHECK(logs.count(core::log_level::ERR) == 1);
+            CHECK(controls().loadCpuCalls.load() == loadCpuCalls);
+            CHECK(handle.state() == asset_state::FAILED);
+        }
+
+        // Fixing the source repairs the slot.
+        fixture.pipeline.write_source("broken.ta", "fixed");
+        fixture.tick();
+        CHECK(handle.state() == asset_state::LOADED);
+        REQUIRE(handle.get<test_asset>() != nullptr);
+        CHECK(handle.get<test_asset>()->content == "fixed");
+    }
+
+    TEST_CASE("hot_reload - the meta written by an import does not trigger a second import") {
+        reload_fixture fixture = {};
+        fixture.pipeline.write_source("fresh.ta", "fresh");
+        CHECK(fixture.tick() == 0);
+        CHECK(fixture.controller.last_report().sourcesReimported == 1);
+
+        // The watcher now reports fresh.ta.meta ADDED: the import it describes already ran.
+        CHECK(fixture.tick() == 0);
+        CHECK(fixture.controller.last_report().changesSeen == 1);
+        CHECK(fixture.controller.last_report().sourcesReimported == 0);
+        CHECK(fixture.tick() == 0);
+        CHECK(fixture.controller.last_report().sourcesReimported == 0);
+    }
+
+    TEST_CASE("regression - a side file missing at import re-imports its owner when it appears") {
+        reload_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        fixture.pipeline.write_source("model.ta", "side model.bin\nmodel");
+        fixture.pipeline.scan_and_import();
+        CONJURE_REQUIRE_OK(fixture.watcher.snapshot());
+        const asset_id model = fixture.pipeline.id_of("model.ta");
+        CHECK(fixture.pipeline.database->find(model)->status == asset_record_status::IMPORT_FAILED);
+        CHECK(fixture.pipeline.database->owners_of_side_file("assets://model.bin") == std::vector<asset_id>{model});
+
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->write_file("assets/model.bin", bytes_of("mesh")));
+        fixture.tick();
+        CHECK(fixture.controller.last_report().sourcesReimported >= 1);
+        CHECK(fixture.pipeline.database->find(model)->status == asset_record_status::OK);
+        REQUIRE(fixture.pipeline.cache().contains(model));
+        CHECK(text_of(fixture.pipeline.cache().read(model).value().payload) == "model|mesh");
     }
 
     TEST_CASE("hot_reload - an added source is registered and importable") {

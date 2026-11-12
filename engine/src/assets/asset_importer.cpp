@@ -90,15 +90,8 @@ core::result<std::vector<std::byte>> import_context::read_side_file(std::string_
     const std::string_view directory = core::vfs::path_utils::parent(mFilePath);
     const std::string filePath = core::vfs::path_utils::normalize(core::vfs::path_utils::join(directory, relativePath));
 
-    core::result<std::vector<std::byte>> bytes = mFileSystem->read_file(filePath);
-    if (!bytes.has_value()) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
-          std::format("cannot read side file '{}' of '{}': {}", relativePath, mAssetPath, bytes.get_error().message())
-        );
-    }
-
-    // Side files are recorded by asset path so the database can hash and watch them.
+    // Side files are recorded by asset path so the database can hash and watch them; a missing
+    // one too, so that its appearance re-imports the source whose import failed for want of it.
     const std::optional<asset_path_parts> parts = split_asset_path(mAssetPath);
     std::string sidePath = filePath;
     if (parts.has_value()) {
@@ -110,6 +103,14 @@ core::result<std::vector<std::byte>> import_context::read_side_file(std::string_
     if (std::find(mSideFiles.begin(), mSideFiles.end(), sidePath) == mSideFiles.end()) {
         mSideFiles.push_back(sidePath);
         std::sort(mSideFiles.begin(), mSideFiles.end());
+    }
+
+    core::result<std::vector<std::byte>> bytes = mFileSystem->read_file(filePath);
+    if (!bytes.has_value()) {
+        return make_asset_error(
+          asset_error_code::IO_ERROR,
+          std::format("cannot read side file '{}' of '{}': {}", relativePath, mAssetPath, bytes.get_error().message())
+        );
     }
     return bytes;
 }

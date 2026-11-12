@@ -24,9 +24,15 @@ namespace conjure::assets {
 
     namespace detail {
         /// <summary>
-        /// Logs the type mismatch of a typed access once per (uuid, requested type) pair.
+        /// Logs the type mismatch of a typed access once per (uuid, requested type) pair until an
+        /// asset_manager is destroyed (the set is process-wide).
         /// </summary>
         CONJURE_API void report_type_mismatch(const asset_id &id, asset_type_id requested, asset_type_id actual);
+
+        /// <summary>
+        /// Forgets every reported mismatch so the next one logs again; called by ~asset_manager.
+        /// </summary>
+        CONJURE_API void forget_type_mismatches() noexcept;
     }
 
     /// <summary>

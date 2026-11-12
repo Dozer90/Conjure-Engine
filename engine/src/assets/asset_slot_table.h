@@ -33,11 +33,13 @@ namespace conjure::assets::detail {
         core::jobs::job_handle job = {};                             // kept until its completion drains
         asset_load_priority priority = asset_load_priority::NORMAL;
         u64 sequence = 0;                                            // FIFO order within a priority
-        u64 payloadBytes = 0;                                        // cooked size, for statistics
+        u64 payloadBytes = 0;                                        // cooked size of the published payload
+        u64 pendingPayloadBytes = 0;                                 // cooked size of the load in flight
         u32 generation = 0;                                          // identifies the load in flight
         bool queued = false;                                         // has a live entry in a queue
         bool jobOutstanding = false;                                 // a job was scheduled and has not drained
         bool awaitingFinalise = false;                               // stage done: dependencyIds are authoritative
+        bool inFailedList = false;                                   // listed in the manager's failed slots
         bool pinned = false;
         bool isReload = false;
         bool dependencyFailureWarned = false;

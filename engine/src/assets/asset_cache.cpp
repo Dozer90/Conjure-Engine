@@ -97,7 +97,7 @@ core::result<cooked_blob> asset_cache::read(const asset_id &id) const {
         return io_error("read blob", path, bytes.get_error());
     }
 
-    core::result<cooked_blob> blob = parse_cooked_blob(bytes.value());
+    core::result<cooked_blob> blob = parse_cooked_blob(std::move(bytes).value());
     if (!blob.has_value()) {
         return blob;
     }

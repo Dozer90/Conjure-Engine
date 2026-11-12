@@ -92,6 +92,7 @@ namespace conjure::assets {
             std::vector<file_change> mReady = {};                           // debounced changes, guarded by mMutex
             core::flat_hash_map<std::string, file_state> mPassResult = {};  // the last pass's table, guarded by mMutex
             bool mPassResultReady = false;                                  // guarded by mMutex
+            std::string mLastPassFailure = {};                              // last logged failure; guarded by mMutex
             core::jobs::job_handle mPass = {};
             std::chrono::steady_clock::time_point mLastPassStart = {};
             bool mHasPassed = false;                                        // a pass was started at least once

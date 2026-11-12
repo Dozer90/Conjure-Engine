@@ -102,7 +102,7 @@ deserialisation. See 📘 API: [Reflection](../core/reflection.md).
 | copy, move, destroy (`noexcept`) | adjust the strong count atomically; usable on any thread |
 | `asset_id id()` / `asset_type_id type()` / `bool is_bound()` / `asset_slot *slot()` | identity |
 | `asset_state state()` / `bool is_terminal()` / `u32 version()` | `is_terminal()` is true for LOADED, FAILED and unbound |
-| `asset_ref<T> ref()` / `T *get()` | typed access; a type mismatch yields an unbound ref and logs once |
+| `asset_ref<T> ref()` / `T *get()` | typed access; a type mismatch yields an unbound ref and logs once per (uuid, type) until an `asset_manager` is destroyed (the record is process-wide) |
 | `void reset()` | release the reference |
 
 ## The manager
@@ -177,7 +177,7 @@ class scene_activation {
         }
 
         [[nodiscard]] bool ready() const noexcept {
-            return mBatch.is_complete();           // every handle LOADED or FAILED; progress() is 0..1
+            return mBatch.is_complete();           // every handle LOADED, RELOADING or FAILED; progress() is 0..1
         }
 
         [[nodiscard]] usize failures() const noexcept {
@@ -187,7 +187,8 @@ class scene_activation {
 ```
 
 `asset_load_batch` holds the handles (`handles()`, `size()`), so the assets stay resident for as long as the
-batch lives; assign a fresh `asset_load_batch()` to release them.
+batch lives; assign a fresh `asset_load_batch()` to release them. A member that hot-reloads keeps its previous
+payload published, so a complete batch stays complete (and `loaded_count()` counts it) while it is `RELOADING`.
 
 > [!TIP]
 > Use `HIGH` for what the player sees next and `LOW` for prefetching. Within a level loads are first in, first
@@ -197,20 +198,21 @@ batch lives; assign a fresh `asset_load_batch()` to release them.
 
 `load_blocking(id)` runs the whole pipeline inline on the main thread, dependencies first, and returns the
 `LOADED` handle or the error (the slot is then `FAILED`). It waits up to `blockingTimeout` for a job that already
-owns the slot and fails with `TIMEOUT` otherwise. Inside a frame it is allowed but logs one WARN per frame: it
+owns the slot (or one of its dependencies) and fails with `TIMEOUT` otherwise; the slot then stays in the normal
+pipeline, which finishes it on a later `update()`. Inside a frame it is allowed but logs one WARN per frame: it
 is a hitch, not a hazard.
 
 ### Fallbacks, errors and queries
 
 | Signature (short) | Purpose |
 |---|---|
-| `T *fallback<T>()` | the type's placeholder (magenta texture, silent clip), created once and pinned; `nullptr` if the type has none |
+| `T *fallback<T>()` | the type's placeholder (magenta texture, silent clip), created once and pinned; `nullptr` while the type is unregistered or if it has none |
 | `T *get_or_fallback(const asset_ref<T> &)` | `ref.get()` while loaded, else the fallback |
-| `const core::error *last_error(id)` | why a slot is FAILED (or why its last reload failed); valid until the slot changes state |
+| `const core::error *last_error(id)` | why a slot is FAILED (or why its last reload failed, until `collect()` unloads it); valid until the slot changes state |
 | `asset_state state_of(id)` | `UNLOADED` for unknown uuids |
-| `std::vector<asset_id> failed_ids(asset_error_code)` | every FAILED slot with that code |
+| `std::vector<asset_id> failed_ids(asset_error_code)` | every FAILED slot with that code; main thread |
 | `std::optional<asset_id> find(std::string_view assetPath)` | `"mount://path#sub"` to uuid through the sources |
-| `asset_manager_stats stats()` | `slots`, `loaded`, `pending`, `failed`, `retired`, `jobsInFlight`, `bytesResident`, `frameIndex` |
+| `asset_manager_stats stats()` | `slots`, `loaded`, `pending`, `failed`, `retired`, `jobsInFlight`, `bytesResident` (of the published payloads), `frameIndex` |
 
 An unknown uuid ends `FAILED` with `NOT_FOUND` and one ERROR log per uuid; a corrupt blob, a missing loader or a
 loader failure end `FAILED` with `CACHE_CORRUPT`, `NO_LOADER`, `LOAD_FAILED` or `FINALISE_FAILED` and a WARN.
@@ -218,7 +220,9 @@ loader failure end `FAILED` with `CACHE_CORRUPT`, `NO_LOADER`, `LOAD_FAILED` or 
 
 ### Events
 
-Events are delivered on the main thread at the end of `update()`, in order, once each.
+Events are delivered on the main thread at the end of `update()`, in order, once each. `unsubscribe()` takes
+effect at once, even from inside a callback: a removed subscriber receives none of the remaining events; a
+subscriber added during delivery starts with the next `update()`.
 
 ```cpp
 #include "conjure/assets/asset_manager.h"

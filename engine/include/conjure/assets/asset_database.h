@@ -100,7 +100,7 @@ namespace conjure::assets {
     /// <summary>
     /// Builds "mount://relative#sub" (the '#' part only when subPath is not empty).
     /// </summary>
-    [[nodiscard]] std::string make_asset_path(
+    [[nodiscard]] CONJURE_API std::string make_asset_path(
       std::string_view mount,
       std::string_view relativePath,
       std::string_view subPath = {}
@@ -152,6 +152,7 @@ namespace conjure::assets {
                 asset_record record = {};
                 std::vector<asset_id> dependencies = {};   // sorted, unique
                 std::vector<std::string> sideFiles = {};   // asset paths, primaries only
+                bool importerSwitched = false;             // meta names another importer; stale until imported
                 u32 firstEdge = 0;                         // CSR into mForwardEdges
                 u32 edgeCount = 0;
                 u32 firstReverseEdge = 0;                  // CSR into mReverseEdges
@@ -245,8 +246,9 @@ namespace conjure::assets {
             /// <summary>
             /// Walks every mount in sorted order, creates missing .meta files, applies the
             /// duplicate-uuid policy, hashes changed sources, marks removed sources MISSING_SOURCE,
-            /// computes the stale set, deletes leftover *.tmp blobs and saves the snapshot.
-            /// INVALID_STATE before open().
+            /// computes the stale set, deletes leftover *.tmp blobs and saves the snapshot. A .meta
+            /// that cannot be written leaves its record META_INVALID (retried by the next scan)
+            /// instead of failing the scan. INVALID_STATE before open().
             /// </summary>
             [[nodiscard]] core::result<scan_report> scan();
 
@@ -276,12 +278,15 @@ namespace conjure::assets {
 
             /// <summary>
             /// Registers a source that exists on disk but was not scanned yet, creating its .meta.
-            /// NOT_FOUND when the file is missing, ALREADY_EXISTS when it is known.
+            /// NOT_FOUND when the file is missing, ALREADY_EXISTS when it is known, INVALID_ARGUMENT
+            /// when the path leaves its mount ("assets://../x", an absolute path).
             /// </summary>
             [[nodiscard]] core::result<asset_id> add_file(std::string_view assetPath);
 
             /// <summary>
-            /// Writes a new source and its .meta with the given importer, then registers it.
+            /// Writes a new source and its .meta with the given importer, then registers it. The
+            /// source is removed again when its .meta cannot be written; INVALID_ARGUMENT when the
+            /// path leaves its mount.
             /// </summary>
             [[nodiscard]] core::result<asset_id> create_asset(
               std::string_view assetPath,
@@ -291,6 +296,7 @@ namespace conjure::assets {
 
             /// <summary>
             /// Renames the source and its .meta; the uuid and every sub-asset uuid are kept.
+            /// INVALID_ARGUMENT when the new path leaves its mount.
             /// </summary>
             [[nodiscard]] core::result<void> move_asset(const asset_id &id, std::string_view newAssetPath);
 
@@ -323,6 +329,9 @@ namespace conjure::assets {
             /// <summary>
             /// Writes the .meta of a primary and refreshes the record (settings hash, importer).
             /// A changed uuid is refused with INVALID_ARGUMENT and logged: it would orphan references.
+            /// A sub-asset the last import dropped (no blob) gets no record back from the meta. An
+            /// imported primary switched to another importer is stale until its next import, even
+            /// when both importers share a version and settings.
             /// </summary>
             [[nodiscard]] core::result<void> write_meta(const asset_id &id, const asset_meta &meta);
 
@@ -388,6 +397,10 @@ namespace conjure::assets {
             [[nodiscard]] u64 hash_source(
               u32 mountIndex,
               std::string_view relativePath,
+              std::span<const std::string> sideFiles
+            ) const;
+            [[nodiscard]] u64 hash_source_bytes(
+              std::span<const std::byte> primaryBytes,
               std::span<const std::string> sideFiles
             ) const;
             void rebuild_indexes_locked();

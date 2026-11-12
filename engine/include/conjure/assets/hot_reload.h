@@ -55,9 +55,12 @@ namespace conjure::assets {
         public:
             /// <summary>
             /// Polls the watcher, classifies changes (a removed source marks its record
-            /// MISSING_SOURCE, a re-added one restores it), re-imports dirty sources (plus slots
-            /// FAILED with CACHE_MISS) and reloads changed assets and flagged dependents. A changed
-            /// asset whose slot is still in flight is reloaded by a later update(), once it is LOADED.
+            /// MISSING_SOURCE, a re-added one restores it; a .meta change counts only when its
+            /// importer or settings differ from the record's, or the owner is not OK or stale),
+            /// re-imports dirty sources (plus slots FAILED with CACHE_MISS whose record is OK: a
+            /// source whose import failed waits for a change) and reloads changed assets and flagged
+            /// dependents. A changed asset whose slot is still in flight is reloaded by a later
+            /// update(), once it is LOADED.
             /// </summary>
             void update();
 

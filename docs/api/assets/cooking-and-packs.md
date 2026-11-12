@@ -82,6 +82,7 @@ parts and owns its bytes.
 | `vector<byte> write_cooked_blob(const cooked_blob &)` | serialise (derived fields recomputed first) |
 | `result<cooked_blob_header> parse_cooked_blob_header(bytes)` | header only; `CACHE_CORRUPT` on bad magic or format |
 | `result<cooked_blob> parse_cooked_blob(bytes)` | header, sizes against the buffer and the payload hash; anything wrong is `CACHE_CORRUPT` |
+| `result<cooked_blob> parse_cooked_blob(std::vector<std::byte> &&bytes)` | same validation; the buffer becomes the payload, with no second allocation |
 | `u64 hash_bytes(bytes)` | the 64-bit content hash used everywhere in the module |
 | `header.payload_offset()` / `header.total_size()` | layout helpers for a consistent header |
 
@@ -132,10 +133,13 @@ appends a secondary one searched after the primary.
 
 `asset_cooker` (`conjure/assets/asset_cooker.h`) produces the export pack from the database and the cache.
 `cook(settings)` scans, computes the closure (the `roots`, plus `alwaysInclude`, plus every `engine://` asset;
-or every record when `includeAll` is set), drops types flagged `EXCLUDE_FROM_PACK`, imports whatever is stale,
-re-verifies every blob and writes `content.cpak` (and `manifest.json` unless `writeManifest` is false) into
-`outputDirectory`. It is **all or nothing**: if any member fails to import, the call fails with `IMPORT_FAILED`,
-nothing is written and `last_report().failures` lists every failing asset with its path and message.
+or every record when `includeAll` is set), drops types flagged `EXCLUDE_FROM_PACK`, imports whatever is stale
+(recomputing the closure after each round, since an import can change a source's dependencies; each source is
+imported at most once per cook), re-verifies every blob and writes `content.cpak` (and `manifest.json` unless
+`writeManifest` is false) into `outputDirectory`. It is **all or nothing**: if any member of the final closure
+fails, the call fails with `IMPORT_FAILED`, nothing is written and `last_report().failures` lists every failing
+asset with its path and message. An asset that only an older version of the graph referenced (a texture deleted
+and replaced in its material) does not fail the cook.
 
 | `cook_settings` | Meaning |
 |---|---|

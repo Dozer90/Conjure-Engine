@@ -1,4 +1,5 @@
 #include "conjure/assets/hot_reload.h"
+#include "conjure/assets/asset_meta.h"
 #include "conjure/assets/log_category.h"
 #include "assets/path_filters.h"
 
@@ -25,6 +26,36 @@ namespace {
     bool is_in_flight(asset_state state) noexcept {
         return state == asset_state::QUEUED || state == asset_state::LOADING || state == asset_state::FINALISING ||
           state == asset_state::RELOADING;
+    }
+
+    bool has_ok_record(const asset_database &database, const asset_id &id) {
+        return database.status_of(id) == std::optional<asset_record_status>(asset_record_status::OK);
+    }
+
+    /// <summary>
+    /// Design 3.7: a .meta change marks its owner dirty only when the import it describes differs
+    /// from the last one (importer or settings), the record is not OK or its blobs are stale. The
+    /// metas written by add_file and by an import (sub-asset uuids appended) therefore cause no
+    /// second import; an inspector write_meta() that changes the importer or the settings leaves
+    /// the owner stale (asset_database tracks an importer switch itself) and re-imports it.
+    /// </summary>
+    bool meta_needs_import(const asset_database &database, const asset_id &owner) {
+        const core::result<asset_meta> meta = database.read_meta(owner);
+        if (!meta.has_value()) {
+            return true;
+        }
+        const std::optional<asset_record> record = database.find(owner);
+        if (!record.has_value() || record->status != asset_record_status::OK) {
+            return true;
+        }
+        if (meta.value().importerId != record->importerId) {
+            return true;
+        }
+        if (canonical_settings_hash(meta.value().settings.root()) != record->settingsHash) {
+            return true;
+        }
+        const std::vector<asset_id> stale = database.stale_ids();
+        return std::find(stale.begin(), stale.end(), owner) != stale.end();
     }
 }
 
@@ -62,8 +93,12 @@ void hot_reload_controller::update() {
 
     std::vector<asset_id> dirty = {};
     collect_dirty(dirty);
-    for (const asset_id &failed : mManager->failed_ids(asset_error_code::CACHE_MISS)) {
-        if (mDatabase->contains(failed)) {
+
+    // IMPORT_FAILED means the import already ran for the current source state; a change to the
+    // source, its meta or a side file puts the owner back into dirty through collect_dirty.
+    const std::vector<asset_id> cacheMisses = mManager->failed_ids(asset_error_code::CACHE_MISS);
+    for (const asset_id &failed : cacheMisses) {
+        if (has_ok_record(*mDatabase, failed)) {
             dirty.push_back(failed);
         }
     }
@@ -81,10 +116,13 @@ void hot_reload_controller::update() {
     mLastReport.sourcesReimported = imported.value().sourcesImported;
 
     // Changed blobs plus, for the previously missing ones, the failed slots themselves, so the
-    // CACHE_MISS repair re-queues them even when the payload hash is unchanged.
+    // CACHE_MISS repair re-queues them even when the payload hash is unchanged. Only a record that
+    // is OK after the import has a blob now; a dropped sub-asset has no record any more.
     std::vector<asset_id> changed = imported.value().changed;
-    for (const asset_id &failed : mManager->failed_ids(asset_error_code::CACHE_MISS)) {
-        changed.push_back(failed);
+    for (const asset_id &failed : cacheMisses) {
+        if (has_ok_record(*mDatabase, failed)) {
+            changed.push_back(failed);
+        }
     }
     std::sort(changed.begin(), changed.end());
     changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
@@ -137,6 +175,9 @@ void hot_reload_controller::collect_dirty(std::vector<asset_id> &outDirty) {
 
         const std::optional<asset_id> owner = mDatabase->find_by_file_path(path);
         if (owner.has_value()) {
+            if (isMeta && change.kind != file_change_kind::REMOVED && !meta_needs_import(*mDatabase, *owner)) {
+                continue;
+            }
             if (change.kind == file_change_kind::REMOVED && !isMeta) {
                 // Design 3.7: REMOVED -> MISSING_SOURCE. Loaded payloads stay loaded; a fresh load
                 // fails NOT_FOUND until the file comes back or the record is deleted.

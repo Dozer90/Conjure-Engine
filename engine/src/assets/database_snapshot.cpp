@@ -1,6 +1,7 @@
 #include "assets/database_snapshot.h"
 #include "assets/binary_io.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <string>
@@ -14,6 +15,10 @@ namespace {
     constexpr std::array<char, 4> MAGIC = {'C', 'J', 'D', 'B'};
     constexpr u32 FORMAT_VERSION = 1;
     constexpr u32 MAX_COUNT = 1u << 24;
+
+    // 2 uuids (32) + type (8) + mount (4) + 4 string lengths (16) + importerVersion (4) + size,
+    // write time and 3 hashes (40) + status (1) + 2 list counts (8).
+    constexpr usize MIN_RECORD_BYTES = 113;
 
     core::error corrupt(std::string message) {
         return make_asset_error(asset_error_code::CACHE_CORRUPT, std::move(message));
@@ -89,7 +94,8 @@ core::result<database_snapshot> conjure::assets::detail::parse_database_snapshot
     if (!in.u32_value(recordCount) || recordCount > MAX_COUNT) {
         return corrupt("snapshot record table is malformed");
     }
-    snapshot.records.reserve(recordCount);
+    // The count is untrusted: a short file must not reserve for millions of records it cannot hold.
+    snapshot.records.reserve(std::min<usize>(recordCount, in.remaining() / MIN_RECORD_BYTES));
     for (u32 index = 0; index < recordCount; ++index) {
         snapshot_record item = {};
         asset_record &record = item.record;

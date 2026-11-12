@@ -6,8 +6,12 @@
 #include "conjure/assets/asset_database.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -19,6 +23,54 @@ namespace {
         core::result<std::vector<std::byte>> bytes = fixture.fileSystem->read_file(fixture.cache().blob_path(id));
         CONJURE_REQUIRE_OK(bytes);
         return bytes.value();
+    }
+
+    constexpr std::array<std::string_view, 1> RACE_EXTENSIONS = {".race"};
+
+    /// <summary>
+    /// Rewrites assets/x.race while importing it, as an editor saving the file mid-import would,
+    /// and imports the bytes it was handed.
+    /// </summary>
+    class rewriting_importer final : public asset_importer {
+        private:
+            core::vfs::memory_file_system *mFileSystem = nullptr;
+
+        public:
+            explicit rewriting_importer(core::vfs::memory_file_system &fileSystem);
+            ~rewriting_importer() override;
+
+        public:
+            [[nodiscard]] std::string_view id() const noexcept override;
+            [[nodiscard]] u32 version() const noexcept override;
+            [[nodiscard]] std::span<const std::string_view> extensions() const noexcept override;
+            [[nodiscard]] core::result<import_output> import(import_context &context) const override;
+    };
+
+    rewriting_importer::rewriting_importer(core::vfs::memory_file_system &fileSystem) :
+        mFileSystem(&fileSystem) {}
+
+    rewriting_importer::~rewriting_importer() {}
+
+    std::string_view rewriting_importer::id() const noexcept {
+        return "conjure.test.rewriting";
+    }
+
+    u32 rewriting_importer::version() const noexcept {
+        return 1;
+    }
+
+    std::span<const std::string_view> rewriting_importer::extensions() const noexcept {
+        return RACE_EXTENSIONS;
+    }
+
+    core::result<import_output> rewriting_importer::import(import_context &context) const {
+        CONJURE_TRY(mFileSystem->write_file("assets/x.race", bytes_of("after, longer")));
+        import_output output = {};
+        imported_asset primary = {};
+        primary.type = asset_type_traits<test_asset>::id();
+        primary.payload.assign(context.source_bytes().begin(), context.source_bytes().end());
+        output.assets.push_back(std::move(primary));
+        return output;
     }
 }
 
@@ -172,6 +224,46 @@ TEST_SUITE("assets/import_cache") {
         fixture.write_source("robot.ta", "sub Body\nsub Head\nrobot v3");
         fixture.scan_and_import();
         CHECK(fixture.database->find_by_path("assets://robot.ta#Head") == head);
+    }
+
+    TEST_CASE("regression - a dropped sub-asset does not make its source stale after a rescan or a meta write") {
+        pipeline_fixture fixture = {};
+        fixture.write_source("robot.ta", "sub Body\nsub Head\nrobot");
+        fixture.scan_and_import();
+        const asset_id robot = fixture.id_of("robot.ta");
+        const asset_id head = fixture.database->find_by_path("assets://robot.ta#Head").value();
+        fixture.write_source("robot.ta", "sub Body\nrobot v2");
+        fixture.scan_and_import();
+
+        // The importer dropped Head: its blob is gone and a rescan does not bring its record back.
+        CHECK_FALSE(fixture.cache().contains(head));
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->stale_ids().empty());
+        CHECK_FALSE(fixture.database->find_by_path("assets://robot.ta#Head").has_value());
+        CHECK_FALSE(fixture.database->find(head).has_value());
+
+        // Neither does an inspector write of the unchanged meta, which still lists Head.
+        const asset_meta meta = fixture.database->read_meta(robot).value();
+        REQUIRE(meta.find_sub_asset("Head") != nullptr);
+        CONJURE_REQUIRE_OK(fixture.database->write_meta(robot, meta));
+        CHECK(fixture.database->stale_ids().empty());
+        CHECK_FALSE(fixture.database->find_by_path("assets://robot.ta#Head").has_value());
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->stale_ids().empty());
+    }
+
+    TEST_CASE("regression - a source rewritten while it is imported stays stale") {
+        pipeline_fixture fixture = {};
+        std::unique_ptr<rewriting_importer> rewriting = std::make_unique<rewriting_importer>(*fixture.fileSystem);
+        CONJURE_REQUIRE_OK(fixture.importers.register_importer(std::move(rewriting)));
+        fixture.write_source("x.race", "before");
+        fixture.scan_and_import();
+        const asset_id id = fixture.id_of("x.race");
+        CHECK(text_of(fixture.cache().read(id).value().payload) == "before");
+
+        // The blob was built from "before"; the file now holds "after, longer", so it is stale.
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->stale_ids() == std::vector<asset_id>{id});
     }
 
     TEST_CASE("import - the blob header records the hashes the stale check compares") {

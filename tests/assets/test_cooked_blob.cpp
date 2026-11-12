@@ -5,6 +5,7 @@
 #include "conjure/core/hash.h"
 
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -178,6 +179,30 @@ TEST_SUITE("assets/cooked_blob") {
         CHECK(hash_bytes(a) == core::hash::fnv1a64(std::span<const std::byte>(a)));
         CHECK(hash_bytes(a) != hash_bytes(b));
         CHECK(hash_bytes({}) == core::hash::FNV1A64_OFFSET_BASIS);
+    }
+
+    TEST_CASE("parse_cooked_blob - an owned buffer becomes the payload without a second allocation") {
+        const cooked_blob blob = make_test_blob(test_id(1), "owned payload", {test_id(2), test_id(3)});
+        std::vector<std::byte> bytes = write_cooked_blob(blob);
+        const std::byte *buffer = bytes.data();
+        core::result<cooked_blob> parsed = parse_cooked_blob(std::move(bytes));
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(text_of(parsed.value().payload) == "owned payload");
+        CHECK(parsed.value().payload.data() == buffer);
+        CHECK(parsed.value().dependencies == std::vector<asset_id>{test_id(2), test_id(3)});
+        CHECK(parsed.value().header.id == test_id(1));
+
+        // The same validation as the span overload.
+        std::vector<std::byte> flipped = write_cooked_blob(blob);
+        flipped.back() ^= std::byte{0x01};
+        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(flipped)), asset_error_code::CACHE_CORRUPT);
+        std::vector<std::byte> truncated = write_cooked_blob(blob);
+        truncated.resize(40);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(truncated)), asset_error_code::CACHE_CORRUPT);
+        const cooked_blob empty = make_cooked_blob(cooked_blob_header{}, {}, {});
+        core::result<cooked_blob> parsedEmpty = parse_cooked_blob(write_cooked_blob(empty));
+        CONJURE_REQUIRE_OK(parsedEmpty);
+        CHECK(parsedEmpty.value().payload.empty());
     }
 
     TEST_CASE("write_cooked_blob - recomputes stale derived fields") {

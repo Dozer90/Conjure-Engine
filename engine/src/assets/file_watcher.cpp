@@ -99,13 +99,33 @@ void polling_file_watcher::poll(std::vector<file_change> &outChanges) {
         mHasPassed = true;
         mPass = mJobs->schedule([this]() {
             core::result<core::flat_hash_map<std::string, file_state>> current = stat_roots();
+
+            // A pass runs every interval: a lasting failure (a deleted root) is reported once,
+            // again only when its message changes, and its end is reported too.
             if (!current.has_value()) {
-                CONJURE_LOG_WARN(LOG_ASSETS, "file watcher pass failed: {}", current.get_error().message());
+                const std::string message = current.get_error().message();
+                bool report = false;
+                {
+                    const std::scoped_lock lock(mMutex);
+                    report = message != mLastPassFailure;
+                    mLastPassFailure = message;
+                }
+                if (report) {
+                    CONJURE_LOG_WARN(LOG_ASSETS, "file watcher pass failed: {} (repeats are not logged)", message);
+                }
                 return;
             }
-            const std::scoped_lock lock(mMutex);
-            mPassResult = std::move(current).value();
-            mPassResultReady = true;
+            bool recovered = false;
+            {
+                const std::scoped_lock lock(mMutex);
+                mPassResult = std::move(current).value();
+                mPassResultReady = true;
+                recovered = !mLastPassFailure.empty();
+                mLastPassFailure.clear();
+            }
+            if (recovered) {
+                CONJURE_LOG_INFO(LOG_ASSETS, "file watcher pass succeeded again");
+            }
         });
         if (mPass.is_complete()) {
             mPass.reset();   // inline job systems finish before schedule() returns

@@ -1,4 +1,5 @@
 #include "conjure/testing/doctest.h"
+#include "conjure/testing/log_capture.h"
 #include "assets_test_support.h"
 
 #include "conjure/assets/file_watcher.h"
@@ -176,6 +177,30 @@ TEST_SUITE("assets/file_watcher") {
         REQUIRE(changes.size() == 1);
         CHECK(changes[0].path == "assets/a.ta");
         CHECK(fixture.poll().empty());
+    }
+
+    TEST_CASE("polling_file_watcher - a failing pass warns once until the failure changes or clears") {
+        watcher_fixture fixture(std::chrono::milliseconds(0));
+        conjure::testing::log_capture logs = {};
+        fixture.watcher.add_root("missing");
+
+        // Interval 0 and an inline job system: every poll runs (and finishes) one failing pass.
+        for (u32 pass = 0; pass < 3; ++pass) {
+            CAPTURE(pass);
+            CHECK(fixture.poll().empty());
+        }
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "file watcher pass failed"));
+
+        CONJURE_REQUIRE_OK(fixture.fileSystem.write_file("missing/x.ta", bytes_of("x")));
+        CHECK(fixture.poll().empty());
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::INFO, "succeeded again"));
+
+        CONJURE_REQUIRE_OK(fixture.fileSystem.remove_all("missing"));
+        static_cast<void>(fixture.poll());
+        static_cast<void>(fixture.poll());
+        CHECK(logs.count(core::log_level::WARN) == 2);
     }
 
     TEST_CASE("polling_file_watcher - the first poll without a snapshot only records the baseline") {

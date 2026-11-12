@@ -48,7 +48,7 @@ namespace conjure::assets {
     /// <summary>
     /// Builds an error in the assets category.
     /// </summary>
-    [[nodiscard]] core::error make_asset_error(asset_error_code code, std::string message = {});
+    [[nodiscard]] CONJURE_API core::error make_asset_error(asset_error_code code, std::string message = {});
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::assets::asset_error_code, "assets", conjure::assets::asset_error_code_name);

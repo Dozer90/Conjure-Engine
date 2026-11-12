@@ -98,4 +98,10 @@ namespace conjure::assets {
     /// the payload hash. Anything wrong is CACHE_CORRUPT.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<cooked_blob> parse_cooked_blob(std::span<const std::byte> bytes);
+
+    /// <summary>
+    /// Same validation as the span overload; the buffer becomes the payload, with no second
+    /// allocation (the bytes in front of the payload are shifted out in place).
+    /// </summary>
+    [[nodiscard]] CONJURE_API core::result<cooked_blob> parse_cooked_blob(std::vector<std::byte> &&bytes);
 }

@@ -256,6 +256,98 @@ TEST_SUITE("assets/asset_manager") {
         fixture.manager->flush();
     }
 
+    TEST_CASE("asset_manager - failed_ids follows slots through retry, success and repeated failure") {
+        pipeline_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        std::unique_ptr<memory_asset_source> owned = source_with({{test_id(2), "two"}});
+        memory_asset_source *source = owned.get();
+        fixture.manager->swap_source(std::move(owned));
+
+        asset_handle one = fixture.manager->load(test_id(1));
+        asset_handle two = fixture.manager->load(test_id(2));
+        asset_handle three = fixture.manager->load(test_id(3));
+        settle(*fixture.manager);
+        const std::vector<asset_id> bothMissing = {test_id(1), test_id(3)};
+        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
+
+        // Failing again after a retry lists the slot once.
+        fixture.manager->retry_failed(test_id(1));
+        settle(*fixture.manager);
+        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
+        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
+
+        // A slot that loads leaves the list; the others keep their slot order.
+        source->add(make_test_blob(test_id(1), "one"));
+        fixture.manager->retry_failed(test_id(1));
+        settle(*fixture.manager);
+        CHECK(one.state() == asset_state::LOADED);
+        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == std::vector<asset_id>{test_id(3)});
+        CHECK(fixture.manager->failed_ids(asset_error_code::CACHE_MISS).empty());
+        CHECK(fixture.manager->stats().failed == 1);
+    }
+
+    TEST_CASE("asset_manager - a fallback asked for before its type is registered is created after registration") {
+        pipeline_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.manager->types().unregister_type(asset_type_traits<test_asset>::id()));
+        CHECK(fixture.manager->fallback<test_asset>() == nullptr);
+        CONJURE_REQUIRE_OK(
+          fixture.manager->types().register_type(make_asset_type_desc<test_asset>(std::make_unique<test_loader>(), 1))
+        );
+        test_asset *fallback = fixture.manager->fallback<test_asset>();
+        REQUIRE(fallback != nullptr);
+        CHECK(fallback->content == "fallback");
+
+        // A PINNED_FALLBACK type creates it at registration even after an early request.
+        CONJURE_REQUIRE_OK(fixture.manager->types().unregister_type(asset_type_traits<test_asset>::id()));
+        CHECK(fixture.manager->fallback<test_asset>() == nullptr);
+        CONJURE_REQUIRE_OK(fixture.manager->types().register_type(
+          make_asset_type_desc<test_asset>(std::make_unique<test_loader>(), 1, asset_type_flags::PINNED_FALLBACK)
+        ));
+        REQUIRE(fixture.manager->fallback<test_asset>() != nullptr);
+        CHECK(fixture.manager->fallback<test_asset>()->content == "fallback");
+    }
+
+    TEST_CASE("asset_manager - a subscriber removed during event delivery receives no further events") {
+        pipeline_fixture fixture = {};
+        fixture.manager->swap_source(source_with({{test_id(1), "one"}, {test_id(2), "two"}}));
+        asset_manager &manager = *fixture.manager;
+        asset_subscription second = {};
+        usize firstEvents = 0;
+        usize secondEvents = 0;
+        const asset_subscription first = manager.subscribe([&manager, &second, &firstEvents](const asset_event &) {
+            ++firstEvents;
+            if (firstEvents == 1) {
+                manager.unsubscribe(second);
+            }
+        });
+        second = manager.subscribe([&secondEvents](const asset_event &) {
+            ++secondEvents;
+        });
+
+        asset_handle one = manager.load(test_id(1));
+        asset_handle two = manager.load(test_id(2));
+        settle(manager);
+        CHECK(one.state() == asset_state::LOADED);
+        CHECK(two.state() == asset_state::LOADED);
+        CHECK(firstEvents == 2);
+        CHECK(secondEvents == 0);
+        manager.unsubscribe(first);
+    }
+
+    TEST_CASE("asset_manager - a type mismatch is logged again by a new asset_manager") {
+        for (u32 round = 0; round < 2; ++round) {
+            CAPTURE(round);
+            pipeline_fixture fixture = {};
+            conjure::testing::log_capture logs = {};
+            logs.allow_errors();
+            fixture.manager->swap_source(source_with({{test_id(77), "seventy-seven"}}));
+            CHECK_FALSE(fixture.manager->bind<other_asset>(test_id(77)).is_bound());
+            CHECK_FALSE(fixture.manager->bind<other_asset>(test_id(77)).is_bound());
+            CHECK(logs.count(core::log_level::ERR) == 1);
+        }
+    }
+
     TEST_CASE("asset_load_batch - progress, completion and loaded count") {
         const asset_load_batch empty = {};
         CHECK(empty.is_complete());

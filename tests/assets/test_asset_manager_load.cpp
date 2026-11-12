@@ -276,6 +276,46 @@ TEST_SUITE("assets/asset_manager_load") {
         handle.reset();
     }
 
+    TEST_CASE("load_blocking - a dependency timeout leaves the dependent to the async pipeline [parallel]") {
+        load_fixture fixture(4);
+        asset_manager_desc desc = {};
+        desc.jobs = &fixture.pipeline.jobs;
+        desc.blockingTimeout = std::chrono::milliseconds(0);
+        auto source = std::make_unique<memory_asset_source>();
+        source->add(make_test_blob(test_id(1), "dependent", {test_id(2)}));
+        source->add(make_test_blob(test_id(2), "dependency"));
+        desc.source = std::move(source);
+        asset_manager manager(std::move(desc));
+        register_test_types(manager.types());
+
+        // A finishes its stage and waits in FINALISING; the load of B it queued is then held in
+        // load_cpu, so load_blocking(A) times out on B.
+        // Each wait step blocks in wait_idle() until the worker jobs have run, so a loaded machine
+        // that leaves a worker unscheduled for a while slows the case down instead of failing it.
+        asset_handle dependent = manager.load(test_id(1));
+        for (u32 step = 0; step < 100 && dependent.state() != asset_state::FINALISING; ++step) {
+            fixture.pipeline.jobs.wait_idle();
+            manager.update();
+        }
+        REQUIRE(dependent.state() == asset_state::FINALISING);
+        REQUIRE(manager.state_of(test_id(2)) == asset_state::QUEUED);
+        controls().blockLoadCpu = true;
+        manager.update();
+        CHECK(manager.state_of(test_id(2)) == asset_state::LOADING);   // no REQUIRE: B's job must be released
+        CONJURE_CHECK_ERROR(manager.load_blocking(test_id(1)), asset_error_code::TIMEOUT);
+        CHECK(dependent.state() == asset_state::FINALISING);
+
+        // Once B lands, the normal pipeline finalises A.
+        controls().blockLoadCpu = false;
+        for (u32 step = 0; step < 100 && !dependent.is_terminal(); ++step) {
+            fixture.pipeline.jobs.wait_idle();
+            manager.update();
+        }
+        CHECK(dependent.state() == asset_state::LOADED);
+        CHECK(manager.state_of(test_id(2)) == asset_state::LOADED);
+        dependent.reset();
+    }
+
     TEST_CASE("load - an unknown uuid fails with NOT_FOUND and logs an ERROR once") {
         load_fixture fixture = {};
         conjure::testing::log_capture logs = {};
@@ -634,6 +674,74 @@ TEST_SUITE("assets/asset_manager_load") {
         fixture.manager().reload(test_id(9));   // unknown: ignored
         fixture.manager().retry_failed(test_id(1));   // not FAILED: ignored
         CHECK(ref.state() == asset_state::LOADED);
+    }
+
+    TEST_CASE("regression - a reload that fails in finalise keeps the published payload's statistics") {
+        load_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.add(test_id(1), "v1");
+        asset_handle handle = fixture.manager().load(test_id(1));
+        fixture.manager().flush();
+        REQUIRE(handle.state() == asset_state::LOADED);
+        const u64 bytesBefore = fixture.manager().stats().bytesResident;
+        CHECK(bytesBefore == 2);
+
+        fixture.add(test_id(1), std::string(64, 'x'));
+        controls().failFinalise = true;
+        fixture.manager().reload(test_id(1));
+        fixture.manager().flush();
+        controls().failFinalise = false;
+        CHECK(handle.state() == asset_state::LOADED);
+        CHECK(handle.get<test_asset>()->content == "v1");
+        CHECK(fixture.manager().stats().bytesResident == bytesBefore);
+        REQUIRE(fixture.manager().last_error(test_id(1)) != nullptr);
+        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::FINALISE_FAILED));
+
+        // A reload that succeeds commits the new size.
+        fixture.manager().reload(test_id(1));
+        fixture.manager().flush();
+        CHECK(handle.get<test_asset>()->content == std::string(64, 'x'));
+        CHECK(fixture.manager().stats().bytesResident == 64);
+    }
+
+    TEST_CASE("regression - collect clears the error of an earlier failed reload") {
+        load_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.add(test_id(1), "v1");
+        asset_handle handle = fixture.manager().load(test_id(1));
+        fixture.manager().flush();
+        controls().failFinalise = true;
+        fixture.manager().reload(test_id(1));
+        fixture.manager().flush();
+        controls().failFinalise = false;
+        REQUIRE(handle.state() == asset_state::LOADED);
+        CHECK(fixture.manager().last_error(test_id(1)) != nullptr);
+
+        handle.reset();
+        CHECK(fixture.manager().collect() == 1);
+        CHECK(fixture.manager().state_of(test_id(1)) == asset_state::UNLOADED);
+        CHECK(fixture.manager().last_error(test_id(1)) == nullptr);
+        CHECK(fixture.manager().stats().bytesResident == 0);
+    }
+
+    TEST_CASE("regression - a load batch stays complete while a member hot-reloads") {
+        load_fixture fixture = {};
+        fixture.add(test_id(1), "v1");
+        asset_load_batch batch = fixture.manager().load_batch(std::vector<asset_id>{test_id(1)});
+        fixture.manager().flush();
+        REQUIRE(batch.is_complete());
+
+        fixture.add(test_id(1), "v2");
+        fixture.manager().reload(test_id(1));
+        REQUIRE(fixture.manager().state_of(test_id(1)) == asset_state::RELOADING);
+        CHECK(batch.is_complete());
+        CHECK(batch.progress() == 1.0f);
+        CHECK(batch.loaded_count() == 1);
+
+        fixture.manager().flush();
+        CHECK(batch.is_complete());
+        CHECK(batch.loaded_count() == 1);
+        CHECK(batch.handles()[0].get<test_asset>()->content == "v2");
     }
 
     TEST_CASE("events - fire once each on the main thread in order, after finalisation") {

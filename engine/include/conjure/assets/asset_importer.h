@@ -139,7 +139,8 @@ namespace conjure::assets {
 
             /// <summary>
             /// Reads a file next to the source (relative to the source's directory) and records it
-            /// as a side file: hashed into the source hash and watched for changes.
+            /// as a side file (even when the read fails, so a missing side file is watched): hashed
+            /// into the source hash and watched for changes.
             /// </summary>
             [[nodiscard]] core::result<std::vector<std::byte>> read_side_file(std::string_view relativePath);
 
@@ -160,7 +161,7 @@ namespace conjure::assets {
             void add_warning(std::string message);
 
             /// <summary>
-            /// Asset paths of every side file read so far.
+            /// Asset paths of every side file asked for so far, including ones that could not be read.
             /// </summary>
             [[nodiscard]] std::span<const std::string> side_files() const noexcept {
                 return mSideFiles;

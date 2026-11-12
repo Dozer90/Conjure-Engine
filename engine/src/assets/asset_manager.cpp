@@ -30,6 +30,21 @@ using namespace conjure::assets;
 /*===========================================================================*/
 // asset_load_batch
 
+namespace {
+    /// <summary>
+    /// A batch member that needs no more waiting. A RELOADING slot keeps its previous payload
+    /// published, so a hot reload does not make a complete batch incomplete again. Dependency
+    /// gating uses is_terminal() instead: it must wait for a reloading dependency.
+    /// </summary>
+    bool is_settled(const asset_handle &handle) noexcept {
+        if (!handle.is_bound()) {
+            return true;
+        }
+        const asset_state current = handle.state();
+        return current == asset_state::LOADED || current == asset_state::RELOADING || current == asset_state::FAILED;
+    }
+}
+
 asset_load_batch::asset_load_batch() {}
 
 asset_load_batch::asset_load_batch(std::vector<asset_handle> handles) :
@@ -39,7 +54,7 @@ asset_load_batch::~asset_load_batch() {}
 
 bool asset_load_batch::is_complete() const noexcept {
     for (const asset_handle &handle : mHandles) {
-        if (!handle.is_terminal()) {
+        if (!is_settled(handle)) {
             return false;
         }
     }
@@ -50,19 +65,20 @@ f32 asset_load_batch::progress() const noexcept {
     if (mHandles.empty()) {
         return 1.0f;
     }
-    usize terminal = 0;
+    usize settled = 0;
     for (const asset_handle &handle : mHandles) {
-        if (handle.is_terminal()) {
-            ++terminal;
+        if (is_settled(handle)) {
+            ++settled;
         }
     }
-    return static_cast<f32>(terminal) / static_cast<f32>(mHandles.size());
+    return static_cast<f32>(settled) / static_cast<f32>(mHandles.size());
 }
 
 usize asset_load_batch::loaded_count() const noexcept {
     usize loaded = 0;
     for (const asset_handle &handle : mHandles) {
-        if (handle.state() == asset_state::LOADED) {
+        const asset_state current = handle.state();
+        if (current == asset_state::LOADED || current == asset_state::RELOADING) {
             ++loaded;
         }
     }
@@ -131,6 +147,7 @@ struct asset_manager::state {
     completion_queue completions = {};
     std::vector<load_completion> drained = {};
     std::vector<u32> finalising = {};                          // slot indices awaiting finalise, arrival order
+    std::vector<u32> failedSlots = {};                         // slots that entered FAILED; compacted by failed_ids
     std::vector<retired_payload> retired = {};
     std::vector<pending_event> events = {};
     std::vector<subscriber> subscribers = {};
@@ -310,7 +327,7 @@ struct asset_manager::state {
 
         data.cpuOutput = std::move(stage.output).value();
         data.dependencyIds = std::move(stage.dependencies);
-        data.payloadBytes = stage.header.payloadSize;
+        data.pendingPayloadBytes = stage.header.payloadSize;
         if (slot.type.load(std::memory_order_acquire) == asset_type_id::INVALID) {
             slot.type.store(stage.header.type, std::memory_order_release);
         }
@@ -498,6 +515,7 @@ struct asset_manager::state {
         set_state(slot, asset_state::LOADED);
         data.dependencyHandles = std::move(data.pendingDependencyHandles);
         data.pendingDependencyHandles.clear();
+        data.payloadBytes = data.pendingPayloadBytes;
         data.lastError.reset();
         data.isReload = false;
         if (previous != nullptr) {
@@ -517,14 +535,19 @@ struct asset_manager::state {
         data.awaitingFinalise = false;
         data.lastError = failure;
         if (data.isReload) {
-            // The old payload stays published.
+            // The old payload stays published, and so do its dependencies.
             data.isReload = false;
+            restore_published_dependencies(data);
             set_state(slot, asset_state::LOADED);
             CONJURE_LOG_WARN(LOG_ASSETS, "reload of asset {} failed: {}", slot.id, failure.to_string());
             queue_event(slot, asset_event_kind::RELOAD_FAILED, std::move(failure));
             return;
         }
         set_state(slot, asset_state::FAILED);
+        if (!data.inFailedList) {
+            data.inFailedList = true;
+            failedSlots.push_back(slot.index);
+        }
         if (failure.is(asset_error_code::NOT_FOUND)) {
             if (!data.notFoundLogged) {
                 data.notFoundLogged = true;
@@ -546,10 +569,22 @@ struct asset_manager::state {
         }
         if (data.isReload) {
             data.isReload = false;
+            restore_published_dependencies(data);
             set_state(slot, asset_state::LOADED);
             return;
         }
         set_state(slot, asset_state::UNLOADED);
+    }
+
+    /// <summary>
+    /// accept_stage() replaced the dependency list with the one of the load in flight; when that
+    /// load is abandoned the published payload's list (the ids of its dependency handles) is back.
+    /// </summary>
+    void restore_published_dependencies(slot_data &data) {
+        data.dependencyIds.clear();
+        for (const asset_handle &dependency : data.dependencyHandles) {
+            data.dependencyIds.push_back(dependency.id());
+        }
     }
 
     void retire_pass() {
@@ -564,7 +599,10 @@ struct asset_manager::state {
         }
         std::vector<pending_event> firing = {};
         firing.swap(events);
-        const std::vector<subscriber> listeners = subscribers;   // callbacks may (un)subscribe
+
+        // The copy keeps a running callback alive; the live list decides who is still called; a
+        // subscriber added during delivery starts with the next update().
+        const std::vector<subscriber> listeners = subscribers;
         for (const pending_event &pending : firing) {
             asset_event event = {};
             event.kind = pending.kind;
@@ -573,11 +611,17 @@ struct asset_manager::state {
             event.version = pending.version;
             event.error = pending.error.has_value() ? &*pending.error : nullptr;
             for (const subscriber &listener : listeners) {
-                if (listener.callback) {
+                if (listener.callback && is_subscribed(listener.id)) {
                     listener.callback(event);
                 }
             }
         }
+    }
+
+    [[nodiscard]] bool is_subscribed(u64 subscriptionId) const noexcept {
+        return std::any_of(subscribers.begin(), subscribers.end(), [subscriptionId](const subscriber &listener) {
+            return listener.id == subscriptionId;
+        });
     }
 
     /*-------------------------------------------------------------------*/
@@ -754,6 +798,11 @@ struct asset_manager::state {
             }
             core::result<void> dependencyLoaded = load_blocking_slot(*dependency, context);
             if (!dependencyLoaded.has_value() && dependencyLoaded.get_error().is(asset_error_code::TIMEOUT)) {
+                // Still FINALISING/RELOADING: the async pipeline finalises it once the dependency lands.
+                const bool listed = std::find(finalising.begin(), finalising.end(), slot.index) != finalising.end();
+                if (data.awaitingFinalise && !listed) {
+                    finalising.push_back(slot.index);
+                }
                 visiting.erase(slot.index);
                 return dependencyLoaded;
             }
@@ -811,6 +860,7 @@ struct asset_manager::state {
                 data.dependencyHandles.clear();
                 data.dependencyIds.clear();
                 data.payloadBytes = 0;
+                data.lastError.reset();   // an earlier failed reload says nothing about the next load
                 queue_event(slot, asset_event_kind::UNLOADED);
                 ++unloaded;
                 changed = true;
@@ -881,11 +931,13 @@ struct asset_manager::state {
         if (existing != fallbacks.end()) {
             return existing->second.get();
         }
-        if (!fallbackAttempted.insert(type).second) {
-            return nullptr;
-        }
+        // Nothing is recorded for a type without a loader: a later registration may provide one,
+        // and its fallback must then be created on the next request.
         const asset_loader *loader = types.find_loader(type);
         if (loader == nullptr) {
+            return nullptr;
+        }
+        if (!fallbackAttempted.insert(type).second) {
             return nullptr;
         }
         core::result<asset_payload> created = loader->create_fallback();
@@ -979,6 +1031,10 @@ asset_manager::asset_manager(asset_manager_desc desc) :
 
 asset_manager::~asset_manager() {
     mState->shutdown();
+
+    // The mismatch log is process-wide (asset_ref has no manager to ask); a new manager, such as a
+    // reopened project, reports its mismatches afresh.
+    detail::forget_type_mismatches();
 
     // Internal handles go first so the external count below is exact.
     for (u32 index = 0; index < mState->slots.size(); ++index) {
@@ -1186,12 +1242,23 @@ asset_state asset_manager::state_of(const asset_id &id) const noexcept {
 }
 
 std::vector<asset_id> asset_manager::failed_ids(asset_error_code code) const {
-    std::vector<asset_id> ids = {};
-    for (u32 index = 0; index < mState->slots.size(); ++index) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_manager::failed_ids is main-thread only");
+    // The list holds every slot fail() moved to FAILED; the ones that left FAILED since (retried,
+    // loaded) drop out here, so the hot reload controller's per-frame query never walks every slot.
+    std::vector<u32> &failedSlots = mState->failedSlots;
+    std::erase_if(failedSlots, [this](u32 index) {
         const asset_slot &slot = mState->slots.at(index);
-        if (slot.state.load(std::memory_order_acquire) != asset_state::FAILED) {
-            continue;
+        if (slot.state.load(std::memory_order_acquire) == asset_state::FAILED) {
+            return false;
         }
+        mState->slots.data(slot).inFailedList = false;
+        return true;
+    });
+    std::sort(failedSlots.begin(), failedSlots.end());
+
+    std::vector<asset_id> ids = {};
+    for (const u32 index : failedSlots) {
+        const asset_slot &slot = mState->slots.at(index);
         const slot_data &data = mState->slots.data(slot);
         if (data.lastError.has_value() && data.lastError->is(code)) {
             ids.push_back(slot.id);

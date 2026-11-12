@@ -114,57 +114,88 @@ core::result<cooked_blob_header> conjure::assets::parse_cooked_blob_header(std::
     return header;
 }
 
-core::result<cooked_blob> conjure::assets::parse_cooked_blob(std::span<const std::byte> bytes) {
-    core::result<cooked_blob_header> parsedHeader = parse_cooked_blob_header(bytes);
-    if (!parsedHeader.has_value()) {
-        return std::move(parsedHeader).get_error();
-    }
-
-    cooked_blob blob = {};
-    blob.header = parsedHeader.value();
-
-    // Every range check is written in subtraction form: a corrupt header must never wrap a sum
-    // past the buffer size and reach the allocation below (the design promises CACHE_CORRUPT).
-    const usize available = bytes.size() - cooked_blob_header::SIZE;
-    if (blob.header.dependencyCount > available / 16) {
-        return corrupt(std::format(
-          "blob declares {} dependencies but only {} bytes follow the header",
-          blob.header.dependencyCount,
-          available
-        ));
-    }
-    const u64 payloadOffset = blob.header.payload_offset();
-    if (payloadOffset > bytes.size() || blob.header.payloadSize != bytes.size() - payloadOffset) {
-        return corrupt(std::format(
-          "blob declares a {} byte payload at offset {} but the file holds {} bytes",
-          blob.header.payloadSize,
-          payloadOffset,
-          bytes.size()
-        ));
-    }
-
-    detail::byte_reader in(bytes, cooked_blob_header::SIZE);
-    blob.dependencies.reserve(blob.header.dependencyCount);
-    for (u32 index = 0; index < blob.header.dependencyCount; ++index) {
-        asset_id dependency = {};
-        if (!in.uuid_value(dependency)) {
-            return corrupt("blob dependency list is truncated");
+namespace {
+    /// <summary>
+    /// Everything parse_cooked_blob validates (header, sizes, dependencies, payload hash), without
+    /// copying the payload: the caller takes it from 'outPayloadOffset' to the end of the bytes.
+    /// </summary>
+    core::result<cooked_blob> parse_blob_prefix(std::span<const std::byte> bytes, usize &outPayloadOffset) {
+        core::result<cooked_blob_header> parsedHeader = parse_cooked_blob_header(bytes);
+        if (!parsedHeader.has_value()) {
+            return std::move(parsedHeader).get_error();
         }
-        blob.dependencies.push_back(dependency);
+
+        cooked_blob blob = {};
+        blob.header = parsedHeader.value();
+
+        // Every range check is written in subtraction form: a corrupt header must never wrap a sum
+        // past the buffer size and reach an allocation (the design promises CACHE_CORRUPT).
+        const usize available = bytes.size() - cooked_blob_header::SIZE;
+        if (blob.header.dependencyCount > available / 16) {
+            return corrupt(std::format(
+              "blob declares {} dependencies but only {} bytes follow the header",
+              blob.header.dependencyCount,
+              available
+            ));
+        }
+        const u64 payloadOffset = blob.header.payload_offset();
+        if (payloadOffset > bytes.size() || blob.header.payloadSize != bytes.size() - payloadOffset) {
+            return corrupt(std::format(
+              "blob declares a {} byte payload at offset {} but the file holds {} bytes",
+              blob.header.payloadSize,
+              payloadOffset,
+              bytes.size()
+            ));
+        }
+
+        detail::byte_reader in(bytes, cooked_blob_header::SIZE);
+        blob.dependencies.reserve(blob.header.dependencyCount);
+        for (u32 index = 0; index < blob.header.dependencyCount; ++index) {
+            asset_id dependency = {};
+            if (!in.uuid_value(dependency)) {
+                return corrupt("blob dependency list is truncated");
+            }
+            blob.dependencies.push_back(dependency);
+        }
+
+        const std::span<const std::byte> payload = bytes.subspan(
+          static_cast<usize>(payloadOffset),
+          static_cast<usize>(blob.header.payloadSize)
+        );
+        const u64 actualHash = hash_bytes(payload);
+        if (actualHash != blob.header.payloadHash) {
+            return corrupt(std::format(
+              "blob payload hash {:#x} does not match the recorded {:#x}",
+              actualHash,
+              blob.header.payloadHash
+            ));
+        }
+        outPayloadOffset = static_cast<usize>(payloadOffset);
+        return blob;
+    }
+}
+
+core::result<cooked_blob> conjure::assets::parse_cooked_blob(std::span<const std::byte> bytes) {
+    usize payloadOffset = 0;
+    core::result<cooked_blob> blob = parse_blob_prefix(bytes, payloadOffset);
+    if (!blob.has_value()) {
+        return blob;
+    }
+    const std::span<const std::byte> payload = bytes.subspan(payloadOffset);
+    blob.value().payload.assign(payload.begin(), payload.end());
+    return blob;
+}
+
+core::result<cooked_blob> conjure::assets::parse_cooked_blob(std::vector<std::byte> &&bytes) {
+    usize payloadOffset = 0;
+    core::result<cooked_blob> blob = parse_blob_prefix(bytes, payloadOffset);
+    if (!blob.has_value()) {
+        return blob;
     }
 
-    const std::span<const std::byte> payload = bytes.subspan(
-      static_cast<usize>(payloadOffset),
-      static_cast<usize>(blob.header.payloadSize)
-    );
-    const u64 actualHash = hash_bytes(payload);
-    if (actualHash != blob.header.payloadHash) {
-        return corrupt(std::format(
-          "blob payload hash {:#x} does not match the recorded {:#x}",
-          actualHash,
-          blob.header.payloadHash
-        ));
-    }
-    blob.payload.assign(payload.begin(), payload.end());
+    // The header and dependency bytes in front of the payload are shifted out in place, so the
+    // buffer read from disk becomes the payload without a second allocation.
+    bytes.erase(bytes.begin(), bytes.begin() + static_cast<isize>(payloadOffset));
+    blob.value().payload = std::move(bytes);
     return blob;
 }

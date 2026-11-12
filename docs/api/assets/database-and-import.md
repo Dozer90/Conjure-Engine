@@ -79,15 +79,18 @@ during `scan()`); then `add_mount()` the roots (`"assets"`, `"engine"`), `open()
 | `result<void> open(cacheRoot, platform)` / `bool is_open()` / `const asset_cache *cache()` | opens the blob cache and the snapshot |
 | `result<scan_report> scan()` | walk every mount, create missing `.meta` files, hash changed sources, compute the stale set |
 | `vector<asset_id> stale_ids()` / `result<import_report> import_stale(jobs)` / `result<import_report> import(ids, jobs)` | cook sources into the cache, one job per source |
-| `result<asset_id> add_file(assetPath)` / `result<asset_id> create_asset(assetPath, importerId, bytes)` | register a new source (and write it) |
+| `result<asset_id> add_file(assetPath)` / `result<asset_id> create_asset(assetPath, importerId, bytes)` | register a new source (and write it); `create_asset` removes the source again when its `.meta` cannot be written |
 | `result<void> move_asset(id, newAssetPath)` / `result<void> delete_asset(id)` | rename keeps every uuid; delete removes source, `.meta`, blobs and records |
-| `result<asset_meta> read_meta(id)` / `result<void> write_meta(id, meta)` | the sidecar; a changed uuid is refused |
+| `result<asset_meta> read_meta(id)` / `result<void> write_meta(id, meta)` | the sidecar; a changed uuid is refused; a new importer or new settings make the asset stale |
 | `result<void> save_snapshot()` | persists `db.bin` (a cache; `scan()` saves it too) |
 | `vector<asset_record> records()` / `usize record_count()` / `optional<asset_record> find(id)` | browse |
 | `bool contains(id)` / `optional<asset_type_id> type_of(id)` / `optional<asset_record_status> status_of(id)` | allocation-free lookups |
 | `optional<asset_id> find_by_path(assetPath)` / `find_by_file_path(filePath)` / `optional<string> asset_path_of(id)` / `file_path_of(id)` | path conversions |
 | `vector<asset_id> dependencies_of(id)` / `dependents_of(id)` / `owners_of_side_file(assetPath)` | the graph |
 | `result<vector<asset_id>> dependency_closure(roots)` / `void collect_dependents(roots, outOrdered)` | transitive closure (uuid order); transitive dependents (depth order, roots first) |
+
+`add_file`, `create_asset` and `move_asset` refuse a path that leaves its mount (`"assets://../x"`,
+`"assets:///abs"`, `"assets://C:/abs"`) with `INVALID_ARGUMENT`, before touching any file.
 
 Lookups take a shared lock and are safe from any thread; every mutating call is main-thread only.
 
@@ -99,7 +102,7 @@ An `asset_record` carries `id`, `parentId` (the primary of a sub-asset), `type` 
 |---|---|
 | `OK` | loadable |
 | `MISSING_SOURCE` | the file is gone; a loaded payload stays loaded, new loads fail `NOT_FOUND` |
-| `META_INVALID` | the sidecar does not parse; it is never overwritten, fix it by hand |
+| `META_INVALID` | the sidecar does not parse (never overwritten, fix it by hand) or could not be created (read-only file or folder; the next `scan()` tries again) |
 | `DUPLICATE_UUID` | another source (first in sorted path order) owns the uuid; this one is excluded |
 | `IMPORT_FAILED` | the last import failed; the previous blob is kept and `import_log.txt` has the message |
 | `NO_IMPORTER` | no importer for the extension |
@@ -112,6 +115,12 @@ Asset paths are `"mount://relative/path#sub/path"`; `split_asset_path()` and `ma
 > sorted path order and flags the other `DUPLICATE_UUID`; it never rewrites a `.meta` to fix this. Delete the
 > copied `.meta` so the copy gets a fresh identity.
 
+The `.meta` is the identity. A uuid edited by hand in an existing `.meta` is refused by `scan()` (ERROR; the
+record keeps its uuid), but two changes at a known path are not edits: a source re-created there without its
+`.meta` gets a fresh uuid and starts over (the previous asset becomes `MISSING_SOURCE`, references to it break,
+and a WARN names both uuids), and a source moved there together with its `.meta` from a place it has left keeps
+its own uuid. Restore a `.meta` lost through version control before the next scan to keep its asset.
+
 ## The `.meta` sidecar
 
 `asset_meta` (`conjure/assets/asset_meta.h`) is the parsed form of `<source>.meta`: `id`, `importerId`,
@@ -120,7 +129,8 @@ to uuid) and `unknown` (top-level keys the module does not know, preserved on wr
 `meta_path_of(sourcePath)`, `is_meta_path(path)`, `parse_asset_meta(text)`, `serialize_asset_meta(meta)`
 (sorted keys, deterministic), `read_asset_meta(fs, path)`, `write_asset_meta(fs, path, meta)` (atomic) and
 `canonical_settings_hash(value)`, which ignores key order and whitespace. Prefer `database.read_meta()` /
-`write_meta()`: they also refresh the record, mark the source stale and refuse a uuid change.
+`write_meta()`: they also refresh the record, mark the source stale when its importer or settings change (even
+for two importers of the same version) and refuse a uuid change.
 
 ## Adding an asset type
 
@@ -210,7 +220,8 @@ ignoring case), optional `default_settings()` (written into new `.meta` files) a
 `imported_asset` has a `type`, a `displayName`, a sorted `dependencies` list and the `payload` bytes.
 
 The context offers `source_path()`, `source_bytes()`, `settings()`, `platform()`, `primary_id()`,
-`read_side_file(relativePath)` (a file next to the source; it becomes part of the source hash and is watched),
+`read_side_file(relativePath)` (a file next to the source; it becomes part of the source hash and is watched,
+even when it is missing, so its appearance re-imports a source whose import failed for want of it),
 `sub_asset_id(subPath)` (a uuid that stays the same on every import), `find_asset_by_path(path)` (the uuid of
 another source, by asset path or relative to this source) and `add_warning(message)`.
 
@@ -301,8 +312,10 @@ class editor_reload {
 ```
 
 What one `update()` does: a modified source, `.meta` (settings or importer change) or side file marks its owners
-dirty; an added file is registered; a removed one becomes `MISSING_SOURCE` (its payload stays loaded) and is
-restored when it comes back. Dirty sources plus slots `FAILED` with `CACHE_MISS` are re-imported synchronously,
+dirty; a `.meta` written by the database itself (a new source's, or sub-asset uuids appended by an import) does
+not; an added file is registered; a removed one becomes `MISSING_SOURCE` (its payload stays loaded) and is
+restored when it comes back. Dirty sources plus slots `FAILED` with `CACHE_MISS` whose record is `OK` are
+re-imported synchronously (a source whose import failed waits for a change to it, its `.meta` or a side file),
 then every changed asset and every `RELOAD_WITH_DEPENDENCIES` dependent is reloaded in dependency order, each
 once. `last_report()` says what happened (`changesSeen`, `sourcesReimported`, `reloaded`, `deferred`).
 
@@ -313,7 +326,9 @@ once. `last_report()` says what happened (`changesSeen`, `sourcesReimported`, `r
 > `update()`, once it is `LOADED`.
 
 `file_watcher` is an interface (`add_root`, `snapshot`, `poll(outChanges)`), so a native watcher can replace the
-polling one later. `scan_now()` runs one pass synchronously for tests and tools.
+polling one later. `scan_now()` runs one pass synchronously for tests and tools. A pass that keeps failing (a
+watched root was deleted) logs one WARN, again only when the failure changes, and one INFO when passes succeed
+again.
 
 ## API summary
 

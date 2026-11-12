@@ -74,17 +74,21 @@ Cache validity is content based: `sourceHash` (source bytes plus side files, sor
 written into the blob header and compared at scan; mtime + size only decides whether to re-hash
 (a source with side files is always re-hashed, since their changes are invisible in its own stat).
 Every cache, meta, pack and snapshot write is `tmp + rename`. The cooker alternates
-`dependency_closure` and `import` until the closure stops growing, because a source's dependencies
-are only known once it has been imported.
+`dependency_closure` and `import` until no member of the closure is left to import (each source at
+most once per cook), because a source's dependencies are only known once it has been imported; only
+members of the final closure can fail the cook.
 
-Records without a usable uuid (corrupt or duplicate meta) carry a transient uuid that is never
-persisted, so they are browsable (`records()`, `find_by_path`) and loads of them fail with
+Records without a usable uuid (corrupt, duplicate or unwritable meta) carry a transient uuid that is
+never persisted, so they are browsable (`records()`, `find_by_path`) and loads of them fail with
 `META_INVALID` / `DUPLICATE_UUID`. A uuid edited in an existing `.meta` is refused at scan (ERROR,
-in-memory uuid kept). Removed sources become `MISSING_SOURCE` (at scan, or at once through the hot
-reload controller); loaded payloads stay loaded and fresh loads fail `NOT_FOUND` until the file is
-back. The importer named in the `.meta` is authoritative at import time: an importer change made
+in-memory uuid kept), except for a meta the scan itself created and for the uuid of a known asset
+that left its old place (moved here). Removed sources become `MISSING_SOURCE` (at scan, or at once
+through the hot reload controller); loaded payloads stay loaded and fresh loads fail `NOT_FOUND`
+until the file is back. The importer named in the `.meta` is authoritative at import time: an importer change made
 by hand re-imports with the new importer (an unknown name makes the record `NO_IMPORTER` until the
-meta is fixed). Blob and pack readers validate every declared range in subtraction form, so a corrupt
+meta is fixed). A blob header names no importer, so an imported primary switched to another importer
+(`write_meta()`, or a meta that differs from the previous record at scan) stays stale until imported. A
+meta the scan creates over a known asset's path logs a WARN naming both uuids. Blob and pack readers validate every declared range in subtraction form, so a corrupt
 header cannot wrap a sum past the buffer and reach an allocation or a wild read; the cycle checks
 (database Tarjan pass, manager load-time DFS) are iterative, so dependency depth is not bounded by
 the stack.

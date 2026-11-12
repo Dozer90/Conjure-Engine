@@ -91,17 +91,18 @@ namespace conjure::assets {
 
         public:
             /// <summary>
-            /// True when every handle is terminal (an empty batch is complete).
+            /// True when every handle has settled: LOADED, RELOADING (its previous payload stays
+            /// published) or FAILED; unbound handles count as settled and an empty batch is complete.
             /// </summary>
             [[nodiscard]] bool is_complete() const noexcept;
 
             /// <summary>
-            /// Terminal handles divided by total, 0..1 (1 for an empty batch).
+            /// Settled handles divided by total, 0..1 (1 for an empty batch).
             /// </summary>
             [[nodiscard]] f32 progress() const noexcept;
 
             /// <summary>
-            /// Number of handles that are LOADED.
+            /// Number of handles with a published payload (LOADED or RELOADING).
             /// </summary>
             [[nodiscard]] usize loaded_count() const noexcept;
 
@@ -124,7 +125,7 @@ namespace conjure::assets {
         u32 failed = 0;
         u32 retired = 0;          // payloads awaiting destruction
         u32 jobsInFlight = 0;
-        u64 bytesResident = 0;    // cooked payload bytes of LOADED slots
+        u64 bytesResident = 0;    // cooked bytes of the published payloads (LOADED and RELOADING slots)
         u64 frameIndex = 0;
     };
 
@@ -230,7 +231,8 @@ namespace conjure::assets {
             /// <summary>
             /// Main thread. Runs the whole pipeline inline, dependencies first, and returns the
             /// LOADED handle or the failure (the slot is then FAILED). Waits for an in-flight job
-            /// up to blockingTimeout (TIMEOUT). Inside a frame it logs one WARN per frame (R23).
+            /// up to blockingTimeout (TIMEOUT; the slot then stays with the async pipeline, which
+            /// finishes it on a later update()). Inside a frame it logs one WARN per frame (R23).
             /// </summary>
             [[nodiscard]] core::result<asset_handle> load_blocking(const asset_id &id);
 
@@ -277,8 +279,8 @@ namespace conjure::assets {
             }
 
             /// <summary>
-            /// The error of a FAILED slot (or of the last failed reload), else nullptr. Valid until
-            /// the slot changes state.
+            /// The error of a FAILED slot (or of the last failed reload, until collect() unloads the
+            /// slot), else nullptr. Valid until the slot changes state.
             /// </summary>
             [[nodiscard]] const core::error *last_error(const asset_id &id) const noexcept;
 
@@ -289,7 +291,7 @@ namespace conjure::assets {
 
             /// <summary>
             /// Slots that are FAILED with the given code (the hot reload controller repairs
-            /// CACHE_MISS).
+            /// CACHE_MISS). Main thread.
             /// </summary>
             [[nodiscard]] std::vector<asset_id> failed_ids(asset_error_code code) const;
 
@@ -329,7 +331,13 @@ namespace conjure::assets {
             // Events and statistics
 
             [[nodiscard]] asset_subscription subscribe(asset_event_callback callback);
+
+            /// <summary>
+            /// Takes effect immediately, including for events the current update() has not
+            /// delivered yet.
+            /// </summary>
             void unsubscribe(asset_subscription subscription);
+
             [[nodiscard]] asset_manager_stats stats() const noexcept;
             [[nodiscard]] u64 frame_index() const noexcept;
 

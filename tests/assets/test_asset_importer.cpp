@@ -225,6 +225,11 @@ TEST_SUITE("assets/asset_importer") {
         CONJURE_REQUIRE_OK(context.read_side_file("./robot.bin"));
         CHECK(context.side_files().size() == 1);
         CONJURE_CHECK_ERROR(context.read_side_file("missing.bin"), asset_error_code::IO_ERROR);
+
+        // A side file that cannot be read is recorded too, so its appearance can be watched for.
+        REQUIRE(context.side_files().size() == 2);
+        CHECK(context.side_files()[0] == "assets://models/missing.bin");
+        CHECK(context.side_files()[1] == "assets://models/robot.bin");
     }
 
     TEST_CASE("import_context - sub-asset ids are stable and paths resolve through the resolver") {

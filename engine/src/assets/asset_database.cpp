@@ -84,6 +84,20 @@ namespace {
     bool is_transient(asset_record_status status) noexcept {
         return status == asset_record_status::META_INVALID || status == asset_record_status::DUPLICATE_UUID;
     }
+
+    /// <summary>
+    /// A normalised path relative to a mount root that names a file inside it. path_utils::join
+    /// returns an absolute right-hand side unchanged and normalize keeps a leading "..", so either
+    /// would reach outside the mount.
+    /// </summary>
+    bool stays_in_mount(std::string_view relative) noexcept {
+        return !relative.empty() && relative != "." && relative != ".." && !core::str::starts_with(relative, "../") &&
+          !path_utils::is_absolute(relative);
+    }
+
+    core::error leaves_mount(std::string_view assetPath) {
+        return core::error(core::error_code::INVALID_ARGUMENT, std::format("'{}' leaves its mount", assetPath));
+    }
 }
 
 std::string_view conjure::assets::to_string(asset_record_status status) noexcept {
@@ -302,10 +316,25 @@ core::result<scan_report> asset_database::scan() {
         return a.relativePath < b.relativePath;
     });
     report.filesScanned = static_cast<u32>(sources.size());
+    core::flat_hash_set<std::string> scannedPaths = {};
+    scannedPaths.reserve(sources.size());
+    for (const scanned_source &source : sources) {
+        scannedPaths.insert(make_asset_path(mMounts[source.mountIndex].name, source.relativePath));
+    }
 
     std::vector<entry> next = {};
     core::flat_hash_map<asset_id, std::string> claimed = {};   // uuid -> first path that declared it
     std::vector<usize> toHash = {};                             // indices into 'next' (primaries)
+
+    // A meta this scan created at a path whose asset had a persisted uuid. D1 makes the source a
+    // new asset; a .meta lost through version control is the usual cause, so the identity that
+    // broke is named after the walk unless its uuid turned up elsewhere (the source moved).
+    struct replaced_identity {
+        std::string assetPath = {};
+        asset_id fresh = {};
+        asset_id previous = {};
+    };
+    std::vector<replaced_identity> replaced = {};
 
     auto previous_for = [&](const asset_id &id, const std::string &assetPath) -> const entry * {
         const auto byId = previousById.find(id);
@@ -317,6 +346,27 @@ core::result<scan_report> asset_database::scan() {
             return &previous[byPath->second];
         }
         return nullptr;
+    };
+
+    // True when 'id' belongs to a known primary that has left its old place: its record is
+    // MISSING_SOURCE, its source is gone, or the meta there no longer declares the uuid. The meta
+    // is read only in that last case, which needs a uuid change at a known path to get here.
+    auto moved_here = [&](const asset_id &id, const std::string &assetPath) -> bool {
+        const auto known = previousById.find(id);
+        if (known == previousById.end()) {
+            return false;
+        }
+        const asset_record &knownRecord = previous[known->second].record;
+        const std::string knownPath = make_asset_path(mMounts[knownRecord.mountIndex].name, knownRecord.relativePath);
+        if (knownRecord.is_sub_asset() || knownPath == assetPath) {
+            return false;
+        }
+        if (knownRecord.status == asset_record_status::MISSING_SOURCE || !scannedPaths.contains(knownPath)) {
+            return true;
+        }
+        const std::string knownMeta = meta_path_of(file_path_for(knownRecord.mountIndex, knownRecord.relativePath));
+        const core::result<asset_meta> declared = read_asset_meta(*mFileSystem, knownMeta);
+        return !declared.has_value() || declared.value().id != id;
     };
 
     for (const scanned_source &source : sources) {
@@ -334,6 +384,7 @@ core::result<scan_report> asset_database::scan() {
 
         core::result<asset_meta> metaRead = read_asset_meta(*mFileSystem, metaPath);
         std::optional<asset_meta> meta = std::nullopt;
+        bool metaCreated = false;
         if (metaRead.has_value()) {
             meta = std::move(metaRead).value();
         } else if (metaRead.get_error().is(asset_error_code::NOT_FOUND)) {
@@ -346,13 +397,27 @@ core::result<scan_report> asset_database::scan() {
                 fresh.settings = importer->default_settings();
             }
             core::result<void> written = write_asset_meta(*mFileSystem, metaPath, fresh);
-            if (!written.has_value()) {
-                return written.get_error();
+            if (written.has_value()) {
+                ++report.metasCreated;
+                metaCreated = true;
+                const auto lost = previousByPath.find(assetPath);
+                if (lost != previousByPath.end()) {
+                    const asset_record &previousRecord = previous[lost->second].record;
+                    if (!is_transient(previousRecord.status) &&
+                        previousRecord.status != asset_record_status::MISSING_SOURCE) {
+                        replaced.push_back(replaced_identity{assetPath, fresh.id, previousRecord.id});
+                    }
+                }
+                meta = std::move(fresh);
+            } else {
+                // A read-only meta, folder or file system degrades this record only (design section
+                // 6); its meta is still missing, so a later scan tries the write again.
+                CONJURE_LOG_WARN(LOG_ASSETS, "{}: cannot write its meta: {}", assetPath, written.get_error().message());
             }
-            ++report.metasCreated;
-            meta = std::move(fresh);
         } else {
             CONJURE_LOG_WARN(LOG_ASSETS, "{}: {}", assetPath, metaRead.get_error().message());
+        }
+        if (!meta.has_value()) {
             const entry *old = previous_for(asset_id(), assetPath);
             const bool keepTransient = old != nullptr && old->record.status == asset_record_status::META_INVALID;
             primary.record.id = keepTransient ? old->record.id : transient_id();
@@ -363,13 +428,15 @@ core::result<scan_report> asset_database::scan() {
         }
 
         // A uuid edited by hand in an existing meta would orphan every reference: the in-memory
-        // uuid is kept and the file is left alone for the user to fix.
+        // uuid is kept and the file is left alone for the user to fix. Two cases are not edits
+        // (D1, the meta is the identity): a meta this scan created is a new asset, and the uuid of
+        // a known asset whose source or meta left its old place is that asset moved here.
         const auto previousAtPath = previousByPath.find(assetPath);
-        if (previousAtPath != previousByPath.end()) {
+        if (previousAtPath != previousByPath.end() && !metaCreated) {
             const asset_record &oldRecord = previous[previousAtPath->second].record;
             const bool persistedId = !is_transient(oldRecord.status) &&
               oldRecord.status != asset_record_status::MISSING_SOURCE;
-            if (persistedId && oldRecord.id != meta->id) {
+            if (persistedId && oldRecord.id != meta->id && !moved_here(meta->id, assetPath)) {
                 CONJURE_LOG_ERROR(
                   LOG_ASSETS,
                   "{}: meta uuid changed from {} to {}; keeping {}",
@@ -408,12 +475,24 @@ core::result<scan_report> asset_database::scan() {
         if (importer == nullptr && meta->importerId.empty()) {
             importer = mImporters->find_for_path(source.relativePath);
             if (importer != nullptr) {
-                meta->importerId = std::string(importer->id());
-                meta->importerVersion = importer->version();
-                meta->settings = importer->default_settings();
-                core::result<void> written = write_asset_meta(*mFileSystem, metaPath, *meta);
-                if (!written.has_value()) {
-                    return written.get_error();
+                asset_meta pinned = *meta;
+                pinned.importerId = std::string(importer->id());
+                pinned.importerVersion = importer->version();
+                pinned.settings = importer->default_settings();
+                core::result<void> written = write_asset_meta(*mFileSystem, metaPath, pinned);
+                if (written.has_value()) {
+                    *meta = std::move(pinned);
+                } else {
+                    // import() takes the importer from the meta on disk, which still names none:
+                    // the record says so (NO_IMPORTER) until a later scan records it.
+                    CONJURE_LOG_WARN(
+                      LOG_ASSETS,
+                      "{}: cannot record importer {} in its meta: {}",
+                      assetPath,
+                      importer->id(),
+                      written.get_error().message()
+                    );
+                    importer = nullptr;
                 }
             }
         }
@@ -427,7 +506,9 @@ core::result<scan_report> asset_database::scan() {
             ++report.missingImporters;
         }
 
-        const entry *old = previous_for(meta->id, assetPath);
+        // A new asset at a reused path inherits nothing from the asset that used the path before.
+        const entry *old = metaCreated ? nullptr : previous_for(meta->id, assetPath);
+        const bool primaryImported = old != nullptr && old->record.type != asset_type_id::INVALID;
         bool needsHash = true;
         if (old != nullptr) {
             primary.record.type = old->record.type;
@@ -435,6 +516,8 @@ core::result<scan_report> asset_database::scan() {
             primary.record.sourceHash = old->record.sourceHash;
             primary.dependencies = old->dependencies;
             primary.sideFiles = old->sideFiles;
+            primary.importerSwitched = old->importerSwitched ||
+              (primaryImported && old->record.importerId != primary.record.importerId);
             if (primary.record.status == asset_record_status::OK && status_from_previous_import(old->record.status)) {
                 primary.record.status = old->record.status;
             }
@@ -455,6 +538,20 @@ core::result<scan_report> asset_database::scan() {
         }
 
         for (const sub_asset_entry &sub : meta->subAssets) {
+            if (!claimed.try_emplace(sub.id, assetPath).second) {
+                CONJURE_LOG_WARN(LOG_ASSETS, "{}#{} duplicates uuid {}; excluded", assetPath, sub.subPath, sub.id);
+                ++report.duplicateUuids;
+                continue;
+            }
+
+            // The meta is append-only, the record table is not: a sub-asset the importer dropped
+            // at its last import has neither a record nor a blob, and gets neither back until an
+            // import produces it again. A fresh clone (no previous primary) creates every one.
+            const entry *oldSub = previous_for(sub.id, make_asset_path(mount.name, source.relativePath, sub.subPath));
+            if (oldSub == nullptr && primaryImported && !mCache->contains(sub.id)) {
+                continue;
+            }
+
             entry subEntry = {};
             subEntry.record.id = sub.id;
             subEntry.record.parentId = meta->id;
@@ -468,7 +565,6 @@ core::result<scan_report> asset_database::scan() {
             subEntry.record.sourceWriteTime = next[primaryIndex].record.sourceWriteTime;
             subEntry.record.status = next[primaryIndex].record.status;
             subEntry.record.displayName = std::string(path_utils::filename(sub.subPath));
-            const entry *oldSub = previous_for(sub.id, make_asset_path(mount.name, source.relativePath, sub.subPath));
             if (oldSub != nullptr) {
                 subEntry.record.type = oldSub->record.type;
                 subEntry.record.payloadHash = oldSub->record.payloadHash;
@@ -478,12 +574,20 @@ core::result<scan_report> asset_database::scan() {
                 subEntry.dependencies = oldSub->dependencies;
             }
             subEntry.record.sourceHash = next[primaryIndex].record.sourceHash;
-            if (claimed.try_emplace(sub.id, assetPath).second) {
-                next.push_back(std::move(subEntry));
-            } else {
-                CONJURE_LOG_WARN(LOG_ASSETS, "{}#{} duplicates uuid {}; excluded", assetPath, sub.subPath, sub.id);
-                ++report.duplicateUuids;
-            }
+            next.push_back(std::move(subEntry));
+        }
+    }
+
+    for (const replaced_identity &item : replaced) {
+        if (!claimed.contains(item.previous)) {
+            CONJURE_LOG_WARN(
+              LOG_ASSETS,
+              "{}: its .meta was missing, so it is a new asset {}; {} is now MISSING_SOURCE and references to "
+              "it break",
+              item.assetPath,
+              item.fresh,
+              item.previous
+            );
         }
     }
 
@@ -703,7 +807,9 @@ core::result<import_report> asset_database::import(std::span<const asset_id> ids
             return;
         }
 
-        job.sourceHash = hash_source(job.mountIndex, job.relativePath, job.sideFiles);
+        // The hash describes the bytes the importer read, not a second read that a concurrent
+        // write could make disagree with the blob.
+        job.sourceHash = hash_source_bytes(bytes.value(), job.sideFiles);
         const u64 settingsHash = canonical_settings_hash(job.meta.settings.root());
         for (imported_asset &asset : output.value().assets) {
             source_job::produced item = {};
@@ -790,11 +896,24 @@ core::result<void> asset_database::apply_import_results(std::vector<source_job> 
                 primary.record.importerId = job.meta.importerId;
                 primary.record.importerVersion = noImporter ? job.meta.importerVersion : job.importerVersion;
             }
+            if (job.importer != nullptr) {
+                primary.importerSwitched = false;   // the switch was tried; IMPORT_FAILED waits for a change
+            }
             for (const usize child : children) {
                 mEntries[child].record.status = status;
                 mEntries[child].record.importerId = primary.record.importerId;
                 mEntries[child].record.importerVersion = primary.record.importerVersion;
             }
+
+            // Side files asked for by the failed import join the known ones (never replace them: a
+            // failure before the importer ran has none), so a missing one re-imports its owner
+            // when it appears.
+            primary.sideFiles.insert(primary.sideFiles.end(), job.sideFiles.begin(), job.sideFiles.end());
+            std::sort(primary.sideFiles.begin(), primary.sideFiles.end());
+            primary.sideFiles.erase(
+              std::unique(primary.sideFiles.begin(), primary.sideFiles.end()),
+              primary.sideFiles.end()
+            );
             if (noImporter) {
                 CONJURE_LOG_WARN(LOG_ASSETS, "import of {} skipped: {}", job.assetPath, job.failure->message());
             } else {
@@ -813,6 +932,7 @@ core::result<void> asset_database::apply_import_results(std::vector<source_job> 
             primary.record.importerVersion = job.importerVersion;
             primary.record.settingsHash = canonical_settings_hash(job.meta.settings.root());
             primary.sideFiles = job.sideFiles;
+            primary.importerSwitched = false;
             primary.record.status = asset_record_status::OK;
         }
 
@@ -882,6 +1002,15 @@ core::result<void> asset_database::apply_import_results(std::vector<source_job> 
         std::erase_if(mEntries, [&](const entry &candidate) {
             return droppedSubAssets.contains(candidate.record.id);
         });
+
+        // Their blobs go too: a scan or write_meta() tells a dropped sub-asset (no blob) from one
+        // whose record was lost before a snapshot save (blob kept, record re-created).
+        for (const asset_id &dropped : droppedSubAssets) {
+            core::result<void> removed = mCache->remove(dropped);
+            if (!removed.has_value()) {
+                CONJURE_LOG_WARN(LOG_ASSETS, "{}", removed.get_error().message());
+            }
+        }
     }
     rebuild_indexes_locked();
     rebuild_graphs_locked();
@@ -933,10 +1062,13 @@ core::result<asset_id> asset_database::add_file(std::string_view assetPath) {
     if (!mountIndex.has_value()) {
         return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
+    const std::string relative = path_utils::normalize(parts->relativePath);
+    if (!stays_in_mount(relative)) {
+        return leaves_mount(assetPath);
+    }
     if (find_by_path(assetPath).has_value()) {
         return core::error(core::error_code::ALREADY_EXISTS, std::format("'{}' is already known", assetPath));
     }
-    const std::string relative = path_utils::normalize(parts->relativePath);
     const std::string filePath = file_path_for(*mountIndex, relative);
     core::result<core::vfs::file_stat> stat = mFileSystem->stat(filePath);
     if (!stat.has_value() || !stat.value().isRegular) {
@@ -974,6 +1106,10 @@ core::result<asset_id> asset_database::create_asset(
     if (!mountIndex.has_value()) {
         return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
+    const std::string relative = path_utils::normalize(parts->relativePath);
+    if (!stays_in_mount(relative)) {
+        return leaves_mount(assetPath);
+    }
     const asset_importer *importer = mImporters->find(importerId);
     if (importer == nullptr) {
         return make_asset_error(
@@ -984,7 +1120,6 @@ core::result<asset_id> asset_database::create_asset(
     if (find_by_path(assetPath).has_value()) {
         return core::error(core::error_code::ALREADY_EXISTS, std::format("'{}' is already known", assetPath));
     }
-    const std::string relative = path_utils::normalize(parts->relativePath);
     const std::string filePath = file_path_for(*mountIndex, relative);
     if (mFileSystem->exists(filePath)) {
         return core::error(core::error_code::ALREADY_EXISTS, std::format("a file exists at '{}'", assetPath));
@@ -999,7 +1134,21 @@ core::result<asset_id> asset_database::create_asset(
     meta.importerId = std::string(importer->id());
     meta.importerVersion = importer->version();
     meta.settings = importer->default_settings();
-    CONJURE_TRY(write_asset_meta(*mFileSystem, meta_path_of(filePath), meta));
+    core::result<void> metaWritten = write_asset_meta(*mFileSystem, meta_path_of(filePath), meta);
+    if (!metaWritten.has_value()) {
+        // A source without its meta would get a fresh uuid at the next scan: the pair is created
+        // together or not at all.
+        core::result<void> removed = mFileSystem->remove(filePath);
+        if (!removed.has_value()) {
+            CONJURE_LOG_WARN(
+              LOG_ASSETS,
+              "cannot remove '{}' after its meta failed to write: {}",
+              filePath,
+              removed.get_error().message()
+            );
+        }
+        return metaWritten.get_error();
+    }
 
     bool metaCreated = false;
     core::result<asset_id> registered = register_source(*mountIndex, relative, metaCreated);
@@ -1109,6 +1258,10 @@ core::result<void> asset_database::move_asset(const asset_id &id, std::string_vi
     if (!mountIndex.has_value()) {
         return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
+    const std::string newRelative = path_utils::normalize(parts->relativePath);
+    if (!stays_in_mount(newRelative)) {
+        return leaves_mount(newAssetPath);
+    }
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {
         return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
@@ -1120,7 +1273,6 @@ core::result<void> asset_database::move_asset(const asset_id &id, std::string_vi
         return core::error(core::error_code::ALREADY_EXISTS, std::format("'{}' is already known", newAssetPath));
     }
 
-    const std::string newRelative = path_utils::normalize(parts->relativePath);
     const std::string oldFile = file_path_for(record->mountIndex, record->relativePath);
     const std::string newFile = file_path_for(*mountIndex, newRelative);
     if (mFileSystem->exists(newFile)) {
@@ -1282,6 +1434,11 @@ core::result<void> asset_database::write_meta(const asset_id &id, const asset_me
         if (primary == nullptr) {
             return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
         }
+        // A blob header names no importer, so the stale rule cannot see a switch between two
+        // importers of the same version: the flag keeps the primary stale until it is imported.
+        if (primary->record.type != asset_type_id::INVALID && primary->record.importerId != meta.importerId) {
+            primary->importerSwitched = true;
+        }
         primary->record.importerId = meta.importerId;
         primary->record.importerVersion = importer != nullptr ? importer->version() : meta.importerVersion;
         primary->record.settingsHash = canonical_settings_hash(meta.settings.root());
@@ -1297,8 +1454,14 @@ core::result<void> asset_database::write_meta(const asset_id &id, const asset_me
             mEntries[child].record.settingsHash = primaryRecord.settingsHash;
             mEntries[child].record.status = primaryRecord.status;
         }
+        // As at scan: a sub-asset the last import dropped stays out of the table (no record, no
+        // blob); a primary that was never imported gets every sub-asset of its meta.
+        const bool primaryImported = primaryRecord.type != asset_type_id::INVALID;
         for (const sub_asset_entry &sub : meta.subAssets) {
             if (find_entry_locked(sub.id) != nullptr) {
+                continue;
+            }
+            if (primaryImported && !mCache->contains(sub.id)) {
                 continue;
             }
             entry subEntry = {};
@@ -1704,7 +1867,14 @@ u64 asset_database::hash_source(
     if (!bytes.has_value()) {
         return 0;
     }
-    u64 hash = detail::fnv1a64_bytes(bytes.value());
+    return hash_source_bytes(bytes.value(), sideFiles);
+}
+
+u64 asset_database::hash_source_bytes(
+  std::span<const std::byte> primaryBytes,
+  std::span<const std::string> sideFiles
+) const {
+    u64 hash = detail::fnv1a64_bytes(primaryBytes);
     std::vector<std::string> sorted(sideFiles.begin(), sideFiles.end());
     std::sort(sorted.begin(), sorted.end());
     for (const std::string &sidePath : sorted) {
@@ -1926,6 +2096,7 @@ void asset_database::recompute_stale() {
 
             stale_candidate candidate = {};
             candidate.primary = primary.record.id;
+            candidate.stale = primary.importerSwitched;   // the blob header cannot tell two importers apart
             const auto probe = [&](const entry &item) {
                 if (item.record.type == asset_type_id::INVALID) {
                     candidate.stale = true;   // never imported

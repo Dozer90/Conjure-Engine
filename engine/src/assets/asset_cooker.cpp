@@ -86,31 +86,30 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
     std::sort(roots.begin(), roots.end());
     roots.erase(std::unique(roots.begin(), roots.end()), roots.end());
 
-    // Dependencies are only known once a source is imported, so the closure and the import of
-    // its stale members alternate until the closure stops growing.
+    // Dependencies are only known once a source is imported, so the closure and the import of its
+    // stale members alternate until no member is left to import. Each primary is imported at most
+    // once per cook (importedThisCook), so the loop ends. Only the final closure's members can
+    // fail as non-cookable.
     const asset_type_registry &types = mDatabase->types();
     std::vector<asset_id> members = {};
+    std::vector<cook_failure> memberFailures = {};
     core::flat_hash_set<asset_id> importedThisCook = {};
-    usize previousClosureSize = 0;
-    bool firstPass = true;
     while (true) {
         core::result<std::vector<asset_id>> closure = mDatabase->dependency_closure(roots);
         if (!closure.has_value()) {
             report.failures.push_back(cook_failure{asset_id(), {}, closure.get_error().to_string()});
             return std::move(closure).get_error();
         }
-        const bool grew = firstPass || closure.value().size() != previousClosureSize;
-        previousClosureSize = closure.value().size();
-        firstPass = false;
 
         // Drop types excluded from packs and records that can never import; the latter are failures.
         members.clear();
+        memberFailures.clear();
         std::vector<asset_id> toImport = {};
         const std::vector<asset_id> stale = mDatabase->stale_ids();
         for (const asset_id &id : closure.value()) {
             const std::optional<asset_record> record = mDatabase->find(id);
             if (!record.has_value()) {
-                report.failures.push_back(cook_failure{id, {}, "record vanished during cook"});
+                memberFailures.push_back(cook_failure{id, {}, "record vanished during cook"});
                 continue;
             }
             const asset_type_desc *type = types.find(record->type);
@@ -119,7 +118,7 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
             }
             if (!can_cook(record->status)) {
                 const std::optional<std::string> path = mDatabase->asset_path_of(id);
-                report.failures.push_back(
+                memberFailures.push_back(
                   cook_failure{id, path.value_or(std::string()), std::format("record is {}", to_string(record->status))}
                 );
                 continue;
@@ -132,7 +131,7 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
         }
         std::sort(toImport.begin(), toImport.end());
         toImport.erase(std::unique(toImport.begin(), toImport.end()), toImport.end());
-        if (toImport.empty() || !grew) {
+        if (toImport.empty()) {
             break;
         }
         for (const asset_id &primary : toImport) {
@@ -151,6 +150,10 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
           imported.value().warnings.end()
         );
     }
+
+    // Import failures are already listed ahead of these, so for an asset whose import failed the
+    // import message is the one kept by the per-id deduplication below.
+    report.failures.insert(report.failures.end(), memberFailures.begin(), memberFailures.end());
 
     // Every member must have a valid blob now; types unregistered since import are failures too.
     pack_writer writer = {};

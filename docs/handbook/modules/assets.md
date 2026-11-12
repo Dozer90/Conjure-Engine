@@ -87,8 +87,16 @@ For every regular file that is not a `.meta` and not an atomic-write temporary (
 sidecar (new uuid, importer chosen by extension, `default_settings()`; `NO_IMPORTER` still gets a uuid). A
 second meta declaring a uuid already owned becomes `DUPLICATE_UUID` and a corrupt meta `META_INVALID`; both
 records carry a **transient** uuid that is never persisted, so they are browsable and loads of them fail with
-their status. A uuid edited in an existing meta is refused (ERROR, in-memory uuid kept). Removed sources
-become `MISSING_SOURCE`; the record stays.
+their status. A meta that cannot be written (read-only file, folder or file system) degrades only its record
+to `META_INVALID` (WARN; the next scan retries) and a failed write that would record a newly registered importer
+leaves the record `NO_IMPORTER`; neither aborts the scan. A uuid edited in an existing meta is refused (ERROR,
+in-memory uuid kept), with two exceptions that follow D1 (the meta is the identity): a meta this scan created is
+a new asset (it inherits nothing from the record that used the path before, which becomes `MISSING_SOURCE`;
+unless that uuid turned up at another path, a WARN names both uuids, since a `.meta` lost through version control
+breaks every reference this way), and the uuid of a known primary whose record is `MISSING_SOURCE`, whose
+source is gone or whose old meta no longer declares it is that asset moved here. Removed sources become
+`MISSING_SOURCE`; the record stays. A sub-asset the last import dropped gets no record back from its
+(append-only) meta unless its blob exists; a primary never imported gets every one.
 
 ### 3.2 Hashing and the stale rule
 
@@ -98,7 +106,10 @@ re-hashed because a side file's change is invisible in the owner's stat. Hashing
 source bytes followed by every side file sorted by path; `settingsHash` = `canonical_settings_hash`
 (sorted keys, minified). A primary is **stale** when its blob header is missing or unreadable or any of
 `sourceHash`, `settingsHash`, `importerVersion`, `typeVersion`, `type` or `formatVersion` differs from the
-expectation (`asset_cache::is_valid`). The scan then deletes leftover `*.tmp` blobs and saves the snapshot.
+expectation (`asset_cache::is_valid`). A blob header names no importer, so an imported primary whose meta
+switched to another importer (through `write_meta()`, or seen by `scan()` against the previous record) carries
+the private `entry::importerSwitched` flag and is stale until an import runs its new importer; the flag is not
+persisted. The scan then deletes leftover `*.tmp` blobs and saves the snapshot.
 
 ### 3.3 Import
 
@@ -107,12 +118,17 @@ expectation (`asset_cache::is_valid`). The scan then deletes leftover `*.tmp` bl
 `jobs.parallel_for`, bracketed by `importer_registry::begin_imports()` / `end_imports()`. Each job builds an
 `import_context` (settings from the meta, a `sub_asset_table` seeded with the meta's entries, a resolver into
 the database), calls `importer.import()`, builds one blob per `imported_asset` (header from the record,
-`make_cooked_blob`), and writes it through `asset_cache::write`. The main thread then merges: new sub-asset
-uuids into the meta (rewritten sorted; append-only, so a dropped sub-asset keeps its uuid for when it
-returns), record types and display names, side-file owners, `payloadHash` (the report's `changed` list is
-every asset whose hash differs or is new), then rebuilds the indexes and graphs, writes `import_log.txt` and
-saves the snapshot. A failing source is recorded `IMPORT_FAILED` with its previous blob kept; the importer
+`make_cooked_blob`; its `sourceHash` is computed from the bytes the importer was handed, so a file rewritten
+during the import stays stale), and writes it through `asset_cache::write`. The main thread then merges: new
+sub-asset uuids into the meta (rewritten sorted; append-only, so a dropped sub-asset keeps its uuid for when it
+returns, while its record and blob are removed), record types and display names, side-file owners,
+`payloadHash` (the report's `changed` list is every asset whose hash differs or is new), then rebuilds the
+indexes and graphs, writes `import_log.txt` and saves the snapshot. A failing source is recorded
+`IMPORT_FAILED` with its previous blob kept and the side files its import asked for added to the known ones
+(`read_side_file` records a path even when the read fails, so a missing side file is watched); the importer
 named in the meta is authoritative, so a hand-edited importer id is honoured (unknown name: `NO_IMPORTER`).
+`add_file`, `create_asset` and `move_asset` refuse a path that leaves its mount (`INVALID_ARGUMENT`), and
+`create_asset` removes the source it wrote when its meta cannot be written.
 
 ### 3.4 Graphs and snapshot
 
@@ -123,7 +139,9 @@ is not bounded by the C stack; every member of a non-trivial component is flagge
 `dependency_closure` is a DFS over the forward graph returning uuid order; `collect_dependents` a BFS over the
 reverse graph returning roots first, depth ascending, deduplicated. The snapshot (`detail::database_snapshot`:
 mount names, records, dependency lists, side files, little-endian with a versioned header) is purely a cache:
-missing, corrupt, another version or different mounts all log INFO and fall back to a full scan.
+missing, corrupt, another version or different mounts all log INFO and fall back to a full scan. The parser
+reserves for no more records than the remaining bytes can hold (113 bytes at least per record), so a forged
+count costs nothing before the truncation check rejects the file.
 
 ## 4. Cache layout and validation
 
@@ -138,9 +156,11 @@ A `.cab` is the 80-byte `cooked_blob_header` (magic `CJAB`, written field by fie
 `dependencyCount` uuids, then the payload at `align_up(80 + 16 * n, 16)`. `parse_cooked_blob` validates magic,
 format version, every declared range against the buffer **in subtraction form** (so a corrupt `payloadSize`
 or `dependencyCount` cannot wrap the sum past the buffer and reach a 64 GiB reserve or a wild read; the
-regression tests pin this) and the payload hash. `asset_cache::read` additionally rejects a header whose `id`
-is not the uuid of the path. Every write is `<path>.tmp` + rename; `remove_temporaries()` clears what a crash
-left behind and `scan()` calls it.
+regression tests pin this) and the payload hash. `asset_cache::read` hands the buffer it read to the
+`parse_cooked_blob(std::vector<std::byte> &&)` overload, which shifts the payload to the front in place, so a
+load holds one copy of the blob, not two; it additionally rejects a header whose `id` is not the uuid of the
+path. Every write is `<path>.tmp` + rename; `remove_temporaries()` clears what a crash left behind and `scan()`
+calls it.
 
 ## 5. The load pipeline
 
@@ -171,26 +191,40 @@ not, which gives hot reload its dependencies-first order for free.
    frameIndex, isReload}, cpuOutput)`; success publishes (6), failure fails the slot (or, on a reload, keeps
    the old payload, returns to `LOADED` and queues `RELOAD_FAILED`).
 4. **Retire pass** (6).
-5. **Events**: the queued `asset_event`s are delivered to subscribers in order.
+5. **Events**: the queued `asset_event`s are delivered to subscribers in order. The subscriber list is copied
+   (a callback may unsubscribe itself) but each call checks the live list, so an `unsubscribe()` made during
+   delivery takes effect for the remaining events; a subscriber added during delivery starts next `update()`.
 
 `load_blocking` runs the same stages inline, dependencies first (depth first, cycle guarded), takes over a
 `QUEUED` slot, waits up to `blockingTimeout` for a job that already owns the slot (`TIMEOUT`) and logs one WARN
-per frame when called inside a frame (R23). A FAILED dependency never fails its dependent: the dependent
-finalises, reads the fallback through its ref and one WARN is logged per slot.
+per frame when called inside a frame (R23). A `TIMEOUT` on a dependency puts every dependent it took out of the
+`finalising` list on the way down back into it, so the async pipeline finalises them once the dependency lands.
+A FAILED dependency never fails its dependent: the dependent finalises, reads the fallback through its ref and
+one WARN is logged per slot. `fail()` also lists the slot in `failedSlots` (once, `slot_data::inFailedList`);
+`failed_ids()` drops the slots that left `FAILED` and answers from that list, so the hot reload controller's
+per-frame query does not walk every slot.
 
 ## 6. Publish, retire and collect
 
 `publish(slot, data, payload)`: move the payload into `slot_data::payload`, `object.store(ptr, release)`,
-`version++`, state `LOADED`, swap `pendingDependencyHandles` into `dependencyHandles`, push the previous payload
-(if any) onto `retired` with the current `frameIndex`, queue `LOADED` or `RELOADED`. The retire pass destroys
+`version++`, state `LOADED`, swap `pendingDependencyHandles` into `dependencyHandles`, commit
+`pendingPayloadBytes` (set by the stage) to `payloadBytes`, push the previous payload (if any) onto `retired`
+with the current `frameIndex`, queue `LOADED` or `RELOADED`. A reload that fails or is discarded restores
+`dependencyIds` from the published `dependencyHandles`, so `stats().bytesResident` and the dependency list keep
+describing the payload that is still published. The retire pass destroys
 entries with `retireFrame + RETIRE_FRAMES <= frameIndex`, so a pointer from `get()` is valid until the end of
 the next frame (D4) and the test with `counted_asset` pins the exact frame.
 
 `collect()` loops until no change: every `LOADED` slot with `strongRefs == 0` and not `pinned` gets
-`object = nullptr`, `version++`, `UNLOADED`, its payload retired and its dependency handles released (which can
-make the dependencies collectable in the next iteration). `UNLOADED` events fire on the following `update()`.
-Fallbacks are created lazily from `loader.create_fallback()` (or at registration with `PINNED_FALLBACK`
-through `asset_type_registry_hooks::onRegistered`), live outside the slot table and die with the type.
+`object = nullptr`, `version++`, `UNLOADED`, its payload retired, its dependency handles released (which can
+make the dependencies collectable in the next iteration) and the error of an earlier failed reload cleared.
+`UNLOADED` events fire on the following `update()`. Fallbacks are created lazily from
+`loader.create_fallback()` (or at registration with `PINNED_FALLBACK` through
+`asset_type_registry_hooks::onRegistered`), live outside the slot table and die with the type; a request made
+while the type has no loader records nothing, so the fallback is created once the type is registered.
+`asset_load_batch` counts a `RELOADING` member as settled (its old payload stays published), unlike
+`is_terminal()`, which dependency gating keeps using. The type-mismatch log (`detail::report_type_mismatch`) is
+process-wide because an `asset_ref` has no manager; `~asset_manager` clears it (`forget_type_mismatches`).
 `shutdown()` refuses new work (`SHUTTING_DOWN`), waits for jobs in flight, discards their completions and
 returns queued slots to `UNLOADED`; the destructor asserts that no external handle is alive (debug) and logs
 and continues in Distribution.
@@ -224,26 +258,33 @@ last pass started (interval 0 means every poll) and applies the previous pass's 
 when the **next** pass sees the same pending value (one stable interval of debounce), and a pending value that
 changes again restarts the wait. Removals go through `mPendingRemoval` the same way, and a change reverted
 before it is stable is never reported. The first `poll()` without a `snapshot()` only records the baseline.
-Temporaries (`path_filters.h`) are never tracked. `scan_now()` runs a pass synchronously for tests.
+Temporaries (`path_filters.h`) are never tracked. `scan_now()` runs a pass synchronously for tests. A failing
+pass (a root deleted) logs one WARN; `mLastPassFailure` (guarded by `mMutex`) suppresses repeats of the same
+message, and the first pass that succeeds again logs INFO and re-arms the WARN.
 
 `hot_reload_controller::update()` (after `asset_manager::update()`): `poll()`, classify each change (a `.meta`
-change re-reads the meta and marks the owner dirty when settings or importer changed; a source change marks it
-dirty; a side file change marks every owner through `owners_of_side_file`; `ADDED` calls `add_file`;
-`REMOVED` calls `mark_source_missing`, and a later `ADDED` of the same path calls `mark_source_present`), add
-the slots `FAILED` with `CACHE_MISS` (`asset_manager::failed_ids`), `database.import(dirty)` synchronously,
-then `collect_dependents(changed)` and, in that depth order, `manager.reload(id)` for every `LOADED` slot that
-changed or whose type has `RELOAD_WITH_DEPENDENCIES`. A changed asset whose slot is still in flight is
-deferred (`hot_reload_report::deferred`) and reloaded by a later `update()` once it is `LOADED`.
+change re-reads the meta and marks the owner dirty only when the importer or the settings hash differ from the
+record's, the record is not `OK` or the owner is stale, so the metas `add_file` and an import write cause no
+second import while an inspector `write_meta()` that changes the importer or the settings leaves the owner
+stale and re-imports it; a source change marks it dirty; a side file change marks every owner through
+`owners_of_side_file`; `ADDED` calls `add_file`; `REMOVED` calls `mark_source_missing`, and a later `ADDED` of
+the same path calls `mark_source_present`), add the slots
+`FAILED` with `CACHE_MISS` (`asset_manager::failed_ids`) whose record is `OK` (an `IMPORT_FAILED` source waits
+for a change), `database.import(dirty)` synchronously, then `collect_dependents(changed)` (plus those failed
+slots whose record is `OK` after the import) and, in that depth order, `manager.reload(id)` for every `LOADED`
+slot that changed or whose type has `RELOAD_WITH_DEPENDENCIES`. A changed asset whose slot is still in flight
+is deferred (`hot_reload_report::deferred`) and reloaded by a later `update()` once it is `LOADED`.
 
 ## 9. Cooker and pack determinism
 
 `asset_cooker::cook`: validate settings (`INVALID_ARGUMENT` for an empty output directory, `NOT_FOUND` for an
 unknown root), `scan()`, roots = `roots` + `alwaysInclude` + every `engine://` record (or all records with
-`includeAll`), then **alternate** `dependency_closure` and `import` until the closure stops growing, because a
-source's dependencies are only known once it has been imported. Drop `EXCLUDE_FROM_PACK` types, fail with
-`IMPORT_FAILED` and write nothing if any member failed (every failure in the report; the good imports stay in
-the cache), otherwise `pack_writer::add` every blob (re-verifying `payloadHash`), `write` the pack and the
-manifest, both `tmp + rename`.
+`includeAll`), then **alternate** `dependency_closure` and `import` until no member of the closure is left to
+import (each source at most once per cook, `importedThisCook`), because a source's dependencies are only known
+once it has been imported; only members of the final closure are reported as non-cookable. Drop
+`EXCLUDE_FROM_PACK` types, fail with `IMPORT_FAILED` and write nothing if any member failed (every failure in
+the report; the good imports stay in the cache), otherwise `pack_writer::add` every blob (re-verifying
+`payloadHash`), `write` the pack and the manifest, both `tmp + rename`.
 
 `pack_writer::build` sorts entries by uuid, deduplicates payloads by `(payloadHash, payloadSize, bytes)`,
 aligns each payload to 16 bytes and writes the 64-byte header, the 72-byte TOC entries, the dependency table,
@@ -279,6 +320,9 @@ cases that shape the code:
 | failed dependency | dependent still finalises; WARN once |
 | cycle | every member `CYCLIC_DEPENDENCY` at import (Tarjan) and again at load (DFS) |
 | reload failure | old payload stays, `LOADED`, `RELOAD_FAILED` |
+| meta cannot be written | record `META_INVALID` (or `NO_IMPORTER` when only the importer could not be recorded), WARN, scan continues; `create_asset` removes its source |
+| asset path leaving its mount | `INVALID_ARGUMENT` from `add_file` / `create_asset` / `move_asset`, nothing touched |
+| watcher pass failing | one WARN per distinct failure, INFO once it recovers |
 | crash mid-write | `*.tmp` ignored by scan and watcher, removed on the next `scan()` |
 | handles alive at manager destruction | assert in Debug / Development, ERROR log in Distribution |
 
@@ -302,11 +346,11 @@ and `test_export_roundtrip` cover the cross-cutting topics. Everything is headle
 | File | Proves |
 |---|---|
 | `test_asset_ref`, `test_asset_handle_lifetime`, `test_asset_slot` | 24-byte layout and the reflect contract, strong count exactness, unbound behaviour, the destructor assert |
-| `test_asset_manager`, `test_asset_manager_load` | bind rules, priorities, budget (`finaliseBudget = 0` finalises exactly one per update), dependency order, failed dependency, cycles (both paths), batches, collect, retirement after exactly `RETIRE_FRAMES`, events, `flush`, `shutdown`, 1,000 blobs through 4 workers; two regressions on reversed-dependency reloads |
-| `test_asset_database`, `test_import_cache` | scan, duplicate policy, moves, `MISSING_SOURCE`, refused uuid change, CSR graphs, a 200-member Tarjan component, side files, snapshot round trip, parallel import of 1,000 sources equal to serial byte for byte, staleness on each input |
-| `test_asset_cache`, `test_cooked_blob` | path layout, `is_valid` per field, truncation, flipped bytes, mislabelled uuid, the wrap-around regressions |
-| `test_file_watcher`, `test_hot_reload` | debounce, temporaries, `add_root` during a pass; leaf / flagged / unflagged propagation, settings and importer changes, side files, removal and return, deferral while in flight, `CACHE_MISS` self-heal |
-| `test_asset_source`, `test_asset_pack`, `test_asset_cooker`, `test_export_roundtrip` | the source contract over all four sources, `swap_source` under a parked read, pack validation and dedup, closure rules, all-or-nothing, byte-identical cooks, pack loads equal to cache loads |
+| `test_asset_manager`, `test_asset_manager_load` | bind rules, priorities, budget (`finaliseBudget = 0` finalises exactly one per update), dependency order, failed dependency, cycles (both paths), batches (complete while a member reloads), collect, retirement after exactly `RETIRE_FRAMES`, events (unsubscribe during delivery), `flush`, `shutdown`, 1,000 blobs through 4 workers; regressions on reversed-dependency reloads, a `load_blocking` dependency timeout, failed-reload statistics, `failed_ids`, late fallbacks and mismatch logging re-armed by a new manager |
+| `test_asset_database`, `test_import_cache` | scan, duplicate policy, moves, `MISSING_SOURCE`, refused uuid change (and the re-created and moved-here exceptions, with the WARN for a lost meta), CSR graphs, a 200-member Tarjan component, side files, snapshot round trip and a forged record count, parallel import of 1,000 sources equal to serial byte for byte, staleness on each input, dropped sub-assets, a source rewritten mid-import, unwritable metas, paths leaving the mount |
+| `test_asset_cache`, `test_cooked_blob` | path layout, `is_valid` per field, truncation, flipped bytes, mislabelled uuid, the wrap-around regressions, the owning parse overload |
+| `test_file_watcher`, `test_hot_reload` | debounce, temporaries, `add_root` during a pass, one WARN for a failing pass; leaf / flagged / unflagged propagation, settings and importer changes (a same-version switch through `write_meta()` too), no second import for a database-written meta, side files (including one missing at import), removal and return, deferral while in flight, `CACHE_MISS` self-heal and no retry loop after a failed repair |
+| `test_asset_source`, `test_asset_pack`, `test_asset_cooker`, `test_export_roundtrip` | the source contract over all four sources, `swap_source` under a parked read, pack validation and dedup, closure rules (a dependency swapped or deleted before the cook), all-or-nothing, byte-identical cooks, pack loads equal to cache loads |
 | `test_asset_extension_desc`, `test_binary_asset`, `test_asset_type_registry`, `test_asset_importer`, `test_asset_loader`, `test_asset_meta`, `test_asset_payload`, `test_asset_types`, `test_assets_error` | the remaining headers |
 
 ## 13. Open items
@@ -314,9 +358,10 @@ and `test_export_roundtrip` cover the cross-cutting topics. Everything is headle
 Native OS watchers behind `file_watcher` (for projects above ~50k files); zero-copy payload aliasing and
 memory-mapped packs; LRU eviction (today `collect()` is explicit); stripping database, importer and cooker
 sources from Distribution builds; streaming loads; several packs per export; the editor commands
-"regenerate uuid" / "repair meta" over the functions this module exposes. The integration tests named in the
-design (`test_assets_renderer_headless`, `test_assets_scene`) and the benchmarks (`bench_asset_ref_get`,
-`bench_asset_load`, `bench_pack_lookup`) land with the modules they need.
+"regenerate uuid" / "repair meta" over the functions this module exposes. The integration suites the design
+names landed with wave 4 (`tests/integration/test_assets_renderer_headless.cpp`,
+`tests/integration/test_assets_scene.cpp`); the benchmarks `bench_asset_ref_get`, `bench_asset_load` and
+`bench_pack_lookup` are still owed (`tests/benchmarks/` has no assets scenario yet).
 
 ## Related
 

@@ -257,6 +257,65 @@ TEST_SUITE("assets/asset_cooker") {
         }
     }
 
+    TEST_CASE("regression - a dependency swapped for a never-imported asset is imported during the cook") {
+        pipeline_fixture pipeline = {};
+        asset_cooker cooker(*pipeline.database, pipeline.cache(), *pipeline.fileSystem, pipeline.jobs);
+        pipeline.write_source("leaf.ta", "leaf");
+        pipeline.write_source("other.ta", "other");
+        pipeline.write_source("top.ta", "dep-path leaf.ta\ntop");
+        CONJURE_REQUIRE_OK(pipeline.database->scan());
+        const asset_id leaf = pipeline.id_of("leaf.ta");
+        const asset_id other = pipeline.id_of("other.ta");
+        const asset_id top = pipeline.id_of("top.ta");
+        CONJURE_REQUIRE_OK(pipeline.database->import(std::vector<asset_id>{top, leaf}, pipeline.jobs));
+
+        // The closure keeps its size (two members) while 'other' replaces 'leaf'.
+        pipeline.write_source("top.ta", "dep-path other.ta\ntop");
+        cook_settings settings = {};
+        settings.outputDirectory = "export";
+        settings.roots = {top};
+        core::result<cook_report> report = cooker.cook(settings);
+        CONJURE_REQUIRE_OK(report);
+        CHECK(report.value().failures.empty());
+        CHECK(report.value().assetCount == 2);
+        pack_reader reader = {};
+        CONJURE_REQUIRE_OK(reader.open(*pipeline.fileSystem, "export/content.cpak"));
+        CHECK(reader.find(top) != nullptr);
+        CHECK(reader.find(other) != nullptr);
+        CHECK(reader.find(leaf) == nullptr);
+    }
+
+    TEST_CASE("regression - a dependency deleted and replaced before a cook does not fail it") {
+        pipeline_fixture pipeline = {};
+        conjure::testing::log_capture logs = {};
+        asset_cooker cooker(*pipeline.database, pipeline.cache(), *pipeline.fileSystem, pipeline.jobs);
+        pipeline.write_source("leaf.ta", "leaf");
+        pipeline.write_source("other.ta", "other");
+        pipeline.write_source("top.ta", "dep-path leaf.ta\ntop");
+        CONJURE_REQUIRE_OK(pipeline.database->scan());
+        const asset_id leaf = pipeline.id_of("leaf.ta");
+        const asset_id other = pipeline.id_of("other.ta");
+        const asset_id top = pipeline.id_of("top.ta");
+        CONJURE_REQUIRE_OK(pipeline.database->import(std::vector<asset_id>{top, leaf}, pipeline.jobs));
+
+        // The first pass still closes over the old graph, where 'leaf' is now MISSING_SOURCE.
+        CONJURE_REQUIRE_OK(pipeline.fileSystem->remove("assets/leaf.ta"));
+        CONJURE_REQUIRE_OK(pipeline.fileSystem->remove("assets/leaf.ta.meta"));
+        pipeline.write_source("top.ta", "dep-path other.ta\ntop");
+        cook_settings settings = {};
+        settings.outputDirectory = "export";
+        settings.roots = {top};
+        core::result<cook_report> report = cooker.cook(settings);
+        CONJURE_REQUIRE_OK(report);
+        CHECK(report.value().failures.empty());
+        CHECK(report.value().assetCount == 2);
+        CHECK(pipeline.database->find(leaf)->status == asset_record_status::MISSING_SOURCE);
+        pack_reader reader = {};
+        CONJURE_REQUIRE_OK(reader.open(*pipeline.fileSystem, "export/content.cpak"));
+        CHECK(reader.find(other) != nullptr);
+        CHECK(reader.find(leaf) == nullptr);
+    }
+
     TEST_CASE("asset_cooker - identical payloads are stored once in the pack") {
         cook_fixture fixture = {};
         fixture.pipeline.write_source("copy1.ta", "same bytes");

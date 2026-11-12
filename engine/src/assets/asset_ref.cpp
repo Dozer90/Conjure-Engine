@@ -58,6 +58,11 @@ void conjure::assets::detail::report_type_mismatch(const asset_id &id, asset_typ
     );
 }
 
+void conjure::assets::detail::forget_type_mismatches() noexcept {
+    const std::scoped_lock lock(mismatch_mutex());
+    reported_mismatches().clear();
+}
+
 /*===========================================================================*/
 /*===========================================================================*/
 // asset_handle
