@@ -123,7 +123,9 @@ crossing the window.
 Up to `MAX_GAMEPADS` (4) gamepads occupy slots 0 to 3; `snapshot().gamepad(index)` returns the slot's
 `gamepad_state` (an out-of-range index asserts). A slot is `connected` after a `gamepad_connection_event`; a
 disconnect releases every held button with an edge and zeroes the axes, and reconnecting starts from a clean slot.
-`window::gamepad_name(index)` gives the device's name.
+A gamepad plugged in while all four slots are taken waits and takes the first slot that frees, one frame after that
+slot's disconnect, so the disconnect's released edges are seen first. `window::gamepad_name(index)` gives the device's
+name.
 
 `gamepad_button` and `gamepad_axis` (`conjure/platform/gamepad.h`) follow the SDL game controller layout: buttons
 `A`, `B`, `X`, `Y`, `LEFT_BUMPER`, `RIGHT_BUMPER`, `BACK`, `START`, `GUIDE`, `LEFT_THUMB`, `RIGHT_THUMB`,
@@ -234,5 +236,5 @@ its layout is fixed. `stats()` returns `input_stats`: `eventsApplied`, `eventsIn
 - 📘 API: [Platform overview](index.md)
 - 📘 API: [Data types](../core/data-types.md) for flag enumerations and `has_flag()`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Platform module](../../handbook/modules/platform.md): the state machine in full and the layout the
-  scripting frame block mirrors
+- 🛠 Handbook: [Platform module](../../handbook/modules/platform.md): the state machine in full and how the
+  scripting frame block copies the snapshot

@@ -66,9 +66,11 @@ namespace conjure::platform::glfw {
             bool mCursorWarpSupported = true;       // false on Wayland: glfwSetCursorPos is unavailable
             bool mIconSupported = true;             // false on Cocoa and Wayland: windows have no icon of their own
             math::ivec2 mWindowedPosition = math::ivec2(0);
+            bool mWindowedPositionKnown = false;            // false: created fullscreen without a position
             math::uvec2 mWindowedSize = math::uvec2(0);     // last size the OS confirmed while windowed
             cursor_mode mCursorMode = cursor_mode::NORMAL;
             bool mMonitorsDirty = true;
+            bool mRescanJoysticks = false;                  // a slot freed: a waiting pad takes it on the next pump
             std::vector<monitor_info> mMonitors = {};
             std::vector<std::vector<video_mode>> mVideoModes = {};
             std::array<gamepad_slot, MAX_GAMEPADS> mGamepads = {};
@@ -128,7 +130,9 @@ namespace conjure::platform::glfw {
 
             /// <summary>
             /// A joystick connected or disconnected: assigns or frees a gamepad slot and queues the
-            /// gamepad_connection_event. Joysticks without a gamepad mapping are ignored (P11).
+            /// gamepad_connection_event. Joysticks without a gamepad mapping are ignored (P11). A gamepad
+            /// that found all slots taken gets the first slot that frees: its connect arrives one pump after
+            /// that slot's disconnect.
             /// </summary>
             void on_joystick(int joystickId, bool connected);
 
@@ -143,6 +147,7 @@ namespace conjure::platform::glfw {
             void scan_joysticks();
             void poll_gamepads();
             void rebuild_monitors();
+            [[nodiscard]] math::ivec2 centred_on_work_area(int width, int height) const noexcept;
             void patch_drop_spans() noexcept;
             void warn_feature_unavailable(optional_feature feature, std::string_view what);
             [[nodiscard]] core::result<void> feature_unavailable(optional_feature feature, std::string_view what);

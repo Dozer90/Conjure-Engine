@@ -153,15 +153,17 @@ coordinates; `set_position` returns `FEATURE_UNAVAILABLE` on Wayland, where appl
 
 `set_fullscreen(true, monitorIndex)` switches to *windowed fullscreen*: the window covers monitor `monitorIndex` at
 its current resolution, with no video-mode change (so a crash never leaves the desktop in a strange mode).
-`set_fullscreen(false)` restores the last windowed size. Both deliver a `framebuffer_resized_event` on the next pump.
-`is_fullscreen()` reports the state; `MONITOR_NOT_FOUND` leaves everything unchanged.
+`set_fullscreen(false)` restores the last windowed size and position; a window created fullscreen without
+`window_desc::position` is centred on its monitor's work area instead. Both deliver a `framebuffer_resized_event` on
+the next pump. `is_fullscreen()` reports the state; `MONITOR_NOT_FOUND` leaves everything unchanged.
 
 `monitors()` returns a `std::span<const monitor_info>`, primary first, refreshed by `pump_events()` when a monitor is
 plugged in or out. `monitor_info` (`conjure/platform/monitor.h`) carries `name`, `isPrimary`, `position` (logical
 desktop coordinates), `currentMode` (a `video_mode`: `width`, `height`, `refreshRateHz`, in pixels), `contentScale`
 and `workArea` (logical, excluding task bars). `video_modes(monitorIndex)` lists every mode a monitor supports, for a
 settings screen; it is empty for an unknown index. The null window has one monitor, `"Null Monitor"`,
-1920 x 1080 at 60 Hz.
+1920 x 1080 at 60 Hz, whose `contentScale` is the window's (`nullContentScale`, then whatever
+`simulate_content_scale()` sets).
 
 ## Cursor modes
 

@@ -458,6 +458,51 @@ TEST_SUITE("platform/backend_conformance") {
     }
 
     TEST_CASE_TEMPLATE(
+      "backend_conformance - leaving fullscreen on a window created fullscreen centres it on the monitor work area",
+      Factory,
+      null_factory,
+      glfw_factory
+    ) {
+        // The glfw window restored itself at the monitor origin, the position GLFW reported while it covered the
+        // monitor, so Win32 put the title bar above the top of the screen. A glfw fullscreen window is shown and
+        // focused even though the factory clears VISIBLE.
+        CONJURE_CONFORMANCE_BEGIN();
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        window_desc desc = Factory::desc();
+        desc.fullscreen = true;
+        result<std::unique_ptr<window>> created = create_window(desc);
+        REQUIRE_MESSAGE(created.has_value(), testing::describe_error(created));
+        window &target = *created.value();
+        static_cast<void>(target.pump_events());
+        REQUIRE(target.is_fullscreen());
+        REQUIRE_FALSE(target.monitors().empty());
+        const math::urect workArea = target.monitors()[0].workArea;
+
+        CONJURE_CHECK_OK(target.set_fullscreen(false));
+        static_cast<void>(target.pump_events());
+        CHECK_FALSE(target.is_fullscreen());
+        CHECK(target.window_size() == math::uvec2(640, 360));
+
+        // Wayland never tells a client where its window is; there is nothing to compare.
+        const math::ivec2 restored = target.position();
+        const result<void> positioned = target.set_position(restored);
+        if (!positioned.has_value()) {
+            CHECK(positioned.get_error().is(platform_error::FEATURE_UNAVAILABLE));
+            return;
+        }
+        const i32 expectedX = static_cast<i32>(workArea.x) + (static_cast<i32>(workArea.width) - 640) / 2;
+        const i32 expectedY = static_cast<i32>(workArea.y) + (static_cast<i32>(workArea.height) - 360) / 2;
+        CHECK(restored.x >= expectedX - 1);
+        CHECK(restored.x <= expectedX + 1);
+        CHECK(restored.y >= expectedY - 1);
+        CHECK(restored.y <= expectedY + 1);
+        if (Factory::KIND == backend_kind::NULL_BACKEND) {
+            CHECK(restored == math::ivec2(640, 360));
+        }
+    }
+
+    TEST_CASE_TEMPLATE(
       "backend_conformance - show and hide change visibility and deliver the focus change when the OS moves it",
       Factory,
       null_factory,

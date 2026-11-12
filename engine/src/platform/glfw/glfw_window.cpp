@@ -227,11 +227,17 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
     glfwSetWindowUserPointer(mWindow, this);
     install_callbacks();
 
-    if (mPositionSupported) {
+    // A window created fullscreen reports its monitor's origin, which is no place to restore it to (the title
+    // bar would be off screen): it returns to the requested position, or set_fullscreen(false) centres it.
+    if (mPositionSupported && !mFullscreen) {
         int positionX = 0;
         int positionY = 0;
         glfwGetWindowPos(mWindow, &positionX, &positionY);
         mWindowedPosition = math::ivec2(positionX, positionY);
+        mWindowedPositionKnown = true;
+    } else if (mPositionSupported && desc.position.has_value()) {
+        mWindowedPosition = *desc.position;
+        mWindowedPositionKnown = true;
     }
     if (!mFullscreen) {
         mWindowedSize = window_size();
@@ -289,6 +295,11 @@ void glfw_window::install_callbacks() noexcept {
 
 void glfw_window::scan_joysticks() {
     for (int joystickId = GLFW_JOYSTICK_1; joystickId <= GLFW_JOYSTICK_LAST; ++joystickId) {
+        // glfwJoystickPresent polls presence and may report a disconnect (Win32). The slot it frees must not
+        // be handed out in the same batch as its disconnect, so the next pump scans again instead.
+        if (mRescanJoysticks) {
+            return;
+        }
         if (glfwJoystickPresent(joystickId) == GLFW_TRUE) {
             on_joystick(joystickId, true);
         }
@@ -312,6 +323,15 @@ std::span<const event> glfw_window::pump_events() {
     mDelivered.clear();
     mDeliveredDropPaths.clear();
     mDeliveredDropRanges.clear();
+
+    // A slot the last batch reported disconnected may go to a gamepad that found all slots taken. Scanning
+    // before this pump polls keeps the disconnect and the connect in separate batches (input resets a slot on
+    // connect, which would wipe the disconnect's released edges), and the slot, gamepad_name() with it, is
+    // assigned only in the pump that delivers the connect.
+    if (mRescanJoysticks) {
+        mRescanJoysticks = false;
+        scan_joysticks();
+    }
 
     glfwPollEvents();
     poll_gamepads();
@@ -451,8 +471,10 @@ core::result<void> glfw_window::set_position(math::ivec2 position) {
         return feature_unavailable(optional_feature::WINDOW_POSITION, "window positioning");
     }
     glfwSetWindowPos(mWindow, position.x, position.y);
+    // GLFW ignores the call for a fullscreen window, so only a windowed position is remembered.
     if (!mFullscreen) {
         mWindowedPosition = position;
+        mWindowedPositionKnown = true;
     }
     return core::result<void>::success();
 }
@@ -487,6 +509,10 @@ core::result<void> glfw_window::set_fullscreen(bool fullscreen, u32 monitorIndex
         }
         const int width = to_glfw_dimension(mWindowedSize.x);
         const int height = to_glfw_dimension(mWindowedSize.y);
+        if (!mWindowedPositionKnown && mPositionSupported) {
+            mWindowedPosition = centred_on_work_area(width, height);
+            mWindowedPositionKnown = true;
+        }
         // Windowed before the call: the size callback it raises records the confirmed windowed size.
         mFullscreen = false;
         glfwSetWindowMonitor(mWindow, nullptr, mWindowedPosition.x, mWindowedPosition.y, width, height, 0);
@@ -515,6 +541,7 @@ core::result<void> glfw_window::set_fullscreen(bool fullscreen, u32 monitorIndex
 
     if (!mFullscreen) {
         mWindowedPosition = position();
+        mWindowedPositionKnown = true;
     }
     // Fullscreen before the call: the size callback it raises must not take the monitor's size for
     // the windowed one (mWindowedSize already holds the last confirmed windowed size).
@@ -702,6 +729,8 @@ void glfw_window::on_joystick(int joystickId, bool connected) {
         value.connected = false;
         mPending.push_back(event(value));
         CONJURE_LOG_INFO(LOG_PLATFORM, "Gamepad {} disconnected", index);
+        // Not scanned here: this callback runs inside glfwPollEvents or glfwGetGamepadState (pump_events).
+        mRescanJoysticks = true;
         return;
     }
 }
@@ -804,6 +833,22 @@ void glfw_window::rebuild_monitors() {
         mMonitors.push_back(std::move(info));
         mVideoModes.push_back(std::move(modes));
     }
+}
+
+math::ivec2 glfw_window::centred_on_work_area(int width, int height) const noexcept {
+    // Asked while the window still covers its monitor. GLFW places the content area there and adds the
+    // decorations around it, so a window smaller than the work area keeps its title bar on screen.
+    GLFWmonitor *monitor = glfwGetWindowMonitor(mWindow);
+    if (monitor == nullptr) {
+        return mWindowedPosition;
+    }
+
+    int workX = 0;
+    int workY = 0;
+    int workWidth = 0;
+    int workHeight = 0;
+    glfwGetMonitorWorkarea(monitor, &workX, &workY, &workWidth, &workHeight);
+    return math::ivec2(workX + std::max(0, workWidth - width) / 2, workY + std::max(0, workHeight - height) / 2);
 }
 
 void glfw_window::patch_drop_spans() noexcept {

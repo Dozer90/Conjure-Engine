@@ -44,7 +44,8 @@ null_backend::null_backend(const window_desc &desc) :
     mWindowedSize(desc.width, desc.height),
     mContentScale(desc.nullContentScale),
     mVisible(has_flag(desc.flags, window_flags::VISIBLE)),
-    mFullscreen(desc.fullscreen) {
+    mFullscreen(desc.fullscreen),
+    mWindowedPositionKnown(desc.position.has_value() || !desc.fullscreen) {
     assert_main_thread("null_backend");
     CONJURE_ASSERT(validate_window_desc(desc).has_value(), "null_backend created from an invalid window_desc");
 
@@ -63,7 +64,7 @@ null_backend::null_backend(const window_desc &desc) :
     monitor.isPrimary = true;
     monitor.position = math::ivec2(0);
     monitor.currentMode = mode;
-    monitor.contentScale = math::vec2(1.0f);
+    monitor.contentScale = mContentScale;
     monitor.workArea.width = VIRTUAL_MONITOR_WIDTH;
     monitor.workArea.height = VIRTUAL_MONITOR_HEIGHT;
     mMonitors.push_back(monitor);
@@ -75,6 +76,9 @@ null_backend::null_backend(const window_desc &desc) :
         }
     }
     mPosition = desc.position.has_value() ? *desc.position : centred_position();
+    if (mWindowedPositionKnown) {
+        mWindowedPosition = mPosition;
+    }
 
     // Capacity for a busy frame so the steady state never allocates (3.3 step 6 on the glfw side).
     mPending.reserve(256);
@@ -217,6 +221,11 @@ void null_backend::set_size(math::uvec2 logicalSize) {
 core::result<void> null_backend::set_position(math::ivec2 position) {
     assert_main_thread("set_position");
     mPosition = position;
+    // As on glfw, only a windowed position is where the window returns when it leaves fullscreen.
+    if (!mFullscreen) {
+        mWindowedPosition = position;
+        mWindowedPositionKnown = true;
+    }
     return core::result<void>::success();
 }
 
@@ -251,9 +260,18 @@ core::result<void> null_backend::set_fullscreen(bool fullscreen, u32 monitorInde
     mFullscreen = fullscreen;
     if (fullscreen) {
         mWindowedSize = mLogicalSize;
+        mWindowedPosition = mPosition;
+        mWindowedPositionKnown = true;
         mLogicalSize = math::uvec2(VIRTUAL_MONITOR_WIDTH, VIRTUAL_MONITOR_HEIGHT);
     } else {
         mLogicalSize = mWindowedSize;
+        // Created fullscreen without a position: like glfw, the window lands centred on the monitor
+        // (centred_position reads mLogicalSize, the restored windowed size by now).
+        if (!mWindowedPositionKnown) {
+            mWindowedPosition = centred_position();
+            mWindowedPositionKnown = true;
+        }
+        mPosition = mWindowedPosition;
     }
     queue_resize();
     return core::result<void>::success();

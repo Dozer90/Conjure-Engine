@@ -183,7 +183,9 @@ namespace conjure::platform {
 
             /// <summary>
             /// Windowed fullscreen on monitors()[monitorIndex] with its current video mode (P12), or
-            /// back to the previous windowed size. MONITOR_NOT_FOUND leaves the window unchanged.
+            /// back to the previous windowed size and position; a window created fullscreen without
+            /// window_desc::position is centred on its monitor's work area. MONITOR_NOT_FOUND leaves the
+            /// window unchanged.
             /// </summary>
             [[nodiscard]] virtual core::result<void> set_fullscreen(bool fullscreen, u32 monitorIndex = 0) = 0;
 

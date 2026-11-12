@@ -206,6 +206,17 @@ TEST_SUITE("platform/event") {
         unknownButton.button = static_cast<mouse_button>(12);
         CHECK(to_string(event(unknownButton)) == "mouse_button_event{button=12, action=RELEASE, modifiers=NONE}");
 
+        // Every enumeration goes through the one fallback formatter: a name when known, the number otherwise.
+        const gamepad_button_event unknownPadButton =
+          make_gamepad_button(0, static_cast<gamepad_button>(99), static_cast<button_action>(7));
+        CHECK(to_string(event(unknownPadButton)) == "gamepad_button_event{gamepad=0, button=99, action=7}");
+
+        gamepad_axis_event unknownAxis = {};
+        unknownAxis.gamepadIndex = 1;
+        unknownAxis.axis = static_cast<gamepad_axis>(42);
+        unknownAxis.value = 0.5f;
+        CHECK(to_string(event(unknownAxis)) == "gamepad_axis_event{gamepad=1, axis=42, value=0.5}");
+
         const event emptyDrop = drop_files_event();
         CHECK(to_string(emptyDrop) == "drop_files_event{paths=[]}");
     }

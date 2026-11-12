@@ -2,9 +2,11 @@
 
 #include <cstddef>
 
-// input_state is header-only; this translation unit pins the layout the scripting frame block
-// (conjure_input_block, docs/design/03_scripting.md 2.1) mirrors field by field (P6). A change to
-// any of these numbers is an ABI change for the C# side.
+// input_state is header-only. scripting_subsystem::write_frame_block copies the three key_bitset word
+// arrays into conjure_input_block (docs/design/03_scripting.md 2.1) with memcpy and every other field one
+// by one, so only the key_bitset size and alignment below are ABI for the C# side. The remaining asserts
+// keep gamepad_state and the snapshot compact (end_frame copies it by value); they are not a layout mirror.
+// The C block itself is pinned in scripting/native_api.h (sizeof(conjure_input_block) == 392).
 
 using namespace conjure;
 using namespace conjure::platform;

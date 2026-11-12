@@ -36,7 +36,7 @@ and never appears in a public header.
 | File | Role |
 |---|---|
 | `engine/src/platform/platform.cpp` | `LOG_PLATFORM`, `window` base (live-window count), `validate_window_desc`, `create_window`, backend queries, `backend_version_string` |
-| `enum_names.cpp`, `platform_error.cpp`, `event.cpp`, `input_state.cpp` | every `to_string` / `parse_*`, the error category, event conversions and formatting, the layout `static_assert`s |
+| `enum_names.cpp`, `platform_error.cpp`, `event.cpp`, `input_state.cpp` | every `to_string` / `parse_*`, the error category, event conversions and formatting (one `format_named` fallback for every enumeration), the `key_bitset` ABI and snapshot-size `static_assert`s (section 5) |
 | `input.cpp` | the state machine of section 5 |
 | `null_backend.cpp` | the virtual window of section 6 |
 | `glfw/glfw_context.{h,cpp}` | process-wide GLFW state: init reference count, error callback and last error, joystick and monitor callback dispatch |
@@ -98,7 +98,8 @@ process-wide and are forwarded to the single active window (`set_active_window`)
 4. Fullscreen: resolve `monitorIndex` against `glfwGetMonitors` (`MONITOR_NOT_FOUND`), take the monitor's current
    video mode as the size, remember the requested size as the windowed size to restore.
 5. `glfwCreateWindow` (`WINDOW_CREATE_FAILED` with the last error), user pointer, the thirteen callbacks.
-6. Record the initial position and windowed size, `GLFW_ICONIFIED`, apply `gamepadMappings`
+6. Record the initial windowed position (for a window created fullscreen, `window_desc::position` when given, else
+   none; see 3.4) and, for a windowed window, the windowed size, `GLFW_ICONIFIED`, apply `gamepadMappings`
    (`glfwUpdateGamepadMappings`, WARN when rejected), query `glfwGetRequiredInstanceExtensions` only when
    `glfwVulkanSupported()` (the query itself errors otherwise), become the active window, scan joysticks
    `GLFW_JOYSTICK_1..LAST` and queue a `gamepad_connection_event` per gamepad-mapped one, build the monitor list.
@@ -109,8 +110,15 @@ GLFW has no gamepad button events, so each pump calls `glfwGetGamepadState` for 
 the previous raw state: a changed button emits a `gamepad_button_event` (`PRESS` / `RELEASE`), a changed axis a
 `gamepad_axis_event` with triggers remapped from `[-1, 1]` to `[0, 1]`. A freshly assigned slot starts from
 `rest_state()` (triggers at -1) so connection produces no spurious axis events while buttons already held still
-produce their press edges. Joysticks without an SDL mapping are ignored; a fifth gamepad logs a WARN. No dead zone
-is applied (P11): it would make null and glfw input differ.
+produce their press edges. Joysticks without an SDL mapping are ignored; a fifth gamepad logs a WARN and waits: it
+takes the first slot that frees, and its connect is delivered one pump after that slot's disconnect (the WARN repeats
+on each rescan while a sixth one also waits). A disconnect only sets `mRescanJoysticks` (the callback runs inside
+`glfwPollEvents` or `glfwGetGamepadState`); the next pump calls `scan_joysticks()` before `glfwPollEvents`, so the
+connect lands in the next batch, and the slot (`gamepad_name()` with it) is assigned only in the pump that delivers
+the connect. Both in one batch would be wrong: `input` resets a slot on connect, which would wipe the disconnect's
+released edges before any script saw them. The scan stops early when a presence poll inside it raises another
+disconnect, for the same reason, and the next pump scans again. No dead zone is applied (P11): it would make null
+and glfw input differ.
 
 ### 3.4 Monitors, high-DPI and fullscreen
 
@@ -121,7 +129,13 @@ make logical and pixel sizes behave identically on Win32, X11, Wayland and Cocoa
 (`glfwSetWindowMonitor` with the current mode); leaving it restores `mWindowedSize`, which is the last size the OS
 *confirmed* through the window size callback while windowed, not the last one requested (the OS may clamp). The
 `mFullscreen` flag is flipped before `glfwSetWindowMonitor` so the size callback it raises synchronously knows
-whether to record a windowed size.
+whether to record a windowed size. The position restored is `mWindowedPosition`, the last windowed one
+(`set_position` while windowed, or `position()` when entering fullscreen). A window created fullscreen has none: the
+position GLFW reports then is the monitor origin, and restoring the content area there makes Win32 put the title bar
+above the top of the screen. `mWindowedPositionKnown` is false in that case unless `window_desc::position` was
+given, and `set_fullscreen(false)` then centres the restored size on the work area of the monitor the window is
+leaving (`centred_on_work_area`, asked before `glfwSetWindowMonitor` while the window is still on it). The null
+backend keeps the same windowed position model and centres on its virtual monitor in the same case.
 
 ### 3.5 Optional features
 
@@ -186,19 +200,27 @@ counting itself, so the two can never diverge (P3). Window events return false f
 `modifiers`; GLFW's own synthetic releases on focus loss then hit the no-op rule. `snapshot()` returns a reference to
 `mPublished`.
 
-`input_state.cpp` pins the layout the scripting frame block (`conjure_input_block`, `03_scripting.md` 2.1) mirrors:
-`sizeof(key_bitset) == 64`, `alignof == 8`, `sizeof(gamepad_state) == 40` with `buttonsDown` at 4 and `axes` at 16,
-`keysDown` / `keysPressed` / `keysReleased` at offsets 8 / 72 / 136, `sizeof(input_state) <= 512`. Changing any of
-these is an ABI change for the C# side.
+The scripting frame block (`conjure_input_block`, `03_scripting.md` 2.1) has the same shape as `input_state`, but
+`scripting_subsystem::write_frame_block` copies it field by field; only the three `key_bitset` word arrays are copied
+byte for byte with `memcpy`. `input_state.cpp` therefore pins `sizeof(key_bitset) == 64` and `alignof == 8` as the
+ABI for the C# side; changing those is an ABI change. Its other asserts (`sizeof(gamepad_state) == 40` with
+`buttonsDown` at 4 and `axes` at 16, `keysDown` / `keysPressed` / `keysReleased` at offsets 8 / 72 / 136,
+`sizeof(input_state) <= 512`) keep the snapshot compact for the by-value copy in `end_frame()` and are not a layout
+mirror: `gamepad_state` even orders its fields differently from `conjure_gamepad_state`. The C block itself is
+pinned in `scripting/native_api.h` (`sizeof(conjure_input_block) == 392`).
 
 ## 6. The null backend
 
 `null_backend` holds the logical size, windowed size, content scale, position, cursor position, focus, minimised,
 visible, fullscreen and close flags, the cursor mode, the raw-motion flag, copies of the icon images, an in-memory
-clipboard with a "has text" flag, one virtual monitor (`"Null Monitor"`, 1920 x 1080 at 60 Hz, scale 1) and per-slot gamepad
-connection flags. `framebuffer_size()` is `round(logical * scale)`, or 0 x 0 while minimised; `position` defaults to
-the window centred on the virtual monitor. Every setter updates state so the getters round-trip (R57), which makes
-the bindings' clipboard and cursor-mode entries real implementations on the null window rather than stubs.
+clipboard with a "has text" flag, one virtual monitor (`"Null Monitor"`, 1920 x 1080 at 60 Hz, scale
+`nullContentScale`; `simulate_content_scale` changes window and monitor together) and per-slot gamepad connection
+flags. `framebuffer_size()` is `round(logical * scale)`, or 0 x 0 while minimised; `position` defaults to the window
+centred on the virtual monitor. Leaving fullscreen restores the last windowed position (`mWindowedPosition`; a
+position set while fullscreen is not restored), and a window created fullscreen without `window_desc::position` is
+centred again instead, as on glfw (section 3.4). Every setter updates state so the getters round-trip (R57),
+which makes the bindings' clipboard and cursor-mode entries real implementations on the null window rather than
+stubs.
 
 The simulation controls queue into the same double buffer as section 4: `simulate_resize`, `set_size`,
 `set_fullscreen`, `simulate_minimise` and a scale change that alters the pixel size all set the single coalesced
@@ -274,7 +296,7 @@ and `make_key` / `make_mouse_button` / `make_mouse_move` / `make_scroll` / `make
 | `test_window.cpp`, `test_null_backend.cpp` | `window_desc` defaults and validation, the null happy path, round trips, fullscreen, Vulkan and clipboard contracts, one live window, each simulation control, coalescing, allocation-free pump, determinism |
 | `test_window_events.cpp` | the engine's frame step 3 against a null window: coalesced resize, 0 x 0 on minimise, focus loss releasing keys through `apply`, close, dropped files |
 | `test_backend_selection.cpp` | option gating, `UNKNOWN_BACKEND`, the `window_settings -> window_desc` mapping the engine will use |
-| `test_backend_conformance.cpp` | `TEST_CASE_TEMPLATE` over `null_factory` and `glfw_factory`: create twice, size relation, title, cursor modes, clipboard, monitors, native handle kind, close, `set_size` / `set_fullscreen` / `show` / `hide` deliver their events, the same injected sequence yields the same snapshot, Vulkan helpers |
+| `test_backend_conformance.cpp` | `TEST_CASE_TEMPLATE` over `null_factory` and `glfw_factory`: create twice, size relation, title, cursor modes, clipboard, monitors, native handle kind, close, `set_size` / `set_fullscreen` / `show` / `hide` deliver their events, a window created fullscreen leaves it centred on the work area, the same injected sequence yields the same snapshot, Vulkan helpers |
 | `test_event.cpp`, `test_key.cpp`, `test_mouse_button.cpp`, `test_gamepad.cpp`, `test_button_action.cpp`, `test_backend.cpp`, `test_monitor.cpp`, `test_native_handle.cpp`, `test_platform_error.cpp`, `test_log_category.cpp`, `test_platform.cpp` | numbering invariants, names and parsers, variant order and formatting, defaults, the umbrella |
 
 The glfw instantiations of the conformance suite carry `[window]` in their name, require

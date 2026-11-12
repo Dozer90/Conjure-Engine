@@ -68,4 +68,19 @@ TEST_SUITE("platform/monitor") {
         CHECK(created->video_modes(1).empty());
         CHECK(created->video_modes(0xFFFFFFFFu).empty());
     }
+
+    TEST_CASE("monitor_info - the null monitor reports the content scale the window was created with") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        window_desc desc = null_desc();
+        desc.nullContentScale = math::vec2(2.0f, 1.5f);
+        const std::unique_ptr<window> created = create_null_window(desc);
+
+        // The window sits on the virtual monitor, so the two scales agree from creation on, as they do after
+        // simulate_content_scale.
+        const std::span<const monitor_info> monitors = created->monitors();
+        REQUIRE(monitors.size() == 1);
+        CHECK(monitors[0].contentScale == math::vec2(2.0f, 1.5f));
+        CHECK(monitors[0].contentScale == created->content_scale());
+    }
 }

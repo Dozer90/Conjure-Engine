@@ -16,8 +16,9 @@
 
 // The immutable per-frame input snapshot (docs/design/11_platform.md 2.3, P4, P6). Edges
 // (pressed / released) are set for exactly the frame the transition happened in; levels (down,
-// positions, axes) persist. The layout mirrors conjure_input_block of the scripting frame block:
-// 512-bit key sets as eight u64 words, u32 button masks, four gamepads with six f32 axes.
+// positions, axes) persist. The shape matches conjure_input_block of the scripting frame block (copied
+// field by field; only the key bitsets byte for byte): 512-bit key sets as eight u64 words, u32 button
+// masks, four gamepads with six f32 axes.
 
 namespace conjure::platform {
 

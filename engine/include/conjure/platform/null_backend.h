@@ -22,9 +22,12 @@
 // without a display server, deterministic. Tests and headless_engine drive it through push_event()
 // and the simulate_*() controls, which queue events for the next pump_events(); every setter updates
 // state so the getters round-trip (R57). One virtual monitor: "Null Monitor", 1920 x 1080 @ 60 Hz,
-// content scale 1. Error contracts match the glfw backend so a caller tested here sees the same
-// codes there: CLIPBOARD_UNAVAILABLE until text (even empty text) has been copied, INVALID_ARGUMENT
-// for null pointers passed to create_vulkan_surface before VULKAN_UNSUPPORTED.
+// content scale nullContentScale (simulate_content_scale changes window and monitor together). Error
+// contracts match the glfw backend so a caller tested here sees the same codes there:
+// CLIPBOARD_UNAVAILABLE until text (even empty text) has been copied, INVALID_ARGUMENT for null
+// pointers passed to create_vulkan_surface before VULKAN_UNSUPPORTED. Leaving fullscreen restores the
+// last windowed position, not one set while fullscreen, as on glfw; a window created fullscreen without
+// window_desc::position is centred on the virtual monitor instead.
 
 namespace conjure::platform {
 
@@ -46,11 +49,13 @@ namespace conjure::platform {
             math::uvec2 mWindowedSize = math::uvec2(0);     // restored when leaving fullscreen
             math::vec2 mContentScale = math::vec2(1.0f);
             math::ivec2 mPosition = math::ivec2(0);
+            math::ivec2 mWindowedPosition = math::ivec2(0); // restored when leaving fullscreen, when known
             math::vec2 mCursorPosition = math::vec2(0.0f);
             bool mFocused = true;
             bool mMinimised = false;
             bool mVisible = true;
             bool mFullscreen = false;
+            bool mWindowedPositionKnown = true;             // false: created fullscreen without a position
             bool mShouldClose = false;
             bool mRawMouseMotion = false;
             cursor_mode mCursorMode = cursor_mode::NORMAL;

@@ -34,22 +34,6 @@ namespace {
     static_assert(INPUT_EVENT_COUNT < EVENT_COUNT);
     static_assert(same_prefix(std::make_index_sequence<INPUT_EVENT_COUNT>()));
 
-    [[nodiscard]] std::string format_action(button_action action) {
-        const std::string_view name = to_string(action);
-        if (name.empty()) {
-            return std::format("{}", static_cast<u32>(action));
-        }
-        return std::string(name);
-    }
-
-    [[nodiscard]] std::string format_key(key code) {
-        const std::string_view name = to_string(code);
-        if (name.empty()) {
-            return std::format("{}", static_cast<u32>(code));
-        }
-        return std::string(name);
-    }
-
     template <typename EnumType>
     [[nodiscard]] std::string format_named(EnumType value) {
         const std::string_view name = to_string(value);
@@ -63,9 +47,9 @@ namespace {
         [[nodiscard]] std::string operator()(const key_event &value) const {
             return std::format(
               "key_event{{key={}, scancode={}, action={}, modifiers={}}}",
-              format_key(value.keyCode),
+              format_named(value.keyCode),
               value.scancode,
-              format_action(value.action),
+              format_named(value.action),
               to_string(value.modifiers)
             );
         }
@@ -82,7 +66,7 @@ namespace {
             return std::format(
               "mouse_button_event{{button={}, action={}, modifiers={}}}",
               format_named(value.button),
-              format_action(value.action),
+              format_named(value.action),
               to_string(value.modifiers)
             );
         }
@@ -108,7 +92,7 @@ namespace {
               "gamepad_button_event{{gamepad={}, button={}, action={}}}",
               value.gamepadIndex,
               format_named(value.button),
-              format_action(value.action)
+              format_named(value.action)
             );
         }
 

@@ -50,6 +50,51 @@ TEST_SUITE("platform/null_backend") {
         CHECK(null_backend::VIRTUAL_MONITOR_REFRESH_HZ == 60);
     }
 
+    TEST_CASE("null_backend - a window created fullscreen at a position returns to it when it leaves fullscreen") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        window_desc desc = null_desc(800, 600);
+        desc.fullscreen = true;
+        desc.position = math::ivec2(-40, 75);
+        const std::unique_ptr<null_backend> created = null_backend::create(desc);
+
+        CONJURE_CHECK_OK(created->set_fullscreen(false));
+        CHECK(created->window_size() == math::uvec2(800, 600));
+        CHECK(created->position() == math::ivec2(-40, 75));
+    }
+
+    TEST_CASE("null_backend - a position set while fullscreen is not where the window returns, as on glfw") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        window_desc desc = null_desc(800, 600);
+        desc.fullscreen = true;
+        const std::unique_ptr<null_backend> created = null_backend::create(desc);
+
+        // glfw ignores a position for a window on a monitor, so the window created fullscreen is still centred.
+        CONJURE_CHECK_OK(created->set_position(math::ivec2(100, 100)));
+        CONJURE_CHECK_OK(created->set_fullscreen(false));
+        CHECK(created->position() == math::ivec2(560, 240));
+
+        // The windowed position is known from now on: another round trip keeps it.
+        CONJURE_CHECK_OK(created->set_position(math::ivec2(30, 40)));
+        CONJURE_CHECK_OK(created->set_fullscreen(true));
+        CONJURE_CHECK_OK(created->set_fullscreen(false));
+        CHECK(created->position() == math::ivec2(30, 40));
+    }
+
+    TEST_CASE("null_backend - leaving fullscreen returns to the windowed position, not one set while fullscreen") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        const std::unique_ptr<null_backend> created = null_backend::create(null_desc(800, 600));
+
+        CONJURE_CHECK_OK(created->set_position(math::ivec2(20, 30)));
+        CONJURE_CHECK_OK(created->set_fullscreen(true));
+        CONJURE_CHECK_OK(created->set_position(math::ivec2(100, 100)));
+        CONJURE_CHECK_OK(created->set_fullscreen(false));
+        CHECK(created->window_size() == math::uvec2(800, 600));
+        CHECK(created->position() == math::ivec2(20, 30));
+    }
+
     TEST_CASE("null_backend - create builds the window directly") {
         testing::memory_guard guard = {};
         testing::log_capture logs = {};

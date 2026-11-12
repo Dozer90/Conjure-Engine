@@ -13,7 +13,7 @@ test harness - consumes three types: `window`, `event` and `input_state`.
 | `null_backend.h` | `null_backend final : window` - the virtual window: no OS calls, one "Null Monitor" 1920x1080@60, in-memory clipboard / cursor mode / gamepad names / icon images (`icons()`), test controls `push_event`, `simulate_resize / content_scale / focus / minimise / close / drop_files`, `pending_event_count` |
 | `event.h` | the trivially copyable event structs, `input_event` (nine input alternatives) and `event` (plus six window alternatives, same prefix order), `is_input_event`, `to_input_event`, `to_event`, `event_as<T>`, `event_name`, `to_string(event)` |
 | `input.h` | `input`: `apply(event)` and `inject(input_event)` run the same state machine, `end_frame()` publishes the snapshot, `snapshot()`, `release_all()`, `skip_next_mouse_delta()`, `input_stats` |
-| `input_state.h` | `input_state` (512-key `key_bitset`s for down / pressed / released, modifiers, mouse position / delta / scroll, button masks, four `gamepad_state`, up to 16 text code points per frame); the layout `conjure_input_block` mirrors (sizes pinned in `input_state.cpp`) |
+| `input_state.h` | `input_state` (512-key `key_bitset`s for down / pressed / released, modifiers, mouse position / delta / scroll, button masks, four `gamepad_state`, up to 16 text code points per frame); the shape `conjure_input_block` matches (the `key_bitset` shape the frame block copies is pinned in `input_state.cpp`) |
 | `key.h`, `mouse_button.h`, `gamepad.h`, `button_action.h` | GLFW-numbered enumerations (`key::SPACE == 32` ... `key::MENU == 348`, `key::DEL`), `to_string` / `parse_*` (case-insensitive), `is_valid_*`, `key_modifier_flags` with `to_string` / `parse_key_modifier_flags` |
 | `backend.h` | `backend_kind` (`NULL_BACKEND`, `GLFW`), `parse_backend_kind` (`UNKNOWN_BACKEND`), `is_backend_compiled`, `default_backend_kind` |
 | `monitor.h`, `native_handle.h` | `video_mode`, `monitor_info`; `native_handle_kind` (`WINDOWS`, `COCOA`, `X11`, `WAYLAND`), `native_window_handle` |
@@ -57,14 +57,21 @@ test harness - consumes three types: `window`, `event` and `input_state`.
   cursor, the backend never asks GLFW: `set_position` returns `FEATURE_UNAVAILABLE`, `position()` returns the
   stored (never set) position and `set_cursor_position` warns once and does nothing, so no ERROR line is logged
   per call. The windowed size restored when leaving fullscreen is the last size the OS *confirmed* through the
-  window size callback, not the last one requested (the OS may clamp). Windowed fullscreen only (P12).
-- **Null backend** reports `framebuffer_size() == round(window_size() * nullContentScale)`, `is_focused() == true`,
-  `is_visible()` following `window_flags::VISIBLE`, `native_handle().kind == NONE`, no Vulkan extensions and
-  `VULKAN_UNSUPPORTED` from `create_vulkan_surface`. Its error contracts mirror glfw: `clipboard_text()` is
-  `CLIPBOARD_UNAVAILABLE` until `set_clipboard_text` has been called (an empty copy counts as text, as on the OS
-  clipboards) and `create_vulkan_surface` rejects a null `surface` or `instance` with
-  `core::error_code::INVALID_ARGUMENT` before answering `VULKAN_UNSUPPORTED`. `gamepad_name(i)` is
-  `"Null Gamepad <i>"` once a `gamepad_connection_event` for slot `i` has been delivered.
+  window size callback, not the last one requested (the OS may clamp); the position restored is the last windowed
+  one, and a window created fullscreen without `window_desc::position` is centred on its monitor's work area (the
+  monitor origin it reported while fullscreen would put the title bar off screen). Windowed fullscreen only (P12).
+  A gamepad that found all four slots taken gets the first slot that frees: after a pump has delivered the slot's
+  disconnect, the next pump rescans the joysticks before it polls, so the connect arrives one pump later, the
+  disconnect's released edges are never wiped by the reset on connect and `gamepad_name()` stays empty until the
+  connect is delivered.
+- **Null backend** reports `framebuffer_size() == round(window_size() * nullContentScale)`, the same content scale
+  on its virtual monitor, `is_focused() == true`, `is_visible()` following `window_flags::VISIBLE`,
+  `native_handle().kind == NONE`, no Vulkan extensions and `VULKAN_UNSUPPORTED` from `create_vulkan_surface`. Its
+  error contracts mirror glfw: `clipboard_text()` is `CLIPBOARD_UNAVAILABLE` until `set_clipboard_text` has been
+  called (an empty copy counts as text, as on the OS clipboards) and `create_vulkan_surface` rejects a null
+  `surface` or `instance` with `core::error_code::INVALID_ARGUMENT` before answering `VULKAN_UNSUPPORTED`.
+  `gamepad_name(i)` is `"Null Gamepad <i>"` once a `gamepad_connection_event` for slot `i` has been delivered.
+  Leaving fullscreen restores the last windowed position, not one set while fullscreen, as on glfw.
 - `CONJURE_PLATFORM_GLFW=OFF` builds a null-only library: `create_window(GLFW)` returns `BACKEND_NOT_COMPILED`,
   `is_backend_compiled(GLFW)` is false and `default_backend_kind()` is `NULL_BACKEND`. The editor requires the
   option ON (checked in the root `CMakeLists.txt`).
