@@ -20,13 +20,6 @@
       "purpose": "node hierarchy import"
     },
     {
-      "name": "models/Sponza.glb",
-      "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Sponza/glTF/Sponza.gltf",
-      "license": "CC-BY-3.0 (Crytek / Frank Meinl)",
-      "purpose": "large scene for the stress and shadow tests",
-      "optional": true
-    },
-    {
       "name": "hdri/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
       "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
       "license": "CC0 (Poly Haven)",
@@ -37,14 +30,6 @@
       "url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr",
       "license": "CC0 (Poly Haven)",
       "purpose": "studio HDRI for material inspection"
-    },
-    {
-      "name": "audio/sine_ogg_sample.ogg",
-      "url": "https://raw.githubusercontent.com/mackron/miniaudio/master/tests/testvectors/flac/README.md",
-      "license": "see source",
-      "purpose": "placeholder entry: replace with a CC0 .ogg clip before enabling ogg decode tests",
-      "optional": true,
-      "disabled": true
     }
   ]
 }

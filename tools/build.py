@@ -4,10 +4,16 @@
 On Windows this imports the MSVC environment (vcvars64.bat, located through vswhere) so the Ninja
 presets work from any shell. On Linux and macOS it simply forwards to CMake.
 
+--preset names a build preset or a configure preset of CMakePresets.json or CMakeUserPresets.json. A build
+preset brings its configure preset and, for a multi-config generator, its configuration (windows-vs-debug
+configures windows-vs and builds and tests Debug); the test preset of the same name runs --test. A configure
+preset without a build preset of its name (windows-vs) is accepted with --configure-only only.
+
 Examples:
     python tools/build.py                       # configure + build the default preset
     python tools/build.py --test                # ... and run ctest
     python tools/build.py --preset windows-msvc-dev --target conjure_core_tests
+    python tools/build.py --preset windows-vs-debug --test   # the multi-config windows-vs tree, Debug
     python tools/build.py --test -R core        # run only tests matching "core"
     python tools/build.py --configure-only -- -DCONJURE_WITH_PHYSICS=OFF
     python tools/build.py --build-dir build/my_area --target conjure_core_math_tests --test -R core_math
@@ -26,6 +32,94 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+PRESETS_FILE = ROOT / "CMakePresets.json"
+USER_PRESETS_FILE = ROOT / "CMakeUserPresets.json"
+PRESET_KINDS = ("configurePresets", "buildPresets", "testPresets")
+
+
+def load_presets(root: pathlib.Path) -> dict[str, list[dict]]:
+    """The configure, build and test presets of <root>/CMakePresets.json, followed by those of
+    <root>/CMakeUserPresets.json when that file exists (personal presets, docs/handbook/repository-layout.md).
+    Raises ValueError naming the file when one is malformed."""
+    presets: dict[str, list[dict]] = {kind: [] for kind in PRESET_KINDS}
+    for path in (root / PRESETS_FILE.name, root / USER_PRESETS_FILE.name):
+        if not path.is_file():
+            continue
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from error
+        if not isinstance(document, dict):
+            raise ValueError(f"{path}: expected a JSON object")
+        for kind in PRESET_KINDS:
+            entries = document.get(kind, [])
+            if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+                raise ValueError(f"{path}: {kind} must be a list of objects")
+            presets[kind].extend(entries)
+    return presets
+
+
+def visible_preset(entries: list[dict], name: str) -> dict | None:
+    """The non-hidden preset called 'name', or None."""
+    return next((entry for entry in entries if entry.get("name") == name and not entry.get("hidden")), None)
+
+
+def inherited_field(entries: list[dict], preset: dict, field: str) -> str | None:
+    """'field' of a build preset, or of the first preset in its `inherits` chain (a name or a list of names,
+    searched in order, depth first) that sets it."""
+    stack = [preset]
+    visited: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if field in current:
+            value = current[field]
+            return value if isinstance(value, str) else None
+        parents = current.get("inherits", [])
+        names = [parents] if isinstance(parents, str) else list(parents)
+        # Pushed in reverse so the first parent (and its own parents) is searched first.
+        for parent_name in reversed(names):
+            if parent_name in visited:
+                continue
+            visited.add(parent_name)
+            parent = next((entry for entry in entries if entry.get("name") == parent_name), None)
+            if parent is not None:
+                stack.append(parent)
+    return None
+
+
+def resolve_presets(
+  name: str,
+  presets: dict[str, list[dict]],
+  need_build: bool,
+) -> tuple[str, str | None, str | None, str | None]:
+    """(configure preset, build preset, test preset, configuration) for --preset 'name'. A build preset names
+    its configure preset and, for a multi-config generator, its configuration (windows-vs-debug: windows-vs,
+    Debug); its test preset is the test preset of the same name, if any. A configure preset alone is enough
+    for --configure-only; building needs a build preset, so a configure preset without one of its name is
+    rejected with the build presets that drive it. Raises ValueError for an unusable name."""
+    build_entries = presets.get("buildPresets", [])
+    build = visible_preset(build_entries, name)
+    if build is not None:
+        configure = inherited_field(build_entries, build, "configurePreset")
+        if not configure:
+            raise ValueError(f"build preset '{name}' names no configurePreset")
+        configuration = inherited_field(build_entries, build, "configuration")
+        test = name if visible_preset(presets.get("testPresets", []), name) is not None else None
+        return configure, name, test, configuration
+    if visible_preset(presets.get("configurePresets", []), name) is None:
+        raise ValueError(f"unknown preset '{name}'")
+    if not need_build:
+        return name, None, None, None
+    choices = sorted(
+        entry["name"] for entry in build_entries
+        if "name" in entry and not entry.get("hidden")
+        and inherited_field(build_entries, entry, "configurePreset") == name
+    )
+    if not choices:
+        raise ValueError(f"'{name}' is a configure preset without a build preset; add one to "
+                         f"{USER_PRESETS_FILE.name} or pass --configure-only")
+    raise ValueError(f"'{name}' is a configure preset without a build preset of its name; use one of: "
+                     f"{', '.join(choices)}")
 
 
 def default_preset() -> str:
@@ -128,9 +222,13 @@ def preset_binary_dir(preset: str) -> pathlib.Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--preset", default=default_preset(), help="CMake preset name (default: %(default)s)")
+    parser.add_argument("--preset", default=default_preset(),
+                        help="configure or build preset; a multi-config configure preset such as windows-vs is "
+                             "driven through its build presets windows-vs-debug / windows-vs-dev "
+                             "(default: %(default)s)")
     parser.add_argument("--build-dir", default=None,
-                        help="private build directory (default: build/<preset>); use when other builds may run concurrently")
+                        help="private build directory (default: build/<configure preset>, e.g. build/windows-vs for "
+                             "windows-vs-debug); use when other builds may run concurrently")
     parser.add_argument("--configure-only", action="store_true", help="only run the configure step")
     parser.add_argument("--no-configure", action="store_true", help="skip configure (build dir must exist)")
     parser.add_argument("--target", action="append", default=[], help="build only these targets (repeatable)")
@@ -142,16 +240,25 @@ def main() -> None:
     parser.add_argument("cmake_args", nargs="*", help="extra arguments passed to the configure step (after --)")
     args = parser.parse_args()
 
+    try:
+        presets = load_presets(ROOT)
+        configure_preset, build_preset, test_preset, configuration = resolve_presets(
+            args.preset, presets, need_build=not args.configure_only)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.test and not args.build_dir and test_preset is None:
+        parser.error(f"preset '{args.preset}' has no test preset")
+
     env = msvc_environment() if platform.system() == "Windows" else dict(os.environ)
 
     private_dir = pathlib.Path(args.build_dir).resolve() if args.build_dir else None
-    binary_dir = private_dir or preset_binary_dir(args.preset)
+    binary_dir = private_dir or preset_binary_dir(configure_preset)
     if args.clean and binary_dir.exists():
         print(f"+ removing {binary_dir}", flush=True)
         remove_tree(binary_dir)
 
     if not args.no_configure:
-        configure = ["cmake", "--preset", args.preset]
+        configure = ["cmake", "--preset", configure_preset]
         if private_dir:
             configure += ["-B", str(private_dir)]
         run(configure + list(args.cmake_args), env)
@@ -161,8 +268,10 @@ def main() -> None:
 
     if private_dir:
         build = ["cmake", "--build", str(private_dir)]
+        if configuration:
+            build += ["--config", configuration]
     else:
-        build = ["cmake", "--build", "--preset", args.preset]
+        build = ["cmake", "--build", "--preset", build_preset]
     if args.jobs > 0:
         build += ["--parallel", str(args.jobs)]
     for target in args.target:
@@ -172,8 +281,10 @@ def main() -> None:
     if args.test:
         if private_dir:
             test = ["ctest", "--test-dir", str(private_dir), "--output-on-failure"]
+            if configuration:
+                test += ["-C", configuration]
         else:
-            test = ["ctest", "--preset", args.preset]
+            test = ["ctest", "--preset", test_preset]
         if args.test_regex:
             test += ["-R", args.test_regex]
         if args.test_label:

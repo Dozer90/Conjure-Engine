@@ -20,6 +20,9 @@ has nothing to fetch, a `[gpu]` test wherever no software adapter exists (D3D12 
 allows the tag on Linux and macOS and not on Windows), an `[audio_device]` test wherever no playback endpoint
 exists (every hosted runner). A `[dotnet]` skip is never allowed on CI, which installs the SDK.
 
+A test carrying CTest's DISABLED property (status="disabled" in the report, no <skipped> marker) is always
+unexpected, whatever its labels and tags: no test is skipped or disabled (AGENTS.md 6).
+
 Exit code 0 when every skip is allowed (or there is none), 1 when a skip is not, 2 on usage errors
 (missing files, unreadable JUnit or JSON). --self-test runs the matcher over embedded fixtures and, when
 ctest is on the PATH, reads a generated CTestTestfile.cmake through `ctest --show-only=json-v1` so a schema
@@ -45,13 +48,15 @@ EXIT_USAGE = 2
 
 ALLOWED_LABELS_VARIABLE = "CONJURE_TEST_ALLOWED_SKIPS"
 NAME_TAG = re.compile(r"\[([A-Za-z0-9_]+)\]")
+DISABLED_REASON = "disabled (CTest DISABLED property)"
 
 
 class skipped_test:
-    def __init__(self, name: str, labels: list[str], reason: str) -> None:
+    def __init__(self, name: str, labels: list[str], reason: str, disabled: bool = False) -> None:
         self.name = name
         self.labels = labels
         self.reason = reason
+        self.disabled = disabled
 
     def tags(self) -> set[str]:
         return {match.group(1).lower() for match in NAME_TAG.finditer(self.name)}
@@ -61,17 +66,22 @@ class skipped_test:
 # Parsing
 #------------------------------------------------------------------------------
 
-def parse_junit(text: str) -> list[tuple[str, str]]:
-    """(name, reason) of every skipped test case of a CTest JUnit report."""
+def parse_junit(text: str) -> list[tuple[str, str, bool]]:
+    """(name, reason, disabled) of every skipped or disabled test case of a CTest JUnit report. CTest writes a
+    test with the DISABLED property as status="disabled" without a <skipped> child."""
     root = element_tree.fromstring(text)
-    skipped: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str, bool]] = []
     for testcase in root.iter("testcase"):
         marker = testcase.find("skipped")
-        if marker is None:
+        disabled = testcase.get("status") == "disabled"
+        if marker is None and not disabled:
             continue
         name = testcase.get("name", "")
-        reason = marker.get("message", "") or (marker.text or "").strip()
-        skipped.append((name, reason))
+        if marker is None:
+            reason = DISABLED_REASON
+        else:
+            reason = marker.get("message", "") or (marker.text or "").strip()
+        skipped.append((name, reason, disabled))
     return skipped
 
 
@@ -91,7 +101,10 @@ def parse_labels(text: str) -> dict[str, list[str]]:
 
 def collect_skips(junit_text: str, labels_text: str) -> list[skipped_test]:
     labels_by_name = parse_labels(labels_text)
-    return [skipped_test(name, labels_by_name.get(name, []), reason) for name, reason in parse_junit(junit_text)]
+    return [
+        skipped_test(name, labels_by_name.get(name, []), reason, disabled)
+        for name, reason, disabled in parse_junit(junit_text)
+    ]
 
 
 def collect_skips_of_reports(junit_texts: list[str], labels_text: str) -> list[skipped_test]:
@@ -111,6 +124,10 @@ def unexpected_skips(skips: list[skipped_test], allowed_labels: set[str], allowe
     lowered_tags = {tag.lower() for tag in allowed_tags if tag}
     unexpected: list[skipped_test] = []
     for skip in skips:
+        # No test is disabled (AGENTS.md 6): neither a label nor a tag allows it.
+        if skip.disabled:
+            unexpected.append(skip)
+            continue
         if any(label.lower() in lowered_labels for label in skip.labels):
             continue
         if skip.tags() & lowered_tags:
@@ -161,7 +178,8 @@ def run_check(
 
     unexpected = unexpected_skips(skips, allowed_labels, allowed_tags)
     print(
-        f"ctest_check_skips: {len(skips)} skipped test(s) in {len(junits)} report(s), {len(unexpected)} unexpected "
+        f"ctest_check_skips: {len(skips)} skipped or disabled test(s) in {len(junits)} report(s), "
+        f"{len(unexpected)} unexpected "
         f"(allowed labels: {', '.join(sorted(allowed_labels)) or 'none'}; allowed tags: "
         f"{', '.join(sorted(allowed_tags)) or 'none'})"
     )
@@ -171,7 +189,8 @@ def run_check(
     if unexpected:
         print(
             "ctest_check_skips: a skipped test on CI means the runner lacks something it was set up to have "
-            f"(docs/design/08_testing.md D12); fix the set-up or allow the label through {ALLOWED_LABELS_VARIABLE}.",
+            f"(docs/design/08_testing.md D12); fix the set-up or allow the label through {ALLOWED_LABELS_VARIABLE}. "
+            "A disabled test is never allowed: remove its DISABLED property.",
             file=sys.stderr,
         )
         return EXIT_UNEXPECTED_SKIPS
@@ -183,7 +202,7 @@ def run_check(
 #------------------------------------------------------------------------------
 
 SELF_TEST_JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="all" tests="7" failures="0" disabled="0" skipped="6" hostname="ci" time="1.0">
+<testsuite name="all" tests="8" failures="0" disabled="1" skipped="6" hostname="ci" time="1.0">
   <testcase name="platform.backend_conformance - title round trips&lt;glfw [window]&gt;" classname="all" time="0.0">
     <skipped message="precondition REAL_WINDOW not met"/>
   </testcase>
@@ -202,7 +221,8 @@ SELF_TEST_JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
   <testcase name="audio.miniaudio_backend - opens the default device [audio_device]" classname="all" time="0.0">
     <skipped message="precondition AUDIO_DEVICE not met"/>
   </testcase>
-  <testcase name="core_math.vec3 - adds" classname="all" time="0.0"/>
+  <testcase name="core_math.vec3 - kept off [window]" classname="all" time="0" status="disabled"/>
+  <testcase name="core_math.vec3 - adds" classname="all" time="0.0" status="run"/>
 </testsuite>
 """
 
@@ -233,6 +253,8 @@ SELF_TEST_LABELS = json.dumps({
         {"name": "editor.editor_process - runs a command file [process]",
          "properties": [{"name": "LABELS", "value": ["unit", "editor", "process"]}]},
         {"name": "runtime.distribution_symbols", "properties": [{"name": "LABELS", "value": ["process", "runtime"]}]},
+        {"name": "core_math.vec3 - kept off [window]",
+         "properties": [{"name": "LABELS", "value": ["unit", "golden"]}, {"name": "DISABLED", "value": True}]},
         {"name": "core_math.vec3 - adds", "properties": [{"name": "LABELS", "value": ["unit", "core_math"]}]},
     ]
 })
@@ -281,29 +303,37 @@ def run_self_test() -> int:
             print(f"self-test FAILED: {title}{(': ' + detail) if detail else ''}")
 
     skips = collect_skips(SELF_TEST_JUNIT, SELF_TEST_LABELS)
-    expect("six skipped cases are read from the JUnit report", len(skips) == 6, str(len(skips)))
+    expect("six skipped cases and one disabled case are read from the JUnit report", len(skips) == 7, str(len(skips)))
     expect("labels are joined by name", skips[1].labels == ["unit", "audio", "downloaded"], str(skips[1].labels))
     expect("name tags are extracted", skips[0].tags() == {"window"}, str(skips[0].tags()))
 
     none_allowed = unexpected_skips(skips, set(), set())
-    expect("without allowances every skip is unexpected", len(none_allowed) == 6, str(len(none_allowed)))
+    expect("without allowances every skip is unexpected", len(none_allowed) == 7, str(len(none_allowed)))
 
+    disabled_name = "core_math.vec3 - kept off [window]"
     pull_request_posix = unexpected_skips(skips, {"golden"}, PR_TAGS_POSIX)
-    expect("the Linux and macOS pull-request policy leaves only the dotnet skip",
-           [skip.name for skip in pull_request_posix] == ["scripting.host - starts [dotnet]"],
+    expect("the Linux and macOS pull-request policy leaves only the dotnet skip and the disabled case",
+           [skip.name for skip in pull_request_posix] == ["scripting.host - starts [dotnet]", disabled_name],
            str([skip.name for skip in pull_request_posix]))
 
     pull_request_windows = unexpected_skips(skips, {"golden"}, PR_TAGS_WINDOWS)
-    expect("the Windows pull-request policy flags the dotnet and the gpu skip (WARP exists there)",
+    expect("the Windows pull-request policy flags the dotnet and the gpu skip (WARP exists there) and the disabled "
+           "case",
            sorted(skip.name for skip in pull_request_windows)
-           == ["rhi.device - creates on the software adapter [gpu]", "scripting.host - starts [dotnet]"],
+           == [disabled_name, "rhi.device - creates on the software adapter [gpu]", "scripting.host - starts [dotnet]"],
            str([skip.name for skip in pull_request_windows]))
 
     nightly = unexpected_skips(skips, set(), {"window", "audio_device", "gpu"})
-    expect("the nightly policy flags downloaded, dotnet and golden skips", len(nightly) == 3, str(len(nightly)))
+    expect("the nightly policy flags downloaded, dotnet, golden and disabled cases", len(nightly) == 4,
+           str(len(nightly)))
+
+    disabled = [skip for skip in unexpected_skips(skips, {"golden"}, {"window"}) if skip.name == disabled_name]
+    expect("ctest_check_skips - a DISABLED test is unexpected even with an allowed label and tag",
+           len(disabled) == 1 and disabled[0].disabled and disabled[0].reason == DISABLED_REASON,
+           str([(skip.name, skip.reason) for skip in disabled]))
 
     both_runs = collect_skips_of_reports([SELF_TEST_JUNIT, SELF_TEST_JUNIT_LABEL_RUN], SELF_TEST_LABELS)
-    expect("the label run's report is examined too", len(both_runs) == 7, str(len(both_runs)))
+    expect("the label run's report is examined too", len(both_runs) == 8, str(len(both_runs)))
     process_skip = unexpected_skips(both_runs, {"golden"}, PR_TAGS_POSIX)
     expect("a process case that exited 77 is unexpected",
            "editor.editor_process - runs a command file [process]" in [skip.name for skip in process_skip],

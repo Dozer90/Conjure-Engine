@@ -2,7 +2,9 @@
 """Generates the managed mirror of the native scripting table (docs/design/03_scripting.md D3, 15_bindings.md 3.6).
 
 Reads every CONJURE_NATIVE_FN(group, name, return, (arguments)) invocation of
-engine/include/conjure/scripting/native_api.inl (an invocation may continue over several lines) and writes:
+engine/include/conjure/scripting/native_api.inl (an invocation may continue over several lines, the return type
+may be a pointer; // and /* */ comments are ignored, and an invocation the generator cannot read fails the run
+instead of being dropped) and writes:
 
   engine/include/conjure/scripting/native_api_hash.h     CONJURE_NATIVE_API_HASH and the entry counts
   managed/Conjure.Managed/Generated/NativeApi.g.cs       struct NativeApi (delegate* unmanaged fields in table
@@ -24,7 +26,7 @@ agree on the hash from the same text, and a stale generated file is reported by 
 entry conjure_scripting_api_generated_up_to_date runs.
 
 Usage:
-    python tools/generate_native_api.py            # regenerate the three outputs
+    python tools/generate_native_api.py            # regenerate the four outputs
     python tools/generate_native_api.py --check    # exit 1 when any output differs from what would be generated
 """
 
@@ -53,9 +55,15 @@ FNV1A64_PRIME = 0x00000100000001B3
 MASK64 = (1 << 64) - 1
 
 ENTRY_PATTERN = re.compile(
-    r"CONJURE_NATIVE_FN\(\s*(\w+)\s*,\s*(\w+)\s*,\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*,\s*(\((?:[^()]|\([^()]*\))*\))\s*\)",
+    r"CONJURE_NATIVE_FN\(\s*(\w+)\s*,\s*(\w+)\s*,\s*([A-Za-z_][A-Za-z0-9_ *]*?)\s*,\s*(\((?:[^()]|\([^()]*\))*\))\s*\)",
     re.DOTALL,
 )
+# Every invocation, readable or not: parse_entries fails when the two counts differ instead of dropping one.
+INVOCATION_PATTERN = re.compile(r"\bCONJURE_NATIVE_FN\s*\(")
+# Both comment kinds in one pattern: the scan takes whichever starts first, so a '//' inside a block comment
+# (a URL, a note on its closing line) neither ends nor extends it.
+COMMENT_PATTERN = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+CONST_QUALIFIER_PATTERN = re.compile(r"\bconst\b")
 VERSION_PATTERN = re.compile(r"#define\s+CONJURE_NATIVE_API_VERSION\s+(\d+)")
 STATUS_PATTERN = re.compile(r"CONJURE_BINDINGS_STATUS\(\s*([A-Z][A-Z0-9_]*)\s*\)")
 
@@ -143,6 +151,18 @@ def fnv1a64(data: bytes, seed: int = FNV1A64_OFFSET_BASIS) -> int:
     return value
 
 
+def blank_directives(code: str) -> str:
+    """'code' with every preprocessor directive line (and its backslash continuations) replaced by spaces of
+    the same length: a CONJURE_NATIVE_FN mentioned in an #error or #define is not a table entry."""
+    lines = code.split("\n")
+    continued = False
+    for index, line in enumerate(lines):
+        if continued or line.lstrip().startswith("#"):
+            continued = line.rstrip().endswith("\\")
+            lines[index] = " " * len(line)
+    return "\n".join(lines)
+
+
 def parse_entries(inl_text: str) -> tuple[list[entry], int]:
     """Entries in table order and the index of the first bindings-owned entry."""
     # The marker is a whole line; the header comment mentions it in passing, so a plain find is not enough.
@@ -150,8 +170,10 @@ def parse_entries(inl_text: str) -> tuple[list[entry], int]:
     if marker_match is None:
         raise SystemExit(f"native_api.inl has no '{BINDINGS_MARKER}' marker line")
     marker = marker_match.start()
-    # Comments are blanked (not removed) so match offsets stay comparable with the marker's position.
-    code = re.sub(r"//[^\n]*", lambda found: " " * len(found.group(0)), inl_text)
+    # Comments and preprocessor directives are blanked (not removed, newlines kept) so match offsets stay
+    # comparable with the marker's position.
+    code = COMMENT_PATTERN.sub(lambda found: re.sub(r"[^\n]", " ", found.group(0)), inl_text)
+    code = blank_directives(code)
     entries: list[entry] = []
     core_count = -1
     for match in ENTRY_PATTERN.finditer(code):
@@ -160,6 +182,10 @@ def parse_entries(inl_text: str) -> tuple[list[entry], int]:
         entries.append(entry(len(entries), match.group(1), match.group(2), match.group(3), match.group(4)))
     if core_count < 0:
         core_count = len(entries)
+    invocations = len(INVOCATION_PATTERN.findall(code))
+    if invocations != len(entries):
+        raise SystemExit(f"native_api.inl: {invocations} CONJURE_NATIVE_FN invocations but {len(entries)} parsed; "
+                         f"an entry uses a form the generator cannot read")
     names = [item.c_name for item in entries]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
@@ -186,10 +212,10 @@ def pascal(snake: str) -> str:
 
 
 def cs_type(c_type: str) -> str:
-    """C# spelling of a C parameter or return type."""
+    """C# spelling of a C parameter or return type. 'const' is dropped as a word only, so a type name that
+    contains it (conjure_constraint_desc) keeps its spelling."""
     stars = c_type.count("*")
-    base = c_type.replace("*", "").replace("const", "").strip()
-    base = " ".join(base.split())
+    base = " ".join(CONST_QUALIFIER_PATTERN.sub(" ", c_type.replace("*", " ")).split())
     if base in SCALAR_TYPES:
         mapped = SCALAR_TYPES[base]
     elif base.startswith("conjure_"):

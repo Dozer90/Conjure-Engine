@@ -13,7 +13,11 @@ The engine's test suites never require these files: tests that need them are gua
 The SHA-256 of every file is pinned in tools/test_assets.lock, which is committed: a downloaded file is
 verified against it, a mismatch fails, and a file the lock does not know yet is pinned with a reminder to
 commit the lock (so the pins come from a reviewed change, not from whatever upstream served a CI runner on a
-cache miss). --verify and --locked treat an unpinned asset as a failure.
+cache miss). --verify and --locked treat an unpinned asset as a failure; --verify and --force are exclusive.
+
+tests/.assets_ready is written whenever every required asset is present and verified, and removed otherwise.
+The exit code is 0 only when every required asset is present and nothing failed: an optional asset that failed
+(--include-optional) exits 1 but keeps the stamp. A failed or interrupted transfer leaves no partial file behind.
 """
 
 from __future__ import annotations
@@ -53,26 +57,32 @@ def save_lock(lock: dict[str, str]) -> None:
 
 
 def download(url: str, destination: pathlib.Path) -> None:
+    """Fetches 'url' into 'destination' through a .part file, which a failed or interrupted transfer removes."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     temporary = destination.with_suffix(destination.suffix + ".part")
-    with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as output:
-        while True:
-            chunk = response.read(1 << 20)
-            if not chunk:
-                break
-            output.write(chunk)
-    temporary.replace(destination)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response, temporary.open("wb") as output:
+            while True:
+                chunk = response.read(1 << 20)
+                if not chunk:
+                    break
+                output.write(chunk)
+        temporary.replace(destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--verify", action="store_true", help="verify existing files only; download nothing")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--verify", action="store_true", help="verify existing files only; download nothing")
     parser.add_argument("--locked", action="store_true",
                         help="fail on an asset tools/test_assets.lock does not pin instead of pinning it")
-    parser.add_argument("--force", action="store_true", help="re-download every asset")
+    mode.add_argument("--force", action="store_true", help="re-download every asset")
     parser.add_argument("--include-optional", action="store_true", help="also fetch assets marked optional")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     lock = load_lock()
@@ -131,15 +141,15 @@ def main() -> int:
     if failures:
         print("\n".join(f"FAILED    {failure}" for failure in failures), file=sys.stderr)
 
-    if required_present and not failures:
+    # The stamp says the required assets are there and verified; an optional asset that failed does not
+    # withdraw it, but still fails the run.
+    if required_present:
         STAMP.write_text("ready\n", encoding="utf-8")
         print(f"ready     {STAMP}")
-        return 0
-
-    if STAMP.exists():
-        STAMP.unlink()
-    return 1
+    else:
+        STAMP.unlink(missing_ok=True)
+    return 0 if required_present and not failures else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

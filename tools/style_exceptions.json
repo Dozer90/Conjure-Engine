@@ -5,7 +5,8 @@
         "conjure/core/platform_detect.h": "compile-time macros only; the static_asserts in types.h and the build itself check them",
         "conjure/core/types.h": "type aliases and static_asserts only; there is no runtime behaviour to test",
         "conjure/core/containers/detail.h": "private implementation detail of the containers; covered through the container tests",
-        "conjure/core/containers/slot_key_format.h": "std::formatter for slot_key; covered by test_slot_map.cpp"
+        "conjure/core/containers/slot_key_format.h": "std::formatter for slot_key; covered by test_slot_map.cpp",
+        "conjure/core/math.h": "convenience include of conjure/core/math/math.h only; tests/core/math/test_math.cpp mirrors that header"
     },
     "forbidden_in_tests": {
         "tests/support/src/test_main.cpp": "the one place that reads CONJURE_TEST_* environment variables (08_testing.md 5.1)",
@@ -23,6 +24,7 @@
         "tests/core/memory/test_frame_allocator.cpp": "10_core.md 2.5 explicitly allows std::thread in the frame_allocator test",
         "tests/core/memory/test_tracked_allocation.cpp": "tracked_allocate from several threads; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
         "tests/core/reflect/test_type_registry.cpp": "registry readers and writers race on purpose; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
+        "tests/core/strings/test_string_id.cpp": "interning from 8 threads and reading names while other threads intern; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
         "tests/core/system/process_child.cpp": "the helper program the process tests spawn: it sleeps and echoes environment variables on request (10_core.md 2.10)",
         "tests/core/system/test_process.cpp": "process timeouts and kill() are wall-clock contracts; polling and killing from a second thread is what the API documents (10_core.md 2.10)",
         "tests/core/time/test_event_bus.cpp": "thread-safe enqueue from several producers; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",

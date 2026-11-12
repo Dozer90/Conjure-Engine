@@ -28,15 +28,18 @@ Modes:
                                           generators) or --config must be Distribution (multi-config generators,
                                           where the binaries live in bin/<config>/); any other configuration
                                           exits 77 ("skipped", CTest's SKIP_RETURN_CODE) unless --any-config.
+                                          A --config that disagrees with a single-config directory's
+                                          CMAKE_BUILD_TYPE is a usage error.
     --binary <file> [...]                 checks the named binaries, whatever build produced them
     --self-test                           runs the matcher and the cache parser over embedded tool output
 
-Options: --tool <dumpbin|llvm-nm|nm executable> (default: searched on PATH; dumpbin on Windows),
+Options: --tool <dumpbin|llvm-nm|nm, a path or a program name looked up on PATH> (default: searched on PATH;
+dumpbin on Windows),
 --no-shared (skip the conjure_shared library next to the runtime), --max-findings <n> (printed per binary,
 default 20), --any-config.
 
 Exit code 0 when every binary is clean, 1 when an editor or ImGui symbol was found, 2 on usage errors
-(missing directory or binary, missing tool, tool failure), 77 when the build directory is not a
+(missing directory or binary, missing tool, tool failure, disagreeing --config), 77 when the build directory is not a
 Distribution one. Output is one `<binary>: <symbol>` line per finding.
 
 CI (docs/handbook/ci.md): the Distribution leg builds the preset and then runs the CTest entry that
@@ -59,6 +62,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -94,6 +98,8 @@ FORBIDDEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 ENGINE_IMGUI_BRIDGE = re.compile(r"set_imgui_draw_data|imgui_layer|imgui_renderer")
 IMGUI_TYPE_RULE = "ImGui type"
 
+DUMP_HEADER_PREFIX = "Dump of file"
+
 CACHE_ENTRY = re.compile(r"^(?P<name>[A-Za-z0-9_\-]+):(?P<type>[A-Z]+)=(?P<value>.*)$")
 
 
@@ -118,6 +124,10 @@ def scan_symbol_text(binary: pathlib.Path, text: str) -> list[finding]:
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line in seen:
+            continue
+        # dumpbin's `Dump of file <path>` header names the binary, not a symbol: a path through a
+        # conjure_editor directory is not an editor symbol.
+        if line.startswith(DUMP_HEADER_PREFIX):
             continue
         for description, pattern in FORBIDDEN_PATTERNS:
             if pattern.search(line) is not None:
@@ -154,16 +164,16 @@ def parse_cache(text: str) -> dict[str, str]:
     return entries
 
 
-def build_configuration(cache: dict[str, str], requested: str | None) -> tuple[str, bool]:
+def build_configuration(cache: dict[str, str], requested: str | None) -> tuple[str | None, bool]:
     """The configuration a build directory holds and whether the generator is multi-config.
-    Single-config: CMAKE_BUILD_TYPE (the --config argument must agree when given). Multi-config: the
-    --config argument, or '' when none was given."""
+    Single-config: CMAKE_BUILD_TYPE; None when a --config argument disagrees with it (a usage error).
+    Multi-config: the --config argument, or '' when none was given."""
     build_type = cache.get("CMAKE_BUILD_TYPE", "")
     multi_config = not build_type and bool(cache.get("CMAKE_CONFIGURATION_TYPES", ""))
     if multi_config:
         return (requested or ""), True
     if requested and requested != build_type:
-        return requested, False
+        return None, False
     return build_type, False
 
 
@@ -179,10 +189,15 @@ def find_binaries(bin_dir: pathlib.Path, with_shared: bool) -> tuple[pathlib.Pat
     return runtime, shared
 
 
-def find_tool(explicit: str | None, binary: pathlib.Path) -> tuple[pathlib.Path | None, str]:
-    """The symbol-listing tool for a binary: (path, 'dumpbin' | 'llvm-nm' | 'nm'); path None when missing."""
+def find_tool(
+  explicit: str | None,
+  binary: pathlib.Path,
+  which: Callable[[str], str | None] = shutil.which,
+) -> tuple[pathlib.Path | None, str]:
+    """The symbol-listing tool for a binary: (path, 'dumpbin' | 'llvm-nm' | 'nm'); path None when missing.
+    An explicit --tool is a path or a program name searched on PATH with 'which'."""
     if explicit:
-        candidate = pathlib.Path(explicit)
+        candidate: pathlib.Path | None = pathlib.Path(explicit)
         stem = candidate.stem.lower()
         if stem == "dumpbin":
             kind = "dumpbin"
@@ -190,14 +205,17 @@ def find_tool(explicit: str | None, binary: pathlib.Path) -> tuple[pathlib.Path 
             kind = "llvm-nm"
         else:
             kind = "nm"
-        return (candidate if candidate.exists() else None), kind
+        if not candidate.exists():
+            found = which(explicit)
+            candidate = pathlib.Path(found) if found else None
+        return candidate, kind
     if binary.suffix.lower() in (".dll", ".exe") or platform.system() == "Windows":
-        found = shutil.which("dumpbin")
+        found = which("dumpbin")
         return (pathlib.Path(found) if found else None), "dumpbin"
-    found = shutil.which("llvm-nm")
+    found = which("llvm-nm")
     if found:
         return pathlib.Path(found), "llvm-nm"
-    found = shutil.which("nm")
+    found = which("nm")
     return (pathlib.Path(found) if found else None), "nm"
 
 
@@ -292,6 +310,13 @@ def run_build_dir(
         return EXIT_USAGE
 
     configuration, multi_config = build_configuration(cache, config_argument)
+    if configuration is None:
+        print(
+            f"check_distribution_symbols: --config {config_argument} disagrees with "
+            f"CMAKE_BUILD_TYPE={cache.get('CMAKE_BUILD_TYPE', '')} of the single-config build directory {build_dir}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     if multi_config and not configuration:
         print("check_distribution_symbols: a multi-config build directory needs --config <name>", file=sys.stderr)
         return EXIT_USAGE
@@ -504,12 +529,30 @@ def run_self_test() -> int:
     duplicate = scan_symbol_text(binary, "  ?NewFrame@ImGui@@YAXXZ\n  ?NewFrame@ImGui@@YAXXZ\n")
     expect("a repeated line is one finding", len(duplicate) == 1, str(len(duplicate)))
 
+    header_only = scan_symbol_text(
+        binary, "Dump of file D:\\work\\conjure_editor\\build\\bin\\conjure_runtime.exe\n"
+                "Dump of file /home/ci/conjure_editor/build/bin/conjure_shared.dll\n")
+    expect("a Dump of file header naming a conjure_editor directory is not a finding", not header_only,
+           "; ".join(item.format() for item in header_only))
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/lib/llvm/bin/llvm-nm" if name == "llvm-nm" else None
+
+    resolved = find_tool("llvm-nm", binary, which=fake_which)
+    expect("an explicit tool name is resolved on PATH",
+           resolved == (pathlib.Path("/usr/lib/llvm/bin/llvm-nm"), "llvm-nm"), str(resolved))
+    unresolved = find_tool("no_such_listing_tool", binary, which=fake_which)
+    expect("an explicit tool name that is not on PATH is not found", unresolved[0] is None, str(unresolved))
+
     single = parse_cache(SELF_TEST_SINGLE_CONFIG_CACHE)
     expect("cache parser reads CMAKE_BUILD_TYPE", single.get("CMAKE_BUILD_TYPE") == "Distribution", str(single))
     expect("single-config build reports its configuration",
            build_configuration(single, None) == ("Distribution", False), str(build_configuration(single, None)))
-    expect("single-config build with a disagreeing --config reports the requested one",
-           build_configuration(single, "Debug") == ("Debug", False), str(build_configuration(single, "Debug")))
+    expect("single-config build with a disagreeing --config is a usage error",
+           build_configuration(single, "Debug") == (None, False), str(build_configuration(single, "Debug")))
+    expect("single-config build with an agreeing --config reports its configuration",
+           build_configuration(single, "Distribution") == ("Distribution", False),
+           str(build_configuration(single, "Distribution")))
 
     multi = parse_cache(SELF_TEST_MULTI_CONFIG_CACHE)
     expect("multi-config build without --config has no configuration",
@@ -533,7 +576,9 @@ def main(argv: list[str]) -> int:
                         help="the configuration of a multi-config build directory (binaries in bin/<config>/)")
     parser.add_argument("--binary", action="append", default=[], metavar="FILE",
                         help="a binary to check instead of a build directory (repeatable)")
-    parser.add_argument("--tool", default=None, help="dumpbin, llvm-nm or nm executable (default: searched on PATH)")
+    parser.add_argument("--tool", default=None,
+                        help="dumpbin, llvm-nm or nm: a path or a program name looked up on PATH "
+                             "(default: searched on PATH)")
     parser.add_argument("--no-shared", action="store_true",
                         help="check the runtime executable only, not the conjure_shared library next to it")
     parser.add_argument("--any-config", action="store_true",

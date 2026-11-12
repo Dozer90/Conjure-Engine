@@ -10,7 +10,8 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
   trailing-whitespace   no spaces or tabs at the end of a line
   pragma-once           every header starts its directives with #pragma once (no include guards)
   using-namespace       no `using namespace` directive at namespace or global scope in a header
-  windows-macro         no enumerator or constant named after a Windows macro (ERROR, DELETE, IN, ...)
+  windows-macro         no enumerator (named or anonymous enum), constant (constexpr, or const with an
+                        ALL_CAPS name) or #define named after a Windows macro (ERROR, DELETE, IN, ...)
   enum-class            every enumeration is an `enum class` (plain enums are tolerated only for names
                         ending in _flags, the style guide's optional flag form)
   include-order         unconditional #include directives come in the documented groups, each group
@@ -19,8 +20,9 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
                         tests), other Conjure headers (private engine/src headers included), third-party
                         headers, standard library and operating-system headers; Conjure headers use
                         quotes, everything else angle brackets
-  third-party-include   public headers (engine/include) include no third-party header; glm through
-                        conjure/core/math/glm_types.h is the single exception
+  third-party-include   public headers (engine/include) include only Conjure headers ("conjure/...") and C++
+                        standard library headers (a bare name such as <vector>): third-party and operating-
+                        system headers are rejected; glm in conjure/core/math/glm_types.h is the single exception
   doctest-include       test code includes doctest only through conjure/testing/doctest.h
   test-case-name        TEST_CASE names (also through TEST_CASE_TEMPLATE, TEST_CASE_FIXTURE and any
                         <PREFIX>_CASE("...") wrapper macro, comments excluded) follow "<type> - <behaviour>"
@@ -34,11 +36,19 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
 
 With --tests-mirror-headers it also verifies that every engine/include/conjure/<module>/**/<name>.h
 has a tests/<module>/**/test_<name>.cpp, every tests/support/include/conjure/testing/<name>.h a
-tests/support/tests/test_<name>.cpp and every tests/support/engine/include/conjure/testing/<name>.h a
-tests/support/tests/engine/test_<name>.cpp. Known exceptions live in tools/style_exceptions.json.
+tests/support/tests/test_<name>.cpp, every tests/support/engine/include/conjure/testing/<name>.h a
+tests/support/tests/engine/test_<name>.cpp and every tests/benchmarks/include/conjure/bench/<name>.h a
+tests/benchmarks/tests/test_<name>.cpp. The mapping is one-to-one (08_testing.md 5.1): when the stem occurs
+more than once under the test root, the file in the header's own sub-directory counts (tests/core/math/
+test_math.cpp for conjure/core/math/math.h); a test file must be listed in a CMakeLists.txt of its directory
+or an ancestor up to the test root (tests/<module>, tests/support/tests, tests/support/tests/engine or
+tests/benchmarks/tests; tests/CMakeLists.txt does not count), and may mirror one header only. Known exceptions
+live in tools/style_exceptions.json.
 
-Exit code 0 when clean, 1 when a finding was reported, 2 on usage errors. Output is one
-`path:line: rule: message` per finding so editors and CI can link to it.
+Exit code 0 when clean, 1 when a finding was reported, 2 on usage errors (a path argument that does not
+exist, lies outside --root, is not a C++ source or names no source at all; a malformed
+tools/style_exceptions.json). Output is one `path:line: rule: message` per finding so editors and CI can link
+to it.
 
 Usage:
     python tools/check_style.py [--tests-mirror-headers] [--root <repo>] [paths...]
@@ -71,7 +81,8 @@ WINDOWS_MACRO_NAMES = {
     "WIN32", "interface", "small", "hyper", "min", "max", "far", "near", "pascal", "cdecl",
 }
 
-# Third-party roots that may never appear in a public header; glm is allowed in the math umbrella.
+# Third-party include prefixes: the include-order rule requires angle brackets for them. The public-header
+# rule does not read this list; it accepts Conjure and standard library headers only (is_allowed_public_include).
 THIRD_PARTY_INCLUDE_ROOTS = (
     "glm/", "yyjson", "stb_", "nvrhi", "Jolt/", "GLFW/", "imgui", "ImGuizmo", "miniaudio", "cgltf", "doctest",
     "nethost", "hostfxr", "coreclr", "vulkan/", "d3d12", "dxgi", "windows.h", "Windows.h",
@@ -119,11 +130,26 @@ TEST_CASE_PATTERN = re.compile(
     r'(?:[A-Za-z_][A-Za-z0-9_:]*\s*,\s*)?"((?:[^"\\]|\\.)*)"'
 )
 USING_NAMESPACE_PATTERN = re.compile(r"^\s*using\s+namespace\s+[A-Za-z_:][A-Za-z0-9_:]*\s*;")
-ENUM_PATTERN = re.compile(r"\benum\s+(?:class\s+|struct\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?::[^{;]+)?\{", re.MULTILINE)
+# The enumeration name is optional: the enumerators of an anonymous enum collide with the macros just the same.
+ENUM_PATTERN = re.compile(
+    r"\benum\b\s*(?:(?:class|struct)\b\s*)?(?:[A-Za-z_][A-Za-z0-9_]*\s*)?(?::[^{;]+)?\{", re.MULTILINE)
 PLAIN_ENUM_PATTERN = re.compile(r"\benum\s+(?!class\b|struct\b)([A-Za-z_][A-Za-z0-9_]*)?\s*(?::[^{;]+)?\{")
-CONSTANT_PATTERN = re.compile(r"\bconstexpr\s+(?:[A-Za-z_:][A-Za-z0-9_:<>,\s]*?\s+)?\b([A-Za-z_][A-Za-z0-9_]*)\s*=")
+CONSTANT_PATTERN = re.compile(
+    r"\b(?P<keyword>constexpr|const)\s+(?:[A-Za-z_:][A-Za-z0-9_:<>,\s]*?\s+)?\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=")
+CONSTANT_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
+DEFINE_PATTERN = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 IDENTIFIER_PATTERN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)")
 FILE_NAME_PATTERN = re.compile(r"^[a-z0-9_]+\.[a-z]+$")
+
+# Raw string literals (R"delimiter(...)delimiter"): encoding prefixes longest first, the longest delimiter
+# the standard allows and the characters a delimiter may not contain.
+RAW_STRING_PREFIXES = ("u8R", "uR", "UR", "LR", "R")
+MAX_RAW_DELIMITER_LENGTH = 16
+RAW_DELIMITER_EXCLUDED = frozenset(" ()\\\t\v\f\n")
+
+
+class usage_error(Exception):
+    """A bad command line or a malformed tools/style_exceptions.json: reported on stderr with exit code 2."""
 
 
 class finding:
@@ -143,10 +169,69 @@ class finding:
         return f"{shown}:{self.line}: {self.rule}: {self.message}"
 
 
+def is_identifier_character(character: str) -> bool:
+    return character.isalnum() or character == "_"
+
+
+def is_digit_separator(text: str, index: int) -> bool:
+    """True when the apostrophe at 'index' is a C++14 digit separator (1'000, 0xFFFF'FFFFull) rather than the
+    start of a character literal: the run of letters, digits, '_', '.' and apostrophes right before it starts
+    with a digit. An encoding prefix (u8'a', L'x', u'x') starts with a letter, so it still opens a literal."""
+    start = index
+    while start > 0 and (is_identifier_character(text[start - 1]) or text[start - 1] in ".'"):
+        start -= 1
+    return start < index and text[start].isdigit()
+
+
+def raw_string_end(text: str, index: int) -> tuple[int, bool] | None:
+    """(end offset, terminated) of the raw string literal (R"delimiter(...)delimiter") whose opening quote is
+    at 'index', or None when that quote does not open one. An unterminated raw string runs to the end."""
+    prefix = next((candidate for candidate in RAW_STRING_PREFIXES if text.endswith(candidate, 0, index)), None)
+    if prefix is None:
+        return None
+    before = index - len(prefix) - 1
+    if before >= 0 and is_identifier_character(text[before]):
+        return None
+    limit = min(len(text), index + 2 + MAX_RAW_DELIMITER_LENGTH)
+    open_index = index + 1
+    while open_index < limit and text[open_index] not in RAW_DELIMITER_EXCLUDED:
+        open_index += 1
+    if open_index >= limit or text[open_index] != "(":
+        return None
+    closing = ")" + text[index + 1:open_index] + '"'
+    close_index = text.find(closing, open_index + 1)
+    if close_index < 0:
+        return len(text), False
+    return close_index + len(closing), True
+
+
+def literal_end(text: str, index: int) -> tuple[int, bool]:
+    """(end offset, terminated) of the ordinary string or character literal opening at 'index'. It ends at its
+    closing quote, at an unescaped newline (so a stray quote cannot swallow the lines after it) or at the end
+    of the text; a backslash-newline continues it."""
+    quote = text[index]
+    end = index + 1
+    length = len(text)
+    while end < length and text[end] != quote and text[end] != "\n":
+        end += 2 if text[end] == "\\" else 1
+    if end < length and text[end] == quote:
+        return end + 1, True
+    return min(end, length), False
+
+
+def blank_literal(span: str, terminated: bool) -> str:
+    """The literal 'span' with its opening quote, its closing quote (when terminated) and every newline kept
+    and everything else replaced by spaces, so offsets and line numbers survive."""
+    closing = span[-1] if terminated and len(span) >= 2 else ""
+    body = span[1:len(span) - len(closing)]
+    return span[:1] + "".join("\n" if character == "\n" else " " for character in body) + closing
+
+
 def strip_comments(text: str, keep_strings: bool = False) -> str:
-    """Replaces comments (and, unless keep_strings is set, string literals) with spaces of the same
-    length so that line numbers and offsets are preserved while regexes no longer see commented-out
-    code or text inside strings."""
+    """Replaces comments (and, unless keep_strings is set, string and character literals) with spaces of the
+    same length, keeping every newline, so that line numbers and offsets are preserved while regexes no longer
+    see commented-out code or text inside literals. Raw strings are one literal and digit separators are
+    code."""
     result: list[str] = []
     index = 0
     length = len(text)
@@ -162,16 +247,14 @@ def strip_comments(text: str, keep_strings: bool = False) -> str:
             end = length if end < 0 else end + 2
             result.append("".join("\n" if c == "\n" else " " for c in text[index:end]))
             index = end
+        elif char == "'" and is_digit_separator(text, index):
+            result.append(char)
+            index += 1
         elif char in "\"'":
-            quote = char
-            end = index + 1
-            while end < length and text[end] != quote:
-                end += 2 if text[end] == "\\" else 1
-            end = min(end + 1, length)
-            if keep_strings:
-                result.append(text[index:end])
-            else:
-                result.append(quote + " " * max(end - index - 2, 0) + (quote if end - index >= 2 else ""))
+            raw = raw_string_end(text, index) if char == '"' else None
+            end, terminated = raw if raw is not None else literal_end(text, index)
+            span = text[index:end]
+            result.append(span if keep_strings else blank_literal(span, terminated))
             index = end
         else:
             result.append(char)
@@ -184,15 +267,28 @@ def line_of(text: str, offset: int) -> int:
 
 
 def iter_source_files(root: pathlib.Path, explicit: list[str]) -> list[pathlib.Path]:
+    """Every C++ source to check: the files and directories named on the command line (relative to the root),
+    or the scanned directories of the whole repository. Raises usage_error for a path that does not exist,
+    lies outside the root or is not a C++ source, and when the named paths hold no source at all."""
     if explicit:
         files: list[pathlib.Path] = []
+        resolved_root = root.resolve()
         for entry in explicit:
             path = pathlib.Path(entry)
             path = path if path.is_absolute() else root / path
+            if not path.exists():
+                raise usage_error(f"{entry} does not exist")
+            if not path.resolve().is_relative_to(resolved_root):
+                raise usage_error(f"{entry} is outside the repository root {root}")
             if path.is_dir():
                 files.extend(collect(path))
             elif path.suffix in SOURCE_SUFFIXES:
                 files.append(path)
+            else:
+                raise usage_error(
+                    f"{entry} is not a C++ source file (accepted: {', '.join(sorted(SOURCE_SUFFIXES))})")
+        if not files:
+            raise usage_error("no C++ source file under the given paths")
         return sorted(set(files))
 
     files = []
@@ -338,11 +434,23 @@ def check_windows_macro_names(path: pathlib.Path, code: str, findings: list[find
             offset += len(enumerator) + 1
 
     for match in CONSTANT_PATTERN.finditer(code):
+        name = match.group("name")
+        if name not in WINDOWS_MACRO_NAMES:
+            continue
+        # docs/CONVENTIONS.md 1: a constexpr name is a constant, but `const float near = 1.0f;` is a local
+        # variable (camelCase); only an ALL_CAPS const name is a constant.
+        if match.group("keyword") == "const" and not CONSTANT_NAME_PATTERN.fullmatch(name):
+            continue
+        findings.append(finding(
+            path, line_of(code, match.start("name")), "windows-macro",
+            f"constant '{name}' is a Windows macro name"))
+
+    for match in DEFINE_PATTERN.finditer(code):
         name = match.group(1)
         if name in WINDOWS_MACRO_NAMES:
             findings.append(finding(
                 path, line_of(code, match.start(1)), "windows-macro",
-                f"constant '{name}' is a Windows macro name"))
+                f"macro '{name}' redefines a Windows macro name"))
 
 
 def check_includes(
@@ -358,19 +466,29 @@ def check_includes(
         if not match:
             continue
         target = match.group(2)
-        if is_public_header:
-            for prefix in THIRD_PARTY_INCLUDE_ROOTS:
-                if target.startswith(prefix) or target.lower().startswith(prefix.lower()):
-                    if prefix == "glm/" and relative == GLM_ALLOWED_HEADER:
-                        break
-                    findings.append(finding(
-                        path, number, "third-party-include",
-                        f"public header includes third-party header <{target}>"))
-                    break
+        if is_public_header and not is_allowed_public_include(target, match.group(1) == '"', relative):
+            findings.append(finding(
+                path, number, "third-party-include",
+                f"public header includes <{target}>; public headers include only Conjure and C++ standard "
+                f"library headers (glm only through conjure/core/math/glm_types.h)"))
         if is_test_code and target.startswith("doctest/") and relative not in DOCTEST_ALLOWED_HEADERS:
             findings.append(finding(
                 path, number, "doctest-include",
                 "include \"conjure/testing/doctest.h\" instead of <doctest/doctest.h>"))
+
+
+def is_allowed_public_include(target: str, quoted: bool, relative: pathlib.PurePosixPath) -> bool:
+    """True for an include a public header may carry (docs/CONVENTIONS.md 2): a Conjure header, a bare C++
+    standard library name (<vector>, <cstdint>), or glm inside conjure/core/math/glm_types.h. Everything else
+    is rejected, so a third-party or operating-system header needs no list entry to be caught. A Conjure header
+    in angle brackets is left to the include-order rule."""
+    if target.startswith("conjure/"):
+        return True
+    if quoted:
+        return False
+    if target.startswith("glm/"):
+        return relative == GLM_ALLOWED_HEADER
+    return "/" not in target and "." not in target
 
 
 def own_module(relative: pathlib.PurePosixPath) -> str | None:
@@ -458,38 +576,45 @@ def check_include_order(
 
 
 def load_exceptions(root: pathlib.Path) -> dict[str, dict[str, str]]:
+    """The parsed tools/style_exceptions.json (empty when absent); usage_error when it is malformed."""
     path = root / "tools" / "style_exceptions.json"
     if not path.exists():
         return {}
-    with path.open(encoding="utf-8") as stream:
-        data = json.load(stream)
+    try:
+        with path.open(encoding="utf-8") as stream:
+            data = json.load(stream)
+    except ValueError as error:
+        raise usage_error(f"{path}: {error}") from error
     if not isinstance(data, dict):
-        raise SystemExit(f"{path}: expected a JSON object")
+        raise usage_error(f"{path}: expected a JSON object")
     return data
 
 
 def exception_table(exceptions: dict[str, dict[str, str]], key: str) -> dict[str, str]:
+    """One table of style_exceptions.json (path -> reason); usage_error when it is not one."""
     table = exceptions.get(key, {})
-    if not isinstance(table, dict):
-        raise SystemExit(f"tools/style_exceptions.json: {key} must map paths to reasons")
+    if not isinstance(table, dict) or not all(isinstance(value, str) for value in table.values()):
+        raise usage_error(f"tools/style_exceptions.json: {key} must map paths to reasons")
     return table
 
 
-def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -> list[finding]:
-    findings: list[finding] = []
-    pairs: list[tuple[pathlib.Path, pathlib.Path, str]] = []
+def mirrored_headers(root: pathlib.Path) -> list[tuple[pathlib.Path, pathlib.Path, str, tuple[str, ...]]]:
+    """(header, test root, exception key, the header's sub-directory below its module) of every header that
+    needs a test file."""
+    pairs: list[tuple[pathlib.Path, pathlib.Path, str, tuple[str, ...]]] = []
 
     include_root = root / "engine" / "include" / "conjure"
     if include_root.is_dir():
         for header in sorted(include_root.rglob("*.h")):
-            module = header.relative_to(include_root).parts[0]
-            pairs.append((header, root / "tests" / module, header.relative_to(root / "engine" / "include").as_posix()))
+            parts = header.relative_to(include_root).parts
+            pairs.append((header, root / "tests" / parts[0], header.relative_to(root / "engine" / "include").as_posix(),
+                          parts[1:-1]))
 
     support_root = root / "tests" / "support" / "include" / "conjure" / "testing"
     if support_root.is_dir():
         for header in sorted(support_root.glob("*.h")):
             pairs.append((header, root / "tests" / "support" / "tests",
-                          header.relative_to(root / "tests" / "support" / "include").as_posix()))
+                          header.relative_to(root / "tests" / "support" / "include").as_posix(), ()))
 
     # The engine-level support library (tests/support/engine) mirrors its headers into its own self-test
     # directory; the key carries the "engine/" prefix so an exception can name either library's header.
@@ -497,20 +622,73 @@ def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -
     if engine_support_root.is_dir():
         for header in sorted(engine_support_root.glob("*.h")):
             pairs.append((header, root / "tests" / "support" / "tests" / "engine",
-                          "engine/" + header.relative_to(root / "tests" / "support" / "engine" / "include").as_posix()))
+                          "engine/" + header.relative_to(root / "tests" / "support" / "engine" / "include").as_posix(),
+                          ()))
 
+    # The benchmark harness (tests/benchmarks/include/conjure/bench) has its self-tests in tests/benchmarks/tests.
+    bench_root = root / "tests" / "benchmarks" / "include" / "conjure" / "bench"
+    if bench_root.is_dir():
+        for header in sorted(bench_root.glob("*.h")):
+            pairs.append((header, root / "tests" / "benchmarks" / "tests", f"bench/{header.name}", ()))
+    return pairs
+
+
+def is_listed_in_cmake(test_file: pathlib.Path, test_root: pathlib.Path, listings: dict[pathlib.Path, str]) -> bool:
+    """True when a CMakeLists.txt in the test file's directory or an ancestor up to 'test_root' names it, so the
+    file is built. 'listings' caches the text of every CMakeLists.txt read."""
+    name = re.compile(rf"(?<![\w.-]){re.escape(test_file.name)}(?![\w.])")
+    directory = test_file.parent
+    while True:
+        listing = directory / "CMakeLists.txt"
+        if listing not in listings:
+            listings[listing] = listing.read_text(encoding="utf-8", errors="replace") if listing.is_file() else ""
+        if name.search(listings[listing]):
+            return True
+        if directory == test_root or directory == directory.parent:
+            return False
+        directory = directory.parent
+
+
+def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -> list[finding]:
+    """One test file per public header (08_testing.md 5.1): test_<stem>.cpp under the header's test root, in
+    the header's sub-directory when the stem occurs more than once, listed in a CMakeLists.txt and mirroring no
+    other header."""
+    findings: list[finding] = []
+    listings: dict[pathlib.Path, str] = {}
+    claimed: dict[pathlib.Path, str] = {}
     used_exceptions: set[str] = set()
-    for header, test_root, key in pairs:
+    for header, test_root, key, sub_directory in mirrored_headers(root):
         expected = f"test_{header.stem}.cpp"
         if key in exceptions:
             used_exceptions.add(key)
             continue
-        if test_root.is_dir() and any(candidate.name == expected for candidate in test_root.rglob("test_*.cpp")):
+        shown_root = test_root.relative_to(root).as_posix()
+        candidates = sorted(test_root.rglob(expected)) if test_root.is_dir() else []
+        if not candidates:
+            findings.append(finding(
+                header, 1, "tests-mirror-headers",
+                f"no {shown_root}/**/{expected} for this header "
+                f"(add it or list the header in tools/style_exceptions.json with a reason)"))
             continue
-        findings.append(finding(
-            header, 1, "tests-mirror-headers",
-            f"no {test_root.relative_to(root).as_posix()}/**/{expected} for this header "
-            f"(add it or list the header in tools/style_exceptions.json with a reason)"))
+        test_file = candidates[0]
+        if len(candidates) > 1:
+            test_file = test_root.joinpath(*sub_directory, expected)
+            if test_file not in candidates:
+                findings.append(finding(
+                    header, 1, "tests-mirror-headers",
+                    f"several {expected} under {shown_root}; keep the test in the header's sub-directory "
+                    f"({'/'.join((shown_root, *sub_directory, expected))})"))
+                continue
+        shown_test = test_file.relative_to(root).as_posix()
+        if not is_listed_in_cmake(test_file, test_root, listings):
+            findings.append(finding(
+                header, 1, "tests-mirror-headers", f"{shown_test} is not listed in any CMakeLists.txt"))
+            continue
+        first = claimed.setdefault(test_file, key)
+        if first != key:
+            findings.append(finding(
+                header, 1, "tests-mirror-headers",
+                f"{shown_test} already mirrors {first}; one test file per public header (08_testing.md 5.1)"))
 
     for key in sorted(set(exceptions) - used_exceptions):
         findings.append(finding(
@@ -532,12 +710,17 @@ def main(argv: list[str]) -> int:
         print(f"check_style: {root} is not a directory", file=sys.stderr)
         return 2
 
-    exceptions = load_exceptions(root)
-    forbidden_exceptions = exception_table(exceptions, "forbidden_in_tests")
+    try:
+        exceptions = load_exceptions(root)
+        forbidden_exceptions = exception_table(exceptions, "forbidden_in_tests")
+        mirror_exceptions = exception_table(exceptions, "tests_mirror_headers")
+        files = iter_source_files(root, args.paths)
+    except usage_error as error:
+        print(f"check_style: {error}", file=sys.stderr)
+        return 2
     used_forbidden_exceptions: set[str] = set()
 
     findings: list[finding] = []
-    files = iter_source_files(root, args.paths)
     for path in files:
         findings.extend(check_file(root, path, forbidden_exceptions, used_forbidden_exceptions))
 
@@ -549,7 +732,7 @@ def main(argv: list[str]) -> int:
                 f"exception '{key}' names a file that does not exist; remove it"))
 
     if args.tests_mirror_headers:
-        findings.extend(check_tests_mirror_headers(root, exception_table(exceptions, "tests_mirror_headers")))
+        findings.extend(check_tests_mirror_headers(root, mirror_exceptions))
 
     for item in sorted(findings, key=lambda f: (f.path.as_posix(), f.line, f.rule)):
         print(item.format(root))

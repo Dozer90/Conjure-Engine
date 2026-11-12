@@ -3,8 +3,9 @@
 
 Checks every Markdown page under docs/api and docs/handbook for:
   * the document-set badge on the first content line (📘 Public API wiki / 🛠 Engineering handbook),
-  * relative links that resolve to an existing file (anchors are not verified),
-  * no TODO/FIXME markers, no page longer than MAX_PAGE_LINES,
+  * relative links, reference definitions and HTML hrefs outside code spans and fenced blocks that resolve
+    to an existing file (anchors are not verified),
+  * no TODO/FIXME/XXX markers, no page longer than MAX_PAGE_LINES,
 and the two coverage rules:
   * every public header that counts as public API is referenced from a wiki page of its module,
   * every engine module has a handbook page under docs/handbook/modules/.
@@ -29,6 +30,60 @@ API_BADGE = "📘 **Public API wiki**"
 HANDBOOK_BADGE = "🛠 **Engineering handbook**"
 MAX_PAGE_LINES = 400
 LINK_PATTERN = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# `[label]: target` at the start of a line (up to three spaces of indentation); footnotes (`[^1]:`) are text.
+REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[(?!\^)[^\]\n]+\]:[ \t]*<?([^\s>]+)>?", re.MULTILINE)
+HTML_HREF = re.compile(r"\bhref\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+# The opening line of a fenced code block (also indented inside a list item): at least three backticks with no
+# backtick in the info string, or at least three tildes.
+FENCE_OPENING = re.compile(r"^[ \t]*(`{3,}(?!.*`)|~{3,})")
+# An inline code span: a run of backticks, the shortest text without a blank line, and a run of the same length.
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\n))+?)(?<!`)\1(?!`)")
+LINK_SCHEMES_NOT_CHECKED = ("http://", "https://", "mailto:", "#")
+
+
+def blank(text: str) -> str:
+    """'text' with every character but newlines replaced by a space."""
+    return "".join("\n" if character == "\n" else " " for character in text)
+
+
+def strip_code(text: str) -> str:
+    """'text' with fenced code blocks and inline code spans blanked (newlines kept), so examples of link
+    syntax inside code are not read as links. An unterminated fence runs to the end of the page."""
+    lines = text.split("\n")
+    fence = ""
+    for index, line in enumerate(lines):
+        opening = FENCE_OPENING.match(line)
+        if not fence and opening:
+            fence = opening.group(1)
+            lines[index] = ""
+        elif fence:
+            closing = line.strip()
+            if closing.startswith(fence) and set(closing) == {fence[0]}:
+                fence = ""
+            lines[index] = ""
+    return CODE_SPAN.sub(lambda match: blank(match.group(0)), "\n".join(lines))
+
+
+def link_targets(text: str) -> list[str]:
+    """Every link target of a page outside code: inline links and images, reference definitions and
+    HTML hrefs."""
+    code_free = strip_code(text)
+    targets = [match.group(1) for match in LINK_PATTERN.finditer(code_free)]
+    targets += [match.group(1) for match in REFERENCE_DEFINITION.finditer(code_free)]
+    targets += [match.group(1) if match.group(1) is not None else match.group(2)
+                for match in HTML_HREF.finditer(code_free)]
+    return targets
+
+
+def dangling_target(page: pathlib.Path, target: str) -> bool:
+    """True when a relative link target names a file that does not exist; absolute URLs, mail links and
+    anchors are not checked."""
+    if target.startswith(LINK_SCHEMES_NOT_CHECKED):
+        return False
+    path_part = target.split("#", 1)[0]
+    if not path_part:
+        return False
+    return not (page.parent / path_part).resolve().exists()
 
 
 def iter_pages(directory: pathlib.Path):
@@ -56,7 +111,7 @@ def check_page(page: pathlib.Path, badge: str, problems: list[str]) -> None:
     if badge not in first_content_line(text):
         problems.append(f"{relative}: first content line after the title must carry the badge '{badge}'")
 
-    line_count = text.count("\n") + 1
+    line_count = len(text.splitlines())
     if line_count > MAX_PAGE_LINES:
         problems.append(f"{relative}: {line_count} lines exceeds {MAX_PAGE_LINES}; split the page")
 
@@ -64,15 +119,8 @@ def check_page(page: pathlib.Path, badge: str, problems: list[str]) -> None:
         if re.search(rf"\b{marker}\b", text):
             problems.append(f"{relative}: contains {marker}")
 
-    for match in LINK_PATTERN.finditer(text):
-        target = match.group(1)
-        if target.startswith(("http://", "https://", "mailto:", "#")):
-            continue
-        path_part = target.split("#", 1)[0]
-        if not path_part:
-            continue
-        resolved = (page.parent / path_part).resolve()
-        if not resolved.exists():
+    for target in link_targets(text):
+        if dangling_target(page, target):
             problems.append(f"{relative}: link target does not exist: {target}")
 
 

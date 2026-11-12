@@ -50,8 +50,26 @@ def make_fake_repo(root: pathlib.Path) -> None:
     long_page = "# Long\n\n🛠 **Engineering handbook**\n" + "\nline\n" * 500
     write(root / "docs" / "handbook" / "long.md", long_page)
 
+    # Exactly 400 lines, the last one ending in a newline: at the limit, not over it.
+    exact_page = "# Exact\n\n🛠 **Engineering handbook**\n" + "line\n" * 397
+    write(root / "docs" / "handbook" / "exact.md", exact_page)
+    # Link syntax inside code is an example, not a link.
+    write(root / "docs" / "api" / "code.md",
+          "# Code\n\n📘 **Public API wiki**\n\nWrite `[code](nope.md)` for a link.\n\n"
+          "```markdown\n[x](fenced.md)\n```\n\n~~~~\n[y](tilde_fenced.md)\n~~~~\n")
+    # Reference definitions and HTML hrefs are links too.
+    write(root / "docs" / "api" / "refs.md",
+          "# Refs\n\n📘 **Public API wiki**\n\nSee [the page][ref] and <a href=\"gone_href.md\">this</a>.\n\n"
+          "[ref]: gone_ref.md\n[ok]: glossary.md\n")
+    write(root / "docs" / "api" / "markers.md", "# Markers\n\n📘 **Public API wiki**\n\nFIXME soon. XXX later.\n")
+    write(root / "docs" / "api" / "front.md",
+          "---\ntitle: Front\n---\n# Front\n\n📘 **Public API wiki**\n\nFront matter comes first.\n")
+    write(root / "docs" / "api" / "wrong_set.md", "# Wrong set\n\n🛠 **Engineering handbook**\n\nIn the wiki.\n")
+
 
 def main() -> int:
+    # Problems quote the badges; a console without UTF-8 must still print a failure instead of raising.
+    sys.stdout.reconfigure(errors="backslashreplace")
     checker = load_checker()
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
@@ -80,6 +98,13 @@ def main() -> int:
             ("exceeds 400", "over-long page is reported"),
             ("no wiki page references `conjure/widgets/gadget.h`", "uncovered header is reported"),
             ("missing handbook page for module 'orphan'", "module without handbook page is reported"),
+            ("link target does not exist: gone_ref.md",
+             "check_docs - reference definitions and hrefs are checked (reference definition)"),
+            ("link target does not exist: gone_href.md",
+             "check_docs - reference definitions and hrefs are checked (href)"),
+            ("docs/api/markers.md: contains FIXME", "FIXME marker is reported"),
+            ("docs/api/markers.md: contains XXX", "XXX marker is reported"),
+            ("docs/api/wrong_set.md: first content line", "a wiki page with the handbook badge is reported"),
         ]
         failures = [why for needle, why in expectations if needle not in joined]
 
@@ -90,6 +115,11 @@ def main() -> int:
             ("detail/impl.h", "detail directory must be excluded"),
             ("conjure/widgets/widget.h", "covered header must not be reported"),
             ("module 'widgets'", "module with a handbook page must not be reported"),
+            ("exact.md", "check_docs - a page of exactly 400 lines passes"),
+            ("nope.md", "check_docs - links inside code are not checked (code span)"),
+            ("fenced.md", "check_docs - links inside code are not checked (fenced block)"),
+            ("front.md", "a page with front matter before the title carries its badge"),
+            ("glossary.md", "a reference definition to an existing page is not reported"),
         ]
         failures += [why for needle, why in must_not if needle in joined]
 

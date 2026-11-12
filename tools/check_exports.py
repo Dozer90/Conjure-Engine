@@ -10,11 +10,14 @@ Annotation check (the default): for every header under engine/include/conjure/<m
 
   class        a class or struct that is not a template (explicit specialisations count as classes,
                nested classes are checked on their own because MSVC does not export them with the
-               enclosing class) and declares at least one member function out of line (a prototype
-               ending in ';' that is not defaulted, deleted, pure virtual or a template; operators
-               and conversion operators count like any other member) while its head lacks CONJURE_API
+               enclosing class) and declares at least one member out of line (a prototype ending in ';'
+               that is not defaulted, deleted, pure virtual or a template, whatever its cv-, ref- and
+               noexcept qualifiers, override or final; operators and conversion operators count like any
+               other member; or a static data member that is not inline or constexpr) while its head
+               lacks CONJURE_API
   function     a namespace-scope function or operator prototype (not a template, not
-               inline/constexpr/consteval, not a friend, not a macro invocation) without CONJURE_API
+               inline/constexpr/consteval, not a friend, not a macro invocation; a prototype on the line
+               after a semicolon-less macro invocation counts) without CONJURE_API
   variable     an `extern` variable declaration without CONJURE_API
 
 Anything header-only (templates, inline and constexpr functions, enums, aggregates without methods,
@@ -48,6 +51,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -65,11 +69,26 @@ CLASS_HEAD_PATTERN = re.compile(
     r"(?::[^{;]*)?\{"
 )
 EXPLICIT_SPECIALISATION_PATTERN = re.compile(r"^template\s*<\s*>\s*$")
+# A prototype: the declaration up to its parameter list, then cv-, ref- and noexcept qualifiers, override and
+# final, an optional trailing return type and ';'. Pure, defaulted and deleted declarations never match,
+# because ';' must follow those parts directly and the trailing return type cannot hold '='; that is why
+# is_out_of_line_method needs no '= 0' test, and a default argument (`int level = 0`) stays visible.
 FUNCTION_PATTERN = re.compile(
-    r"^(?P<indent>\s*)(?P<decl>[^\s#/{}][^;{}]*?\))\s*(?:const\s*)?(?:noexcept(?:\([^)]*\))?\s*)?"
-    r"(?:->\s*[^;{}]+)?\s*(?:override\s*)?;",
+    r"^(?P<indent>\s*)(?P<decl>[^\s#/{}][^;{}]*?\))"
+    r"(?:\s*(?:const\b|volatile\b|&&|&|noexcept(?:\([^)]*\))?|override\b|final\b))*\s*"
+    r"(?:->\s*[^;{}=]+)?\s*(?:override\s*|final\s*)*;",
     re.MULTILINE,
 )
+# An out-of-line static data member needs a definition in a .cpp, so its class needs CONJURE_API; inline and
+# constexpr members, initialised ones and static_assert do not match.
+STATIC_DATA_MEMBER = re.compile(
+    r"^[ \t]*static\b(?!\s+(?:inline|constexpr|consteval)\b)\s+[^;(){}=]+;", re.MULTILINE)
+# A whole line holding an upper-case macro invocation without a semicolon (CONJURE_SOMETHING(x)): it is
+# not part of the prototype on the lines after it.
+MACRO_INVOCATION_LINE = re.compile(r"\s*[A-Z][A-Z0-9_]*\s*\(.*\)\s*")
+# decltype(...) with at most one level of nested parentheses: replaced by a plain word before the name
+# lookup so `decltype(auto) value();` is read as a function named value.
+DECLTYPE_SPECIFIER = re.compile(r"\bdecltype\s*\((?:[^()]|\([^()]*\))*\)")
 # String literals are blanked before matching, so `extern "C"` arrives as `extern " "`: any quote
 # after the keyword marks a linkage specification, which is a function (checked above), not a variable.
 EXTERN_PATTERN = re.compile(r"^[ 	]*(?P<keyword>extern)\s+(?!\")(?P<decl>[^;{}]+);", re.MULTILINE)
@@ -92,6 +111,13 @@ KEYWORDS_NOT_FUNCTIONS = {
 }
 DUMPBIN_FUNCTION_COUNT = re.compile(r"^\s*(?P<count>\d+)\s+number of functions\s*$", re.MULTILINE)
 
+# Raw string literals (R"delimiter(...)delimiter"): encoding prefixes longest first, the longest delimiter
+# the standard allows and the characters a delimiter may not contain. The tokenizer below is the one of
+# tools/check_style.py; each tool keeps its own copy because the CTest entries run them with `python -I`.
+RAW_STRING_PREFIXES = ("u8R", "uR", "UR", "LR", "R")
+MAX_RAW_DELIMITER_LENGTH = 16
+RAW_DELIMITER_EXCLUDED = frozenset(" ()\\\t\v\f\n")
+
 
 class finding:
     def __init__(self, path: pathlib.Path, line: int, kind: str, message: str) -> None:
@@ -112,12 +138,72 @@ class finding:
 # Source preparation
 #------------------------------------------------------------------------------
 
+def is_identifier_character(character: str) -> bool:
+    return character.isalnum() or character == "_"
+
+
+def is_digit_separator(text: str, index: int) -> bool:
+    """True when the apostrophe at 'index' is a C++14 digit separator (1'000, 0xFFFF'FFFFull) rather than the
+    start of a character literal: the run of letters, digits, '_', '.' and apostrophes right before it starts
+    with a digit. An encoding prefix (u8'a', L'x', u'x') starts with a letter, so it still opens a literal."""
+    start = index
+    while start > 0 and (is_identifier_character(text[start - 1]) or text[start - 1] in ".'"):
+        start -= 1
+    return start < index and text[start].isdigit()
+
+
+def raw_string_end(text: str, index: int) -> tuple[int, bool] | None:
+    """(end offset, terminated) of the raw string literal (R"delimiter(...)delimiter") whose opening quote is
+    at 'index', or None when that quote does not open one. An unterminated raw string runs to the end."""
+    prefix = next((candidate for candidate in RAW_STRING_PREFIXES if text.endswith(candidate, 0, index)), None)
+    if prefix is None:
+        return None
+    before = index - len(prefix) - 1
+    if before >= 0 and is_identifier_character(text[before]):
+        return None
+    limit = min(len(text), index + 2 + MAX_RAW_DELIMITER_LENGTH)
+    open_index = index + 1
+    while open_index < limit and text[open_index] not in RAW_DELIMITER_EXCLUDED:
+        open_index += 1
+    if open_index >= limit or text[open_index] != "(":
+        return None
+    closing = ")" + text[index + 1:open_index] + '"'
+    close_index = text.find(closing, open_index + 1)
+    if close_index < 0:
+        return len(text), False
+    return close_index + len(closing), True
+
+
+def literal_end(text: str, index: int) -> tuple[int, bool]:
+    """(end offset, terminated) of the ordinary string or character literal opening at 'index'. It ends at its
+    closing quote, at an unescaped newline (so a stray quote cannot swallow the lines after it) or at the end
+    of the text; a backslash-newline continues it."""
+    quote = text[index]
+    end = index + 1
+    length = len(text)
+    while end < length and text[end] != quote and text[end] != "\n":
+        end += 2 if text[end] == "\\" else 1
+    if end < length and text[end] == quote:
+        return end + 1, True
+    return min(end, length), False
+
+
+def blank_literal(span: str, terminated: bool) -> str:
+    """The literal 'span' with its opening quote, its closing quote (when terminated) and every newline kept
+    and everything else replaced by spaces, so offsets and line numbers survive."""
+    closing = span[-1] if terminated and len(span) >= 2 else ""
+    body = span[1:len(span) - len(closing)]
+    return span[:1] + "".join("\n" if character == "\n" else " " for character in body) + closing
+
+
 def strip_comments_and_strings(text: str) -> str:
-    """Blanks comments and string literals, keeping newlines so line numbers survive."""
+    """Blanks comments and string and character literals (raw strings included), keeping newlines so line
+    numbers survive; digit separators stay code."""
     result: list[str] = []
     index = 0
     length = len(text)
     while index < length:
+        char = text[index]
         if text.startswith("//", index):
             end = text.find("\n", index)
             end = length if end < 0 else end
@@ -128,16 +214,16 @@ def strip_comments_and_strings(text: str) -> str:
             end = length if end < 0 else end + 2
             result.append("".join("\n" if c == "\n" else " " for c in text[index:end]))
             index = end
-        elif text[index] in "\"'":
-            quote = text[index]
-            end = index + 1
-            while end < length and text[end] != quote:
-                end += 2 if text[end] == "\\" else 1
-            end = min(end + 1, length)
-            result.append(quote + " " * max(end - index - 2, 0) + (quote if end - index >= 2 else ""))
+        elif char == "'" and is_digit_separator(text, index):
+            result.append(char)
+            index += 1
+        elif char in "\"'":
+            raw = raw_string_end(text, index) if char == '"' else None
+            end, terminated = raw if raw is not None else literal_end(text, index)
+            result.append(blank_literal(text[index:end], terminated))
             index = end
         else:
-            result.append(text[index])
+            result.append(char)
             index += 1
     return "".join(result)
 
@@ -221,10 +307,22 @@ def has_top_level_assignment(declaration: str) -> bool:
     return False
 
 
+def leading_macro_lines_length(declaration: str) -> int:
+    """The number of characters at the start of 'declaration' taken by whole lines that are upper-case macro
+    invocations without a semicolon (CONJURE_SOMETHING(x)), which a prototype on the next line is not part
+    of. The last line is always kept."""
+    lines = declaration.split("\n")
+    skipped = 0
+    kept = 0
+    while kept < len(lines) - 1 and MACRO_INVOCATION_LINE.fullmatch(lines[kept]):
+        skipped += len(lines[kept]) + 1
+        kept += 1
+    return skipped
+
+
 def is_out_of_line_method(declaration: str) -> bool:
     """True for a prototype that needs a definition in a .cpp (so an export)."""
-    if "= default" in declaration or "= delete" in declaration or "= 0" in declaration:
-        return False
+    declaration = declaration[leading_macro_lines_length(declaration):]
     if has_top_level_assignment(OPERATOR_TOKEN.sub("operator_token", declaration)):
         return False
     if declaration.lstrip().startswith("template") or declaration.lstrip().startswith("friend"):
@@ -235,6 +333,7 @@ def is_out_of_line_method(declaration: str) -> bool:
         return False
     if OPERATOR_PROTOTYPE.search(declaration) is not None:
         return True
+    declaration = DECLTYPE_SPECIFIER.sub("decltype_type", declaration)
     call = IDENTIFIER_CALL.search(declaration.split("(")[0] + "(")
     if call is None:
         return False
@@ -281,12 +380,12 @@ def blank_ranges(text: str, ranges: list[tuple[int, int]]) -> str:
 
 
 def declares_out_of_line_members(body: str) -> bool:
-    """True when the class body (nested class bodies already blanked) holds a prototype that needs
-    a definition in a .cpp."""
+    """True when the class body (nested class bodies already blanked) holds a prototype or a static data
+    member that needs a definition in a .cpp."""
     for method in FUNCTION_PATTERN.finditer(body):
         if is_out_of_line_method(method.group("decl")):
             return True
-    return False
+    return STATIC_DATA_MEMBER.search(body) is not None
 
 
 def check_classes(
@@ -342,13 +441,14 @@ def check_source(path: pathlib.Path, text: str) -> list[finding]:
     for match in FUNCTION_PATTERN.finditer(code):
         if inside_class(match.start()):
             continue
-        declaration = match.group("decl")
+        skipped = leading_macro_lines_length(match.group("decl"))
+        declaration = match.group("decl")[skipped:]
         if not is_out_of_line_method(declaration):
             continue
         if "CONJURE_API" in declaration or "typedef" in declaration or "using " in declaration:
             continue
         findings.append(finding(
-            path, line_of(code, match.start("decl")), "function",
+            path, line_of(code, match.start("decl") + skipped), "function",
             f"'{declaration.strip()}' is declared out of line without CONJURE_API"))
 
     for match in EXTERN_PATTERN.finditer(code):
@@ -391,18 +491,25 @@ def parse_nm_exports(output: str) -> int:
     return count
 
 
-def find_tool(explicit: str | None, binary: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+def find_tool(
+  explicit: str | None,
+  binary: pathlib.Path,
+  which: Callable[[str], str | None] = shutil.which,
+) -> tuple[pathlib.Path | None, str]:
     """The export-listing tool for the binary: ('path', 'dumpbin' | 'nm'); the path is None when
-    nothing was found."""
+    nothing was found. An explicit --tool is a path or a program name searched on PATH with 'which'."""
     if explicit:
-        candidate = pathlib.Path(explicit)
+        candidate: pathlib.Path | None = pathlib.Path(explicit)
         kind = "dumpbin" if candidate.stem.lower() == "dumpbin" else "nm"
-        return (candidate if candidate.exists() else None), kind
+        if not candidate.exists():
+            found = which(explicit)
+            candidate = pathlib.Path(found) if found else None
+        return candidate, kind
     if binary.suffix.lower() == ".dll" or platform.system() == "Windows":
-        found = shutil.which("dumpbin")
+        found = which("dumpbin")
         return (pathlib.Path(found) if found else None), "dumpbin"
     for name in ("llvm-nm", "nm"):
-        found = shutil.which(name)
+        found = which(name)
         if found:
             return pathlib.Path(found), "nm"
     return None, "nm"
@@ -491,9 +598,87 @@ SELF_TEST_CASES: list[tuple[str, str, list[str]]] = [
                 }
                 point(const point &) = default;
                 virtual void pure() = 0;
+                void removed() = delete;
             };
         }
     """, []),
+    ("default arguments do not hide a free prototype", """
+        namespace conjure::demo {
+            void set_level(int level = 0);
+            void fade(float seconds = 0.5f);
+            void pick(int id = default_id());
+        }
+    """, ["function", "function", "function"]),
+    ("default arguments do not hide an out-of-line member", """
+        namespace conjure::demo {
+            class mixer {
+                public:
+                    void fade(float seconds = 0.0f);
+            };
+        }
+    """, ["class"]),
+    ("trailing-return pure, defaulted and deleted members are not out-of-line members", """
+        namespace conjure::demo {
+            class a {
+                public:
+                    virtual auto f() -> int = 0;
+                    auto operator=(const a &other) -> a & = default;
+                    auto g() -> int = delete;
+            };
+            class b {
+                public:
+                    auto g() -> int;
+            };
+        }
+    """, ["class"]),
+    ("final, ref-qualified and volatile members are out-of-line members", """
+        namespace conjure::demo {
+            class runner {
+                public:
+                    virtual void run() final;
+            };
+            class getter {
+                public:
+                    int get() const &;
+            };
+            class poller {
+                public:
+                    void poll() volatile;
+            };
+        }
+    """, ["class", "class", "class"]),
+    ("out-of-line static data members need the macro", """
+        namespace conjure::demo {
+            struct counters {
+                static int sCount;
+            };
+            struct limits {
+                static constexpr int MAX = 1;
+                static inline int sValue = 0;
+                static inline int sCached;
+                static_assert(sizeof(int) == 4);
+            };
+        }
+    """, ["class"]),
+    ("a prototype after a macro invocation without a semicolon is reported", """
+        namespace conjure::demo {
+            CONJURE_SOMETHING(x)
+            void helper(int a);
+        }
+    """, ["function"]),
+    ("decltype(auto) prototypes are reported", """
+        namespace conjure::demo {
+            [[nodiscard]] decltype(auto) forward_value(int value);
+        }
+    """, ["function"]),
+    ("digit separators and raw strings do not hide later prototypes", """
+        namespace conjure::demo {
+            inline constexpr unsigned long long MASK = 0xFFFF'FFFFull;
+            void after_separator(int value);
+            inline constexpr const char *PATTERN = R"x(a " b)x";
+            void after_raw_string(int value);
+        }
+    """, ["function", "function"]),
     ("class template is clean", """
         namespace conjure::demo {
             template <typename T>
@@ -750,7 +935,28 @@ def run_self_test() -> int:
     else:
         print("self-test ok: nm parser")
 
-    print(f"check_exports: self-test {len(SELF_TEST_CASES) + 3} case(s), {failures} failure(s)")
+    macro_snippet = next(snippet for title, snippet, _ in SELF_TEST_CASES if "macro invocation without" in title)
+    macro_lines = [item.line for item in check_source(pathlib.Path("self_test.h"), macro_snippet)]
+    helper_line = next(number for number, line in enumerate(macro_snippet.split("\n"), start=1) if "helper" in line)
+    if macro_lines != [helper_line]:
+        failures += 1
+        print(f"self-test FAILED: a prototype after a macro invocation is reported on its own line: expected "
+              f"[{helper_line}], found {macro_lines}")
+    else:
+        print("self-test ok: a prototype after a macro invocation is reported on its own line")
+
+    def fake_which(name: str) -> str | None:
+        return "/opt/msvc/bin/dumpbin" if name == "dumpbin" else None
+
+    tool, kind = find_tool("dumpbin", pathlib.Path("conjure_shared.dll"), which=fake_which)
+    missing, _ = find_tool("no_such_listing_tool", pathlib.Path("conjure_shared.dll"), which=fake_which)
+    if tool != pathlib.Path("/opt/msvc/bin/dumpbin") or kind != "dumpbin" or missing is not None:
+        failures += 1
+        print(f"self-test FAILED: an explicit tool name is resolved on PATH: found {tool}, {kind}, {missing}")
+    else:
+        print("self-test ok: an explicit tool name is resolved on PATH")
+
+    print(f"check_exports: self-test {len(SELF_TEST_CASES) + 5} case(s), {failures} failure(s)")
     return 1 if failures else 0
 
 
@@ -794,7 +1000,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--limit", type=int, default=DEFAULT_EXPORT_LIMIT,
                         help=f"largest export count --count-exports accepts (default: {DEFAULT_EXPORT_LIMIT})")
     parser.add_argument("--tool", default=None,
-                        help="dumpbin, llvm-nm or nm executable for --count-exports (default: searched on PATH)")
+                        help="dumpbin, llvm-nm or nm for --count-exports: a path or a program name looked up on "
+                             "PATH (default: searched on PATH)")
     parser.add_argument("--self-test", action="store_true", help="run the checker over embedded cases")
     parser.add_argument("modules", nargs="*", help="module names to check (default: every module)")
     args = parser.parse_args(argv)
