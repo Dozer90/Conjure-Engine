@@ -16,7 +16,7 @@ Dear ImGui, and `tools/check_distribution_symbols.py` proves it on the binaries.
 | Run a development project without the editor | `conjure_runtime --project <project dir>` |
 | Smoke-test a build without a window | `conjure_runtime --project <dir> --headless --frames 60` |
 | Run a server | `conjure_runtime --project <dir> --headless --audio off --fixed-frame-delta 0 --target-hz 30` |
-| See every option | `conjure_runtime --help` |
+| See every option | `conjure_runtime --help` (a shipped build without a console shows the list in a dialog) |
 
 ## Command line
 
@@ -45,8 +45,13 @@ The runtime's own messages go to standard error as `conjure_runtime: <message>`;
 engine's console log, filtered by `--log-level`. A shipped (Distribution) build has no console window, so it
 writes the engine log and the runtime's messages to `conjure_runtime.log` next to `project.json` (next to the
 executable when no project directory exists) unless `--log-file <path>` names another file, and when nothing reads
-standard error at all (a double-click on Windows) it also shows the message in a dialog with the log's path.
-Debug and Development builds keep the console and write a log file only with `--log-file`.
+standard error at all (a shipped Windows build, double-clicked or started from a terminal) it also shows the
+message in a dialog with the log's path. Debug and Development builds keep the console and write a log file only
+with `--log-file`.
+
+`--help` prints the option list on standard output; when nothing reads standard output (a shipped Windows build,
+double-clicked or started from a terminal, which cannot write to the terminal's console) it also shows the list
+in an information dialog.
 
 > [!NOTE]
 > After a game exits with a non-zero code, read `conjure_runtime.log` in the game's folder: the last lines name

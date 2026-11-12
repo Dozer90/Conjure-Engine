@@ -25,8 +25,9 @@ check and its tests. The design is `06_engine_loop.md` 4.2 and 2.12, `ARCHITECTU
 
 1. `runtime::utf8_arguments(argc, argv)` (the arguments as UTF-8; on Windows re-read from the wide command line
    with `GetCommandLineW` + `CommandLineToArgvW` and converted with `core::str::from_utf16`), then
-   `engine::parse_command_line`. `--help` prints the runtime's usage line plus `engine::command_line_help()` and
-   exits 0 before anything is loaded.
+   `engine::parse_command_line`. `--help` prints the runtime's usage line plus `engine::command_line_help()` on
+   standard output and exits 0 before anything is loaded; when nothing reads standard output (the console-less
+   Distribution build, double-clicked or started from a terminal) it also shows that text in an information box.
 2. Refuses the unknown options the engine left for the executable (the runtime consumes none; the editor owns
    `--exec` / `--export`).
 3. Without `--project` it runs the `project.json` next to the executable (`runtime::executable_directory()`, the
@@ -59,18 +60,21 @@ engine's console log. Section 3 says where they go when there is no console.
 ## 3. Diagnostics without a console
 
 `WIN32_GUI` hides the console in Distribution, so a player who double-clicks an exported game would otherwise see
-an exit code and nothing else. `main.cpp` therefore routes every runtime message through three channels:
+an exit code and nothing else. `main.cpp` therefore routes every runtime message through three channels, and the
+`--help` text through a fourth:
 
 | Channel | When | What |
 |---|---|---|
 | standard error | always | the plain `conjure_runtime: <message>` line (what scripts, CI and the tests read) |
 | the log file | `--log-file`, or in Distribution the default `<project dir>/conjure_runtime.log` (else `<executable dir>/conjure_runtime.log`) | the same line logged through `core::log` (category `runtime`, level ERROR). The engine's `file_log_sink` lives only between startup step 1 and `stop_core`, so the runtime opens its own sink in append mode for the line; a failed start leaves the engine's lines of the failed step followed by the runtime's summary, and a failure before the application exists (a missing `project.json`, a bad flag) still leaves a file naming it |
-| a message box | `runtime::has_standard_error()` is false: no console, no pipe, no redirection (the double-clicked Distribution build on Windows) | `MessageBoxW` with the message and the log file's path; a process spawned by `core::process` or a terminal has a standard error and never sees it |
+| a message box | `runtime::has_standard_error()` is false: no console, no pipe, no redirection (the console-less Distribution build on Windows, double-clicked or started from a terminal) | `MessageBoxW` with the message and the log file's path; a process spawned by `core::process` (a pipe), a redirected one, or a Debug/Development build has a standard error and never sees it |
+| an information box (`--help` only) | `runtime::has_standard_output()` is false: the Distribution build on Windows, double-clicked or started from a terminal (a GUI-subsystem process cannot write to the terminal's console) | `runtime::show_info_dialog` shows the usage text with `MessageBoxW` and `MB_ICONINFORMATION`; a piped `--help` (the tests, scripts) never opens it |
 
 The platform-specific pieces (`utf8_arguments`, `executable_directory`, `has_standard_error`,
-`show_error_dialog`) live behind `runtime/src/runtime_platform.h`, with `runtime_platform_windows.cpp` and
-`runtime_platform_posix.cpp` selected by `runtime/CMakeLists.txt` the way `core/system` selects its backends
-(`CONVENTIONS.md` 3: no platform `#if` outside backend files).
+`has_standard_output`, `show_error_dialog`, `show_info_dialog`) live behind `runtime/src/runtime_platform.h`, with
+`runtime_platform_windows.cpp` and `runtime_platform_posix.cpp` selected by `runtime/CMakeLists.txt` the way
+`core/system` selects its backends (`CONVENTIONS.md` 3: no platform `#if` outside backend files). The POSIX
+backend probes both streams with `fcntl` and has no dialogs.
 
 On Windows the executable also embeds `runtime/src/conjure_runtime.manifest`, whose `activeCodePage` makes UTF-8
 the process code page (Windows 10 1903+): the engine turns the UTF-8 arguments into `std::filesystem::path`
@@ -121,7 +125,9 @@ module carries the `process` label of 08_testing.md 6.3 item 8: the default pres
   Distribution leaves the default log file next to the project); a development project boots directly;
   `--log-level`, `--width` / `--height` (the platform subsystem's window line echoes the size) and
   `--jobs 0|auto|abc|300` reach the configuration or are refused with the right code on standard error; a project
-  path outside the active code page loads; `--help` -> 0.
+  path outside the active code page loads; `--help` -> 0 with every option line on the piped standard output and
+  no information box (a box would block the child until the case times out; the box itself needs a desktop and is
+  not automated).
 - `test_missing_project.cpp`: missing, malformed, invalid and too-new `project.json` -> 2 named on standard error
   without the help hint; a project whose own settings do not validate -> 2; `--log-file` names a missing project.
 - `test_exit_codes.cpp`: bad arguments -> 3 with `conjure_runtime:` plus the usage text or the help hint on

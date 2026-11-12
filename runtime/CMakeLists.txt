@@ -2,15 +2,16 @@
 # docs/design/04_editor.md 8 "Distribution stripping"). One thin main.cpp: parse the engine command line,
 # load project.json (the one next to the executable when --project is absent), construct engine::application
 # with the project's settings, push game_layer, run; plus the platform backend of runtime_platform.h (UTF-8
-# arguments, the executable's directory, the console probe and the message box the diagnostics need).
+# arguments, the executable's directory, the console probes and the message boxes the diagnostics and --help
+# need).
 #
 # The executable links conjure::shared and nothing else from the engine (R17), so no editor library and
 # no Dear ImGui can reach it except through the umbrella; in Distribution the editor is off, ImGui is not
 # fetched and tools/check_distribution_symbols.py proves the binaries clean (tests/runtime/CMakeLists.txt).
 #
-# The bindings module (docs/design/15_bindings.md, wave 4) is optional at this point: when its target
-# exists the runtime adds bindings::scripting_bindings_subsystem before initialise() (startup step 16);
-# until then the scripting table keeps the core entries only.
+# The bindings module (docs/design/15_bindings.md) exists whenever scripting is built (CONJURE_WITH_SCRIPTING);
+# with its target the runtime adds bindings::scripting_bindings_subsystem before initialise() (startup step 16),
+# without it there is no scripting table to fill.
 
 if(NOT TARGET conjure::shared OR NOT TARGET conjure::engine)
     message(STATUS "runtime: conjure::engine is not available, executable skipped")
@@ -43,7 +44,8 @@ endif()
 # WIN32_GUI: the console window is hidden in Distribution only (conjure_add_executable keeps stdout for
 # developers in Debug and Development). main.cpp compensates: without --log-file a Distribution build logs to
 # conjure_runtime.log next to the project or the executable, and its own messages also reach the log file and,
-# when nothing reads standard error, a message box.
+# when nothing reads standard error, a message box; --help uses an information box when nothing reads standard
+# output.
 conjure_add_executable(conjure_runtime
     WIN32_GUI
     SOURCES

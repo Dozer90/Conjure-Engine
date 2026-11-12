@@ -44,7 +44,10 @@
 // Diagnostics: every runtime message goes to standard error as "conjure_runtime: <message>". It is also logged
 // through core::log into the log file when there is one (--log-file; in Distribution, where WIN32_GUI hides the
 // console, the default <project>/conjure_runtime.log or <executable dir>/conjure_runtime.log), and shown in a
-// message box when the process has no standard error at all (a double-clicked Distribution build on Windows).
+// message box when the process has no standard error at all (the console-less Distribution build on Windows,
+// double-clicked or started from a terminal without redirection).
+// --help writes the usage text to standard output and, when nothing reads standard output (the console-less
+// Distribution build, double-clicked or started from a terminal), also shows it in an information box.
 // Without --project the runtime runs the project.json next to the executable, which is how an exported folder
 // starts from a double-click.
 //
@@ -66,21 +69,23 @@ namespace {
     /// <summary>
     /// The usage text: the runtime's own line plus the engine's option list.
     /// </summary>
-    void print_usage(std::FILE *stream) {
-        const std::string_view version = engine_version_string();
-        const std::string_view help = command_line_help();
-        std::fprintf(
-          stream,
-          "%.*s %.*s - the Conjure standalone runtime\n"
+    [[nodiscard]] std::string usage_text() {
+        return std::format(
+          "{} {} - the Conjure standalone runtime\n"
           "Usage: conjure_runtime [--project <dir>] [options]\n"
-          "Without --project the runtime runs the project.json next to the executable.\n\n%.*s",
-          static_cast<int>(RUNTIME_NAME.size()),
-          RUNTIME_NAME.data(),
-          static_cast<int>(version.size()),
-          version.data(),
-          static_cast<int>(help.size()),
-          help.data()
+          "Without --project the runtime runs the project.json next to the executable.\n\n{}",
+          RUNTIME_NAME,
+          engine_version_string(),
+          command_line_help()
         );
+    }
+
+    /// <summary>
+    /// Writes the usage text to the stream.
+    /// </summary>
+    void print_usage(std::FILE *stream) {
+        const std::string text = usage_text();
+        std::fputs(text.c_str(), stream);
     }
 
     /// <summary>
@@ -229,7 +234,14 @@ int main(int argc, char **argv) {
     }
     command_line_options options = std::move(parsed).value();
     if (options.help) {
-        print_usage(stdout);
+        const std::string usage = usage_text();
+        std::fputs(usage.c_str(), stdout);
+        std::fflush(stdout);
+        if (!runtime::has_standard_output()) {
+            // A console-less Distribution build (double-clicked, or started from a terminal a GUI process cannot
+            // write to) would otherwise show nothing at all.
+            runtime::show_info_dialog(RUNTIME_NAME, usage);
+        }
         return static_cast<int>(exit_code::OK);
     }
     if (!options.unrecognisedArguments.empty()) {

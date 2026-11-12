@@ -8,16 +8,19 @@
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/types.h"
+#include "conjure/engine/command_line.h"
 #include "conjure/engine/engine_version.h"
 #include "conjure/engine/exit_code.h"
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 // The boot cases of 08_testing.md 5.2 (runtime row): an exported folder boots headless for 60 frames with exit
 // 0, both with the build's runtime and with the copy the export placed into the folder (also without --project:
 // the project.json next to the executable, the double-click launch), a development project boots directly, the
-// flags reach the engine configuration, a path outside the active code page survives, and --help exits 0.
+// flags reach the engine configuration, a path outside the active code page survives, and --help exits 0 with
+// the whole option list on a piped standard output.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -186,13 +189,29 @@ TEST_SUITE("runtime/runtime_boot") {
     }
 
     TEST_CASE("conjure_runtime - --help prints the usage and exits 0") {
+        // A process without a standard output (the console-less Distribution build) also shows the usage text in
+        // a modal information box (code sweep F470), which needs a desktop and is not automated. run_runtime
+        // fails the case when the child times out, so a run that returns proves a piped --help never opened it.
         const core::process_result result = run_runtime({"--help"});
         CHECK(result.exitCode == static_cast<i32>(exit_code::OK));
         CHECK(contains(result.standardOutput, USAGE_LINE));
         CHECK(contains(result.standardOutput, engine_version_string()));
-        CHECK(contains(result.standardOutput, "--frames <n>"));
-        CHECK(contains(result.standardOutput, "--headless"));
         CHECK(result.standardError.empty());
+
+        // Every option line, one by one: the text-mode stream of the child may turn every line feed into CR LF.
+        const std::string_view help = command_line_help();
+        REQUIRE_FALSE(help.empty());
+        usize lineStart = 0;
+        while (lineStart < help.size()) {
+            usize lineEnd = help.find('\n', lineStart);
+            if (lineEnd == std::string_view::npos) {
+                lineEnd = help.size();
+            }
+            const std::string_view line = help.substr(lineStart, lineEnd - lineStart);
+            CAPTURE(line);
+            CHECK(contains(result.standardOutput, line));
+            lineStart = lineEnd + 1;
+        }
 
         // Help wins over every other outcome: nothing is loaded, so a missing project is not an error.
         const core::process_result withProject = run_runtime({"--project", "nowhere", "--bogus", "--help"});

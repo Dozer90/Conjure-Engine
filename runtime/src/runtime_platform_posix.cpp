@@ -1,6 +1,7 @@
 // POSIX backend of runtime_platform.h (Linux and macOS): argv is already bytes the file system understands, the
-// executable is found through /proc/self/exe or _NSGetExecutablePath, standard error is probed with fcntl, and
-// there is no dialog (the message is on standard error, which a desktop launcher captures in its journal).
+// executable is found through /proc/self/exe or _NSGetExecutablePath, standard error and standard output are
+// probed with fcntl, and there is no dialog (the text is on the standard streams, which a desktop launcher
+// captures in its journal).
 
 #include "runtime_platform.h"
 
@@ -54,7 +55,16 @@ bool conjure::runtime::has_standard_error() {
     return fcntl(STDERR_FILENO, F_GETFD) != -1;
 }
 
+bool conjure::runtime::has_standard_output() {
+    return fcntl(STDOUT_FILENO, F_GETFD) != -1;
+}
+
 void conjure::runtime::show_error_dialog(std::string_view title, std::string_view text) {
+    static_cast<void>(title);
+    static_cast<void>(text);
+}
+
+void conjure::runtime::show_info_dialog(std::string_view title, std::string_view text) {
     static_cast<void>(title);
     static_cast<void>(text);
 }

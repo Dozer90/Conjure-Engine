@@ -1,5 +1,5 @@
-// Windows backend of runtime_platform.h: the wide command line, GetModuleFileNameW, the standard-error handle
-// and MessageBoxW.
+// Windows backend of runtime_platform.h: the wide command line, GetModuleFileNameW, the standard-error and
+// standard-output handles and MessageBoxW.
 
 #include "runtime_platform.h"
 
@@ -23,6 +23,25 @@ namespace {
     [[nodiscard]] std::wstring wide_of(std::string_view utf8) {
         const std::u16string units = conjure::core::str::to_utf16(utf8);
         return std::wstring(units.begin(), units.end());
+    }
+
+    /// <summary>
+    /// True when the standard handle ('STD_ERROR_HANDLE' or 'STD_OUTPUT_HANDLE') leads somewhere.
+    /// </summary>
+    [[nodiscard]] bool has_standard_handle(DWORD which) {
+        const HANDLE handle = GetStdHandle(which);
+        if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        // A GUI-subsystem process started from a terminal inherits a console handle without a console behind it;
+        // GetFileType reports it as unknown, exactly like no handle at all.
+        return GetFileType(handle) != FILE_TYPE_UNKNOWN;
+    }
+
+    void show_dialog(std::string_view title, std::string_view text, UINT icon) {
+        const std::wstring wideTitle = wide_of(title);
+        const std::wstring wideText = wide_of(text);
+        MessageBoxW(nullptr, wideText.c_str(), wideTitle.c_str(), MB_OK | icon | MB_SETFOREGROUND | MB_TASKMODAL);
     }
 }
 
@@ -56,17 +75,17 @@ std::filesystem::path conjure::runtime::executable_directory() {
 }
 
 bool conjure::runtime::has_standard_error() {
-    const HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
-    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    // A GUI-subsystem process started from a terminal inherits a console handle without a console behind it;
-    // GetFileType reports it as unknown, exactly like no handle at all.
-    return GetFileType(handle) != FILE_TYPE_UNKNOWN;
+    return has_standard_handle(STD_ERROR_HANDLE);
+}
+
+bool conjure::runtime::has_standard_output() {
+    return has_standard_handle(STD_OUTPUT_HANDLE);
 }
 
 void conjure::runtime::show_error_dialog(std::string_view title, std::string_view text) {
-    const std::wstring wideTitle = wide_of(title);
-    const std::wstring wideText = wide_of(text);
-    MessageBoxW(nullptr, wideText.c_str(), wideTitle.c_str(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
+    show_dialog(title, text, MB_ICONERROR);
+}
+
+void conjure::runtime::show_info_dialog(std::string_view title, std::string_view text) {
+    show_dialog(title, text, MB_ICONINFORMATION);
 }

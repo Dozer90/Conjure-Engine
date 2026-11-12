@@ -10,7 +10,9 @@ sure the message behind an outcome reaches someone, console or not.
 
 1. `runtime::utf8_arguments(argc, argv)`: the arguments as UTF-8 (on Windows re-read from the wide command line,
    see "Paths and encodings"), then `engine::parse_command_line`. `--help` prints the runtime's usage line plus
-   `engine::command_line_help()` and exits 0 before anything is loaded.
+   `engine::command_line_help()` on standard output and exits 0 before anything is loaded; when nothing reads
+   standard output (`runtime::has_standard_output()`: the console-less Distribution build, double-clicked or
+   started from a terminal) it also shows that text in an information box (`runtime::show_info_dialog`).
 2. Refuses what the engine left for the executable: unknown options (the runtime consumes none; the editor owns
    `--exec` / `--export`).
 3. Without `--project` it looks for `project.json` next to the executable (`runtime::executable_directory()`),
@@ -23,7 +25,7 @@ sure the message behind an outcome reaches someone, console or not.
    `INVALID_CONFIG` is exit 2 when the project's own settings fail the same validation without any flag (the
    merge of `--project` and the `--headless` mode alone), else exit 3 with the help hint.
 6. `application app(desc)`; `add_subsystem(bindings::scripting_bindings_subsystem)` when the bindings module is
-   built (startup step 16; compiled in through `CONJURE_RUNTIME_WITH_BINDINGS` once the `conjure::bindings`
+   built (startup step 16; compiled in through `CONJURE_RUNTIME_WITH_BINDINGS` when the `conjure::bindings`
    target exists); `layers().push_layer(game_layer)` (quits on the window's close event).
 7. `initialise()`; on failure the engine has logged the step and the runtime exits 1 with its summary.
 8. `return app.run()`; a non-zero result (a failed frame, a lost device) is named through the same channel as
@@ -51,7 +53,7 @@ headless smoke test of an export is `conjure_runtime --project <dir> --headless 
 
 Every message the runtime prints itself goes to standard error as `conjure_runtime: <message>`; everything else
 is the engine's console log (`--log-level` filters it). Because `WIN32_GUI` hides the console in Distribution,
-the runtime adds two more ways out:
+the runtime adds three more ways out:
 
 - **The log file.** The runtime's own line is also logged through `core::log` (category `runtime`, level
   ERROR) into the log file when there is one: `--log-file <path>`, or in Distribution the default
@@ -63,9 +65,15 @@ the runtime adds two more ways out:
   missing `project.json`, a bad flag) still leaves a file naming it. The console sink is paused for that one
   line so standard error carries the plain line only.
 - **A message box.** When nothing reads standard error (`runtime::has_standard_error()`: no console, no pipe,
-  no redirection, which is the double-clicked Distribution build on Windows), the message plus the log file's
-  path is shown with `MessageBoxW`. A process started by `core::process` or a terminal has a standard error and
-  never sees the box, so the tests cannot trigger it.
+  no redirection, which is the console-less Distribution build on Windows, double-clicked or started from a
+  terminal), the message plus the log file's path is shown with `MessageBoxW`. A process started by
+  `core::process` (a pipe), a redirected one, or a Debug/Development build has a standard error and never sees
+  the box, so the tests cannot trigger it.
+- **An information box for `--help`.** The usage text goes to standard output; when nothing reads it
+  (`runtime::has_standard_output()`, the same probe on the output handle) `runtime::show_info_dialog` shows it
+  with `MessageBoxW` and `MB_ICONINFORMATION`. A Distribution build on Windows needs it both double-clicked and
+  started from a terminal, because a GUI-subsystem process cannot write to the terminal's console. A piped
+  `--help` never opens it: the tests read the text from the pipe, and a box would make them time out.
 
 ## Paths and encodings
 
@@ -133,7 +141,8 @@ own step. The files follow 08_testing.md 5.2:
   `project.json` next to it; in Distribution the default log file appears next to the project); a development
   project boots directly; `--log-level`, `--width` / `--height` (the platform subsystem's window line echoes the
   size), `--jobs 0|auto|abc|300` reach the configuration or are refused with the right code and stream; a
-  project path outside the active code page loads; `--help` -> 0.
+  project path outside the active code page loads; `--help` -> 0 with every option line on the piped standard
+  output and no information box (a box would block the child until the case times out).
 - `test_missing_project.cpp`: missing, malformed, invalid and too-new `project.json` -> 2 with the cause on
   standard error and no help hint; a project whose own settings do not validate -> 2; `--log-file` names a
   missing project in the file.
@@ -158,7 +167,8 @@ The runtime has no public headers, so there is no header-mirroring test file.
   behaviour unless `--log-file` is given.
 - 08 5.2 names `test_runtime_boot` and `test_missing_project`; both exist, and the remaining exit codes live in
   a third file, `test_exit_codes.cpp`, with the fixtures in `runtime_test_support.{h,cpp}`.
-- `bindings::scripting_bindings_subsystem` is added only when the `conjure::bindings` target exists (the
-  module is not implemented yet); the include path and class name follow `15_bindings.md` 4.
+- `bindings::scripting_bindings_subsystem` is added only when the `conjure::bindings` target exists
+  (`engine/src/bindings` skips the module when `CONJURE_WITH_SCRIPTING` is off); the include path and class name
+  follow `15_bindings.md` 4.
 - The Windows build embeds an application manifest (`activeCodePage` UTF-8) so the engine's narrow-string
   path conversions decode the UTF-8 argument vector; no design document mentions the process code page.
