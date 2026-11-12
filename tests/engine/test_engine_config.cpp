@@ -85,6 +85,18 @@ TEST_SUITE("engine/engine_config") {
         CONJURE_CHECK_ERROR(config.validate(), engine_error::INVALID_CONFIG);
     }
 
+    TEST_CASE("engine_config - validate rejects a forced frame delta above maxFrameDeltaSeconds") {
+        // begin_frame clamps every delta to maxFrameDeltaSeconds, so a larger forced delta would silently shrink.
+        engine_config config = engine_config::defaults();
+        config.time.forcedFrameDeltaSeconds = 0.5f;
+        const core::result<void> rejected = config.validate();
+        CONJURE_CHECK_ERROR(rejected, engine_error::INVALID_CONFIG);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.get_error().message().find("forcedFrameDeltaSeconds") != std::string::npos);
+        config.time.forcedFrameDeltaSeconds = config.time.maxFrameDeltaSeconds;
+        CONJURE_CHECK_OK(config.validate());
+    }
+
     TEST_CASE("engine_config - validate rejects a zero window size unless headless") {
         engine_config config = engine_config::defaults();
         config.window.width = 0;

@@ -13,9 +13,10 @@
 #include <vector>
 
 // project.json (docs/design/06_engine_loop.md 2.10, D9, R20, R39, R52, R53): schema version 1, snake_case
-// keys. Unknown top-level keys log one WARN each and are preserved in `extensions` on save; relative paths
-// resolve against the project root; "fixed_hz" is stored for readability and converted to
-// fixedDeltaSeconds. The export pipeline writes the same file with "cooked": true.
+// keys. Unknown top-level keys log one WARN each and are preserved in `extensions` on save, unless `extensions`
+// already has a member of that name, which wins; relative paths resolve against the project root; "fixed_hz" is
+// stored for readability and converted to fixedDeltaSeconds. The export pipeline writes the same file with
+// "cooked": true.
 
 namespace conjure::engine {
 

@@ -16,6 +16,7 @@
     #include <imgui.h>
 #endif
 
+#include <algorithm>
 #include <format>
 
 using namespace conjure;
@@ -80,8 +81,11 @@ std::string debug_overlay_layer::format_sample(const engine_context &context) {
     }
     if (context.stats != nullptr && context.stats->sample_count() > 0) {
         const frame_sample &sample = context.stats->latest();
+        // frameMilliseconds is measured after the pacer sleep: the CPU's own share is what is left without it.
+        const f32 cpuMilliseconds = std::max(sample.frameMilliseconds - sample.pacerSleepMilliseconds, 0.0f);
         text += std::format(
-          "\ncpu {:.2f} ms (avg {:.2f}) | submit {:.2f} ms | sleep {:.2f} ms | jobs {}",
+          "\ncpu {:.2f} ms | frame {:.2f} ms (avg {:.2f}) | submit {:.2f} ms | sleep {:.2f} ms | jobs {}",
+          cpuMilliseconds,
           sample.frameMilliseconds,
           context.stats->average_frame_milliseconds(60),
           sample.submitMilliseconds,

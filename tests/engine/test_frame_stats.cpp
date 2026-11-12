@@ -66,16 +66,16 @@ TEST_SUITE("engine/frame_stats") {
         CHECK(stats.average_frame_milliseconds(0) == 0.0f);
     }
 
-    TEST_CASE("frame_stats - dropped fixed time is counted and clear resets everything") {
+    TEST_CASE("frame_stats - frames with dropped fixed time are counted and clear resets everything") {
         frame_stats stats = {};
         stats.commit(sample_of(1.0f, true));
         stats.commit(sample_of(1.0f, false));
         stats.commit(sample_of(1.0f, true));
-        CHECK(stats.total_dropped_fixed_steps() == 2);
+        CHECK(stats.total_frames_with_dropped_time() == 2);
         stats.clear();
         CHECK(stats.sample_count() == 0);
         CHECK(stats.total_committed() == 0);
-        CHECK(stats.total_dropped_fixed_steps() == 0);
+        CHECK(stats.total_frames_with_dropped_time() == 0);
         CHECK(stats.latest() == frame_sample{});
     }
 }

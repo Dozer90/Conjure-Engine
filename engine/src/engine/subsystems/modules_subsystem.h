@@ -18,7 +18,10 @@
 // and <engine>/plugins, then load_all(). A module named in modules.required (or the game module) that is not
 // LOADED afterwards is MODULE_LOAD_FAILED; other failures warn. Module entries may add subsystems through the
 // application service during this step only. apply_pending() runs at frame step 5; modules:// is mounted
-// over the assets consumer's content file system.
+// over the assets consumer's content file system. An EDITOR host with a project shadow-copies module binaries
+// into <project>/.conjure/module_cache (07 D9) so module.build can relink them. On Windows only one editor per
+// project can load a native game module: the folder is shared and every manager numbers its copies from 1, so a
+// second editor's copy over the first one's locked binary is BINARY_COPY_FAILED (an open item of 07 D9).
 
 namespace conjure::engine {
 

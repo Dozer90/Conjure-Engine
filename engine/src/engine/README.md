@@ -15,7 +15,7 @@ go through `application::step_frame()`.
 | Services | `engine_services.h` (every module object as a `unique_ptr`, declared in startup order), `executable_path.{h,cpp}` | 06 5 |
 | Subsystem adapters | `subsystems/{platform,rhi,assets,ecs,scene,audio,physics,renderer,scripting,modules}_subsystem.{h,cpp}`, `subsystems/renderer_components.h`, `subsystems/audio_components.h` (the `CONJURE_COMPONENT` names of the renderer and audio components, R7), `subsystems/model_prefab_converter.{h,cpp}` | 06 2.9, 3.4; 09 section 3 |
 | Module consumers | `module_consumers/{ecs,assets,scripting}_module_consumer.{h,cpp}`, `module_consumers/module_content_file_system.{h,cpp}` (`modules://<name>/`, R24), `builtin_modules.{h,cpp}` (manifest-only static modules, R18) | 07 D3/D6/4.1/9 |
-| Export | `export_pipeline.cpp` | 06 3.6, R21 |
+| Export | `export_pipeline.cpp`, `export_commands.{h,cpp}` (the dotnet command lines of step 3) | 06 3.6, R21, R39 |
 
 ## Startup and frame
 
@@ -52,6 +52,20 @@ unknown members of the section are dropped on `save()` like those of every other
 `make_frame_info(engine_time)`; `inFixedStep` is true only inside FIXED_UPDATE / PHYSICS_STEP / FIXED_END.
 PAUSED runs UPDATE / LATE_UPDATE through `run_phase_filtered(RUNS_WHILE_PAUSED)`; STEP_ONCE and
 `step_fixed(n)` leave the mode PAUSED afterwards (R13). EXTRACT runs only when a renderer exists.
+
+A startup scene whose source no longer imports (`asset_record_status::IMPORT_FAILED`, the cache keeps the old
+blob) is `STARTUP_SCENE_FAILED` for the runtime; the editor loads the cached copy. `physics_subsystem` marks the
+shape cache on `scene_manager::on_before_unload` and calls `physics_world::collect_shapes()` at the next
+`end_frame`, after the unload destroyed the bodies (14_physics.md). `modules_subsystem` gives an `EDITOR` host
+with a project shadow copies in `<project>/.conjure/module_cache` (07 D9); the runtime loads in place. The
+folder is shared per project and numbered from 1, so on Windows only one editor per project can load a native
+game module (open with the 07 D9 owner: a folder per editor instance). The scripting subsystem clears
+`scripting_module_consumer`'s runtime pointer before it destroys the runtime.
+
+`export_pipeline::run` refuses (`BAD_ARGUMENTS`) the project directory itself and any folder inside the assets
+root as output, ships only `index.json` and the `.dxil` / `.spv` blobs of `shaders/` (subfolders included, `.d`
+depfiles left out), and builds its dotnet command lines in `export_commands.{h,cpp}` (symbols stripped unless
+`scripting.exportDebugSymbols`, no bootstrap apphost for a framework-dependent export).
 
 ## Allocation-free frames
 

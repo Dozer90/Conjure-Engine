@@ -28,7 +28,7 @@ void frame_stats::commit(const frame_sample &sample) {
     mCount = std::min(mCount + 1, HISTORY_SIZE);
     ++mTotalCommitted;
     if (sample.droppedFixedTime) {
-        ++mTotalDroppedFixedSteps;
+        ++mTotalFramesWithDroppedTime;
     }
 }
 
@@ -66,5 +66,5 @@ void frame_stats::clear() noexcept {
     mWriteIndex = 0;
     mCount = 0;
     mTotalCommitted = 0;
-    mTotalDroppedFixedSteps = 0;
+    mTotalFramesWithDroppedTime = 0;
 }

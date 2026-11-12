@@ -86,6 +86,12 @@ core::result<void> modules_subsystem::startup(engine_context &context) {
 
     modules::module_manager_desc desc = {};
     desc.host = host_kind(config);
+    // The editor loads copies so module.build can relink a binary Windows keeps locked while loaded (07 D9);
+    // the runtime loads in place.
+    if (desc.host == modules::module_host_kind::EDITOR && context.project != nullptr) {
+        desc.shadowCopyBinaries = true;
+        desc.shadowCopyDirectory = context.project->root_directory() / ".conjure" / "module_cache";
+    }
     desc.allowSharedLibraries = !config.headless || context.project != nullptr;
     desc.isInsideFrame = &is_inside_frame;
     register_inside_frame_owner(context.app);

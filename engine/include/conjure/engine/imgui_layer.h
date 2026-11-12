@@ -73,8 +73,9 @@ namespace conjure::engine {
 
             /// <summary>
             /// Forwards keys, text, mouse, scroll and focus to the ImGui IO. Mouse events are consumed
-            /// while ImGui wants the mouse, key and text events while it wants the keyboard; window events
-            /// are never consumed.
+            /// while ImGui wants the mouse, key and text events while it wants the keyboard; key and
+            /// mouse-button releases and window events are never consumed, so nothing pressed before ImGui
+            /// took capture stays down in the engine's input state.
             /// </summary>
             [[nodiscard]] bool on_event(engine_context &context, const platform::event &event) override;
 

@@ -208,6 +208,55 @@ TEST_SUITE("engine/renderer_subsystem") {
         app.shutdown();
     }
 
+    TEST_CASE("renderer_subsystem - alternating loaded and unknown meshes are each extracted or skipped") {
+        // The extraction remembers the last mesh lookup; an unknown mesh between two uses of the same loaded one
+        // must neither reuse the loaded mirror nor hide it from the second cube.
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        REQUIRE(subsystem != nullptr);
+
+        const assets::asset_id meshId = core::uuid::generate();
+        std::unique_ptr<assets::memory_asset_source> source = std::make_unique<assets::memory_asset_source>();
+        source->add(mesh_blob(meshId), "assets://meshes/cube.mesh");
+        app.context().assets->add_source(std::move(source));
+        assets::asset_handle handle = app.context().assets->load(meshId);
+
+        CONJURE_UNUSED(create_camera(app));
+        scene::scene &active = app.context().scenes->active();
+        std::vector<ecs::entity> cubes = {};
+        for (const std::string_view name : {"cube_a", "ghost", "cube_b"}) {
+            const core::result<ecs::entity> entity = active.create_entity(core::string_id::intern(name));
+            CONJURE_REQUIRE_OK(entity);
+            renderer::mesh_renderer_component meshRenderer = {};
+            if (name != "ghost") {
+                meshRenderer.mesh = app.context().assets->bind<renderer::mesh_asset>(meshId);
+                cubes.push_back(entity.value());
+            }
+            CONJURE_REQUIRE_OK(
+              app.context().world->add<renderer::mesh_renderer_component>(entity.value(), meshRenderer)
+            );
+        }
+
+        for (u32 frame = 0; frame < 8 && handle.state() != assets::asset_state::LOADED; ++frame) {
+            CONJURE_REQUIRE_OK(app.step_frame());
+        }
+        REQUIRE(handle.state() == assets::asset_state::LOADED);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(subsystem->stats().meshes == 2);
+        CHECK(subsystem->stats().meshesSkipped == 1);
+
+        for (const ecs::entity cube : cubes) {
+            CONJURE_REQUIRE_OK(app.context().world->destroy_entity(cube));
+        }
+        handle = assets::asset_handle{};
+        app.shutdown();
+    }
+
     TEST_CASE("model_prefab_converter - nodes become prefab nodes with renderer components") {
         application app(engine_test::make_desc(engine_test::inline_config()));
         CONJURE_REQUIRE_OK(app.initialise());

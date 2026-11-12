@@ -54,6 +54,8 @@ set(CONJURE_ENGINE_SOURCES
     executable_path.cpp
     executable_path.h
     exit_code.cpp
+    export_commands.cpp
+    export_commands.h
     export_pipeline.cpp
     fixed_step_clock.cpp
     frame_loop.cpp

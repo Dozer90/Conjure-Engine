@@ -23,7 +23,9 @@ namespace conjure::engine {
     enum class engine_error : u16 {
         NONE = 0,
         INVALID_CONFIG,                 // engine_config::validate rejected a field; the message names it
-        BAD_ARGUMENTS,                  // a command-line flag is unknown or carries a bad value
+        BAD_ARGUMENTS,                  // a known command-line flag lacks its value or carries a bad one, or a
+                                        // caller argument is malformed; unknown flags are not errors
+                                        // (parse_command_line returns them in unrecognisedArguments)
         PROJECT_NOT_FOUND,              // project.json (or the project directory) does not exist
         PROJECT_PARSE_FAILED,           // project.json is not valid JSON; the message carries line and column
         PROJECT_INVALID,                // project.json lacks a required member or has one of the wrong type
@@ -40,7 +42,8 @@ namespace conjure::engine {
         MODULE_LOAD_FAILED,             // a module named in modules.required did not load (step 15)
         SCHEDULER_CONFLICT,             // scheduler::finalise rejected the registered systems (step 18)
         LAYER_ATTACH_FAILED,            // a layer's on_attach failed (step 19)
-        STARTUP_SCENE_FAILED,           // the startup scene could not be loaded in a runtime build (step 20)
+        STARTUP_SCENE_FAILED,           // the startup scene could not be loaded, or its source no longer
+                                        // imports, in a runtime build (step 20)
         ALREADY_INITIALISED,            // initialise() on an application that is not CREATED
         NOT_INITIALISED,                // step_frame() before initialise() or after shutdown()
         DEVICE_LOST,                    // the device was lost during a frame

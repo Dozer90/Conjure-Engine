@@ -28,6 +28,11 @@
 #include "engine/module_consumers/module_content_file_system.h"
 #include "engine/module_consumers/scripting_module_consumer.h"
 
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+    #include "conjure/scripting/script_host.h"
+    #include "conjure/scripting/script_runtime.h"
+#endif
+
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -318,4 +323,34 @@ TEST_SUITE("engine/module_consumers") {
         CHECK(consumer.assemblies_of(fixture.id).empty());
         CHECK(consumer.managed_reload_count() == 0);
     }
+
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+    TEST_CASE("scripting_module_consumer - a managed reload skips a runtime cleared with set_runtime(nullptr)") {
+        log_capture logs = {};
+        scripting::script_runtime runtime(scripting::create_script_host(scripting::script_backend::NULL_HOST));
+        scripting::script_runtime_config config = {};
+        config.host.backend = scripting::script_backend::NULL_HOST;
+        CONJURE_REQUIRE_OK(runtime.initialize(config));
+        CONJURE_REQUIRE_OK(runtime.load_game_assembly({}));
+        REQUIRE(runtime.is_assembly_loaded());
+
+        // Control: a consumer that keeps the runtime reloads the game assembly once.
+        consumer_fixture kept = {};
+        scripting_module_consumer keeping(&runtime);
+        keeping.attach(kept.id, *kept.context, kept.set);
+        modules::reload_context keptReload = {};
+        keeping.detach(kept.id, &keptReload);
+        CHECK(keeping.managed_reload_count() == 1);
+
+        // The scripting subsystem clears the pointer before it destroys the runtime (disable or shutdown).
+        consumer_fixture cleared = {};
+        scripting_module_consumer clearing(&runtime);
+        clearing.set_runtime(nullptr);
+        clearing.attach(cleared.id, *cleared.context, cleared.set);
+        modules::reload_context clearedReload = {};
+        clearing.detach(cleared.id, &clearedReload);
+        CHECK(clearing.managed_reload_count() == 0);
+        runtime.shutdown();
+    }
+#endif
 }

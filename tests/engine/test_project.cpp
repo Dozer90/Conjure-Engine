@@ -241,6 +241,82 @@ TEST_SUITE("engine/project") {
         CHECK(overridden.startupSceneOverride.generic_string() == "other.scene.json");
     }
 
+    TEST_CASE("project - a headless apply keeps the forced delta within the frame clamp") {
+        // The headless 1/60 forced delta is above this project's 1/120 clamp: apply_to lowers it to the clamp,
+        // the delta begin_frame would have used anyway, so the configuration still validates.
+        const core::result<project> parsed = project::parse(
+          R"({"schema_version": 1, "name": "fast", "time": {"fixed_hz": 240, "max_frame_delta_seconds": 0.008333333}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(parsed);
+        engine_config headless = engine_config::headless_defaults();
+        parsed.value().apply_to(headless);
+        CHECK(headless.time.maxFrameDeltaSeconds == 0.008333333f);
+        CHECK(headless.time.forcedFrameDeltaSeconds == headless.time.maxFrameDeltaSeconds);
+        CONJURE_CHECK_OK(headless.validate());
+    }
+
+    TEST_CASE("project - saved floats are the shortest decimal that reads back as the same f32") {
+        const core::result<project> parsed = project::parse(
+          R"({"schema_version":1,"name":"x","time":{"max_frame_delta_seconds":0.1},"physics":{"gravity":[0,-9.81,0]}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(parsed);
+        const std::string text = parsed.value().to_json().to_string();
+        CHECK(text.find("0.1") != std::string::npos);
+        CHECK(text.find("-9.81") != std::string::npos);
+        CHECK(text.find("0.10000000149011612") == std::string::npos);
+        CHECK(text.find("-9.8100004196167") == std::string::npos);
+
+        const core::result<project> reread = project::parse(text, std::filesystem::path("."));
+        CONJURE_REQUIRE_OK(reread);
+        CHECK(reread.value().description().time.maxFrameDeltaSeconds == 0.1f);
+        CHECK(reread.value().description().physics.gravity.y == -9.81f);
+    }
+
+    TEST_CASE("project - a vec3 component outside the f32 range is PROJECT_INVALID") {
+        CONJURE_CHECK_ERROR(
+          project::parse(
+            R"({"schema_version": 1, "name": "x", "physics": {"gravity": [0, -1e39, 0]}})",
+            std::filesystem::path(".")
+          ),
+          engine_error::PROJECT_INVALID
+        );
+        const core::result<project> earthly = project::parse(
+          R"({"schema_version": 1, "name": "x", "physics": {"gravity": [0, -9.81, 0]}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(earthly);
+        CHECK(earthly.value().description().physics.gravity.y == -9.81f);
+    }
+
+    TEST_CASE("project - an unknown top-level key never replaces the same member of extensions") {
+        log_capture logs = {};
+        const core::result<project> parsed = project::parse(
+          R"({"schema_version": 1, "name": "g", "extensions": {"build": "dist"}, "build": 123})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value().description().extensions.root()["build"].as_string() == "dist");
+        CHECK(logs.contains(core::log_level::WARN, "'build'"));
+        const core::json::document written = parsed.value().to_json();
+        CHECK(written.root()["extensions"]["build"].as_string() == "dist");
+    }
+
+    TEST_CASE("project - a root given with a trailing separator names the game module after its folder") {
+        temp_directory directory("engine_project_trailing");
+        const project written = engine_test::write_project(directory.path(), "trailing");
+        CHECK(written.description().name == "trailing");
+        CONJURE_REQUIRE_OK(directory.write_text("module.json", "{}"));
+
+        const core::result<project> loaded = project::load(directory.path() / "");
+        CONJURE_REQUIRE_OK(loaded);
+        CHECK(loaded.value().root_directory().filename() == directory.path().filename());
+        const std::vector<project_module_entry> entries = loaded.value().module_manifests();
+        REQUIRE(entries.size() == 1);
+        CHECK(entries[0].name == directory.path().filename().generic_string());
+    }
+
     TEST_CASE("project - the cooked flag and root are read") {
         const core::result<project> parsed = project::parse(
           R"({"schema_version": 1, "name": "shipped", "cooked": true, "cooked_root": "cooked"})",

@@ -267,6 +267,15 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
     }
 
     // Mesh instances from render_world_transform (R3): one fixed step of visual latency, never simulation truth.
+    // Entities that share a mesh or a material in a row reuse the previous lookup instead of taking the resource
+    // cache's lock again (the last-asset memo of 17_demo_games.md gap 9); one extract sees no upload or release,
+    // so the memo cannot go stale.
+    assets::asset_id lastMeshAsset = {};
+    renderer::gpu_mesh_id lastMesh = {};
+    bool haveMesh = false;
+    assets::asset_id lastMaterialAsset = {};
+    renderer::gpu_material_id lastMaterial = {};
+    bool haveMaterial = false;
     context.view<
         const renderer::mesh_renderer_component,
         const scene::render_world_transform,
@@ -279,7 +288,13 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
         const scene::render_world_transform &transform,
         const scene::local_bounds *bounds
       ) {
-          const renderer::gpu_mesh_id mesh = instance.find_mesh(meshRenderer.mesh.id());
+          const assets::asset_id &meshAsset = meshRenderer.mesh.id();
+          if (!haveMesh || meshAsset != lastMeshAsset) {
+              lastMesh = instance.find_mesh(meshAsset);
+              lastMeshAsset = meshAsset;
+              haveMesh = true;
+          }
+          const renderer::gpu_mesh_id mesh = lastMesh;
           if (!mesh.is_valid()) {
               ++mStats.meshesSkipped;
               return;
@@ -288,9 +303,15 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
           item.mesh = mesh;
           for (u32 slot = 0; slot < renderer::MAX_MATERIAL_SLOTS; ++slot) {
               const assets::asset_id &material = meshRenderer.materials[slot].id();
-              if (!material.is_null()) {
-                  item.materials[slot] = instance.find_material(material);
+              if (material.is_null()) {
+                  continue;
               }
+              if (!haveMaterial || material != lastMaterialAsset) {
+                  lastMaterial = instance.find_material(material);
+                  lastMaterialAsset = material;
+                  haveMaterial = true;
+              }
+              item.materials[slot] = lastMaterial;
           }
           item.worldFromLocal = transform.matrix;
           math::aabb local = {};

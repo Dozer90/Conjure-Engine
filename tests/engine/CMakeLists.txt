@@ -26,6 +26,7 @@ set(CONJURE_ENGINE_TEST_SOURCES
     test_engine_subsystem.cpp
     test_engine_time.cpp
     test_engine_version.cpp
+    test_executable_path.cpp
     test_exit_code.cpp
     test_export.cpp
     test_fixed_step_clock.cpp

@@ -1,6 +1,9 @@
 #include "conjure/engine/application_desc.h"
 
 #include "conjure/engine/engine_error.h"
+#include "conjure/engine/log_category.h"
+
+#include "conjure/core/log.h"
 
 #include <utility>
 
@@ -53,6 +56,16 @@ core::result<application_desc> application_desc::from_options(
     }
 
     apply_command_line(options, desc.config);
+    // AUTO and NULL_DEVICE name no device of their own, so only an explicit d3d12 or vulkan warns.
+    const bool realBackend = options.rhi.has_value()
+      && (*options.rhi == rhi_backend_choice::D3D12 || *options.rhi == rhi_backend_choice::VULKAN);
+    if (options.headless && realBackend && !desc.config.rendering.enabled) {
+        CONJURE_LOG_WARN(
+          LOG_ENGINE,
+          "--rhi {} has no effect with --headless: a headless run renders on the null device only",
+          to_string(*options.rhi)
+        );
+    }
     CONJURE_TRY(desc.config.validate());
     return desc;
 }

@@ -111,6 +111,35 @@ TEST_SUITE("engine/command_line") {
         CONJURE_CHECK_ERROR(parse({"--log-level", "loud"}), engine_error::BAD_ARGUMENTS);
     }
 
+    TEST_CASE("command_line - a value that starts with -- is a missing value") {
+        CONJURE_CHECK_ERROR(parse({"--scene", "--no-physics"}), engine_error::BAD_ARGUMENTS);
+        CONJURE_CHECK_ERROR(parse({"--project", "--headless"}), engine_error::BAD_ARGUMENTS);
+        CONJURE_CHECK_ERROR(parse({"--frames", "--headless", "3"}), engine_error::BAD_ARGUMENTS);
+        // A single dash is still a value (a negative number is then rejected by the number check).
+        CONJURE_CHECK_ERROR(parse({"--time-scale", "-2"}), engine_error::BAD_ARGUMENTS);
+        const core::result<command_line_options> parsed = parse({"--scene", "-odd-name.scene.json"});
+        CONJURE_REQUIRE_OK(parsed);
+        REQUIRE(parsed.value().scene.has_value());
+        CHECK(parsed.value().scene->generic_string() == "-odd-name.scene.json");
+    }
+
+    TEST_CASE("command_line - the last --audio flag wins") {
+        const core::result<command_line_options> enabled = parse({"--audio", "off", "--audio", "null"});
+        CONJURE_REQUIRE_OK(enabled);
+        CHECK_FALSE(enabled.value().audioOff);
+        engine_config config = engine_config::defaults();
+        apply_command_line(enabled.value(), config);
+        CHECK(config.audio.enabled);
+        CHECK(config.audio.backend == audio_backend_choice::NULL_DEVICE);
+
+        const core::result<command_line_options> disabled = parse({"--audio", "null", "--audio", "off"});
+        CONJURE_REQUIRE_OK(disabled);
+        CHECK_FALSE(disabled.value().audio.has_value());
+        engine_config silent = engine_config::defaults();
+        apply_command_line(disabled.value(), silent);
+        CHECK_FALSE(silent.audio.enabled);
+    }
+
     TEST_CASE("command_line - apply_command_line lays the overrides over a configuration") {
         const core::result<command_line_options> parsed = parse(
           {"--scene", "a.scene.json", "--frames", "5", "--audio", "off", "--no-physics", "--width", "320",

@@ -138,6 +138,22 @@ TEST_SUITE("engine/application_desc") {
         CONJURE_CHECK_OK(from_arguments({"--rhi", "null", "--headless"}));
     }
 
+    TEST_CASE("application_desc - --rhi with --headless warns that it has no effect") {
+        log_capture logs = {};
+        const core::result<application_desc> desc = from_arguments({"--headless", "--rhi", "d3d12"});
+        CONJURE_REQUIRE_OK(desc);
+        CHECK_FALSE(desc.value().config.rendering.enabled);
+        CHECK(logs.contains(core::log_level::WARN, "--rhi d3d12"));
+
+        // The null device is what headless renders on anyway, and auto names no backend: no warning.
+        logs.clear();
+        CONJURE_REQUIRE_OK(from_arguments({"--headless", "--rhi", "null"}));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "--rhi"));
+        logs.clear();
+        CONJURE_REQUIRE_OK(from_arguments({"--headless", "--rhi", "auto"}));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "--rhi"));
+    }
+
     TEST_CASE("application_desc - unrecognised arguments are handed back to the executable") {
         const core::result<application_desc> desc = from_arguments({"--exec", "run.json", "--headless"});
         CONJURE_REQUIRE_OK(desc);

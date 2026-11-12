@@ -10,6 +10,7 @@
 #include "conjure/engine/engine_time.h"
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 // engine_time.h (docs/design/06_engine_loop.md 2.1): the per-frame timing block, its clamp and scale rules
@@ -74,6 +75,23 @@ TEST_SUITE("engine/engine_time") {
         CHECK(time.unscaledDeltaTime > 0.0f);
         CHECK(time.frameIndex == 2);
         CHECK(time.time == 0.0);
+    }
+
+    TEST_CASE("engine_time - a non-finite time scale counts as zero") {
+        for (const f32 scale : {std::numeric_limits<f32>::quiet_NaN(), std::numeric_limits<f32>::infinity()}) {
+            CAPTURE(scale);
+            engine_time time = {};
+            time_settings settings = sixty_hz();
+            settings.timeScale = scale;
+            begin_frame(time, settings, 0.0);
+            begin_frame(time, settings, 0.016);
+            CHECK(time.timeScale == 0.0f);
+            CHECK(time.deltaTime == 0.0f);
+            CHECK(time.time == 0.0);
+            CHECK(time.unscaledDeltaTime > 0.0f);
+            advance_fixed_step(time);
+            CHECK(std::isfinite(time.fixedTime));
+        }
     }
 
     TEST_CASE("engine_time - fixed time advances per step and counts steps") {

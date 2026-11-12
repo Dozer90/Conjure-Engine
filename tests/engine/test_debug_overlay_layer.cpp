@@ -7,6 +7,8 @@
 #include "conjure/core/types.h"
 #include "conjure/engine/application.h"
 #include "conjure/engine/debug_overlay_layer.h"
+#include "conjure/engine/engine_context.h"
+#include "conjure/engine/frame_stats.h"
 
 #include <memory>
 #include <string>
@@ -59,6 +61,20 @@ TEST_SUITE("engine/debug_overlay_layer") {
         CHECK(logs.count(core::log_level::INFO) >= 2);
         CHECK(logs.contains(core::log_level::INFO, "frame 4"));
         app.shutdown();
+    }
+
+    TEST_CASE("debug_overlay_layer - cpu time excludes the pacer sleep") {
+        frame_stats stats = {};
+        frame_sample sample = {};
+        sample.frameMilliseconds = 33.3f;
+        sample.pacerSleepMilliseconds = 30.0f;
+        stats.commit(sample);
+        engine_context context = {};
+        context.stats = &stats;
+        const std::string text = debug_overlay_layer::format_sample(context);
+        CHECK(text.find("cpu 3.30 ms") != std::string::npos);
+        CHECK(text.find("frame 33.30 ms") != std::string::npos);
+        CHECK(text.find("sleep 30.00 ms") != std::string::npos);
     }
 
     TEST_CASE("debug_overlay_layer - format_sample tolerates an empty context and visibility toggles") {

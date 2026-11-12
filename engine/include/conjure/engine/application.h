@@ -130,8 +130,10 @@ namespace conjure::engine {
             [[nodiscard]] core::result<void> step_frame();
 
             /// <summary>
-            /// As step_frame(), but deltaSeconds replaces the clock / forced delta for this frame (tests, R13).
-            /// The value is clamped like any frame delta: a negative or non-finite delta is a zero-length frame.
+            /// As step_frame(), but deltaSeconds replaces the clock / forced delta for this frame (tests, R13),
+            /// except on the first frame, which always runs exactly fixedDeltaSeconds so a run is deterministic
+            /// from frame 0 (06 2.1). The value is clamped like any frame delta: a negative or non-finite delta
+            /// is a zero-length frame.
             /// </summary>
             [[nodiscard]] core::result<void> step_frame(f64 deltaSeconds);
 
@@ -187,7 +189,8 @@ namespace conjure::engine {
             void inject_render_failure(core::error error, u32 frameCount);
 
             /// <summary>
-            /// Sets engine_time::timeScale from the next frame on (negative values clamp to zero).
+            /// Sets engine_time::timeScale from the next frame on; negative and non-finite values (NaN, infinity)
+            /// become zero.
             /// </summary>
             void set_time_scale(f32 timeScale) noexcept;
 

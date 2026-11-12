@@ -8,7 +8,8 @@ using namespace conjure::engine;
 
 void conjure::engine::begin_frame(engine_time &time, const time_settings &settings, f64 rawDeltaSeconds) noexcept {
     time.fixedDeltaTime = settings.fixedDeltaSeconds;
-    time.timeScale = std::max(settings.timeScale, 0.0f);
+    // NaN and infinity would poison every later time value; they stop time like a negative scale does.
+    time.timeScale = std::isfinite(settings.timeScale) && settings.timeScale > 0.0f ? settings.timeScale : 0.0f;
 
     f64 raw = rawDeltaSeconds;
     if (time.frameIndex == 0) {

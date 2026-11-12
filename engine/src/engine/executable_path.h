@@ -9,7 +9,8 @@
 namespace conjure::engine {
 
     /// <summary>
-    /// The directory of the running executable; the current directory when the platform cannot say.
+    /// The directory of the running executable, however long its path; the current directory, with a warning,
+    /// when the platform cannot say.
     /// </summary>
     [[nodiscard]] std::filesystem::path executable_directory();
 }

@@ -2,6 +2,8 @@
 
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
 
+#include "engine/module_consumers/scripting_module_consumer.h"
+
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
@@ -194,6 +196,10 @@ void scripting_subsystem::shutdown(engine_context &context) {
     if (mServices->scripting != nullptr) {
         mServices->scripting->shutdown();
     }
+    // The modules subsystem shuts down first and has usually destroyed the consumer by now.
+    if (mServices->scriptingConsumer != nullptr) {
+        mServices->scriptingConsumer->set_runtime(nullptr);
+    }
     mServices->scripting.reset();
     mCollisions.clear();
     mInitialised = false;
@@ -283,6 +289,10 @@ void scripting_subsystem::disable(engine_context &context) {
     mUnloadSubscription = {};
     if (mServices->scripting != nullptr) {
         mServices->scripting->shutdown();
+    }
+    // The module consumer was built over this runtime at step 15; a later managed reload must not reach it.
+    if (mServices->scriptingConsumer != nullptr) {
+        mServices->scriptingConsumer->set_runtime(nullptr);
     }
     mServices->scripting.reset();
     mInitialised = false;

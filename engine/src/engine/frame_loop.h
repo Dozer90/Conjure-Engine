@@ -50,7 +50,8 @@ namespace conjure::engine {
         public:
             /// <summary>
             /// Runs one frame. 'deltaOverride' replaces the clock and the forced delta for this frame
-            /// (application::step_frame(f64), R13). Returns an error only for unrecoverable failures.
+            /// (application::step_frame(f64), R13), except on frame 0, which begin_frame always runs at
+            /// fixedDeltaSeconds. Returns an error only for unrecoverable failures.
             /// </summary>
             [[nodiscard]] core::result<void> run_frame(std::optional<f64> deltaOverride);
 

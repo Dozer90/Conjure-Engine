@@ -45,14 +45,15 @@ namespace {
     }
 
     /// <summary>
-    /// Fetches the value token of a flag or fails when the arguments end.
+    /// Fetches the value token of a flag or fails when the arguments end or the next token is another flag
+    /// ("--scene --no-physics" lacks its scene; it must not take "--no-physics" as one).
     /// </summary>
     [[nodiscard]] core::result<std::string_view> take_value(
       std::span<const std::string_view> arguments,
       usize &index,
       std::string_view flag
     ) {
-        if (index + 1 >= arguments.size()) {
+        if (index + 1 >= arguments.size() || core::str::starts_with(arguments[index + 1], "--")) {
             return bad_argument(flag, "missing value");
         }
         ++index;
@@ -120,11 +121,14 @@ core::result<command_line_options> conjure::engine::parse_command_line(std::span
             options.rhi = backend;
         } else if (token == "--audio") {
             CONJURE_TRY_ASSIGN(const std::string_view value, take_value(arguments, index, token));
+            // The last --audio wins: "off" and a backend clear each other.
             if (core::str::iequals(value, "off")) {
                 options.audioOff = true;
+                options.audio = std::nullopt;
             } else {
                 CONJURE_TRY_ASSIGN(const audio_backend_choice backend, parse_audio_backend_choice(value));
                 options.audio = backend;
+                options.audioOff = false;
             }
         } else if (token == "--no-physics") {
             options.noPhysics = true;

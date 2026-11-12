@@ -144,6 +144,23 @@ TEST_SUITE("engine/application") {
         app.shutdown();
     }
 
+    TEST_CASE("application - set_time_scale treats NaN and infinity as zero") {
+        for (const f32 scale : {std::numeric_limits<f32>::quiet_NaN(), std::numeric_limits<f32>::infinity()}) {
+            CAPTURE(scale);
+            application app(engine_test::make_desc(engine_test::inline_config()));
+            CONJURE_REQUIRE_OK(app.initialise());
+            CONJURE_REQUIRE_OK(app.step_frame());
+            app.set_time_scale(scale);
+            CHECK(app.time().timeScale == 0.0f);
+            CONJURE_REQUIRE_OK(app.step_frame());
+            CHECK(app.time().timeScale == 0.0f);
+            CHECK(app.time().deltaTime == 0.0f);
+            CHECK(std::isfinite(app.time().time));
+            CHECK(std::isfinite(app.time().fixedTime));
+            app.shutdown();
+        }
+    }
+
     TEST_CASE("application - PAUSED skips the fixed loop, STEP_ONCE runs one frame then pauses") {
         application app(engine_test::make_desc(engine_test::inline_config()));
         CONJURE_REQUIRE_OK(app.initialise());

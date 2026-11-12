@@ -14,6 +14,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -124,7 +125,12 @@ namespace {
             if (!component.is_number()) {
                 return invalid(key, "expected an array of three numbers");
             }
-            target[static_cast<glm::length_t>(index)] = component.as_f32();
+            // as_f32's fallback stands for a value outside the f32 range: refuse it, as read_f32 does.
+            const f32 parsed = component.as_f32(std::numeric_limits<f32>::quiet_NaN());
+            if (!std::isfinite(parsed)) {
+                return invalid(key, "expected an array of three finite numbers");
+            }
+            target[static_cast<glm::length_t>(index)] = parsed;
         }
         return core::result<void>::success();
     }
@@ -322,10 +328,12 @@ namespace {
     }
 
     /// <summary>
-    /// A float as the JSON number project.json stores (f64 so 0.1 reads back as 0.1).
+    /// A float as the JSON number project.json stores: the shortest decimal that reads back as the same f32,
+    /// widened through text so 0.1f is written as 0.1 rather than 0.10000000149011612.
     /// </summary>
     [[nodiscard]] f64 number(f32 value) {
-        return static_cast<f64>(value);
+        const std::optional<f64> shortest = core::str::parse_double(std::format("{}", value));
+        return shortest.value_or(static_cast<f64>(value));
     }
 }
 
@@ -376,6 +384,11 @@ core::result<project> project::parse(std::string_view text, std::filesystem::pat
         return invalid("/", "the root must be an object");
     }
 
+    // A root given with a trailing separator ("C:/games/mygame/") has an empty filename(); drop it so the game
+    // module and root_directory() are named after the folder. A bare root ("C:/", "/") stays as it is.
+    if (!rootDirectory.has_filename() && rootDirectory.has_relative_path()) {
+        rootDirectory = rootDirectory.parent_path();
+    }
     project result = {};
     result.mRootDirectory = std::move(rootDirectory);
     project_description &description = result.mDescription;
@@ -427,6 +440,15 @@ core::result<project> project::parse(std::string_view text, std::filesystem::pat
         }
         const bool known = std::find(KNOWN_KEYS.begin(), KNOWN_KEYS.end(), entry.key) != KNOWN_KEYS.end();
         if (known) {
+            continue;
+        }
+        // The explicit extensions member is the canonical place (06 2.10): a stray top-level copy never replaces it.
+        if (description.extensions.root()[entry.key].is_valid()) {
+            CONJURE_LOG_WARN(
+              LOG_ENGINE,
+              "project.json: unknown key '{}' is also a member of extensions; the extensions member is kept",
+              entry.key
+            );
             continue;
         }
         CONJURE_LOG_WARN(LOG_ENGINE, "project.json: unknown key '{}' preserved in extensions", entry.key);
@@ -606,9 +628,11 @@ void project::apply_to(engine_config &config) const {
         config.scripting.enabled = desc.scripting.enabled;
     } else {
         // A headless time setting keeps its forced delta: the project's wall-clock preference is for
-        // interactive runs.
+        // interactive runs. It stays within the project's frame clamp, which validate() requires and which
+        // would have shortened it to the same value anyway.
         const engine_config headlessDefaults = engine_config::headless_defaults();
-        config.time.forcedFrameDeltaSeconds = headlessDefaults.time.forcedFrameDeltaSeconds;
+        config.time.forcedFrameDeltaSeconds =
+          std::min(headlessDefaults.time.forcedFrameDeltaSeconds, config.time.maxFrameDeltaSeconds);
     }
 
     if (config.startupSceneOverride.empty() && !desc.startupScene.empty()) {

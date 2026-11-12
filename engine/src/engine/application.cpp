@@ -37,6 +37,7 @@
 #include "conjure/core/vfs/native_file_system.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <optional>
 #include <system_error>
@@ -289,8 +290,9 @@ void application::inject_render_failure(core::error error, u32 frameCount) {
 }
 
 void application::set_time_scale(f32 timeScale) noexcept {
-    mTime.timeScale = std::max(timeScale, 0.0f);
-    mDesc.config.time.timeScale = mTime.timeScale;
+    const f32 sanitised = std::isfinite(timeScale) && timeScale > 0.0f ? timeScale : 0.0f;
+    mTime.timeScale = sanitised;
+    mDesc.config.time.timeScale = sanitised;
 }
 
 void application::set_simulation_mode(simulation_mode mode) noexcept {
@@ -549,10 +551,22 @@ core::result<void> application::load_startup_scene() {
     const std::string assetPath = asset_path_of(config.startupSceneOverride);
     std::optional<core::error> failure = std::nullopt;
     const std::optional<assets::asset_id> id = mServices->assetManager->find(assetPath);
+    // A source that no longer imports keeps its previous blob in the cache; a runtime must not run that stale
+    // copy and exit OK. The editor keeps loading the cached copy so the scene can still be opened and fixed.
+    const bool importFailed = id.has_value() && mServices->assetDatabase != nullptr
+      && mServices->assetDatabase->status_of(*id) == assets::asset_record_status::IMPORT_FAILED;
     if (!id.has_value()) {
         failure = make_error(
           engine_error::STARTUP_SCENE_FAILED,
           std::format("startup scene '{}' is not a known asset", assetPath)
+        );
+    } else if (importFailed && !config.editor) {
+        failure = make_error(
+          engine_error::STARTUP_SCENE_FAILED,
+          std::format(
+            "startup scene '{}' failed to import; refusing the stale cached copy (the import error is logged above)",
+            assetPath
+          )
         );
     } else {
         const core::result<scene::scene_id> loaded = mServices->scenes->load(*id, scene::load_mode::REPLACE);

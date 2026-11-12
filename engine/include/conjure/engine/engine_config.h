@@ -210,11 +210,13 @@ namespace conjure::engine {
         [[nodiscard]] static engine_config headless_defaults();
 
         /// <summary>
-        /// Rejects (INVALID_CONFIG, the message names the field): fixedDeltaSeconds &lt;= 0,
-        /// maxFrameDeltaSeconds &lt; fixedDeltaSeconds, maxFixedStepsPerFrame == 0, a zero window size when
-        /// not headless, rendering.backend == NULL_DEVICE when not headless, headless with rendering enabled
-        /// on a real backend, frameThreadBlockBytes &gt; frameArenaBytes, forcedFrameDeltaSeconds &lt; 0,
-        /// a negative timeScale, and non-finite time values.
+        /// Rejects (INVALID_CONFIG, the message names the field): a non-finite or non-positive
+        /// fixedDeltaSeconds, a non-finite maxFrameDeltaSeconds or one below fixedDeltaSeconds,
+        /// maxFixedStepsPerFrame == 0, a forcedFrameDeltaSeconds that is negative, non-finite or above
+        /// maxFrameDeltaSeconds, a negative or non-finite timeScale, a zero window size when not headless,
+        /// rendering.backend == NULL_DEVICE when not headless, headless with rendering enabled on a real
+        /// backend, frameThreadBlockBytes &gt; frameArenaBytes, a negative or non-finite audio.masterGain,
+        /// and jobs.workerCount above core::jobs::MAX_WORKER_COUNT unless it is AUTO_WORKER_COUNT.
         /// </summary>
         [[nodiscard]] core::result<void> validate() const;
 

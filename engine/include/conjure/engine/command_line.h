@@ -16,7 +16,8 @@
 
 // The command line (docs/design/06_engine_loop.md 2.11): parse_command_line() turns the arguments into
 // a set of optional overrides, apply_command_line() lays them over an engine_config, and
-// application_desc::from_command_line() orders the whole merge (defaults < project.json < command line).
+// application_desc::from_command_line() orders the whole merge (defaults < --headless defaults < project.json <
+// the remaining flags).
 //
 // Recognised flags: --project <dir>, --scene <asset path>, --headless, --frames <n>, --rhi d3d12|vulkan|null,
 // --audio miniaudio|null|off, --no-physics, --no-scripting, --no-render, --width <n>, --height <n>,
@@ -54,9 +55,10 @@ namespace conjure::engine {
 
     /// <summary>
     /// Parses the arguments (argv[1..], not the program name). Fails with BAD_ARGUMENTS for a flag without
-    /// its value, a value that does not parse (a non-number, a zero where a positive count is needed, an
-    /// unknown backend or log level). Unknown tokens, and the values that follow one until the next known
-    /// flag, land in unrecognisedArguments in order.
+    /// its value (a value token that starts with -- counts as a missing value), a value that does not parse
+    /// (a non-number, a zero where a positive count is needed, an unknown backend or log level). When --audio
+    /// is given several times the last one wins. Unknown tokens, and the values that follow one until the
+    /// next known flag, land in unrecognisedArguments in order.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<command_line_options> parse_command_line(
       std::span<const std::string_view> arguments

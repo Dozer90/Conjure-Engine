@@ -94,7 +94,8 @@ namespace conjure::engine {
             /// <summary>
             /// Runs the six steps. EXPORT_FAILED names the step and the cause; nothing of a failed step is
             /// written. INVALID_STATE (core) when the context has no project or no asset database (a cooked
-            /// project cannot be exported again).
+            /// project cannot be exported again). BAD_ARGUMENTS for an empty output directory, the project
+            /// directory itself or a folder inside the assets root.
             /// </summary>
             [[nodiscard]] core::result<export_report> run(
               const export_settings &settings,

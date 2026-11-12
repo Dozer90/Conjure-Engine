@@ -284,7 +284,9 @@ bool imgui_layer::on_event(engine_context &context, const platform::event &event
         if (mapped != ImGuiKey_None) {
             io.AddKeyEvent(mapped, down);
         }
-        consumed = io.WantCaptureKeyboard;
+        // A release always reaches the input state so a key pressed before ImGui took capture cannot stay
+        // down; input ignores a release of a key that is already up.
+        consumed = down && io.WantCaptureKeyboard;
     } else if (const platform::text_event *text = platform::event_as<platform::text_event>(event); text != nullptr) {
         io.AddInputCharacter(text->codepoint);
         consumed = io.WantCaptureKeyboard;
@@ -294,11 +296,13 @@ bool imgui_layer::on_event(engine_context &context, const platform::event &event
         consumed = io.WantCaptureMouse;
     } else if (const platform::mouse_button_event *button = platform::event_as<platform::mouse_button_event>(event);
                button != nullptr) {
+        const bool pressed = button->action != platform::button_action::RELEASE;
         const int index = to_imgui_mouse_button(button->button);
         if (index >= 0) {
-            io.AddMouseButtonEvent(index, button->action != platform::button_action::RELEASE);
+            io.AddMouseButtonEvent(index, pressed);
         }
-        consumed = io.WantCaptureMouse;
+        // As for keys: a release is never consumed, so a button cannot stay down in the input state.
+        consumed = pressed && io.WantCaptureMouse;
     } else if (const platform::mouse_scroll_event *scroll = platform::event_as<platform::mouse_scroll_event>(event);
                scroll != nullptr) {
         io.AddMouseWheelEvent(scroll->offset.x, scroll->offset.y);

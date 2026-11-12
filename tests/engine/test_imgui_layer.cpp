@@ -9,6 +9,10 @@
 #include "conjure/platform/event.h"
 #include "conjure/platform/window.h"
 
+#if defined(CONJURE_BUILD_EDITOR) && CONJURE_BUILD_EDITOR
+    #include <imgui.h>
+#endif
+
 #include <memory>
 
 // imgui_layer.h (docs/design/06_engine_loop.md 2.8, R9): the single ImGui context, opened at frame begin,
@@ -75,6 +79,40 @@ TEST_SUITE("engine/imgui_layer") {
 
         layer.on_imgui_end(app.context());
         CHECK(layer.stats().framesRendered == 1);
+        layer.on_detach(app.context());
+        app.shutdown();
+    }
+
+    TEST_CASE("imgui_layer - releases reach the engine while a widget captures the keyboard and the mouse") {
+        application app(engine_test::make_desc(engine_test::inline_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        imgui_layer layer = {};
+        CONJURE_REQUIRE_OK(layer.on_attach(app.context()));
+        layer.on_frame_begin(app.context());
+
+        // What NewFrame sets while a text field or a window under the cursor holds capture.
+        ImGui::SetCurrentContext(layer.context());
+        ImGui::GetIO().WantCaptureKeyboard = true;
+        ImGui::GetIO().WantCaptureMouse = true;
+
+        platform::key_event key = {};
+        key.keyCode = platform::key::A;
+        key.action = platform::button_action::PRESS;
+        CHECK(layer.on_event(app.context(), platform::event(key)));
+        key.action = platform::button_action::REPEAT;
+        CHECK(layer.on_event(app.context(), platform::event(key)));
+        key.action = platform::button_action::RELEASE;
+        CHECK_FALSE(layer.on_event(app.context(), platform::event(key)));
+
+        platform::mouse_button_event button = {};
+        button.button = platform::mouse_button::LEFT;
+        button.action = platform::button_action::PRESS;
+        CHECK(layer.on_event(app.context(), platform::event(button)));
+        button.action = platform::button_action::RELEASE;
+        CHECK_FALSE(layer.on_event(app.context(), platform::event(button)));
+        CHECK(layer.stats().eventsConsumed == 3);
+
+        layer.on_imgui_end(app.context());
         layer.on_detach(app.context());
         app.shutdown();
     }

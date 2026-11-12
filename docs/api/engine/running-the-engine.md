@@ -59,7 +59,7 @@ combination once (`INVALID_CONFIG` names the field). The merge order is fixed: d
 | Section | Fields you set most |
 |---|---|
 | `window` | `title`, `width`, `height`, `fullscreen`, `resizable`, `vsync` |
-| `time` | `fixedDeltaSeconds` (1/60), `maxFrameDeltaSeconds`, `maxFixedStepsPerFrame`, `timeScale`, `forcedFrameDeltaSeconds` (> 0 replaces the clock), `interpolatePhysics` |
+| `time` | `fixedDeltaSeconds` (1/60), `maxFrameDeltaSeconds`, `maxFixedStepsPerFrame`, `timeScale`, `forcedFrameDeltaSeconds` (> 0 replaces the clock; at most `maxFrameDeltaSeconds`), `interpolatePhysics` |
 | `pacing` | `targetHz` (0 = unpaced), `sleepWhenUnfocused` |
 | `rendering` | `enabled`, `backend` (`AUTO`, `D3D12`, `VULKAN`, `NULL_DEVICE`), `gpuValidation`, `shaderDirectory` |
 | `physics` | `enabled`, `gravity`, `maxBodies`; the rest of the physics settings come from the project's `"physics"` section |
@@ -73,7 +73,8 @@ combination once (`INVALID_CONFIG` names the field). The merge order is fixed: d
 `headless_defaults()` sets a 1280 x 720 null window, rendering off on the null device, the null audio backend,
 scripting off, asset hot reload off, a forced 1/60 frame delta and two workers; `--headless` applies the same
 fields over the base configuration, and a project cannot switch the devices, scripting or hot reload back on
-under it. Tests opt subsystems back in field by field.
+under it (a project whose `max_frame_delta_seconds` is below 1/60 lowers the forced delta to that clamp). Tests
+opt subsystems back in field by field.
 
 > [!IMPORTANT]
 > `validate()` rejects rendering on a real backend while `headless` is true. Headless rendering means the null
@@ -89,17 +90,22 @@ auto|d3d12|vulkan|null`, `--audio auto|miniaudio|null|off`, `--no-physics`, `--n
 `unrecognisedArguments` for the executable (the editor reads `--exec` and `--export` from there; the runtime
 refuses unknown options). `command_line_help()` is the text the executables print.
 
+A flag that takes a value never takes another flag as it: `--scene --no-physics` is `BAD_ARGUMENTS` (missing value), not
+a scene named `--no-physics`. When `--audio` is given several times the last one wins, so `--audio off --audio null`
+runs on the null backend. `--rhi d3d12` or `--rhi vulkan` together with `--headless` logs a warning and has no effect: a
+headless run renders on the null device only.
+
 ## project.json
 
 `project::load(directory)` reads `<directory>/project.json` (schema version 1, snake_case keys): `name`,
 `version`, `assets_root`, `cooked_root`, `startup_scene`, the `window`, `time`, `physics`, `rendering`, `audio`,
 `assets` (`hot_reload`), `scripting` and `modules` sections, `layers` (the 32 scene layer names) and `cooked`.
-Unknown top-level keys are kept in `extensions` and written back by `save()`; schema 1 reserves `"assets"`, so a
-file that used that key for its own data is parsed as the section and its unknown members are dropped on
-`save()` like those of every other section. `apply_to(config)` copies the
-sections into a configuration without touching the headless, frame-count, jobs and log settings, so a headless
-test keeps its null backends (and its disabled asset hot reload) while reading the project's scenes and physics
-layers.
+Unknown top-level keys are kept in `extensions` and written back by `save()`; when `extensions` already has a member of
+the same name, that member is kept and the top-level key is dropped with a warning. Schema 1 reserves `"assets"`, so a
+file that used that key for its own data is parsed as the section and its unknown members are dropped on `save()` like
+those of every other section. `apply_to(config)` copies the sections into a configuration without touching the headless,
+frame-count, jobs and log settings, so a headless test keeps its null backends (and its disabled asset hot reload) while
+reading the project's scenes and physics layers.
 
 ```cpp
 core::result<engine::project> loaded = engine::project::load("C:/games/rolling_course");
@@ -116,9 +122,15 @@ desc.project = std::move(loaded).value();
 `initialise()` runs the startup order of the design in one call: the log sinks, the job system, frame memory,
 the virtual file system mounts (`project://`, `assets://`, `engine://`, `cooked://`), then one subsystem after
 another, every `post_startup` (the asset scan happens here), every `register_systems` followed by
-`scheduler::finalise()`, the layers' `on_attach` and the startup scene. Afterwards `state()` is `RUNNING`.
+`scheduler::finalise()`, the layers' `on_attach` and the startup scene. Afterwards `state()` is `RUNNING`. A
+startup scene that is not a known asset, fails to load or whose source no longer imports is
+`STARTUP_SCENE_FAILED` for the runtime, which never runs a stale cached copy. The editor goes on: it warns about a
+scene it cannot load and opens the last cached copy of a scene that no longer imports, so the scene can be fixed.
 
-- `step_frame()` runs one frame; `step_frame(deltaSeconds)` forces this frame's delta (tests).
+- `step_frame()` runs one frame; `step_frame(deltaSeconds)` forces this frame's delta (tests); the first frame
+  always runs exactly `fixedDeltaSeconds`.
+- `set_time_scale(scale)` takes effect from the next frame; a negative or non-finite scale (NaN, infinity) is
+  stored as zero, which stops time while frames keep running.
 - `run()` loops `step_frame()` until `is_quit_requested()` or `engine_config::maxFrames`, then calls
   `shutdown()` and returns `current_exit_code()` as an `int`.
 - `request_quit(code)` stops `run()` after the current frame; the worst code wins (`OK` < `INIT_FAILURE` <

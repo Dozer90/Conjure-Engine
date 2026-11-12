@@ -4,6 +4,7 @@
 
 #include "conjure/engine/engine_subsystem.h"
 
+#include "conjure/core/event.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/result.h"
 
@@ -17,7 +18,8 @@
 // the Jolt world over the job system attached to the ECS world, the physics components and the collision
 // mesh asset type, and asset RELOADED events forwarded to physics_world::on_asset_reloaded. The components
 // are registered even when physics.enabled == false so scenes with bodies still load; the world is not
-// created then and the context pointer stays null.
+// created then and the context pointer stays null. A scene unload marks the shape cache for collection, which
+// runs at the next end_frame (14_physics.md: after the unload flush, while no push, step or pull runs).
 
 namespace conjure::engine {
 
@@ -25,7 +27,9 @@ namespace conjure::engine {
         private:
             engine_services *mServices = nullptr;
             assets::asset_subscription mSubscription = {};
+            core::event_subscription mUnloadSubscription = {};
             u32 mReloadsForwarded = 0;
+            bool mCollectShapes = false;
 
         public:
             explicit physics_subsystem(engine_services &services);
@@ -35,6 +39,12 @@ namespace conjure::engine {
             [[nodiscard]] std::string_view name() const noexcept override;
             [[nodiscard]] core::result<void> startup(engine_context &context) override;
             void register_systems(ecs::scheduler &scheduler, engine_context &context) override;
+
+            /// <summary>
+            /// Drops the cached shapes no body references once a scene unloaded since the last frame end.
+            /// </summary>
+            void end_frame(engine_context &context) override;
+
             void shutdown(engine_context &context) override;
 
             /// <summary>

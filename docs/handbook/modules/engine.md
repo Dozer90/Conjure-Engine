@@ -48,10 +48,11 @@ because `engine_context` and `application` carry `CONJURE_MODULE_SERVICE` (R19).
 | `log_category.h` | `LOG_ENGINE` | not user-facing |
 
 Private: `frame_loop.{h,cpp}` (steps 1-16 of 06 3.1), `frame_pacer.{h,cpp}`, `main_thread_queue.{h,cpp}`,
-`engine_services.{h,cpp}` (every module object as a `unique_ptr`, declared in startup order so destruction is
-the reverse), `executable_path.{h,cpp}`, `builtin_modules.{h,cpp}`, `subsystems/*_subsystem.{h,cpp}`,
-`subsystems/renderer_components.h` and `audio_components.h` (the `CONJURE_COMPONENT` names of the renderer and
-audio components, R7), `subsystems/model_prefab_converter.{h,cpp}`, `module_consumers/*`.
+`engine_services.{h,cpp}` (every module object as a `unique_ptr`, declared in startup order so destruction is the
+reverse), `executable_path.{h,cpp}`, `export_commands.{h,cpp}` (the dotnet command lines of export step 3),
+`builtin_modules.{h,cpp}`, `subsystems/*_subsystem.{h,cpp}`, `subsystems/renderer_components.h` and `audio_components.h`
+(the `CONJURE_COMPONENT` names of the renderer and audio components, R7), `subsystems/model_prefab_converter.{h,cpp}`,
+`module_consumers/*`.
 
 ## 2. Startup and shutdown
 
@@ -93,45 +94,49 @@ the main-thread queue, `subsystems.begin_frame` and `layers.on_frame_begin`, `FR
 | `ecs_subsystem` | `component_registry`, `world`, `scheduler` | nothing per frame; the scheduler runs the phases |
 | `scene_subsystem` | `scene_manager`, the layer table from `project.json` | registers the four scene systems, loads the startup scene, `time.interpolatePhysics` -> `transform_system::set_interpolation_enabled` |
 | `audio_subsystem` | `audio_engine` (`audio_settings` mapped one to one, `NULL_DEVICE` -> null backend) | registers the audio components and `engine.audio_sync` (SYNC) / `engine.audio_finish_one_shots` (FRAME_END) (R7, R50) |
-| `physics_subsystem` | `physics_world` from `physics_settings::from_json(project.physics, extensions.physics_layers)` | attaches the world, registers the physics systems and asset types, forwards `RELOADED` |
+| `physics_subsystem` | `physics_world` from `physics_settings::from_json(project.physics, extensions.physics_layers)` | attaches the world, registers the physics systems and asset types, forwards `RELOADED`, and after a scene unload (`on_before_unload`) runs `collect_shapes()` at the next `end_frame` |
 | `renderer_subsystem` | `renderer`, `debug_draw` | registers the renderer components and `engine.render_sync` / `engine.render_extract`, drives `upload_*` / `release_*` from asset events (R10), converts `model_asset` to prefabs |
 | `scripting_subsystem` | `script_runtime` over the .NET host or the null host, `hot_reload_controller` | `initialize` + `load_game_assembly` in `post_startup` (after the bindings filled the table, R27), the six scripting systems, `destroy_all` on `on_before_unload` (R29) |
-| `modules_subsystem` | `module_manager` with the three consumers, the manifest-only static modules (R18), the project's manifests and search paths | `apply_pending` per frame; `allowSharedLibraries` for a windowed host or a headless host with a project |
+| `modules_subsystem` | `module_manager` with the three consumers, the manifest-only static modules (R18), the project's manifests and search paths | `apply_pending` per frame; `allowSharedLibraries` for a windowed host or a headless host with a project; an `EDITOR` host with a project shadow-copies binaries into `<project>/.conjure/module_cache` (07 D9); the folder is shared and numbered from 1, so on Windows only one editor per project can load a native game module (a second editor's copy over the locked binary is `BINARY_COPY_FAILED`) |
 
 The renderer and audio component types are registered whenever the libraries are compiled, even with rendering
 or audio disabled, so a headless server still loads scenes that carry them.
 
 ## 5. Module consumers and services
 
-`ecs_module_consumer` turns `ecs::component_type_desc` / `system_extension_desc` records into
-`register_described` and `scheduler::add_system` calls, counts live uses and strips instances on unload (ids stay
-stable per name, a layout change is refused at `validate()`); `assets_module_consumer` validates importer and
-asset-type records and mounts module content as `modules://<name>/` (`module_content_file_system`);
-`scripting_module_consumer` records a module's managed assemblies (appending them to the game load context is
-section 12). Services a module entry may require: `engine::engine_context`, `engine::application` (during step
-15 only); `ecs::world`, `assets::asset_database` and `scene::scene_manager` are reached through the context.
+`ecs_module_consumer` turns `ecs::component_type_desc` / `system_extension_desc` records into `register_described` and
+`scheduler::add_system` calls, counts live uses and strips instances on unload (ids stay stable per name, a layout
+change is refused at `validate()`); `assets_module_consumer` validates importer and asset-type records and mounts module
+content as `modules://<name>/` (`module_content_file_system`); `scripting_module_consumer` records a module's managed
+assemblies (appending them to the game load context is section 12); the scripting subsystem clears its runtime pointer
+(`set_runtime(nullptr)`) before it destroys the runtime, so a later managed reload is a no-op instead of a
+use-after-free. Services a module entry may require: `engine::engine_context`, `engine::application` (during step 15
+only); `ecs::world`, `assets::asset_database` and `scene::scene_manager` are reached through the context.
 
 ## 6. Configuration, project and command line
 
 `engine_config` is merged by `application_desc::from_command_line` in the fixed order defaults, `--headless`
-(`headless_defaults()` before everything else), `project.json` (`project::apply_to`, which leaves headless,
-frame count, jobs, memory, pacing and log settings alone, and under `headless` also the null backends, the
-window size, the disabled scripting and the disabled asset hot reload), the flags, `validate()`. `project` parses schema
-version 1 with snake_case keys, keeps unknown top-level keys in `extensions`, converts `fixed_hz` to a delta,
-stores the raw `physics` section for `physics_settings::from_json` (R53) and resolves relative paths against the
-root; `module_manifests()` lists the game module and every `<search path>/*/module.json`. `--jobs <n|auto>` maps
-to `jobs_settings::workerCount` (0 = inline, `AUTO_WORKER_COUNT` otherwise); unknown flags are returned in
-`unrecognisedArguments` for the executable.
+(`headless_defaults()` before everything else), `project.json` (`project::apply_to`, which leaves headless, frame count,
+jobs, memory, pacing and log settings alone, and under `headless` also the null backends, the window size, the disabled
+scripting and the disabled asset hot reload), the flags, `validate()`. `project` parses schema version 1 with snake_case
+keys, keeps unknown top-level keys in `extensions` (never over a member `extensions` already has), writes every float as
+the shortest decimal that reads back as the same `f32`, converts `fixed_hz` to a delta, stores the raw `physics` section
+for `physics_settings::from_json` (R53) and resolves relative paths against the root; `module_manifests()` lists the
+game module and every `<search path>/*/module.json`. `--jobs <n|auto>` maps to `jobs_settings::workerCount` (0 = inline,
+`AUTO_WORKER_COUNT` otherwise); unknown flags are returned in `unrecognisedArguments` for the executable. A value token
+starting with `--` is a missing value, the last `--audio` wins, and `--rhi <real backend>` with `--headless` only warns
+(a headless run renders on the null device).
 
 ## 7. Export pipeline
 
-`export_pipeline::run` (R21) performs the six steps of 06 3.6 through the context's project, database, module
-manager and jobs: the native game module in Distribution through CMake, `asset_cooker::cook` into
-`cooked/content.cpak` + `manifest.json`, `dotnet publish` / `dotnet build` into `managed/`,
-`module_manager::export_layout`, the copy of the Distribution `conjure_runtime`, `conjure_shared` (and `nethost`
-on MSVC) and `shaders/`, and `project.json` with `cooked: true`. Each step is all-or-nothing; `EXPORT_FAILED`
-names the step. The editor's `--export` and `project.export` call it; `tests/integration/test_export_roundtrip.cpp`
-and `tests/runtime/test_runtime_process.cpp` prove the round trip.
+`export_pipeline::run` (R21) performs the six steps of 06 3.6 through the context's project, database, module manager
+and jobs: the native game module in Distribution through CMake, `asset_cooker::cook` into `cooked/content.cpak` +
+`manifest.json`, `dotnet publish` / `dotnet build` into `managed/`, `module_manager::export_layout`, the copy of the
+Distribution `conjure_runtime`, `conjure_shared` (and `nethost` on MSVC) and `shaders/`, and `project.json` with
+`cooked: true`. Each step is all-or-nothing; `EXPORT_FAILED` names the step. The output may not be the project directory
+itself (step 6 would replace the source `project.json`) nor lie inside the assets root (the next scan would import it):
+both are `BAD_ARGUMENTS`. The editor's `--export` and `project.export` call it;
+`tests/integration/test_export_roundtrip.cpp` and `tests/runtime/test_runtime_process.cpp` prove the round trip.
 
 ## 8. Threading model
 

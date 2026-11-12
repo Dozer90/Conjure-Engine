@@ -60,6 +60,12 @@ core::result<void> engine_config::validate() const {
     if (!std::isfinite(time.forcedFrameDeltaSeconds) || time.forcedFrameDeltaSeconds < 0.0f) {
         return invalid_field("time.forcedFrameDeltaSeconds", "must not be negative");
     }
+    if (time.forcedFrameDeltaSeconds > time.maxFrameDeltaSeconds) {
+        return invalid_field(
+          "time.forcedFrameDeltaSeconds",
+          "must not exceed maxFrameDeltaSeconds (the frame clamp would shorten it)"
+        );
+    }
     if (!std::isfinite(time.timeScale) || time.timeScale < 0.0f) {
         return invalid_field("time.timeScale", "must not be negative");
     }

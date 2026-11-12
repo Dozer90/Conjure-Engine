@@ -38,7 +38,7 @@ namespace conjure::engine {
             usize mWriteIndex = 0;              // slot the next commit fills
             usize mCount = 0;                   // samples committed, saturating at HISTORY_SIZE
             u64 mTotalCommitted = 0;
-            u64 mTotalDroppedFixedSteps = 0;
+            u64 mTotalFramesWithDroppedTime = 0;
 
         public:
             frame_stats();
@@ -89,10 +89,11 @@ namespace conjure::engine {
             }
 
             /// <summary>
-            /// Frames in which the spiral-of-death guard dropped fixed time, since construction.
+            /// Frames in which the spiral-of-death guard dropped fixed time, since construction (one per frame,
+            /// however much time that frame dropped).
             /// </summary>
-            [[nodiscard]] u64 total_dropped_fixed_steps() const noexcept {
-                return mTotalDroppedFixedSteps;
+            [[nodiscard]] u64 total_frames_with_dropped_time() const noexcept {
+                return mTotalFramesWithDroppedTime;
             }
 
             /// <summary>

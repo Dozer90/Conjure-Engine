@@ -103,6 +103,16 @@ namespace conjure::engine {
                 return mManagedReloads;
             }
 
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+            /// <summary>
+            /// Replaces the runtime; null (scripting disabled or shut down) makes managed reloads a no-op. The
+            /// scripting subsystem clears it before it destroys the runtime.
+            /// </summary>
+            void set_runtime(scripting::script_runtime *runtime) noexcept {
+                mRuntime = runtime;
+            }
+#endif
+
         private:
             [[nodiscard]] module_record *find_record(modules::module_id id) noexcept;
     };

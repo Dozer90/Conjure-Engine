@@ -113,8 +113,10 @@ and the `FIXED_PHASES` span.
 `frame_stats` is a ring of 240 `frame_sample`s committed at the end of each frame: `frameMilliseconds`,
 `phaseMilliseconds[phase]`, `submitMilliseconds`, `pacerSleepMilliseconds`, `fixedSteps`, `jobsExecuted`,
 `frameMemoryHighWater`, `droppedFixedTime`. `latest()`, `sample_at(age)`, `history()`,
-`average_frame_milliseconds(count)`, `total_committed()` and `total_dropped_fixed_steps()` read it; the editor's
-profiler panel and the C# `Diagnostics.Stats` show the same numbers.
+`average_frame_milliseconds(count)`, `total_committed()` and `total_frames_with_dropped_time()` (the number of
+frames in which the spiral-of-death guard dropped fixed time, one per frame) read it; the editor's profiler panel
+and the C# `Diagnostics.Stats` show the same numbers. `frameMilliseconds` includes the pacer sleep: the debug
+overlay prints `cpu` as `frameMilliseconds - pacerSleepMilliseconds` next to the whole `frame` time.
 
 `frame_memory` is per-frame scratch over the core frame allocator: `allocate(bytes, alignment)`,
 `allocate_span<T>(count)`, `construct<T>(args...)`; everything is released by `reset()` at the start of the next

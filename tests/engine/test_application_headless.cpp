@@ -15,12 +15,17 @@
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
 #include "conjure/engine/exit_code.h"
+#include "conjure/modules/module_manager.h"
 #include "conjure/platform/null_backend.h"
 #include "conjure/platform/window.h"
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_manager.h"
 #include "conjure/scene/scene_serializer.h"
 
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    #include "conjure/physics/components.h"
+    #include "conjure/physics/physics_world.h"
+#endif
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
     #include "conjure/renderer/renderer.h"
 #endif
@@ -56,6 +61,28 @@ namespace {
         authoring.shutdown();
     }
 
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    /// <summary>
+    /// Writes "scenes/start.scene.json" holding one dynamic sphere body of the given radius.
+    /// </summary>
+    void author_sphere_scene(const std::filesystem::path &assetsDirectory, f32 radius) {
+        application authoring(engine_test::make_desc(engine_test::inline_config()));
+        CONJURE_REQUIRE_OK(authoring.initialise());
+        scene::scene &draft = authoring.context().scenes->active();
+        draft.set_name("start");
+        const core::result<ecs::entity> ball = draft.create_entity(core::string_id("ball"));
+        CONJURE_REQUIRE_OK(ball);
+        ecs::world &world = *authoring.context().world;
+        CONJURE_REQUIRE_OK(world.add<physics::rigid_body>(ball.value(), physics::rigid_body{}));
+        physics::sphere_collider collider = {};
+        collider.radius = radius;
+        CONJURE_REQUIRE_OK(world.add<physics::sphere_collider>(ball.value(), collider));
+        core::vfs::native_file_system files(assetsDirectory, false);
+        CONJURE_REQUIRE_OK(scene::scene_serializer::save_scene_file(draft, files, "scenes/start.scene.json"));
+        authoring.shutdown();
+    }
+#endif
+
     /// <summary>
     /// The descriptor of a project boot: the project's settings applied over the inline configuration.
     /// </summary>
@@ -72,11 +99,17 @@ namespace {
 
 TEST_SUITE("engine/application_headless") {
 
-    TEST_CASE("application_headless - construction is cheap and initialise / shutdown leave the object reusable") {
+    TEST_CASE(
+      "application_headless - construction creates no subsystem and initialise / shutdown leave the object reusable"
+    ) {
         const core::stopwatch watch = {};
         application app(engine_test::make_desc(engine_test::inline_config()));
-        // Construction creates no module object (06 3.4): loose bound, the design asks for 5 ms.
-        CHECK(watch.elapsed_seconds() < 0.005);
+        // Construction creates no module object (06 3.4). The design's 5 ms budget is only reported here:
+        // wall-clock limits belong to the benchmark harness (08 11), not to a unit test on a loaded machine.
+        const f64 seconds = watch.elapsed_seconds();
+        MESSAGE("application construction took " << seconds * 1000.0 << " ms (design budget 5 ms, not asserted)");
+        CHECK(app.subsystems().empty());
+        CHECK(app.state() == application_state::CREATED);
         for (u32 cycle = 0; cycle < 2; ++cycle) {
             CONJURE_REQUIRE_OK(app.initialise());
             CONJURE_REQUIRE_OK(app.step_frame());
@@ -302,4 +335,81 @@ TEST_SUITE("engine/application_headless") {
         CHECK(logs.contains(core::log_level::WARN, "missing.scene.json"));
         editorApp.shutdown();
     }
+
+    TEST_CASE(
+      "application_headless - a startup scene that no longer imports is fatal for the runtime and kept for the editor"
+    ) {
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_project_stale_scene");
+        project loaded = engine_test::write_project(directory.path(), "stale", "scenes/start.scene.json");
+        author_start_scene(loaded.assets_directory());
+        {
+            // The first boot imports the scene and fills the cache.
+            application first(project_desc(loaded, 1));
+            CONJURE_REQUIRE_OK(first.initialise());
+            CHECK(first.context().scenes->loaded_scenes().size() == 1);
+            CHECK(first.run() == 0);
+        }
+        CONJURE_REQUIRE_OK(directory.write_text("assets/scenes/start.scene.json", R"({"version": 999})"));
+
+        application runtime(project_desc(loaded, 1));
+        CONJURE_CHECK_ERROR(runtime.initialise(), engine_error::STARTUP_SCENE_FAILED);
+        CHECK(runtime.state() == application_state::CREATED);
+
+        application_desc editorDesc = project_desc(loaded, 1);
+        editorDesc.config.editor = true;
+        application editor(std::move(editorDesc));
+        CONJURE_REQUIRE_OK(editor.initialise());
+        CHECK(editor.context().scenes->loaded_scenes().size() == 1);
+        editor.shutdown();
+    }
+
+    TEST_CASE("application_headless - an editor project boot shadow-copies modules into .conjure/module_cache") {
+        log_capture logs = {};
+        temp_directory directory("engine_project_shadow_copy");
+        project loaded = engine_test::write_project(directory.path(), "shadow");
+
+        application_desc editorDesc = project_desc(loaded, 0);
+        editorDesc.config.editor = true;
+        application editor(std::move(editorDesc));
+        CONJURE_REQUIRE_OK(editor.initialise());
+        REQUIRE(editor.context().modules != nullptr);
+        const modules::module_manager_desc &shadowed = editor.context().modules->desc();
+        CHECK(shadowed.shadowCopyBinaries);
+        CHECK(shadowed.shadowCopyDirectory == loaded.root_directory() / ".conjure" / "module_cache");
+        editor.shutdown();
+
+        // The runtime loads module binaries in place (07 D9).
+        application runtime(project_desc(loaded, 0));
+        CONJURE_REQUIRE_OK(runtime.initialise());
+        REQUIRE(runtime.context().modules != nullptr);
+        CHECK_FALSE(runtime.context().modules->desc().shadowCopyBinaries);
+        runtime.shutdown();
+    }
+
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    TEST_CASE("application_headless - unloading a scene collects the physics shapes its bodies used") {
+        log_capture logs = {};
+        temp_directory directory("engine_project_physics_unload");
+        project loaded = engine_test::write_project(directory.path(), "shapes", "scenes/start.scene.json");
+        author_sphere_scene(loaded.assets_directory(), 0.37f);
+
+        application app(project_desc(std::move(loaded), 0));
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.context().physics != nullptr);
+        for (u32 frame = 0; frame < 4 && app.context().physics->stats().shapeCacheEntries == 0; ++frame) {
+            CONJURE_REQUIRE_OK(app.step_frame());
+        }
+        REQUIRE(app.context().physics->stats().shapeCacheEntries >= 1);
+
+        const std::vector<scene::loaded_scene_info> scenes = app.context().scenes->loaded_scenes();
+        REQUIRE(scenes.size() == 1);
+        CONJURE_REQUIRE_OK(app.context().scenes->unload(scenes[0].id));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(app.context().physics->stats().bodies == 0);
+        CHECK(app.context().physics->stats().shapeCacheEntries == 0);
+        app.shutdown();
+    }
+#endif
 }

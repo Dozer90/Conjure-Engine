@@ -1,5 +1,7 @@
 #include "conjure/engine/export.h"
 
+#include "engine/export_commands.h"
+
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/log_category.h"
@@ -102,20 +104,117 @@ namespace {
       std::string_view step,
       const std::filesystem::path &source,
       const std::filesystem::path &destination,
-      bool recursive,
       std::vector<std::string> &copied,
       const std::filesystem::path &outputDirectory
     ) {
         std::error_code error = {};
         std::filesystem::create_directories(destination.parent_path(), error);
-        const std::filesystem::copy_options options = recursive
-          ? std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive
-          : std::filesystem::copy_options::overwrite_existing;
-        std::filesystem::copy(source, destination, options, error);
+        std::filesystem::copy(source, destination, std::filesystem::copy_options::overwrite_existing, error);
         if (error) {
             return export_error(step, std::format("copying '{}': {}", source.generic_string(), error.message()));
         }
         copied.push_back(destination.lexically_relative(outputDirectory).generic_string());
+        return core::result<void>::success();
+    }
+
+    /// <summary>
+    /// Copies the shader indexes (index.json) and the DXIL / SPIR-V blobs under 'source' at any depth (a module's
+    /// conjure_add_shaders() may write shaders/&lt;module&gt;/), keeping their relative paths; the build's .d
+    /// depfiles and anything else stay behind (06 3.6 step 5).
+    /// </summary>
+    [[nodiscard]] core::result<void> copy_shader_blobs(
+      std::string_view step,
+      const std::filesystem::path &source,
+      const std::filesystem::path &destination,
+      std::vector<std::string> &copied,
+      const std::filesystem::path &outputDirectory
+    ) {
+        std::error_code error = {};
+        std::filesystem::create_directories(destination, error);
+        if (error) {
+            return export_error(step, std::format("creating '{}': {}", destination.generic_string(), error.message()));
+        }
+        // The explicit iterator: the range-for increments with the throwing operator++ (CONVENTIONS 3).
+        std::filesystem::recursive_directory_iterator walker(source, std::filesystem::directory_options::none, error);
+        const std::filesystem::recursive_directory_iterator end = {};
+        while (!error && walker != end) {
+            std::error_code status = {};
+            const std::filesystem::path &path = walker->path();
+            const std::filesystem::path extension = path.extension();
+            const bool shipped = path.filename() == "index.json" || extension == ".dxil" || extension == ".spv";
+            if (shipped && walker->is_regular_file(status)) {
+                const std::filesystem::path target = destination / path.lexically_relative(source);
+                std::filesystem::create_directories(target.parent_path(), error);
+                if (error) {
+                    return export_error(
+                      step,
+                      std::format("creating '{}': {}", target.parent_path().generic_string(), error.message())
+                    );
+                }
+                std::filesystem::copy_file(path, target, std::filesystem::copy_options::overwrite_existing, error);
+                if (error) {
+                    return export_error(step, std::format("copying '{}': {}", path.generic_string(), error.message()));
+                }
+            }
+            walker.increment(error);
+        }
+        if (error) {
+            return export_error(step, std::format("reading '{}': {}", source.generic_string(), error.message()));
+        }
+        copied.push_back(destination.lexically_relative(outputDirectory).generic_string());
+        return core::result<void>::success();
+    }
+
+    /// <summary>
+    /// True when 'directory' or one of its ancestors is the existing folder 'folder'. The file system decides
+    /// (std::filesystem::equivalent), so a different spelling or case of the same folder still matches.
+    /// </summary>
+    [[nodiscard]] bool lies_inside(const std::filesystem::path &directory, const std::filesystem::path &folder) {
+        std::error_code ignored = {};
+        std::filesystem::path candidate = directory;
+        while (true) {
+            const bool same = std::filesystem::exists(candidate, ignored)
+              && std::filesystem::equivalent(candidate, folder, ignored);
+            if (same) {
+                return true;
+            }
+            if (!candidate.has_relative_path()) {
+                return false;
+            }
+            candidate = candidate.parent_path();
+        }
+    }
+
+    /// <summary>
+    /// BAD_ARGUMENTS for the project directory itself (step 6 would replace the source project.json with a
+    /// cooked one) and for a folder inside the assets root (the next scan would import the exported files).
+    /// </summary>
+    [[nodiscard]] core::result<void> check_output_directory(
+      const std::filesystem::path &output,
+      const project &loaded
+    ) {
+        std::error_code ignored = {};
+        const bool isRoot = std::filesystem::exists(output, ignored)
+          && std::filesystem::equivalent(output, loaded.root_directory(), ignored);
+        if (isRoot) {
+            return make_error(
+              engine_error::BAD_ARGUMENTS,
+              std::format(
+                "export output '{}' is the project directory; choose a separate folder",
+                output.generic_string()
+              )
+            );
+        }
+        if (lies_inside(output, loaded.assets_directory())) {
+            return make_error(
+              engine_error::BAD_ARGUMENTS,
+              std::format(
+                "export output '{}' lies inside the assets root '{}'; the exported files would be imported as assets",
+                output.generic_string(),
+                loaded.assets_directory().generic_string()
+              )
+            );
+        }
         return core::result<void>::success();
     }
 
@@ -171,6 +270,7 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
           std::format("resolving '{}': {}", settings.outputDirectory.generic_string(), fsError.message())
         );
     }
+    CONJURE_TRY(check_output_directory(output, *loaded));
     std::filesystem::create_directories(output, fsError);
     if (fsError) {
         return export_error("prepare", std::format("creating '{}': {}", output.generic_string(), fsError.message()));
@@ -272,33 +372,13 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             );
         } else {
             const std::filesystem::path managed = output / MANAGED_DIRECTORY;
-            const bool selfContained = config.scripting.exportMode == script_export_mode::SELF_CONTAINED;
-            std::vector<std::string> publish = {
-                "publish",
-                settings.bootstrapProject.string(),
-                "-c",
-                "Release",
-                "-o",
-                managed.string(),
-                "--self-contained",
-                selfContained ? "true" : "false",
-            };
-            if (!settings.runtimeIdentifier.empty()) {
-                publish.push_back("-r");
-                publish.push_back(settings.runtimeIdentifier);
-            }
-            CONJURE_TRY(run_tool(
-              STEP_NAMES[2],
-              settings.dotnetExecutable,
-              publish,
-              loaded->root_directory(),
-              settings.processTimeoutSeconds
-            ));
-            if (!settings.scriptsProject.empty()) {
+            std::vector<std::vector<std::string>> commands =
+              managed_export_commands(settings, config.scripting, managed);
+            for (std::vector<std::string> &arguments : commands) {
                 CONJURE_TRY(run_tool(
                   STEP_NAMES[2],
                   settings.dotnetExecutable,
-                  {"build", settings.scriptsProject.string(), "-c", "Release", "-o", managed.string()},
+                  std::move(arguments),
                   loaded->root_directory(),
                   settings.processTimeoutSeconds
                 ));
@@ -343,14 +423,14 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             const std::string sharedName = core::dynamic_library::decorate_name("conjure_shared");
             const std::string_view step = STEP_NAMES[4];
             std::vector<std::string> &copied = report.copiedFiles;
-            CONJURE_TRY(copy_into(step, source / runtimeName, output / runtimeName, false, copied, output));
-            CONJURE_TRY(copy_into(step, source / sharedName, output / sharedName, false, copied, output));
+            CONJURE_TRY(copy_into(step, source / runtimeName, output / runtimeName, copied, output));
+            CONJURE_TRY(copy_into(step, source / sharedName, output / sharedName, copied, output));
             if (std::filesystem::is_regular_file(source / "nethost.dll", fsError)) {
-                CONJURE_TRY(copy_into(step, source / "nethost.dll", output / "nethost.dll", false, copied, output));
+                CONJURE_TRY(copy_into(step, source / "nethost.dll", output / "nethost.dll", copied, output));
             }
             if (settings.copyShaders) {
                 if (std::filesystem::is_directory(source / "shaders", fsError)) {
-                    CONJURE_TRY(copy_into(step, source / "shaders", output / "shaders", true, copied, output));
+                    CONJURE_TRY(copy_shader_blobs(step, source / "shaders", output / "shaders", copied, output));
                 } else {
                     report.warnings.emplace_back("the distribution directory has no shaders/ folder");
                 }

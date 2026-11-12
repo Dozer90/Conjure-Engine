@@ -35,7 +35,8 @@ namespace conjure::engine {
     /// Step 1 of the frame: clamps the raw delta to maxFrameDeltaSeconds, applies the time scale,
     /// advances time and unscaledTime, increments frameIndex and resets the per-frame fields
     /// (fixedStepsThisFrame, inFixedStep, droppedFixedTime). The first frame (frameIndex 0 on entry)
-    /// ignores rawDeltaSeconds and uses fixedDeltaTime; negative or non-finite deltas count as zero.
+    /// ignores rawDeltaSeconds and uses fixedDeltaTime; negative or non-finite deltas count as zero, and so
+    /// does a negative or non-finite time scale.
     /// </summary>
     CONJURE_API void begin_frame(engine_time &time, const time_settings &settings, f64 rawDeltaSeconds) noexcept;
 

@@ -10,8 +10,10 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/log.h"
 #include "conjure/physics/register.h"
+#include "conjure/scene/scene_manager.h"
 
 #include <format>
+#include <span>
 #include <utility>
 
 using namespace conjure;
@@ -72,6 +74,17 @@ core::result<void> physics_subsystem::startup(engine_context &context) {
         }
     });
 
+    // The unloaded bodies are destroyed inside unload; their shapes are collected at the next end_frame.
+    mCollectShapes = false;
+    if (mServices->scenes != nullptr) {
+        bool *pending = &mCollectShapes;
+        mUnloadSubscription = mServices->scenes->on_before_unload().subscribe(
+          [pending](scene::scene_id, std::span<const ecs::entity>) {
+              *pending = true;
+          }
+        );
+    }
+
     context.physics = world;
     CONJURE_LOG_INFO(LOG_ENGINE, "physics: world ready ({} layer(s))", settings.layers.count());
     return core::result<void>::success();
@@ -92,8 +105,19 @@ void physics_subsystem::register_systems(ecs::scheduler &scheduler, engine_conte
     }
 }
 
+void physics_subsystem::end_frame(engine_context &context) {
+    CONJURE_UNUSED(context);
+    if (!mCollectShapes || mServices->physics == nullptr) {
+        return;
+    }
+    mCollectShapes = false;
+    mServices->physics->collect_shapes();
+}
+
 void physics_subsystem::shutdown(engine_context &context) {
     context.physics = nullptr;
+    mUnloadSubscription = {};
+    mCollectShapes = false;
     if (mSubscription.is_valid() && mServices->assetManager != nullptr) {
         mServices->assetManager->unsubscribe(mSubscription);
     }
