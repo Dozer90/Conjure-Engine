@@ -45,7 +45,7 @@ disconnects the client (`MESSAGE_TOO_LARGE`).
 -> {"id":2,"cmd":"entity.create","args":{"name":"Player","components":{"transform":{"position":[1,0,1]}}}}
 <- {"id":2,"ok":true,"result":{"guid":"a9e2c0d4-...","name":"Player","revision":42}}
 <- {"id":3,"ok":false,"error":{"code":"ENTITY_NOT_FOUND","message":"...","details":{"didYouMean":[]}}}
-<- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["a9e2c0d4-..."]}}
+<- {"event":"selection.changed","seq":913,"frame":8812,"data":{"guids":["a9e2c0d4-..."],"primary":"a9e2c0d4-..."}}
 ```
 
 - `id` is an integer, string or null and is echoed verbatim; `args` is an object (`{}` when absent).

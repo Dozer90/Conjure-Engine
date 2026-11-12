@@ -12,3 +12,6 @@
 *.ttf binary
 *.dxil binary
 *.spv binary
+
+# Byte-exact protocol fuzz inputs (CRLF, NUL, invalid UTF-8): never convert line endings.
+tests/editor/data/protocol_corpus/** -text

@@ -56,13 +56,13 @@ jobs:
             test-preset: ""
             skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install Linux dependencies
@@ -76,11 +76,11 @@ jobs:
         run: brew install ninja
       - name: Set up MSVC
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
       - name: Cache dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/${{ matrix.preset }}/_deps
           key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
@@ -112,7 +112,7 @@ jobs:
           --junit build/${{ matrix.preset }}/junit.xml ${{ matrix.skip-tags }}
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nightly-reports-${{ matrix.name }}
           path: |
@@ -125,8 +125,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install Linux dependencies
@@ -135,7 +135,7 @@ jobs:
           sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
             libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
       - name: Cache dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux-clang-tsan/_deps
           key: deps-linux-clang-tsan-${{ hashFiles('third_party/CMakeLists.txt') }}
@@ -168,11 +168,11 @@ jobs:
             dev-preset: linux-gcc-dev
             exe: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install Linux dependencies
@@ -183,7 +183,7 @@ jobs:
             libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
       - name: Set up MSVC
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
       # The Distribution runtime and the Development editor that exports with it (the editor is never part of
@@ -199,8 +199,10 @@ jobs:
       - name: Distribution symbol check and process tests
         run: ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error
       # Export tests/assets/projects/minimal (samples/feature_test once wave 5 lands it) with the Development
-      # editor, copying the Distribution runtime and shared library into the folder, then run that runtime
-      # headless for 300 frames (08_testing.md 7.3 nightly table).
+      # editor, copying the Distribution runtime, shared library and (Windows) nethost.dll into the folder, then
+      # run that runtime headless for 300 frames (08_testing.md 7.3 nightly table). On MSVC conjure_shared
+      # imports nethost.dll (engine/src/scripting/CMakeLists.txt) and --export does not copy it, so the runtime
+      # would not load without the guarded copy.
       - name: Export and run
         shell: bash
         run: |
@@ -209,6 +211,9 @@ jobs:
             --export build/export_out
           cp build/${{ matrix.dist-preset }}/bin/conjure_runtime${{ matrix.exe }} build/export_out/
           cp build/${{ matrix.dist-preset }}/bin/*conjure_shared* build/export_out/
+          if [ -f build/${{ matrix.dist-preset }}/bin/nethost.dll ]; then
+            cp build/${{ matrix.dist-preset }}/bin/nethost.dll build/export_out/
+          fi
           build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
           python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
 
@@ -217,17 +222,17 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
       - name: Configure
@@ -240,7 +245,7 @@ jobs:
         run: ctest --test-dir build/windows-msvc-dev --output-on-failure -L golden --no-tests=error
       - name: Upload golden diffs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: golden-d3d12-warp
           path: build/windows-msvc-dev/test_output
@@ -254,13 +259,13 @@ jobs:
     # been stable for two weeks (08_testing.md D11).
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install Linux dependencies
@@ -278,7 +283,7 @@ jobs:
         run: ctest --test-dir build/linux-gcc-dev --output-on-failure -L golden --no-tests=error
       - name: Upload golden diffs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: golden-vulkan-lavapipe
           path: build/linux-gcc-dev/test_output
@@ -301,11 +306,11 @@ jobs:
             preset: linux-gcc-dev
             exe: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "8.0.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install Linux dependencies
@@ -316,7 +321,7 @@ jobs:
             libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
       - name: Set up MSVC
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
       - name: Configure
@@ -324,6 +329,8 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel --target conjure_benchmarks
       # The ci machine class is 3x desktop; a breach or a missing threshold fails the job (08_testing.md D10).
+      # The runner exits 77 only when every scenario skipped, and every skip() is an unmet precondition, so a
+      # single SKIPPED row fails the job too (D12); the summary is written first so it is still published.
       - name: Benchmarks
         shell: bash
         run: |
@@ -335,10 +342,18 @@ jobs:
             cat build/bench-${{ matrix.name }}.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q 'status=SKIPPED' build/bench-${{ matrix.name }}.txt; then
+            echo '::error::a benchmark scenario was SKIPPED (08_testing.md D12: skipped means not measured)'
+            grep 'status=SKIPPED' build/bench-${{ matrix.name }}.txt
+            exit 1
+          fi
+      # Also after a breach or a SKIPPED row: those are the runs whose JSON report needs inspecting.
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bench-${{ matrix.name }}
           path: |
             build/bench-${{ matrix.name }}.json
             build/bench-${{ matrix.name }}.txt
+          if-no-files-found: ignore

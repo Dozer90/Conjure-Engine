@@ -86,6 +86,12 @@ build/<my-name>`, `cmake --build build/<my-name> --target <target>` and
 
 ## CI
 
-`.github/workflows/ci.yml` runs: Windows MSVC Debug and Development (tests), Windows MSVC
-Distribution (build only), Ubuntu 24.04 GCC Debug (tests), Ubuntu 24.04 Clang Debug with ASan +
-UBSan (tests, sanitizer failures are fatal), macOS Debug (tests). Keep every leg green.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: `windows-msvc-debug` and
+`windows-msvc-dev` (tests; the Development leg also runs the export smoke), `linux-gcc-debug` (tests),
+`linux-clang-sanitize` (Clang Debug with ASan + UBSan, scripting off; sanitizer failures are fatal),
+`macos-debug` (tests) and `style-and-headers` (check_style, check_exports, check_docs, mkdocs, header
+check). Every build leg runs its test preset and then a second `ctest -L "downloaded|process"` pass, and
+the skip check covers both. The Distribution build, the `slow` cases (the `*-nightly` test presets exclude
+only `benchmark`), TSan, golden images and benchmarks run only in `.github/workflows/nightly.yml`
+(`distribution-export`, `full-matrix-nightly`, `linux-clang-tsan`, `golden-d3d12-warp` /
+`golden-vulkan-lavapipe`, `benchmarks-ci-class`); see `docs/handbook/ci.md`. Keep every leg green.

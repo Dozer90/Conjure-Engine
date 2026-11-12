@@ -55,7 +55,8 @@ every AI agent (and human) working in the repository. Read it fully before touch
 engine/include/conjure/<module>/   public headers           engine/src/<module>/   implementation
 editor/                            conjure_editor           runtime/               conjure_runtime
 managed/                           C# SDK + templates       tests/<module>/        doctest tests
-samples/feature_test/              the everything-scene     tools/                 build.py, scripts
+samples/                           sample projects          tools/                 build.py, scripts
+                                   (feature_test: wave 5)
 third_party/                       pinned dependencies      cmake/                 build helpers
 docs/                              design + conventions     .claude/skills/        agent skills
 ```
@@ -97,11 +98,16 @@ conjure_core_math_tests --test -R core_math`; add `--no-configure` on later runs
 | Configuration | Purpose |
 |---|---|
 | `Debug` | no optimisation, asserts, editor |
-| `Development` | optimised + debug info, asserts, editor, profiling (default) |
+| `Development` | optimised + debug info, asserts, editor, profiling |
 | `Distribution` | shipping: no asserts, no editor, no dev tooling |
 
+`python tools/build.py` builds the host's Debug preset by default (`windows-msvc-debug`, `linux-gcc-debug`,
+`macos-debug`); a configure without a preset falls back to Development (`cmake/ConjureConfigs.cmake`).
+
 Options: `CONJURE_WITH_RENDERER/PHYSICS/AUDIO/SCRIPTING`, `CONJURE_BUILD_EDITOR/RUNTIME/TESTS/
-BENCHMARKS/SAMPLES/MANAGED`, `CONJURE_RHI_D3D12/VULKAN`, `CONJURE_ENABLE_ASAN/UBSAN`.
+BENCHMARKS/SAMPLES/MANAGED`, `CONJURE_RHI_D3D12/VULKAN`, `CONJURE_ENABLE_ASAN/UBSAN/TSAN`,
+`CONJURE_WARNINGS_AS_ERRORS`, `CONJURE_PLATFORM_GLFW`, `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC`,
+`CONJURE_TEST_GOLDEN_IMAGES`.
 Presets live in `CMakePresets.json`; `tools/build.py` wraps them and sets up MSVC on Windows.
 
 ## 6. Definition of done (per task)

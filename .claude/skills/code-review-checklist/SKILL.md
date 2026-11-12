@@ -34,7 +34,9 @@ touching. Every item must hold. Fix, do not waive.
       following lines.
 - [ ] Wrapped argument lists: all arguments moved to new lines with two-space indent, closing
       parenthesis on its own line followed by `{`.
-- [ ] `enum class` with explicit underlying type (plain `enum` only for flag sets).
+- [ ] `enum class` with explicit underlying type for every enumeration, flag sets included
+      (`docs/CONVENTIONS.md` section 3 refines the style guide here): flag enumerations end in `_flags`, have a
+      `NONE = 0` member and get their operators from `CONJURE_ENUM_FLAGS(type);`.
 - [ ] Public methods have `/// <summary>` blocks; comments explain *why*; proper grammar.
 - [ ] Heading comment blocks separate sections in long files.
 
@@ -58,6 +60,6 @@ touching. Every item must hold. Fix, do not waive.
 ## How to run a review as an agent
 
 1. `git diff --cached --stat` then read every changed file in full.
-2. Walk the three sections above, noting each violation with `file:line`.
+2. Walk the four sections above, noting each violation with `file:line`.
 3. Fix all violations, rebuild, rerun tests.
 4. Only then commit.
