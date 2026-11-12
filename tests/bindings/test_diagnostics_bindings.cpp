@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "bindings_test_support.h"
 
@@ -132,6 +133,50 @@ TEST_SUITE("bindings/diagnostics_bindings") {
         CHECK(drawer.timed_entry_count() == 1);
         drawer.tick(3.0f);
         CHECK(drawer.timed_entry_count() == 0);
+        fixture.context.debugDraw = nullptr;
+        fixture.fill();
+    }
+
+    TEST_CASE("diagnostics - consecutive draw_box calls each submit twelve edges") {
+        bare_fixture fixture = {};
+        renderer::debug_draw drawer = {};
+        fixture.context.debugDraw = &drawer;
+        fixture.fill();
+        conjure_native_api &api = fixture.api();
+        const conjure_vec3 first = {0.0f, 0.0f, 0.0f};
+        const conjure_vec3 second = {5.0f, 0.0f, 0.0f};
+        const conjure_vec3 half = {0.5f, 0.5f, 0.5f};
+        // The entry reuses one scratch buffer: each call must start from an empty one.
+        CHECK(api.diagnostics_draw_box(&first, &half, nullptr, 0x00FF00FFu, 0.0f) == 0);
+        CHECK(api.diagnostics_draw_box(&second, &half, nullptr, 0x00FF00FFu, 0.0f) == 0);
+        renderer::debug_draw_buffer frame = {};
+        drawer.append_to(frame);
+        REQUIRE(frame.depth_tested().size() == 48);
+        CHECK(frame.depth_tested()[24].position.x == doctest::Approx(4.5f));
+
+        // Once the scratch and the drawer's frame list have grown, an immediate box allocates nothing.
+        frame.clear();
+        int32_t drawn = -1;
+        u64 allocations = 0;
+        {
+            const allocation_scope scope = {};
+            drawn = api.diagnostics_draw_box(&first, &half, nullptr, 0x00FF00FFu, 0.0f);
+            allocations = scope.allocation_count();
+        }
+        CHECK(drawn == 0);
+        CHECK(allocations == 0);
+        drawer.append_to(frame);
+        CHECK(frame.depth_tested().size() == 24);
+
+        // Timed boxes are copied out of the scratch: each entry keeps its own twelve edges.
+        frame.clear();
+        CHECK(api.diagnostics_draw_box(&first, &half, nullptr, 0x00FF00FFu, 2.0f) == 0);
+        CHECK(api.diagnostics_draw_box(&second, &half, nullptr, 0x00FF00FFu, 2.0f) == 0);
+        CHECK(drawer.timed_entry_count() == 2);
+        drawer.append_to(frame);
+        REQUIRE(frame.depth_tested().size() == 48);
+        CHECK(frame.depth_tested()[0].position.x == doctest::Approx(-0.5f));
+        CHECK(frame.depth_tested()[24].position.x == doctest::Approx(4.5f));
         fixture.context.debugDraw = nullptr;
         fixture.fill();
     }

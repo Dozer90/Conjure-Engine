@@ -47,10 +47,11 @@ field's `AssetTypeId<T>` to `asset_ref_bind`, so a field holding an id of anothe
 ## Using it
 
 The subsystem is added to the application after the engine's own subsystems and before the scripting
-subsystem initialises the runtime (`15_bindings.md` 8): `runtime/main.cpp` adds it with
-`application.add_subsystem(...)` before `initialise()`, `editor/main.cpp` is meant to do the same (an open
-request to the editor, see below) and `engine::application` does **not** add it itself. A reader who omits
-`add_subsystem` gets a table of null bindings slots at the handshake. A test or tool wires it by hand:
+subsystem initialises the runtime (`15_bindings.md` 8): `runtime/src/main.cpp` adds it with
+`application.add_subsystem(...)` before `initialise()`, the editor adds it in `editor_application::start_engine`
+(`engine/src/editor/core/editor_application.cpp`), and `engine::application` does **not** add it itself. A
+reader who omits `add_subsystem` gets a table of null bindings slots at the handshake. A test or tool wires it
+by hand:
 
 ```cpp
 engine::application_desc desc = {};
@@ -80,9 +81,6 @@ initialised table twice (a second startup, a fixture, a tool) never chains the h
 and re-wraps after `script_runtime::initialize` refilled the core slots (a runtime re-initialised after
 `shutdown()`).
 
-Open requests: `editor/main.cpp` does not add the subsystem yet (the editor executable gets null bindings
-slots at the handshake until it does).
-
 Every entry follows the status convention of `15_bindings.md` B4: an `int32_t` result `>= 0` is a success
 (0, a count, a bool or a needed length) and `< 0` is `-bindings_error`; `uint64_t` entries return 0 on
 failure. Every failure goes through `fail()`, which formats `"<entry>: <detail>"` into the main thread's
@@ -103,10 +101,22 @@ a caller's buffer is always filled completely. Lookups by name (`entity_find_by_
 `physics_layer_index`) hash the script's string without interning it; only `entity_set_name` and
 `entity_set_tag` intern, where tools must see the text.
 
+The ray and shape casts refuse a non-finite or negative `max_distance` with `INVALID_ARGUMENT` (it scales the unit
+direction, so an infinity would produce NaN components; zero is a valid miss). An unknown layer index is
+`NOT_FOUND` in `physics_layer_name` and `physics_layers_collide` alike (`15_bindings.md` 2.2). The velocity
+setters write the `rigid_body` mirror only once `physics_world` queued the command: the push diffs the mirror, so
+a refused request (a non-finite vector, a full command queue) must leave it untouched. `physics_character_move`
+writes `character_controller::velocity` under the same rule, since the step feeds that field to Jolt whenever no
+move is queued. `diagnostics_draw_box` builds its twelve edges in one function-local scratch buffer that keeps its
+capacity between calls.
+
 The read-only asset entries (`asset_ref_get`, `asset_type_of`, `asset_state_of`, the prefab and audio clip
 resolution) never bind: they look the slot up with `asset_manager::find_slot` and ask the sources through
 `asset_manager::type_of`, so a uuid a script merely polls costs no permanent slot (05: slots are never
-freed); an unknown uuid is `NOT_FOUND`. Only `asset_ref_bind` and the loads create slots.
+freed); an unknown uuid is `NOT_FOUND`, except in `asset_state_of`, which answers `UNLOADED` for a uuid no
+slot exists for; like the others it refuses a null uuid with `INVALID_ARGUMENT`. Only `asset_ref_bind` and
+the loads create slots, and only once every check passed: an `asset_ref_bind` refused with
+`ASSET_TYPE_MISMATCH` and an `asset_load` without a `script_residency` (`NOT_SUPPORTED`) leave no slot behind.
 
 A group whose service is missing from the context (physics disabled, no window, no module registry) or
 compiled out gets `stubs::stub_thunk` in every slot: `NOT_SUPPORTED` with the entry name in the last-error
@@ -123,7 +133,13 @@ operation (adopting the new entities into the hierarchy, reparenting, enabling) 
 `scene_fixup` queue. The queue is applied right after the command buffer flushes: by the `query_end`
 interposer `wrap_with_counters` installs, by the main-thread guard of the next entry and by `begin_frame`.
 What cannot be deferred (`entity_duplicate`, which must capture a subtree from an unlocked world) fails
-with `STRUCTURE_LOCKED`.
+with `STRUCTURE_LOCKED`. The fixups apply in call order, and the getters report the pre-flush state until
+then: `entity_set_enabled` queues every request inside a scope (a disable then an enable ends enabled) while
+`entity_is_enabled` still reads the live value. Only a request that is wrong whatever the tree looks like at
+the flush is refused at the call (a deferred self-parent is `INVALID_ARGUMENT`); a fix-up the scene refuses
+when it is applied (a cycle, the depth limit) is logged at WARN, and the call itself already returned success.
+A fix-up whose entity died before the flush is skipped with a DEBUG line. The queue and its apply-time scratch
+swap storage, so a steady stream of scopes stops allocating once both have grown.
 
 ## Threading and ownership
 

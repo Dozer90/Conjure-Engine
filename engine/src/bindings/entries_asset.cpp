@@ -76,18 +76,19 @@ namespace {
         if (out.type == assets::asset_type_id::INVALID) {
             out.type = manager()->type_of(out.id).value_or(assets::asset_type_id::INVALID);
         }
+        // Every refusal comes before bind_slot: a slot is permanent (05), so a refused bind must not leave one.
+        const bool mismatch = typeId != 0 && out.type != assets::asset_type_id::INVALID
+          && out.type != static_cast<assets::asset_type_id>(typeId);
+        if (mismatch) {
+            status = fail_entry(entry, bindings_error::ASSET_TYPE_MISMATCH, "the slot holds another asset type");
+            return false;
+        }
         if (policy == slot_policy::BIND) {
             out.slot = manager()->bind_slot(out.id);
             if (out.slot == nullptr) {
                 status = fail_entry(entry, bindings_error::INVALID_ARGUMENT, "null asset uuid");
                 return false;
             }
-        }
-        const bool mismatch = typeId != 0 && out.type != assets::asset_type_id::INVALID
-          && out.type != static_cast<assets::asset_type_id>(typeId);
-        if (mismatch) {
-            status = fail_entry(entry, bindings_error::ASSET_TYPE_MISMATCH, "the slot holds another asset type");
-            return false;
         }
         return true;
     }
@@ -211,8 +212,13 @@ int32_t conjure::bindings::entries::asset_load(const conjure_uuid *id, uint64_t 
     if (resolved.type == assets::asset_type_id::INVALID) {
         return unknown_asset(ID);
     }
+    // The residency is checked before load(): without one the handle could not be held, and the load would
+    // still have bound a permanent slot and queued the IO.
     script_residency *residency = scripting_bindings_subsystem::active_residency();
-    if (residency != nullptr && residency->holds(resolved.id)) {
+    if (residency == nullptr) {
+        return unavailable(ID, "script residency");
+    }
+    if (residency->holds(resolved.id)) {
         return 0;
     }
     // load() binds the slot itself: only a uuid some source knows gets one.
@@ -269,7 +275,12 @@ int32_t conjure::bindings::entries::asset_state_of(const conjure_uuid *id) {
     if (manager() == nullptr) {
         return unavailable(ID, "assets");
     }
-    return static_cast<int32_t>(manager()->state_of(marshal::to_uuid(*id)));
+    const core::uuid uuid = marshal::to_uuid(*id);
+    if (uuid.is_null()) {
+        return fail_entry(ID, bindings_error::INVALID_ARGUMENT, "null asset uuid");
+    }
+    // An unknown uuid answers UNLOADED (state_of never binds), unlike the NOT_FOUND of the sibling entries.
+    return static_cast<int32_t>(manager()->state_of(uuid));
 }
 
 int32_t conjure::bindings::entries::asset_type_of(const conjure_uuid *id, uint64_t *outTypeId) {

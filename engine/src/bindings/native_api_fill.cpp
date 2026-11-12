@@ -16,6 +16,7 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // Filling the table (docs/design/15_bindings.md 3.1 steps 3-5, B3, B6): the active context, the per-group
@@ -32,6 +33,7 @@ namespace {
     std::bitset<NATIVE_FUNCTION_COUNT> sLoggedThisFrame = {};
     std::vector<ecs::entity> sScratchEntities = {};
     std::vector<detail::scene_fixup> sPendingFixups = {};
+    std::vector<detail::scene_fixup> sApplyingScratch = {};     // empty outside apply_pending_fixups
     bool sApplyingFixups = false;
     void (*sQueryEndTarget)(uint32_t) = nullptr;
 
@@ -443,9 +445,11 @@ u32 conjure::bindings::detail::apply_pending_fixups() noexcept {
     scene::scene &active = sActiveContext.scenes->active();
     ecs::world &world = *sActiveContext.world;
     u32 applied = 0;
-    // The queue is swapped out first: a scene operation may fire observers that reach back into the bindings.
-    std::vector<scene_fixup> pending = std::move(sPendingFixups);
-    sPendingFixups.clear();
+    // The queue is swapped with a scratch queue first: a scene operation may fire observers that reach back into
+    // the bindings and queue more. Swapping (instead of moving into a local) keeps both capacities between scopes.
+    std::vector<scene_fixup> &pending = sApplyingScratch;
+    pending.clear();
+    std::swap(pending, sPendingFixups);
     for (const scene_fixup &fixup : pending) {
         if (!world.is_alive(fixup.entity)) {
             CONJURE_LOG_DEBUG(
@@ -467,9 +471,11 @@ u32 conjure::bindings::detail::apply_pending_fixups() noexcept {
                 break;
         }
         if (!outcome.has_value()) {
-            CONJURE_LOG_DEBUG(
+            // The request returned success when it was queued, so the refusal (a cycle, the depth limit) is the
+            // only trace the script gets: visible at WARN, unlike the dead-entity skip above.
+            CONJURE_LOG_WARN(
               LOG_BINDINGS,
-              "deferred scene fixup on entity {} failed: {}",
+              "deferred scene fixup on entity {} refused by the scene: {} (the request already returned success)",
               fixup.entity,
               outcome.get_error().to_string()
             );
@@ -477,6 +483,7 @@ u32 conjure::bindings::detail::apply_pending_fixups() noexcept {
         }
         ++applied;
     }
+    pending.clear();
     sApplyingFixups = false;
     return applied;
 }

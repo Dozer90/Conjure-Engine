@@ -50,13 +50,15 @@ namespace conjure::bindings {
     }
 
     /// <summary>
-    /// The code behind a negative status; NONE for a success value, INTERNAL for an unknown code.
+    /// The code behind a negative status; NONE for a success value, INTERNAL for an unknown code (INT32_MIN
+    /// included).
     /// </summary>
     [[nodiscard]] constexpr bindings_error from_status(int32_t status) noexcept {
         if (status >= 0) {
             return bindings_error::NONE;
         }
-        const u32 code = static_cast<u32>(-status);
+        // Negated in unsigned arithmetic: -INT32_MIN overflows int32_t, 0u - 0x80000000u is 0x80000000u.
+        const u32 code = 0u - static_cast<u32>(status);
         if (code >= BINDINGS_ERROR_COUNT) {
             return bindings_error::INTERNAL;
         }

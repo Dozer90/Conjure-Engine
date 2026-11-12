@@ -61,8 +61,42 @@ TEST_SUITE("bindings/asset_bindings") {
         CHECK(api.asset_ref_get(&id, 0, nullptr) == to_status(bindings_error::INVALID_ARGUMENT));
         const conjure_uuid null = {};
         CHECK(api.asset_ref_get(&null, 0, &info) == to_status(bindings_error::INVALID_ARGUMENT));
+        CHECK(api.asset_state_of(&null) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.asset_state_of(&id) == static_cast<int32_t>(assets::asset_state::UNLOADED));
         CHECK(api.asset_state_of(nullptr) == to_status(bindings_error::INVALID_ARGUMENT));
+    }
+
+    TEST_CASE("regression - a refused asset_ref_bind creates no slot") {
+        // Slots are never freed (05): the type check runs before bind_slot, so a refused bind leaves nothing.
+        asset_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const conjure_uuid id = uuid_of(fixture.blob);
+        const uint64_t prefabType = static_cast<uint64_t>(assets::make_asset_type_id("conjure.scene.prefab"));
+        const u32 slotsBefore = fixture.base.assets.stats().slots;
+        const void *slot = nullptr;
+        CHECK(api.asset_ref_bind(&id, prefabType, &slot) == to_status(bindings_error::ASSET_TYPE_MISMATCH));
+        CHECK(slot == nullptr);
+        CHECK(fixture.base.assets.find_slot(fixture.blob) == nullptr);
+        CHECK(fixture.base.assets.stats().slots == slotsBefore);
+        // The matching type still binds.
+        CHECK(api.asset_ref_bind(&id, static_cast<uint64_t>(fixture.binaryType), &slot) == 0);
+        CHECK(slot != nullptr);
+        CHECK(fixture.base.assets.stats().slots == slotsBefore + 1);
+    }
+
+    TEST_CASE("regression - asset_load without a residency neither binds nor loads") {
+        asset_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const conjure_uuid id = uuid_of(fixture.blob);
+        const u32 slotsBefore = fixture.base.assets.stats().slots;
+        scripting_bindings_subsystem::set_active_residency(nullptr);
+        CHECK(api.asset_load(&id, 0, 1) == to_status(bindings_error::NOT_SUPPORTED));
+        CHECK(api.asset_load_blocking(&id, 0) == to_status(bindings_error::NOT_SUPPORTED));
+        scripting_bindings_subsystem::set_active_residency(&fixture.base.residency);
+        CHECK(fixture.base.assets.find_slot(fixture.blob) == nullptr);
+        CHECK(fixture.base.assets.stats().slots == slotsBefore);
+        CHECK(fixture.base.assets.stats().pending == 0);
+        CHECK(fixture.base.assets.state_of(fixture.blob) == assets::asset_state::UNLOADED);
     }
 
     TEST_CASE("regression - the read-only asset entries never create a slot") {

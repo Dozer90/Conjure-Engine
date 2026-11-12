@@ -193,7 +193,8 @@ namespace conjure::bindings::detail {
 
     /// <summary>
     /// Applies every queued fixup in order while the world is unlocked (entities dead by then are skipped with
-    /// a DEBUG log); does nothing while it is locked. Returns the number applied.
+    /// a DEBUG log, a fixup the scene refuses is logged at WARN); does nothing while it is locked. Returns the
+    /// number applied. The queue swaps storage with a scratch queue, so neither loses its capacity.
     /// </summary>
     u32 apply_pending_fixups() noexcept;
 

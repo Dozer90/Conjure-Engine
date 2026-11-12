@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 // physics_* (docs/design/15_bindings.md 10, 14_physics.md 8): queries, velocities, forces, kinematic moves,
@@ -216,6 +217,43 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(api.physics_shape_cast(nullptr, &hit) == to_status(bindings_error::INVALID_ARGUMENT));
     }
 
+    TEST_CASE("physics - a non-finite or negative max_distance is INVALID_ARGUMENT") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        fixture.run_steps(1);
+        conjure_raycast_hit hit = {};
+        std::array<conjure_raycast_hit, 4> hits = {};
+        conjure_shape_query cast = {};
+        cast.ray = fixture.down_from(10.0f);
+        cast.shape = static_cast<uint8_t>(conjure_cast_shape::SPHERE);
+        cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        cast.radius = 0.5f;
+        constexpr std::array<f32, 4> REFUSED = {
+          std::numeric_limits<f32>::infinity(), -std::numeric_limits<f32>::infinity(),
+          std::numeric_limits<f32>::quiet_NaN(), -1.0f
+        };
+        for (usize index = 0; index < REFUSED.size(); ++index) {
+            CAPTURE(index);
+            conjure_ray_query query = fixture.down_from(10.0f);
+            query.max_distance = REFUSED[index];
+            CHECK(api.physics_raycast(&query, &hit) == to_status(bindings_error::INVALID_ARGUMENT));
+            CHECK(api.physics_raycast_all(&query, hits.data(), 4) == to_status(bindings_error::INVALID_ARGUMENT));
+            cast.ray.max_distance = REFUSED[index];
+            CHECK(api.physics_shape_cast(&cast, &hit) == to_status(bindings_error::INVALID_ARGUMENT));
+        }
+        // There is no infinite ray: a world-sized distance hits, zero is a valid miss.
+        conjure_ray_query far = fixture.down_from(10.0f);
+        far.max_distance = 1000.0f;
+        CHECK(api.physics_raycast(&far, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+        CHECK(api.physics_raycast_all(&far, hits.data(), 4) == 1);
+        conjure_ray_query zero = fixture.down_from(10.0f);
+        zero.max_distance = 0.0f;
+        CHECK(api.physics_raycast(&zero, &hit) == 0);
+        CHECK(api.physics_raycast_all(&zero, hits.data(), 4) == 0);
+    }
+
     TEST_CASE("physics - overlap counts follow the protocol") {
         physics_fixture fixture = {};
         conjure_native_api &api = fixture.base.api();
@@ -279,6 +317,51 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(api.physics_get_linear_velocity(body.to_u64(), nullptr) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.physics_set_linear_velocity(body.to_u64(), nullptr) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.physics_get_angular_velocity(999, &read) == to_status(bindings_error::ENTITY_NOT_ALIVE));
+    }
+
+    TEST_CASE("physics - a refused velocity write leaves the mirror unchanged") {
+        log_capture logs = {};
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity body = fixture.spawn_box(math::vec3(0.0f, 10.0f, 0.0f));
+        fixture.run_steps(1);
+        conjure_vec3 linear = {};
+        conjure_vec3 angular = {};
+        REQUIRE(api.physics_get_linear_velocity(body.to_u64(), &linear) == 0);
+        REQUIRE(api.physics_get_angular_velocity(body.to_u64(), &angular) == 0);
+        conjure_vec3 read = {};
+
+        // A non-finite value is refused by physics_world before it queues anything.
+        const conjure_vec3 poisoned = {std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f};
+        CHECK(
+          api.physics_set_linear_velocity(body.to_u64(), &poisoned) == to_status(bindings_error::INVALID_ARGUMENT)
+        );
+        CHECK(
+          api.physics_set_angular_velocity(body.to_u64(), &poisoned) == to_status(bindings_error::INVALID_ARGUMENT)
+        );
+        REQUIRE(api.physics_get_linear_velocity(body.to_u64(), &read) == 0);
+        CHECK(std::isfinite(read.x));
+        CHECK(read.x == linear.x);
+
+        // A full command queue (the fixture's maxQueuedCommands is 256) refuses with COMMAND_QUEUE_FULL (INTERNAL).
+        const conjure_vec3 nudge = {0.0f, 0.0f, 1.0f};
+        for (u32 index = 0; index < 256; ++index) {
+            REQUIRE(
+              api.physics_add_force(body.to_u64(), &nudge, static_cast<uint8_t>(conjure_force_mode::FORCE)) == 0
+            );
+        }
+        const conjure_vec3 velocity = {3.0f, 0.0f, 0.0f};
+        CHECK(api.physics_set_linear_velocity(body.to_u64(), &velocity) == to_status(bindings_error::INTERNAL));
+        CHECK(api.physics_set_angular_velocity(body.to_u64(), &velocity) == to_status(bindings_error::INTERNAL));
+        REQUIRE(api.physics_get_linear_velocity(body.to_u64(), &read) == 0);
+        CHECK(read.x == linear.x);
+        CHECK(read.y == linear.y);
+        CHECK(read.z == linear.z);
+        REQUIRE(api.physics_get_angular_velocity(body.to_u64(), &read) == 0);
+        CHECK(read.x == angular.x);
+        CHECK(read.y == angular.y);
+        CHECK(read.z == angular.z);
+        CHECK(logs.contains(core::log_level::WARN, "command queue full"));
     }
 
     TEST_CASE("physics - force modes change the velocity as expected") {
@@ -443,8 +526,9 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(api.physics_layer_name(-1, nullptr, 0) == to_status(bindings_error::NOT_FOUND));
         CHECK(api.physics_layer_name(0, nullptr, -1) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.physics_layers_collide(0, 0) == 1);
-        CHECK(api.physics_layers_collide(0, 3) == to_status(bindings_error::INVALID_ARGUMENT));
-        CHECK(api.physics_layers_collide(-1, 0) == to_status(bindings_error::INVALID_ARGUMENT));
+        // An unknown layer is NOT_FOUND in every layer entry (15_bindings.md 2.2), as in physics_layer_name.
+        CHECK(api.physics_layers_collide(0, 3) == to_status(bindings_error::NOT_FOUND));
+        CHECK(api.physics_layers_collide(-1, 0) == to_status(bindings_error::NOT_FOUND));
     }
 
     TEST_CASE("physics - character move and grounded") {
@@ -473,6 +557,53 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(
           api.physics_character_velocity(character.to_u64(), nullptr) == to_status(bindings_error::INVALID_ARGUMENT)
         );
+    }
+
+    TEST_CASE("physics - a refused character_move leaves the controller velocity unchanged") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        static_cast<void>(fixture.spawn_ground());
+        const ecs::entity character = fixture.spawn_character(math::vec3(0.0f, 0.05f, 0.0f));
+        const ecs::entity box = fixture.spawn_box(math::vec3(5.0f, 10.0f, 0.0f));
+        fixture.run_steps(30);
+        const physics::character_controller *controller =
+          fixture.base.world.get<physics::character_controller>(character);
+        REQUIRE(controller != nullptr);
+        const math::vec3 before = controller->velocity;
+        REQUIRE(std::isfinite(before.x));
+
+        // A non-finite velocity is refused by physics_world before it queues anything. No move is queued, so the
+        // step reads the component velocity: a NaN left there would reach Jolt.
+        const conjure_vec3 poisoned = {std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f};
+        CHECK(
+          api.physics_character_move(character.to_u64(), &poisoned) == to_status(bindings_error::INVALID_ARGUMENT)
+        );
+        controller = fixture.base.world.get<physics::character_controller>(character);
+        CHECK(controller->velocity.x == before.x);
+        CHECK(controller->velocity.y == before.y);
+        CHECK(controller->velocity.z == before.z);
+        fixture.run_steps(1);
+        controller = fixture.base.world.get<physics::character_controller>(character);
+        CHECK(std::isfinite(controller->velocity.x));
+        CHECK(std::isfinite(controller->velocity.y));
+        CHECK(std::isfinite(controller->velocity.z));
+        const std::optional<math::transform> pose = fixture.base.physics->body_pose(character);
+        REQUIRE(pose.has_value());
+        CHECK(std::isfinite(pose->position.x));
+        CHECK(std::isfinite(pose->position.y));
+
+        // A full command queue (maxQueuedCommands is 256) refuses with COMMAND_QUEUE_FULL (INTERNAL).
+        const math::vec3 settled = controller->velocity;
+        const conjure_vec3 nudge = {0.0f, 0.0f, 1.0f};
+        for (u32 index = 0; index < 256; ++index) {
+            REQUIRE(api.physics_add_force(box.to_u64(), &nudge, static_cast<uint8_t>(conjure_force_mode::FORCE)) == 0);
+        }
+        const conjure_vec3 walk = {2.0f, 0.0f, 0.0f};
+        CHECK(api.physics_character_move(character.to_u64(), &walk) == to_status(bindings_error::INTERNAL));
+        controller = fixture.base.world.get<physics::character_controller>(character);
+        CHECK(controller->velocity.x == settled.x);
+        CHECK(controller->velocity.y == settled.y);
+        CHECK(controller->velocity.z == settled.z);
     }
 
     TEST_CASE("physics - an entity without a body is COMPONENT_MISSING") {

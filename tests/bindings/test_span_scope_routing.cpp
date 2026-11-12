@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
 #include "bindings_test_support.h"
 
@@ -280,6 +281,99 @@ TEST_SUITE("bindings/span_scope_routing") {
         CHECK(fixture.base.active().root_owner(marshal::to_entity(created[0])).has_value());
     }
 
+    TEST_CASE("span routing - disable then enable inside a scope leaves the entity enabled") {
+        log_capture logs = {};
+        routing_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity lamp = fixture.base.create("lamp");
+        const ecs::entity bulb = fixture.base.create("bulb", lamp);
+        const u32 warningsBefore = logs.count(core::log_level::WARN);
+        fixture.inside_scope([&](conjure_query_scope &) {
+            CHECK(api.entity_set_enabled(lamp.to_u64(), 0) == 0);
+            CHECK(api.entity_set_enabled(lamp.to_u64(), 1) == 0);
+            // Both are queued: the live state cannot change while the scope holds the world.
+            CHECK(bindings::detail::pending_fixup_count() == 2);
+            CHECK(api.entity_is_enabled(lamp.to_u64()) == 1);                // the pre-flush state
+        });
+        CHECK(bindings::detail::pending_fixup_count() == 0);
+        CHECK(fixture.base.active().is_enabled(lamp));
+        CHECK_FALSE(fixture.base.world.has<scene::inactive>(bulb));
+        CONJURE_CHECK_OK(fixture.base.active().validate());
+        CHECK(logs.count(core::log_level::WARN) == warningsBefore);           // neither fixup was refused
+    }
+
+    TEST_CASE("span routing - enable then disable inside a scope leaves the entity disabled") {
+        routing_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity lamp = fixture.base.create("lamp");
+        const ecs::entity bulb = fixture.base.create("bulb", lamp);
+        REQUIRE(api.entity_set_enabled(lamp.to_u64(), 0) == 0);
+        REQUIRE_FALSE(fixture.base.active().is_enabled(lamp));
+        fixture.inside_scope([&](conjure_query_scope &) {
+            CHECK(api.entity_set_enabled(lamp.to_u64(), 1) == 0);
+            CHECK(api.entity_set_enabled(lamp.to_u64(), 0) == 0);
+            CHECK(bindings::detail::pending_fixup_count() == 2);
+            CHECK(api.entity_is_enabled(lamp.to_u64()) == 0);
+        });
+        CHECK(bindings::detail::pending_fixup_count() == 0);
+        CHECK_FALSE(fixture.base.active().is_enabled(lamp));
+        CHECK(fixture.base.world.has<scene::inactive>(bulb));
+        CONJURE_CHECK_OK(fixture.base.active().validate());
+    }
+
+    TEST_CASE("span routing - a deferred self-parent is refused and a refused reparent is logged at WARN") {
+        log_capture logs = {};
+        routing_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity parent = fixture.base.create("parent");
+        const ecs::entity child = fixture.base.create("child", parent);
+        const u32 warningsBefore = logs.count(core::log_level::WARN);
+        fixture.inside_scope([&](conjure_query_scope &) {
+            // Wrong whatever the tree looks like at the flush: refused at the call, nothing queued.
+            CHECK(
+              api.transform_set_parent(child.to_u64(), child.to_u64()) == to_status(bindings_error::INVALID_ARGUMENT)
+            );
+            CHECK(bindings::detail::pending_fixup_count() == 0);
+            // A cycle depends on the tree at the flush: queued, and refused by the scene when applied.
+            CHECK(api.transform_set_parent(parent.to_u64(), child.to_u64()) == 0);
+            CHECK(bindings::detail::pending_fixup_count() == 1);
+        });
+        CHECK(bindings::detail::pending_fixup_count() == 0);
+        CHECK(fixture.base.active().tree().parent_of(child) == parent);
+        CHECK(fixture.base.active().tree().parent_of(parent).is_null());
+        CHECK(logs.count(core::log_level::WARN) == warningsBefore + 1);
+        CHECK(logs.contains(core::log_level::WARN, "deferred scene fixup"));
+        CONJURE_CHECK_OK(fixture.base.active().validate());
+    }
+
+    TEST_CASE("regression - applying fixups reuses the queue storage") {
+        routing_fixture fixture = {};
+        const ecs::entity steady = fixture.base.create("steady");
+        // SET_ENABLED to the current state: scene::set_enabled returns early, so the apply itself allocates nothing.
+        bindings::detail::scene_fixup fixup = {};
+        fixup.operation = bindings::detail::scene_fixup::kind::SET_ENABLED;
+        fixup.entity = steady;
+        fixup.enabled = true;
+        // Two warm-up rounds give both the queue and the scratch it is swapped with a capacity.
+        for (u32 round = 0; round < 2; ++round) {
+            CAPTURE(round);
+            bindings::detail::queue_fixup(fixup);
+            CHECK(bindings::detail::apply_pending_fixups() == 1);
+        }
+        u32 applied = 0;
+        u64 allocations = 0;
+        {
+            const allocation_scope scope = {};
+            bindings::detail::queue_fixup(fixup);
+            applied = bindings::detail::apply_pending_fixups();
+            allocations = scope.allocation_count();
+        }
+        CHECK(applied == 1);
+        CHECK(allocations == 0);
+        CHECK(bindings::detail::pending_fixup_count() == 0);
+        CHECK(fixture.base.active().is_enabled(steady));
+    }
+
     TEST_CASE("span routing - a locked world without a runtime refuses with STRUCTURE_LOCKED") {
         bare_fixture_options options = {};
         options.scripting = false;
@@ -297,6 +391,7 @@ TEST_SUITE("bindings/span_scope_routing") {
             CHECK(last_error_code() == bindings_error::STRUCTURE_LOCKED);
             CHECK(api.entity_create_many(1, 0, created.data()) == to_status(bindings_error::STRUCTURE_LOCKED));
             CHECK(api.entity_set_enabled(child.to_u64(), 0) == to_status(bindings_error::STRUCTURE_LOCKED));
+            CHECK(api.entity_set_enabled(child.to_u64(), 1) == 0);         // no change requested: nothing to defer
             const utf8_argument tag = utf8("x");
             CHECK(
               api.entity_set_tag(child.to_u64(), tag.data, tag.length) == to_status(bindings_error::STRUCTURE_LOCKED)

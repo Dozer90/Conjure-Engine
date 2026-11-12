@@ -130,20 +130,23 @@ int32_t conjure::bindings::entries::entity_set_enabled(uint64_t entity, int32_t 
     }
     scene::scene &active = *active_scene();
     const bool wanted = enabled != 0;
-    if (active.is_enabled(target) == wanted) {
-        return 0;
-    }
     marshal::structural_guard guard = structural();
     if (guard.deferred()) {
         if (!guard.can_defer()) {
-            return locked_refused(ID);
+            // A request that changes nothing needs no buffer: it succeeds as it does on the unlocked path.
+            return active.is_enabled(target) == wanted ? 0 : locked_refused(ID);
         }
-        // The descendants' inactive tags are the scene's business: applied once the world unlocks.
+        // Always queued: the live state cannot change while the scope is open, so comparing against it would drop
+        // the second request of a disable-then-enable pair. Applied in order once the world unlocks, where
+        // scene::set_enabled ignores an unchanged state and owns the descendants' inactive tags.
         scene_fixup fixup = {};
         fixup.operation = scene_fixup::kind::SET_ENABLED;
         fixup.entity = target;
         fixup.enabled = wanted;
         queue_fixup(fixup);
+        return 0;
+    }
+    if (active.is_enabled(target) == wanted) {
         return 0;
     }
     const core::result<void> toggled = active.set_enabled(target, wanted);

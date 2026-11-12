@@ -89,6 +89,19 @@ namespace {
     }
 
     /// <summary>
+    /// A query's max_distance must be finite and non-negative: it scales the unit direction, so an infinity
+    /// would turn the zero components into NaN and a negative or NaN distance would cast backwards or nowhere.
+    /// Zero is allowed and misses.
+    /// </summary>
+    [[nodiscard]] bool valid_distance(native_function_id id, float distance, int32_t &status) noexcept {
+        if (!std::isfinite(distance) || distance < 0.0f) {
+            status = fail_entry(id, bindings_error::INVALID_ARGUMENT, "max_distance must be finite and >= 0");
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// The mass a VELOCITY_CHANGE or ACCELERATION request scales by: the component's explicit mass (a
     /// derived mass, 0, cannot be known here).
     /// </summary>
@@ -179,6 +192,9 @@ int32_t conjure::bindings::entries::physics_raycast(const conjure_ray_query *que
     if (!unit_direction(ID, query->direction, ray.direction, status)) {
         return status;
     }
+    if (!valid_distance(ID, query->max_distance, status)) {
+        return status;
+    }
     const std::optional<physics::raycast_hit> hit =
       world()->raycast(ray, query->max_distance, filter_of(query->layer_mask, query->ignore_entity));
     if (!hit.has_value()) {
@@ -210,6 +226,9 @@ int32_t conjure::bindings::entries::physics_raycast_all(
     if (!unit_direction(ID, query->direction, ray.direction, status)) {
         return status;
     }
+    if (!valid_distance(ID, query->max_distance, status)) {
+        return status;
+    }
     std::vector<physics::raycast_hit> &hits = hit_scratch(capacity);
     const u32 count =
       world()->raycast_all(ray, query->max_distance, hits, filter_of(query->layer_mask, query->ignore_entity));
@@ -235,6 +254,9 @@ int32_t conjure::bindings::entries::physics_shape_cast(const conjure_shape_query
     int32_t status = 0;
     math::vec3 direction = math::vec3(0.0f);
     if (!unit_direction(ID, query->ray.direction, direction, status)) {
+        return status;
+    }
+    if (!valid_distance(ID, query->ray.max_distance, status)) {
         return status;
     }
     physics::cast_shape_desc shape = physics::sphere_shape_desc{query->radius};
@@ -354,9 +376,15 @@ int32_t conjure::bindings::entries::physics_set_linear_velocity(uint64_t entity,
     if (body == nullptr) {
         return status;
     }
-    // The mirror field answers reads until the next pull; the queued command reaches Jolt at the push.
-    body->linearVelocity = marshal::to_vec3(*value);
-    return finish(ID, world()->set_linear_velocity(marshal::to_entity(entity), body->linearVelocity));
+    // The queued command reaches Jolt at the push; the mirror field answers reads until the next pull. The mirror
+    // is written only once the command is queued: the push diffs it, so a refused request must leave it alone.
+    const math::vec3 velocity = marshal::to_vec3(*value);
+    const core::result<void> queued = world()->set_linear_velocity(marshal::to_entity(entity), velocity);
+    if (!queued.has_value()) {
+        return fail_entry(ID, queued.get_error());
+    }
+    body->linearVelocity = velocity;
+    return 0;
 }
 
 int32_t conjure::bindings::entries::physics_get_angular_velocity(uint64_t entity, conjure_vec3 *out) {
@@ -388,8 +416,14 @@ int32_t conjure::bindings::entries::physics_set_angular_velocity(uint64_t entity
     if (body == nullptr) {
         return status;
     }
-    body->angularVelocity = marshal::to_vec3(*value);
-    return finish(ID, world()->set_angular_velocity(marshal::to_entity(entity), body->angularVelocity));
+    // Mirror after the queue, as in physics_set_linear_velocity.
+    const math::vec3 velocity = marshal::to_vec3(*value);
+    const core::result<void> queued = world()->set_angular_velocity(marshal::to_entity(entity), velocity);
+    if (!queued.has_value()) {
+        return fail_entry(ID, queued.get_error());
+    }
+    body->angularVelocity = velocity;
+    return 0;
 }
 
 int32_t conjure::bindings::entries::physics_add_force(uint64_t entity, const conjure_vec3 *force, uint8_t mode) {
@@ -598,7 +632,8 @@ int32_t conjure::bindings::entries::physics_layers_collide(int32_t layerA, int32
     const bool known = layerA >= 0 && layerB >= 0 && static_cast<u32>(layerA) < layers.count()
       && static_cast<u32>(layerB) < layers.count();
     if (!known) {
-        return fail_entry(ID, bindings_error::INVALID_ARGUMENT, "layer index");
+        // NOT_FOUND like physics_layer_name: a layer is looked up, not validated as a shape (15_bindings.md 2.2).
+        return fail_entry(ID, bindings_error::NOT_FOUND, "layer index");
     }
     return layers.collides(static_cast<u8>(layerA), static_cast<u8>(layerB)) ? 1 : 0;
 }
@@ -618,8 +653,15 @@ int32_t conjure::bindings::entries::physics_character_move(uint64_t entity, cons
     if (controller == nullptr) {
         return status;
     }
-    controller->velocity = marshal::to_vec3(*velocity);
-    return finish(ID, world()->character_move(marshal::to_entity(entity), controller->velocity));
+    // The component velocity is written only once the move is queued: the step feeds it to Jolt whenever no
+    // move is waiting, so a refused request (non-finite, queue full, not a character) must leave it alone.
+    const math::vec3 desired = marshal::to_vec3(*velocity);
+    const core::result<void> queued = world()->character_move(marshal::to_entity(entity), desired);
+    if (!queued.has_value()) {
+        return fail_entry(ID, queued.get_error());
+    }
+    controller->velocity = desired;
+    return 0;
 }
 
 int32_t conjure::bindings::entries::physics_character_is_grounded(uint64_t entity) {

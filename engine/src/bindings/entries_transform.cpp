@@ -75,6 +75,11 @@ namespace {
             if (!guard.can_defer()) {
                 return fail_entry(id, bindings_error::STRUCTURE_LOCKED, "no deferred command buffer");
             }
+            // Self-parenting is wrong whatever the tree looks like at the flush, so it is refused now. Cycle and
+            // depth checks are not: earlier fixups of the same scope may still change the tree they depend on.
+            if (parent == entity) {
+                return fail_entry(id, bindings_error::INVALID_ARGUMENT, "an entity cannot be its own parent");
+            }
             // Reparenting is a scene operation (children cache, depth tags, roots): it runs through the real
             // API once the scope's flush unlocked the world, in call order with the other fixups (3.3).
             scene_fixup fixup = {};

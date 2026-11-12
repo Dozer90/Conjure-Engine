@@ -9,6 +9,7 @@
 #include "conjure/platform/platform_error.h"
 #include "conjure/scene/scene_error.h"
 
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -31,6 +32,17 @@ TEST_SUITE("bindings/bindings_error") {
         CHECK(from_status(-2) == bindings_error::ENTITY_NOT_ALIVE);
         CHECK(from_status(-1000) == bindings_error::INTERNAL);
         CHECK(BINDINGS_ERROR_COUNT == 16);
+    }
+
+    TEST_CASE("bindings_error - from_status of INT32_MIN is INTERNAL") {
+        // A compile error while the negation overflowed: a constant expression may not contain undefined behaviour.
+        static_assert(from_status(std::numeric_limits<int32_t>::min()) == bindings_error::INTERNAL);
+        volatile int32_t lowest = std::numeric_limits<int32_t>::min();
+        CHECK(from_status(lowest) == bindings_error::INTERNAL);
+        CHECK(from_status(std::numeric_limits<int32_t>::min() + 1) == bindings_error::INTERNAL);
+        const int32_t lastCode = -static_cast<int32_t>(BINDINGS_ERROR_COUNT - 1);
+        CHECK(from_status(lastCode) == static_cast<bindings_error>(BINDINGS_ERROR_COUNT - 1));
+        CHECK(from_status(lastCode - 1) == bindings_error::INTERNAL);
     }
 
     TEST_CASE("bindings_error - fail sets the message without allocating") {

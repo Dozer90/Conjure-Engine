@@ -60,7 +60,7 @@ last-error buffer. `post_startup` calls `wrap_with_counters` after the runtime r
 `begin_frame` re-wraps when `is_scope_hook_installed(api)` turned false (a runtime re-initialised after
 `shutdown()`) and applies pending fix-ups. `wrap_with_counters` is idempotent in every configuration: a slot
 already holding its thunk is skipped and the `query_end` interposer is peeled off and re-installed. The runtime
-executable adds the subsystem unconditionally; the editor is meant to (section 10).
+(`runtime/src/main.cpp`) and the editor (`editor_application::start_engine`) add the subsystem unconditionally.
 
 ## 3. The status protocol
 
@@ -73,7 +73,14 @@ Hierarchy refusals (`SELF_PARENT`, `HIERARCHY_CYCLE`, `HIERARCHY_TOO_DEEP`, `INV
 generating). Array entries follow the count protocol (capacity 0 = count query); the physics queries fill a
 scratch the physics world writes into (exact up to 1024 results). Lookups by name hash the script's string
 without interning; only `entity_set_name` and `entity_set_tag` intern. The read-only asset entries never bind a
-slot (`find_slot` + `type_of`); only `asset_ref_bind` and the loads create slots.
+slot (`find_slot` + `type_of`); only `asset_ref_bind` and the loads create slots, and only after every check
+passed (the type check before `bind_slot`, the `script_residency` check before `asset_manager::load`), since slots
+are never freed. `asset_state_of` answers `UNLOADED` for an unknown uuid where its siblings answer `NOT_FOUND`.
+An unknown layer index is `NOT_FOUND` in `physics_layer_name` and `physics_layers_collide` alike (2.2: layers are
+looked up); the ray and shape casts refuse a non-finite or negative `max_distance` with `INVALID_ARGUMENT`. The
+velocity setters write the `rigid_body` mirror only once `physics_world` queued the command, because the push
+diffs the mirror and would otherwise apply a refused request. `physics_character_move` follows the same rule for
+`character_controller::velocity`, which the step feeds to Jolt whenever no move is queued.
 
 ## 4. Structural routing
 
@@ -83,6 +90,16 @@ into `script_runtime::deferred_commands()` (`set_raw` / `add_raw`, `create_entit
 reparenting, enabling) into the bindings-owned `scene_fixup` queue, applied right after the command buffer
 flushes: by the `query_end` interposer, by the main-thread guard of the next entry and by `begin_frame`. What
 cannot be deferred (`entity_duplicate`) fails with `STRUCTURE_LOCKED`.
+
+Fix-ups apply in call order, and the getters answer the pre-flush state until then. A deferred request is
+therefore never compared against the live state: `entity_set_enabled` queues every request inside a scope (a
+disable then an enable ends enabled; `scene::set_enabled` ignores an unchanged state when it runs), and only a
+request that is wrong whatever the tree looks like at the flush is refused at the call (a deferred self-parent is
+`INVALID_ARGUMENT`; cycle and depth checks wait for the apply, since earlier fix-ups may change the tree). A fix-up
+the scene refuses when it is applied is logged at WARN, because the call already returned success; one whose
+entity died first is skipped at DEBUG (`15_bindings.md` 6). `apply_pending_fixups` swaps the queue with a scratch
+queue instead of moving it into a local, so a steady stream of scopes stops allocating once both have grown;
+re-entrancy is unchanged (a nested apply is refused, observers queue into the emptied queue).
 
 ## 5. Call counters
 
@@ -146,8 +163,7 @@ python tools/build.py --build-dir build/mod_bindings --test -R bindings
 
 ## 10. Open items
 
-From `09_cross_area_resolutions.md` 4 item 15: `editor/main.cpp` does not add the subsystem (the editor's
-handshake sees null bindings slots until it does); `renderer::debug_draw` is not exposed through
+From `09_cross_area_resolutions.md` 4 item 15: `renderer::debug_draw` is not exposed through
 `engine_context`, so `Diagnostics.Draw.*` is a silent success in applications; a command-buffer prefab adoption
 path with expected-repair accounting would remove the bindings-owned fix-up queue; `script_component` has no
 reflection description, so the `ScriptComponentHandle` mirror cannot resolve.

@@ -23,11 +23,15 @@ includes these; executables, plugins and tests do.
 
 `scripting_bindings_subsystem` is an `engine_subsystem` the runtime and the editor add before `initialise()`.
 Its `startup` (step 16) builds a `binding_context` from the `engine_context` (world, components, scenes, physics,
-audio, assets, input, window, checks, stats, debug draw) and fills every bindings-owned slot of the runtime's
-table; `post_startup` wraps the table in counting thunks (outside Distribution); `begin_frame` re-wraps after a
-runtime that was re-initialised and applies the deferred scene fix-ups; `shutdown` releases the assets scripts
-asked for (`script_residency`). Without the subsystem the handshake sees null slots and the runtime refuses to
-start, so `conjure_runtime` adds it unconditionally when the module is built.
+audio, assets, input, window, checks, stats) and fills every bindings-owned slot of the runtime's table
+(`debugDraw` stays null: the engine does not publish its `renderer::debug_draw` yet, so `Diagnostics.Draw.*` is a
+silent success; `09_cross_area_resolutions.md` section 4 item 15(e)); `post_startup` wraps the table in counting
+thunks (outside Distribution); `begin_frame` re-wraps after a runtime that was re-initialised and applies the
+deferred scene fix-ups; `shutdown` releases the assets scripts asked for (`script_residency`). Without the
+subsystem the bindings-owned slots stay null. The scripting handshake checks only scripting's core entries, and
+the managed side counts the unfilled ones (`NativeBridge.MissingEntryCount`, logged at DEBUG), so the game
+assembly loads and each facade over a missing entry throws `NotSupportedException` when called. That is why
+`conjure_runtime` adds it unconditionally when the module is built.
 
 ```cpp
 #include "conjure/bindings/bindings_subsystem.h"
@@ -53,8 +57,9 @@ missing group answers `NOT_SUPPORTED` naming the entry. `wrap_with_counters(api)
 `query_end` interposer the deferred scene fix-ups need; `is_scope_hook_installed(api)` tells whether it did.
 
 > [!IMPORTANT]
-> Fill the table before `script_runtime::initialize`: the handshake checks that every slot is non-null and the
-> managed side caches the pointers. Re-filling later only takes effect after a runtime re-initialisation.
+> Fill the table before `script_runtime::initialize`: the subsystem's startup refuses a table with a null
+> bindings-owned slot (`TABLE_INCOMPLETE`), the handshake validates size, version, hash and the core entries, and
+> the managed side caches the pointers. Re-filling later only takes effect after a runtime re-initialisation.
 
 ## The status protocol
 

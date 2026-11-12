@@ -19,8 +19,9 @@ the engine's own components. Native code lives in `namespace conjure::bindings`;
    `Rigidbody.AddForce`, `Prefab.Instantiate`, `Physics.Raycast`, `Audio.PlayOneShot` are thin calls into
    entries the bindings module filled before the game assembly loaded.
 3. Component data crosses as plain structs: `LocalTransform`, `RigidBodyData`, `AudioSourceData` and the other
-   mirrors have exactly the native layout (the layout hash is checked at start-up), so `Entity.GetComponent<T>()`
-   is a copy, `SetComponent` a copy back, and `ComponentQuery` hands out `Span<T>` over whole chunks.
+   mirrors have exactly the native layout (size and layout hash are checked the first time a mirror is used), so
+   `Entity.GetComponent<T>()` is a copy, `SetComponent` a copy back, and `ComponentQuery` hands out `Span<T>` over
+   whole chunks.
 4. Structural changes (create, destroy, add, remove, reparent) are applied at once from an ordinary callback and
    deferred to the end of the phase from inside a `ComponentQuery` scope, where the world is locked.
 5. Failures are exceptions on the C# side (`EntityNotAliveException`, `AssetNotLoadedException`,

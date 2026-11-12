@@ -147,12 +147,15 @@ int32_t conjure::bindings::entries::diagnostics_draw_box(
       {{0, 2}}, {{1, 3}}, {{4, 6}}, {{5, 7}},
       {{0, 4}}, {{1, 5}}, {{2, 6}}, {{3, 7}},
     }};
-    renderer::debug_draw_buffer shape = {};
+    // One scratch buffer for every call: clear() keeps its capacity, so a box a frame stops allocating here. A
+    // static is safe because the guard above keeps every entry on the main thread.
+    static renderer::debug_draw_buffer sBoxScratch = {};
+    sBoxScratch.clear();
     const math::vec4 colour = marshal::rgba_to_color(rgba);
     for (const std::array<u8, 2> &edge : EDGES) {
-        shape.line(corners[edge[0]], corners[edge[1]], colour);
+        sBoxScratch.line(corners[edge[0]], corners[edge[1]], colour);
     }
-    drawer()->submit(shape, seconds);
+    drawer()->submit(sBoxScratch, seconds);
 #else
     CONJURE_UNUSED(rotation);
     CONJURE_UNUSED(rgba);
