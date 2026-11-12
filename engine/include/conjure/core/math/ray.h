@@ -73,7 +73,9 @@ namespace conjure::math {
         /// The world-space pick ray through a viewport pixel (origin top-left, y down; pixel
         /// centres are at +0.5). The origin lies on the near plane (depth 0). Works for
         /// perspective, infinite and orthographic projections. A zero-sized viewport asserts and
-        /// uses the viewport centre.
+        /// uses the viewport centre. Assumes forward depth (near plane at depth 0, far plane at 1,
+        /// as math::perspective builds). The renderer's matrices are reverse-Z: use
+        /// renderer::ray_from_viewport for them.
         /// </summary>
         [[nodiscard]] static ray from_viewport(
           vec2 pixel,

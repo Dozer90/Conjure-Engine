@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 
 #include "jobs_test_support.h"
@@ -153,6 +154,22 @@ TEST_SUITE("core/main_thread") {
         CHECK(drain_main_thread_queue() == 1);
         CHECK(innerRuns == 1);
         CHECK(main_thread_queue_size() == 0);
+    }
+
+    TEST_CASE("main_thread - posting after a drain reuses the queue's capacity") {
+        drain_everything();
+        int runs = 0;
+        post_to_main_thread([&runs] {
+            ++runs;
+        });
+        CHECK(drain_main_thread_queue() == 1);
+
+        // The drain hands its emptied buffer back, so the next post finds room without allocating.
+        CONJURE_CHECK_NO_ALLOCATIONS(post_to_main_thread([&runs] {
+            ++runs;
+        }));
+        CHECK(drain_main_thread_queue() == 1);
+        CHECK(runs == 2);
     }
 
     TEST_CASE("main_thread - draining an empty queue returns zero") {

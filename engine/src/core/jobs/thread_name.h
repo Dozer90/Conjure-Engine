@@ -39,8 +39,10 @@ namespace conjure::core::jobs::detail {
 
     /// <summary>
     /// Converts a UTF-8 name for set_current_thread_name(const prepared_thread_name &). Names longer
-    /// than the platform allows are truncated on a code point boundary; a name that cannot be
-    /// converted prepares as empty.
+    /// than the platform allows are cut on a code point boundary: to MAX_WINDOWS_THREAD_NAME_LENGTH
+    /// UTF-16 units on Windows, where invalid UTF-8 sequences become U+FFFD, and to
+    /// MAX_POSIX_THREAD_NAME_LENGTH bytes on Linux and macOS, where the kept bytes are copied unchanged
+    /// (invalid UTF-8 included).
     /// </summary>
     [[nodiscard]] prepared_thread_name prepare_thread_name(std::string_view name) noexcept;
 

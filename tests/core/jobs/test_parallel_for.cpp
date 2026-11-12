@@ -157,6 +157,24 @@ TEST_SUITE("core/parallel_for") {
         CHECK(stats.inlineExecutions == 1);
     }
 
+    TEST_CASE("parallel_for - the caller's own range counts as an inline execution [parallel]") {
+        testing::scoped_job_system fixture(4);
+        std::atomic<usize> visited = 0;
+
+        fixture->parallel_for(1000, 10, [&visited](usize begin, usize end) {
+            visited.fetch_add(end - begin);
+        });
+        fixture->wait_idle();
+
+        // Every range was queued by this thread, so each one was stolen by a worker, helped along while
+        // this thread waited, or run inline here: range 0 always is.
+        const job_system_stats stats = fixture->stats();
+        CHECK(visited.load() == 1000);
+        CHECK(stats.executed == 100);
+        CHECK(stats.inlineExecutions >= 1);
+        CHECK(stats.stolen + stats.helped + stats.inlineExecutions == stats.executed);
+    }
+
     TEST_CASE("parallel_for - a grain of 0 is treated as 1 [parallel]") {
         CONJURE_JOBS_WORKER_SUBCASES(workers);
         testing::scoped_job_system fixture(workers);

@@ -320,6 +320,66 @@ TEST_SUITE("core/small_vector") {
         CHECK(testing::tracked_value::live_count() == 4);
     }
 
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F203: small_vector resize and assign accept a value that aliases an element"
+    ) {
+        // Longer than any small-string buffer, so a dangling read cannot pass by accident.
+        const std::string alpha = "alpha-alpha-alpha-alpha-alpha";
+        small_vector<std::string, 2> strings = {alpha, "b"};
+
+        strings.resize(8, strings[0]);   // inline to heap: the old storage is gone before the copies
+        REQUIRE(strings.size() == 8);
+        CHECK_FALSE(strings.is_inline());
+        CHECK(strings[1] == "b");
+        for (usize index = 0; index < strings.size(); ++index) {
+            CAPTURE(index);
+            if (index != 1) {
+                CHECK(strings[index] == alpha);
+            }
+        }
+
+        strings.resize(strings.capacity() + 1, strings[1]);   // heap to a larger heap block
+        CHECK(strings.back() == "b");
+
+        strings.assign(3, strings[1]);   // clear() would destroy the aliased element first
+        REQUIRE(strings.size() == 3);
+        CHECK(strings[0] == "b");
+        CHECK(strings[1] == "b");
+        CHECK(strings[2] == "b");
+
+        small_vector<int, 2> numbers = {1, 2, 3};
+        numbers.resize(100, numbers[2]);
+        REQUIRE(numbers.size() == 100);
+        CHECK(numbers[3] == 3);
+        CHECK(numbers[99] == 3);
+
+        numbers.resize(10);
+        numbers.resize(numbers.capacity(), numbers[0]);   // no reallocation: nothing moves
+        CHECK(numbers[10] == 1);
+        CHECK(numbers.back() == 1);
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F003: small_vector single-pass insert relocates non-trivial elements") {
+        testing::tracked_value::reset();
+        {
+            testing::leak_check leaks = {};
+            small_vector<testing::tracked_value, 2> vector = {};
+            vector.emplace_back(1);
+            vector.emplace_back(5);
+            CHECK(vector.is_inline());
+
+            std::istringstream numbers("2 3 4");
+            const auto position = vector.insert(vector.begin() + 1, std::istream_iterator<int>(numbers), {});
+            CHECK(position == vector.begin() + 1);
+            CHECK(values_of(vector) == std::vector<int>{1, 2, 3, 4, 5});
+            CHECK_FALSE(vector.is_inline());
+            CHECK(testing::tracked_value::live_count() == 5);
+            CHECK(testing::tracked_value::copy_count() == 0);   // collected elements are moved in
+        }
+        CHECK(testing::tracked_value::live_count() == 0);
+        CHECK(testing::tracked_value::constructed_count() == testing::tracked_value::destroyed_count());
+    }
+
     TEST_CASE("small_vector - reserve and shrink_to_fit move between inline and heap storage") {
         small_vector<int, 4> vector = {1, 2};
         vector.reserve(2);

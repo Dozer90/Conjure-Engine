@@ -555,6 +555,8 @@ TEST_SUITE("core/job_system") {
         }));
 
         REQUIRE(testing::spin_until([&innerEnteredWaitIdle] { return innerEnteredWaitIdle.load(); }));
+        // A best-effort negative check: a stalled runner can let it pass without the inner wait_idle()
+        // having waited at all. The deterministic assertion is blockerFinishedWhenInnerReturned below.
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         CHECK_FALSE(outerDone.load());
         blocker.open.store(true, std::memory_order_release);
@@ -662,23 +664,52 @@ TEST_SUITE("core/job_system") {
     }
 
     TEST_CASE("job_system - jobs scheduled by a running job during stop still execute") {
+        // Declared before the system so they outlive it.
         std::atomic<int> ran = 0;
+        std::atomic<int> inlineProbes = 0;
+        std::atomic<bool> stopEntered = false;
+        std::atomic<bool> outerSawStop = false;
         job_system system = {};
         job_system_desc desc = {};
         desc.workerCount = 2;
         REQUIRE(system.start(desc).has_value());
 
+        // The outer job holds its worker until stop() has been entered, then schedules the follow-up. It
+        // records whether it saw stop() rather than giving up, so a stalled runner cannot pass vacuously.
         static_cast<void>(system.schedule([&] {
-            // Give stop() time to be entered before the follow-up job is scheduled.
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            outerSawStop.store(testing::spin_until([&stopEntered] { return stopEntered.load(); }));
             static_cast<void>(system.schedule([&ran] {
                 ran.fetch_add(1);
             }));
             ran.fetch_add(1);
         }));
-        system.stop();
 
+        // stop() clears "accepting jobs" under the queue lock, after which a job scheduled from outside
+        // the workers runs inline on the scheduling thread: the prober's first inline probe proves stop()
+        // has been entered. At most one probe is queued at a time, so the queue-full inline fallback can
+        // never fire, and the probe is polled rather than waited for because wait() would help and run
+        // queued work on the prober.
+        dedicated_thread prober("prober", [&](std::stop_token) {
+            const std::thread::id self = std::this_thread::get_id();
+            while (!stopEntered.load()) {
+                const job_handle probe = system.schedule([&inlineProbes, self] {
+                    if (std::this_thread::get_id() == self) {
+                        inlineProbes.fetch_add(1);
+                    }
+                });
+                static_cast<void>(testing::spin_until([&probe] { return probe.is_complete(); }));
+                if (inlineProbes.load() > 0) {
+                    stopEntered.store(true);
+                }
+            }
+        });
+        system.stop();
+        prober.join();
+
+        REQUIRE(stopEntered.load());
+        CHECK(outerSawStop.load());
         CHECK(ran.load() == 2);
+        CHECK(system.stats().queueFullFallbacks == 0);
     }
 
     TEST_CASE("job_system - jobs scheduled from outside after stop run inline") {

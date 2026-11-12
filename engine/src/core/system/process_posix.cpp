@@ -5,6 +5,7 @@
 #include "conjure/core/process.h"
 
 #include "core/system/system_internal.h"
+#include "conjure/core/log.h"
 #include "conjure/core/platform_detect.h"
 
 #include <fcntl.h>
@@ -320,6 +321,7 @@ class process::state {
         std::atomic<bool> mExited = false;   // waitpid reaped the child; mWaitStatus is valid
         std::mutex mExitMutex = {};          // serialises the reapers; held while waitpid runs
         int mWaitStatus = 0;
+        bool mStatusLost = false;            // written with mWaitStatus, before mExited is set
 
     public:
         explicit state(launch &&launched);
@@ -337,6 +339,7 @@ class process::state {
 
     private:
         void record_exit(int status) noexcept;
+        void record_lost_exit() noexcept;
         [[nodiscard]] bool poll_exit() noexcept;
         void wait_exit() noexcept;
         void join_reader();
@@ -465,6 +468,15 @@ void process::state::record_exit(int status) noexcept {
     mExited.store(true);
 }
 
+// ECHILD with the lock held: nobody else in this object reaped the child, so it is gone without a
+// status (SIGCHLD ignored by the host, or reaped elsewhere). KILLED_EXIT_CODE is reported rather than a
+// made-up success, so a failing tool never reads as one that passed.
+void process::state::record_lost_exit() noexcept {
+    mStatusLost = true;
+    record_exit(0);
+    CONJURE_LOG_WARN(LOG_CORE, "process {}: the exit status was lost (SIGCHLD ignored?)", mProcessId);
+}
+
 bool process::state::poll_exit() noexcept {
     if (mExited.load()) {
         return true;
@@ -486,9 +498,7 @@ bool process::state::poll_exit() noexcept {
         return true;
     }
     if (reaped < 0 && errno != EINTR) {
-        // ECHILD with the lock held: nobody else reaped it, so the child is gone without a
-        // status (SIGCHLD ignored by the host). Nothing better than 0 can be reported.
-        record_exit(0);
+        record_lost_exit();
         return true;
     }
     return false;
@@ -502,7 +512,7 @@ void process::state::wait_exit() noexcept {
         if (reaped == mProcessId) {
             record_exit(status);
         } else if (reaped < 0 && errno != EINTR) {
-            record_exit(0);
+            record_lost_exit();
         }
     }
 }
@@ -514,6 +524,9 @@ void process::state::join_reader() {
 }
 
 i32 process::state::exit_code() const noexcept {
+    if (mStatusLost) {
+        return process::KILLED_EXIT_CODE;
+    }
     if (WIFEXITED(mWaitStatus)) {
         return static_cast<i32>(WEXITSTATUS(mWaitStatus));
     }
@@ -592,6 +605,17 @@ result<process> process::start(const process_desc &desc) {
     }
     if (!desc.mergeStderr && !desc.captureStderr) {
         posix_spawn_file_actions_addinherit_np(&fileActions, STDERR_FILENO);
+    }
+#endif
+#if CONJURE_SPAWN_CLOSEFROM_AVAILABLE
+    // Linux has no POSIX_SPAWN_CLOEXEC_DEFAULT, so every descriptor above the standard three is closed in
+    // the child, as macOS and the Windows handle list do. The action runs after the dup2s, so the pipe
+    // ends already sit on 1 and 2. A C library without the call (glibc before 2.34, musl) keeps only
+    // close-on-exec descriptors out.
+    const int closeError = posix_spawn_file_actions_addclosefrom_np(&fileActions, STDERR_FILENO + 1);
+    if (closeError != 0) {
+        posix_spawn_file_actions_destroy(&fileActions);
+        return errno_error(closeError, "cannot configure the spawn file actions");
     }
 #endif
     if (!workingDirectory.empty()) {

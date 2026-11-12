@@ -33,6 +33,31 @@ namespace {
         return hash;
     }
 
+    /// <summary>
+    /// Field by field part of type_info::has_same_layout. layout_hash() covers only name, kind, offset and
+    /// size (it is mirrored by C# and stays so); the element kind and count of an array and the description
+    /// a STRUCT or ENUM value refers to change the layout as well. Scalar type ids are not compared because
+    /// hand-built and dynamic descriptions may leave them unset; validate_layout guarantees a STRUCT or
+    /// ENUM field's id matches the description it points at.
+    /// </summary>
+    bool same_field_layout(const field_info &left, const field_info &right) noexcept {
+        if (left.name != right.name || left.kind != right.kind) {
+            return false;
+        }
+        if (left.offset != right.offset || left.size != right.size) {
+            return false;
+        }
+        if (left.is_array() && (left.arrayCount != right.arrayCount || left.elementKind != right.elementKind)) {
+            return false;
+        }
+
+        const field_kind valueKind = left.value_kind();
+        if (valueKind == field_kind::STRUCT || valueKind == field_kind::ENUM) {
+            return left.type == right.type;
+        }
+        return true;
+    }
+
     error layout_error(const reflect::type_info &type, const field_info &field, std::string_view problem) {
         return error(
           error_code::INVALID_ARGUMENT,
@@ -226,7 +251,15 @@ u64 reflect::type_info::layout_hash() const noexcept {
 }
 
 bool reflect::type_info::has_same_layout(const reflect::type_info &other) const noexcept {
-    return size == other.size && alignment == other.alignment && layout_hash() == other.layout_hash();
+    if (size != other.size || alignment != other.alignment || fields.size() != other.fields.size()) {
+        return false;
+    }
+    for (usize index = 0; index < fields.size(); ++index) {
+        if (!same_field_layout(fields[index], other.fields[index])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /*===========================================================================*/

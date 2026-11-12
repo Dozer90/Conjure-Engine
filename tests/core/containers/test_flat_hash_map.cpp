@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <initializer_list>
 #include <memory>
 #include <random>
 #include <string>
@@ -330,6 +331,44 @@ TEST_SUITE("core/flat_hash_map") {
         flat_hash_map<int, int> presized(100);
         CHECK(presized.capacity() >= 100);
         CHECK(presized.empty());
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F215: flat_hash_map reserve(0) and zero-sized construction stay allocation free"
+    ) {
+        flat_hash_map<int, int> map = {};
+        map.reserve(0);
+        CHECK(map.capacity() == 0);
+
+        flat_hash_map<int, int> sized(0);
+        CHECK(sized.capacity() == 0);
+
+        const std::initializer_list<flat_hash_map<int, int>::value_type> noPairs = {};
+        flat_hash_map<int, int> fromList(noPairs);
+        CHECK(fromList.capacity() == 0);
+        CHECK(fromList.empty());
+
+        flat_hash_set<int> set(0);
+        CHECK(set.capacity() == 0);
+        set.reserve(0);
+        CHECK(set.capacity() == 0);
+
+        const std::initializer_list<int> noKeys = {};
+        flat_hash_set<int> setFromList(noKeys);
+        CHECK(setFromList.capacity() == 0);
+
+        // The first insertion still allocates the minimum table.
+        map.try_emplace(1, 1);
+        CHECK(map.capacity() == 8);
+        sized.try_emplace(1, 1);
+        CHECK(sized.capacity() == 8);
+        set.insert(1);
+        CHECK(set.capacity() == 8);
+
+        // On an allocated table reserve(0) changes nothing either.
+        map.reserve(0);
+        CHECK(map.capacity() == 8);
+        CHECK(map.size() == 1);
     }
 
     TEST_CASE("flat_hash_map - a reserved table filled exactly to its grow threshold never rehashes") {

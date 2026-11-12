@@ -86,9 +86,15 @@ namespace conjure::core::vfs {
             ) override;
 
             /// <summary>
-            /// When both URIs resolve to the same backend it renames (so two schemes over one
-            /// backend behave like one). Across backends a file is copied and the source removed; a
-            /// directory is UNSUPPORTED.
+            /// When both URIs lead to the same backend, directly or through nested mount tables, it
+            /// renames (so two schemes over one backend behave like one). Across backends a file is
+            /// copied and the source removed; a directory is UNSUPPORTED. The base contract's codes
+            /// still apply there, judged by the backends that store the two files: INVALID_ARGUMENT
+            /// for the root of a backend at either end, ALREADY_EXISTS for a directory at 'to',
+            /// NOT_FOUND when the parent of 'to' is missing, PERMISSION_DENIED for a read-only
+            /// source, all checked before anything is copied. The copy is written atomically. If the
+            /// source cannot be removed afterwards, a copy that created a new file is removed again,
+            /// but a file it replaced is not restored.
             /// </summary>
             [[nodiscard]] result<void> rename(std::string_view from, std::string_view to) override;
             [[nodiscard]] result<void> remove(std::string_view uri) override;
@@ -103,6 +109,7 @@ namespace conjure::core::vfs {
 
         private:
             [[nodiscard]] result<route_target> route(std::string_view uri) const;
+            [[nodiscard]] static result<route_target> route_to_storage(route_target target);
             [[nodiscard]] std::shared_ptr<file_system> find_shared(std::string_view scheme) const;
             [[nodiscard]] std::vector<std::shared_ptr<file_system>> snapshot_backends() const;
             [[nodiscard]] bool contains(const file_system &backend) const;

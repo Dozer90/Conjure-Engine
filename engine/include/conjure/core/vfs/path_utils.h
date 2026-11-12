@@ -27,7 +27,8 @@ namespace conjure::core::vfs::path_utils {
 
     /// <summary>
     /// Everything before the last separator ("a/b/c.txt" -> "a/b"). A single segment has the
-    /// empty parent; the parent of "/a" is "/". A trailing separator is ignored.
+    /// empty parent; the parent of "/a" is "/" and of "C:/a" is "C:/": a root keeps its separator
+    /// (in the spelling the input used), so a root is its own parent. A trailing separator is ignored.
     /// </summary>
     [[nodiscard]] CONJURE_API std::string_view parent(std::string_view path) noexcept;
 

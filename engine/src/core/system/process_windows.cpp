@@ -191,6 +191,34 @@ namespace {
         commandLine.push_back(L'"');
     }
 
+    bool equals_ascii_ignore_case(std::string_view left, std::string_view right) noexcept {
+        const auto lower = [](char character) {
+            return character >= 'A' && character <= 'Z' ? static_cast<char>(character - 'A' + 'a') : character;
+        };
+        return std::ranges::equal(left, right, [&lower](char leftCharacter, char rightCharacter) {
+            return lower(leftCharacter) == lower(rightCharacter);
+        });
+    }
+
+    // CreateProcessW runs a .bat or .cmd target through cmd.exe, which parses the command line again with
+    // its own rules ('&', '|', '%', '^' ...): the MSVCRT quoting below cannot keep an argument intact
+    // there, and process_desc promises that nothing goes through a shell. Win32 drops trailing dots and
+    // spaces from a file name, so "tool.cmd." still names a batch file.
+    bool is_batch_file(std::string_view executable) noexcept {
+        const conjure::usize separator = executable.find_last_of("/\\");
+        std::string_view name = separator == std::string_view::npos ? executable : executable.substr(separator + 1);
+        while (!name.empty() && (name.back() == '.' || name.back() == ' ')) {
+            name.remove_suffix(1);
+        }
+
+        const conjure::usize dot = name.rfind('.');
+        if (dot == std::string_view::npos) {
+            return false;
+        }
+        const std::string_view extension = name.substr(dot + 1);
+        return equals_ascii_ignore_case(extension, "bat") || equals_ascii_ignore_case(extension, "cmd");
+    }
+
     std::wstring build_command_line(const process_desc &desc) {
         // argv[0] follows simpler rules than the other arguments (no backslash escaping), so it is
         // just wrapped in quotes, which also lets CreateProcessW find a path containing spaces.
@@ -553,6 +581,14 @@ process &process::operator=(process &&other) noexcept {
 
 result<process> process::start(const process_desc &desc) {
     CONJURE_TRY(detail::validate_process_desc(desc));
+    if (is_batch_file(desc.executable)) {
+        return make_error(
+          error_code::INVALID_ARGUMENT,
+          "cannot start '{}': batch files run through cmd.exe, which re-parses the arguments; start cmd.exe "
+          "explicitly instead",
+          desc.executable
+        );
+    }
 
     // Handles the child inherits. Standard error may alias standard output when merged, so it is
     // tracked as a raw handle and owned only when it is a distinct object.

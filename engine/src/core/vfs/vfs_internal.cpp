@@ -95,15 +95,14 @@ std::string internal::path_to_utf8(const std::filesystem::path &path) {
 }
 
 u64 internal::file_time_to_nanoseconds(std::filesystem::file_time_type time) noexcept {
-    using system_clock = std::chrono::system_clock;
-    using file_clock = std::filesystem::file_time_type::clock;
 #if CONJURE_STDLIB_LIBCXX
-    // libc++ gained clock_cast late; the two clocks are related through "now" instead. The error is
-    // the time between the two now() calls, far below the resolution anyone compares write times at.
-    const auto sinceNow = std::chrono::duration_cast<system_clock::duration>(time - file_clock::now());
-    const system_clock::time_point systemTime = system_clock::now() + sinceNow;
+    // libc++ gained clock_cast late, but its file clock counts from system_clock's Unix epoch, so to_sys
+    // converts without reading either clock: the result is exact and the same on every call. Relating the
+    // clocks through two now() calls instead gave an unchanged file a different write time on every stat.
+    using file_clock = std::filesystem::file_time_type::clock;
+    const auto systemTime = file_clock::to_sys(time);
 #else
-    const system_clock::time_point systemTime = std::chrono::clock_cast<system_clock>(time);
+    const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(time);
 #endif
     const auto sinceEpoch = systemTime.time_since_epoch();
     const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(sinceEpoch).count();

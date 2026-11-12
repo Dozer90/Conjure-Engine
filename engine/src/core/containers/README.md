@@ -26,16 +26,19 @@ hook and gives the area its static library (`conjure::core_containers`). Design:
   it. The dense storage holds `slot_map_entry` objects, so iterators are plain pointers, `*it` is a
   real reference into the map, `for (auto &[key, value] : map)` binds straight into storage and
   `entries()` exposes the whole dense array. Pointers, references and iterators are invalidated by
-  insert, erase, clear and reserve.
+  insert, erase, clear and reserve. A moved-from `slot_map` is empty (no slots, no free list) and
+  reusable.
 - Checked access never throws. `at()` (index or key) is checked in every configuration and a miss
   is fatal: it asserts, then terminates, exactly like `result::value()` on an error. `operator[]`,
   `front`, `back`, `pop_back`, `emplace`/`insert` positions and `erase` ranges assert in
   Debug/Development; the position/range variants also early-out so a continuing assert handler
   cannot corrupt the container.
-- `small_vector` `insert`/`emplace` arguments may alias elements of the same vector. Moving a
-  heap-backed vector steals the buffer; moving an inline one relocates elements. `operator<=>`
-  follows `std::vector`: it uses `T`'s `operator<=>` when there is one and falls back to
-  `operator<` (weak ordering) otherwise.
+- `small_vector` `push_back`/`emplace_back`/`insert`/`emplace` arguments and the `value` of
+  `resize(count, value)` and `assign(count, value)` may alias elements of the same vector (only the
+  range overloads of `insert` and `assign` must not). A single-pass (input iterator) range is
+  collected into a temporary vector and moved in directly. Moving a heap-backed vector steals the
+  buffer; moving an inline one relocates elements. `operator<=>` follows `std::vector`: it uses
+  `T`'s `operator<=>` when there is one and falls back to `operator<` (weak ordering) otherwise.
 - `stable_vector` iterators may only be ordered (`<`, `<=>`, `-`) against iterators of the same
   vector (asserted); equality works across vectors and is false.
 - `flat_hash_map` rehashes only when an insertion would push `size()` above
@@ -51,10 +54,13 @@ hook and gives the area its static library (`conjure::core_containers`). Design:
   wraps around the table; an insertion can move the anchor, so re-fetch `end()` after inserting.
   Copies keep the iteration order. Hash values go through a 64-bit finaliser, so identity-style
   `std::hash` specialisations are fine. Arguments passed to an inserting call must not refer to
-  elements of the same map. Capacity is limited to 2^31 buckets.
+  elements of the same map. Capacity is limited to 2^31 buckets. Nothing is allocated before the
+  first insertion: `reserve(0)`, a zero-sized constructor and an empty initializer list leave
+  `capacity()` at 0.
 - `flat_map` stores `std::pair<K, V>`; do not modify a key through an iterator. With a
   transparent comparator (`std::less<>`) `find`, `contains`, `count`, `lower_bound`,
-  `upper_bound`, `at` and `erase(key)` all accept key-like types such as `std::string_view`.
+  `upper_bound`, `at` and `erase(key)` all accept key-like types such as `std::string_view`; the
+  heterogeneous `erase(key)` excludes iterators, so `erase(iterator)` still erases by position.
 
 ## Allocation
 

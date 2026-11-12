@@ -7,8 +7,6 @@
 
 #include <dlfcn.h>
 
-#include <algorithm>
-#include <cctype>
 #include <string>
 #include <system_error>
 
@@ -31,8 +29,10 @@ result<dynamic_library> dynamic_library::load(const std::filesystem::path &path)
         // dlopen reports no error code. A path that names a directory is checked directly: when
         // the file exists the loader's "no such file" refers to a dependency, which is a
         // BACKEND_FAILURE. For a bare name resolved through the search path only the loader's
-        // text tells ("No such file or directory" from glibc, "no such file" / "image not found"
-        // from dyld).
+        // text tells, and it counts as NOT_FOUND only when it is about the requested name itself:
+        // dyld's "Symbol not found" / "Library not loaded" and a glibc "cannot open shared object
+        // file" naming another object mean the file was found but a symbol or a dependency was not,
+        // and a dyld search location with a wrong-architecture or badly signed file means it exists.
         error_code code = error_code::BACKEND_FAILURE;
         if (path.has_parent_path()) {
             std::error_code ignored = {};
@@ -40,15 +40,7 @@ result<dynamic_library> dynamic_library::load(const std::filesystem::path &path)
                 code = error_code::NOT_FOUND;
             }
         } else {
-            std::string lowered = message;
-            std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
-            const bool missingText = lowered.find("no such file") != std::string::npos
-              || lowered.find("not found") != std::string::npos;
-            if (missingText) {
-                code = error_code::NOT_FOUND;
-            }
+            code = detail::classify_bare_name_load_failure(path.native(), message);
         }
         return make_error(code, "cannot load '{}': {}", detail::path_to_utf8(path), message);
     }

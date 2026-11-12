@@ -102,6 +102,14 @@ namespace conjure::core::vfs::internal {
     [[nodiscard]] result<void> replace_file(const std::filesystem::path &source, const std::filesystem::path &target);
 
     /// <summary>
+    /// True when replace_file, having been refused a POSIX-semantics rename with 'platformError', takes
+    /// the classic MoveFileExW route instead. Windows: true for the Win32 codes with which a volume or its
+    /// driver refuses that rename (ERROR_INVALID_FUNCTION from SMB/NAS redirectors and some FAT/exFAT
+    /// drivers, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED). POSIX: always false.
+    /// </summary>
+    [[nodiscard]] bool rename_falls_back_to_move(u32 platformError) noexcept;
+
+    /// <summary>
     /// The form of a native path the operating system accepts whatever its length. On Windows a path
     /// at or beyond the classic MAX_PATH limit is returned absolute, normalised and prefixed with the
     /// extended-length marker (`\\?\`, `\\?\UNC\` for shares), which every Win32 file call honours;
@@ -110,4 +118,13 @@ namespace conjure::core::vfs::internal {
     /// limit and returns the path as given.
     /// </summary>
     [[nodiscard]] std::filesystem::path extend_native_path(const std::filesystem::path &path);
+
+    /// <summary>
+    /// Like extend_native_path but without the length threshold: on Windows the absolute, normalised,
+    /// extended-length form of any path, for directory walks that append components below a short root and
+    /// may pass the classic limit on the way down (a walk rooted at the classic form fails there and aborts).
+    /// A path already in the extended or device form is normalised as extend_native_path does. POSIX
+    /// returns the path unchanged.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path always_extended_native_path(const std::filesystem::path &path);
 }

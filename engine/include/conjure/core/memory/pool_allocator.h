@@ -47,7 +47,8 @@ namespace conjure::core::memory {
             /// <summary>
             /// 'blockSize' is rounded up to a multiple of 'alignment' and to at least one pointer so a
             /// free block can hold its link. 'alignment' must be a power of two (asserts and falls back
-            /// to DEFAULT_ALIGNMENT otherwise), 'blocksPerSlab' at least 1 (asserts and uses 1
+            /// to DEFAULT_ALIGNMENT otherwise) and is raised to at least alignof(void *) because a free
+            /// block stores its link in place. 'blocksPerSlab' must be at least 1 (asserts and uses 1
             /// otherwise). 'maxSlabs' caps growth; 0 means unlimited. Nothing is allocated until the
             /// first allocate().
             /// </summary>
@@ -146,7 +147,8 @@ namespace conjure::core::memory {
             }
 
             /// <summary>
-            /// Alignment of every block.
+            /// Alignment every block is guaranteed: the requested alignment raised to at least
+            /// alignof(void *).
             /// </summary>
             [[nodiscard]] usize alignment() const noexcept {
                 return mAlignment;

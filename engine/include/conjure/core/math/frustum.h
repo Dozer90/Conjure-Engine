@@ -28,8 +28,8 @@ namespace conjure::math {
 
     /// <summary>
     /// Six inward-facing, normalised planes describing a view volume. Points with a non-negative
-    /// signed distance to every plane are inside. Built from a view-projection matrix with the
-    /// engine's 0..1 depth convention.
+    /// signed distance to every plane are inside. Built from a view-projection matrix with forward
+    /// 0..1 depth (near plane at depth 0).
     /// </summary>
     struct CONJURE_API frustum {
         std::array<plane, FRUSTUM_PLANE_COUNT> planes = {};
@@ -38,7 +38,9 @@ namespace conjure::math {
         /// Extracts the planes from a view-projection (or projection) matrix using the
         /// Gribb-Hartmann method for clip space -w <= x <= w, -w <= y <= w, 0 <= z <= w
         /// (GLM_FORCE_DEPTH_ZERO_TO_ONE). Works for perspective, infinite and orthographic
-        /// projections; planes are normalised.
+        /// projections; planes are normalised. With a reverse-Z matrix the planes still bound the
+        /// same volume, but NEAR_PLANE and FAR_PLANE are swapped; renderer::frustum_from_clip
+        /// corrects the labels.
         /// </summary>
         [[nodiscard]] static frustum from_view_projection(const mat4 &viewProjection) noexcept;
 
@@ -47,7 +49,8 @@ namespace conjure::math {
         /// order near bottom-left, near bottom-right, near top-right, near top-left, then the same
         /// for the far plane. Requires a finite projection: an infinite projection has no finite
         /// far corners, so the call asserts once and leaves the affected corners at their undivided
-        /// clip-space value.
+        /// clip-space value. With a reverse-Z matrix the first four corners lie on the far plane and
+        /// the last four on the near plane.
         /// </summary>
         [[nodiscard]] static std::array<vec3, 8> corners(const mat4 &inverseViewProjection) noexcept;
 

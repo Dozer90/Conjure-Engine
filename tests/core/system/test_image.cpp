@@ -168,6 +168,22 @@ TEST_SUITE("core/image") {
         CHECK(tooWide.width() == 0);
     }
 
+    TEST_CASE("image - dimensions whose pixel data exceeds MAX_PIXEL_BYTES assert and yield the empty image") {
+        // Both axes are within MAX_DIMENSION, but 65536 x 65536 x 4 bytes is 16 GiB: the constructor used to
+        // ask the vector for it and throw.
+        testing::expect_assert asserts = {};
+        const image huge(65536, 65536);
+        CHECK(asserts.count() == 1);
+        CHECK(huge.is_empty());
+        CHECK(huge.width() == 0);
+        CHECK(huge.height() == 0);
+
+        // One past the cap: 32768 x 16384 x 4 is exactly 2 GiB, one byte more than MAX_PIXEL_BYTES.
+        const image justOver(32768, 16384);
+        CHECK(asserts.count() == 2);
+        CHECK(justOver.is_empty());
+    }
+
     TEST_CASE("image - pixels are stored row-major RGBA") {
         image picture(3, 2);
         picture.set_pixel(1, 0, rgba8{10, 20, 30, 40});

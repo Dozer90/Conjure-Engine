@@ -84,9 +84,9 @@ usize conjure::core::jobs::drain_main_thread_queue() {
 
     // Swap the queue out so tasks posted while draining (including from the tasks themselves)
     // are left for the next drain and the lock is never held while user code runs.
+    main_thread_state &shared = state();
     std::vector<std::function<void()>> tasks = {};
     {
-        main_thread_state &shared = state();
         const std::scoped_lock lock(shared.queueMutex);
         tasks.swap(shared.queue);
     }
@@ -94,7 +94,19 @@ usize conjure::core::jobs::drain_main_thread_queue() {
     for (std::function<void()> &task : tasks) {
         task();
     }
-    return tasks.size();
+    const usize ran = tasks.size();
+
+    // The callables are destroyed outside the lock. The emptied buffer goes back when nothing was posted
+    // meanwhile, so a steady stream of posts reuses one allocation instead of growing a fresh queue
+    // after every drain.
+    tasks.clear();
+    {
+        const std::scoped_lock lock(shared.queueMutex);
+        if (shared.queue.empty()) {
+            shared.queue.swap(tasks);
+        }
+    }
+    return ran;
 }
 
 usize conjure::core::jobs::main_thread_queue_size() {

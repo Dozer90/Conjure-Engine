@@ -4,11 +4,15 @@
 #include "conjure/testing/temp_directory.h"
 
 #include "conjure/core/log.h"
+#include "core/foundation/console_output.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -274,23 +278,46 @@ TEST_SUITE("core/log") {
         CHECK(capture.contains("inner"));
     }
 
-    TEST_CASE("log - console sink writes without colour and with colour") {
-        log_message message = {};
-        message.level = log_level::INFO;
-        message.category = "test";
-        message.text = "console";
-        message.timestamp = std::chrono::system_clock::now();
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F253: console sink routes WARN and above to stderr and colours only when asked"
+    ) {
+        CHECK(core::detail::console_stream_for(log_level::TRACE) == stdout);
+        CHECK(core::detail::console_stream_for(log_level::DEBUG) == stdout);
+        CHECK(core::detail::console_stream_for(log_level::INFO) == stdout);
+        CHECK(core::detail::console_stream_for(log_level::WARN) == stderr);
+        CHECK(core::detail::console_stream_for(log_level::ERR) == stderr);
+        CHECK(core::detail::console_stream_for(log_level::FATAL) == stderr);
 
+        log_message info = {};
+        info.level = log_level::INFO;
+        info.category = "test";
+        info.text = "plain line";
+        info.timestamp = std::chrono::system_clock::now();
+        log_message failure = info;
+        failure.level = log_level::ERR;
+        failure.text = "coloured line";
+
+        testing::temp_directory directory("core_log_console");
+        const std::filesystem::path path = directory.file("console.txt");
+        std::FILE *file = std::fopen(path.string().c_str(), "wb");
+        REQUIRE(file != nullptr);
+
+        core::detail::write_console_line(file, info, false);
+        core::detail::write_console_line(file, failure, true);
+
+        // Read before closing: the buffered INFO line is only on disk because the ERR line flushed.
+        const std::string plainLine = format_log_line(info) + "\n";
+        const std::string colouredLine = "\x1b[31m" + format_log_line(failure) + "\x1b[0m\n";
+        CHECK(read_file(path) == plainLine + colouredLine);
+        std::fclose(file);
+
+        // The sink itself, plain and coloured, on the process's console.
         console_log_sink plain(false);
-        plain.write(message);
-        message.level = log_level::ERR;
-        plain.write(message);
+        plain.write(info);
         plain.flush();
-
         console_log_sink coloured(true);
-        coloured.write(message);
+        coloured.write(info);
         coloured.flush();
-        CHECK(true);
     }
 
     TEST_CASE("log - console can be disabled and re-enabled") {

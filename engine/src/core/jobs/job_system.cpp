@@ -812,8 +812,9 @@ void job_system::state::parallel_for(usize count, usize grain, detail::range_inv
         notify_pushed(pushed);
     }
 
-    invoke(context, 0, std::min(effectiveGrain, count));
-    my_stats().executed.fetch_add(1, std::memory_order_relaxed);
+    // The caller's own range runs synchronously on the scheduling thread, so it counts as an inline
+    // execution like the fallback ranges below; that keeps stolen + helped + inlineExecutions == executed.
+    run_range_inline(invoke, context, 0, std::min(effectiveGrain, count));
 
     for (usize range = firstInline; range < rangeCount; ++range) {
         const usize begin = range * effectiveGrain;

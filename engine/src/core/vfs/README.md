@@ -38,7 +38,10 @@ URIs when enumerating through a `mount_table`.
   its own: it is 41 characters longer than the target, so a target just under the classic Windows
   limit has a temporary beyond it) and swaps it in with `internal::replace_file`:
   `SetFileInformationByHandle(FileRenameInfoEx)` with `FILE_RENAME_FLAG_POSIX_SEMANTICS` (falling
-  back to `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on volumes without it) in
+  back to `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on volumes without it, recognised by the codes in
+  `internal::rename_falls_back_to_move`: `ERROR_INVALID_FUNCTION` from SMB/NAS redirectors and some
+  FAT/exFAT drivers, `ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED`; never `ERROR_ACCESS_DENIED`,
+  which also means an ACL refusal that `MoveFileExW` would hit too) in
   `native_platform_windows.cpp`, `std::filesystem::rename` in `native_platform_posix.cpp` (CMake
   picks the file). `rename` onto an existing file goes through the same helper; a rename onto
   another spelling of the same entry (a case-only rename on a case-insensitive volume) is handed
@@ -47,6 +50,16 @@ URIs when enumerating through a `mount_table`.
   `open_read` recognise that state (a zero-access probe open fails too) and report `NOT_FOUND`, so
   readers racing a `remove` see the same codes as on POSIX. UTF-8 paths are converted with
   `std::u8string` so Windows receives wide paths.
+- Paths beyond the classic Windows limit: single-entry calls go through `extend_native_path`, which
+  switches to the extended-length form (`\\?\`) from 248 characters on. Directory walks
+  (`enumerate`, `remove_all`) append components below their root as they descend, so they start
+  from `always_extended_native_path` instead, whatever the root's length: one asset nested deeper
+  than the limit below a short project root cannot abort the whole scan. POSIX returns both paths
+  unchanged.
+- `file_time_to_nanoseconds` converts with `clock_cast` (MSVC, libstdc++) or, on libc++ whose
+  file clock counts from the Unix epoch, with `file_clock::to_sys`. Neither reads a clock, so an
+  unchanged file reports the same write time on every `stat` and `enumerate`; consumers compare
+  write times for equality.
 - `memory_file_system` stores a tree of `node`s. File contents are immutable
   `shared_ptr<const vector<byte>>`s: a write swaps the pointer, so files opened with `open_read`
   keep reading the snapshot they were opened on. Write times are the value of a per-instance
@@ -54,8 +67,23 @@ URIs when enumerating through a `mount_table`.
 - `mount_table` validates schemes (letters, digits, `-`, `_`, `.`, `+`), accepts `assets` and
   `assets://` interchangeably for `mount`/`unmount`/`find_mount`, refuses to mount a mount table
   that already contains it (directly or through other tables), and moves files between mounts by
-  copy-and-remove (directories are `UNSUPPORTED`). One backend may sit behind several schemes;
-  `rename` decides "same backend" by identity, not by scheme, so such a rename is a real rename.
+  copy-and-remove (directories are `UNSUPPORTED`). One backend may sit behind several schemes,
+  directly or through nested mount tables. Before deciding, `rename` follows both URIs down to the
+  backends that store them (`route_to_storage`), because a nested table hides its backends behind
+  URIs; it then decides "same backend" by identity, not by scheme, so such a rename is a real
+  rename and a file renamed onto itself through two routes is never copied and removed.
+- The cross-backend `rename` keeps the base contract and checks it, against those storing
+  backends, before copying: the root of a backend at either end is `INVALID_ARGUMENT` (`stat`
+  reports a root as a directory), a read-only source is `PERMISSION_DENIED` (otherwise the copy
+  would land and only the removal fail; a nested table's own `is_read_only()` would be false while
+  any of its mounts is writable), a directory at `to` is `ALREADY_EXISTS` and a missing parent of
+  `to` is `NOT_FOUND` (`write_file_atomic` would answer `INVALID_ARGUMENT` and create the parent).
+  The parent is taken from the normalised path, because `path_utils::parent` cannot take a URI
+  apart. The copy goes through `write_file_atomic`. When removing the source fails, a copy that
+  created a new file is removed again (a `WARN` on `LOG_CORE` if that fails too); a replaced file
+  is not restored.
+- `path_utils::parent` keeps a root's separator: `"/a"` -> `"/"`, `"C:/a"` -> `"C:/"` (the bare
+  `"C:"` would mean "the current directory of drive C").
 
 ## Threading
 
@@ -84,5 +112,6 @@ python tools/build.py --build-dir build/core_vfs --target conjure_core_vfs_tests
 renamed over and removed, and case-only renames; the other files cover the interface defaults, the
 native specifics (root escapes, UTF-8 names, atomic writes leaving no temporary, write times), the
 memory specifics (counter semantics, snapshots, concurrent writers and readers) and the mount
-table (routing, error pass-through, cross-mount rename, one backend under two schemes, mount
-cycles, concurrent mount changes).
+table (routing, error pass-through, cross-mount rename with its error codes, nested tables and the
+undo of a copy whose source cannot be removed, one backend under two schemes or reached through a
+nested table, mount cycles, concurrent mount changes).

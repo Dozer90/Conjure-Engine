@@ -110,7 +110,7 @@ const f64 sinceRestart = frameTimer.elapsed_seconds();   // 0.5
 
 Every random number in Conjure comes from `random::engine` (`std::mt19937_64`), so a seeded run replays identically.
 The helpers avoid the standard `<random>` distributions on purpose: their algorithms differ between standard
-libraries, while `random::uniform` gives the same values on Windows, Linux and macOS.
+libraries, while `random::uniform` and `random::chance` give the same values on Windows, Linux and macOS.
 
 | Function | Result |
 |---|---|
@@ -118,7 +118,7 @@ libraries, while `random::uniform` gives the same values on Windows, Linux and m
 | `random::seed(value)`, `random::current_seed()` | Set the seed new engines start from and reseed the calling thread now. Thread-safe. |
 | `random::uniform(generator, min, max)` | Integers: inclusive `[min, max]`, any integral type except `bool`. Floats: half-open `[min, max)`, never returns `max`. Asserts and returns `min` when `min > max`. |
 | `random::chance(generator, probability)` | `true` with that probability; 0 is never, 1 is always. |
-| `random::unit_vector3<Vector3>(generator)` | Uniform point on the unit sphere; `Vector3` defaults to `std::array<f32, 3>`. Pass `math::vec3` (include `conjure/core/math.h`; `random.h` does not) to get one. |
+| `random::unit_vector3<Vector3>(generator)` | Uniform point on the unit sphere; `Vector3` defaults to `std::array<f32, 3>`. Pass `math::vec3` (include `conjure/core/math.h`; `random.h` does not) to get one. It takes the same two engine draws on every platform, but x and y use `std::cos`/`std::sin`, so they may differ in the last bit between platforms (z is exact). |
 | `random::random_engine` | An owned engine with its own seed and the helpers as members. Satisfies `std::uniform_random_bit_generator`, so `std::shuffle` accepts it. |
 
 ```cpp

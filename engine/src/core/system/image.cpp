@@ -57,19 +57,24 @@ image::image() {}
 image::image(conjure::u32 width, conjure::u32 height) :
     mWidth(width),
     mHeight(height) {
+    // Each axis alone may be valid while the product is not: 2^24 x 2^24 pixels would ask for a PiB, and
+    // the resize would throw instead of failing like every other programmer error here.
+    const conjure::u64 pixelBytes = static_cast<conjure::u64>(width) * height * BYTES_PER_PIXEL;
+    const bool withinLimits = width <= MAX_DIMENSION && height <= MAX_DIMENSION && pixelBytes <= MAX_PIXEL_BYTES;
     CONJURE_ASSERT(
-      width <= MAX_DIMENSION && height <= MAX_DIMENSION,
-      "image dimensions {}x{} exceed {}",
+      withinLimits,
+      "image dimensions {}x{} exceed {} per axis or {} bytes of pixel data",
       width,
       height,
-      MAX_DIMENSION
+      MAX_DIMENSION,
+      MAX_PIXEL_BYTES
     );
-    if (width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION) {
+    if (width == 0 || height == 0 || !withinLimits) {
         mWidth = 0;
         mHeight = 0;
         return;
     }
-    mPixels.resize(static_cast<conjure::usize>(width) * height * BYTES_PER_PIXEL);
+    mPixels.resize(static_cast<conjure::usize>(pixelBytes));
 }
 
 image::~image() {}

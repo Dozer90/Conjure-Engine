@@ -67,6 +67,13 @@ namespace {
         return errorCode == ERROR_ACCESS_DENIED || gone;
     }
 
+    // The extended-length ("\\?\") and device ("\\.\") forms, which Win32 takes literally.
+    bool is_literal_form(const std::wstring &native) noexcept {
+        constexpr std::wstring_view EXTENDED_PREFIX = L"\\\\?\\";
+        constexpr std::wstring_view DEVICE_PREFIX = L"\\\\.\\";
+        return native.starts_with(EXTENDED_PREFIX) || native.starts_with(DEVICE_PREFIX);
+    }
+
     HANDLE to_handle(const internal::read_handle &handle) noexcept {
         return reinterpret_cast<HANDLE>(handle.value());
     }
@@ -101,8 +108,9 @@ namespace {
 
     // Renames through SetFileInformationByHandle with POSIX semantics, which succeeds even while
     // another handle (opened with delete sharing) still refers to the target. Returns the Win32
-    // error code, 0 on success; ERROR_INVALID_PARAMETER / ERROR_NOT_SUPPORTED mean the volume or
-    // the operating system cannot do it and the caller should fall back to MoveFileExW.
+    // error code, 0 on success; the codes rename_falls_back_to_move accepts (ERROR_INVALID_FUNCTION,
+    // ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED) mean the volume, its driver or the operating
+    // system cannot do it and the caller should fall back to MoveFileExW.
     DWORD rename_posix(const std::filesystem::path &source, const std::filesystem::path &target) {
         const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
         const HANDLE sourceHandle = CreateFileW(
@@ -230,23 +238,24 @@ std::filesystem::path internal::extend_native_path(const std::filesystem::path &
     // short file name, so the classic limit for a directory component is 248; everything from there on
     // goes through the extended-length form, which Win32 accepts up to about 32,767 characters.
     constexpr usize CLASSIC_LIMIT = 248;
-    constexpr std::wstring_view EXTENDED_PREFIX = L"\\\\?\\";
-    constexpr std::wstring_view DEVICE_PREFIX = L"\\\\.\\";
-    constexpr std::wstring_view UNC_PREFIX = L"\\\\";
+    if (path.native().size() < CLASSIC_LIMIT && !is_literal_form(path.native())) {
+        return path;
+    }
+    return always_extended_native_path(path);
+}
 
-    const std::wstring &native = path.native();
-    if (native.starts_with(EXTENDED_PREFIX) || native.starts_with(DEVICE_PREFIX)) {
+std::filesystem::path internal::always_extended_native_path(const std::filesystem::path &path) {
+    if (is_literal_form(path.native())) {
         // Already a literal form (a user-supplied root, or one derived from native_path() of a long path).
         // Win32 does not translate '/' inside it, so the components the VFS appended with forward slashes
         // must still be normalised (review 4: an extended root failed every stat and read of a nested path).
         return path.lexically_normal().make_preferred();
     }
-    if (native.size() < CLASSIC_LIMIT) {
-        return path;
-    }
 
     // The extended form is taken literally: it must be absolute, use backslashes and hold no "." or
     // ".." components, which lexically_normal and make_preferred guarantee.
+    constexpr std::wstring_view EXTENDED_PREFIX = L"\\\\?\\";
+    constexpr std::wstring_view UNC_PREFIX = L"\\\\";
     std::error_code ignored = {};
     std::filesystem::path absolute = std::filesystem::absolute(path, ignored);
     if (ignored) {
@@ -268,8 +277,9 @@ result<void> internal::replace_file(const std::filesystem::path &source, const s
         return result<void>::success();
     }
 
-    if (errorCode == ERROR_INVALID_PARAMETER || errorCode == ERROR_NOT_SUPPORTED) {
-        // Volumes without POSIX rename (FAT, some network shares) take the classic route.
+    if (rename_falls_back_to_move(errorCode)) {
+        // Volumes without POSIX rename (FAT and exFAT drivers, SMB and NAS redirectors that answer
+        // ERROR_INVALID_FUNCTION) take the classic route.
         // MOVEFILE_WRITE_THROUGH makes the call return only once the rename has reached the disk.
         const DWORD flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
         if (MoveFileExW(source.c_str(), target.c_str(), flags) != 0) {
@@ -282,4 +292,11 @@ result<void> internal::replace_file(const std::filesystem::path &source, const s
       error_code::IO_FAILURE,
       std::format("replace '{}' with '{}': {}", path_to_utf8(target), path_to_utf8(source), last_error_text(errorCode))
     );
+}
+
+bool internal::rename_falls_back_to_move(u32 platformError) noexcept {
+    // ERROR_ACCESS_DENIED stays out on purpose: it also means an ACL refusal or a delete-pending target,
+    // which MoveFileExW would refuse in the same way.
+    return platformError == ERROR_INVALID_FUNCTION || platformError == ERROR_INVALID_PARAMETER
+           || platformError == ERROR_NOT_SUPPORTED;
 }

@@ -119,8 +119,9 @@ namespace {
     }
 
     std::string_view strip_trailing_separators(std::string_view path) noexcept {
-        // Keep a lone root separator so parent("/") stays "/".
-        while (path.size() > 1 && is_separator(path.back())) {
+        // Keep a lone root separator so parent("/") stays "/", and the separator of a drive root so
+        // "C:/" does not turn into the drive-relative "C:".
+        while (path.size() > 1 && is_separator(path.back()) && !(path.size() == 3 && has_drive_prefix(path))) {
             path.remove_suffix(1);
         }
         return path;
@@ -185,6 +186,9 @@ std::string_view path_utils::parent(std::string_view path) noexcept {
     }
     if (separator == 0) {
         return trimmed.substr(0, 1);
+    }
+    if (separator == 2 && has_drive_prefix(trimmed)) {
+        return trimmed.substr(0, 3);
     }
     return trimmed.substr(0, separator);
 }

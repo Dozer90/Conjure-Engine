@@ -123,7 +123,8 @@ namespace conjure::core::json {
 
             /// <summary>
             /// Reads a file and parses it. Fails with IO_FAILURE when the path is not a readable
-            /// regular file and PARSE_FAILURE when its content is not JSON.
+            /// regular file and PARSE_FAILURE when its content is not JSON. A leading UTF-8 byte order
+            /// mark is skipped (as file_system::read_text_file does); parse() itself rejects one.
             /// </summary>
             [[nodiscard]] static result<document> parse_file(const std::filesystem::path &path);
 

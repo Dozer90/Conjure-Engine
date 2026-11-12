@@ -215,6 +215,36 @@ TEST_SUITE("core/type_registry") {
         CHECK(local.type_count() == 1);
     }
 
+    TEST_CASE("type_registry - re-registering a type whose array element kind changed fails with ALREADY_EXISTS") {
+        type_registry local = {};
+        field_info values = {};
+        values.name = "values";
+        values.kind = field_kind::ARRAY;
+        values.elementKind = field_kind::I32;
+        values.arrayCount = 4;
+        values.offset = 0;
+        values.size = 16;
+
+        reflect::type_info integers = {};
+        integers.name = "test.element_kind_changed";
+        integers.size = 16;
+        integers.alignment = 4;
+        integers.fields = {values};
+        const result<const reflect::type_info *> first = local.register_type(integers);
+        REQUIRE(first.has_value());
+
+        // Same name, offset and size, so layout_hash() is unchanged; the stale i32 description must not
+        // be handed back for f32 data.
+        reflect::type_info floats = integers;
+        floats.fields[0].elementKind = field_kind::F32;
+        REQUIRE(floats.layout_hash() == integers.layout_hash());
+        const result<const reflect::type_info *> rejected = local.register_type(floats);
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.get_error().generic_code() == error_code::ALREADY_EXISTS);
+        CHECK(first.value()->fields[0].elementKind == field_kind::I32);
+        CHECK(local.type_count() == 1);
+    }
+
     TEST_CASE("type_registry - types are listed in registration order") {
         type_registry local = {};
         const reflect::type_info *first = local.register_type(make_simple("test.order.a")).value();

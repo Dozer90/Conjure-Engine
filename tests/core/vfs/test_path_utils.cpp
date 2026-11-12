@@ -84,7 +84,17 @@ TEST_SUITE("core/path_utils") {
         CHECK(path_utils::parent("/a") == "/");
         CHECK(path_utils::parent("/") == "/");
         CHECK(path_utils::parent("a/b/") == "a");
-        CHECK(path_utils::parent("C:/a") == "C:");
+        CHECK(path_utils::parent("C:/a/b") == "C:/a");
+        CHECK(path_utils::parent("C:") == "");
+    }
+
+    TEST_CASE("path_utils - the parent of an entry at a drive root is the drive root, not the drive-relative name") {
+        // "C:" alone means "the current directory of drive C", so stripping the separator of "C:/" changed the path.
+        CHECK(path_utils::parent("C:/a") == "C:/");
+        CHECK(path_utils::parent("C:/") == "C:/");
+        CHECK(path_utils::parent("C:/a/") == "C:/");
+        CHECK(path_utils::parent("C:\\a") == "C:\\");
+        CHECK(path_utils::parent("c://") == "c:/");
     }
 
     TEST_CASE("path_utils - filename returns the last segment") {

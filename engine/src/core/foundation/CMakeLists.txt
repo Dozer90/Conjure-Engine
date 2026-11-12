@@ -1,4 +1,26 @@
 # core/foundation - the part of core every other core area builds on.
+#
+# The platform backends are selected here rather than with preprocessor guards so each file is a
+# plain translation unit of one operating system.
+
+set(CONJURE_CORE_FOUNDATION_SOURCES
+    assert.cpp
+    console_output.h
+    error.cpp
+    local_time.h
+    log.cpp
+    uuid.cpp
+)
+
+if(WIN32)
+    list(APPEND CONJURE_CORE_FOUNDATION_SOURCES
+        local_time_windows.cpp
+    )
+else()
+    list(APPEND CONJURE_CORE_FOUNDATION_SOURCES
+        local_time_posix.cpp
+    )
+endif()
 
 conjure_add_core_area(foundation
     PUBLIC_HEADERS
@@ -14,10 +36,7 @@ conjure_add_core_area(foundation
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/types.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/uuid.h
     SOURCES
-        assert.cpp
-        error.cpp
-        log.cpp
-        uuid.cpp
+        ${CONJURE_CORE_FOUNDATION_SOURCES}
 )
 
 find_package(Threads REQUIRED)

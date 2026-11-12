@@ -50,7 +50,17 @@ result<bool> build_scripts(const std::filesystem::path &projectRoot) {
 `process_desc` holds everything about the launch. Arguments are an array and never go through a shell,
 so you do not quote anything: `{"--name", "my level"}` arrives in the child as exactly those two
 `argv` entries on every platform. `environment` entries are added to the inherited environment; an
-empty value removes a variable. Standard input is always the null device.
+empty value removes a variable. Standard input is always the null device, and children inherit only
+the three standard streams (on Linux this needs glibc 2.34 or later; an older C library still keeps
+close-on-exec descriptors out).
+
+> [!WARNING]
+> Windows runs `.bat` and `.cmd` files through `cmd.exe`, which would parse the arguments again with its
+> own rules. To keep the "no shell" promise, starting one is `INVALID_ARGUMENT`; set `executable` to
+> `cmd.exe` and pass `/c` and the script yourself when you really mean to run a batch file; `cmd.exe`
+> then parses every argument with its own rules (`&`, `|`, `<`, `>`, `^`, `%`), which the quoting does
+> not protect against, so pass only trusted text that way. A NUL character in the executable, an
+> argument or an environment entry is `INVALID_ARGUMENT` everywhere.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -116,7 +126,9 @@ std::optional<process_result> poll_cook(process &cooker, std::string &log) {
 > code.
 
 `kill()` terminates the child and every process it spawned, including grandchildren that outlived it, and
-is harmless once the child is gone. A killed child reports `process::KILLED_EXIT_CODE` (-1). Timeouts above
+is harmless once the child is gone. A killed child reports `process::KILLED_EXIT_CODE` (-1), and so does a
+child whose exit status could not be obtained (Linux and macOS: the host ignores `SIGCHLD` or reaped the
+child itself), so a lost status never reads as success. Timeouts above
 `process::MAX_TIMEOUT_SECONDS` behave like that maximum; negative or non-finite values are `INVALID_ARGUMENT`.
 
 > [!NOTE]
@@ -206,8 +218,9 @@ result<bool> matches_golden(const image &actual, const std::filesystem::path &go
 
 > [!WARNING]
 > `pixel()` and `set_pixel()` assert on out-of-range coordinates (and return a default `rgba8` or change
-> nothing). `image(width, height)` with a zero or oversized dimension (above `image::MAX_DIMENSION`) yields
-> the empty image. Check `is_empty()` before encoding.
+> nothing). `image(width, height)` with a zero or oversized dimension (above `image::MAX_DIMENSION`), or
+> whose pixel data `width * height * 4` would exceed `image::MAX_PIXEL_BYTES` (INT_MAX, what the PNG codecs
+> can handle), asserts for the oversized cases and yields the empty image. Check `is_empty()` before encoding.
 
 > [!NOTE]
 > This is the small image type core needs for icons, screenshots and golden-image tests. Textures and
@@ -240,7 +253,7 @@ and identical bytes. `pixels()` exposes the raw bytes; pixel `(x, y)` starts at 
 | `static result<image> image::load_png(span<const std::byte>)` / `load_file(const path &)` | decode |
 | `result<std::vector<std::byte>> image::encode_png() const` / `result<void> save_png(const path &) const` | encode |
 | `void image::flip_vertical()` / `f64 compare(const image &) const` | helpers |
-| `image::BYTES_PER_PIXEL` / `MAX_DIMENSION` / `MAX_ENCODED_BYTES` | 4 / 2^24 / INT_MAX |
+| `image::BYTES_PER_PIXEL` / `MAX_DIMENSION` / `MAX_ENCODED_BYTES` / `MAX_PIXEL_BYTES` | 4 / 2^24 / INT_MAX / INT_MAX |
 
 ## See also
 

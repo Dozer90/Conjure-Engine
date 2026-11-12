@@ -228,11 +228,12 @@ is already JSON; Debug builds validate it. `finish()` returns the text and reset
 `json::document::parse_file()` reads and parses a file (`IO_FAILURE` when it is not a readable regular
 file, `PARSE_FAILURE` otherwise) and `write_file()` creates parent directories. To read JSON from the
 virtual file system, use `file_system::read_text_file()` and `json::parse()` (see 📘 API:
-[Files and the virtual file system](files.md)).
+[Files and the virtual file system](files.md)). Both file routes skip a leading UTF-8 byte order mark.
 
 Parsing is strict RFC 8259: comments, trailing commas, `NaN`, single quotes, a byte order mark and
-trailing content are all rejected with `PARSE_FAILURE` and a message of the form
-`parse error at line L, column C: reason`. Containers may nest at most `json::MAX_NESTING_DEPTH` (1024)
+trailing content are all rejected by `parse()` with `PARSE_FAILURE` and a message of the form
+`parse error at line L, column C: reason` (the byte order mark only in the text itself: `parse_file()`
+drops one at the start of a file first). Containers may nest at most `json::MAX_NESTING_DEPTH` (1024)
 levels.
 
 ## Threading

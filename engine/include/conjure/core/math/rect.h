@@ -147,14 +147,20 @@ namespace conjure::math {
         }
 
         /// <summary>
-        /// The point inside or on the rectangle nearest to point.
+        /// The point inside or on the rectangle nearest to point (point itself when inside). An
+        /// invalid rectangle has no surface and returns point unchanged.
         /// </summary>
         [[nodiscard]] vec2 closest_point(vec2 point) const noexcept {
+            if (!is_valid()) {
+                return point;
+            }
             return glm::clamp(point, min, max);
         }
 
         /// <summary>
-        /// A rectangle from its min corner and size (negative sizes are made positive).
+        /// The rectangle spanned by position and position + extent; a negative extent component
+        /// extends to the other side of position (from_position_size((10, 10), (-4, 2)) is min
+        /// (6, 10), max (10, 12)).
         /// </summary>
         [[nodiscard]] static rect from_position_size(vec2 position, vec2 extent) noexcept {
             return from_points(position, position + extent);

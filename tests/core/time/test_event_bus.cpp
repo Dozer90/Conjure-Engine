@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/assert_capture.h"
 
 #include "conjure/core/event_bus.h"
@@ -212,6 +213,21 @@ TEST_SUITE("core/event_bus") {
         CHECK(bus.dispatch_queued() == 1);
         CHECK(bus.dispatch_queued() == 0);
         CHECK(received == std::vector<int>{1, 2, 3});
+    }
+
+    TEST_CASE("event_bus - enqueue after dispatch_queued reuses the queue's capacity") {
+        event_bus bus = {};
+        int reloads = 0;
+        const event_subscription onReload = bus.subscribe<asset_reloaded>([&reloads](const asset_reloaded &payload) {
+            reloads += payload.assetId;
+        });
+        bus.enqueue(asset_reloaded{1});
+        CHECK(bus.dispatch_queued() == 1);
+
+        // The dispatch hands its emptied buffer back, so the next enqueue finds room without allocating.
+        CONJURE_CHECK_NO_ALLOCATIONS(bus.enqueue(asset_reloaded{2}));
+        CHECK(bus.dispatch_queued() == 1);
+        CHECK(reloads == 3);
     }
 
     TEST_CASE("event_bus - clear_queue drops queued events without delivering them") {

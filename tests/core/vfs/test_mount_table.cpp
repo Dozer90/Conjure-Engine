@@ -1,18 +1,24 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 
 #include "vfs_test_helpers.h"
 
+#include "conjure/core/error.h"
+#include "conjure/core/log.h"
 #include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/core/vfs/mount_table.h"
 #include "conjure/core/vfs/native_file_system.h"
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -34,6 +40,67 @@ namespace {
             REQUIRE(table.mount("assets", assets));
             REQUIRE(table.mount("cooked://", cooked));
         }
+    };
+
+    /// <summary>
+    /// Forwards to a memory_file_system but refuses every remove(), like a backend whose files
+    /// are held open by another process.
+    /// </summary>
+    class undeletable_file_system final : public file_system {
+        private:
+            memory_file_system mStorage = {};
+
+        public:
+            undeletable_file_system() = default;
+            ~undeletable_file_system() override = default;
+
+        public:
+            [[nodiscard]] memory_file_system &storage() noexcept {
+                return mStorage;
+            }
+
+            [[nodiscard]] result<std::vector<std::byte>> read_file(std::string_view path) override {
+                return mStorage.read_file(path);
+            }
+
+            [[nodiscard]] result<void> write_file(std::string_view path, std::span<const std::byte> data) override {
+                return mStorage.write_file(path, data);
+            }
+
+            [[nodiscard]] result<void> write_file_atomic(
+              std::string_view path,
+              std::span<const std::byte> data
+            ) override {
+                return mStorage.write_file_atomic(path, data);
+            }
+
+            [[nodiscard]] result<file_stat> stat(std::string_view path) override {
+                return mStorage.stat(path);
+            }
+
+            [[nodiscard]] result<void> enumerate(
+              std::string_view directory,
+              enumerate_flags flags,
+              const enumerate_callback &callback
+            ) override {
+                return mStorage.enumerate(directory, flags, callback);
+            }
+
+            [[nodiscard]] result<void> rename(std::string_view from, std::string_view to) override {
+                return mStorage.rename(from, to);
+            }
+
+            [[nodiscard]] result<void> remove(std::string_view) override {
+                return make_error(error_code::IO_FAILURE, "the file is in use");
+            }
+
+            [[nodiscard]] result<void> create_directories(std::string_view path) override {
+                return mStorage.create_directories(path);
+            }
+
+            [[nodiscard]] result<std::unique_ptr<file>> open_read(std::string_view path) override {
+                return mStorage.open_read(path);
+            }
     };
 }
 
@@ -251,12 +318,116 @@ TEST_SUITE("core/mount_table") {
     TEST_CASE("mount_table - rename across mounts copies a file and removes the source") {
         mounted_pair mounts = {};
         REQUIRE(mounts.table.write_file("assets://raw/model.bin", to_bytes("model bytes")));
+        REQUIRE(mounts.table.create_directories("cooked://models"));
 
         REQUIRE(mounts.table.rename("assets://raw/model.bin", "cooked://models/model.bin"));
 
         CHECK_FALSE(mounts.assets->exists("raw/model.bin"));
         CHECK(mounts.assets->exists("raw"));
         CHECK(mounts.cooked->read_text_file("models/model.bin").value() == "model bytes");
+
+        // An existing file at the destination is replaced, as a rename within one backend does.
+        REQUIRE(mounts.table.write_file("assets://raw/model.bin", to_bytes("rebuilt")));
+        REQUIRE(mounts.table.rename("assets://raw/model.bin", "cooked://models/model.bin"));
+        CHECK_FALSE(mounts.assets->exists("raw/model.bin"));
+        CHECK(mounts.cooked->read_text_file("models/model.bin").value() == "rebuilt");
+    }
+
+    TEST_CASE(
+      "mount_table - rename across mounts onto a directory is ALREADY_EXISTS and into a missing parent is NOT_FOUND"
+    ) {
+        mounted_pair mounts = {};
+        REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));
+        REQUIRE(mounts.table.create_directories("cooked://dir"));
+        REQUIRE(mounts.table.write_file("cooked://blocker.txt", to_bytes("b")));
+
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://dir")) == error_code::ALREADY_EXISTS);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://dir/..")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://missing/file.txt")) == error_code::NOT_FOUND);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://blocker.txt/f")) == error_code::NOT_FOUND);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://../f")) == error_code::PERMISSION_DENIED);
+
+        // Nothing was copied, created or removed by the refused renames.
+        CHECK(mounts.assets->read_text_file("file.txt").value() == "f");
+        CHECK_FALSE(mounts.cooked->exists("missing"));
+        CHECK(mounts.cooked->stat("dir").value().isDirectory);
+        CHECK(mounts.cooked->read_text_file("blocker.txt").value() == "b");
+        CHECK(enumerate_all(*mounts.cooked, "", enumerate_flags::RECURSIVE).value().paths
+              == std::vector<std::string>{"blocker.txt", "dir"});
+
+        // The parent is taken from the normalised path, as a rename within one backend does:
+        // "moved.txt/missing/.." names "moved.txt", whose parent is the root.
+        REQUIRE(mounts.table.rename("assets://file.txt", "cooked://moved.txt/missing/.."));
+        CHECK(mounts.cooked->read_text_file("moved.txt").value() == "f");
+        CHECK_FALSE(mounts.assets->exists("file.txt"));
+    }
+
+    TEST_CASE("mount_table - rename across mounts from a read-only mount is PERMISSION_DENIED and copies nothing") {
+        mounted_pair mounts = {};
+        REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));
+        mounts.assets->set_read_only(true);
+
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://file.txt")) == error_code::PERMISSION_DENIED);
+        CHECK_FALSE(mounts.cooked->exists("file.txt"));
+        CHECK(mounts.assets->read_text_file("file.txt").value() == "f");
+    }
+
+    TEST_CASE("mount_table - rename across mounts removes its copy again when the source cannot be removed") {
+        mount_table table = {};
+        const std::shared_ptr<undeletable_file_system> held = std::make_shared<undeletable_file_system>();
+        const std::shared_ptr<memory_file_system> cooked = std::make_shared<memory_file_system>();
+        REQUIRE(table.mount("held", held));
+        REQUIRE(table.mount("cooked", cooked));
+        REQUIRE(held->storage().write_file("model.bin", to_bytes("model")));
+
+        SUBCASE("a new file is removed again") {
+            CHECK(code_of(table.rename("held://model.bin", "cooked://model.bin")) == error_code::IO_FAILURE);
+            CHECK_FALSE(cooked->exists("model.bin"));
+        }
+
+        SUBCASE("a replaced file keeps the copy, since its old contents are gone") {
+            REQUIRE(cooked->write_file("model.bin", to_bytes("old")));
+            CHECK(code_of(table.rename("held://model.bin", "cooked://model.bin")) == error_code::IO_FAILURE);
+            CHECK(cooked->read_text_file("model.bin").value() == "model");
+        }
+
+        SUBCASE("a copy that cannot be removed either is reported as a warning") {
+            testing::log_capture logs = {};
+            const std::shared_ptr<undeletable_file_system> stuck = std::make_shared<undeletable_file_system>();
+            REQUIRE(table.mount("stuck", stuck));
+
+            CHECK(code_of(table.rename("held://model.bin", "stuck://model.bin")) == error_code::IO_FAILURE);
+            CHECK(stuck->storage().read_text_file("model.bin").value() == "model");
+            CHECK(logs.contains(log_level::WARN, "could not remove the copy at 'stuck://model.bin'"));
+        }
+
+        CHECK(held->storage().read_text_file("model.bin").value() == "model");
+    }
+
+    TEST_CASE("mount_table - rename across mounts into a nested mount table checks the parent where the file lands") {
+        mounted_pair mounts = {};
+        const std::shared_ptr<mount_table> inner = std::make_shared<mount_table>();
+        const std::shared_ptr<memory_file_system> data = std::make_shared<memory_file_system>();
+        REQUIRE(inner->mount("data", data));
+        REQUIRE(mounts.table.mount("inner", inner));
+        REQUIRE(mounts.table.write_file("assets://a.txt", to_bytes("a")));
+        REQUIRE(mounts.table.write_file("assets://b.txt", to_bytes("b")));
+
+        CHECK(code_of(mounts.table.rename("assets://a.txt", "inner://data://missing/a.txt")) == error_code::NOT_FOUND);
+        CHECK(code_of(mounts.table.rename("assets://a.txt", "inner://other://a.txt")) == error_code::NOT_FOUND);
+        CHECK_FALSE(data->exists("missing"));
+        CHECK(mounts.assets->exists("a.txt"));
+
+        // "data://a.txt" lies at the root of the inner scheme. Its parent is looked up inside the
+        // inner table; taking the URI itself apart would yield "data:/", which is not a URI.
+        REQUIRE(mounts.table.rename("assets://a.txt", "inner://data://a.txt"));
+        CHECK(data->read_text_file("a.txt").value() == "a");
+        CHECK_FALSE(mounts.assets->exists("a.txt"));
+
+        REQUIRE(data->create_directories("dir"));
+        REQUIRE(mounts.table.rename("assets://b.txt", "inner://data://dir/b.txt"));
+        CHECK(data->read_text_file("dir/b.txt").value() == "b");
     }
 
     TEST_CASE(
@@ -268,6 +439,7 @@ TEST_SUITE("core/mount_table") {
 
         CHECK(code_of(mounts.table.rename("assets://missing", "cooked://x")) == error_code::NOT_FOUND);
         CHECK(code_of(mounts.table.rename("assets://dir", "cooked://dir")) == error_code::UNSUPPORTED);
+        CHECK(code_of(mounts.table.rename("assets://", "cooked://x")) == error_code::INVALID_ARGUMENT);
         CHECK(mounts.assets->exists("dir"));
         CHECK_FALSE(mounts.cooked->exists("dir"));
 
@@ -297,6 +469,58 @@ TEST_SUITE("core/mount_table") {
         REQUIRE(table.rename("b://dir", "a://renamed"));
         CHECK_FALSE(shared->exists("dir"));
         CHECK(shared->read_text_file("renamed/inner.txt").value() == "inner");
+    }
+
+    TEST_CASE("mount_table - rename across mounts onto the same file through a nested table keeps it") {
+        mount_table table = {};
+        const std::shared_ptr<memory_file_system> shared = std::make_shared<memory_file_system>();
+        const std::shared_ptr<mount_table> nested = std::make_shared<mount_table>();
+        REQUIRE(nested->mount("c", shared));
+        REQUIRE(table.mount("a", shared));
+        REQUIRE(table.mount("b", nested));
+        REQUIRE(table.write_file("a://x.txt", to_bytes("x")));
+        REQUIRE(table.write_file("a://dir/inner.txt", to_bytes("inner")));
+
+        // "a://x.txt" and "b://c://x.txt" are the same file, so renaming one onto the other changes
+        // nothing in either direction.
+        REQUIRE(table.rename("a://x.txt", "b://c://x.txt"));
+        CHECK(shared->read_text_file("x.txt").value() == "x");
+        REQUIRE(table.rename("b://c://x.txt", "a://x.txt"));
+        CHECK(shared->read_text_file("x.txt").value() == "x");
+
+        // Both sides reach one backend, so it is a real rename there and a directory moves too.
+        REQUIRE(table.rename("a://dir", "b://c://renamed"));
+        CHECK_FALSE(shared->exists("dir"));
+        CHECK(shared->read_text_file("renamed/inner.txt").value() == "inner");
+    }
+
+    TEST_CASE(
+      "mount_table - rename across mounts from a read-only backend behind a nested table is PERMISSION_DENIED"
+    ) {
+        mounted_pair mounts = {};
+        const std::shared_ptr<mount_table> nested = std::make_shared<mount_table>();
+        const std::shared_ptr<memory_file_system> frozen = std::make_shared<memory_file_system>();
+        const std::shared_ptr<memory_file_system> live = std::make_shared<memory_file_system>();
+        REQUIRE(frozen->write_file("x.txt", to_bytes("source")));
+        frozen->set_read_only(true);
+        REQUIRE(live->write_file("y.txt", to_bytes("y")));
+        REQUIRE(nested->mount("r", frozen));
+        REQUIRE(nested->mount("w", live));
+        REQUIRE(mounts.table.mount("n", nested));
+        REQUIRE(mounts.table.write_file("cooked://x.txt", to_bytes("old")));
+
+        // The nested table as a whole is writable; the backend that holds the source is not.
+        REQUIRE_FALSE(nested->is_read_only());
+        CHECK(code_of(mounts.table.rename("n://r://x.txt", "cooked://x.txt")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(mounts.table.rename("n://r://x.txt", "cooked://new.txt")) == error_code::PERMISSION_DENIED);
+        CHECK(mounts.cooked->read_text_file("x.txt").value() == "old");
+        CHECK_FALSE(mounts.cooked->exists("new.txt"));
+        CHECK(frozen->read_text_file("x.txt").value() == "source");
+
+        // A writable backend in the same nested table still moves its file.
+        REQUIRE(mounts.table.rename("n://w://y.txt", "cooked://y.txt"));
+        CHECK(mounts.cooked->read_text_file("y.txt").value() == "y");
+        CHECK_FALSE(live->exists("y.txt"));
     }
 
     TEST_CASE("mount_table - mount rejects a mount table that leads back to this one") {

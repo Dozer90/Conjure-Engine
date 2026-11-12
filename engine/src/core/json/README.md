@@ -66,7 +66,8 @@ canonical copy walk with explicit stacks (one `std::vector` of frames), never re
 Strict RFC 8259: comments, trailing commas, `NaN`/`Infinity`, single quotes, a BOM and trailing
 content are rejected with `PARSE_FAILURE` and a message of the form
 `parse error at line L, column C: reason`. Duplicate keys are kept (`operator[]` returns the first,
-`erase()` removes all).
+`erase()` removes all). `parse_file()` skips a leading UTF-8 byte order mark (as
+`file_system::read_text_file` does) before handing the text to `parse()`, which itself rejects one.
 
 ### Nesting limit
 

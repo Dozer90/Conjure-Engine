@@ -18,7 +18,8 @@ using namespace conjure::core::jobs::detail;
 #if CONJURE_PLATFORM_WINDOWS
 
 namespace {
-    // UTF-16 units the first 'bytes' bytes of 'text' convert to, or 0 when they are not valid UTF-8.
+    // UTF-16 units the first 'bytes' bytes of 'text' convert to. Invalid UTF-8 sequences count as U+FFFD
+    // (flags 0), so 0 means an empty prefix or a failed call.
     int wide_length(std::string_view text, usize bytes) noexcept {
         if (bytes == 0) {
             return 0;
@@ -92,9 +93,13 @@ std::string conjure::core::jobs::detail::current_thread_name() {
 
 prepared_thread_name conjure::core::jobs::detail::prepare_thread_name(std::string_view name) noexcept {
     // Linux limits names to 15 bytes; macOS allows 63. Both accept the shorter buffer, and a
-    // single limit keeps the behaviour predictable across the two.
+    // single limit keeps the behaviour predictable across the two. The cut steps back over
+    // continuation bytes (10xxxxxx), so it never splits a code point.
     prepared_thread_name prepared = {};
-    const usize length = std::min(name.size(), MAX_POSIX_THREAD_NAME_LENGTH);
+    usize length = std::min(name.size(), MAX_POSIX_THREAD_NAME_LENGTH);
+    while (length > 0 && length < name.size() && (static_cast<unsigned char>(name[length]) & 0xC0) == 0x80) {
+        --length;
+    }
     std::copy_n(name.data(), length, prepared.characters.data());
     return prepared;
 }

@@ -14,7 +14,7 @@ Design: `docs/design/10_core.md` 2.1 (the headers themselves are the detailed re
 | `hash.h` | `hash::fnv1a64` / `fnv1a32` over `std::string_view` and `std::span<const std::byte>`, the `*_step` helpers and `hash::combine`. `constexpr`; the constants are ABI (`string_id`, error categories and the C# `NameHash` all depend on them). |
 | `error.h` | `error_code` (generic codes: `NOT_FOUND`, `INVALID_ARGUMENT`, `IO_FAILURE`, `PARSE_FAILURE`, ...), `class error` (`category()`, `code()`, `message()`, `is(code)`, `to_string()`), `make_error(code)` / `make_error(code, detail)` / `make_error(code, fmt, args...)`, `CONJURE_DECLARE_ERROR_CATEGORY(enum, "name", name_fn)` binding a module enum to a category, `std::formatter` for both. |
 | `result.h` | `result<T>` (value or `error`; `value()`, `get_error()`, `value_or()`, `operator->`), `result<void>` and the alias `status`, `CONJURE_TRY(expression)` and `CONJURE_TRY_ASSIGN(declaration, expression)`. Accessing the wrong alternative asserts and aborts. |
-| `assert.h` | `CONJURE_ASSERT(condition, fmt, ...)` and `CONJURE_VERIFY` (both check in Debug and Development; in Distribution `CONJURE_ASSERT` compiles out while `CONJURE_VERIFY` still evaluates its expression), `CONJURE_UNREACHABLE()` (fatal everywhere), `CONJURE_FATAL_ASSERT`, `set_assert_handler` / `current_assert_handler` returning `assert_action` (`BREAK`, `CONTINUE`, `ABORT`), `assert_info`. |
+| `assert.h` | `CONJURE_ASSERT(condition, fmt, ...)` and `CONJURE_VERIFY` (both check in Debug and Development; in Distribution `CONJURE_ASSERT` compiles out while `CONJURE_VERIFY` still evaluates its expression), `CONJURE_UNREACHABLE()` (asserts then aborts in Debug and Development, even when the handler continues; a compiler hint in Distribution, where reaching it is undefined behaviour), `CONJURE_FATAL_ASSERT`, `set_assert_handler` / `current_assert_handler` returning `assert_action` (`BREAK`, `CONTINUE`, `ABORT`), `assert_info`. |
 | `log.h` | `log_level` (`TRACE` .. `FATAL`, `OFF`; `ERR` rather than the Windows macro `ERROR`), `log_category` with `CONJURE_DECLARE_LOG_CATEGORY(name)` / `CONJURE_DEFINE_LOG_CATEGORY(name, "display")`, `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR/FATAL(category, fmt, ...)` (TRACE and DEBUG compile out of Distribution), `log_sink` with `console_log_sink`, `file_log_sink`, `callback_log_sink`, `log::add_sink` / `remove_sink` / `clear_sinks` taking `std::shared_ptr<log_sink>`, global and per-category levels, `log::categories()` / `find_category` / `set_category_level`, `format_log_line`, `LOG_CORE`. |
 | `uuid.h` | `uuid` (two `u64` halves): `generate()` (RFC 4122 v4), `parse`, `to_string`, `is_null`, `hash`, `<=>`, `std::hash` and `std::formatter`. |
 | `enum_flags.h` | `CONJURE_ENUM_FLAGS(type);` operators for `enum class <x>_flags`, plus `has_flag`, `has_any_flag`, `with_flag`, `without_flag`, `to_underlying`. |
@@ -30,11 +30,18 @@ Design: `docs/design/10_core.md` 2.1 (the headers themselves are the detailed re
   module errors, so compare with `is(<enum>::VALUE)` rather than through the generic code.
 - Log messages are formatted only when the category and the global level allow them; `log::write` delivers to
   the sinks outside the logger lock, so a sink may itself log or add/remove sinks.
+- Private sources: `format_log_line` gets the local time of day from `detail::local_time_of` (`local_time.h`),
+  implemented once per OS in `local_time_windows.cpp` (`localtime_s`) and `local_time_posix.cpp` (`localtime_r`);
+  `CMakeLists.txt` picks the file, so `log.cpp` holds no platform conditionals. `console_output.h` declares
+  `detail::console_stream_for` (stdout below `WARN`, stderr from `WARN` up) and `detail::write_console_line`
+  (optional ANSI colour, flush from `ERR` up), which `console_log_sink::write` is built on.
 - `uuid::generate()` seeds a per-thread `std::mt19937_64` from `std::random_device` on first use.
 
 ## Threading model
 
-- Logging is thread-safe; sinks must synchronise themselves (`file_log_sink` and `callback_log_sink` do).
+- Logging is thread-safe; sinks must synchronise themselves: `file_log_sink` locks internally, `console_log_sink`
+  relies on the C runtime's per-call stream locking, and a `callback_log_sink` callable is invoked concurrently from
+  every logging thread and must be thread-safe itself.
 - `log_category::set_level` / `log::set_global_level` are relaxed atomics readable from every thread.
 - The assert handler is an atomic function pointer; `set_assert_handler` is safe from any thread.
 - `uuid::generate()` is thread-safe (per-thread generator). `error`, `result` and `uuid` values are plain values
@@ -44,9 +51,12 @@ Design: `docs/design/10_core.md` 2.1 (the headers themselves are the detailed re
 
 `tests/core/foundation/` builds `conjure_core_foundation_tests`, one file per public header that has
 behaviour (`test_assert.cpp`, `test_enum_flags.cpp`, `test_error.cpp`, `test_hash.cpp`, `test_log.cpp`,
-`test_result.cpp`, `test_uuid.cpp`; `platform_detect.h`, `types.h`, `api.h`, `build_info.h` and
-`non_copyable.h` are macro/alias-only headers listed in `tools/style_exceptions.json`). `test_hash.cpp`
-carries the FNV-1a test vectors mirrored by `Conjure.Managed`.
+`test_result.cpp`, `test_uuid.cpp`; `platform_detect.h`, `types.h` and `api.h` are macro/alias-only headers
+and `non_copyable.h` holds two trivial base classes, all four listed in `tools/style_exceptions.json`;
+`build_info.h` is generated from `build_info.h.in` into the build tree, so the test-mirror check does not apply
+to it). `test_hash.cpp` carries the FNV-1a test vectors mirrored by `Conjure.Managed`. `test_log.cpp` checks the
+console sink's stream routing, colour codes and ERR flush through `console_output.h` against a temporary file,
+since redirecting the process's own console would need platform code in the test.
 
 ```
 python tools/build.py --build-dir build/core_foundation --target conjure_core_foundation_tests --test -R core_foundation

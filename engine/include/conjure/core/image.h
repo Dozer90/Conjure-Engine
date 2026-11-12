@@ -53,13 +53,19 @@ namespace conjure::core {
             /// </summary>
             static constexpr usize MAX_ENCODED_BYTES = 0x7FFFFFFF;
 
+            /// <summary>
+            /// Largest pixel buffer (width * height * BYTES_PER_PIXEL) the constructor accepts; the
+            /// PNG codecs work in 32-bit signed sizes.
+            /// </summary>
+            static constexpr usize MAX_PIXEL_BYTES = MAX_ENCODED_BYTES;
+
         public:
             image();
 
             /// <summary>
             /// A zero-filled image (transparent black). A zero width or height yields the empty
-            /// image. Dimensions above MAX_DIMENSION are a programmer error and yield the empty
-            /// image too.
+            /// image. Dimensions above MAX_DIMENSION, or whose pixel data would exceed
+            /// MAX_PIXEL_BYTES, are a programmer error and yield the empty image too.
             /// </summary>
             image(u32 width, u32 height);
 

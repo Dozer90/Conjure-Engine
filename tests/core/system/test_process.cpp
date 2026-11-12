@@ -3,13 +3,16 @@
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
+#include "core/system/system_internal.h"
 
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -33,10 +36,22 @@ namespace {
         return desc;
     }
 
+    // Linux children shed inherited descriptors only when the backend can add a closefrom action
+    // (system_internal.h); an older C library keeps the limitation documented in
+    // engine/src/core/system/README.md.
+    constexpr bool CHILDREN_INHERIT_ONLY_STANDARD_STREAMS =
+      CONJURE_PLATFORM_LINUX == 0 || CONJURE_SPAWN_CLOSEFROM_AVAILABLE == 1;
+
     // The child prints in text mode, which the Windows runtime turns into "\r\n" line endings.
     std::string without_carriage_returns(std::string text) {
         std::erase(text, '\r');
         return text;
+    }
+
+    // process_desc arguments are UTF-8.
+    std::string utf8_of(const std::filesystem::path &path) {
+        const std::u8string text = path.u8string();
+        return std::string(reinterpret_cast<const char *>(text.data()), text.size());
     }
 
     f64 seconds_since(steady_clock::time_point start) {
@@ -273,6 +288,62 @@ TEST_SUITE("core/process") {
         CHECK_FALSE(notStarted.has_value());
     }
 
+    TEST_CASE("process - an embedded NUL in the executable, an argument or the environment is INVALID_ARGUMENT") {
+        // The operating system takes NUL-terminated strings, so each of these would otherwise be cut short
+        // silently: a different program, a truncated argument, a shortened variable.
+        const std::string withNul("a\0b", 3);
+
+        process_desc badExecutable = child({"exit", "0"});
+        badExecutable.executable = CHILD_PATH.generic_string() + withNul;
+        process_desc badArgument = child({"echo", withNul});
+        process_desc badName = child({"exit", "0"});
+        badName.environment = {{"CONJURE_FINE", "1"}, {withNul, "1"}};
+        process_desc badValue = child({"exit", "0"});
+        badValue.environment = {{"CONJURE_NUL_VALUE", withNul}};
+
+        const std::vector<std::pair<process_desc, std::string>> cases = {
+            {badExecutable, "executable"},
+            {badArgument, "arguments[1]"},
+            {badName, "environment entry 1"},
+            {badValue, "environment entry 0"},
+        };
+        for (const std::pair<process_desc, std::string> &entry : cases) {
+            const std::string &field = entry.second;
+            CAPTURE(field);
+            const result<process_result> finished = process::run(entry.first);
+            REQUIRE_FALSE(finished.has_value());
+            CHECK(finished.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+            CHECK(finished.get_error().message().find(field) != std::string::npos);
+            CHECK(finished.get_error().message().find("NUL") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("process - batch files are refused on Windows because cmd.exe would re-parse the arguments") {
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            const testing::temp_directory directory("core_process_batch");
+            const std::filesystem::path lower = directory.write_file("tool.cmd", "@echo off\r\necho %1\r\n");
+            const std::filesystem::path upper = directory.write_file("TOOL.BAT", "@echo off\r\necho %1\r\n");
+
+            // Win32 drops trailing dots and spaces, so these spellings still run cmd.exe.
+            const std::vector<std::string> executables = {
+                utf8_of(lower),
+                utf8_of(upper),
+                utf8_of(lower) + ".",
+                utf8_of(upper) + ". ",
+            };
+            for (const std::string &executable : executables) {
+                CAPTURE(executable);
+                process_desc desc = {};
+                desc.executable = executable;
+                desc.arguments = {"safe&echo injected"};
+                const result<process> started = process::start(desc);
+                REQUIRE_FALSE(started.has_value());
+                CHECK(started.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+                CHECK(started.get_error().message().find("cmd.exe") != std::string::npos);
+            }
+        }
+    }
+
     TEST_CASE("process - the timeout kills a child that runs too long") {
         process_desc desc = child({"sleep", "10000"});
         desc.timeoutSeconds = 0.5;
@@ -399,7 +470,12 @@ TEST_SUITE("core/process") {
     }
 
     TEST_CASE("process - is_running polled from another thread while wait blocks keeps the exit code") {
-        result<process> started = process::start(child({"sleep", "150"}));
+        // The child runs until a marker file appears, and the marker is created only once the poller has
+        // seen the child alive, so the check does not depend on how quickly a loaded runner schedules
+        // either side.
+        const testing::temp_directory directory("core_process_poll");
+        const std::filesystem::path marker = directory.path() / "release";
+        result<process> started = process::start(child({"wait-for", utf8_of(marker)}));
         REQUIRE(started.has_value());
         process &running = started.value();
 
@@ -413,18 +489,26 @@ TEST_SUITE("core/process") {
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
         });
+        std::thread releaser([&polls, &marker] {
+            const steady_clock::time_point begin = steady_clock::now();
+            while (polls.load() == 0 && seconds_since(begin) < 30.0) {
+                std::this_thread::yield();
+            }
+            std::ofstream release(marker);
+        });
 
         process_desc exitDesc = child({"exit", "9"});
         const result<process_result> finished = running.wait();
         stop.store(true);
         poller.join();
+        releaser.join();
 
         REQUIRE(finished.has_value());
         CHECK(finished->exitCode == 0);
         CHECK(polls.load() > 0);   // the poller saw the child alive at least once
         CHECK_FALSE(running.is_running());
 
-        // The same with a non-zero code, so a lost status (reported as 0) would be caught.
+        // The same with a non-zero code, so a lost status (KILLED_EXIT_CODE) or a made-up 0 would be caught.
         result<process> nonZero = process::start(exitDesc);
         REQUIRE(nonZero.has_value());
         std::atomic<bool> stopSecond = false;
@@ -602,14 +686,19 @@ TEST_SUITE("core/process") {
     TEST_CASE("process - children started concurrently from two threads do not inherit each other's pipes") {
         // A pipe end leaks only while another start() is in flight: the slow child must not
         // receive the fast child's write end, or the fast child's reader never sees end-of-file
-        // until the sleeper dies. Both threads release the barrier and start at the same moment.
+        // until the slow child dies. Both threads release the barrier and start at the same moment.
+        // The slow child waits for a marker that is never created, so it outlives the fast one
+        // however long the runner stalls; a watchdog kills it after 30 s so a leak fails the case
+        // instead of hanging it.
+        const testing::temp_directory directory("core_process_pipes");
+        const std::string neverCreated = utf8_of(directory.path() / "never");
         std::barrier<> ready(2);
         std::optional<result<process>> slow = std::nullopt;
         std::optional<result<process>> fast = std::nullopt;
 
-        std::thread slowStarter([&slow, &ready] {
+        std::thread slowStarter([&slow, &ready, &neverCreated] {
             ready.arrive_and_wait();
-            slow.emplace(process::start(child({"sleep", "2000"})));
+            slow.emplace(process::start(child({"wait-for", neverCreated})));
         });
         std::thread fastStarter([&fast, &ready] {
             ready.arrive_and_wait();
@@ -623,20 +712,72 @@ TEST_SUITE("core/process") {
         REQUIRE(slow->has_value());
         REQUIRE(fast->has_value());
 
-        const steady_clock::time_point begin = steady_clock::now();
+        process &slowProcess = slow->value();
+        std::atomic<bool> done = false;
+        std::atomic<bool> watchdogFired = false;
+        std::thread watchdog([&slowProcess, &done, &watchdogFired] {
+            const steady_clock::time_point begin = steady_clock::now();
+            while (!done.load()) {
+                if (seconds_since(begin) > 30.0) {
+                    watchdogFired.store(true);
+                    slowProcess.kill();
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        });
+
         const result<process_result> fastResult = fast->value().wait();
-        const f64 fastSeconds = seconds_since(begin);
+        const bool slowStillRunning = slowProcess.is_running();
+        done.store(true);
+        watchdog.join();
 
         REQUIRE(fastResult.has_value());
         CHECK(without_carriage_returns(fastResult->standardOutput) == "fast\n");
-        CHECK(fastSeconds < 1.5);
-        CHECK(slow->value().is_running());
+        CHECK_FALSE(watchdogFired.load());
+        CHECK(slowStillRunning);
 
-        slow->value().kill();
-        const result<process_result> slowResult = slow->value().wait();
+        slowProcess.kill();
+        const result<process_result> slowResult = slowProcess.wait();
         REQUIRE(slowResult.has_value());
         CHECK(slowResult->exitCode == process::KILLED_EXIT_CODE);
     }
+
+    TEST_CASE("process - children inherit no descriptor beyond the standard streams") {
+        if constexpr (!CHILDREN_INHERIT_ONLY_STANDARD_STREAMS) {
+            MESSAGE("glibc before 2.34 cannot close inherited descriptors in a spawned child");
+            return;
+        }
+
+        // A descriptor without close-on-exec: libstdc++ opens file streams through fopen, which leaves
+        // O_CLOEXEC off, so before the closefrom file action every Linux child inherited it. Windows limits
+        // inheritance to the standard handles and the child reports 0 there by construction.
+        const testing::temp_directory directory("core_process_fds");
+        std::ofstream held(directory.path() / "held.txt");
+        REQUIRE(held.is_open());
+
+        const result<process_result> finished = process::run(child({"fds"}));
+        held.close();
+
+        REQUIRE(finished.has_value());
+        CHECK(finished->exitCode == 0);
+        CHECK(without_carriage_returns(finished->standardOutput) == "0\n");
+    }
+
+#if !CONJURE_PLATFORM_WINDOWS
+    TEST_CASE("process - a child whose exit status is lost to an ignored SIGCHLD reports KILLED_EXIT_CODE") {
+        // With SIGCHLD ignored the kernel reaps children itself and waitpid fails with ECHILD: the status is
+        // gone, and it used to be reported as exit code 0, a success the child never claimed.
+        testing::log_capture logs = {};
+        const auto previous = std::signal(SIGCHLD, SIG_IGN);
+        const result<process_result> finished = process::run(child({"exit", "3"}));
+        std::signal(SIGCHLD, previous);
+
+        REQUIRE(finished.has_value());
+        CHECK(finished->exitCode == process::KILLED_EXIT_CODE);
+        CHECK(logs.contains(log_level::WARN, "exit status was lost"));
+    }
+#endif
 
     TEST_CASE("process - a zero-length write by the child does not end the capture early") {
         const result<process_result> finished = process::run(child({"zero-write"}));

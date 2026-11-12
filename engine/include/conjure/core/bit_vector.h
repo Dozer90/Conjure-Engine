@@ -15,7 +15,7 @@ namespace conjure::core {
     /// A dynamically sized set of bits packed into 64-bit words. Used for component masks,
     /// free-slot tracking and dirty flags. Bits past size() are always zero, so whole-word
     /// operations (count, any, equality, bitwise ops) need no masking at the call site.
-    /// Not thread-safe.
+    /// A moved-from bit_vector is empty (size 0, no words) and fully reusable. Not thread-safe.
     /// </summary>
     class CONJURE_API bit_vector {
         public:
@@ -119,8 +119,13 @@ namespace conjure::core {
 
             bit_vector(const bit_vector &) = default;
             bit_vector &operator=(const bit_vector &) = default;
-            bit_vector(bit_vector &&) noexcept = default;
-            bit_vector &operator=(bit_vector &&) noexcept = default;
+
+            /// <summary>
+            /// Moving transfers the words without copying. The moved-from vector is empty (size 0,
+            /// no words) and may be resized and used again; a self-move assignment changes nothing.
+            /// </summary>
+            bit_vector(bit_vector &&other) noexcept;
+            bit_vector &operator=(bit_vector &&other) noexcept;
 
         public:
             /*-----------------------------------------------------------------------*/

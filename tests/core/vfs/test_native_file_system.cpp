@@ -6,6 +6,7 @@
 
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/vfs/native_file_system.h"
+#include "core/vfs/native_platform.h"
 
 #include <array>
 #include <atomic>
@@ -298,6 +299,71 @@ TEST_SUITE("core/native_file_system") {
 
         CHECK(after > before);
         CHECK(after - before < 60'000'000'000ull);
+    }
+
+    TEST_CASE("native_file_system - an unchanged file reports the same write time on every stat and enumerate") {
+        // Asset and file watchers compare write times for equality. The libc++ conversion used to relate the
+        // file clock to the system clock through two now() calls, so every stat of an untouched file differed.
+        testing::temp_directory directory("core_vfs_native");
+        native_file_system fileSystem(directory.path());
+        REQUIRE(fileSystem.write_file("steady.txt", to_bytes("x")));
+        const result<file_stat> first = fileSystem.stat("steady.txt");
+        REQUIRE(first);
+
+        int mismatches = 0;
+        for (int index = 0; index < 100; ++index) {
+            const result<file_stat> again = fileSystem.stat("steady.txt");
+            if (!again.has_value() || again->writeTimeNanoseconds != first->writeTimeNanoseconds) {
+                ++mismatches;
+            }
+        }
+        const result<enumeration> listing = enumerate_all(fileSystem, "", enumerate_flags::FILES);
+        REQUIRE(listing);
+        REQUIRE(listing->stats.size() == 1);
+
+        CHECK(mismatches == 0);
+        CHECK(listing->stats[0].writeTimeNanoseconds == first->writeTimeNanoseconds);
+    }
+
+    TEST_CASE(
+      "native_file_system - recursive enumerate and remove_all reach entries beyond the classic Windows path limit"
+    ) {
+        // The walk used to start from the classic form of a short root, so descending past MAX_PATH failed and
+        // aborted the whole scan (and remove_all the same way). Four nested 60-character directories put the
+        // file past 260 characters wherever the temporary root lives; the fixture's own clean-up cannot walk
+        // that deep, so the case removes the tree through the file system, whatever the checks before found.
+        testing::temp_directory directory("core_vfs_native");
+        native_file_system fileSystem(directory.path());
+        const std::string name(60, 'd');
+        const std::string deep = name + "/" + name + "/" + name + "/" + name + "/deep.bin";
+        CHECK(directory.path().native().size() + 1 + deep.size() > 262);
+        REQUIRE(fileSystem.write_file(deep, to_bytes("deep")));
+
+        const enumerate_flags allFiles = enumerate_flags::RECURSIVE | enumerate_flags::FILES;
+        const result<enumeration> files = enumerate_all(fileSystem, "", allFiles);
+        CHECK(code_of(files) == error_code::NONE);
+        const bool listed = files.has_value() && files->paths == std::vector<std::string>{deep};
+        CHECK(listed);
+
+        CHECK(code_of(fileSystem.remove_all(name)) == error_code::NONE);
+        CHECK_FALSE(fileSystem.exists(name));
+    }
+
+    TEST_CASE(
+      "native_file_system - replace falls back to MoveFileExW for every error code that means no POSIX rename"
+    ) {
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            // ERROR_INVALID_FUNCTION (SMB/NAS redirectors, some FAT/exFAT drivers), ERROR_NOT_SUPPORTED and
+            // ERROR_INVALID_PARAMETER mean the volume has no POSIX rename; ERROR_ACCESS_DENIED is an ACL refusal
+            // or a delete-pending target that MoveFileExW would refuse just the same.
+            CHECK(core::vfs::internal::rename_falls_back_to_move(1));
+            CHECK(core::vfs::internal::rename_falls_back_to_move(50));
+            CHECK(core::vfs::internal::rename_falls_back_to_move(87));
+            CHECK_FALSE(core::vfs::internal::rename_falls_back_to_move(5));
+            CHECK_FALSE(core::vfs::internal::rename_falls_back_to_move(0));
+        } else {
+            CHECK_FALSE(core::vfs::internal::rename_falls_back_to_move(1));
+        }
     }
 
     TEST_CASE("native_file_system - a held reader does not stop the standard library from seeing a replaced file") {

@@ -32,7 +32,18 @@ usize event_bus::dispatch_queued() {
     for (deferred_publish &deferred : batch) {
         deferred(*this);
     }
-    return batch.size();
+    const usize dispatched = batch.size();
+
+    // The events are destroyed outside the lock. The emptied buffer goes back when nothing was enqueued
+    // meanwhile, so enqueueing after a dispatch reuses its capacity instead of growing a fresh queue.
+    batch.clear();
+    {
+        const std::scoped_lock lock(mQueueMutex);
+        if (mQueue.empty()) {
+            mQueue.swap(batch);
+        }
+    }
+    return dispatched;
 }
 
 usize event_bus::queued_count() const {

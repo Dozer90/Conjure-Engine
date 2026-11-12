@@ -104,7 +104,8 @@ namespace conjure::core::str {
     // Trimming
 
     /// <summary>
-    /// 'text' without leading and trailing characters from 'characters'. Returns a view into 'text'.
+    /// 'text' without leading and trailing characters from 'characters'. Returns a view into 'text';
+    /// when nothing remains, an empty view at the end of 'text'.
     /// </summary>
     [[nodiscard]] constexpr std::string_view trim(
       std::string_view text,
@@ -112,14 +113,15 @@ namespace conjure::core::str {
     ) noexcept {
         const usize first = text.find_first_not_of(characters);
         if (first == std::string_view::npos) {
-            return std::string_view();
+            return text.substr(text.size());
         }
         const usize last = text.find_last_not_of(characters);
         return text.substr(first, last - first + 1);
     }
 
     /// <summary>
-    /// 'text' without leading characters from 'characters'. Returns a view into 'text'.
+    /// 'text' without leading characters from 'characters'. Returns a view into 'text'; when nothing
+    /// remains, an empty view at the end of 'text'.
     /// </summary>
     [[nodiscard]] constexpr std::string_view trim_left(
       std::string_view text,
@@ -127,13 +129,14 @@ namespace conjure::core::str {
     ) noexcept {
         const usize first = text.find_first_not_of(characters);
         if (first == std::string_view::npos) {
-            return std::string_view();
+            return text.substr(text.size());
         }
         return text.substr(first);
     }
 
     /// <summary>
-    /// 'text' without trailing characters from 'characters'. Returns a view into 'text'.
+    /// 'text' without trailing characters from 'characters'. Returns a view into 'text'; when nothing
+    /// remains, an empty view at the start of 'text'.
     /// </summary>
     [[nodiscard]] constexpr std::string_view trim_right(
       std::string_view text,
@@ -141,7 +144,7 @@ namespace conjure::core::str {
     ) noexcept {
         const usize last = text.find_last_not_of(characters);
         if (last == std::string_view::npos) {
-            return std::string_view();
+            return text.substr(0, 0);
         }
         return text.substr(0, last + 1);
     }

@@ -410,6 +410,74 @@ TEST_SUITE("core/type_info") {
         CHECK_FALSE(stricter.has_same_layout(reference));
     }
 
+    TEST_CASE("type_info - has_same_layout tells apart array element kinds and retargeted enum or struct fields") {
+        // layout_hash() covers name, kind, offset and size only, so every pair below hashes alike.
+        reflect::type_info floats = {};
+        floats.name = "test.element_kinds";
+        floats.size = 16;
+        floats.alignment = 4;
+        field_info values = make_field("values", field_kind::ARRAY, 0, 16);
+        values.elementKind = field_kind::F32;
+        values.arrayCount = 4;
+        floats.fields = {values};
+
+        reflect::type_info integers = floats;
+        integers.fields[0].elementKind = field_kind::I32;
+        CHECK(integers.layout_hash() == floats.layout_hash());
+        CHECK_FALSE(integers.has_same_layout(floats));
+        CHECK(floats.has_same_layout(floats));
+
+        reflect::type_info recounted = floats;
+        recounted.fields[0].arrayCount = 2;
+        CHECK(recounted.layout_hash() == floats.layout_hash());
+        CHECK_FALSE(recounted.has_same_layout(floats));
+
+        enum_info first = {};
+        first.name = "test.first_mode";
+        first.type = type_id::from_name(first.name);
+        first.underlyingSize = 4;
+        first.values = {{"A", 0}};
+        enum_info second = first;
+        second.name = "test.second_mode";
+        second.type = type_id::from_name(second.name);
+
+        reflect::type_info holder = {};
+        holder.name = "test.enum_holder";
+        holder.size = 4;
+        holder.alignment = 4;
+        holder.fields = {make_field("mode", field_kind::ENUM, 0, 4)};
+        holder.fields[0].type = first.type;
+        holder.fields[0].enumType = &first;
+        reflect::type_info retargeted = holder;
+        retargeted.fields[0].type = second.type;
+        retargeted.fields[0].enumType = &second;
+        REQUIRE(validate_layout(holder).has_value());
+        REQUIRE(validate_layout(retargeted).has_value());
+        CHECK(retargeted.layout_hash() == holder.layout_hash());
+        CHECK_FALSE(retargeted.has_same_layout(holder));
+
+        const reflect::type_info inner = describe_struct<reflect_test::inner>();
+        const reflect::type_info lookalike = make_inner_layout();
+        reflect::type_info structHolder = {};
+        structHolder.name = "test.struct_holder";
+        structHolder.size = inner.size;
+        structHolder.alignment = inner.alignment;
+        structHolder.fields = {make_field("nested", field_kind::STRUCT, 0, inner.size)};
+        structHolder.fields[0].type = inner.type;
+        structHolder.fields[0].structType = &inner;
+        reflect::type_info structRetargeted = structHolder;
+        structRetargeted.fields[0].type = lookalike.type;
+        structRetargeted.fields[0].structType = &lookalike;
+        CHECK(structRetargeted.layout_hash() == structHolder.layout_hash());
+        CHECK_FALSE(structRetargeted.has_same_layout(structHolder));
+
+        // Scalar type ids are not part of the layout: hand-built and dynamic descriptions may leave them unset.
+        reflect::type_info unsetIds = make_inner_layout();
+        unsetIds.fields[0].type = {};
+        unsetIds.fields[1].type = {};
+        CHECK(unsetIds.has_same_layout(make_inner_layout()));
+    }
+
     TEST_CASE("type_info - validate_layout accepts a consistent description") {
         CHECK(validate_layout(make_inner_layout()).has_value());
         CHECK(validate_layout(describe_struct<reflect_test::everything>()).has_value());

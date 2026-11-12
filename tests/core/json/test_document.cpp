@@ -181,6 +181,27 @@ TEST_SUITE("core/document") {
         CHECK(folder.get_error().message().find("not a regular file") != std::string::npos);
     }
 
+    TEST_CASE("document - parse_file skips a leading UTF-8 byte order mark") {
+        const testing::temp_directory directory("core_json_bom");
+        const std::string text = "\xEF\xBB\xBF{\"a\": 1}";
+        const std::filesystem::path marked = directory.write_file("marked.json", text);
+
+        const result<document> parsed = document::parse_file(marked);
+        REQUIRE(parsed.has_value());
+        CHECK(parsed->root()["a"].as_i64() == 1);
+
+        // parse() itself stays strict.
+        const result<document> direct = document::parse(text);
+        REQUIRE_FALSE(direct.has_value());
+        CHECK(direct.get_error().generic_code() == error_code::PARSE_FAILURE);
+
+        // Only one leading mark is dropped: a second one is still content.
+        const std::filesystem::path twice = directory.write_file("twice.json", "\xEF\xBB\xBF" + text);
+        const result<document> twiceParsed = document::parse_file(twice);
+        REQUIRE_FALSE(twiceParsed.has_value());
+        CHECK(twiceParsed.get_error().generic_code() == error_code::PARSE_FAILURE);
+    }
+
     TEST_CASE("document - copies are deep and moves transfer ownership") {
         document original = parse_or_fail(R"({"a":[1,2],"b":"text"})");
 

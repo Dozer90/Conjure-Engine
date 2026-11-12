@@ -165,7 +165,7 @@ namespace conjure::core {
     ///
     /// T must be move-constructible and move-assignable (swap-remove). Pointers returned by find()
     /// and references and iterators obtained during iteration are invalidated by insert, emplace,
-    /// erase, clear and reserve.
+    /// erase, clear and reserve. A moved-from map is empty (no slots) and reusable.
     /// </summary>
     template <typename T, slot_key_type Key = slot_key>
     class slot_map {
@@ -213,8 +213,38 @@ namespace conjure::core {
 
             slot_map(const slot_map &) = default;
             slot_map &operator=(const slot_map &) = default;
-            slot_map(slot_map &&) noexcept = default;
-            slot_map &operator=(slot_map &&) noexcept = default;
+
+            /// <summary>
+            /// Takes the elements, slots and keys of 'other', which is left empty (no slots) and
+            /// reusable. Keys issued by 'other' address the new map.
+            /// </summary>
+            slot_map(slot_map &&other) noexcept :
+                mEntries(std::move(other.mEntries)),
+                mSlots(std::move(other.mSlots)),
+                mFreeHead(std::exchange(other.mFreeHead, INVALID_INDEX)),
+                mFreeCount(std::exchange(other.mFreeCount, u32{0})),
+                mRetiredCount(std::exchange(other.mRetiredCount, u32{0})) {
+                other.mEntries.clear();
+                other.mSlots.clear();
+            }
+
+            /// <summary>
+            /// Replaces the contents with those of 'other', which is left empty (no slots) and
+            /// reusable.
+            /// </summary>
+            slot_map &operator=(slot_map &&other) noexcept {
+                if (this == &other) {
+                    return *this;
+                }
+                mEntries = std::move(other.mEntries);
+                mSlots = std::move(other.mSlots);
+                mFreeHead = std::exchange(other.mFreeHead, INVALID_INDEX);
+                mFreeCount = std::exchange(other.mFreeCount, u32{0});
+                mRetiredCount = std::exchange(other.mRetiredCount, u32{0});
+                other.mEntries.clear();
+                other.mSlots.clear();
+                return *this;
+            }
 
         public:
             /// <summary>

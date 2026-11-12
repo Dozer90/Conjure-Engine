@@ -94,7 +94,8 @@ Include `conjure/core/containers/slot_key_format.h` to print it as `"index:gener
 > [!NOTE]
 > A custom key type works too (`slot_map<T, my_key>`) when it has unsigned `index` and `generation` fields of at
 > most 32 bits each; narrower fields make smaller keys and retire slots sooner. `slot_count()`,
-> `free_slot_count()` and `retired_slot_count()` report the slot table's state.
+> `free_slot_count()` and `retired_slot_count()` report the slot table's state. A moved-from `slot_map` is empty
+> (no slots) and ready for reuse; keys issued before the move address the map it was moved into.
 
 ## Short lists: `small_vector`
 
@@ -126,8 +127,9 @@ u32 first_child_or(const node &parent, u32 fallback) {
 > still grows without limit. `shrink_to_fit()` moves the elements back inline when they fit again.
 
 > [!WARNING]
-> The range overloads of `insert()` must not alias the vector itself. Single-element `push_back`, `emplace_back`,
-> `insert` and `emplace` are safe with arguments that refer to existing elements.
+> The range overloads of `insert()` and `assign()` must not alias the vector itself. `push_back`, `emplace_back`,
+> single-element `insert`, `emplace`, `resize(count, value)` and `assign(count, value)` are safe with arguments that
+> refer to existing elements.
 
 ## Elements that never move: `stable_vector`
 
@@ -175,7 +177,7 @@ table without values.
 | Get or create a default | `map[key]` |
 | Read a key that must exist | `at(key)` |
 | Remove | `erase(key)` returns `bool`; `erase(iterator)` returns the next iterator |
-| Avoid rehashing during a burst of insertions | `reserve(count)` first |
+| Avoid rehashing during a burst of insertions | `reserve(count)` first (`reserve(0)` allocates nothing) |
 
 ```cpp
 #include "conjure/core/containers/flat_hash_map.h"
@@ -239,7 +241,7 @@ int setting_or(std::string_view name, int fallback) {
 > [!TIP]
 > Give string-keyed maps the transparent comparator `std::less<>` as shown; then `find`, `contains`, `count`,
 > `lower_bound`, `upper_bound`, `at` and `erase(key)` accept a `std::string_view` or a `const char *` without
-> building a `std::string`.
+> building a `std::string`. `erase(iterator)` keeps erasing by position on such a map.
 
 > [!WARNING]
 > Entries are plain `std::pair<K, V>`, so a key *can* be modified through an iterator; doing so breaks the sort

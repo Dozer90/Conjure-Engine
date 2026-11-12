@@ -53,7 +53,7 @@ TEST_SUITE("core/pool_allocator") {
     TEST_CASE("pool_allocator - block size is rounded up to the alignment and to a pointer") {
         pool_allocator tiny(1, 1, 4);
         CHECK(tiny.block_size() == sizeof(void *));
-        CHECK(tiny.alignment() == 1);
+        CHECK(tiny.alignment() == alignof(void *));
 
         pool_allocator rounded(20, 16, 4);
         CHECK(rounded.block_size() == 32);
@@ -66,6 +66,29 @@ TEST_SUITE("core/pool_allocator") {
         CHECK(chunks.slab_count() == 0);
         CHECK(chunks.capacity() == 0);
         CHECK(chunks.live_count() == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F222: a small-alignment pool_allocator hands out pointer-aligned blocks for u64"
+    ) {
+        testing::expect_assert asserts = {};
+        pool_allocator pool(16, 4, 64);
+        CHECK(pool.alignment() == alignof(void *));
+        CHECK(pool.block_size() == 16);
+
+        u64 *value = pool.allocate_as<u64>();
+        REQUIRE(value != nullptr);
+        CHECK(is_aligned(value, alignof(u64)));
+        CHECK(asserts.count() == 0);
+
+        // Every block of the slab shares the guarantee, not just the first.
+        void *second = pool.allocate();
+        REQUIRE(second != nullptr);
+        CHECK(is_aligned(second, alignof(void *)));
+
+        pool.deallocate(second);
+        pool.deallocate(value);
+        CHECK(pool.live_count() == 0);
     }
 
     TEST_CASE("pool_allocator - an invalid alignment or an empty slab asserts and falls back") {

@@ -43,17 +43,18 @@ overloads, or 16-byte aligned types end up under-aligned on MSVC only.
   rewinds it; `release()` frees everything and the next `allocate()` starts over. Addresses are stable
   until either call. `bytes_allocated()` counts requested bytes, `bytes_reserved()` block capacities.
   A moved-from arena is empty and usable.
-- `pool_allocator`: the block stride is `blockSize` rounded up to the alignment and to a pointer (free
-  blocks hold their free-list link in place). Each slab allocation is the blocks followed by a free
-  bitmap (one bit per block); the slab table is a sorted, `tracked_allocate`-backed array (8 entries,
-  then doubling through `tracked_reallocate`) obtained on the first `allocate()`, so the pool is fully
-  counted, allocates nothing until used and never throws. `allocate()`, `deallocate()` and `owns()` are
-  O(log slabCount) and per-slab live counts stay exact, which is what lets `shrink_to_fit()` release
-  exactly the fully free slabs (the table keeps its capacity). `deallocate()` of a pointer the pool does
-  not own, of a pointer inside a block, or of a block that is already free (the bitmap catches a double
-  free whatever its neighbours are doing) asserts and is ignored. A slab larger than
-  `MAX_ALLOCATION_BYTES` can never be obtained: `allocate()` returns nullptr. A moved-from pool is empty
-  and usable.
+- `pool_allocator`: the requested alignment is raised to at least `alignof(void *)`, because a free
+  block stores its free-list link in place; `alignment()` reports that raised value and `allocate_as()`
+  checks types against it. The block stride is `blockSize` rounded up to that alignment and to a
+  pointer. Each slab allocation is the blocks followed by a free bitmap (one bit per block); the slab
+  table is a sorted, `tracked_allocate`-backed array (8 entries, then doubling through
+  `tracked_reallocate`) obtained on the first `allocate()`, so the pool is fully counted, allocates
+  nothing until used and never throws. `allocate()`, `deallocate()` and `owns()` are O(log slabCount)
+  and per-slab live counts stay exact, which is what lets `shrink_to_fit()` release exactly the fully
+  free slabs (the table keeps its capacity). `deallocate()` of a pointer the pool does not own, of a
+  pointer inside a block, or of a block that is already free (the bitmap catches a double free whatever
+  its neighbours are doing) asserts and is ignored. A slab larger than `MAX_ALLOCATION_BYTES` can never
+  be obtained: `allocate()` returns nullptr. A moved-from pool is empty and usable.
 - `frame_allocator`: one arena of `arenaBytes` (rounded up to whole thread blocks of `threadBlockBytes`,
   itself clamped and rounded up to cache lines). A thread claims a block with one compare-exchange that
   never moves the offset past the capacity (so `used_bytes()` is exact and a failed claim marks the

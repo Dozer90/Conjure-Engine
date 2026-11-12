@@ -134,8 +134,10 @@ except in the explicit conversion functions.
 | Identifiers | `is_valid_identifier` (C-style: letter or `_`, then letters, digits, `_`) |
 
 The parsers accept the whole string or nothing: no surrounding whitespace, no trailing characters, and out-of-range
-values fail. `parse_bool` understands `true/false`, `yes/no`, `on/off` and `1/0` in any case. The Unicode
-conversions never fail; malformed input becomes U+FFFD.
+values fail. `parse_double` and `parse_float` accept `inf` and `nan` (any case, optional sign) as the only
+non-finite spellings; `infinity`, `nan(...)` and hexadecimal floats are rejected. `parse_bool` understands
+`true/false`, `yes/no`, `on/off` and `1/0` in any case. The Unicode conversions never fail; malformed input becomes
+U+FFFD.
 
 ```cpp
 #include "conjure/core/string_utils.h"
@@ -197,7 +199,8 @@ std::vector<usize> entities_to_draw(const bit_vector &alive, const bit_vector &v
 > [!WARNING]
 > Out-of-range indices assert; `test()` then returns false and the setters do nothing. Binary operations require
 > both operands to have the same `size()` (asserted). Do not modify the vector while iterating `set_bits()`.
-> `bit_vector` is a plain value type and is not thread-safe.
+> `bit_vector` is a plain value type and is not thread-safe. A moved-from `bit_vector` is empty (`size()` 0) and
+> can be resized and used again.
 
 ## Sorting integer keys: radix sort
 
@@ -223,9 +226,9 @@ void sort_draws(std::vector<u64> &sortKeys, std::vector<u32> &drawIndices) {
 ```
 
 > [!WARNING]
-> `values` must have the same size as `keys`, both scratch spans must be at least that large, and neither scratch
-> span may overlap the inputs (the sort ping-pongs between them). All of this is asserted and the input is left
-> untouched on a violation. The scratch contents are unspecified afterwards.
+> `values` must have the same size as `keys`, both scratch spans must be at least that large, and no two of the
+> spans may overlap (the sort ping-pongs between them and writes keys and values side by side). All of this is
+> asserted and the input is left untouched on a violation. The scratch contents are unspecified afterwards.
 
 ## API summary
 

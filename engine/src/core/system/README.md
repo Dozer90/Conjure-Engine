@@ -41,6 +41,14 @@ needs the operating system directly for a few of its modes.
   `/` is made absolute before the spawn, because the `chdir` file action runs in the child before
   `exec` and would otherwise resolve it against `workingDirectory` instead of the parent's current
   directory as the header promises. `argv[0]` stays as the caller wrote it.
+- Nothing goes through a shell. `CreateProcessW` would run a `.bat` or `.cmd` target through
+  `cmd.exe`, which parses the command line again with its own rules (`&`, `|`, `%`, `^`), so the
+  Windows backend refuses such an executable with `INVALID_ARGUMENT` (any case, also spelt with the
+  trailing dots or spaces Win32 drops); start `cmd.exe` explicitly instead, whose own parsing then
+  applies to the arguments (the quoting does not protect against it, so pass only trusted text that
+  way). A NUL character in the executable, an argument or an environment name or value is
+  `INVALID_ARGUMENT` on every platform (the operating system would cut the string short), reported
+  by index rather than text.
 - `environment` entries are merged into the inherited environment (case-insensitively on Windows
   through `CompareStringOrdinal`, block sorted as the platform documents); an empty value removes
   the variable. An empty name or one containing `=` is `INVALID_ARGUMENT`. Removing every variable
@@ -55,7 +63,10 @@ needs the operating system directly for a few of its modes.
   this the pipe of one child would leak into another child started concurrently and its reader
   would never see end-of-file. POSIX pipes are close-on-exec from creation (`pipe2(O_CLOEXEC)`
   on Linux; on macOS `POSIX_SPAWN_CLOEXEC_DEFAULT` lets only the descriptors named in the file
-  actions through), so a `start()` on another thread cannot inherit them either.
+  actions through), so a `start()` on another thread cannot inherit them either. On Linux with
+  glibc 2.34 or later `posix_spawn_file_actions_addclosefrom_np(3)` (added after the `dup2`s)
+  closes every other descriptor in the child too, matching macOS and the Windows handle list; with
+  an older C library (glibc before 2.34, musl) only close-on-exec descriptors are kept out.
 - POSIX children start with an empty signal mask and default dispositions
   (`POSIX_SPAWN_SETSIGMASK` / `POSIX_SPAWN_SETSIGDEF`), whatever the spawning thread blocks or
   the engine ignores.
@@ -79,7 +90,9 @@ needs the operating system directly for a few of its modes.
   A non-zero exit code is a result, not an error.
 - POSIX reaping: `is_running()` and `wait()` both call `waitpid`; a mutex held across the call
   serialises them (`is_running()` uses `try_lock` and reports the published state when a blocking
-  waiter owns the child), so the exit status can never be lost to an `ECHILD` loser.
+  waiter owns the child), so the exit status can never be lost to an `ECHILD` loser. When the host
+  ignores `SIGCHLD` (or reaps the child itself), `waitpid` fails with `ECHILD` and the status is
+  gone; the child then reports `KILLED_EXIT_CODE` (with a warning) instead of a made-up 0.
 
 ### dynamic_library
 
@@ -89,9 +102,13 @@ needs the operating system directly for a few of its modes.
   dependencies in that mode). Bare and relative names use `LoadLibraryW`'s default search. This
   deviates from the spec's literal `LoadLibraryW`; see the report.
 - `NOT_FOUND` when the file does not exist (Win32 `ERROR_MOD_NOT_FOUND` / `ERROR_FILE_NOT_FOUND`
-  for a path that is absent; on POSIX by checking the path, or the loader's "no such file" /
-  "not found" text for bare names), `BACKEND_FAILURE` with the loader's message for anything else
-  (wrong format, or a dependency missing while the file itself exists).
+  for a path that is absent; on POSIX by checking the path, and for a bare name only when the
+  loader's "no such file" / "image not found" text is about the requested name itself:
+  `detail::classify_bare_name_load_failure`), `BACKEND_FAILURE` with the loader's message for
+  anything else (wrong format, a symbol error, dyld's "Library not loaded", a dyld "tried:" entry
+  reporting a found file with the wrong architecture or an invalid code signature even when other
+  locations say "no such file", a glibc "cannot open shared object file" naming another object, or
+  any other dependency missing while the file itself exists).
 - `symbol_as<Fn>` copies the address bit-wise into the pointer type because object-to-function
   pointer casts are only conditionally supported.
 - `decorate_name` leaves a name that already ends with the platform extension unchanged and
@@ -129,7 +146,9 @@ needs the operating system directly for a few of its modes.
 
 `tests/core/system/` builds `conjure_core_system_tests` plus three helpers: `conjure_process_child`
 (echo / stderr / both / exit / sleep / args / env / envlist / cwd / flood / trickle / stdin / pid /
-signals / zero-write / spawn-sleeper modes) in the bin directory, and in `bin/core_system_libraries/`
+signals / zero-write / spawn-sleeper / fds / wait-for modes; `wait-for <path>` runs until a marker
+file appears, which is how the timing-sensitive cases gate the child on an event instead of a short
+sleep, and `fds` counts inherited descriptors) in the bin directory, and in `bin/core_system_libraries/`
 (outside every loader's default search) `conjure_test_shared_library` (exports `conjure_test_add`
 and `conjure_test_constant`) and `conjure_test_dependent_library` (imports the former, exports
 `conjure_test_add_twice`). The tests receive the helper paths as compile definitions.

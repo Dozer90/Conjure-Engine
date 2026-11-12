@@ -120,9 +120,22 @@ TEST_SUITE("core/rect") {
         CHECK(value.closest_point(vec2(-5.0f, 10.0f)) == vec2(0.0f, 4.0f));
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F220: closest_point of an invalid rect returns the point unchanged") {
+        const rect inverted = make_rect(2.0f, 2.0f, 0.0f, 0.0f);
+        REQUIRE_FALSE(inverted.is_valid());
+        CHECK(inverted.closest_point(vec2(5.0f, -1.0f)) == vec2(5.0f, -1.0f));
+        CHECK(inverted.closest_point(vec2(1.0f, 1.0f)) == vec2(1.0f, 1.0f));
+
+        // Invalid on one axis only is still invalid.
+        const rect flipped = make_rect(0.0f, 3.0f, 4.0f, 1.0f);
+        CHECK(flipped.closest_point(vec2(9.0f, 9.0f)) == vec2(9.0f, 9.0f));
+    }
+
     TEST_CASE("rect - factories build ordered rects") {
         CHECK(rect::from_position_size(vec2(1.0f, 2.0f), vec2(3.0f, 4.0f)) == make_rect(1.0f, 2.0f, 4.0f, 6.0f));
         CHECK(rect::from_position_size(vec2(1.0f, 2.0f), vec2(-3.0f, 4.0f)) == make_rect(-2.0f, 2.0f, 1.0f, 6.0f));
+        const rect leftward = rect::from_position_size(vec2(10.0f, 10.0f), vec2(-4.0f, 2.0f));
+        CHECK(leftward == make_rect(6.0f, 10.0f, 10.0f, 12.0f));
         CHECK(rect::from_center_extents(vec2(0.0f), vec2(1.0f, 2.0f)) == make_rect(-1.0f, -2.0f, 1.0f, 2.0f));
         CHECK(rect::from_center_extents(vec2(0.0f), vec2(-1.0f, 2.0f)) == make_rect(-1.0f, -2.0f, 1.0f, 2.0f));
         CHECK(rect::from_points(vec2(4.0f, 1.0f), vec2(1.0f, 4.0f)) == make_rect(1.0f, 1.0f, 4.0f, 4.0f));

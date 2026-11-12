@@ -19,10 +19,13 @@
 //   result<process_result> built = process::run(desc);
 //
 // Arguments are passed as an array, never through a shell, so callers do not quote anything; the
-// Windows backend applies the MSVCRT quoting rules so the child's argv matches exactly. Standard
-// output and standard error are drained concurrently while the child runs, so a child producing
-// large amounts of output on both streams never deadlocks. The child's standard input is the null
-// device.
+// Windows backend applies the MSVCRT quoting rules so the child's argv matches exactly. Windows would
+// run a .bat or .cmd executable through cmd.exe, which re-parses the arguments, so such an executable is
+// INVALID_ARGUMENT (start cmd.exe explicitly instead, whose own parsing then applies to the arguments,
+// so pass it only trusted text); a NUL character in the executable, an argument or the environment is
+// INVALID_ARGUMENT on every platform. Standard output and standard error are drained concurrently while
+// the child runs, so a child producing large amounts of output on both streams never deadlocks. The
+// child's standard input is the null device.
 
 namespace conjure::core {
 
@@ -33,12 +36,15 @@ namespace conjure::core {
         /// <summary>
         /// Path of the program, or a bare name searched in the inherited PATH (and, on Windows,
         /// the parent's directory). A relative path is resolved against the parent's current
-        /// directory, not against workingDirectory.
+        /// directory, not against workingDirectory. On Windows a .bat or .cmd file (any case, also
+        /// spelt with trailing dots or spaces) is INVALID_ARGUMENT because cmd.exe would re-parse
+        /// the arguments; a NUL character is INVALID_ARGUMENT everywhere.
         /// </summary>
         std::string executable = {};
 
         /// <summary>
-        /// argv[1..] of the child, unquoted.
+        /// argv[1..] of the child, unquoted. An argument containing a NUL character is
+        /// INVALID_ARGUMENT.
         /// </summary>
         std::vector<std::string> arguments = {};
 
@@ -49,8 +55,8 @@ namespace conjure::core {
 
         /// <summary>
         /// Variables added to, or overriding, the inherited environment. A pair with an empty
-        /// value removes the variable. Names are case-insensitive on Windows; an empty name or
-        /// one containing '=' is INVALID_ARGUMENT.
+        /// value removes the variable. Names are case-insensitive on Windows; an empty name, one
+        /// containing '=' or a NUL character in a name or value is INVALID_ARGUMENT.
         /// </summary>
         std::vector<std::pair<std::string, std::string>> environment = {};
 
@@ -87,7 +93,9 @@ namespace conjure::core {
     struct process_result {
         /// <summary>
         /// The child's exit code. process::KILLED_EXIT_CODE when it was killed by kill() or by
-        /// the timeout; on POSIX a death by another signal reports the negated signal number.
+        /// the timeout, and also when the exit status could not be obtained (POSIX: the host
+        /// ignores SIGCHLD or reaped the child itself); on POSIX a death by another signal reports
+        /// the negated signal number.
         /// A child that exited on its own keeps its code even when the timeout later kills the
         /// descendants it left behind (timedOut is set in that case too).
         /// </summary>
@@ -130,7 +138,9 @@ namespace conjure::core {
 
         public:
             /// <summary>
-            /// Exit code reported for a child killed by kill() or by the timeout.
+            /// Exit code reported for a child killed by kill() or by the timeout, and for a child
+            /// whose exit status was lost (POSIX: SIGCHLD ignored by the host, or the child reaped
+            /// elsewhere), so a lost status never reads as success.
             /// </summary>
             static constexpr i32 KILLED_EXIT_CODE = -1;
 

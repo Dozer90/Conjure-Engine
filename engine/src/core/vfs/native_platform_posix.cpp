@@ -114,6 +114,10 @@ std::filesystem::path internal::extend_native_path(const std::filesystem::path &
     return path;
 }
 
+std::filesystem::path internal::always_extended_native_path(const std::filesystem::path &path) {
+    return path;
+}
+
 result<void> internal::replace_file(const std::filesystem::path &source, const std::filesystem::path &target) {
     // POSIX rename(2) replaces an existing destination file atomically.
     std::error_code code = {};
@@ -125,4 +129,9 @@ result<void> internal::replace_file(const std::filesystem::path &source, const s
         );
     }
     return result<void>::success();
+}
+
+bool internal::rename_falls_back_to_move(u32) noexcept {
+    // rename(2) is the only route here; there is nothing to fall back to.
+    return false;
 }

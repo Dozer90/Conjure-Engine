@@ -158,7 +158,7 @@ class projectile_pool {
 | Call | Behaviour |
 |---|---|
 | `allocate()` / `deallocate(block)` | raw blocks; `allocate()` returns `nullptr` at the slab cap or when the heap refuses |
-| `allocate_as<T>()` | typed uninitialised storage; asserts and returns `nullptr` when `T` does not fit |
+| `allocate_as<T>()` | typed uninitialised storage; asserts and returns `nullptr` when `T` is larger than `block_size()` or more aligned than `alignment()` |
 | `construct<T>(args...)` / `destroy(object)` | build and tear down an object in a block |
 | `shrink_to_fit()` | frees every slab with no live block |
 | `live_count()` / `capacity()` / `slab_count()` / `block_size()` / `alignment()` / `owns(pointer)` | statistics and checks |
@@ -166,6 +166,9 @@ class projectile_pool {
 > [!TIP]
 > Nothing is allocated until the first `allocate()`, so a pool can be a plain member of a class that is often
 > left unused. `block_size()` reports the effective block size (rounded up to the alignment and to a pointer).
+> `alignment()` reports the requested alignment raised to at least `alignof(void *)`, because a free block stores
+> its link in place; `allocate_as<T>()` checks `T` against that same alignment, so on a 64-bit build a pool created
+> with alignment 4 still hands out blocks for a `u64`.
 
 > [!WARNING]
 > Returning a pointer the pool does not own, a pointer into the middle of a block, or a block that is already

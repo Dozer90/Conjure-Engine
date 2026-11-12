@@ -12,10 +12,6 @@
 
 namespace conjure::core {
 
-    /// <summary>
-    /// Either a value or an error. The engine's replacement for exceptions. Check with
-    /// has_value() (or operator bool) before calling value().
-    /// </summary>
     namespace detail {
         /// <summary>
         /// Accessing the wrong alternative of a result is a programmer error. It asserts, and
@@ -29,6 +25,10 @@ namespace conjure::core {
         }
     }
 
+    /// <summary>
+    /// Either a value or an error. The engine's replacement for exceptions. Check with
+    /// has_value() (or operator bool) before calling value().
+    /// </summary>
     template <typename ValueType>
     class [[nodiscard]] result {
         private:

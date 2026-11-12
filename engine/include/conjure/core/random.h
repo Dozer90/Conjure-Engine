@@ -17,8 +17,10 @@
 //
 // The engine is std::mt19937_64 everywhere so seeded runs replay identically. The helpers below
 // draw from any uniform random bit generator but deliberately avoid the standard distributions,
-// whose algorithms differ between standard libraries: given the same engine state they produce
-// the same values on every platform.
+// whose algorithms differ between standard libraries: uniform and chance produce the same values on
+// every platform for the same engine state. unit_vector3 consumes the same engine draws everywhere
+// (two 64-bit draws), so the engine state stays in step, but its x and y go through std::cos /
+// std::sin and can differ in the last bit between C runtimes (z is exact).
 //
 //   random::engine &generator = random::default_engine();       // this thread's engine
 //   const i32 damage = random::uniform(generator, 10, 20);       // inclusive
@@ -197,6 +199,9 @@ namespace conjure::core::random {
     /// <summary>
     /// A uniformly distributed point on the unit sphere, built as Vector3{x, y, z}. The default
     /// is a plain array; pass math::vec3 (or any type constructible from three floats) to get it.
+    /// Consumes two 64-bit draws (two calls of random::engine). x and y come from std::cos /
+    /// std::sin and are not bit-identical across platforms; do not hash or compare them bit for bit
+    /// across machines.
     /// </summary>
     template <typename Vector3 = std::array<f32, 3>, std::uniform_random_bit_generator Generator>
     [[nodiscard]] Vector3 unit_vector3(Generator &generator) {
@@ -299,7 +304,8 @@ namespace conjure::core::random {
             }
 
             /// <summary>
-            /// A uniformly distributed point on the unit sphere.
+            /// A uniformly distributed point on the unit sphere. Two engine draws; x and y may differ
+            /// in the last bit between platforms (see the free random::unit_vector3).
             /// </summary>
             template <typename Vector3 = std::array<f32, 3>>
             [[nodiscard]] Vector3 unit_vector3() {

@@ -2,6 +2,7 @@
 
 // Helpers shared by the platform backends of the system area. Private to engine/src/core/system.
 
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -11,6 +12,17 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <string_view>
+
+// 1 when the POSIX backend can close every descriptor above the standard three in the child
+// (posix_spawn_file_actions_addclosefrom_np, glibc 2.34 or later on Linux). The standard headers above
+// define __GLIBC__ through <features.h> on a glibc system. The process tests read it too, so the guard
+// and the test expectation cannot drift apart.
+#if CONJURE_PLATFORM_LINUX && defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
+    #define CONJURE_SPAWN_CLOSEFROM_AVAILABLE 1
+#else
+    #define CONJURE_SPAWN_CLOSEFROM_AVAILABLE 0
+#endif
 
 namespace conjure::core::detail {
 
@@ -24,11 +36,25 @@ namespace conjure::core::detail {
     }
 
     /// <summary>
-    /// Checks the platform-independent parts of a process description: executable set, timeout
-    /// finite and not negative, environment names non-empty and free of '=', mergeStderr only
-    /// together with captureStdout, working directory existing.
+    /// Checks the platform-independent parts of a process description: executable set, no NUL in
+    /// the executable, an argument or an environment entry, timeout finite and not negative,
+    /// environment names non-empty and free of '=', mergeStderr only together with captureStdout,
+    /// working directory existing.
     /// </summary>
     [[nodiscard]] status validate_process_desc(const process_desc &desc);
+
+    /// <summary>
+    /// The error code for a failed dlopen of a bare name (no directory part), where only the loader's
+    /// text tells what went wrong. NOT_FOUND only when the "no such file" / "image not found" text is
+    /// about 'requested' itself; a symbol error, dyld's "Library not loaded", a dyld search location
+    /// holding a file of the wrong architecture or with an invalid code signature, and a glibc "cannot
+    /// open shared object file" naming another object (a missing dependency) are BACKEND_FAILURE, as is
+    /// anything else. Pure, so every platform can test it.
+    /// </summary>
+    [[nodiscard]] error_code classify_bare_name_load_failure(
+      std::string_view requested,
+      std::string_view loaderMessage
+    );
 
     /// <summary>
     /// The timeout a backend works with: process_desc::timeoutSeconds limited to

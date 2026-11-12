@@ -34,6 +34,7 @@ TEST_SUITE("core/vfs") {
         REQUIRE(mounts.mount("cooked", std::make_shared<memory_file_system>()));
 
         REQUIRE(mounts.write_text_file("project://scenes/main.scene", "{}"));
+        REQUIRE(mounts.create_directories("cooked://scenes"));
         REQUIRE(mounts.rename("project://scenes/main.scene", "cooked://scenes/main.scene"));
 
         CHECK_FALSE(mounts.exists("project://scenes/main.scene"));

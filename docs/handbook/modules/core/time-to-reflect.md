@@ -35,14 +35,17 @@ Purpose: clocks, randomness, events, delegates and the engine-wide event bus (`c
 ### 1.2 Algorithms
 
 The random helpers implement their own bounded-integer and unit-float draws so a seed replays identically on
-every platform (`test_random.cpp` pins the first outputs for `DEFAULT_SEED`). `event` handlers may subscribe,
-unsubscribe themselves, emit recursively or destroy the event during an emit.
+every platform (`test_random.cpp` pins the first outputs for `DEFAULT_SEED`; `unit_vector3`'s x and y excepted:
+they use libm `cos`/`sin`, and the golden test compares them with a tolerance, while its two engine draws and its
+z stay exact). `event` handlers may subscribe, unsubscribe themselves, emit recursively or destroy the event
+during an emit.
 
 ### 1.3 Threading
 
 Clocks, events, delegates and the subscribe/publish half of `event_bus` are main-thread objects;
 `steady_clock::now_seconds` and the tick functions are stateless; `event_bus::enqueue` is mutex-guarded and the
-queue is swapped out before dispatch; `random::default_engine()` is `thread_local`.
+queue is swapped out before dispatch (the emptied buffer is handed back afterwards when nothing was enqueued
+meanwhile, so steady enqueueing does not reallocate); `random::default_engine()` is `thread_local`.
 
 ### 1.4 Tests
 
@@ -101,7 +104,8 @@ Purpose: the engine's threading primitives, and the only area that creates `std:
   worker other than the thread that queued them.
 - **Main thread.** The first caller of `set_main_thread()` or the constructor of the first `job_system`;
   absent both, the first thread to call `is_main_thread()`. `drain_main_thread_queue` swaps the vector out
-  before running, asserts and runs nothing off the main thread, and never claims the designation.
+  before running and hands the emptied buffer back when nothing was posted meanwhile (so steady posting does
+  not reallocate), asserts and runs nothing off the main thread, and never claims the designation.
 - **Errors.** `start()` returns `INVALID_STATE` when running and `INVALID_ARGUMENT` for a zero or
   over-`MAX_QUEUED_JOBS` (2^20) queue, more than `MAX_WORKER_COUNT` (256) workers or an empty prefix.
 
@@ -188,13 +192,20 @@ helpers (`namespace conjure::core::vfs`).
   OS text) and enumerates in ascending path order.
 - The native backend reads through handles opened with delete sharing (`CreateFileW` with `FILE_SHARE_DELETE`,
   `pread` on POSIX) so an open reader never blocks `write_file_atomic`, `rename` or `remove`; atomic writes go
-  to `<path>.tmp-<uuid>` and swap in with `FileRenameInfoEx` + `POSIX_SEMANTICS` (fallback `MoveFileExW`) or
-  `std::filesystem::rename`.
+  to `<path>.tmp-<uuid>` and swap in with `FileRenameInfoEx` + `POSIX_SEMANTICS` (fallback `MoveFileExW` for the
+  codes `internal::rename_falls_back_to_move` lists, `ERROR_INVALID_FUNCTION` from network redirectors among
+  them) or `std::filesystem::rename`. Recursive `enumerate` and `remove_all` start their walk from the
+  extended-length form on Windows, so an entry nested past the classic path limit below a short root is still
+  reached; write times convert without reading a clock, so an unchanged file always reports the same value.
 - The memory backend stores immutable `shared_ptr<const vector<byte>>` contents, so open handles keep reading
   their snapshot; write times come from a per-instance counter.
 - The mount table validates schemes, accepts `assets` and `assets://` interchangeably, refuses to mount itself
-  (directly or through other tables) and moves files across backends by copy-and-remove. Engine mounts (R24):
-  `project://`, `assets://`, `engine://`, `cooked://`, `modules://<name>/`.
+  (directly or through other tables) and moves files across backends by copy-and-remove. `rename` first
+  follows both URIs through nested tables to the backends that store them, so one backend reached by two
+  routes gets a real rename. The move keeps the rename contract against those backends (a backend root at
+  either end, a read-only source, a directory at the destination and a missing destination parent are refused
+  before anything is copied), writes the copy atomically and removes a new copy again when the source cannot
+  be removed. Engine mounts (R24): `project://`, `assets://`, `engine://`, `cooked://`, `modules://<name>/`.
 
 ### 4.3 Threading
 
@@ -225,10 +236,13 @@ Purpose: operating-system services the rest of the engine must not touch directl
 
 ### 5.2 Algorithms
 
-- Arguments are passed as an array (Windows applies the MSVCRT quoting rules so the child's `argv` matches);
-  captured streams are drained while the child runs so large output never deadlocks; `kill()` and the timeout
-  terminate the whole tree (a job object on Windows, `kill(-pid)` on a child in its own process group);
-  destroying an un-waited `process` kills the tree first.
+- Arguments are passed as an array (Windows applies the MSVCRT quoting rules so the child's `argv` matches, and
+  refuses a `.bat` / `.cmd` executable because `cmd.exe` would re-parse them; a NUL anywhere in the description
+  is `INVALID_ARGUMENT`); children inherit only the standard streams (handle list, `POSIX_SPAWN_CLOEXEC_DEFAULT`,
+  `posix_spawn_file_actions_addclosefrom_np` on glibc 2.34+); captured streams are drained while the child runs
+  so large output never deadlocks; `kill()` and the timeout terminate the whole tree (a job object on Windows,
+  `kill(-pid)` on a child in its own process group); destroying an un-waited `process` kills the tree first; a
+  status lost to `ECHILD` reports `KILLED_EXIT_CODE`.
 - `dynamic_library::load` uses `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
   LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` for absolute paths (a plugin finds a dependency shipped next to it) and
   `dlopen(RTLD_NOW | RTLD_LOCAL)` on POSIX; `symbol_as` copies the address bit-wise because object-to-function
@@ -273,11 +287,13 @@ mirror (`namespace conjure::core::reflect`).
 - `layout_hash()` is FNV-1a 64 over `(name bytes, kind byte, offset u32 LE, size u32 LE)` per field in order
   and is the single mirror-hash definition shared with C# (R61); `test_type_info.cpp` pins
   `0xfe13925eca48303a` for `test.inner`.
-- The registry validates layouts, returns the existing description for an identical re-registration and
-  `ALREADY_EXISTS` otherwise, refuses to unregister a type another live struct still references
-  (`INVALID_STATE`), and keeps retired descriptions allocated so a lock-free reader racing a removal never
-  touches freed memory. The id index (`engine/src/core/reflect/pointer_index.h`) is a chain of grow-only
-  open-addressing tables with release/acquire publication.
+- The registry validates layouts, returns the existing description for an identical re-registration
+  (`has_same_layout`: size, alignment and every field, including an array's element kind and count and the
+  type a `STRUCT` or `ENUM` value refers to, which `layout_hash()` does not cover) and `ALREADY_EXISTS`
+  otherwise, refuses to unregister a type another live struct still references (`INVALID_STATE`), and keeps
+  retired descriptions allocated so a lock-free reader racing a removal never touches freed memory. The id
+  index (`engine/src/core/reflect/pointer_index.h`) is a chain of grow-only open-addressing tables with
+  release/acquire publication.
 - JSON reads are lenient (missing members keep their value, unknown members are reported, `3.0` is accepted
   for an integer) and stop at the first failing field with a message naming the path.
 

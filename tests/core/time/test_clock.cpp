@@ -181,7 +181,15 @@ TEST_SUITE("core/clock") {
         const core::stopwatch watch = {};
 
         CHECK(&watch.source() == &core::default_clock());
-        CHECK(watch.elapsed_seconds() >= 0.0);
+
+        // The lower bound is half the 2 ms wait: sleep_until only guarantees now >= fl(start + 0.002), and
+        // when the stopwatch start and the deadline reading share one tick the f64 difference can come out
+        // a few ulps short of 0.002. A clock that never advances still fails it.
+        const f64 deadline = core::default_clock().now_seconds() + 0.002;
+        core::default_clock().sleep_until(deadline);
+        const f64 elapsed = watch.elapsed_seconds();
+        CHECK(elapsed >= 0.001);
+        CHECK(elapsed < 5.0);
     }
 
     TEST_CASE("clock - default_clock is one shared steady instance") {
@@ -227,7 +235,10 @@ TEST_SUITE("core/clock") {
         SUBCASE("sleep_until with a deadline in the past returns immediately") {
             const f64 before = first.now_seconds();
             first.sleep_until(before - 10.0);
-            CHECK(first.now_seconds() >= before);
+            const f64 after = first.now_seconds();
+            CHECK(after >= before);
+            // The same generous bound as above: an implementation that slept for the 10 s gap fails it.
+            CHECK(after - before < 1.0);
         }
 
         SUBCASE("sleep_until does not return before the deadline") {

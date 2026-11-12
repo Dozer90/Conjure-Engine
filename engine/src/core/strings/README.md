@@ -64,18 +64,24 @@ Headers (`conjure/core/`):
 - `str::parse_double` uses `std::from_chars` where the standard library provides it and falls back to
   `strtod` (C locale assumed) otherwise. Both paths reject hexadecimal floats, overflow (`1e400`) and
   underflow to zero (`1e-400`), and both accept denormals (`1e-320`), so behaviour is identical
-  everywhere. `str::parse_float` rejects finite values outside the `f32` range before narrowing.
+  everywhere. Both paths also reject the `infinity` and `nan(...)` spellings that `from_chars` and
+  `strtod` accept, so only `inf` and `nan` (any case, optional sign) parse as non-finite values.
+  `str::parse_float` rejects finite values outside the `f32` range before narrowing.
 - `str::to_wide` / `from_wide` produce UTF-16 where `wchar_t` is 16 bits (Windows) and UTF-32 where
   it is 32 bits, with no platform `#ifdef`; `to_utf16` / `from_utf16` and `to_utf32` / `from_utf32`
   expose both encodings on every platform.
 - `bit_vector` keeps every bit past `size()` zero, so `count()`, `any()`, `==` and the bitwise
   operators work on whole words. Mixing vectors of different sizes asserts.
+- `bit_vector`'s move constructor and move assignment are written out in `bit_vector.cpp`: the
+  moved-from vector is empty (size 0, no words) and reusable, and a self-move assignment is a
+  no-op. Defaulted moves would leave the old size over an emptied word array.
 - `bit_vector::set_bit_iterator` models `std::forward_iterator` but reports the legacy
   `input_iterator_tag` because it dereferences to a value, like `std::ranges::iota_view`'s iterator.
   Incrementing the end iterator asserts and leaves it at the end.
 - The radix sort skips any 8-bit pass in which every key shares the same digit, so already sorted,
-  all-equal and small-range inputs cost one histogram sweep plus the passes that matter. Scratch
-  buffers must not overlap the inputs (asserted; the input is left untouched).
+  all-equal and small-range inputs cost one histogram sweep plus the passes that matter. No two of
+  the spans (keys, values and both scratch buffers) may overlap (every pair is asserted; the input
+  is left untouched).
 
 ## Testing
 
@@ -89,5 +95,6 @@ The suite covers constexpr construction, lazy interning, static/namespace-scope 
 un-interned, collision asserts through the public constructor and `intern` (`assert_capture` +
 `log_capture`), re-entrant handlers and sinks during a collision report, interning from 8 threads,
 UTF-8/UTF-16/UTF-32 round trips and malformed input, float parsing at the overflow/underflow edges,
-the `std::forward_iterator` concept for set-bit iteration, radix sorting against `std::stable_sort`
-on random, sorted, equal, empty, single and 100k-element inputs, and aliasing scratch detection.
+the `std::forward_iterator` concept for set-bit iteration, the moved-from `bit_vector`, radix
+sorting against `std::stable_sort` on random, sorted, equal, empty, single and 100k-element inputs,
+and aliasing scratch detection.

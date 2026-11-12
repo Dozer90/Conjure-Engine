@@ -43,17 +43,19 @@ pool_allocator::pool_allocator(usize blockSize, usize alignment, u32 blocksPerSl
         mAlignment = DEFAULT_ALIGNMENT;
     }
 
+    // A free block stores its link in place, so every block is aligned for the link as well: that is
+    // the alignment the pool really guarantees, and what alignment() and allocate_as() report.
+    mAlignment = std::max(mAlignment, alignof(free_block));
+
     CONJURE_ASSERT(blocksPerSlab > 0, "a pool slab must hold at least one block");
     if (blocksPerSlab == 0) {
         mBlocksPerSlab = 1;
     }
 
-    // A free block stores its link in place, so a block is at least one pointer and the stride is a
-    // multiple of both the requested alignment and the link's alignment: every block in a slab is
-    // then correctly aligned for the caller and for the free list, and the bitmap that follows the
-    // blocks starts on a word boundary.
-    const usize strideAlignment = std::max(mAlignment, alignof(free_block));
-    mBlockBytes = align_up(std::max(blockSize, sizeof(free_block)), strideAlignment);
+    // A block is at least one pointer and the stride is a multiple of the (raised) alignment: every
+    // block in a slab is then correctly aligned for the caller and for the free list, and the bitmap
+    // that follows the blocks starts on a word boundary.
+    mBlockBytes = align_up(std::max(blockSize, sizeof(free_block)), mAlignment);
 
     // A slab allocation is the blocks followed by the free bitmap. When the size would wrap, the pool
     // simply never grows (allocate() returns nullptr) instead of asking the heap for a wrapped size.

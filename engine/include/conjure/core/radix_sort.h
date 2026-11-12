@@ -15,15 +15,16 @@
 // key shares the same byte, so already sorted, all-equal and small-range inputs finish in one read
 // sweep plus the passes that matter. Equal keys keep their relative order. The caller provides the
 // scratch buffers so the sort never allocates; they must be at least as large as the inputs and
-// must not overlap them (the sort ping-pongs between the two, so aliasing corrupts the data).
+// must not overlap the inputs or each other (the sort ping-pongs between them, so aliasing corrupts
+// the data).
 
 namespace conjure::core {
 
     /// <summary>
     /// Sorts 'keys' ascending and permutes 'values' alongside them. Stable. 'values' must have the
-    /// same size as 'keys', both scratch spans must be at least that large and neither scratch span
-    /// may overlap 'keys' or 'values' (all asserted; the input is left untouched on violation). On
-    /// return the sorted data is in 'keys'/'values'; the scratch contents are unspecified.
+    /// same size as 'keys', both scratch spans must be at least that large and no two of the four
+    /// spans may overlap (all asserted; the input is left untouched on violation). On return the
+    /// sorted data is in 'keys'/'values'; the scratch contents are unspecified.
     /// </summary>
     CONJURE_API void radix_sort_u64(
       std::span<u64> keys,

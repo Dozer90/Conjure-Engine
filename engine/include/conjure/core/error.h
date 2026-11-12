@@ -4,6 +4,7 @@
 #include "conjure/core/hash.h"
 #include "conjure/core/types.h"
 
+#include <concepts>
 #include <format>
 #include <string>
 #include <string_view>
@@ -114,7 +115,9 @@ namespace conjure::core {
             }
 
             /// <summary>
-            /// FNV-1a 32 hash of the category name. 0 for a default-constructed error.
+            /// FNV-1a 32 hash of the category name. A default-constructed error carries the core
+            /// category (error_category_traits<error_code>::ID) with code NONE; test for "no error"
+            /// with is(error_code::NONE), not with category() == 0.
             /// </summary>
             [[nodiscard]] u32 category() const noexcept {
                 return mCategory;

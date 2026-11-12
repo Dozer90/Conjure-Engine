@@ -305,6 +305,45 @@ TEST_SUITE("core/radix_sort") {
         CHECK(halves[2] == 3);
     }
 
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F204: any two overlapping radix_sort spans assert and leave the input unchanged"
+    ) {
+        testing::expect_assert asserts = {};
+        std::vector<u32> keys = {3, 1, 2, 5, 4};
+        std::vector<u32> values = {0, 1, 2, 3, 4};
+        std::vector<u32> scratchKeys(5, 0);
+        std::vector<u32> scratchValues(5, 0);
+        const std::vector<u32> originalKeys = keys;
+        const std::vector<u32> originalValues = values;
+
+        SUBCASE("the scratch keys and scratch values are one buffer") {
+            radix_sort_u32(keys, values, scratchKeys, scratchKeys);
+        }
+
+        SUBCASE("the scratch values are the keys") {
+            radix_sort_u32(keys, values, scratchKeys, keys);
+        }
+
+        SUBCASE("the scratch keys are the values") {
+            radix_sort_u32(keys, values, values, scratchValues);
+        }
+
+        SUBCASE("the keys and the values are one buffer") {
+            radix_sort_u32(keys, keys, scratchKeys, scratchValues);
+        }
+
+        SUBCASE("the scratch keys and scratch values partially overlap") {
+            std::vector<u32> shared(8, 0);
+            const std::span<u32> sharedKeys(shared.data(), 5);
+            const std::span<u32> sharedValues(shared.data() + 3, 5);
+            radix_sort_u32(keys, values, sharedKeys, sharedValues);
+        }
+
+        CHECK(asserts.count() == 1);
+        CHECK(keys == originalKeys);
+        CHECK(values == originalValues);
+    }
+
     TEST_CASE("radix_sort - sorting is deterministic") {
         const std::vector<u64> keys = random_keys<u64>(1000, std::numeric_limits<u64>::max());
         sort_fixture<u64> first(keys);

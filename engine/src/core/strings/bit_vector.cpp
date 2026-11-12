@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <utility>
 
 using namespace conjure::core;
 
@@ -26,6 +27,24 @@ bit_vector::bit_vector(usize size, bool value) :
     mWords(words_for(size), value ? ALL_ONES : 0u),
     mSize(size) {
     clear_trailing_bits();
+}
+
+bit_vector::bit_vector(bit_vector &&other) noexcept :
+    mWords(std::move(other.mWords)),
+    mSize(std::exchange(other.mSize, usize{0})) {
+    // Only an empty word array matches size 0, whatever state std::vector leaves its source in.
+    other.mWords.clear();
+}
+
+bit_vector &bit_vector::operator=(bit_vector &&other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+
+    mWords = std::move(other.mWords);
+    mSize = std::exchange(other.mSize, usize{0});
+    other.mWords.clear();
+    return *this;
 }
 
 

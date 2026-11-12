@@ -154,11 +154,14 @@ namespace conjure::core {
 
         public:
             /// <summary>
-            /// Replaces the contents with 'count' copies of 'value'.
+            /// Replaces the contents with 'count' copies of 'value'. 'value' may refer to an element of
+            /// this vector.
             /// </summary>
             void assign(usize count, const T &value) {
+                // clear() would destroy an aliased 'value' before it is read.
+                const T copy(value);
                 clear();
-                resize(count, value);
+                resize(count, copy);
             }
 
             /// <summary>
@@ -233,12 +236,20 @@ namespace conjure::core {
                     return end();
                 }
                 if constexpr (!std::forward_iterator<Iterator>) {
+                    // Moved in directly: re-dispatching through std::move_iterator<T *> would recurse
+                    // forever on standard libraries where it is only an input iterator (before P2520).
                     small_vector collected(first, last);
-                    return insert(
-                      mData + index,
-                      std::move_iterator<iterator>(collected.begin()),
-                      std::move_iterator<iterator>(collected.end())
-                    );
+                    const usize count = collected.size();
+                    if (count == 0) {
+                        return mData + index;
+                    }
+                    open_gap(index, count);
+                    T *destination = mData + index;
+                    for (usize offset = 0; offset < count; ++offset) {
+                        std::construct_at(destination + offset, std::move(collected[offset]));
+                    }
+                    mSize += count;
+                    return mData + index;
                 } else {
                     const usize count = static_cast<usize>(std::distance(first, last));
                     if (count == 0) {
@@ -346,7 +357,8 @@ namespace conjure::core {
             }
 
             /// <summary>
-            /// Grows with copies of 'value' or shrinks by destroying the tail.
+            /// Grows with copies of 'value' or shrinks by destroying the tail. 'value' may refer to an
+            /// element of this vector.
             /// </summary>
             void resize(usize count, const T &value) {
                 if (count < mSize) {
@@ -354,7 +366,14 @@ namespace conjure::core {
                     mSize = count;
                     return;
                 }
-                reserve(count);
+                if (count > mCapacity) {
+                    // The reallocation moves the elements out and releases their old storage, which
+                    // would leave an aliased 'value' dangling; copy it out first.
+                    const T copy(value);
+                    reserve(count);
+                    resize(count, copy);
+                    return;
+                }
                 for (usize index = mSize; index < count; ++index) {
                     std::construct_at(mData + index, value);
                 }

@@ -17,17 +17,22 @@
 //   zero-write             print "before", perform a zero-length write to stdout, print "after"
 //   spawn-sleeper <ms>     start this program in "sleep <ms>" mode with inherited standard
 //                          streams, print "spawned" and exit at once, leaving the grandchild
+//   fds                    print how many descriptors from 3 to 1023 are open (POSIX); print 0
+//                          on Windows, where inheritance is limited to the standard handles
+//   wait-for <path>        poll every 5 ms until <path> exists, then exit 0; exit 4 after 60 s
+//                          so a child whose marker never appears does not linger
 //
 // Anything else prints a usage line to stderr and exits with 2.
 //
-// This is a test program, not engine code: the pid, zero-write and spawn-sleeper modes need the
-// operating system directly, so the platform guard below is accepted here.
+// This is a test program, not engine code: the pid, zero-write, spawn-sleeper and fds modes need
+// the operating system directly, so the platform guard below is accepted here.
 
 #include "conjure/core/platform_detect.h"
 
 #if CONJURE_PLATFORM_WINDOWS
     #include <Windows.h>
 #else
+    #include <fcntl.h>
     #include <spawn.h>
     #include <unistd.h>
 #endif
@@ -224,6 +229,41 @@ namespace {
         std::cout.flush();
         return 0;
     }
+
+    // Descriptors beyond the standard three that this process inherited (nothing here opens any).
+    int count_open_descriptors() {
+        int open = 0;
+#if !CONJURE_PLATFORM_WINDOWS
+        constexpr int FIRST_DESCRIPTOR = 3;
+        constexpr int LAST_DESCRIPTOR = 1023;
+        for (int descriptor = FIRST_DESCRIPTOR; descriptor <= LAST_DESCRIPTOR; ++descriptor) {
+            if (::fcntl(descriptor, F_GETFD) != -1) {
+                ++open;
+            }
+        }
+#endif
+        std::cout << open << '\n';
+        std::cout.flush();
+        return 0;
+    }
+
+    // A marker file is the portable "go" signal: standard input is always the null device.
+    int wait_for(std::string_view path) {
+        constexpr int GIVE_UP_EXIT_CODE = 4;
+        constexpr std::chrono::seconds GIVE_UP_AFTER = std::chrono::seconds(60);
+
+        // argv holds the narrow native encoding, which is what a std::string path is read as.
+        const std::filesystem::path marker = std::filesystem::path(std::string(path));
+        const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + GIVE_UP_AFTER;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::error_code ignored = {};
+            if (std::filesystem::exists(marker, ignored)) {
+                return 0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return GIVE_UP_EXIT_CODE;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -303,6 +343,12 @@ int main(int argc, char **argv) {
     }
     if (mode == "spawn-sleeper") {
         return spawn_sleeper(argv[0], rest.empty() ? "60000" : rest.front());
+    }
+    if (mode == "fds") {
+        return count_open_descriptors();
+    }
+    if (mode == "wait-for") {
+        return rest.empty() ? usage(mode) : wait_for(rest.front());
     }
     return usage(mode);
 }

@@ -78,7 +78,8 @@ CONJURE_REFLECT_ENUM(damage_type, "game.damage_type", BLUNT, FIRE);
   4 or 8 bytes), requires every STRUCT/ENUM field pointer to be a live description of the same
   registry (a stack-local `type_info` would dangle), derives a null id from the name and rejects an
   id that does not match it. The same id registered again returns the existing description when
-  `has_same_layout` (size, alignment, layout hash) holds and fails with `ALREADY_EXISTS` otherwise.
+  `has_same_layout` (size, alignment and every field, including an array's element kind and count and
+  the type a STRUCT or ENUM value refers to) holds and fails with `ALREADY_EXISTS` otherwise.
   `register_enum` applies the same policy with full equality of the description.
 - `unregister_type` / `unregister_enum` (module unload) fail with `INVALID_STATE` while a live struct
   has a field (or array element) of that type, `NOT_FOUND` when unknown. Retired descriptions stay

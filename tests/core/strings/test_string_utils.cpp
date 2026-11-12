@@ -70,6 +70,29 @@ TEST_SUITE("core/string_utils") {
         static_assert(str::trim("  a  ") == "a");
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F216: trimming everything leaves an empty view into the input") {
+        const std::string blank = "  \t ";
+
+        const std::string_view trimmed = str::trim(blank);
+        CHECK(trimmed.empty());
+        CHECK(trimmed.data() == blank.data() + blank.size());
+
+        const std::string_view left = str::trim_left(blank);
+        CHECK(left.empty());
+        CHECK(left.data() == blank.data() + blank.size());
+
+        const std::string_view right = str::trim_right(blank);
+        CHECK(right.empty());
+        CHECK(right.data() == blank.data());
+
+        const std::string dashes = "---";
+        CHECK(str::trim(dashes, "-").data() == dashes.data() + dashes.size());
+
+        static_assert(str::trim("   ").empty());
+        static_assert(str::trim_left("   ").empty());
+        static_assert(str::trim_right("   ").empty());
+    }
+
     TEST_CASE("string_utils - trim accepts a custom character set") {
         CHECK(str::trim("--x--", "-") == "x");
         CHECK(str::trim_left("//path/", "/") == "path/");
@@ -300,6 +323,34 @@ TEST_SUITE("core/string_utils") {
         CHECK_FALSE(str::parse_double("0X10").has_value());
         CHECK_FALSE(str::parse_double("1e400").has_value());
         CHECK_FALSE(str::parse_double("-1e400").has_value());
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F217: parse_double rejects the 'infinity' and 'nan(...)' spellings") {
+        CHECK_FALSE(str::parse_double("infinity").has_value());
+        CHECK_FALSE(str::parse_double("-Infinity").has_value());
+        CHECK_FALSE(str::parse_double("+INFINITY").has_value());
+        CHECK_FALSE(str::parse_double("nan(abc)").has_value());
+        CHECK_FALSE(str::parse_double("nan()").has_value());
+        CHECK_FALSE(str::parse_double("NaN(1)").has_value());
+        CHECK_FALSE(str::parse_double("-nan(ind)").has_value());
+        CHECK_FALSE(str::parse_double("in").has_value());
+        CHECK_FALSE(str::parse_double("n").has_value());
+        CHECK_FALSE(str::parse_float("infinity").has_value());
+
+        const std::optional<f64> upper = str::parse_double("INF");
+        REQUIRE(upper.has_value());
+        CHECK(std::isinf(*upper));
+        const std::optional<f64> negative = str::parse_double("-inf");
+        REQUIRE(negative.has_value());
+        CHECK(*negative < 0.0);
+        CHECK(std::isinf(*negative));
+        const std::optional<f64> signedNan = str::parse_double("+NaN");
+        REQUIRE(signedNan.has_value());
+        CHECK(std::isnan(*signedNan));
+        const std::optional<f64> plainNan = str::parse_double("nan");
+        REQUIRE(plainNan.has_value());
+        CHECK(std::isnan(*plainNan));
+        CHECK(str::parse_double("-NAN").has_value());
     }
 
     TEST_CASE("string_utils - parse_double rejects underflow to zero but accepts denormals on every implementation") {

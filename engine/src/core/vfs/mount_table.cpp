@@ -1,5 +1,7 @@
 #include "conjure/core/vfs/mount_table.h"
 
+#include "conjure/core/log.h"
+#include "conjure/core/vfs/path_utils.h"
 #include "core/vfs/vfs_internal.h"
 
 #include <algorithm>
@@ -49,6 +51,49 @@ namespace {
         uri.append(SCHEME_SEPARATOR);
         uri.append(path);
         return uri;
+    }
+
+    bool failed_other_than_not_found(const result<file_stat> &outcome) noexcept {
+        return !outcome.has_value() && outcome.get_error().generic_code() != error_code::NOT_FOUND;
+    }
+
+    // Every backend's own rename() refuses its root at either end with this code.
+    error root_of_file_system(std::string_view uri) {
+        return make_error(error_code::INVALID_ARGUMENT, std::format("'{}' is the root of a file system", uri));
+    }
+
+    // A copy between backends must fail where a real rename would. write_file_atomic reports a
+    // directory at the destination as INVALID_ARGUMENT and creates missing parents, so both are
+    // checked before anything is written; the root, which stat reports as a directory, is
+    // INVALID_ARGUMENT as in a real rename. 'path' is relative to 'backend', which must not be a
+    // mount table. Returns whether a file already exists at the destination.
+    result<bool> check_copy_destination(file_system &backend, std::string_view path, std::string_view uri) {
+        CONJURE_TRY_ASSIGN(const std::string normalized, internal::resolve_backend_path(path));
+        if (normalized.empty()) {
+            return root_of_file_system(uri);
+        }
+
+        const result<file_stat> existing = backend.stat(path);
+        if (existing.has_value() && existing->isDirectory) {
+            return make_error(error_code::ALREADY_EXISTS, std::format("a directory exists at '{}'", uri));
+        }
+        if (failed_other_than_not_found(existing)) {
+            return existing.get_error();
+        }
+
+        const std::string_view parentPath = path_utils::parent(normalized);
+        if (parentPath.empty()) {
+            return existing.has_value();
+        }
+
+        const result<file_stat> parentStat = backend.stat(parentPath);
+        if (failed_other_than_not_found(parentStat)) {
+            return parentStat.get_error();
+        }
+        if (!parentStat.has_value() || !parentStat->isDirectory) {
+            return make_error(error_code::NOT_FOUND, std::format("the parent of '{}' does not exist", uri));
+        }
+        return existing.has_value();
     }
 }
 
@@ -194,23 +239,58 @@ result<void> mount_table::rename(std::string_view from, std::string_view to) {
     CONJURE_TRY_ASSIGN(const route_target source, route(from));
     CONJURE_TRY_ASSIGN(const route_target destination, route(to));
 
-    // One backend may sit behind several schemes, so the decision is by backend, not by scheme:
-    // copy-and-remove on the same backend would delete a file renamed onto itself.
-    if (source.backend == destination.backend) {
-        return source.backend->rename(source.path, destination.path);
+    // Both sides are followed down to the backends that store them, so every check below asks the
+    // backend that holds the file rather than a nested mount table in front of it.
+    CONJURE_TRY_ASSIGN(const route_target origin, route_to_storage(source));
+    CONJURE_TRY_ASSIGN(const route_target storage, route_to_storage(destination));
+
+    // One backend may sit behind several schemes, directly or through nested mount tables, so the
+    // decision is by backend, not by scheme: copy-and-remove on the same backend would delete a file
+    // renamed onto itself.
+    if (origin.backend == storage.backend) {
+        return origin.backend->rename(origin.path, storage.path);
     }
 
     // Across backends there is nothing to rename, so a file is copied and the original removed.
-    CONJURE_TRY_ASSIGN(const file_stat sourceStat, source.backend->stat(source.path));
+    CONJURE_TRY_ASSIGN(const std::string sourcePath, internal::resolve_backend_path(origin.path));
+    if (sourcePath.empty()) {
+        return root_of_file_system(from);
+    }
+    CONJURE_TRY_ASSIGN(const file_stat sourceStat, origin.backend->stat(origin.path));
     if (sourceStat.isDirectory) {
         return make_error(
           error_code::UNSUPPORTED,
           std::format("'{}' is a directory; directories cannot be moved between mounts", from)
         );
     }
-    CONJURE_TRY_ASSIGN(const std::vector<std::byte> bytes, source.backend->read_file(source.path));
-    CONJURE_TRY(destination.backend->write_file(destination.path, bytes));
-    return source.backend->remove(source.path);
+    if (origin.backend->is_read_only()) {
+        return make_error(error_code::PERMISSION_DENIED, std::format("the file system behind '{}' is read-only", from));
+    }
+
+    CONJURE_TRY_ASSIGN(const bool replacesFile, check_copy_destination(*storage.backend, storage.path, to));
+    CONJURE_TRY_ASSIGN(const std::vector<std::byte> bytes, origin.backend->read_file(origin.path));
+    CONJURE_TRY(storage.backend->write_file_atomic(storage.path, bytes));
+
+    const result<void> removed = origin.backend->remove(origin.path);
+    if (removed.has_value()) {
+        return removed;
+    }
+
+    // A copy this call created is taken back so the failure leaves only the source. A file it
+    // replaced cannot be restored; the copy stays in its place.
+    if (!replacesFile) {
+        const result<void> undone = storage.backend->remove(storage.path);
+        if (!undone.has_value()) {
+            CONJURE_LOG_WARN(
+              LOG_CORE,
+              "vfs: could not remove the copy at '{}' after '{}' could not be removed: {}",
+              to,
+              from,
+              undone.get_error().message()
+            );
+        }
+    }
+    return removed;
 }
 
 result<void> mount_table::remove(std::string_view uri) {
@@ -262,6 +342,17 @@ result<mount_table::route_target> mount_table::route(std::string_view uri) const
     }
     target.scheme = parts.first;
     target.path = parts.second;
+    return target;
+}
+
+result<mount_table::route_target> mount_table::route_to_storage(route_target target) {
+    // A mount table mounted in this one takes URIs, which path_utils cannot take apart and which
+    // hide the backend behind them, so the target is followed down to the backend that stores it.
+    const mount_table *nested = dynamic_cast<const mount_table *>(target.backend.get());
+    while (nested != nullptr) {
+        CONJURE_TRY_ASSIGN(target, nested->route(target.path));
+        nested = dynamic_cast<const mount_table *>(target.backend.get());
+    }
     return target;
 }
 

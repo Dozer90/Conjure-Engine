@@ -573,6 +573,47 @@ TEST_SUITE("core/slot_map") {
         CHECK(*assigned.find(b) == "b");
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F000: a moved-from slot_map is empty and reusable") {
+        // The source has a free slot, so a stale free-list head would point past its emptied storage.
+        slot_map<std::string> source = {};
+        const slot_key first = source.insert("first");
+        const slot_key second = source.insert("second");
+        REQUIRE(source.erase(first));
+        REQUIRE(source.free_slot_count() == 1);
+
+        SUBCASE("move construction") {
+            slot_map<std::string> constructed = std::move(source);
+            REQUIRE(constructed.find(second) != nullptr);
+            CHECK(*constructed.find(second) == "second");
+            CHECK(constructed.free_slot_count() == 1);
+        }
+
+        SUBCASE("move assignment") {
+            slot_map<std::string> target = {};
+            static_cast<void>(target.insert("replaced"));
+            target = std::move(source);
+            REQUIRE(target.find(second) != nullptr);
+            CHECK(*target.find(second) == "second");
+            CHECK(target.size() == 1);
+            CHECK(target.free_slot_count() == 1);
+        }
+
+        CHECK(source.size() == 0);
+        CHECK(source.empty());
+        CHECK(source.slot_count() == 0);
+        CHECK(source.free_slot_count() == 0);
+        CHECK(source.retired_slot_count() == 0);
+        CHECK(source.find(second) == nullptr);
+
+        const slot_key again = source.insert("again");
+        CHECK(again.index == 0);
+        CHECK(again.generation == 1);
+        REQUIRE(source.find(again) != nullptr);
+        CHECK(*source.find(again) == "again");
+        CHECK(source.size() == 1);
+        CHECK(source.slot_count() == 1);
+    }
+
     TEST_CASE("slot_map - property test against an unordered_map oracle") {
         std::mt19937_64 random(0x5EED);
         slot_map<u64> map = {};

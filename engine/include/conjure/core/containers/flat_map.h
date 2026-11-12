@@ -325,8 +325,14 @@ namespace conjure::core {
                 return true;
             }
 
+            /// <summary>
+            /// Removes the element whose key compares equal to 'key' (transparent comparators only).
+            /// Returns false when absent. Iterators are excluded so that they reach erase(position).
+            /// </summary>
             template <typename KeyLike>
-                requires detail::transparent_compare<Compare>
+                requires detail::transparent_compare<Compare> &&
+                    (!std::is_convertible_v<const KeyLike &, const_iterator>) &&
+                    (!std::is_convertible_v<const KeyLike &, iterator>)
             bool erase(const KeyLike &key) {
                 iterator found = find(key);
                 if (found == mEntries.end()) {

@@ -261,27 +261,31 @@ result<void> native_file_system::enumerate(
         return make_error(error_code::INVALID_ARGUMENT, std::format("'{}' is not a directory", directory));
     }
 
+    // The walk appends components below a root that may be short enough for the classic form while an
+    // entry deep down is not: rooted in the extended form, one deeply nested asset cannot abort the scan.
+    const std::filesystem::path walkRoot = internal::always_extended_native_path(nativePath);
+
     // Directory iteration order is unspecified, so entries are collected and sorted: every
     // caller sees the same order on every platform.
     std::vector<std::pair<std::string, file_stat>> entries = {};
-    const auto collect = [&entries, &relative, &nativePath, flags](const std::filesystem::directory_entry &entry) {
+    const auto collect = [&entries, &relative, &walkRoot, flags](const std::filesystem::directory_entry &entry) {
         const file_stat entryStat = stat_entry(entry);
         if (!internal::passes_kind_filter(flags, entryStat.isDirectory)) {
             return;
         }
-        const std::string tail = internal::path_to_utf8(entry.path().lexically_relative(nativePath));
+        const std::string tail = internal::path_to_utf8(entry.path().lexically_relative(walkRoot));
         entries.emplace_back(path_utils::join(relative, tail), entryStat);
     };
 
     std::error_code code = {};
     constexpr std::filesystem::directory_options OPTIONS = std::filesystem::directory_options::skip_permission_denied;
     if (has_flag(flags, enumerate_flags::RECURSIVE)) {
-        std::filesystem::recursive_directory_iterator iterator(nativePath, OPTIONS, code);
+        std::filesystem::recursive_directory_iterator iterator(walkRoot, OPTIONS, code);
         for (; !code && iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(code)) {
             collect(*iterator);
         }
     } else {
-        std::filesystem::directory_iterator iterator(nativePath, OPTIONS, code);
+        std::filesystem::directory_iterator iterator(walkRoot, OPTIONS, code);
         for (; !code && iterator != std::filesystem::directory_iterator(); iterator.increment(code)) {
             collect(*iterator);
         }
@@ -392,8 +396,9 @@ result<void> native_file_system::remove_all(std::string_view path) {
     const std::filesystem::path nativePath = to_native(relative);
     CONJURE_TRY(stat_native(nativePath, path));
 
+    // remove_all walks the tree like enumerate does, so it starts from the extended form for the same reason.
     std::error_code code = {};
-    std::filesystem::remove_all(nativePath, code);
+    std::filesystem::remove_all(internal::always_extended_native_path(nativePath), code);
     if (code) {
         return internal::io_error("remove_all", path, code);
     }

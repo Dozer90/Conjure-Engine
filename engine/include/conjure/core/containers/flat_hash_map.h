@@ -241,8 +241,12 @@ namespace conjure::core {
 
                 /// <summary>
                 /// Makes room for 'count' elements without a rehash during the next insertions.
+                /// reserve(0) does nothing, so an empty table stays unallocated.
                 /// </summary>
                 void reserve(usize count) {
+                    if (count == 0) {
+                        return;
+                    }
                     const usize requiredCapacity = capacity_for(count);
                     if (requiredCapacity > mCapacity) {
                         rehash(requiredCapacity);
@@ -689,7 +693,7 @@ namespace conjure::core {
             ~flat_hash_map() = default;
 
             /// <summary>
-            /// Pre-sizes the table for 'initialCapacity' elements.
+            /// Pre-sizes the table for 'initialCapacity' elements; 0 allocates nothing.
             /// </summary>
             explicit flat_hash_map(usize initialCapacity) :
                 mTable(initialCapacity) {}
@@ -857,6 +861,7 @@ namespace conjure::core {
 
             /// <summary>
             /// Makes room for 'count' elements without a rehash during the next insertions.
+            /// reserve(0) does nothing, so an empty map stays unallocated.
             /// </summary>
             void reserve(usize count) {
                 mTable.reserve(count);
@@ -978,7 +983,7 @@ namespace conjure::core {
             ~flat_hash_set() = default;
 
             /// <summary>
-            /// Pre-sizes the table for 'initialCapacity' elements.
+            /// Pre-sizes the table for 'initialCapacity' elements; 0 allocates nothing.
             /// </summary>
             explicit flat_hash_set(usize initialCapacity) :
                 mTable(initialCapacity) {}
@@ -1039,6 +1044,10 @@ namespace conjure::core {
                 return mTable.erase(position);
             }
 
+            /// <summary>
+            /// Makes room for 'count' elements without a rehash during the next insertions.
+            /// reserve(0) does nothing, so an empty set stays unallocated.
+            /// </summary>
             void reserve(usize count) {
                 mTable.reserve(count);
             }

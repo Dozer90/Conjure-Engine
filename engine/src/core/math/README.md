@@ -10,7 +10,12 @@ adds the value types every other module shares: `transform`, `aabb`, `plane`, `f
 - Right-handed, Y up, -Z forward (glTF). Matrices are column-major and multiply column vectors.
 - Depth 0..1 (`GLM_FORCE_DEPTH_ZERO_TO_ONE`); `perspective`, `infinite_perspective` and
   `orthographic` call the `RH_ZO` glm variants explicitly, and `frustum::from_view_projection`
-  extracts the near plane from clip `z >= 0`.
+  extracts the near plane from clip `z >= 0`. Core math is forward-Z (near plane at depth 0). The
+  renderer's camera matrices are reverse-Z (`renderer::clip_from_view`), so
+  `renderer::ray_from_viewport` and `renderer::frustum_from_clip` are the functions to use with
+  them. With a reverse-Z matrix `ray::from_viewport` would start the ray on the far plane, pointing
+  back at the camera, `frustum::from_view_projection` swaps the `NEAR_PLANE` and `FAR_PLANE` labels
+  (the volume is unchanged) and `frustum::corners` lists the far corners first.
 - Angles are radians everywhere (`GLM_FORCE_RADIANS`); `radians()` / `degrees()` convert.
 - glm constructors are explicit (`GLM_FORCE_EXPLICIT_CTOR`): write `vec3(0.0f)`, never `vec3 v = 0.0f`.
 - `quat` is constructed as `quat(w, x, y, z)` and stored as `x, y, z, w`; formatters print `(w, x, y, z)`.
@@ -59,7 +64,10 @@ exists because both `frustum.h` and `ray.h` need `plane`.
   direction length, so millimetre triangles and grazing angles still hit. `ray::from_viewport` builds
   its direction from depth 0 and 0.5 so infinite projections work.
 - `aabb::transformed` is for affine matrices only (no perspective divide). `closest_point` and
-  `distance_squared` return the point itself and 0 for an invalid box, like `surface_area`/`volume`.
+  `distance_squared` return the point itself and 0 for an invalid box, like `surface_area`/`volume`;
+  `rect::closest_point` likewise returns the point unchanged for an invalid rectangle.
+  `rect::from_position_size` spans `position` and `position + extent`, so a negative extent extends
+  to the other side of `position`.
 - `nearly_equal` treats exactly equal values (including equal infinities) as equal; NaN never is.
   `inverse_lerp` only collapses an exactly empty range to 0.
 - `urect` requires `x + width` and `y + height` to fit in `u32`; `right()`/`bottom()` assert otherwise.

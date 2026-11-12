@@ -209,6 +209,17 @@ std::optional<conjure::f64> conjure::core::str::parse_double(std::string_view te
         return std::nullopt;
     }
 
+    // from_chars and strtod also accept "infinity" and "nan(characters)"; the contract allows only
+    // "inf" and "nan", and no other valid spelling starts with those letters.
+    std::string_view body = text;
+    if (body.front() == '-') {
+        body.remove_prefix(1);
+    }
+    const char lead = body.empty() ? '\0' : to_lower(body.front());
+    if ((lead == 'i' || lead == 'n') && !iequals(body, "inf") && !iequals(body, "nan")) {
+        return std::nullopt;
+    }
+
 #if defined(__cpp_lib_to_chars)
     conjure::f64 value = 0.0;
     const std::from_chars_result parsed = std::from_chars(text.data(), text.data() + text.size(), value);

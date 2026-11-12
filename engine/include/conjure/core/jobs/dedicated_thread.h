@@ -21,8 +21,9 @@ namespace conjure::core::jobs {
 
         public:
             /// <summary>
-            /// Starts the thread immediately. The name is applied to the OS thread (truncated to
-            /// 15 bytes on Linux). An empty body asserts and leaves the object non-joinable.
+            /// Starts the thread immediately. The name is applied to the OS thread (truncated on a
+            /// code point boundary to 15 bytes on Linux and macOS and 63 UTF-16 units on Windows). An
+            /// empty body asserts and leaves the object non-joinable.
             /// </summary>
             dedicated_thread(std::string name, std::function<void(std::stop_token)> body);
 

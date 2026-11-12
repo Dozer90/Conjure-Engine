@@ -7,6 +7,7 @@
 #include "conjure/core/jobs/dedicated_thread.h"
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/jobs/main_thread.h"
+#include "conjure/core/platform_detect.h"
 #include "core/jobs/thread_name.h"
 
 #include <atomic>
@@ -57,6 +58,36 @@ TEST_SUITE("core/dedicated_thread") {
         }
         CHECK(longName.starts_with(osName));
         CHECK(osName.size() >= jobs::detail::MAX_POSIX_THREAD_NAME_LENGTH);
+    }
+
+    TEST_CASE("dedicated_thread - name truncation never splits a UTF-8 code point") {
+        // The two-byte character occupies bytes 14 and 15, so a plain 15-byte cut keeps only its lead byte.
+        const std::string name = "worker-thread-\xC3\xA4-streaming";
+#if !CONJURE_PLATFORM_WINDOWS
+        CHECK(std::string(jobs::detail::prepare_thread_name(name).characters.data()) == "worker-thread-");
+#endif
+
+        std::string osName = {};
+        {
+            dedicated_thread thread(name, [&osName](std::stop_token) {
+                osName = jobs::detail::current_thread_name();
+            });
+        }
+        REQUIRE_FALSE(osName.empty());
+        CHECK(name.starts_with(osName));
+        CHECK(static_cast<unsigned char>(osName.back()) < 0xC0);
+    }
+
+    TEST_CASE("dedicated_thread - a name with invalid UTF-8 keeps its valid characters") {
+        // Windows replaces the stray byte with U+FFFD; Linux and macOS keep it as it is.
+        std::string osName = {};
+        {
+            dedicated_thread thread("\xFFworker", [&osName](std::stop_token) {
+                osName = jobs::detail::current_thread_name();
+            });
+        }
+        CHECK_FALSE(osName.empty());
+        CHECK(osName.ends_with("worker"));
     }
 
     TEST_CASE("dedicated_thread - destruction requests a stop and joins") {

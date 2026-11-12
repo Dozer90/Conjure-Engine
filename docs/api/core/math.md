@@ -62,6 +62,12 @@ Every module and the C# side agree on these; the types below assume them.
 | Quaternions | Constructed as `quat(w, x, y, z)`; identity `quat(1.0f, 0.0f, 0.0f, 0.0f)`. Formatters print `(w, x, y, z)`. See the warning below for the memory layout. |
 | Constructors | glm constructors are explicit: write `vec3(0.0f)`, never `vec3 value = 0.0f`. |
 
+> [!NOTE]
+> The depth row describes core math (`perspective()`, `frustum::from_view_projection`, `ray::from_viewport`). The
+> renderer's camera matrices are **reverse-Z** (near plane at depth 1, far plane at 0, from
+> `renderer::clip_from_view`); with those use `renderer::frustum_from_clip` and `renderer::ray_from_viewport`
+> (`conjure/renderer/camera.h`, see [Rendering a frame](../renderer/rendering-a-frame.md)).
+
 > [!WARNING]
 > `quat(1.0f, 0.0f, 0.0f, 0.0f)` is the identity because the constructor takes `w` first, but the same four
 > floats laid out in memory are `x, y, z, w` (what the C# mirror and `memcpy` see). Never build a quaternion from
@@ -221,6 +227,11 @@ const std::array<vec3, 8> corners = frustum::corners(glm::inverse(viewProjection
 > An infinite projection has no far plane: `from_view_projection` produces a degenerate far plane that accepts
 > everything (fine for culling), but `frustum::corners` asserts for it because the far corners are at infinity.
 
+> [!NOTE]
+> `from_view_projection` and `corners` assume forward depth (near plane at depth 0). Given a reverse-Z matrix from
+> the renderer, the planes still bound the same volume but `NEAR_PLANE` and `FAR_PLANE` swap labels, and `corners`
+> lists the far corners first. `renderer::frustum_from_clip` corrects the labels for the renderer's matrices.
+
 ## Rays and picking
 
 `ray` (`conjure/core/math/ray.h`) is `origin + t * direction` for `t >= 0`. Keep `direction` normalised (the
@@ -239,7 +250,9 @@ std::optional<vec3> pick(vec2 mousePixel, uvec2 viewportSize, const mat4 &viewPr
 ```
 
 - `from_viewport` takes pixel coordinates with the origin at the top-left and y pointing down (pixel centres are at
-  +0.5); the ray starts on the near plane and works for perspective, infinite and orthographic projections.
+  +0.5); the ray starts on the near plane and works for perspective, infinite and orthographic projections built
+  with forward depth (`perspective()` and friends). For the renderer's reverse-Z camera matrices use
+  `renderer::ray_from_viewport` instead.
 - `intersect_plane` hits from both sides and misses when parallel; `intersect_triangle` culls back faces
   (counter-clockwise front) unless you pass `cullBackFaces = false`. Edges and vertices count as hits.
 - `from_points(a, b)` normalises the direction; `a == b` gives the default `-Z` ray.
@@ -255,7 +268,10 @@ std::optional<vec3> pick(vec2 mousePixel, uvec2 viewportSize, const mat4 &viewPr
 
 `rect` offers the same vocabulary as `aabb` (`contains`, `intersects`, `intersection`, `expand`, `inflated`,
 `closest_point`, `center`, `size`) plus `translated`, `from_position_size`, `from_center_extents` and `from_points`.
-The default `rect` is empty at the origin and valid; `is_empty()` is true for zero width or height.
+The default `rect` is empty at the origin and valid; `is_empty()` is true for zero width or height. Like `aabb`,
+`closest_point` returns the point unchanged for an invalid rectangle. `from_position_size(position, extent)` spans
+`position` and `position + extent`, so a negative extent extends to the other side of `position`
+(`from_position_size(vec2(10.0f), vec2(-4.0f, 2.0f))` is min `(6, 10)`, max `(10, 12)`).
 
 `urect` covers pixel `(px, py)` when `x <= px < right()` and `y <= py < bottom()`. `intersection` of disjoint
 rectangles is empty (zero size), `area()` returns a `u64`, and `to_rect()` converts to the float form.

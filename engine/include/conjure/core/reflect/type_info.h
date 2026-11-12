@@ -49,7 +49,9 @@ namespace conjure::core::reflect {
         [[nodiscard]] u64 layout_hash() const noexcept;
 
         /// <summary>
-        /// True when size, alignment and layout_hash() all match.
+        /// True when size, alignment and every field's name, kind, offset, size, array count and
+        /// element kind (arrays) and, for STRUCT and ENUM values, type id match; implies equal
+        /// layout_hash(), which covers fewer components.
         /// </summary>
         [[nodiscard]] bool has_same_layout(const type_info &other) const noexcept;
     };

@@ -472,7 +472,15 @@ result<document> document::parse_file(const std::filesystem::path &path) {
         return error(error_code::IO_FAILURE, std::format("cannot read '{}'", path_to_utf8(path)));
     }
 
-    result<document> parsed = parse(content);
+    // A leading byte order mark is skipped as file_system::read_text_file does, so reading a file directly is
+    // no stricter than the VFS route; parse() itself keeps rejecting one.
+    constexpr std::string_view UTF8_BOM = "\xEF\xBB\xBF";
+    std::string_view text = content;
+    if (text.starts_with(UTF8_BOM)) {
+        text.remove_prefix(UTF8_BOM.size());
+    }
+
+    result<document> parsed = parse(text);
     if (!parsed.has_value()) {
         const error &failure = parsed.get_error();
         return error(failure.generic_code(), std::format("{}: {}", path_to_utf8(path), failure.message()));

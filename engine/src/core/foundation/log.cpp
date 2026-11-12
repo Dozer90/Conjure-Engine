@@ -1,5 +1,8 @@
 #include "conjure/core/log.h"
 
+#include "core/foundation/console_output.h"
+#include "core/foundation/local_time.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -122,22 +125,9 @@ log_category conjure::core::LOG_CORE("core");
 /*===========================================================================*/
 // Formatting
 
-namespace {
-    // Local wall-clock time without std::chrono time zones, which Apple's libc++ lacks.
-    std::tm local_time_of(std::chrono::system_clock::time_point timestamp) {
-        const std::time_t seconds = std::chrono::system_clock::to_time_t(timestamp);
-        std::tm local = {};
-#if CONJURE_PLATFORM_WINDOWS
-        localtime_s(&local, &seconds);
-#else
-        localtime_r(&seconds, &local);
-#endif
-        return local;
-    }
-}
-
 std::string conjure::core::format_log_line(const log_message &message) {
-    const std::tm local = local_time_of(message.timestamp);
+    // Local wall-clock time without std::chrono time zones, which Apple's libc++ lacks.
+    const std::tm local = detail::local_time_of(std::chrono::system_clock::to_time_t(message.timestamp));
     const auto sinceEpoch = message.timestamp.time_since_epoch();
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(sinceEpoch).count() % 1000;
 
@@ -196,17 +186,13 @@ namespace {
     }
 }
 
-console_log_sink::console_log_sink(bool useColour) :
-    log_sink(),
-    mUseColour(useColour) {}
+std::FILE *conjure::core::detail::console_stream_for(log_level level) noexcept {
+    return level >= log_level::WARN ? stderr : stdout;
+}
 
-console_log_sink::~console_log_sink() {}
-
-void console_log_sink::write(const log_message &message) {
+void conjure::core::detail::write_console_line(std::FILE *stream, const log_message &message, bool useColour) {
     const std::string line = format_log_line(message);
-    std::FILE *stream = message.level >= log_level::WARN ? stderr : stdout;
-
-    if (mUseColour) {
+    if (useColour) {
         std::fprintf(stream, "%s%s\x1b[0m\n", colour_for(message.level), line.c_str());
     } else {
         std::fprintf(stream, "%s\n", line.c_str());
@@ -215,6 +201,16 @@ void console_log_sink::write(const log_message &message) {
     if (message.level >= log_level::ERR) {
         std::fflush(stream);
     }
+}
+
+console_log_sink::console_log_sink(bool useColour) :
+    log_sink(),
+    mUseColour(useColour) {}
+
+console_log_sink::~console_log_sink() {}
+
+void console_log_sink::write(const log_message &message) {
+    detail::write_console_line(detail::console_stream_for(message.level), message, mUseColour);
 }
 
 void console_log_sink::flush() {

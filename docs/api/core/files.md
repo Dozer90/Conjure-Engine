@@ -169,6 +169,8 @@ backend may sit behind several schemes, and a mount table may be mounted inside 
 
 ```cpp
 result<void> stage_scene(vfs::mount_table &mounts) {
+    // Like every rename, this needs the destination folder to exist already.
+    CONJURE_TRY(mounts.create_directories("cooked://scenes"));
     // Same backend: a real rename. Different backends: copy, then remove the source.
     CONJURE_TRY(mounts.rename("project://scenes/main.scene", "cooked://scenes/main.scene"));
     return {};
@@ -178,7 +180,18 @@ result<void> stage_scene(vfs::mount_table &mounts) {
 > [!WARNING]
 > `rename()` across two different backends copies the file and removes the source; it works for files
 > only (a directory is `UNSUPPORTED`). Within one backend, including one backend mounted under two
-> schemes, it is a real rename and moves directories too.
+> schemes or reached through a nested mount table, it is a real rename and moves directories too.
+
+Across backends `rename()` keeps the error contract of a real rename and checks it before copying
+anything, against the backends that actually store the two files: the root of a backend at either end
+is `INVALID_ARGUMENT`, a directory at the destination is `ALREADY_EXISTS`, a missing destination folder
+is `NOT_FOUND` and a read-only source is `PERMISSION_DENIED`. The copy is written with
+`write_file_atomic()`, so readers never see half of it.
+
+> [!CAUTION]
+> A move between backends is two steps, not one atomic rename. If the source cannot be removed after the
+> copy, `rename()` returns that error and removes a copy that created a new file. A file the copy replaced
+> is not restored: the destination then holds the new contents and the source is still there.
 
 > [!WARNING]
 > `find_mount()` returns a raw `file_system *` that is valid only until the scheme is unmounted. Prefer
@@ -220,7 +233,7 @@ forward slashes.
 |---|---|
 | `normalize(path)` | `"./a//b\\..\\c/"` -> `"a/c"`; drive letters and `//server/share` are preserved |
 | `join(left, right)` | `join("a/", "b")` -> `"a/b"`; an absolute right side replaces the left |
-| `parent(path)` | `"a/b/c.txt"` -> `"a/b"` |
+| `parent(path)` | `"a/b/c.txt"` -> `"a/b"`; a root keeps its separator: `"/a"` -> `"/"`, `"C:/a"` -> `"C:/"` |
 | `filename(path)` | `"a/b/c.txt"` -> `"c.txt"` |
 | `stem(path)` | `"archive.tar.gz"` -> `"archive.tar"`; `".gitignore"` stays whole |
 | `extension(path)` | `"texture.PNG"` -> `".png"` (lower-cased, with the dot) |

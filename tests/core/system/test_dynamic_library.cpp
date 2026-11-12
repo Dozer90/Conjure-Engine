@@ -4,9 +4,12 @@
 
 #include "conjure/core/dynamic_library.h"
 #include "conjure/core/platform_detect.h"
+#include "core/system/system_internal.h"
 
+#include <array>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 
 using namespace conjure;
@@ -251,5 +254,48 @@ TEST_SUITE("core/dynamic_library") {
         const result<dynamic_library> loaded = dynamic_library::load(name);
         REQUIRE_FALSE(loaded.has_value());
         CHECK(loaded.get_error().generic_code() == error_code::NOT_FOUND);
+    }
+
+    TEST_CASE("dynamic_library - bare-name loader messages about symbols or dependencies are BACKEND_FAILURE") {
+        // The texts glibc and dyld produce; only a message about the requested file itself means it is missing.
+        constexpr error_code MISSING = error_code::NOT_FOUND;
+        constexpr error_code BROKEN = error_code::BACKEND_FAILURE;
+        struct loader_case {
+            std::string_view requested = {};
+            std::string_view message = {};
+            error_code expected = error_code::BACKEND_FAILURE;
+        };
+        const std::array<loader_case, 11> cases = {{
+            {"libgame.so", "libgame.so: cannot open shared object file: No such file or directory", MISSING},
+            {"libgame.so", "libdep.so: cannot open shared object file: No such file or directory", BROKEN},
+            {"libgame.so", "/opt/libdep.so: cannot open shared object file: No such file or directory", BROKEN},
+            {"libgame.so", "libgame.so: undefined symbol: engine_fn", BROKEN},
+            {"libgame.so", "libgame.so: invalid ELF header", BROKEN},
+            {"libgame.dylib", "dlopen(libgame.dylib, 0x0006): tried: 'libgame.dylib' (no such file)", MISSING},
+            {"libgame.dylib", "dlopen(libgame.dylib, 6): image not found", MISSING},
+            {"libgame.dylib", "dlopen(libgame.dylib, 0x0006): Symbol not found: _engine_fn", BROKEN},
+            {
+                "libgame.dylib",
+                "dlopen(libgame.dylib, 0x0006): Library not loaded: @rpath/libdep.dylib\n  Reason: tried: "
+                "'/opt/libdep.dylib' (no such file)",
+                BROKEN
+            },
+            {
+                "libgame.dylib",
+                "dlopen(libgame.dylib, 0x0006): tried: 'libgame.dylib' (mach-o file, but is an incompatible "
+                "architecture (have 'x86_64', need 'arm64')), '/usr/lib/libgame.dylib' (no such file)",
+                BROKEN
+            },
+            {
+                "libgame.dylib",
+                "dlopen(libgame.dylib, 0x0006): tried: 'libgame.dylib' (code signature in 'libgame.dylib' not "
+                "valid for use in process), '/usr/lib/libgame.dylib' (no such file)",
+                BROKEN
+            },
+        }};
+        for (const loader_case &entry : cases) {
+            CAPTURE(entry.message);
+            CHECK(core::detail::classify_bare_name_load_failure(entry.requested, entry.message) == entry.expected);
+        }
     }
 }

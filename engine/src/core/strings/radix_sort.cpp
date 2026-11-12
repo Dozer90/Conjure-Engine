@@ -73,8 +73,9 @@ namespace {
         return before(firstBegin, secondBegin + secondBytes) && before(secondBegin, firstBegin + firstBytes);
     }
 
-    template <typename ElementType>
-    [[nodiscard]] bool spans_overlap(std::span<const ElementType> first, std::span<const ElementType> second) noexcept {
+    // Compares bytes, so spans of different element types (u64 keys, u32 payloads) can be checked.
+    template <typename FirstType, typename SecondType>
+    [[nodiscard]] bool spans_overlap(std::span<FirstType> first, std::span<SecondType> second) noexcept {
         return ranges_overlap(first.data(), first.size_bytes(), second.data(), second.size_bytes());
     }
 
@@ -118,13 +119,15 @@ namespace {
             return;
         }
 
-        // The passes ping-pong between the caller's buffers and the scratch, so any aliasing
-        // between the two sets silently corrupts the data.
-        bool aliased = spans_overlap<KeyType>(keys, scratchKeys);
+        // The passes ping-pong between the caller's buffers and the scratch and write keys and
+        // values side by side, so aliasing between any two of the spans silently corrupts the data.
+        bool aliased = spans_overlap(keys, scratchKeys);
         if constexpr (WithValues) {
-            aliased = aliased || spans_overlap<conjure::u32>(values, scratchValues);
+            aliased = aliased || spans_overlap(values, scratchValues) || spans_overlap(keys, values) ||
+                spans_overlap(keys, scratchValues) || spans_overlap(values, scratchKeys) ||
+                spans_overlap(scratchKeys, scratchValues);
         }
-        CONJURE_ASSERT(!aliased, "radix sort scratch buffers overlap the input");
+        CONJURE_ASSERT(!aliased, "radix sort spans overlap each other");
         if (aliased) {
             return;
         }

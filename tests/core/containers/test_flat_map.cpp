@@ -9,6 +9,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -260,6 +261,25 @@ TEST_SUITE("core/flat_map") {
             CHECK_FALSE(map.contains(view));
             CHECK(map.contains(std::string_view("alpha")));
         }
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F002: a transparent flat_map erases by mutable iterator") {
+        using transparent_map = flat_map<std::string, int, std::less<>>;
+        transparent_map map = {{"alpha", 1}, {"beta", 2}, {"gamma", 3}};
+        static_assert(std::is_same_v<decltype(map.erase(map.begin())), transparent_map::iterator>);
+        static_assert(std::is_same_v<decltype(map.erase(map.cbegin())), transparent_map::iterator>);
+        static_assert(std::is_same_v<decltype(map.erase(std::string_view("alpha"))), bool>);
+
+        const transparent_map::iterator next = map.erase(map.begin());
+        REQUIRE(next != map.end());
+        CHECK(next->first == "beta");
+
+        const transparent_map::iterator last = map.erase(map.find("gamma"));
+        CHECK(last == map.end());
+        CHECK(map.size() == 1);
+        CHECK(map.contains("beta"));
+        CHECK_FALSE(map.contains("alpha"));
+        CHECK_FALSE(map.contains("gamma"));
     }
 
     TEST_CASE("flat_map - custom comparator controls the order") {

@@ -473,6 +473,51 @@ TEST_SUITE("core/bit_vector") {
         CHECK(moveAssigned == copy);
     }
 
+    TEST_CASE("bit_vector - a moved-from vector is empty and reusable") {
+        bit_vector source(100);
+        source.set(3);
+
+        SUBCASE("move construction") {
+            const bit_vector destination = std::move(source);
+            CHECK(destination.size() == 100);
+            CHECK(destination.test(3));
+        }
+
+        SUBCASE("move assignment into an existing vector") {
+            bit_vector destination(130, true);
+            destination = std::move(source);
+            CHECK(destination.size() == 100);
+            CHECK(destination.count() == 1);
+            CHECK(destination.test(3));
+        }
+
+        // A defaulted move kept the old size over an emptied word array, so set() and test() indexed past it.
+        REQUIRE(source.size() == 0);
+        CHECK(source.empty());
+        CHECK(source.word_count() == 0);
+        CHECK(source == bit_vector());
+
+        source.resize(100);
+        CHECK(source.word_count() == 2);
+        CHECK(source.none());
+        source.set(3);
+        CHECK(source.test(3));
+        CHECK(source.count() == 1);
+    }
+
+    TEST_CASE("bit_vector - self move assignment keeps the bits") {
+        bit_vector bits(70);
+        bits.set(69);
+
+        // Self-assignment through an alias (a literal self-move is a compiler warning) is a no-op.
+        bit_vector &alias = bits;
+        bits = std::move(alias);
+        CHECK(bits.size() == 70);
+        CHECK(bits.word_count() == 2);
+        CHECK(bits.test(69));
+        CHECK(bits.count() == 1);
+    }
+
     TEST_CASE("bit_vector - large vectors behave at word multiples and beyond") {
         constexpr usize SIZE = 64 * 1024 + 1;
         bit_vector bits(SIZE);
