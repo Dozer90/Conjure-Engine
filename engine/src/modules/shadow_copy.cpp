@@ -94,7 +94,11 @@ void conjure::modules::detail::clean_shadow_copy_cache(const std::filesystem::pa
         return;
     }
 
-    for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(cacheDirectory, failure)) {
+    // The non-throwing increment: engine code never throws, and a listing that fails halfway ends
+    // in the warning below.
+    std::filesystem::directory_iterator iterator(cacheDirectory, failure);
+    for (const std::filesystem::directory_iterator end = {}; !failure && iterator != end; iterator.increment(failure)) {
+        const std::filesystem::directory_entry &entry = *iterator;
         std::error_code removeFailure = {};
         std::filesystem::remove_all(entry.path(), removeFailure);
         if (removeFailure) {

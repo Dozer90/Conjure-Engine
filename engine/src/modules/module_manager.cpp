@@ -115,8 +115,21 @@ result<u32> module_manager::discover(const std::filesystem::path &searchDirector
         );
     }
 
+    // The non-throwing increment: engine code never throws, and a listing that fails halfway
+    // reports the same error as one that cannot start.
     std::vector<std::filesystem::path> manifests = {};
-    const std::filesystem::directory_iterator entries(searchDirectory, failure);
+    std::filesystem::directory_iterator iterator(searchDirectory, failure);
+    for (const std::filesystem::directory_iterator end = {}; !failure && iterator != end; iterator.increment(failure)) {
+        const std::filesystem::directory_entry &entry = *iterator;
+        std::error_code ignored = {};
+        if (!entry.is_directory(ignored)) {
+            continue;
+        }
+        const std::filesystem::path manifest = entry.path() / MODULE_MANIFEST_FILE_NAME;
+        if (std::filesystem::is_regular_file(manifest, ignored)) {
+            manifests.push_back(manifest);
+        }
+    }
     if (failure) {
         // An unreadable directory must not pass for an empty one: the project would silently
         // start without its plugins.
@@ -126,16 +139,6 @@ result<u32> module_manager::discover(const std::filesystem::path &searchDirector
           searchDirectory.generic_string(),
           failure.message()
         );
-    }
-    for (const std::filesystem::directory_entry &entry : entries) {
-        std::error_code ignored = {};
-        if (!entry.is_directory(ignored)) {
-            continue;
-        }
-        const std::filesystem::path manifest = entry.path() / MODULE_MANIFEST_FILE_NAME;
-        if (std::filesystem::is_regular_file(manifest, ignored)) {
-            manifests.push_back(manifest);
-        }
     }
     const auto byDirectoryName = [](const std::filesystem::path &left, const std::filesystem::path &right) {
         return left.parent_path().filename().generic_string() < right.parent_path().filename().generic_string();
@@ -554,6 +557,11 @@ result<module_record *> module_manager::checked_record(module_id id) {
         );
     }
     if (record.state == module_state::FAULTED) {
+        // detach_record stores the fault already worded as "module 'x' is faulted: ..."; wrapping it
+        // again would nest the text once more on every refused request.
+        if (record.lastError.is(module_error::FAULTED)) {
+            return record.lastError;
+        }
         return make_module_error(
           module_error::FAULTED,
           "module '{}' is faulted: {}",
@@ -1069,10 +1077,13 @@ void module_manager::apply_one(const pending_operation &operation) {
     }
 
     // Load failures are already logged and stored by fail_record; refusals of the other kinds are
-    // recorded here so the editor's module panel can show them next to the module.
+    // recorded here so the editor's module panel can show them next to the module. A FAULTED module
+    // keeps the fault that put it there as its last error.
     module_record *record = mRegistry.record(operation.id);
     if (record != nullptr && record->state != module_state::FAILED) {
-        record->lastError = outcome.get_error();
+        if (record->state != module_state::FAULTED) {
+            record->lastError = outcome.get_error();
+        }
         CONJURE_LOG_WARN(
           LOG_MODULES,
           "pending module request for '{}' refused: {}",

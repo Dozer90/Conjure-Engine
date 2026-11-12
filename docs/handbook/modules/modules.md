@@ -60,7 +60,8 @@ module is indistinguishable from an engine type at attach time.
 | `modules.h` | umbrella for module authors (entry, context, registrar, service) | `test_modules.cpp` |
 
 Private (`engine/src/modules/`): `log_category.{h,cpp}` (`LOG_MODULES`), `module_record.h`, `module_loader.{h,cpp}`
-(`detail::open_module_binary`), `shadow_copy.{h,cpp}`, one `.cpp` per public header with out-of-line code.
+(`detail::open_module_binary`), `shadow_copy.{h,cpp}`, `manifest_paths.h` (`detail::is_base_name`,
+`detail::stays_inside_root`), one `.cpp` per public header with out-of-line code.
 
 ## 3. Internals
 
@@ -113,7 +114,8 @@ first.
 subscriptions and descriptor strings die before the binary), the binary closed (unless `keepBinariesResident`), the
 generation incremented, `module_unloaded_event` with the old id and the name. A consumer still reporting live uses
 after `detach()` puts the record in `FAULTED`: its binary stays resident and every later operation on the id returns
-`FAULTED`. A leaked DLL beats a `dlclose` of unknown state.
+`FAULTED`. A leaked DLL beats a `dlclose` of unknown state. That error is the stored fault itself, unwrapped, and a
+refused request (`apply_one`) does not overwrite it, so `last_error(id)` keeps naming the consumer that faulted.
 
 `reload(id, FULL)` computes the cascade (the module plus its transitive loaded dependents, reverse load order),
 pre-checks every member, then per member `onDeactivating`, `module_unloading_event{ reloading = true }`, `detach(id,
@@ -145,6 +147,9 @@ when the manager is destroyed.
 record of another size under the same point is skipped, so two descriptor versions never alias) and returns
 pointers into the storage. The set also carries `managedAssemblies` (manifest entries first, then
 `register_managed_assembly()` additions, deduplicated), `lifecycle` and `errors` (any entry rejects the load).
+`register_managed_assembly()` applies the manifest's `"managed"` rule (`detail::stays_inside_root`, a private
+`manifest_paths.h`): a path that leaves the module root asserts and lands in `errors`, because `export_layout`
+writes the full list into the exported manifest, which must parse again in the shipped game.
 
 Consumers are non-owning pointers held in add order. The manager calls `validate()` on all of them before the
 first `attach()`, so a veto is free of side effects; `attach()` cannot fail. Ownership is per *type*: consumers
@@ -322,9 +327,6 @@ python tools/check_exports.py modules
 
 - `platform_detect.h` does not yet define `CONJURE_COMPILER_VERSION_MAJOR`, `CONJURE_RUNTIME_DYNAMIC_CRT` and
   `CONJURE_SANITIZER_ADDRESS` (requested from core); until then the signature reports the engine build's values.
-- Export-everything on MSVC spends the 65535-symbol budget; the switch to `CONJURE_API`-only exports
-  (`CONJURE_SHARED_EXPORTS` on the static libraries, hidden visibility in `conjure_add_module`) waits for core to
-  carry the annotations.
 - The consumers themselves (`ecs_module_consumer`, assets, scripting, editor) and `builtin_modules.cpp` landed
   with wave 4 ([Engine module](engine.md) 5, [Editor module](editor.md) 7); `tests/integration/test_module_plugin.cpp`
   loads the fixture `tests/integration/fixtures/sample_plugin` through a headless application. The benchmark

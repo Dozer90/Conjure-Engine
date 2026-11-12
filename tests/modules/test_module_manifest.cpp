@@ -180,6 +180,58 @@ TEST_SUITE("modules/module_manifest") {
         CHECK(logs.count(log_level::WARN) == 1);
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F342 an unknown key inside a dependency warns and is otherwise ignored") {
+        conjure::testing::log_capture logs = {};
+        const module_manifest manifest =
+          parse_or_fail(BASE + R"(, "dependencies": [{"name": "b", "versoin": "^2.0.0", "optinal": true}]})");
+        REQUIRE(manifest.dependencies.size() == 1);
+        CHECK(manifest.dependencies[0].name == "b");
+        CHECK(manifest.dependencies[0].version.is_unbounded());
+        CHECK_FALSE(manifest.dependencies[0].optional);
+        CHECK(logs.contains(log_level::WARN, "versoin"));
+        CHECK(logs.contains(log_level::WARN, "optinal"));
+        CHECK(logs.contains(log_level::WARN, "/dependencies/0"));
+        CHECK(logs.count(log_level::WARN) == 2);
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F338 path members that leave the module root are MANIFEST_INVALID") {
+        const std::array<std::string_view, 6> badBinaries = {"../x", "sub/x", R"(a\\b)", "C:x", ".", ".."};
+        for (const std::string_view binary : badBinaries) {
+            CAPTURE(binary);
+            const std::string text = BASE + R"(, "binary": ")" + std::string(binary) + R"("})";
+            CONJURE_CHECK_ERROR(parse_module_manifest(text), module_error::MANIFEST_INVALID);
+            CHECK(message_of(text).find("/binary") != std::string::npos);
+        }
+
+        const std::array<std::string_view, 6> badManaged = {
+            R"(["../../secrets.dll"])", R"(["/abs/x.dll"])", R"(["C:/x.dll"])", R"(["managed\\..\\..\\x.dll"])",
+            R"(["\\\\server\\share\\x.dll"])", R"([""])",
+        };
+        for (const std::string_view managed : badManaged) {
+            CAPTURE(managed);
+            const std::string text = BASE + R"(, "managed": )" + std::string(managed) + "}";
+            CONJURE_CHECK_ERROR(parse_module_manifest(text), module_error::MANIFEST_INVALID);
+            CHECK(message_of(text).find("/managed/0") != std::string::npos);
+        }
+
+        const std::array<std::string_view, 3> badContent = {R"([".."])", R"(["assets/../../x"])", R"(["ok", "a/.."])"};
+        for (const std::string_view content : badContent) {
+            CAPTURE(content);
+            const std::string text = BASE + R"(, "content": )" + std::string(content) + "}";
+            CONJURE_CHECK_ERROR(parse_module_manifest(text), module_error::MANIFEST_INVALID);
+            CHECK(message_of(text).find("/content/") != std::string::npos);
+        }
+        CHECK(message_of(BASE + R"(, "content": ["ok", "a/.."]})").find("/content/1") != std::string::npos);
+
+        const std::string acceptedText = BASE + R"(, "binary": "space_shooter", "managed": ["managed/Beta.dll"],)"
+          + R"( "content": ["assets", "assets/./sub"]})";
+        const module_manifest accepted = parse_or_fail(acceptedText);
+        CHECK(accepted.binary == "space_shooter");
+        CHECK(accepted.managedAssemblies == std::vector<std::string>{"managed/Beta.dll"});
+        CHECK(accepted.contentDirectories == std::vector<std::string>{"assets", "assets/./sub"});
+        CONJURE_CHECK_OK(parse_module_manifest(BASE + R"(, "binary": "", "content": ["..assets", "a..b/c"]})"));
+    }
+
     TEST_CASE("module_manifest - unknown platform, feature and kind entries are MANIFEST_INVALID") {
         CONJURE_CHECK_ERROR(
           parse_module_manifest(BASE + R"(, "platforms": ["amiga"]})"),
@@ -304,5 +356,19 @@ TEST_SUITE("modules/module_manifest") {
         const result<module_manifest> broken = load_module_manifest(directory.file("broken.json"));
         CONJURE_CHECK_ERROR(broken, module_error::MANIFEST_INVALID);
         CHECK(broken.get_error().message().find("broken.json") != std::string::npos);
+    }
+
+    TEST_CASE("module_manifest - load_module_manifest names the file and the pointer of an invalid member") {
+        const conjure::testing::temp_directory directory("modules_manifest");
+        CONJURE_REQUIRE_OK(directory.write_text("module.json", BASE + R"(, "platforms": ["amiga"]})"));
+        const std::filesystem::path path = directory.file("module.json");
+
+        const result<module_manifest> loaded = load_module_manifest(path);
+        CONJURE_CHECK_ERROR(loaded, module_error::MANIFEST_INVALID);
+        REQUIRE_FALSE(loaded.has_value());
+        const std::string message = loaded.get_error().message();
+        CHECK(message.find(path.generic_string()) == 0);
+        CHECK(message.find("/platforms/0") != std::string::npos);
+        CHECK(message.find("amiga") != std::string::npos);
     }
 }

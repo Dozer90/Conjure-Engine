@@ -31,6 +31,7 @@ conjure_add_module(modules
     SOURCES
         log_category.h
         log_category.cpp
+        manifest_paths.h
         module_abi.cpp
         module_consumer.cpp
         module_context.cpp

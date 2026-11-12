@@ -35,7 +35,9 @@ one relaxed atomic load in `apply_pending()`.
 Private (`engine/src/modules/`): `log_category.{h,cpp}` (`LOG_MODULES`), `module_record.h` (the
 per-module state the registry owns), `module_loader.{h,cpp}` (the shared-library half of a load:
 settings, binary lookup, shadow copy, `dlopen`, symbols, `describe()`, ABI and name check),
-`shadow_copy.{h,cpp}`, and one `.cpp` per public header with out-of-line code.
+`shadow_copy.{h,cpp}`, `manifest_paths.h` (the textual path rules `detail::is_base_name` and
+`detail::stays_inside_root`, shared by the manifest parser and the registrar), and one `.cpp` per
+public header with out-of-line code.
 
 ## How a load works
 
@@ -69,7 +71,8 @@ consumers' `can_detach`) are side-effect free; then `onDeactivating`, `module_un
 in reverse order, context and registrations die, the binary closes, the generation increments and
 `module_unloaded_event` carries the old id and the name. A consumer still reporting live uses after
 detach puts the record in `FAULTED`: its binary stays resident and every later operation on the id
-returns `FAULTED`. `reload` (FULL) is the cascade of the module plus its transitive LOADED dependents:
+returns `FAULTED` with the stored fault itself (never re-wrapped), and a refused request leaves that
+fault in `last_error()`. `reload` (FULL) is the cascade of the module plus its transitive LOADED dependents:
 detach with `reload_context` snapshots in reverse load order, close, reopen (a fresh shadow copy),
 attach in order, restore, `onActivated`; the id stays valid across a reload. A load failing inside the
 cascade leaves that module `FAILED` (its error in `last_error()`) and the rest `UNLOADED`, every
@@ -85,10 +88,11 @@ the module's unloaded dependencies and stops at the first failure. Resolution fa
 `DEPENDENCY_CYCLE`, `DEPENDENCY_FAILED`, `MULTIPLE_GAME_MODULES`) mark the record `FAILED` like any
 other load failure. `DEPENDENCY_MISSING` names the actual cause: a module that is not registered,
 one `SKIPPED` on this platform, or one `FAULTED` (with its error). `discover()` returns
-`MANIFEST_NOT_FOUND` for a search directory that does not exist or cannot be listed; an unreadable
-directory never passes for an empty one. `request_load/unload/reload` enqueue; `apply_pending()`
-performs the queue at the frame start, drops requests for stale ids with a warning and keeps
-refusals in `last_error()`.
+`MANIFEST_NOT_FOUND` for a search directory that does not exist or cannot be listed (also when the
+listing fails halfway: every directory walk uses the non-throwing `increment(error_code)`); an
+unreadable directory never passes for an empty one. `request_load/unload/reload` enqueue;
+`apply_pending()` performs the queue at the frame start, drops requests for stale ids with a warning
+and keeps refusals in `last_error()` (except on a `FAULTED` module, which keeps its fault).
 
 ## Binaries, manifests and the ABI identity
 
@@ -96,6 +100,11 @@ refusals in `last_error()`.
   plus the platform decoration (`game.dll`, `libgame.so`, `libgame.dylib`), with the config chosen by
   `module_manager_desc::binaryConfig`. `conjure_add_game_module()` (`cmake/ConjureModule.cmake`) puts a
   plugin exactly there.
+- `module_manifest.cpp` parses a file once (`load_module_manifest` hands the parsed root to the same
+  reader `parse_module_manifest` uses) and checks the path members textually, with both separators:
+  `"binary"` is a file name without `/`, `\` or `:`, and every `"managed"` / `"content"` entry stays
+  inside the module root (no `..` segment, no leading separator, no drive). Unknown keys warn at the
+  root and inside each dependency, with the JSON pointer of the dependency.
 - `make_abi_signature()` is `constexpr` and reads no compiler-defined macro itself: compiler and
   standard library ids come from `platform_detect.h`; the compiler major, the runtime facts
   (`CONJURE_ABI_RUNTIME_DYNAMIC_CRT`, `_ASAN`, `_UBSAN`) and the public-header hash come from the
@@ -131,7 +140,10 @@ refusals in `last_error()`.
   destroyed; their shadow copies are left on disk for the next manager's cache clean.
 - `export_layout` copies `registrations(id).managedAssemblies`, the manifest's assemblies plus the
   ones the entry added through `module_registrar::register_managed_assembly()`, and writes that full
-  list into the exported manifest's `"managed"` array so the exported tree describes itself.
+  list into the exported manifest's `"managed"` array so the exported tree describes itself. The
+  registrar therefore applies the manifest's rule (`detail::stays_inside_root`): a path leaving the
+  module root asserts and is recorded in `errors`, which rejects the load with `ENTRY_FAILED`
+  instead of exporting a manifest the shipped game would refuse.
 
 ## The umbrella shared library and symbol export
 

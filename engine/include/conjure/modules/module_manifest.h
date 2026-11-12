@@ -22,9 +22,11 @@
 //     "managed": ["managed/Game.dll"], "content": ["assets"], "editorOnly": false
 //   }
 //
-// Required: schema, name, version, engine. Everything else has a default. Unknown keys log a
-// warning. The binary's location is derived, never declared: <root>/bin/<platform>-<arch>-<config>/
-// plus the platform decoration of "binary" (game.dll, libgame.so, libgame.dylib).
+// Required: schema, name, version, engine. Everything else has a default. Unknown keys, at the root
+// or inside a dependency, log a warning. The binary's location is derived, never declared:
+// <root>/bin/<platform>-<arch>-<config>/ plus the platform decoration of "binary" (game.dll,
+// libgame.so, libgame.dylib), so "binary" is a file name without a directory part. "managed" and
+// "content" entries stay inside the module root: no ".." segment, no leading separator, no drive.
 
 namespace conjure::modules {
 
@@ -73,7 +75,8 @@ namespace conjure::modules {
     /// <summary>
     /// Parses and validates manifest text. 'sourceName' is the file the text came from, used in
     /// messages together with the JSON pointer of the offending member. MANIFEST_INVALID on any
-    /// JSON, schema, type or range error; INVALID_NAME for a bad name.
+    /// JSON, schema, type or range error, for a "binary" with a directory part and for a "managed"
+    /// or "content" entry that leaves the module root; INVALID_NAME for a bad name.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<module_manifest> parse_module_manifest(
       std::string_view jsonText,
@@ -81,8 +84,8 @@ namespace conjure::modules {
     );
 
     /// <summary>
-    /// Reads and parses a manifest file. MANIFEST_NOT_FOUND when the file is missing, otherwise
-    /// as parse_module_manifest().
+    /// Reads and parses a manifest file once; messages name its generic path. MANIFEST_NOT_FOUND
+    /// when the file is missing, otherwise as parse_module_manifest().
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<module_manifest> load_module_manifest(const std::filesystem::path &path);
 

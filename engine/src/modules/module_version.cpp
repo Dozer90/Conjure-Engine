@@ -23,6 +23,11 @@ namespace {
         if (text.empty() || text.size() > 5) {
             return std::nullopt;
         }
+
+        // Semantic versioning forbids leading zeros, so "01" and "1" never name the same version.
+        if (text.size() > 1 && text.front() == '0') {
+            return std::nullopt;
+        }
         for (const char character : text) {
             if (character < '0' || character > '9') {
                 return std::nullopt;
@@ -145,16 +150,31 @@ result<version_range> conjure::modules::parse_version_range(std::string_view tex
         return version_range{*exact, *upper};
     }
 
-    // Comparator forms: ">=a.b.c", "<d.e.f" or both, in either order, each at most once.
+    // Comparator forms: ">=a.b.c", "<d.e.f" or both, in either order, each at most once. Whitespace
+    // (str::WHITESPACE, as trimmed everywhere else) separates them and, as after '^' and '~', may
+    // follow the operator.
+    usize position = 0;
+    const auto nextToken = [trimmed, &position]() {
+        while (position < trimmed.size() && str::is_space(trimmed[position])) {
+            ++position;
+        }
+        const usize tokenStart = position;
+        while (position < trimmed.size() && !str::is_space(trimmed[position])) {
+            ++position;
+        }
+        return trimmed.substr(tokenStart, position - tokenStart);
+    };
+
     version_range range = {};
     bool sawLower = false;
     bool sawUpper = false;
-    for (const std::string_view token : str::split(trimmed, ' ')) {
-        if (token.empty()) {
-            continue;
-        }
+    for (std::string_view token = nextToken(); !token.empty(); token = nextToken()) {
         if (token.starts_with(">=")) {
-            const std::optional<semantic_version> lower = parse_version_text(token.substr(2));
+            std::string_view versionText = token.substr(2);
+            if (versionText.empty()) {
+                versionText = nextToken();
+            }
+            const std::optional<semantic_version> lower = parse_version_text(versionText);
             if (!lower.has_value() || sawLower) {
                 return range_error(text, "expected one '>=major.minor.patch'");
             }
@@ -163,7 +183,11 @@ result<version_range> conjure::modules::parse_version_range(std::string_view tex
             continue;
         }
         if (token.starts_with('<') && !token.starts_with("<=")) {
-            const std::optional<semantic_version> upper = parse_version_text(token.substr(1));
+            std::string_view versionText = token.substr(1);
+            if (versionText.empty()) {
+                versionText = nextToken();
+            }
+            const std::optional<semantic_version> upper = parse_version_text(versionText);
             if (!upper.has_value() || sawUpper) {
                 return range_error(text, "expected one '<major.minor.patch'");
             }

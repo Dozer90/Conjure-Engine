@@ -2,6 +2,7 @@
 
 #include "conjure/modules/module_error.h"
 #include "modules/log_category.h"
+#include "modules/manifest_paths.h"
 
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
@@ -11,6 +12,7 @@
 #include <array>
 #include <filesystem>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -27,6 +29,8 @@ namespace {
         "schema", "name", "displayName", "description", "version", "kind", "engine", "platforms",
         "requires", "binary", "dependencies", "managed", "content", "editorOnly",
     };
+
+    constexpr std::array<std::string_view, 3> KNOWN_DEPENDENCY_KEYS = {"name", "version", "optional"};
 
     /*=======================================================================*/
     /*=======================================================================*/
@@ -66,7 +70,7 @@ namespace {
         return std::string(member.as_string());
     }
 
-    result<std::vector<std::string>> read_string_array(
+    result<std::vector<std::string>> read_relative_paths(
       json::value object,
       std::string_view key,
       std::string_view source
@@ -86,6 +90,13 @@ namespace {
             if (!item.is_string()) {
                 return invalid_type(source, std::format("/{}/{}", key, index), "string", item);
             }
+            if (!modules::detail::stays_inside_root(item.as_string())) {
+                return invalid(
+                  source,
+                  std::format("/{}/{}", key, index),
+                  std::format("'{}' must be a relative path inside the module root", item.as_string())
+                );
+            }
             items.emplace_back(item.as_string());
             ++index;
         }
@@ -101,6 +112,27 @@ namespace {
             return invalid(source, pointer, range.get_error().message());
         }
         return range;
+    }
+
+    // A typo such as "versoin" would otherwise silently become the default; 'pointer' is empty for
+    // the root object.
+    void warn_unknown_keys(
+      json::value object,
+      std::span<const std::string_view> knownKeys,
+      std::string_view source,
+      std::string_view pointer
+    ) {
+        for (const json::member entry : object.members()) {
+            const bool known = std::find(knownKeys.begin(), knownKeys.end(), entry.key) != knownKeys.end();
+            if (known) {
+                continue;
+            }
+            if (pointer.empty()) {
+                CONJURE_LOG_WARN(LOG_MODULES, "{}: unknown manifest key '{}' ignored", source, entry.key);
+                continue;
+            }
+            CONJURE_LOG_WARN(LOG_MODULES, "{}: unknown manifest key '{}' at {} ignored", source, entry.key, pointer);
+        }
     }
 
     result<module_dependency> read_dependency(json::value item, usize index, std::string_view source) {
@@ -130,16 +162,9 @@ namespace {
             }
             dependency.optional = optional.as_bool();
         }
-        return dependency;
-    }
 
-    void warn_unknown_keys(json::value root, std::string_view source) {
-        for (const json::member entry : root.members()) {
-            const bool known = std::find(KNOWN_KEYS.begin(), KNOWN_KEYS.end(), entry.key) != KNOWN_KEYS.end();
-            if (!known) {
-                CONJURE_LOG_WARN(LOG_MODULES, "{}: unknown manifest key '{}' ignored", source, entry.key);
-            }
-        }
+        warn_unknown_keys(item, KNOWN_DEPENDENCY_KEYS, source, pointer);
+        return dependency;
     }
 
     json::document string_array(const std::vector<std::string> &items) {
@@ -148,6 +173,170 @@ namespace {
             array.push_back(std::string_view(item));
         }
         return array;
+    }
+
+    /*=======================================================================*/
+    /*=======================================================================*/
+    // Root object
+
+    // Everything after the JSON parse. load_module_manifest() hands it the document it read, so a
+    // file is parsed once and never re-serialised.
+    result<module_manifest> parse_manifest_root(json::value root, std::string_view sourceName) {
+        if (!root.is_object()) {
+            return invalid_type(sourceName, "", "object", root);
+        }
+
+        module_manifest manifest = {};
+
+        // Required members first: schema, name, version, engine.
+        const json::value schema = root["schema"];
+        if (!schema.is_integer()) {
+            return invalid_type(sourceName, "/schema", "integer", schema);
+        }
+        if (schema.as_u64() != MODULE_MANIFEST_SCHEMA_VERSION) {
+            return invalid(
+              sourceName,
+              "/schema",
+              std::format(
+                "unsupported schema {} (this engine reads schema {})",
+                schema.as_i64(),
+                MODULE_MANIFEST_SCHEMA_VERSION
+              )
+            );
+        }
+        manifest.schemaVersion = static_cast<u32>(schema.as_u64());
+
+        CONJURE_TRY_ASSIGN(manifest.name, read_string(root, "name", sourceName, true));
+        if (!is_valid_module_name(manifest.name)) {
+            return make_module_error(
+              module_error::INVALID_NAME,
+              "{}: /name: '{}' is not a valid module name ([a-z0-9_.], 1 to {} characters)",
+              sourceName,
+              manifest.name,
+              MAX_MODULE_NAME_LENGTH
+            );
+        }
+
+        const json::value version = root["version"];
+        if (!version.is_string()) {
+            return invalid_type(sourceName, "/version", "version string", version);
+        }
+        result<semantic_version> parsedVersion = parse_version(version.as_string());
+        if (!parsedVersion.has_value()) {
+            return invalid(sourceName, "/version", parsedVersion.get_error().message());
+        }
+        manifest.version = parsedVersion.value();
+
+        const json::value engine = root["engine"];
+        if (!engine.is_valid()) {
+            return invalid_type(sourceName, "/engine", "version range string", engine);
+        }
+        CONJURE_TRY_ASSIGN(manifest.engineVersion, read_range(engine, "/engine", sourceName));
+
+        // Optional members.
+        CONJURE_TRY_ASSIGN(manifest.displayName, read_string(root, "displayName", sourceName, false));
+        CONJURE_TRY_ASSIGN(manifest.description, read_string(root, "description", sourceName, false));
+        CONJURE_TRY_ASSIGN(manifest.binary, read_string(root, "binary", sourceName, false));
+        if (!manifest.binary.empty() && !modules::detail::is_base_name(manifest.binary)) {
+            const std::string reason =
+              std::format("'{}' must be a file name without a directory part", manifest.binary);
+            return invalid(sourceName, "/binary", reason);
+        }
+
+        const json::value kind = root["kind"];
+        if (kind.is_valid()) {
+            if (!kind.is_string()) {
+                return invalid_type(sourceName, "/kind", "string", kind);
+            }
+            const std::optional<module_kind> parsedKind = parse_module_kind(kind.as_string());
+            if (!parsedKind.has_value()) {
+                const std::string reason = std::format("unknown kind '{}' (engine, plugin, game)", kind.as_string());
+                return invalid(sourceName, "/kind", reason);
+            }
+            manifest.kind = *parsedKind;
+        }
+
+        const json::value platforms = root["platforms"];
+        if (platforms.is_valid()) {
+            if (!platforms.is_array()) {
+                return invalid_type(sourceName, "/platforms", "array of strings", platforms);
+            }
+            manifest.platforms = module_platform_flags::NONE;
+            usize index = 0;
+            for (const json::value item : platforms) {
+                const std::string pointer = std::format("/platforms/{}", index);
+                if (!item.is_string()) {
+                    return invalid_type(sourceName, pointer, "string", item);
+                }
+                const std::optional<module_platform> platform = parse_module_platform(item.as_string());
+                if (!platform.has_value()) {
+                    return invalid(sourceName, pointer, std::format("unknown platform '{}'", item.as_string()));
+                }
+                manifest.platforms |= to_flag(*platform);
+                ++index;
+            }
+        }
+
+        const json::value requiredFeatures = root["requires"];
+        if (requiredFeatures.is_valid()) {
+            if (!requiredFeatures.is_array()) {
+                return invalid_type(sourceName, "/requires", "array of strings", requiredFeatures);
+            }
+            usize index = 0;
+            for (const json::value item : requiredFeatures) {
+                const std::string pointer = std::format("/requires/{}", index);
+                if (!item.is_string()) {
+                    return invalid_type(sourceName, pointer, "string", item);
+                }
+                const std::optional<module_feature_flags> feature = parse_module_feature(item.as_string());
+                if (!feature.has_value()) {
+                    return invalid(sourceName, pointer, std::format("unknown feature '{}'", item.as_string()));
+                }
+                manifest.requiredFeatures |= *feature;
+                ++index;
+            }
+        }
+
+        const json::value dependencies = root["dependencies"];
+        if (dependencies.is_valid()) {
+            if (!dependencies.is_array()) {
+                return invalid_type(sourceName, "/dependencies", "array of objects", dependencies);
+            }
+            usize index = 0;
+            for (const json::value item : dependencies) {
+                CONJURE_TRY_ASSIGN(module_dependency dependency, read_dependency(item, index, sourceName));
+                if (dependency.name == manifest.name) {
+                    const std::string pointer = std::format("/dependencies/{}/name", index);
+                    return invalid(sourceName, pointer, "a module cannot depend on itself");
+                }
+                const auto sameName = [&dependency](const module_dependency &existing) {
+                    return existing.name == dependency.name;
+                };
+                if (std::any_of(manifest.dependencies.begin(), manifest.dependencies.end(), sameName)) {
+                    return invalid(
+                      sourceName,
+                      std::format("/dependencies/{}/name", index),
+                      std::format("duplicate dependency '{}'", dependency.name)
+                    );
+                }
+                manifest.dependencies.push_back(std::move(dependency));
+                ++index;
+            }
+        }
+
+        CONJURE_TRY_ASSIGN(manifest.managedAssemblies, read_relative_paths(root, "managed", sourceName));
+        CONJURE_TRY_ASSIGN(manifest.contentDirectories, read_relative_paths(root, "content", sourceName));
+
+        const json::value editorOnly = root["editorOnly"];
+        if (editorOnly.is_valid()) {
+            if (!editorOnly.is_bool()) {
+                return invalid_type(sourceName, "/editorOnly", "bool", editorOnly);
+            }
+            manifest.editorOnly = editorOnly.as_bool();
+        }
+
+        warn_unknown_keys(root, KNOWN_KEYS, sourceName, "");
+        return manifest;
     }
 }
 
@@ -183,158 +372,7 @@ result<module_manifest> conjure::modules::parse_module_manifest(
     if (!parsed.has_value()) {
         return invalid(sourceName, "", parsed.get_error().message());
     }
-    const json::document &document = parsed.value();
-    const json::value root = document.root();
-    if (!root.is_object()) {
-        return invalid_type(sourceName, "", "object", root);
-    }
-
-    module_manifest manifest = {};
-
-    // Required members first: schema, name, version, engine.
-    const json::value schema = root["schema"];
-    if (!schema.is_integer()) {
-        return invalid_type(sourceName, "/schema", "integer", schema);
-    }
-    if (schema.as_u64() != MODULE_MANIFEST_SCHEMA_VERSION) {
-        return invalid(
-          sourceName,
-          "/schema",
-          std::format(
-            "unsupported schema {} (this engine reads schema {})",
-            schema.as_i64(),
-            MODULE_MANIFEST_SCHEMA_VERSION
-          )
-        );
-    }
-    manifest.schemaVersion = static_cast<u32>(schema.as_u64());
-
-    CONJURE_TRY_ASSIGN(manifest.name, read_string(root, "name", sourceName, true));
-    if (!is_valid_module_name(manifest.name)) {
-        return make_module_error(
-          module_error::INVALID_NAME,
-          "{}: /name: '{}' is not a valid module name ([a-z0-9_.], 1 to {} characters)",
-          sourceName,
-          manifest.name,
-          MAX_MODULE_NAME_LENGTH
-        );
-    }
-
-    const json::value version = root["version"];
-    if (!version.is_string()) {
-        return invalid_type(sourceName, "/version", "version string", version);
-    }
-    result<semantic_version> parsedVersion = parse_version(version.as_string());
-    if (!parsedVersion.has_value()) {
-        return invalid(sourceName, "/version", parsedVersion.get_error().message());
-    }
-    manifest.version = parsedVersion.value();
-
-    const json::value engine = root["engine"];
-    if (!engine.is_valid()) {
-        return invalid_type(sourceName, "/engine", "version range string", engine);
-    }
-    CONJURE_TRY_ASSIGN(manifest.engineVersion, read_range(engine, "/engine", sourceName));
-
-    // Optional members.
-    CONJURE_TRY_ASSIGN(manifest.displayName, read_string(root, "displayName", sourceName, false));
-    CONJURE_TRY_ASSIGN(manifest.description, read_string(root, "description", sourceName, false));
-    CONJURE_TRY_ASSIGN(manifest.binary, read_string(root, "binary", sourceName, false));
-
-    const json::value kind = root["kind"];
-    if (kind.is_valid()) {
-        if (!kind.is_string()) {
-            return invalid_type(sourceName, "/kind", "string", kind);
-        }
-        const std::optional<module_kind> parsedKind = parse_module_kind(kind.as_string());
-        if (!parsedKind.has_value()) {
-            const std::string reason = std::format("unknown kind '{}' (engine, plugin, game)", kind.as_string());
-            return invalid(sourceName, "/kind", reason);
-        }
-        manifest.kind = *parsedKind;
-    }
-
-    const json::value platforms = root["platforms"];
-    if (platforms.is_valid()) {
-        if (!platforms.is_array()) {
-            return invalid_type(sourceName, "/platforms", "array of strings", platforms);
-        }
-        manifest.platforms = module_platform_flags::NONE;
-        usize index = 0;
-        for (const json::value item : platforms) {
-            const std::string pointer = std::format("/platforms/{}", index);
-            if (!item.is_string()) {
-                return invalid_type(sourceName, pointer, "string", item);
-            }
-            const std::optional<module_platform> platform = parse_module_platform(item.as_string());
-            if (!platform.has_value()) {
-                return invalid(sourceName, pointer, std::format("unknown platform '{}'", item.as_string()));
-            }
-            manifest.platforms |= to_flag(*platform);
-            ++index;
-        }
-    }
-
-    const json::value requiredFeatures = root["requires"];
-    if (requiredFeatures.is_valid()) {
-        if (!requiredFeatures.is_array()) {
-            return invalid_type(sourceName, "/requires", "array of strings", requiredFeatures);
-        }
-        usize index = 0;
-        for (const json::value item : requiredFeatures) {
-            const std::string pointer = std::format("/requires/{}", index);
-            if (!item.is_string()) {
-                return invalid_type(sourceName, pointer, "string", item);
-            }
-            const std::optional<module_feature_flags> feature = parse_module_feature(item.as_string());
-            if (!feature.has_value()) {
-                return invalid(sourceName, pointer, std::format("unknown feature '{}'", item.as_string()));
-            }
-            manifest.requiredFeatures |= *feature;
-            ++index;
-        }
-    }
-
-    const json::value dependencies = root["dependencies"];
-    if (dependencies.is_valid()) {
-        if (!dependencies.is_array()) {
-            return invalid_type(sourceName, "/dependencies", "array of objects", dependencies);
-        }
-        usize index = 0;
-        for (const json::value item : dependencies) {
-            CONJURE_TRY_ASSIGN(module_dependency dependency, read_dependency(item, index, sourceName));
-            if (dependency.name == manifest.name) {
-                const std::string pointer = std::format("/dependencies/{}/name", index);
-                return invalid(sourceName, pointer, "a module cannot depend on itself");
-            }
-            const auto sameName = [&dependency](const module_dependency &existing) {
-                return existing.name == dependency.name;
-            };
-            if (std::any_of(manifest.dependencies.begin(), manifest.dependencies.end(), sameName)) {
-                return invalid(
-                  sourceName,
-                  std::format("/dependencies/{}/name", index),
-                  std::format("duplicate dependency '{}'", dependency.name)
-                );
-            }
-            manifest.dependencies.push_back(std::move(dependency));
-            ++index;
-        }
-    }
-
-    CONJURE_TRY_ASSIGN(manifest.managedAssemblies, read_string_array(root, "managed", sourceName));
-    CONJURE_TRY_ASSIGN(manifest.contentDirectories, read_string_array(root, "content", sourceName));
-
-    const json::value editorOnly = root["editorOnly"];
-    if (editorOnly.is_valid()) {
-        if (!editorOnly.is_bool()) {
-            return invalid_type(sourceName, "/editorOnly", "bool", editorOnly);
-        }
-        manifest.editorOnly = editorOnly.as_bool();
-    }
-
-    warn_unknown_keys(root, sourceName);
-    return manifest;
+    return parse_manifest_root(parsed->root(), sourceName);
 }
 
 result<module_manifest> conjure::modules::load_module_manifest(const std::filesystem::path &path) {
@@ -351,7 +389,7 @@ result<module_manifest> conjure::modules::load_module_manifest(const std::filesy
     if (!parsed.has_value()) {
         return invalid(path.generic_string(), "", parsed.get_error().message());
     }
-    return parse_module_manifest(parsed->to_string(), path.generic_string());
+    return parse_manifest_root(parsed->root(), path.generic_string());
 }
 
 

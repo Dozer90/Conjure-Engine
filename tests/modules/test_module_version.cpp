@@ -46,6 +46,20 @@ TEST_SUITE("modules/module_version") {
         }
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F343 a version component with a leading zero is PARSE_FAILURE") {
+        const std::array<std::string_view, 4> rejected = {"01.2.3", "1.02.3", "1.2.03", "00.0.0"};
+        for (const std::string_view text : rejected) {
+            CAPTURE(text);
+            CONJURE_CHECK_ERROR(parse_version(text), error_code::PARSE_FAILURE);
+            CONJURE_CHECK_ERROR(parse_version_range(text), error_code::PARSE_FAILURE);
+        }
+        CONJURE_CHECK_ERROR(parse_version_range("^01.2.3"), error_code::PARSE_FAILURE);
+        CONJURE_CHECK_ERROR(parse_version_range(">=1.0.0 <02.0.0"), error_code::PARSE_FAILURE);
+        CHECK(version_of("0.0.0") == semantic_version{0, 0, 0});
+        CHECK(version_of("10.0.0") == semantic_version{10, 0, 0});
+        CHECK(version_of("1.20.300") == semantic_version{1, 20, 300});
+    }
+
     TEST_CASE("semantic_version - ordering compares major, then minor, then patch") {
         CHECK(semantic_version{1, 0, 0} < semantic_version{2, 0, 0});
         CHECK(semantic_version{1, 9, 9} < semantic_version{2, 0, 0});
@@ -80,6 +94,24 @@ TEST_SUITE("modules/module_version") {
         CHECK(range_of("<2.0.0") == version_range{{0, 0, 0}, {2, 0, 0}});
         CHECK(range_of("*") == version_range{});
         CHECK(range_of("  ^ 1.2.3 ") == version_range{{1, 2, 3}, {2, 0, 0}});
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F343 whitespace may follow a range operator and separate comparators") {
+        const version_range expected = {{1, 0, 0}, {2, 0, 0}};
+        CHECK(range_of(">= 1.0.0 < 2.0.0") == expected);
+        CHECK(range_of(">=1.0.0\t<2.0.0") == expected);
+        CHECK(range_of("<\t2.0.0   >=  1.0.0") == expected);
+        CHECK(range_of(">=1.0.0\n<2.0.0") == expected);
+        CHECK(range_of(">=\r\n1.0.0\r\n<\f2.0.0") == expected);
+        CHECK(range_of("^\n1.2.3") == version_range{{1, 2, 3}, {2, 0, 0}});
+        CHECK(range_of(">= 1.0.0") == version_range{{1, 0, 0}, MAX_SEMANTIC_VERSION});
+        CHECK(range_of("~ 1.2.3") == version_range{{1, 2, 3}, {1, 3, 0}});
+
+        const std::array<std::string_view, 5> rejected = {">=", "<", ">= <2.0.0", "< >=1.0.0", ">= 1.0.0 >= 1.1.0"};
+        for (const std::string_view text : rejected) {
+            CAPTURE(text);
+            CONJURE_CHECK_ERROR(parse_version_range(text), error_code::PARSE_FAILURE);
+        }
     }
 
     TEST_CASE("version_range - caret on 0.x bumps the minor and on 0.0.x the patch") {

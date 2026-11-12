@@ -17,8 +17,9 @@
 //   r.contains(v);                                                // true
 //
 // Range grammar: "1.2.3" exact; "^1.2.3" = [1.2.3, 2.0.0) (for 0.x: [0.2.3, 0.3.0); for 0.0.x:
-// [0.0.3, 0.0.4)); "~1.2.3" = [1.2.3, 1.3.0); ">=1.0.0 <2.0.0"; ">=1.0.0"; "<2.0.0"; "*". No
-// pre-release tags. Both parsers fail with core::error_code::PARSE_FAILURE.
+// [0.0.3, 0.0.4)); "~1.2.3" = [1.2.3, 1.3.0); ">=1.0.0 <2.0.0"; ">=1.0.0"; "<2.0.0"; "*".
+// Whitespace separates comparators and may follow an operator ("^ 1.2.3", ">= 1.0.0"). No
+// pre-release tags, no leading zeros. Both parsers fail with core::error_code::PARSE_FAILURE.
 
 namespace conjure::modules {
 
@@ -75,8 +76,8 @@ namespace conjure::modules {
     }
 
     /// <summary>
-    /// Parses "major.minor.patch" (all three required, decimal, no sign, no tags, each at most
-    /// 65535). PARSE_FAILURE otherwise.
+    /// Parses "major.minor.patch" (all three required, decimal without leading zeros, no sign, no
+    /// tags, each at most 65535). PARSE_FAILURE otherwise.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<semantic_version> parse_version(std::string_view text);
 

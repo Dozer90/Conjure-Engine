@@ -1,9 +1,11 @@
 #include "conjure/modules/module_registrar.h"
+#include "modules/manifest_paths.h"
 
 #include "conjure/core/assert.h"
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 #include <string>
 
 using namespace conjure;
@@ -29,6 +31,18 @@ void module_registrar::register_managed_assembly(std::string_view relativePath) 
     if (relativePath.empty()) {
         return;
     }
+
+    // export_layout() writes these into the exported manifest, which must pass the same check as
+    // the manifest's own "managed" entries or the shipped game would refuse the module.
+    const bool insideRoot = modules::detail::stays_inside_root(relativePath);
+    CONJURE_ASSERT(insideRoot, "register_managed_assembly: '{}' leaves the module root", relativePath);
+    if (!insideRoot) {
+        mSet->errors.emplace_back(
+          std::format("register_managed_assembly: '{}' must be a relative path inside the module root", relativePath)
+        );
+        return;
+    }
+
     std::vector<std::string> &assemblies = mSet->managedAssemblies;
     if (std::find(assemblies.begin(), assemblies.end(), relativePath) != assemblies.end()) {
         return;

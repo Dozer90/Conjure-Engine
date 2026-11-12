@@ -141,7 +141,8 @@ fix-rebuild-reload loses nothing.
 > frame and asserts both. From a system, an editor command or any job, use the request functions instead:
 > `request_load(id)`, `request_unload(id, policy)` and `request_reload(id, scope)` enqueue (main thread only),
 > `apply_pending()` performs the queue at the next frame start and `pending_count()` tells how much is waiting.
-> Requests for stale ids are dropped with a warning; a refused request leaves its error in `last_error(id)`.
+> Requests for stale ids are dropped with a warning; a refused request leaves its error in `last_error(id)`, except
+> on a `FAULTED` module, which keeps the fault that put it there.
 
 ## Reading the registry
 

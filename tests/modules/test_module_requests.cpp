@@ -170,6 +170,42 @@ TEST_SUITE("modules/module_requests") {
         CHECK(logs.count(log_level::ERR) == 0);
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F337 requests on a FAULTED module keep its fault as the last error") {
+        request_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();    // the fault itself is logged at ERROR
+        CONJURE_REQUIRE_OK(fixture.host.manager.load(fixture.alphaId));
+        fixture.ecs.liveUsesAfterDetach = 3;
+        {
+            conjure::testing::expect_assert guard = {};
+            const result<void> faulted = fixture.host.manager.unload(fixture.alphaId, unload_policy::REMOVE_INSTANCES);
+            CONJURE_CHECK_ERROR(faulted, module_error::FAULTED);
+        }
+        const module_registry &registry = fixture.host.manager.registry();
+        REQUIRE(registry.state(fixture.alphaId) == module_state::FAULTED);
+        const std::string fault = registry.last_error(fixture.alphaId).message();
+
+        for (u32 round = 0; round < 2; ++round) {
+            CAPTURE(round);
+            fixture.host.manager.request_reload(fixture.alphaId, reload_scope::FULL);
+            fixture.host.manager.request_load(fixture.alphaId);
+            fixture.host.manager.apply_pending();
+        }
+
+        const error &lastError = registry.last_error(fixture.alphaId);
+        CHECK(lastError.is(module_error::FAULTED));
+        CHECK(lastError.message() == fault);
+        const usize firstMention = fault.find("is faulted");
+        REQUIRE(firstMention != std::string::npos);
+        CHECK(fault.find("is faulted", firstMention + 1) == std::string::npos);
+
+        const result<void> refused = fixture.host.manager.load(fixture.alphaId);
+        CONJURE_CHECK_ERROR(refused, module_error::FAULTED);
+        CHECK(refused.get_error().message() == fault);
+        CHECK(logs.contains(log_level::WARN, "refused"));
+        CHECK(registry.state(fixture.alphaId) == module_state::FAULTED);
+    }
+
     TEST_CASE("module_manager - requests made while applying wait for the next apply_pending") {
         request_fixture fixture = {};
         bool requestedAgain = false;

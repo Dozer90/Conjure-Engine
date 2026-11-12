@@ -10,6 +10,7 @@
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -105,6 +106,34 @@ TEST_SUITE("modules/module_registrar") {
 
         CONJURE_CHECK_ASSERTS(registrar.register_managed_assembly(""));
         CHECK(set.managedAssemblies.size() == 2);
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F338 a managed assembly outside the module root asserts and fails") {
+        module_registration_set set = {};
+        module_registrar registrar(set);
+        registrar.register_managed_assembly("managed/Game.dll");
+
+        const std::array<std::string_view, 5> rejected = {
+            "../x.dll", "/abs/x.dll", "C:/x.dll", "managed\\..\\..\\x.dll", "\\\\server\\share\\x.dll",
+        };
+        for (const std::string_view path : rejected) {
+            CAPTURE(path);
+            const usize errorCount = set.errors.size();
+            {
+                conjure::testing::expect_assert guard = {};
+                registrar.register_managed_assembly(path);
+                CHECK(guard.count() == (CONJURE_ASSERTS_ENABLED ? 1u : 0u));
+            }
+            REQUIRE(set.errors.size() == errorCount + 1);
+            CHECK(set.errors.back().find(path) != std::string::npos);
+            CHECK(set.errors.back().find("inside the module root") != std::string::npos);
+        }
+        CHECK(set.managedAssemblies == std::vector<std::string>{"managed/Game.dll"});
+
+        registrar.register_managed_assembly("managed/./Tools.dll");
+        registrar.register_managed_assembly("..managed/x..dll");
+        CHECK(set.managedAssemblies.size() == 3);
+        CHECK(set.errors.size() == rejected.size());
     }
 
     TEST_CASE("module_registrar - fail accumulates every reason and an empty reason is named") {

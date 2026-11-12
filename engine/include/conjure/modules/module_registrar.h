@@ -44,7 +44,9 @@ namespace conjure::modules {
             }
 
             /// <summary>
-            /// Adds a managed assembly path relative to the module root. Duplicates are ignored.
+            /// Adds a managed assembly path relative to the module root. Duplicates are ignored. A
+            /// path that leaves the root (a ".." segment, a leading separator, a drive) asserts and
+            /// is recorded as a failure, like fail(), so the load is rejected.
             /// </summary>
             void register_managed_assembly(std::string_view relativePath);
 

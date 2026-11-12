@@ -76,11 +76,17 @@ subscription and a log line through the host logger.
 | `kind` | `kind` | `plugin`, `game` (one per project, loaded last) or `engine` (built-ins only) | `plugin` |
 | `platforms` | `platforms` | any of `windows`, `linux`, `macos`; elsewhere the module is skipped | all |
 | `requires` | `requiredFeatures` | `renderer`, `physics`, `audio`, `scripting`, `editor`; the host must have them compiled in | none |
-| `binary` | `binary` | base name of the native library; empty means no native code | `""` |
+| `binary` | `binary` | base name of the native library (no directory part); empty means no native code | `""` |
 | `dependencies` | `dependencies` | `{ "name", "version" (range), "optional" }` entries | none |
-| `managed` | `managedAssemblies` | C# assemblies, relative to the module root | none |
-| `content` | `contentDirectories` | content directories, relative to the module root | none |
+| `managed` | `managedAssemblies` | C# assemblies, relative to the module root and staying inside it | none |
+| `content` | `contentDirectories` | content directories, relative to the module root and staying inside it | none |
 | `editorOnly` | `editorOnly` | never exported into a shipped game | `false` |
+
+An unknown key, at the top level or inside a `dependencies` entry, logs a warning naming it and is otherwise
+ignored, so check the log after a typo such as `"versoin"`. A `binary` with a directory part (`/`, `\` or `:`, or
+`.` / `..`) and a `managed` or `content` entry that would leave the module root (a `..` segment, a leading `/` or
+`\`, a drive such as `C:`, or an empty string) are `MANIFEST_INVALID`, with the JSON pointer of the entry
+(`/managed/0`). The check is textual, so a manifest is accepted or refused the same way on every platform.
 
 The binary's location is never written down. For `"binary": "space_shooter"` the engine loads
 `<root>/bin/<platform>-<arch>-<config>/space_shooter.dll` (`libspace_shooter.so`, `libspace_shooter.dylib`), with
@@ -106,6 +112,10 @@ grammar, as `parse_version_range()` reads it:
 | `"~1.2.3"` | `[1.2.3, 1.3.0)` |
 | `">=1.0.0 <2.0.0"`, `">=1.0.0"`, `"<2.0.0"` | explicit bounds, either may be omitted |
 | `"*"` | every version |
+
+Whitespace (spaces, tabs, line breaks) separates the two comparators and may follow any operator
+(`"^ 1.2.3"`, `">= 1.0.0 < 2.0.0"`). Each component is decimal without leading zeros: `"1.02.3"` is a
+`PARSE_FAILURE`, `"0.0.0"` and `"10.0.0"` are fine.
 
 ```cpp
 #include "conjure/modules/module_version.h"
@@ -151,7 +161,7 @@ with `ENTRY_FAILED` listing every reason; nothing you registered is applied.
 | Call | Effect |
 |---|---|
 | `register_extension(desc)` | appends a trivially copyable descriptor under `DescType::EXTENSION_POINT` (`"ecs.component"`, `"ecs.system"`, `"editor.panel"`, ...) |
-| `register_managed_assembly("managed/X.dll")` | adds a C# assembly path relative to the module root; duplicates are ignored |
+| `register_managed_assembly("managed/X.dll")` | adds a C# assembly path relative to the module root; duplicates are ignored; a path that leaves the root (as for `managed` in the manifest) asserts and rejects the load |
 | `set_lifecycle(module_lifecycle{&on_activated, &on_deactivating})` | installs the callbacks; the last call wins; either may be null |
 | `fail("reason")` | records why the module cannot load; reasons accumulate |
 
