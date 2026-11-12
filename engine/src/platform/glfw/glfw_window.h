@@ -64,6 +64,7 @@ namespace conjure::platform::glfw {
             bool mFullscreen = false;
             bool mPositionSupported = true;         // false on Wayland: clients never learn where they are
             bool mCursorWarpSupported = true;       // false on Wayland: glfwSetCursorPos is unavailable
+            bool mIconSupported = true;             // false on Cocoa and Wayland: windows have no icon of their own
             math::ivec2 mWindowedPosition = math::ivec2(0);
             math::uvec2 mWindowedSize = math::uvec2(0);     // last size the OS confirmed while windowed
             cursor_mode mCursorMode = cursor_mode::NORMAL;
@@ -102,6 +103,7 @@ namespace conjure::platform::glfw {
             [[nodiscard]] bool is_fullscreen() const noexcept override;
             void set_title(std::string_view title) override;
             [[nodiscard]] std::string_view title() const noexcept override;
+            [[nodiscard]] core::result<void> set_icon(std::span<const core::image> images) override;
             void set_size(math::uvec2 logicalSize) override;
             [[nodiscard]] core::result<void> set_position(math::ivec2 position) override;
             [[nodiscard]] math::ivec2 position() const noexcept override;

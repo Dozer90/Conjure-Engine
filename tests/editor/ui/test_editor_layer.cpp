@@ -4,8 +4,11 @@
 
 #include "conjure/editor/ui/editor_layer.h"
 #include "conjure/editor/ui/imgui_frame_scope.h"
+#include "conjure/engine/engine_context.h"
 #include "conjure/engine/layer.h"
 #include "conjure/platform/event.h"
+#include "conjure/platform/null_backend.h"
+#include "conjure/platform/window.h"
 
 #include <memory>
 
@@ -28,6 +31,20 @@ TEST_SUITE("editor/ui/editor_layer") {
         CHECK(layer.workspace()->layout_file() == editor.project_directory() / ".conjure" / "editor_layout.ini");
         layer.on_detach(editor.context().engine_context());
         CHECK(layer.workspace() == nullptr);
+    }
+
+    TEST_CASE("editor_layer - attaching gives the window the editor icon") {
+        editor_test::headless_editor editor = {};
+        platform::window *window = editor.context().engine_context().window;
+        REQUIRE(window != nullptr);
+        REQUIRE(window->as_null() != nullptr);
+        CONJURE_REQUIRE_OK(window->set_icon({}));
+        editor_layer layer(editor.context());
+        CONJURE_REQUIRE_OK(layer.on_attach(editor.context().engine_context()));
+        REQUIRE_FALSE(window->as_null()->icons().empty());
+        CHECK(window->as_null()->icons().front().width() == 16);
+        CHECK(window->as_null()->icons().back().width() == 256);
+        layer.on_detach(editor.context().engine_context());
     }
 
     TEST_CASE("editor_layer - on_update refreshes and on_imgui draws only inside an ImGui frame") {

@@ -26,7 +26,7 @@ generated or downloaded and therefore never committed.
 | `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake` |
 | `third_party/` | `CMakeLists.txt` with every pinned dependency and `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) |
 | `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `shaders/` the engine's HLSL sources and their `CMakeLists.txt` (`conjure_add_shaders`), `CMakeLists.txt` with the module list |
-| `editor/` | the `conjure_editor` executable: `src/main.cpp` over `conjure::shared` ([Editor module](modules/editor.md)) |
+| `editor/` | the `conjure_editor` executable: `src/main.cpp` over `conjure::shared` ([Editor module](modules/editor.md)); `resources/` the Windows icon resource and its generated `.ico` |
 | `runtime/` | the `conjure_runtime` executable: `src/main.cpp` over `conjure::shared` ([Runtime](modules/runtime.md)) |
 | `managed/` | the C# SDK (`Conjure.Managed`), the test scripts and the project templates built with `dotnet` |
 | `samples/` | sample projects, first `feature_test` (wave 5; skipped until `feature_test/CMakeLists.txt` exists) |
@@ -161,7 +161,7 @@ Conventions worth knowing when looking for something:
 | `docs/index.md` | landing page of the site: pick your document set |
 | `docs/api/` | 📘 Public API wiki, one directory per module |
 | `docs/handbook/` | 🛠 Engineering handbook (this set); `modules/` one page per engine module, `module-system/` the module system chapter |
-| `docs/assets/` | images, SVG diagrams, `extra.css` |
+| `docs/assets/` | images, SVG diagrams, `extra.css`; `brand/` holds the logo masters and the per-size icon drawings ([Logo and application icon](brand.md)) |
 
 ## 6. Generated and ignored files
 
@@ -187,7 +187,11 @@ is not ignored yet.
 | `__pycache__/`, `*.pyc` | Python | |
 | `.vs/`, `.vscode/`, `.idea/`, `*.user`, `*.log`, `*.dmp`, `/logs/` | IDEs, the engine | editor state, logs, crash dumps |
 
-`.gitattributes` normalises every text file to LF and marks `.png .jpg .hdr .glb .bin .wav .ogg .mp3 .ttf
+Generator outputs that the build needs on every machine are committed instead and checked by CTest: the editor's
+icon (`editor/resources/conjure_editor.ico`, `engine/src/editor/ui/editor_icon_data.cpp`) comes from
+`tools/generate_brand_icons.py`, and `brand.icons_up_to_date` fails while either differs from the drawings.
+
+`.gitattributes` normalises every text file to LF and marks `.png .ico .jpg .hdr .glb .bin .wav .ogg .mp3 .ttf
 .dxil .spv` as binary; `tools/check_style.py` rejects a CRLF source file, so configure your editor rather than git.
 
 ## Related

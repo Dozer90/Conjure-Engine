@@ -26,3 +26,17 @@ conjure_add_executable(conjure_editor
 )
 
 set_target_properties(conjure_editor PROPERTIES OUTPUT_NAME "conjure_editor")
+
+# The application icon (docs/handbook/brand.md): on Windows a resource script compiles the generated .ico into the
+# executable. The resource compiler looks for the .ico on its include path rather than next to the script, so the
+# resources directory is added for this one source, and the .ico is a dependency so a regenerated icon relinks.
+# Other platforms get the icon at run time from editor_ui (window::set_icon).
+if(WIN32)
+    set(editorResourceDirectory "${CMAKE_CURRENT_SOURCE_DIR}/resources")
+    set(editorResourceScript "${editorResourceDirectory}/conjure_editor.rc")
+    set_property(SOURCE "${editorResourceScript}" PROPERTY INCLUDE_DIRECTORIES "${editorResourceDirectory}")
+    set_property(SOURCE "${editorResourceScript}" APPEND PROPERTY
+        OBJECT_DEPENDS "${editorResourceDirectory}/conjure_editor.ico"
+    )
+    target_sources(conjure_editor PRIVATE "${editorResourceScript}")
+endif()

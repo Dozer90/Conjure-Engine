@@ -9,11 +9,13 @@
 #include "conjure/platform/platform_error.h"
 #include "conjure/platform/window.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using namespace conjure;
 using namespace conjure::core;
@@ -112,6 +114,38 @@ TEST_SUITE("platform/window") {
         const result<void> backendResult = validate_window_desc(badBackend);
         CONJURE_CHECK_ERROR(backendResult, platform_error::INVALID_DESC);
         CHECK(backendResult.get_error().message().find("backend") != std::string::npos);
+    }
+
+    TEST_CASE("validate_window_icon - accepts no images, any non-empty size and the largest allowed set") {
+        CONJURE_CHECK_OK(validate_window_icon({}));
+
+        const std::array<image, 2> mixed = {image(16, 16), image(48, 32)};
+        CONJURE_CHECK_OK(validate_window_icon(mixed));
+
+        const std::vector<image> most(
+          MAX_WINDOW_ICON_IMAGES,
+          image(MAX_WINDOW_ICON_DIMENSION, MAX_WINDOW_ICON_DIMENSION)
+        );
+        CONJURE_CHECK_OK(validate_window_icon(most));
+    }
+
+    TEST_CASE("validate_window_icon - rejects too many, empty and oversized images naming the first offender") {
+        const std::vector<image> tooMany(MAX_WINDOW_ICON_IMAGES + 1, image(16, 16));
+        const result<void> countResult = validate_window_icon(tooMany);
+        CONJURE_CHECK_ERROR(countResult, error_code::INVALID_ARGUMENT);
+        CHECK(countResult.get_error().message().find("17 images") != std::string::npos);
+
+        const std::array<image, 3> withEmpty = {image(16, 16), image(), image()};
+        const result<void> emptyResult = validate_window_icon(withEmpty);
+        CONJURE_CHECK_ERROR(emptyResult, error_code::INVALID_ARGUMENT);
+        CHECK(emptyResult.get_error().message().find("image 1 is empty") != std::string::npos);
+
+        const std::array<image, 1> wide = {image(MAX_WINDOW_ICON_DIMENSION + 1, 16)};
+        CONJURE_CHECK_ERROR(validate_window_icon(wide), error_code::INVALID_ARGUMENT);
+        const std::array<image, 1> tall = {image(16, MAX_WINDOW_ICON_DIMENSION + 1)};
+        const result<void> tallResult = validate_window_icon(tall);
+        CONJURE_CHECK_ERROR(tallResult, error_code::INVALID_ARGUMENT);
+        CHECK(tallResult.get_error().message().find("16 x 257") != std::string::npos);
     }
 
     TEST_CASE("create_window - rejects an invalid description with INVALID_DESC and creates nothing") {
@@ -236,6 +270,30 @@ TEST_SUITE("platform/window") {
         result<std::string> cleared = created->clipboard_text();
         CONJURE_REQUIRE_OK(cleared);
         CHECK(cleared.value().empty());
+    }
+
+    TEST_CASE("window - set_icon keeps its own copy, rejects invalid images and restores the default when empty") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        const std::unique_ptr<window> created = create_null_window();
+        REQUIRE(created->as_null() != nullptr);
+        CHECK(created->as_null()->icons().empty());
+
+        constexpr rgba8 INK = {0x4C, 0x8D, 0xFF, 255};
+        std::array<image, 2> icons = {image(16, 16), image(32, 32)};
+        icons[0].fill(INK);
+        CONJURE_REQUIRE_OK(created->set_icon(icons));
+        icons[0].fill(rgba8{});
+        REQUIRE(created->as_null()->icons().size() == 2);
+        CHECK(created->as_null()->icons()[0].pixel(15, 15) == INK);
+        CHECK(created->as_null()->icons()[1].width() == 32);
+
+        const std::array<image, 1> oversized = {image(MAX_WINDOW_ICON_DIMENSION + 1, 1)};
+        CONJURE_CHECK_ERROR(created->set_icon(oversized), error_code::INVALID_ARGUMENT);
+        CHECK(created->as_null()->icons().size() == 2);
+
+        CONJURE_CHECK_OK(created->set_icon({}));
+        CHECK(created->as_null()->icons().empty());
     }
 
     TEST_CASE("window - set_fullscreen resizes to the virtual mode and restores the windowed size") {

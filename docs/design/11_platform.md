@@ -34,6 +34,7 @@ test harness's `input_script` - consumes these three types and nothing else.
 | P12 | Fullscreen is **windowed fullscreen** (`glfwSetWindowMonitor` with the monitor's current video mode); monitors are enumerated through `window::monitors()` and selected by index in `window_desc::monitorIndex` or `set_fullscreen(true, index)`. No video-mode switching in v1. | No mode switches means no desktop corruption on crash and no DXGI/Vulkan exclusive-mode interaction with NVRHI; the current mode is what every modern engine defaults to. |
 | P13 | Clipboard is text only (`clipboard_text()` / `set_clipboard_text()`), UTF-8; the null backend keeps an in-memory string. Cursor modes are `NORMAL`, `HIDDEN`, `DISABLED`, `CAPTURED` (GLFW 3.4) plus optional raw mouse motion. | Exactly what ImGui, the editor and a first-person camera need; images and files in the clipboard are future work. |
 | P14 | Naming: struct fields camelCase (R31), class members `mCamelCase`, flags `enum class <x>_flags : uN { NONE = 0, ... }` + `CONJURE_ENUM_FLAGS`, no enumerator named after a Windows macro (`key::DEL`, not `DELETE`; R56 - the C# `Key.Delete` name is unaffected). The ABI enums of `15_bindings.md` 2.4 (`conjure_button_action`, `conjure_cursor_mode`) carry exactly these enumerator values. Public classes with out-of-line members and `create_window` carry `CONJURE_API` (`07_modules.md` D1). | CONVENTIONS 1 and 3; GLFW is linked exactly once into `conjure_shared`. |
+| P15 | Window icons (added 2026-11-13): `set_icon(std::span<const core::image>)` takes up to 16 RGBA8 images of at most 256 x 256, checked by `validate_window_icon` on both backends before anything else (`INVALID_ARGUMENT`, icon unchanged); an empty span restores the default icon. Cocoa and Wayland windows have no icon of their own, so glfw answers `FEATURE_UNAVAILABLE` there without calling GLFW and without a log line; the null backend keeps copies (`icons()`). | The editor sets its icon at every start: an expected platform limit must not print an error, and one validation keeps the two backends' contracts identical. 256 px is the largest icon Windows draws and keeps a full set inside one X11 property. |
 
 What was rejected: a callback-based event API (hides ordering, allocates closures, forces re-entrancy rules on
 every consumer); per-event heap allocation or `std::function` sinks; SDL (GLFW is a fixed decision); a platform
@@ -405,6 +406,8 @@ namespace conjure::platform {
 
             virtual void set_title(std::string_view title) = 0;
             [[nodiscard]] virtual std::string_view title() const noexcept = 0;
+            /// <summary>RGBA8 icon images (validate_window_icon); FEATURE_UNAVAILABLE on Cocoa and Wayland (P15).</summary>
+            [[nodiscard]] virtual core::result<void> set_icon(std::span<const core::image> images) = 0;
             virtual void set_size(math::uvec2 logicalSize) = 0;
             [[nodiscard]] virtual core::result<void> set_position(math::ivec2 position) = 0;   // FEATURE_UNAVAILABLE on Wayland
             [[nodiscard]] virtual math::ivec2 position() const noexcept = 0;
@@ -680,7 +683,8 @@ fixture owns a `memory_guard` and a `log_capture`; no test needs a display unles
 - Multiple windows (editor floating viewports); the interface is per-window already, only the one-live-window
   assert and the joystick-callback dispatch need changing.
 - Exclusive fullscreen with video-mode switching; `video_modes()` exists so a settings UI can prepare for it.
-- Cursor images and shapes (`glfwCreateCursor`, standard shapes), window icons, drag-and-drop *out* of the window.
+- Cursor images and shapes (`glfwCreateCursor`, standard shapes), drag-and-drop *out* of the window. (Window
+  icons moved in on 2026-11-13 as `window::set_icon`, P15.)
 - Clipboard images and file lists; IME composition events (GLFW has no IME API in 3.4).
 - Gamepad rumble, battery, touchpads and gyros (not in GLFW); touch and pen input.
 - Dead zones, action maps and rebinding (bindings / gameplay layer); input recording and replay beyond

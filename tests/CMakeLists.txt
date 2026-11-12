@@ -66,6 +66,19 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set_tests_properties(docs.check_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+
+    # The editor's application icon (docs/handbook/brand.md): the .ico and the embedded PNGs must match what
+    # tools/generate_brand_icons.py renders from the logo drawings, plus the generator's own self-test.
+    add_test(NAME brand.icons_up_to_date
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/generate_brand_icons.py" --check
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(brand.icons_up_to_date PROPERTIES LABELS "generated" TIMEOUT 120)
+    add_test(NAME brand.icons_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_generate_brand_icons.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(brand.icons_tool PROPERTIES LABELS "generated" TIMEOUT 120)
 else()
     message(STATUS "tests: Python 3 not found, the style.check test is not registered")
 endif()

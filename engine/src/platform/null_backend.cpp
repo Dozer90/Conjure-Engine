@@ -193,6 +193,15 @@ std::string_view null_backend::title() const noexcept {
     return mTitle;
 }
 
+core::result<void> null_backend::set_icon(std::span<const core::image> images) {
+    assert_main_thread("set_icon");
+    CONJURE_TRY(validate_window_icon(images));
+    // Copy before replacing: the span may be icons() itself, and assign() must not read the vector it overwrites.
+    std::vector<core::image> copies(images.begin(), images.end());
+    mIcons = std::move(copies);
+    return core::result<void>::success();
+}
+
 void null_backend::set_size(math::uvec2 logicalSize) {
     assert_main_thread("set_size");
     if (logicalSize == mLogicalSize) {
@@ -423,6 +432,10 @@ math::vec2 null_backend::cursor_position() const noexcept {
 
 bool null_backend::raw_mouse_motion() const noexcept {
     return mRawMouseMotion;
+}
+
+std::span<const core::image> null_backend::icons() const noexcept {
+    return mIcons;
 }
 
 /*===========================================================================*/

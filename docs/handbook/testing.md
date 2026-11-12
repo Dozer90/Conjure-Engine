@@ -322,6 +322,10 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
   links, page length, markers and header coverage of both documentation sets; `tools/tests/test_check_docs.py`
   (CTest `docs.check_tool`) is the checker's self-test over the fixtures in `tools/tests/check_docs/`. The
   [Documentation](documentation.md#4-tooling) chapter explains both.
+- **Generated outputs.** `python -I tools/generate_brand_icons.py --check` (CTest `brand.icons_up_to_date`,
+  label `generated`) fails while the editor's committed icon differs from what the logo drawings produce;
+  `tools/tests/test_generate_brand_icons.py` (CTest `brand.icons_tool`) is the generator's self-test. The
+  [Logo and application icon](brand.md#5-changing-a-drawing) chapter explains both.
 
 ## 10. Labels
 
@@ -331,6 +335,7 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 | extra `LABELS` | e.g. `support` on the self-tests | run |
 | `style` | `style.check` | run |
 | `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
+| `generated` | `conjure_scripting_api_generated_up_to_date`, `brand.icons_up_to_date`, `brand.icons_tool` | run |
 | `integration`, `engine`, `bindings`, `editor`, `runtime`, `benchmarks` | the wave-4 suites (`benchmarks` is the harness self-test, not the scenarios) | run |
 | `dotnet` | cases that start the real CLR (`tests/scripting`, `tests/bindings`, the `[scripting]` integration scenarios, the scripting benchmarks) | run; *Not Run* without the SDK |
 | `benchmark` | one entry per scenario of `conjure_benchmarks` (`benchmark.<module>.<scenario>`, plus the module label) | excluded; nightly `benchmarks-ci-class` |

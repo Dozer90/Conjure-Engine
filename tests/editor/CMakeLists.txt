@@ -83,6 +83,7 @@ if(TARGET conjure::bindings)
 endif()
 if(TARGET conjure::editor_ui)
     list(APPEND CONJURE_EDITOR_TEST_SOURCES
+        ui/test_editor_icon.cpp
         ui/test_editor_layer.cpp
         ui/test_editor_panel.cpp
         ui/test_editor_workspace.cpp

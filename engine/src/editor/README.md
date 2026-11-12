@@ -24,7 +24,8 @@ core/component_access  component JSON in protocol form (entity refs as guid stri
 core/protocol/         protocol_message, line_splitter, protocol_server, transports (tcp, stdio, loopback)
 core/net/              socket.h + socket_win32.cpp / socket_posix.cpp (the only platform-specific files)
 ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_cache, property_drawer,
-                       gizmo_controller, imgui_frame_scope, ui_support, panels/
+                       gizmo_controller, imgui_frame_scope, ui_support, editor_icon (+ generated
+                       editor_icon_data.cpp, see docs/handbook/brand.md), panels/
 ```
 
 ## How a command runs

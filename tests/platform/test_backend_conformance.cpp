@@ -9,6 +9,7 @@
 #include "conjure/platform/platform_error.h"
 #include "conjure/platform/window.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
@@ -519,6 +520,39 @@ TEST_SUITE("platform/backend_conformance") {
         CHECK(accumulator.snapshot().is_key_released(key::SPACE));
         CHECK(accumulator.snapshot().gamepad(0).is_pressed(gamepad_button::Y));
         CHECK(accumulator.snapshot().mouseDelta == math::vec2(5.0f, 0.0f));
+    }
+
+    TEST_CASE_TEMPLATE(
+      "backend_conformance - set_icon validates first, then applies or reports the platform has no window icons",
+      Factory,
+      null_factory,
+      glfw_factory
+    ) {
+        CONJURE_CONFORMANCE_BEGIN();
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        const std::unique_ptr<window> created = create_or_fail<Factory>();
+
+        // Validation comes before any platform question, so a bad set is INVALID_ARGUMENT on every backend,
+        // even where windows have no icon of their own.
+        const std::array<image, 1> empty = {image()};
+        CONJURE_CHECK_ERROR(created->set_icon(empty), error_code::INVALID_ARGUMENT);
+
+        std::array<image, 3> icons = {image(16, 16), image(32, 32), image(48, 48)};
+        for (image &icon : icons) {
+            icon.fill(rgba8{0x4C, 0x8D, 0xFF, 255});
+        }
+        const result<void> applied = created->set_icon(icons);
+        if (applied.has_value()) {
+            CONJURE_CHECK_OK(created->set_icon({}));
+        } else {
+            // Cocoa and Wayland: the window shows the bundle's or the desktop file's icon, an expected state
+            // that is reported without a log line.
+            CHECK(Factory::KIND == backend_kind::GLFW);
+            CONJURE_CHECK_ERROR(applied, platform_error::FEATURE_UNAVAILABLE);
+            CONJURE_CHECK_ERROR(created->set_icon({}), platform_error::FEATURE_UNAVAILABLE);
+            CHECK(logs.count(log_level::WARN) == 0);
+        }
     }
 
     TEST_CASE_TEMPLATE(

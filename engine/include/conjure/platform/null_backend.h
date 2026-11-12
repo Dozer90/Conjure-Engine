@@ -5,6 +5,7 @@
 #include "conjure/platform/window.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/image.h"
 #include "conjure/core/math.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -40,6 +41,7 @@ namespace conjure::platform {
             };
 
             std::string mTitle = {};
+            std::vector<core::image> mIcons = {};           // copies of the last set_icon images
             math::uvec2 mLogicalSize = math::uvec2(0);
             math::uvec2 mWindowedSize = math::uvec2(0);     // restored when leaving fullscreen
             math::vec2 mContentScale = math::vec2(1.0f);
@@ -94,6 +96,7 @@ namespace conjure::platform {
             [[nodiscard]] bool is_fullscreen() const noexcept override;
             void set_title(std::string_view title) override;
             [[nodiscard]] std::string_view title() const noexcept override;
+            [[nodiscard]] core::result<void> set_icon(std::span<const core::image> images) override;
             void set_size(math::uvec2 logicalSize) override;
             [[nodiscard]] core::result<void> set_position(math::ivec2 position) override;
             [[nodiscard]] math::ivec2 position() const noexcept override;
@@ -171,6 +174,11 @@ namespace conjure::platform {
             /// The raw mouse motion flag set_raw_mouse_motion() stored.
             /// </summary>
             [[nodiscard]] bool raw_mouse_motion() const noexcept;
+
+            /// <summary>
+            /// Copies of the images the last successful set_icon() received; empty for the default icon.
+            /// </summary>
+            [[nodiscard]] std::span<const core::image> icons() const noexcept;
 
         private:
             [[nodiscard]] math::uvec2 compute_framebuffer_size() const noexcept;

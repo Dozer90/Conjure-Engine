@@ -58,6 +58,7 @@ One line per chapter, in reading order for a new contributor.
 | [Continuous integration](ci.md) | the GitHub Actions matrix, what each job proves, sanitizer options, how to reproduce a CI failure locally |
 | [Contributing](contributing.md) | the workflow from design note to commit, commit message convention, `AGENTS.md` and the skills, private build directories, the definition of done |
 | [Documentation](documentation.md) | how this documentation works for contributors: the two sets, badges, alert boxes, page templates, `tools/docs.py`, `tools/check_docs.py`, the site build and CI |
+| [Logo and application icon](brand.md) | the official logo and its construction, the small-size cuts, the editor's icon on each platform, `tools/generate_brand_icons.py` and its checks |
 | [Decision records](decision-records.md) | annotated index of `docs/design/00` to `16`: what each record decides and when to read it |
 
 ## 3. Chapters still to be written

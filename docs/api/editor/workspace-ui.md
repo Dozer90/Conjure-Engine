@@ -24,7 +24,11 @@ submit `command_request`s through the context's dispatcher, so everything you cl
 
 `editor_layer` is pushed after the engine's `imgui_layer` (which owns the one `ImGuiContext`): `on_update`
 refreshes the panels' caches, `on_imgui` draws the workspace inside the frame the engine opened, `on_event` lets
-ImGui consume input first. `editor_workspace` is the full-window dockspace with a pass-through central node (the
+ImGui consume input first. `on_attach` also gives the window the editor's icon through
+`conjure/editor/ui/editor_icon.h`: `editor_icon_images()` decodes the official logo, compiled in as one PNG per
+size from 16 to 256 px, and `apply_editor_icon(window)` hands it to `window::set_icon` (`FEATURE_UNAVAILABLE` on
+macOS and Wayland, which is logged once at INFO and never fails the attach). `editor_workspace` is the
+full-window dockspace with a pass-through central node (the
 scene renders underneath), the main menu bar, the panel instances and the layout file
 `<project>/.conjure/editor_layout.ini`: `create_default_panels(context)`, `sync_module_panels(context)` (adds
 and removes module panels as modules load and unload), `update`, `draw`, `set_layout_file`, `save_layout`,
@@ -104,6 +108,7 @@ can be drawn against the null device in a unit test.
 | Signature (short) | Purpose |
 |---|---|
 | `unique_ptr<engine::layer> create_editor_layer(editor_context &)` | the UI layer for `editor_application::initialise` |
+| `result<std::vector<core::image>> editor_icon_images()` / `result<void> apply_editor_icon(platform::window &)` | the editor's window icon |
 | `class editor_panel { explicit editor_panel(std::string title, bool open = true); title(); is_open(); set_open(bool); draw(editor_context &) }` | a panel |
 | `void panel_registry::add(panel_descriptor)` / `add_module_panel(string_view owner, const panel_desc &)` / `descriptors()` | the panel list |
 | `void editor_workspace::create_default_panels(editor_context &)` / `sync_module_panels` / `update` / `draw` / `save_layout` | the dockspace |
@@ -117,3 +122,4 @@ can be drawn against the null device in a unit test.
 - 📘 API: [Headless mode and the command model](headless-and-commands.md), [The AI control protocol](ai-protocol.md)
 - 📘 API: [Rendering a frame](../renderer/rendering-a-frame.md) (the ImGui backend), [Writing a module](../modules/writing-a-module.md)
 - 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
+- 🛠 Handbook: [Logo and application icon](../../handbook/brand.md)

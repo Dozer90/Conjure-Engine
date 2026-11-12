@@ -11,6 +11,8 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <format>
 #include <limits>
 #include <string>
@@ -165,6 +167,9 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
     const int glfwPlatform = glfwGetPlatform();
     mPositionSupported = glfwPlatform != GLFW_PLATFORM_WAYLAND;
     mCursorWarpSupported = glfwPlatform != GLFW_PLATFORM_WAYLAND;
+    // Cocoa windows show the application bundle's icon and Wayland ones the desktop file's; glfwSetWindowIcon
+    // reports GLFW_FEATURE_UNAVAILABLE there, so set_icon answers without calling it.
+    mIconSupported = glfwPlatform != GLFW_PLATFORM_COCOA && glfwPlatform != GLFW_PLATFORM_WAYLAND;
 
     glfwDefaultWindowHints();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // NVRHI owns the graphics API; never a GL context
@@ -396,6 +401,41 @@ void glfw_window::set_title(std::string_view title) {
 
 std::string_view glfw_window::title() const noexcept {
     return mTitle;
+}
+
+core::result<void> glfw_window::set_icon(std::span<const core::image> images) {
+    assert_main_thread("set_icon");
+    CONJURE_TRY(validate_window_icon(images));
+    if (!mIconSupported) {
+        // Expected on these platforms rather than a fault, so no WARN line: the caller decides what to say.
+        return core::make_error(
+          platform_error::FEATURE_UNAVAILABLE,
+          "window icons are not available on {}",
+          platform_name()
+        );
+    }
+
+    std::array<GLFWimage, MAX_WINDOW_ICON_IMAGES> glfwImages = {};
+    for (usize index = 0; index < images.size(); ++index) {
+        const core::image &image = images[index];
+        glfwImages[index].width = static_cast<int>(image.width());
+        glfwImages[index].height = static_cast<int>(image.height());
+        // GLFWimage is not const-correct; glfwSetWindowIcon only reads the pixels and copies them before it
+        // returns.
+        std::byte *pixels = const_cast<std::byte *>(image.pixels().data());
+        glfwImages[index].pixels = reinterpret_cast<unsigned char *>(pixels);
+    }
+
+    clear_last_error();
+    glfwSetWindowIcon(mWindow, static_cast<int>(images.size()), images.empty() ? nullptr : glfwImages.data());
+    if (last_error_code() != GLFW_NO_ERROR) {
+        return core::make_error(
+          core::error_code::BACKEND_FAILURE,
+          "glfwSetWindowIcon failed: {}",
+          last_error_summary()
+        );
+    }
+    return core::result<void>::success();
 }
 
 void glfw_window::set_size(math::uvec2 logicalSize) {

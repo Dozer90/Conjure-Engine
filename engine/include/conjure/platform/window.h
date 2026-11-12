@@ -7,6 +7,7 @@
 
 #include "conjure/core/api.h"
 #include "conjure/core/enum_flags.h"
+#include "conjure/core/image.h"
 #include "conjure/core/math.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
@@ -65,6 +66,17 @@ namespace conjure::platform {
     /// Longest title create_window accepts, in bytes.
     /// </summary>
     inline constexpr usize MAX_WINDOW_TITLE_BYTES = 255;
+
+    /// <summary>
+    /// Most images window::set_icon accepts in one call.
+    /// </summary>
+    inline constexpr usize MAX_WINDOW_ICON_IMAGES = 16;
+
+    /// <summary>
+    /// Largest width or height of one window icon image in pixels: the largest icon Windows draws, and small
+    /// enough that a full set fits in one X11 window property.
+    /// </summary>
+    inline constexpr u32 MAX_WINDOW_ICON_DIMENSION = 256;
 
     struct window_desc {
         backend_kind backend = backend_kind::GLFW;
@@ -140,6 +152,15 @@ namespace conjure::platform {
             /// The current title.
             /// </summary>
             [[nodiscard]] virtual std::string_view title() const noexcept = 0;
+
+            /// <summary>
+            /// Sets the icon the OS shows for this window (title bar, task switcher, taskbar) from RGBA8 images;
+            /// the OS picks the size closest to each use, so pass several (16, 32 and 48 px at least). The pixels
+            /// are copied. An empty span restores the default icon. INVALID_ARGUMENT, icon unchanged, when
+            /// validate_window_icon rejects the images; FEATURE_UNAVAILABLE where windows have no icon of their
+            /// own (macOS shows the application bundle's, Wayland the desktop file's).
+            /// </summary>
+            [[nodiscard]] virtual core::result<void> set_icon(std::span<const core::image> images) = 0;
 
             /// <summary>
             /// Resizes the window in logical coordinates; the framebuffer change arrives as an event.
@@ -243,6 +264,13 @@ namespace conjure::platform {
     /// Fails with INVALID_DESC naming the field.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> validate_window_desc(const window_desc &desc);
+
+    /// <summary>
+    /// Checks icon images the way window::set_icon does: at most MAX_WINDOW_ICON_IMAGES of them, none empty
+    /// and none wider or taller than MAX_WINDOW_ICON_DIMENSION. An empty span is valid (the default icon).
+    /// Fails with INVALID_ARGUMENT naming the first offending image.
+    /// </summary>
+    [[nodiscard]] CONJURE_API core::result<void> validate_window_icon(std::span<const core::image> images);
 
     /// <summary>
     /// Creates the window for desc.backend. Main thread only. Exactly one live window per process

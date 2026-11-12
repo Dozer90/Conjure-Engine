@@ -21,6 +21,7 @@ adds the virtual window tests drive. Everything is in `namespace conjure::platfo
 | Go fullscreen | `set_fullscreen(true, monitorIndex)`; `monitors()` lists the choices |
 | Hide or lock the mouse cursor | `set_cursor_mode(cursor_mode::HIDDEN)` / `DISABLED` |
 | Copy and paste text | `set_clipboard_text(text)` / `clipboard_text()` |
+| Give the window your game's icon | `set_icon(images)` with RGBA8 `core::image`s (16, 32 and 48 px at least) |
 | Feed events to a null window in a test | `created->as_null()->push_event(...)`, `simulate_resize(...)`, ... |
 
 ## Quick example
@@ -188,6 +189,48 @@ has none); `set_cursor_position(logicalPosition)` warps the cursor.
 or nothing yet on the null window); an empty string that was copied counts as text. Both work on the null backend,
 which keeps an in-memory string.
 
+## Window icon
+
+`set_icon(images)` gives the window the icon the OS shows in its title bar, task switcher and taskbar. Pass one
+square RGBA8 `core::image` (`conjure/core/image.h`) per size; the OS picks the closest size for each place, so pass
+16, 32 and 48 px at least. The pixels are copied, and an empty span restores the default icon.
+
+```cpp
+#include "conjure/core/image.h"
+#include "conjure/platform/platform_error.h"
+#include "conjure/platform/window.h"
+
+#include <utility>
+#include <vector>
+
+using namespace conjure;
+
+// Loads the game's icon files and gives them to the window; platforms without window icons are fine.
+core::result<void> apply_game_icon(platform::window &target) {
+    std::vector<core::image> icons = {};
+    for (const char *path : {"icon_16.png", "icon_32.png", "icon_48.png"}) {
+        CONJURE_TRY_ASSIGN(core::image icon, core::image::load_file(path));
+        icons.push_back(std::move(icon));
+    }
+    core::result<void> applied = target.set_icon(icons);
+    if (!applied.has_value() && applied.get_error().is(platform::platform_error::FEATURE_UNAVAILABLE)) {
+        return core::result<void>::success();
+    }
+    return applied;
+}
+```
+
+The images are checked first, on every platform, by `validate_window_icon(images)`: at most
+`MAX_WINDOW_ICON_IMAGES` (16), none empty and none larger than `MAX_WINDOW_ICON_DIMENSION` (256) on either side,
+else `INVALID_ARGUMENT` and the icon is unchanged. Windows and X11 then show the icon. macOS and Wayland answer
+`FEATURE_UNAVAILABLE`, without a log line: there the window shows the icon of the application bundle or of the
+desktop file instead.
+
+> [!TIP]
+> On Windows, an executable that carries an icon resource named `GLFW_ICON` shows it from the first frame,
+> before any code runs, and Explorer uses it for the file. The editor does both; see
+> 🛠 Handbook: [Logo and application icon](../../handbook/brand.md).
+
 ## Native handle and Vulkan helpers
 
 These exist for the rendering layer; games rarely touch them. `native_handle()` returns a `native_window_handle`
@@ -256,6 +299,7 @@ back what `set_cursor_position()` and `set_raw_mouse_motion()` stored.
 | `math::uvec2 framebuffer_size()` / `math::uvec2 window_size()` / `math::vec2 content_scale()` | pixels, logical units, ratio |
 | `bool is_minimised()` / `is_focused()` / `is_visible()` / `is_fullscreen()` | state |
 | `void set_title(std::string_view)` / `std::string_view title()` | title |
+| `result<void> set_icon(std::span<const core::image>)` / `result<void> validate_window_icon(...)` | window icon; its checks |
 | `void set_size(math::uvec2)` / `result<void> set_position(math::ivec2)` / `math::ivec2 position()` | geometry in logical units |
 | `void show()` / `void hide()` | visibility |
 | `result<void> set_fullscreen(bool, u32 monitorIndex = 0)` | windowed fullscreen on a monitor |
@@ -278,5 +322,6 @@ back what `set_cursor_position()` and `set_raw_mouse_motion()` stored.
 - 📘 API: [Platform overview](index.md): the two backends and the error codes
 - 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>` and `CONJURE_TRY_ASSIGN`
 - 📘 API: [Glossary](../glossary.md)
+- 🛠 Handbook: [Logo and application icon](../../handbook/brand.md): how the editor builds and sets its icon
 - 🛠 Handbook: [Platform module](../../handbook/modules/platform.md): GLFW lifetime, event double buffering, resize
   coalescing, the gamepad poll

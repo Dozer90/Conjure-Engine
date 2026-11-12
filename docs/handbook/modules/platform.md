@@ -40,7 +40,7 @@ and never appears in a public header.
 | `input.cpp` | the state machine of section 5 |
 | `null_backend.cpp` | the virtual window of section 6 |
 | `glfw/glfw_context.{h,cpp}` | process-wide GLFW state: init reference count, error callback and last error, joystick and monitor callback dispatch |
-| `glfw/glfw_window.{h,cpp}` | the `GLFWwindow`, its callbacks, the pump, the gamepad poll, monitors, cursor and clipboard |
+| `glfw/glfw_window.{h,cpp}` | the `GLFWwindow`, its callbacks, the pump, the gamepad poll, monitors, cursor, clipboard and icon |
 | `glfw/glfw_native.{h,cpp}` | the only file that includes `glfw3native.h`; one `CONJURE_PLATFORM_*` block per OS |
 | `glfw/glfw_vulkan.cpp` | `create_surface` with locally declared Vulkan handle types (no SDK dependency) |
 
@@ -194,8 +194,8 @@ these is an ABI change for the C# side.
 ## 6. The null backend
 
 `null_backend` holds the logical size, windowed size, content scale, position, cursor position, focus, minimised,
-visible, fullscreen and close flags, the cursor mode, the raw-motion flag, an in-memory clipboard with a
-"has text" flag, one virtual monitor (`"Null Monitor"`, 1920 x 1080 at 60 Hz, scale 1) and per-slot gamepad
+visible, fullscreen and close flags, the cursor mode, the raw-motion flag, copies of the icon images, an in-memory
+clipboard with a "has text" flag, one virtual monitor (`"Null Monitor"`, 1920 x 1080 at 60 Hz, scale 1) and per-slot gamepad
 connection flags. `framebuffer_size()` is `round(logical * scale)`, or 0 x 0 while minimised; `position` defaults to
 the window centred on the virtual monitor. Every setter updates state so the getters round-trip (R57), which makes
 the bindings' clipboard and cursor-mode entries real implementations on the null window rather than stubs.
@@ -236,8 +236,10 @@ expose them as non-owning pointers; nothing else ever holds a `GLFWwindow *`.
   changed), `input::apply_input` for an input alternative, and `test_event.cpp`'s `every_event` list, which pins
   the alternative order.
 - **Gamepad mappings**: `window_desc::gamepadMappings` takes SDL game controller database lines; no code change.
-- **Cursor images, window icons, IME, touch**: out of scope for v1 (section 11); they would be new virtuals on
-  `window` with null implementations that round-trip.
+- **Cursor images, IME, touch**: out of scope for v1 (section 11); they would be new virtuals on `window` with
+  null implementations that round-trip, the way `set_icon` was added: the shared `validate_window_icon` runs
+  first on both backends, the null window keeps copies (`icons()`), and glfw skips the call where the platform
+  has no window icons (Cocoa, Wayland) instead of letting GLFW log an error.
 
 ## 9. Failure handling
 
@@ -298,7 +300,7 @@ CONJURE_TEST_WINDOW=1 build/mod_platform/bin/conjure_platform_tests -ts="platfor
   and the joystick / monitor callback dispatch to a single active window need changing.
 - Replace the local Vulkan declarations in `glfw_vulkan.cpp` with a pinned Vulkan-Headers dependency (3.6).
 - Exclusive fullscreen with mode switching (`video_modes()` exists for a settings UI), cursor images and shapes,
-  window icons, clipboard images and file lists, IME composition, touch and pen, gamepad rumble: `11_platform.md` 11.
+  clipboard images and file lists, IME composition, touch and pen, gamepad rumble: `11_platform.md` 11.
 - `tests/benchmarks/bench_platform.cpp` (10,000 injected events under 50 us, snapshot copy under 0.2 us) is listed
   in the design's plan and not yet in the tree; the harness itself exists ([Testing](../testing.md#11-benchmarks)).
 

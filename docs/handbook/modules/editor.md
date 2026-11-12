@@ -120,7 +120,8 @@ rows, D11), inspector (`component.get` per component, `property_drawer_registry`
 with the drag session as coalesce key), viewport (orbit camera, `view.pick`, `gizmo_controller` over ImGuizmo
 dispatching `component.set_many` inside a transaction), asset browser, console, history, toolbar, profiler, AI
 session, export dialog. `imgui_frame_scope` lets the UI tests draw every panel on the null RHI without the engine's
-layer.
+layer. `editor_layer::on_attach` also sets the window icon from `ui/editor_icon` (the logo's PNGs, generated into
+`ui/editor_icon_data.cpp`); the [Logo and application icon](../brand.md) chapter covers the icon end to end.
 
 ## 7. Modules
 

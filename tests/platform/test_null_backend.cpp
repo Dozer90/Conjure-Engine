@@ -350,6 +350,32 @@ TEST_SUITE("platform/null_backend") {
         CHECK(resized->height == 1080);
     }
 
+    TEST_CASE("null_backend - icons holds deep copies of the last successful set_icon") {
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        const std::unique_ptr<window> created = create_null_window();
+        null_backend &backend = as_null_ref(created);
+        CHECK(backend.icons().empty());
+
+        std::vector<core::image> first = {core::image(16, 16)};
+        first[0].set_pixel(3, 4, core::rgba8{1, 2, 3, 4});
+        CONJURE_REQUIRE_OK(created->set_icon(first));
+        first.clear();
+        REQUIRE(backend.icons().size() == 1);
+        CHECK(backend.icons()[0].pixel(3, 4) == core::rgba8{1, 2, 3, 4});
+
+        const std::vector<core::image> second = {core::image(24, 24), core::image(48, 48), core::image(64, 64)};
+        CONJURE_REQUIRE_OK(created->set_icon(second));
+        REQUIRE(backend.icons().size() == 3);
+        CHECK(backend.icons()[2].height() == 64);
+
+        // Setting the window's own icons again is a supported no-op, not a self-overwrite.
+        CONJURE_REQUIRE_OK(created->set_icon(backend.icons()));
+        REQUIRE(backend.icons().size() == 3);
+        CHECK(backend.icons()[0].width() == 24);
+        CHECK(backend.icons()[2].height() == 64);
+    }
+
     TEST_CASE("null_backend - the pump allocates nothing after the first frame") {
         testing::memory_guard guard = {};
         testing::log_capture logs = {};

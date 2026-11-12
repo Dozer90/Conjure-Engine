@@ -17,6 +17,14 @@
     white-space: normal;
 }
 
+/* The black logo master sits on a light tile so it stays visible in the dark colour scheme (handbook/brand.md). */
+.md-typeset img.conjure-brand-tile {
+    background: #ffffff;
+    border: 1px solid #e2e0e8;
+    border-radius: 12px;
+    padding: 1rem;
+}
+
 /* The first paragraph of every page carries the document-set badge; make it stand out slightly. */
 .md-typeset h1 + p {
     border-left: 4px solid var(--md-primary-fg-color);

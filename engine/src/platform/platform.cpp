@@ -81,6 +81,35 @@ core::result<void> conjure::platform::validate_window_desc(const window_desc &de
     return core::result<void>::success();
 }
 
+core::result<void> conjure::platform::validate_window_icon(std::span<const core::image> images) {
+    if (images.size() > MAX_WINDOW_ICON_IMAGES) {
+        return core::make_error(
+          core::error_code::INVALID_ARGUMENT,
+          "set_icon: {} images, the maximum is {}",
+          images.size(),
+          MAX_WINDOW_ICON_IMAGES
+        );
+    }
+    for (usize index = 0; index < images.size(); ++index) {
+        const core::image &image = images[index];
+        if (image.is_empty()) {
+            return core::make_error(core::error_code::INVALID_ARGUMENT, "set_icon: image {} is empty", index);
+        }
+        if (image.width() > MAX_WINDOW_ICON_DIMENSION || image.height() > MAX_WINDOW_ICON_DIMENSION) {
+            return core::make_error(
+              core::error_code::INVALID_ARGUMENT,
+              "set_icon: image {} is {} x {}, the largest allowed is {} x {}",
+              index,
+              image.width(),
+              image.height(),
+              MAX_WINDOW_ICON_DIMENSION,
+              MAX_WINDOW_ICON_DIMENSION
+            );
+        }
+    }
+    return core::result<void>::success();
+}
+
 core::result<std::unique_ptr<window>> conjure::platform::create_window(const window_desc &desc) {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "create_window must run on the main thread");
 
