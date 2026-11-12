@@ -17,6 +17,8 @@
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/EActivation.h>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace conjure::physics {
@@ -32,12 +34,25 @@ namespace {
           || a.gravityFactor != b.gravityFactor || a.maxLinearVelocity != b.maxLinearVelocity;
     }
 
-    [[nodiscard]] bool pose_differs(const math::transform &a, const math::transform &b, f32 epsilon) noexcept {
+    [[nodiscard]] bool pose_differs(
+      const math::transform &a,
+      const math::transform &b,
+      f32 positionEpsilon,
+      f32 rotationEpsilon
+    ) noexcept {
         return !math::nearly_equal(
           a.position,
           b.position,
-          epsilon
-        ) || !math::same_rotation(a.rotation, b.rotation, epsilon);
+          positionEpsilon
+        ) || !math::same_rotation(a.rotation, b.rotation, rotationEpsilon);
+    }
+
+    [[nodiscard]] bool pose_differs(const math::transform &a, const math::transform &b, f32 epsilon) noexcept {
+        return pose_differs(a, b, epsilon, epsilon);
+    }
+
+    [[nodiscard]] f32 max_abs_component(const math::vec3 &value) noexcept {
+        return std::max(std::abs(value.x), std::max(std::abs(value.y), std::abs(value.z)));
     }
 
     [[nodiscard]] u64 microseconds_since(u64 startTicks) noexcept {
@@ -67,9 +82,19 @@ void physics_world::push_transforms(f32 fixedDeltaTime, ecs::command_buffer *def
     s.contacts.clear();
 
     ecs::command_buffer &buffer = deferred != nullptr ? *deferred : *s.ownDeferred;
-    s.flush_pending_creates(buffer);
+    // Rebuilds go first: one that replaces a body (a rigid_body removed so the colliders make an implicit
+    // static body, an implicit static body given a rigid_body, a shape left without colliders) queues the
+    // replacement for creation, which the flush below then creates in this same push.
     s.apply_rebuilds(buffer);
-    s.push_changed_components(fixedDeltaTime, buffer);
+    s.flush_pending_creates(buffer);
+    s.replacedInPush = false;
+    s.push_changed_components(buffer);
+    if (s.replacedInPush) {
+        // A motion change pushed through the component can replace an implicit static body after the
+        // flush above; its replacement is created here so that no fixed step runs without it.
+        s.replacedInPush = false;
+        s.flush_pending_creates(buffer);
+    }
     s.push_hierarchy_rows(fixedDeltaTime);
     s.apply_commands(fixedDeltaTime);
 
@@ -157,7 +182,7 @@ void physics_world::pull_transforms(ecs::system_context *context) {
 /*===========================================================================*/
 // state: push
 
-void physics_world::state::push_changed_components(f32 fixedDeltaTime, ecs::command_buffer &deferred) {
+void physics_world::state::push_changed_components(ecs::command_buffer &deferred) {
     // A non-const access stamps its chunk with the world version current at that moment and the
     // changed filter keeps chunks stamped strictly after 'since'. The version only moves on structural
     // changes and scheduler runs, so the push bumps it itself: writes made after this push (including
@@ -230,7 +255,6 @@ void physics_world::state::push_changed_components(f32 fixedDeltaTime, ecs::comm
             visitBody(entities[index], column[index]);
         }
     });
-    CONJURE_UNUSED(fixedDeltaTime);
 
     // Characters teleported or reshaped through their components.
     const auto visitCharacter = [&](ecs::entity target, const character_controller &controller) {
@@ -282,6 +306,16 @@ void physics_world::state::push_hierarchy_rows(f32 fixedDeltaTime) {
               fixedDeltaTime
             );
             row.lastPulled = pose;
+            // The pull never visits this row, so the render pose follows the transform here: like a pulled
+            // body, the body reaches 'current' at the end of the step. firstPull is only cleared once the
+            // component exists (it can still sit in a deferred buffer at the first push), so the next push
+            // does not interpolate from a stale pose.
+            scene::interpolated_transform *interpolated = write<scene::interpolated_transform>(row.entity);
+            if (interpolated != nullptr) {
+                interpolated->previous = row.firstPull ? pose : interpolated->current;
+                interpolated->current = pose;
+                row.firstPull = false;
+            }
             if (!math::nearly_equal(pose.scale, row.lastScale, 1.0e-6f)) {
                 mark_rebuild(row.entity, record_dirty_flags::SHAPE);
             }
@@ -294,7 +328,16 @@ void physics_world::state::push_hierarchy_rows(f32 fixedDeltaTime) {
         // body or character is composed every push: an ancestor moved by gameplay or by its own body
         // would otherwise never reach Jolt. Parented rows are rare, so the walk is cheap.
         const math::transform pose = compose_world_pose(row.entity);
-        if (!row.awaitingPull && pose_differs(pose, row.lastPulled, TELEPORT_EPSILON)) {
+        // The pose is the pull's local = parentWorld^-1 * world recomposed, whose rounding grows with the
+        // coordinates on either side of the round trip (|local| covers a far parent with a child near the
+        // origin): far from the origin it exceeds the absolute tolerance and would teleport the row every push.
+        const scene::local_transform *local = read<scene::local_transform>(row.entity);
+        const f32 magnitude = std::max(
+          std::max(max_abs_component(pose.position), max_abs_component(row.lastPulled.position)),
+          local != nullptr ? max_abs_component(local->position) : 0.0f
+        );
+        const f32 positionEpsilon = std::max(TELEPORT_EPSILON, magnitude * TELEPORT_RELATIVE_EPSILON);
+        if (!row.awaitingPull && pose_differs(pose, row.lastPulled, positionEpsilon, TELEPORT_EPSILON)) {
             teleport_row(row, pose);
         }
         if (row.kind == record_kind::BODY && !math::nearly_equal(pose.scale, row.lastScale, 1.0e-6f)) {
@@ -522,7 +565,9 @@ void physics_world::state::pull_chunk(ecs::chunk_view &chunk) {
         current.rotation = jolt::from_jolt(joltBody->GetRotation());
         current.scale = locals[index].scale;
 
-        interpolated[index].previous = row->firstPull ? current : interpolated[index].current;
+        // A row pulled while not awake is seen asleep for the first time (or is a first pull of a sleeping
+        // body): its render pose must stand still, not keep blending between its last two poses.
+        interpolated[index].previous = (row->firstPull || !awakeNow) ? current : interpolated[index].current;
         interpolated[index].current = current;
         row->firstPull = false;
         row->awaitingPull = false;
@@ -565,7 +610,7 @@ void physics_world::state::pull_parented_rows() {
 
         scene::interpolated_transform *interpolated = write<scene::interpolated_transform>(row.entity);
         if (interpolated != nullptr) {
-            interpolated->previous = row.firstPull ? current : interpolated->current;
+            interpolated->previous = (row.firstPull || !awakeNow) ? current : interpolated->current;
             interpolated->current = current;
         }
         row.firstPull = false;

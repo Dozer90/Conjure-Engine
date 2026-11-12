@@ -41,7 +41,9 @@ namespace conjure::physics::detail {
 
     class collision_mesh_importer final : public assets::asset_importer {
         public:
-            static constexpr u32 VERSION = 1;
+            // 2: glTF sources are validated (accessors, buffer lengths, per-primitive triangle counts),
+            // mirrored nodes keep their winding, and welding finds every vertex of a shared grid cell.
+            static constexpr u32 VERSION = 2;
             static constexpr f32 DEFAULT_WELD_DISTANCE = 1.0e-4f;
 
         public:

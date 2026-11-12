@@ -52,6 +52,11 @@ The body appears at the next `push_transforms`; from then on the `rigid_body` fi
 (`linearVelocity`, `angularVelocity`, `isSleeping`) are written back every step, and editing the authored ones
 (mass, damping, flags, layer, motion type) is picked up by the next push.
 
+Dynamic and kinematic bodies and characters get a `scene::interpolated_transform`, which the renderer blends
+between the last two fixed steps. Physics adds it (starting at the pose the entity has when its body component
+arrives), keeps it current and removes it again; a static body never has one, and a body that falls asleep
+holds still in it.
+
 ## The components
 
 All components are plain reflected structs registered under `"conjure.physics.<name>"`; the C# mirrors share
@@ -59,7 +64,7 @@ their layout.
 
 | Component | Fields | Notes |
 |---|---|---|
-| `rigid_body` | `motionType`, `layer`, `flags`, `mass`, `linearDamping`, `angularDamping`, `gravityFactor`, `maxLinearVelocity`, `linearVelocity`, `angularVelocity`, `isSleeping` | 52 bytes; mass 0 derives from the shape volume |
+| `rigid_body` | `motionType`, `layer`, `flags`, `mass`, `linearDamping`, `angularDamping`, `gravityFactor`, `maxLinearVelocity`, `linearVelocity`, `angularVelocity`, `isSleeping` | 52 bytes; mass 0 derives from the shape volume (a shape without volume, a mesh, gets 1 kg) |
 | `box_collider` | `halfExtents`, `offset`, `rotation`, `isTrigger` | entity space |
 | `sphere_collider` | `radius`, `offset`, `isTrigger` | |
 | `capsule_collider` | `radius`, `halfHeight`, `offset`, `rotation`, `isTrigger` | along the entity's Y axis; total height `2 * (halfHeight + radius)` |
@@ -84,7 +89,8 @@ writes the body's pose back as a local transform relative to its parent.
 
 `motion_type::STATIC` bodies never move (a changed `local_transform` is a teleport). `KINEMATIC` bodies push
 dynamic ones and are driven either by your edits of `local_transform` (`KINEMATIC_MOVES_WITH_TRANSFORM`, the
-world turns the edit into a smooth `MoveKinematic` over the step) or by velocities you set
+world turns the edit into a smooth `MoveKinematic` over the step and interpolates the rendered pose between your
+last two transforms) or by velocities you set
 (`physics_world::set_linear_velocity` or `move_kinematic(entity, pose)`). `DYNAMIC` bodies are simulated; write
 their pose only through `physics_world::teleport` (an edited `local_transform` of a dynamic body is treated as a
 teleport too).
@@ -126,8 +132,15 @@ vertices welded, one asset per file). `from_geometry(positions, indices)`, `from
 `to_payload()` are the in-code forms; `positions()`, `indices()`, `bounds()`, `vertex_count()` and
 `triangle_count()` read it. The loader builds the Jolt shape on the load job, so a `mesh_collider` referencing a
 loaded asset creates its body at the next push without a stall; convex hulls are built per asset, version and
-`convexRadius` and shared between bodies. When the asset reloads, `physics_world::on_asset_reloaded(id)` marks
-every body using it for a rebuild.
+`convexRadius` and shared between bodies. A body whose `convex_collider` or `mesh_collider` references an asset
+that is not loaded yet waits for it: a new body stays pending (`physics_stats::bodiesWithoutShape`) and an existing
+one keeps its current shape, both until the asset is there. When the asset reloads,
+`physics_world::on_asset_reloaded(id)` marks every body using it for a rebuild.
+
+The importer validates glTF sources before reading them (accessors and buffer views against their buffers, an
+external buffer file against its declared length, every triangle primitive's index count a multiple of three),
+so a malformed file is an import failure rather than a crash, and it keeps the triangles of a mirrored node (a
+negative scale) facing the way they were authored.
 
 ## API summary
 

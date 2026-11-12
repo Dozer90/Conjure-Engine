@@ -38,8 +38,6 @@ namespace conjure::physics {
             std::mutex mQueueMutex = {};
             std::atomic<u32> mGeneration = 0;            // bumped on every push and at step end; helpers wait on it
             std::atomic<bool> mParallelActive = false;   // true while run_parallel owns the helpers
-            std::atomic<u32> mQueuedCount = 0;
-            std::atomic<u64> mExecutedByHelpers = 0;
 
         public:
             jolt_job_system();
@@ -81,20 +79,6 @@ namespace conjure::physics {
             /// Workers that take part in run_parallel (0 when the engine job system runs inline).
             /// </summary>
             [[nodiscard]] u32 helper_count() const noexcept;
-
-            /// <summary>
-            /// Jobs executed by helper ranges since init (tests).
-            /// </summary>
-            [[nodiscard]] u64 executed_by_helpers() const noexcept {
-                return mExecutedByHelpers.load(std::memory_order_relaxed);
-            }
-
-            /// <summary>
-            /// Jobs waiting in the queue right now.
-            /// </summary>
-            [[nodiscard]] u32 queued_count() const noexcept {
-                return mQueuedCount.load(std::memory_order_relaxed);
-            }
 
             // JPH::JobSystem
             [[nodiscard]] int GetMaxConcurrency() const override;

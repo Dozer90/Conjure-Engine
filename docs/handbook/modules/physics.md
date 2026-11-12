@@ -72,9 +72,14 @@ rebuild entry is skipped because the row's own `dirty` flags are the truth. Coll
 an implicit static body (adding a collider to a resting floor is a `SetShape`, not a new body); `rigid_body`
 without colliders stays pending (`stats().bodiesWithoutShape`); `rigid_body` + `character_controller` warns
 `CONFLICTING_BODY_COMPONENTS` and the character wins. `interpolated_transform` is added to dynamic and kinematic
-bodies and characters through the deferred command buffer (R47). Shapes are gathered from all colliders of the
-entity (offset, rotation, world scale), shared through `shape_cache` by value, and wrapped in a
-`StaticCompoundShape` when there is more than one.
+bodies and characters through the deferred command buffer (R47), seeded with the entity's world pose so nothing
+renders at the origin before the first pull; a body that turns out static at creation loses one queued while it
+was pending, and `detach` removes every one physics added. Shapes are gathered from all colliders of the entity
+(offset, rotation, world scale), shared through `shape_cache` by value, and wrapped in a `StaticCompoundShape`
+when there is more than one. A convex or mesh collider whose asset is not loaded keeps a new body pending and an
+existing one on its current shape (`build_shape` reports `pendingAsset` before building or logging anything).
+Rebuilds run before the pending creations, so a rebuild that replaces a body is recreated in the same push; an
+implicit static body replaced later in the push (its static `rigid_body` turned dynamic) gets a second flush.
 
 ## 4. The fixed step
 
@@ -84,12 +89,17 @@ the mirror kept in its record and applies only what changed: a mass or lock-flag
 properties from the shape, damping, gravity factor, motion quality, sleeping and gyroscopic force follow their
 flags, and a shape rebuild re-applies the same mass properties after `SetShape`. A pose that differs from the
 last pulled pose is a teleport. The chunk filter only sees a row's own columns, so `push_hierarchy_rows` walks the
-records every push for the rows it cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic`, and
-parented bodies and characters are composed through their ancestors and teleported when an ancestor moved.
+records every push for the rows it cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic` and
+their `interpolated_transform` written, and parented bodies and characters are composed through their ancestors
+and teleported when an ancestor moved. The teleport tolerance of a parented row grows with its coordinates, since
+the pull's local = parent^-1 * world round trip loses more than 1e-4 m far from the origin. An ancestor that moves
+less than that tolerance in one push does not carry an awake parented body (the pull re-expresses the body in the
+moved parent's frame): 16 * `FLT_EPSILON` times the largest coordinate, roughly 6 mm at 3 km.
 
 `pull_transforms` acquires a chunk's non-const spans only when a row of it needs writing (awake, first pull,
-teleported), so chunks of sleeping bodies are left unstamped; parented bodies and characters are written in a
-serial tail (local pose = parent world pose inverse times body pose). `pull_transforms(system_context *)` is the
+teleported), so chunks of sleeping bodies are left unstamped, and the pull that first sees a row asleep writes
+`previous = current` so its render pose holds still; parented bodies and characters are written in a serial
+tail (local pose = parent world pose inverse times body pose). `pull_transforms(system_context *)` is the
 scheduled form (parallel chunks).
 
 ## 5. Jobs and memory
@@ -107,14 +117,16 @@ The listener records raw added / persisted / removed contacts into per-thread bu
 `maxContactEventsPerStep`); `collect_contact_events` merges them, sorts twice with the stable
 `core::radix_sort_u64` (sub-shape pair, then body pair) and folds each body pair into one `ENTER` / `STAY` / `EXIT`
 (or `TRIGGER_ENTER` / `TRIGGER_EXIT`) per step, so the span is sorted by body id pair and identical whatever
-thread recorded what (R6). Destroying a body in contact synthesises its exits.
+thread recorded what (R6). A `STAY` takes its point and normal from a live (added or persisted) record, never
+from a removed one. Destroying a body in contact synthesises its exits.
 
 Forces, impulses, velocities, teleports, wake / sleep, gravity and `character_move` are queued
-(`COMMAND_QUEUE_FULL` when `maxQueuedCommands` is reached) and applied in the next push; a command on a pending
-entity is kept for one push. Queries go through the narrow-phase query with layer mask, static, trigger and
-ignore filters; calling one (or `body_pose` / `debug_draw`) while `push_transforms`, `step` or `pull_transforms`
-runs asserts (`STEP_IN_PROGRESS`) and returns nothing, because the `busy` flag covers every mutation of the row
-tables, not only the Jolt update.
+(`COMMAND_QUEUE_FULL` when `maxQueuedCommands` is reached, core `INVALID_ARGUMENT` for a non-finite value) and
+applied in the next push; a command on a pending entity is kept for one push. Queries go through the
+narrow-phase query with layer mask, static, trigger and ignore filters; `raycast_all` keeps the nearest hits that
+fit its span, rays are clamped to 1e6 m and non-finite input yields nothing. Calling a query (or `body_pose` /
+`debug_draw`) while `push_transforms`, `step` or `pull_transforms` runs asserts (`STEP_IN_PROGRESS`) and returns
+nothing, because the `busy` flag covers every mutation of the row tables, not only the Jolt update.
 
 ## 7. Characters
 
@@ -131,7 +143,9 @@ Payload `{u32 vertexCount; u32 indexCount; u32 reserved[2]; f32 positions[][3]; 
 the loader builds the `MeshShape` on the load job; convex hulls are built per (asset, version, convexRadius) in
 the shape cache. The importer reads glTF / GLB (cgltf with the engine's memory and VFS hooks) baking node
 transforms, and OBJ (quads, relative indices), welds vertices (`weld_distance`, default 1e-4 m) and emits one
-primary asset; the same bytes import byte-identically. `on_asset_reloaded` marks every body using the asset for a
+primary asset; the same bytes import byte-identically. glTF input is validated before it is read
+(`cgltf_validate`, external buffers against their declared length, per-primitive triangle counts) and mirrored
+nodes keep their winding (importer version 2). `on_asset_reloaded` marks every body using the asset for a
 rebuild.
 
 ## 9. Settings and build options
@@ -149,11 +163,13 @@ Distribution neither; `Jolt/Core/Core.h` checks them at `RegisterTypes` through 
 ## 10. Threading model
 
 `attach`, `detach`, `push_transforms`, `step`, `collect_contact_events` and the command queue are owner-thread
-only (the thread that constructed the world; asserted). `pull_transforms` with a `system_context` runs its chunk
-pass on the job system; the queries run from any thread while none of `push_transforms`, `step` and
-`pull_transforms` is in progress (Jolt's `NarrowPhaseQuery` locks per body; the row tables are not locked), which
-in the engine means outside the PHYSICS_STEP and FIXED_END phases. The contact listener runs on Jolt's job
-threads and writes only to the buffer of `job_system::thread_index()`.
+only (the thread that constructed the world; asserted, `attach` and the commands return `WRONG_THREAD`).
+`pull_transforms` with a `system_context` runs its chunk pass on the job system; the queries run from any thread
+while none of `push_transforms`, `step` and `pull_transforms` is in progress (Jolt's `NarrowPhaseQuery` locks per
+body; the row tables are not locked), which in the engine means outside the PHYSICS_STEP and FIXED_END phases.
+Structural ECS changes on the owner thread run the physics observers, which edit the same tables, so queries from
+other threads must not overlap those either. The contact listener runs on Jolt's job threads and writes only to the
+buffer of `job_system::thread_index()`.
 
 ## 11. Tests
 
@@ -173,6 +189,9 @@ python tools/build.py --build-dir build/mod_physics --target conjure_physics_tes
 
 - `core::jobs`: an allocation-free fire-and-forget `schedule` (a counter owned by the caller) would let the
   adapter drop the `parallel_for` helper trick.
+- The Jolt-free unit test of the job adapter (`14_physics.md` 9 step 2) does not exist: the physics tests include
+  no Jolt header, so it needs a test target with Jolt's include paths. Whole-world steps with 0 and 4 workers
+  (`test_determinism.cpp`) cover the adapter meanwhile.
 - `tests/benchmarks/bench_physics.cpp` (`physics.step_10k_active`, `physics.step_10k_sleeping`, `physics.sync_10k`,
   `physics.step_2k_settling`, `engine.full_frame_10k_physics`) holds the scenarios; the raycast batch scenario of
   the design is not written yet, and the `[bench]` / `[slow]` cases in `tests/physics` cover the allocation-free

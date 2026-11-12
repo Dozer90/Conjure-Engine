@@ -113,7 +113,6 @@ void jolt_job_system::help_until_done() {
         if (job != nullptr) {
             job->Execute();
             job->Release();
-            mExecutedByHelpers.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         if (!mParallelActive.load(std::memory_order_acquire)) {
@@ -143,7 +142,6 @@ bool jolt_job_system::push(Job *job) noexcept {
     }
     mQueue[mTail % mCapacity] = job;
     ++mTail;
-    mQueuedCount.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -155,7 +153,6 @@ JPH::JobSystem::Job *jolt_job_system::pop() noexcept {
     Job *job = mQueue[mHead % mCapacity];
     mQueue[mHead % mCapacity] = nullptr;
     ++mHead;
-    mQueuedCount.fetch_sub(1, std::memory_order_relaxed);
     return job;
 }
 }

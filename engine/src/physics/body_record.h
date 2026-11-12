@@ -47,7 +47,6 @@ namespace conjure::physics {
         motion_type motion = motion_type::STATIC;
         u8 layer = 0;
         bool isTrigger = false;
-        bool hasShape = false;
         bool hasParent = false;                      // scene::parent present: the pull writes it serially
         bool firstPull = true;                       // next pull writes previous = current = pose
         bool awaitingPull = false;                   // a teleport happened; push ignores local_transform until pulled

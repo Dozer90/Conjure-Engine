@@ -73,9 +73,14 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   `rigid_body` without colliders stays pending (`stats().bodiesWithoutShape`); `rigid_body` +
   `character_controller` warns `CONFLICTING_BODY_COMPONENTS` and the character wins, also when the
   `character_controller` arrives after the body exists. `interpolated_transform` is added to dynamic and
-  kinematic bodies and characters through the deferred command buffer (R47). Shapes are gathered from
-  all colliders of the entity (offset, rotation, world scale), shared through `shape_cache` by value, and
-  wrapped in a `StaticCompoundShape` when there is more than one.
+  kinematic bodies and characters through the deferred command buffer (R47), seeded with the entity's
+  composed world pose so it never renders at the origin before the first pull; `create_body` removes it
+  from a body that turns out STATIC (one queued while the entity was pending as the default DYNAMIC
+  `rigid_body`), and `detach` removes every one physics added. Shapes are gathered from all colliders of
+  the entity (offset, rotation, world scale), shared through `shape_cache` by value, and wrapped in a
+  `StaticCompoundShape` when there is more than one. A convex or mesh collider whose asset is not loaded
+  makes `build_shape` return `pendingAsset` before it builds or logs anything: a new body stays pending
+  and an existing one keeps its shape while its SHAPE rebuild is re-queued every push.
 - **Change detection.** `push_transforms` visits the chunks whose `rigid_body`, `character_controller` or
   `local_transform` column was stamped since the previous push (persistent `ecs::query` objects with a
   `changed` filter), diffs each row against the mirror kept in its record (velocities, motion type,
@@ -87,13 +92,20 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   (`SetPositionAndRotation`, `interpolated_transform.previous` reset). The push bumps the world version
   itself so that writes made between pushes always stamp above the remembered version. The chunk filter
   only sees a row's own columns, so `push_hierarchy_rows` walks the records every push for the rows the
-  filter cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic`, and parented bodies
-  and characters are composed through their ancestors and teleported when an ancestor moved (a design
-  gap of `14_physics.md` 3.4, which only names the chunk filter).
+  filter cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic` and their
+  `interpolated_transform` written (the pull never visits them), and parented bodies and characters are
+  composed through their ancestors and teleported when an ancestor moved (a design gap of `14_physics.md`
+  3.4, which only names the chunk filter). A parented row's position tolerance grows with its coordinates
+  (`TELEPORT_RELATIVE_EPSILON`): the pull's local = parent^-1 * world round trip loses more than the
+  absolute 1e-4 m far from the origin, which would otherwise teleport and wake the body every push. Root
+  rows keep the absolute tolerance; the pull writes them bit-exactly. An ancestor that moves less than that
+  tolerance in one push does not carry an awake parented body (the pull re-expresses the body in the moved
+  parent's frame): 16 * `FLT_EPSILON` times the largest coordinate, roughly 6 mm at 3 km.
 - **Pull.** `pull_transforms` acquires a chunk's non-const spans at the first row that needs writing
   (awake, first pull, teleported), so chunks of sleeping bodies are left unstamped and every row resolves
-  its record once; the body is fetched once per row through `BodyLockInterfaceNoLock::TryGetBody` (no
-  step runs during the pull) and its pose and velocities read from the `JPH::Body`. Parented bodies and
+  its record once; the pull that first sees a row asleep writes `previous = current`, so a sleeping body's
+  render pose stands still; the body is fetched once per row through `BodyLockInterfaceNoLock::TryGetBody`
+  (no step runs during the pull) and its pose and velocities read from the `JPH::Body`. Parented bodies and
   characters are written in a serial tail (local pose = parent world pose inverse times body pose).
   `pull_transforms(system_context *)` is the scheduled form: the persistent pull query (the match list,
   nothing more) is fanned out through `system_context::parallel_for_chunks`, so the step allocates
@@ -104,16 +116,17 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   buffers (global budget `maxContactEventsPerStep`); `collect_contact_events` merges them, sorts twice
   with the stable `core::radix_sort_u64` (sub-shape pair, then body pair) and folds each body pair into
   one `ENTER` / `STAY` / `EXIT` (or `TRIGGER_ENTER` / `TRIGGER_EXIT`) per step using a pair table, so the
-  span is sorted by body id pair and identical whatever thread recorded what. Destroying a body in
-  contact synthesises its exits, which the next collect reports. The span dies at the next
-  `push_transforms`.
+  span is sorted by body id pair and identical whatever thread recorded what. `ENTER` takes its point and
+  normal from the run's first ADDED record, `STAY` from its first live (ADDED or PERSISTED) one, never from
+  a REMOVED record, whose point and normal are zero. Destroying a body in contact synthesises its exits,
+  which the next collect reports. The span dies at the next `push_transforms`.
 - **Commands (P9).** Forces, impulses, velocities, teleports, wake / sleep, gravity and `character_move`
-  are queued (`COMMAND_QUEUE_FULL` when `maxQueuedCommands` is reached) and applied in the next push;
-  a command on a pending entity is kept for one push. `character_move` lands in the row
-  (`desiredVelocity`) and is consumed by the next `step`, so the push never writes
-  `character_controller` (its system declares the component as a read). A `teleport` of a row the pull
-  never visits (static, `KINEMATIC_MOVES_WITH_TRANSFORM`) writes the entity's `local_transform` at once
-  so later edits of it are measured against the teleported pose.
+  are queued (`COMMAND_QUEUE_FULL` when `maxQueuedCommands` is reached; core `INVALID_ARGUMENT`, never
+  queued, for a non-finite vector or rotation) and applied in the next push; a command on a pending entity
+  is kept for one push. `character_move` lands in the row (`desiredVelocity`) and is consumed by the next
+  `step`, so the push never writes `character_controller` (its system declares the component as a read). A
+  `teleport` of a row the pull never visits (static, `KINEMATIC_MOVES_WITH_TRANSFORM`) writes the entity's
+  `local_transform` at once so later edits of it are measured against the teleported pose.
 - **Characters.** `JPH::CharacterVirtual` with an inner kinematic body (so raycasts hit it and it shows
   up in contact events); `step()` runs `ExtendedUpdate` per character in table order before the Jolt
   update: horizontal velocity from the component, gravity integrated in the air, the vertical component
@@ -121,18 +134,26 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   `CancelVelocityTowardsSteepSlopes`, stair walking and floor sticking by `stepHeight`. The pull writes
   back `velocity`, `ground`, `groundNormal` and `groundEntity`. Authored field changes rebuild the
   character in place with the same inner body id.
-- **Queries.** `raycast`, `raycast_all` (sorted by distance, truncated to the span), `overlap_sphere`,
-  `overlap_box`, `shape_cast` (sphere / box / capsule) through the narrow-phase query with layer mask,
-  static, trigger and ignore filters. Calling one (or `body_pose` / `debug_draw`) while
-  `push_transforms`, `step` or `pull_transforms` runs asserts (`STEP_IN_PROGRESS`) and returns nothing:
-  the `busy` flag covers every mutation of the row tables, not only the Jolt update.
+- **Queries.** `raycast`, `raycast_all` (the nearest hits that fit the span, sorted by distance: once the
+  span is full a nearer hit replaces the farthest kept and the collector's early-out fraction follows the
+  farthest kept), `overlap_sphere`, `overlap_box`, `shape_cast` (sphere / box / capsule) through the
+  narrow-phase query with layer mask, static, trigger and ignore filters. Rays are clamped to 1e6 m (an
+  infinite `maxDistance` means unlimited) and a non-finite origin, rotation or direction yields nothing.
+  Calling one (or `body_pose` / `debug_draw`) while `push_transforms`, `step` or `pull_transforms` runs
+  asserts (`STEP_IN_PROGRESS`) and returns nothing: the `busy` flag covers every mutation of the row
+  tables, not only the Jolt update.
 - **Collision meshes.** Payload `{u32 vertexCount; u32 indexCount; u32 reserved[2]; f32 positions[][3];
   (16-aligned) u32 indices[]}`; the loader builds the `MeshShape` on the load job; convex hulls are built
   per (asset, version, convexRadius) in the shape cache. The importer reads glTF / GLB (cgltf with the
   engine's memory and VFS hooks) baking node transforms, and OBJ (quads, relative indices), welds
-  vertices (`weld_distance`, default 1e-4 m) and emits one primary asset; the same bytes import
-  byte-identically. Jolt simulates against the front face of a triangle (counter-clockwise seen from
-  the side the body approaches). `on_asset_reloaded` marks every body using the asset for a rebuild.
+  vertices (`weld_distance`, default 1e-4 m; every welded vertex is chained into its grid cell, the lowest
+  index within reach wins) and emits one primary asset; the same bytes import byte-identically. glTF input
+  is validated first: `cgltf_validate` after the buffers load, the side-file hook rejects an external
+  buffer shorter than its declared `byteLength` (cgltf only validates against the declared length), every
+  triangle primitive's index count must be a multiple of three, and a node with a negative determinant has
+  its triangles' winding reversed. `collision_mesh_importer::VERSION` is 2 since those checks. Jolt
+  simulates against the front face of a triangle (counter-clockwise seen from the side the body
+  approaches). `on_asset_reloaded` marks every body using the asset for a rebuild.
 - **Settings.** `physics_settings::from_json` reads the snake_case keys of `project.json` `physics`;
   invalid settings are logged and replaced by validated defaults at construction. `maxJobs` must be a
   power of two (the job pool is a `JPH::FixedSizeFreeList` paged by it) large enough for one update's
@@ -172,6 +193,16 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
 - A character's `velocity` is written back every pull (Jolt leaves it as set, so walking into a wall
   keeps the pushed velocity while the position stops), and the grounded vertical reset described above
   is the engine's, not Jolt's.
+- `push_transforms` applies rebuilds before it flushes pending creations (3.4 lists the flush first): a
+  rebuild that replaces a body (a `rigid_body` removed so the colliders make an implicit static body, an
+  implicit static body given a `rigid_body`, a shape left without colliders) queues the replacement, and
+  the flush creates it in the same push. An implicit static body whose static `rigid_body` turns dynamic
+  or kinematic is replaced by the change detection after that flush, so the push flushes once more; no
+  fixed step runs without the body.
+- The Jolt-free unit test of the job adapter (`14_physics.md` 9 step 2: 10k dependent jobs through a
+  barrier with 0 and 4 workers) does not exist: the physics tests include no Jolt header. The adapter is
+  covered through whole-world steps (`test_determinism.cpp`, 0 versus 4 workers); writing that test needs a
+  test target with Jolt's include paths.
 
 ## Cross-module requests
 
@@ -186,12 +217,14 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
 ## Threading
 
 `attach`, `detach`, `push_transforms`, `step`, `collect_contact_events` and the command queue are
-owner-thread only (the thread that constructed the world; asserted). `pull_transforms` with a
-`system_context` runs its chunk pass on the job system; the queries run from any thread while none of
-`push_transforms`, `step` and `pull_transforms` is in progress (Jolt's `NarrowPhaseQuery` locks per
-body; the row tables are not locked, so the `busy` flag refuses queries for the whole of those three
-calls, which in the engine means outside the PHYSICS_STEP and FIXED_END phases); `debug_draw` draws
-nothing meanwhile. The contact listener runs on Jolt's job threads and writes only to the buffer of
+owner-thread only (the thread that constructed the world; asserted, and `attach` and the commands return
+`WRONG_THREAD`). `pull_transforms` with a `system_context` runs its chunk pass on the job system; the
+queries run from any thread while none of `push_transforms`, `step` and `pull_transforms` is in progress
+(Jolt's `NarrowPhaseQuery` locks per body; the row tables are not locked, so the `busy` flag refuses
+queries for the whole of those three calls, which in the engine means outside the PHYSICS_STEP and
+FIXED_END phases); `debug_draw` draws nothing meanwhile. Structural ECS changes on the owner thread run
+the physics observers, which edit the same tables, so queries from other threads must not overlap those
+either. The contact listener runs on Jolt's job threads and writes only to the buffer of
 `job_system::thread_index()`.
 
 ## Testing

@@ -11,7 +11,7 @@ events, cast rays and shapes, tune it and draw it. Headers: `conjure/physics/phy
 
 | You want to... | Use |
 |---|---|
-| Create the world | `physics_world(settings, jobs)` then `attach(world)`; `detach()` or destruction removes every body |
+| Create the world | `physics_world(settings, jobs)` then `attach(world)`; `detach()` or destruction removes every body and the `scene::interpolated_transform` physics added |
 | Step by hand (tools, tests) | `push_transforms(dt)`, `step(dt)`, `pull_transforms()`, `collect_contact_events()` |
 | Push a body | `add_force`, `add_force_at`, `add_impulse`, `add_impulse_at`, `add_torque`, `add_angular_impulse` |
 | Set a velocity | `set_linear_velocity`, `set_angular_velocity` |
@@ -57,8 +57,11 @@ void report_hits(const physics::physics_world &physics, ecs::entity player) {
 `physics_world(settings, jobs)` builds the Jolt system from validated `physics_settings` (call `validate()`
 first; an invalid value is clamped with one ERROR) and runs Jolt's jobs on the engine `job_system` (0 workers =
 everything inline, same results). `attach(ecsWorld)` installs the component observers and queues every entity
-that already carries a body component; it fails with `ALREADY_ATTACHED` or `INVALID_STATE` when the registry
-lacks the scene or physics components.
+that already carries a body component; it fails with `ALREADY_ATTACHED`, with `INVALID_STATE` when the registry
+lacks the scene or physics components, and with `WRONG_THREAD` (after an assert) off the thread that built the
+world. `detach()` removes the observers, destroys every body and removes the `scene::interpolated_transform`
+physics added to dynamic and kinematic bodies and characters (one you added to a static body stays); call it
+while the ECS world is not locked.
 
 Each fixed step is four calls, which the four systems `register_systems` adds make for you:
 
@@ -73,14 +76,17 @@ Each fixed step is four calls, which the four systems `register_systems` adds ma
 > Every command and `attach` / `push` / `step` / `collect` belong to the thread that owns the ECS world. The
 > queries run from any thread, but not while `push_transforms`, `step` or `pull_transforms` is in progress
 > (`STEP_IN_PROGRESS` asserts and the query yields nothing); in the engine that means outside the `PHYSICS_STEP`
-> and `FIXED_END` phases.
+> and `FIXED_END` phases. Structural ECS changes on the owner thread (adding or removing body components or
+> `scene::parent`, destroying a body entity) run the physics observers, which edit the same tables, so queries
+> from other threads must not overlap them either.
 
 ## Commands
 
 Forces, impulses, velocities, teleports, `move_kinematic`, `wake`, `sleep`, `set_gravity` and `character_move`
 are queued and applied in the next `push_transforms`; a command on an entity whose body is still pending is
-kept for one push. Each returns `NO_BODY` for an entity without a body component and `COMMAND_QUEUE_FULL` when
-`physics_settings::maxQueuedCommands` is reached. `teleport` on a dynamic body also resets its interpolation so
+kept for one push. Each returns `NO_BODY` for an entity without a body component, `COMMAND_QUEUE_FULL` when
+`physics_settings::maxQueuedCommands` is reached and `INVALID_ARGUMENT` (a core error) for a vector or rotation
+holding a NaN or an infinity, which is never queued. `teleport` on a dynamic body also resets its interpolation so
 rendering does not blend across the jump.
 
 ## Contact events
@@ -101,11 +107,13 @@ and `ignore` (one entity, usually the caster).
 | Query | Result |
 |---|---|
 | `raycast(ray, maxDistance, filter)` | the closest `raycast_hit {entity, point, normal, distance, fraction, layer, isTrigger}` |
-| `raycast_all(ray, maxDistance, out, filter)` | every hit sorted by distance, at most `out.size()`; returns the count |
+| `raycast_all(ray, maxDistance, out, filter)` | the nearest `out.size()` hits, sorted by distance; returns the count |
 | `overlap_sphere(center, radius, out, filter)` / `overlap_box(center, halfExtents, rotation, out, filter)` | the entities whose bodies overlap, one per body, at most `out.size()` |
 | `shape_cast(shape, start, direction, filter)` | the closest `shape_cast_hit {entity, point, normal, distance, fraction, penetrationDepth, layer}`; `shape` is a `sphere_shape_desc`, `box_shape_desc` or `capsule_shape_desc` and `direction` includes the length |
 
-Queries never allocate: you pass the span they fill.
+Queries never allocate: you pass the span they fill. A ray is at most 1e6 m long (`maxDistance` is clamped, so
+an infinite one means unlimited), and a ray or sweep whose origin, rotation or direction is not finite hits
+nothing.
 
 ## Settings
 
@@ -129,7 +137,7 @@ while a step is in progress. The renderer's `debug_draw_buffer` is the natural s
 | Signature (short) | Purpose |
 |---|---|
 | `physics_world(const physics_settings &, core::jobs::job_system &)` | construction (never fails) |
-| `result<void> attach(ecs::world &)`, `void detach()`, `bool is_attached() const` | ECS binding |
+| `result<void> attach(ecs::world &)`, `void detach()`, `bool is_attached() const` | ECS binding; `detach` also removes the `interpolated_transform` physics added |
 | `void push_transforms(f32 dt, ecs::command_buffer *deferred = nullptr)`, `void step(f32 dt)`, `void pull_transforms(ecs::system_context * = nullptr)`, `void collect_contact_events()` | the fixed step |
 | `span<const contact_event> contact_events() const` | last step's contacts |
 | `bool has_body(entity) const` | the body exists |
@@ -140,7 +148,7 @@ while a step is in progress. The renderer's `debug_draw_buffer` is the natural s
 | `result<void> wake(entity)`, `sleep(entity)`, `bool is_sleeping(entity) const` | sleeping |
 | `result<void> character_move(entity, const vec3 &velocity)`, `optional<ground_state> character_ground(entity) const` | characters |
 | `optional<raycast_hit> raycast(const ray &, f32 maxDistance, const query_filter & = {}) const` | rays |
-| `u32 raycast_all(const ray &, f32, span<raycast_hit> out, const query_filter & = {}) const` | every hit |
+| `u32 raycast_all(const ray &, f32, span<raycast_hit> out, const query_filter & = {}) const` | the nearest hits |
 | `u32 overlap_sphere(const vec3 &, f32, span<entity> out, const query_filter & = {}) const`, `u32 overlap_box(const vec3 &, const vec3 &, const quat &, span<entity> out, const query_filter & = {}) const` | overlaps |
 | `optional<shape_cast_hit> shape_cast(const cast_shape_desc &, const math::transform &start, const vec3 &direction, const query_filter & = {}) const` | sweeps |
 | `void on_asset_reloaded(assets::asset_id)`, `void collect_shapes()` | asset lifetime |

@@ -25,6 +25,8 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <memory>
 #include <thread>
@@ -99,6 +101,20 @@ namespace conjure::physics {
     };
 
     /// <summary>
+    /// True when no component is NaN or infinite: what a command or query may hand Jolt.
+    /// </summary>
+    [[nodiscard]] inline bool is_finite(const math::vec3 &value) noexcept {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    }
+
+    /// <summary>
+    /// True when no component is NaN or infinite.
+    /// </summary>
+    [[nodiscard]] inline bool is_finite(const math::quat &value) noexcept {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z) && std::isfinite(value.w);
+    }
+
+    /// <summary>
     /// Rate limiter of a repeated warning: the first few occurrences log, later ones every 1024th.
     /// </summary>
     struct warn_limiter {
@@ -144,6 +160,13 @@ namespace conjure::physics {
         /// Position / rotation difference a push treats as a teleport.
         /// </summary>
         static constexpr f32 TELEPORT_EPSILON = 1.0e-4f;
+
+        /// <summary>
+        /// Position tolerance of parented rows relative to the largest coordinate of the pull's
+        /// local = parentWorld^-1 * world round trip, whose rounding grows with the distance from the origin
+        /// (TELEPORT_EPSILON stays the floor). Root rows are written bit-exactly and keep the absolute one.
+        /// </summary>
+        static constexpr f32 TELEPORT_RELATIVE_EPSILON = 16.0f * std::numeric_limits<f32>::epsilon();
 
         physics_settings settings = {};
         core::jobs::job_system *jobs = nullptr;
@@ -216,6 +239,8 @@ namespace conjure::physics {
         u64 sinceVersion = 0;
         u32 addedSinceOptimise = 0;
         bool bodyLimitLoggedThisStep = false;
+        // An implicit static body replaced after the push's first flush (apply_motion_type).
+        bool replacedInPush = false;
         warn_limiter commandQueueWarnings = {};
         warn_limiter contactBufferWarnings = {};
         warn_limiter updateErrorWarnings = {};
@@ -283,6 +308,11 @@ namespace conjure::physics {
         void apply_motion_type(body_record &row, const rigid_body &body, ecs::command_buffer &deferred);
         void add_interpolated(ecs::entity target, ecs::command_buffer &deferred);
         void remove_interpolated(ecs::entity target, ecs::command_buffer &deferred);
+
+        /// <summary>
+        /// Queues the removal of every interpolated_transform physics added (detach).
+        /// </summary>
+        void queue_interpolated_removals(ecs::command_buffer &deferred);
         [[nodiscard]] math::transform compose_world_pose(ecs::entity target) const noexcept;
         [[nodiscard]] u8 resolve_layer(ecs::entity target, u8 requested) const;
 
@@ -301,7 +331,7 @@ namespace conjure::physics {
         /*---------------------------------------------------------------*/
         // Sync (physics_world_sync.cpp)
 
-        void push_changed_components(f32 fixedDeltaTime, ecs::command_buffer &deferred);
+        void push_changed_components(ecs::command_buffer &deferred);
         void push_hierarchy_rows(f32 fixedDeltaTime);
         void apply_commands(f32 fixedDeltaTime);
 

@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #include <algorithm>
+#include <span>
 #include <utility>
 
 namespace conjure::physics {
@@ -264,7 +265,16 @@ void physics_world::state::add_interpolated(ecs::entity target, ecs::command_buf
     if (world->has_raw(target, ids.interpolatedTransform)) {
         return;
     }
-    deferred.add_raw(target, ids.interpolatedTransform);
+    // Seeded with the current world pose: scene propagation renders an entity that carries the component
+    // from it alone, so a default value would show the body at the origin until its first pull.
+    scene::interpolated_transform initial = {};
+    initial.current = compose_world_pose(target);
+    initial.previous = initial.current;
+    deferred.add_raw(
+      target,
+      ids.interpolatedTransform,
+      std::as_bytes(std::span<const scene::interpolated_transform>(&initial, 1))
+    );
 }
 
 void physics_world::state::remove_interpolated(ecs::entity target, ecs::command_buffer &deferred) {
@@ -272,6 +282,28 @@ void physics_world::state::remove_interpolated(ecs::entity target, ecs::command_
         return;
     }
     deferred.remove_raw(target, ids.interpolatedTransform);
+}
+
+void physics_world::state::queue_interpolated_removals(ecs::command_buffer &deferred) {
+    // The entities physics gave the component (R47): live characters and non-static bodies, and every
+    // pending entity with a rigid_body or character_controller (create_body would take it off a static
+    // one anyway). A live static body keeps one its owner added.
+    for (const body_record &row : records) {
+        if (row.is_free() || !world->is_alive(row.entity)) {
+            continue;
+        }
+        if (row.kind == record_kind::CHARACTER || row.motion != motion_type::STATIC) {
+            remove_interpolated(row.entity, deferred);
+        }
+    }
+    for (const ecs::entity target : pendingCreate) {
+        if (!is_pending(target) || !world->is_alive(target)) {
+            continue;
+        }
+        if (world->has_raw(target, ids.character) || world->has_raw(target, ids.rigidBody)) {
+            remove_interpolated(target, deferred);
+        }
+    }
 }
 
 
@@ -459,6 +491,8 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
         return false;
     }
     if (built.shape == nullptr) {
+        // Every collider failed, or one references an asset that is not loaded yet (pendingAsset): the
+        // entity stays pending and the next flush tries again.
         ++stats.bodiesWithoutShape;
         return false;
     }
@@ -498,8 +532,14 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     if (authored.mass > 0.0f) {
         creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         creation.mMassPropertiesOverride.mMass = authored.mass;
-    } else {
+    } else if (body == nullptr || built.shape->GetMassProperties().mMass > 0.0f) {
         creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateMassAndInertia;
+    } else {
+        // A shape without a volume (a mesh_collider) derives no mass, yet Jolt builds motion properties for
+        // every body a rigid_body authors, static ones included, and those need a mass: 1 kg. Its zero
+        // inertia makes Jolt fall back to the inertia of a unit sphere.
+        creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        creation.mMassPropertiesOverride.mMass = 1.0f;
     }
 
     JPH::Body *created = physicsSystem->GetBodyInterface().CreateBody(creation);
@@ -522,7 +562,6 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     row.motion = motion;
     row.layer = layer;
     row.isTrigger = built.isTrigger;
-    row.hasShape = true;
     row.hasParent = world->has_raw(target, ids.parent);
     row.movesWithTransform = motion == motion_type::KINEMATIC
       && has_flag(authored.flags, rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM);
@@ -540,7 +579,12 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     } else {
         activateBatch.push_back(row.bodyId);
     }
-    if (body != nullptr && motion != motion_type::STATIC) {
+    // A static body never carries interpolated_transform (3.3 step 6), also when the component was queued
+    // while the entity was pending as a dynamic body (the default rigid_body, later switched to STATIC or
+    // removed so that the colliders make an implicit static body).
+    if (motion == motion_type::STATIC) {
+        remove_interpolated(target, deferred);
+    } else {
         add_interpolated(target, deferred);
     }
     return true;
@@ -695,8 +739,13 @@ void physics_world::state::apply_motion_type(body_record &row, const rigid_body 
             // A collider-only body was created without motion properties; it must be rebuilt.
             const u32 index = static_cast<u32>(&row - records.data());
             const ecs::entity target = row.entity;
-            destroy_body(index, &deferred, true);
+            // The replacement is never static (an implicit static is STATIC and the motion changed), so
+            // interpolated_transform stays; create_body adds it when missing.
+            destroy_body(index, nullptr, true);
             mark_pending_create(target);
+            // Called from push_changed_components, this runs after the push's first flush of pending
+            // creations; push_transforms flushes again so that no fixed step runs without the body.
+            replacedInPush = true;
             return;
         }
         bodies.SetMotionType(
@@ -773,6 +822,12 @@ void physics_world::state::apply_rebuilds(ecs::command_buffer &deferred) {
                     mark_pending_create(target);
                 }
                 continue;
+            }
+            if (built.pendingAsset) {
+                // The body keeps its current shape until every asset is loaded; the next push retries. The
+                // row's dirty flags were reset above and pendingScratch is the list walked here, so the entry
+                // lands in the next push's pendingRebuild.
+                mark_rebuild(target, record_dirty_flags::SHAPE);
             }
             if (built.shape != nullptr) {
                 JPH::BodyInterface &bodies = physicsSystem->GetBodyInterface();

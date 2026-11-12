@@ -11,6 +11,8 @@
 #include "conjure/physics/physics_world.h"
 
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <random>
 #include <vector>
@@ -114,6 +116,61 @@ TEST_SUITE("physics/physics_world") {
         CHECK(physics.body_count() == 1);
         physics.detach();
         CONJURE_CHECK_OK(world.validate());
+    }
+
+    TEST_CASE("physics_world - detach removes the interpolated_transform physics added") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity ground = fixture.spawn_ground();
+        const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 0.5f, 0.0f));
+        const ecs::entity character = fixture.spawn_character(math::vec3(4.0f, 0.0f, 0.0f));
+        // A dynamic body without a collider stays pending, yet already carries the component.
+        const ecs::entity shapeless = fixture.create_at(math::vec3(9.0f, 1.0f, 0.0f));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(shapeless));
+        // Got the component as a pending dynamic body, then switched to STATIC while still pending.
+        const ecs::entity switched = fixture.create_at(math::vec3(12.0f, 1.0f, 0.0f));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(switched));
+        const ecs::entity wall = fixture.spawn_box(math::vec3(-5.0f, 1.0f, 0.0f), physics::motion_type::STATIC);
+        fixture.run_step();
+        // Added by the user to a static body: physics never added it, so it never removes it.
+        CONJURE_REQUIRE_OK(fixture.world.add<scene::interpolated_transform>(wall));
+        REQUIRE(fixture.world.has<scene::interpolated_transform>(box));
+        REQUIRE(fixture.world.has<scene::interpolated_transform>(character));
+        REQUIRE(fixture.world.has<scene::interpolated_transform>(shapeless));
+        REQUIRE(fixture.world.has<scene::interpolated_transform>(switched));
+        REQUIRE_FALSE(fixture.world.has<scene::interpolated_transform>(ground));
+        physics::rigid_body *switchedBody = fixture.world.get<physics::rigid_body>(switched);
+        REQUIRE(switchedBody != nullptr);
+        switchedBody->motionType = physics::motion_type::STATIC;
+
+        fixture.physics.detach();
+        CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(box));
+        CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(character));
+        CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(shapeless));
+        CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(switched));
+        CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(ground));
+        CHECK(fixture.world.has<scene::interpolated_transform>(wall));
+        CONJURE_CHECK_OK(fixture.world.validate());
+    }
+
+    TEST_CASE("physics_world - attach off the owner thread asserts and returns WRONG_THREAD") {
+        core::jobs::job_system jobs = {};
+        ecs::component_registry registry = {};
+        register_physics_test_components(registry);
+        ecs::world world(registry);
+        physics::physics_world physics(test_settings(), jobs);
+        testing::expect_assert guard = {};
+        std::atomic<bool> wrongThread = false;
+        {
+            core::jobs::dedicated_thread helper("physics-test", [&](std::stop_token) {
+                const core::result<void> outcome = physics.attach(world);
+                wrongThread = !outcome.has_value() && outcome.get_error().is(physics::physics_error::WRONG_THREAD);
+            });
+            helper.join();
+        }
+        CHECK(wrongThread.load());
+        CHECK(guard.count() == ASSERTS_PER_VIOLATION);
+        CHECK_FALSE(physics.is_attached());
     }
 
     TEST_CASE("physics_world - attach needs the physics and scene components registered") {
@@ -229,6 +286,40 @@ TEST_SUITE("physics/physics_world") {
         }
         CHECK(wrongThread.load());
         CHECK(guard.count() == ASSERTS_PER_VIOLATION);
+    }
+
+    TEST_CASE("physics_world - body commands with a non-finite vector are INVALID_ARGUMENT and leave the body finite") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 5.0f, 0.0f));
+        fixture.run_step();
+        const f32 nan = std::numeric_limits<f32>::quiet_NaN();
+        const f32 infinity = std::numeric_limits<f32>::infinity();
+        CONJURE_CHECK_ERROR(
+          fixture.physics.add_force(box, math::vec3(nan, 0.0f, 0.0f)),
+          core::error_code::INVALID_ARGUMENT
+        );
+        CONJURE_CHECK_ERROR(
+          fixture.physics.add_impulse_at(box, math::vec3(0.0f, 1.0f, 0.0f), math::vec3(infinity, 0.0f, 0.0f)),
+          core::error_code::INVALID_ARGUMENT
+        );
+        CONJURE_CHECK_ERROR(
+          fixture.physics.set_gravity(math::vec3(0.0f, -infinity, 0.0f)),
+          core::error_code::INVALID_ARGUMENT
+        );
+        math::transform pose = {};
+        pose.position = math::vec3(1.0f, 5.0f, 0.0f);
+        pose.rotation = math::quat(nan, 0.0f, 0.0f, 0.0f);
+        CONJURE_CHECK_ERROR(fixture.physics.teleport(box, pose), core::error_code::INVALID_ARGUMENT);
+
+        fixture.run_step();
+        const math::vec3 position = fixture.position_of(box);
+        CHECK(std::isfinite(position.x));
+        CHECK(std::isfinite(position.y));
+        CHECK(std::isfinite(position.z));
+        CHECK(position.x == doctest::Approx(0.0f));
+        CHECK(fixture.physics.gravity() == math::vec3(0.0f, -9.81f, 0.0f));
+        CHECK(fixture.physics.stats().droppedCommands == 0);
     }
 
     TEST_CASE("physics_world - body commands on an unknown entity are NO_BODY and pending ones are kept") {

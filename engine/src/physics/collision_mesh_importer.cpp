@@ -13,6 +13,7 @@
 
 #include <cgltf.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -137,6 +138,21 @@ namespace {
             user->failure = bytes.get_error();
             return cgltf_result_file_not_found;
         }
+        // On entry *size is the byteLength the document declares (cgltf's own reader enforces the same
+        // contract). cgltf_validate checks accessors against that declared length only, so a shorter file
+        // must fail here or the accessors would read past the end of the copy.
+        const cgltf_size declared = *size;
+        if (declared != 0 && bytes.value().size() < declared) {
+            user->failed = true;
+            user->failure = core::make_error(
+              physics_error::COLLISION_MESH_PARSE_FAILED,
+              "buffer '{}' holds {} bytes but the glTF declares {}",
+              path,
+              bytes.value().size(),
+              declared
+            );
+            return cgltf_result_data_too_short;
+        }
         void *copy = cgltf_alloc(memoryOptions->user_data, bytes.value().size());
         if (copy == nullptr) {
             return cgltf_result_out_of_memory;
@@ -210,6 +226,16 @@ namespace {
     };
 
     /// <summary>
+    /// Appends the triangle (base + first, base + second, base + third): the corners swap when the node
+    /// mirrors its mesh, so the triangle keeps facing the way it was authored.
+    /// </summary>
+    void append_triangle(std::vector<u32> &out, u32 base, const std::array<u32, 3> &corners, bool mirrored) {
+        out.push_back(base + corners[0]);
+        out.push_back(base + (mirrored ? corners[2] : corners[1]));
+        out.push_back(base + (mirrored ? corners[1] : corners[2]));
+    }
+
+    /// <summary>
     /// Appends every triangle primitive of a mesh instanced by a node, positions transformed by the
     /// node's world matrix.
     /// </summary>
@@ -230,13 +256,17 @@ namespace {
                 world[column][row] = matrix[static_cast<usize>(column * 4 + row)];
             }
         }
+        // A negative determinant (an odd number of negative scale axes) turns the winding around, and
+        // Jolt collides with the front face of a mesh triangle only.
+        const bool mirrored = glm::determinant(math::mat3(world)) < 0.0f;
+        const char *meshName = node.mesh->name == nullptr ? "" : node.mesh->name;
 
         for (cgltf_size primitiveIndex = 0; primitiveIndex < node.mesh->primitives_count; ++primitiveIndex) {
             const cgltf_primitive &primitive = node.mesh->primitives[primitiveIndex];
             if (primitive.type != cgltf_primitive_type_triangles) {
                 context.add_warning(std::format(
                   "mesh '{}' primitive {} is not a triangle list and was skipped",
-                  node.mesh->name == nullptr ? "" : node.mesh->name,
+                  meshName,
                   primitiveIndex
                 ));
                 continue;
@@ -250,6 +280,18 @@ namespace {
             }
             if (positions == nullptr || cgltf_num_components(positions->type) != 3) {
                 return core::make_error(physics_error::COLLISION_MESH_PARSE_FAILED, "primitive without POSITION");
+            }
+            // cgltf_validate does not check this outside meshopt, and the merged index list would only be
+            // checked as a whole: a ragged primitive would shift every triangle of the ones after it.
+            const cgltf_size cornerCount = primitive.indices == nullptr ? positions->count : primitive.indices->count;
+            if (cornerCount % 3 != 0) {
+                return core::make_error(
+                  physics_error::COLLISION_MESH_PARSE_FAILED,
+                  "mesh '{}' primitive {}: {} indices is not a multiple of three",
+                  meshName,
+                  primitiveIndex,
+                  cornerCount
+                );
             }
 
             const u32 base = static_cast<u32>(out.positions.size());
@@ -266,8 +308,9 @@ namespace {
             }
 
             if (primitive.indices == nullptr) {
-                for (cgltf_size vertex = 0; vertex < positions->count; ++vertex) {
-                    out.indices.push_back(base + static_cast<u32>(vertex));
+                for (cgltf_size vertex = 0; vertex < positions->count; vertex += 3) {
+                    const u32 first = static_cast<u32>(vertex);
+                    append_triangle(out.indices, base, {first, first + 1, first + 2}, mirrored);
                 }
                 continue;
             }
@@ -280,8 +323,9 @@ namespace {
             ) != indices.size()) {
                 return core::make_error(physics_error::COLLISION_MESH_PARSE_FAILED, "index accessor could not be read");
             }
-            for (const u32 index : indices) {
-                out.indices.push_back(base + index);
+            for (usize corner = 0; corner < indices.size(); corner += 3) {
+                const std::array<u32, 3> triangle = {indices[corner], indices[corner + 1], indices[corner + 2]};
+                append_triangle(out.indices, base, triangle, mirrored);
             }
         }
         return core::result<void>::success();
@@ -335,6 +379,17 @@ namespace {
               "{}: cgltf buffers: {}",
               context.source_path(),
               cgltf_result_name(loaded)
+            );
+        }
+        // Accessors and buffer views against their buffers, indices against their vertex counts, node
+        // cycles: what the readers below take on trust.
+        const cgltf_result validated = cgltf_validate(raw);
+        if (validated != cgltf_result_success) {
+            return core::make_error(
+              physics_error::COLLISION_MESH_PARSE_FAILED,
+              "{}: cgltf validate: {}",
+              context.source_path(),
+              cgltf_result_name(validated)
             );
         }
 
@@ -460,10 +515,15 @@ raw_geometry weld_vertices(const raw_geometry &source, f32 weldDistance) {
         return welded;
     }
 
+    // Every welded vertex is registered in its cell: the cell maps to its newest vertex and nextInCell chains
+    // the older ones, so a vertex in a cell that already holds another, farther one is still found.
+    constexpr u32 NONE = 0xFFFFFFFFu;
     const f32 cellSize = weldDistance;
     const f32 weldSquared = weldDistance * weldDistance;
-    core::flat_hash_map<cell_key, u32, cell_hash> firstInCell = {};
-    firstInCell.reserve(source.positions.size());
+    core::flat_hash_map<cell_key, u32, cell_hash> headOfCell = {};
+    headOfCell.reserve(source.positions.size());
+    std::vector<u32> nextInCell = {};
+    nextInCell.reserve(source.positions.size());
     std::vector<u32> remap(source.positions.size());
 
     for (usize index = 0; index < source.positions.size(); ++index) {
@@ -472,27 +532,34 @@ raw_geometry weld_vertices(const raw_geometry &source, f32 weldDistance) {
           position.x,
           cellSize
         ), cell_of(position.y, cellSize), cell_of(position.z, cellSize)};
-        u32 found = 0xFFFFFFFFu;
-        for (i64 dx = -1; dx <= 1 && found == 0xFFFFFFFFu; ++dx) {
-            for (i64 dy = -1; dy <= 1 && found == 0xFFFFFFFFu; ++dy) {
+        // The lowest index within reach wins whatever the walk order: first occurrence, deterministic.
+        u32 found = NONE;
+        for (i64 dx = -1; dx <= 1; ++dx) {
+            for (i64 dy = -1; dy <= 1; ++dy) {
                 for (i64 dz = -1; dz <= 1; ++dz) {
                     const cell_key neighbour = {home.x + dx, home.y + dy, home.z + dz};
-                    const auto candidate = firstInCell.find(neighbour);
-                    if (candidate == firstInCell.end()) {
+                    const auto head = headOfCell.find(neighbour);
+                    if (head == headOfCell.end()) {
                         continue;
                     }
-                    const math::vec3 delta = welded.positions[candidate->second] - position;
-                    if (glm::dot(delta, delta) <= weldSquared) {
-                        found = candidate->second;
-                        break;
+                    for (u32 candidate = head->second; candidate != NONE; candidate = nextInCell[candidate]) {
+                        const math::vec3 delta = welded.positions[candidate] - position;
+                        if (glm::dot(delta, delta) <= weldSquared) {
+                            found = std::min(found, candidate);
+                        }
                     }
                 }
             }
         }
-        if (found == 0xFFFFFFFFu) {
+        if (found == NONE) {
             found = static_cast<u32>(welded.positions.size());
             welded.positions.push_back(position);
-            firstInCell.try_emplace(home, found);
+            nextInCell.push_back(NONE);
+            const auto [slot, inserted] = headOfCell.try_emplace(home, found);
+            if (!inserted) {
+                nextInCell[found] = slot->second;
+                slot->second = found;
+            }
         }
         remap[index] = found;
     }

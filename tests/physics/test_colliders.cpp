@@ -14,6 +14,69 @@ using namespace physics_test;
 
 TEST_SUITE("physics/colliders") {
 
+    TEST_CASE("colliders - removing the rigid_body of a static floor keeps a body under the box in the same push") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.allowSleeping = false;
+        physics_fixture fixture(jobs, settings);
+        const ecs::entity ground = fixture.spawn_ground();
+        const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 0.5f, 0.0f));
+        fixture.run_steps(30);
+
+        // The floor's body is replaced by an implicit static one; the step after this push must have it.
+        CONJURE_REQUIRE_OK(fixture.world.remove<physics::rigid_body>(ground));
+        fixture.physics.push_transforms(STEP);
+        CHECK(fixture.physics.has_body(ground));
+        fixture.physics.step(STEP);
+        fixture.physics.pull_transforms();
+        fixture.physics.collect_contact_events();
+        CHECK(fixture.position_of(box).y == doctest::Approx(0.5f).epsilon(0.02));
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("colliders - an implicit static body given a dynamic rigid_body keeps its interpolated_transform") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity crate = fixture.create_at(math::vec3(0.0f, 5.0f, 0.0f));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(crate));
+        fixture.run_step();
+        REQUIRE(fixture.physics.has_body(crate));
+        // Added by the owner to the static body; the dynamic body that replaces it in the next push keeps it.
+        CONJURE_REQUIRE_OK(fixture.world.add<scene::interpolated_transform>(crate));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(crate));
+        fixture.physics.push_transforms(STEP);
+        CHECK(fixture.physics.has_body(crate));
+        CHECK(fixture.world.has<scene::interpolated_transform>(crate));
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("colliders - an implicit static body whose static rigid_body turns dynamic has a body in the same push") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity crate = fixture.create_at(math::vec3(0.0f, 5.0f, 0.0f));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(crate));
+        fixture.run_step();
+        // A STATIC rigid_body does not change the motion, so the row stays the implicit static one.
+        physics::rigid_body authored = {};
+        authored.motionType = physics::motion_type::STATIC;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(crate, authored));
+        fixture.run_step();
+        REQUIRE(fixture.physics.has_body(crate));
+
+        // The change detection replaces the body after the push's first flush of pending creations.
+        physics::rigid_body *body = fixture.world.get<physics::rigid_body>(crate);
+        REQUIRE(body != nullptr);
+        body->motionType = physics::motion_type::DYNAMIC;
+        fixture.physics.push_transforms(STEP);
+        CHECK(fixture.physics.has_body(crate));
+        CHECK(fixture.world.has<scene::interpolated_transform>(crate));
+        fixture.physics.step(STEP);
+        fixture.physics.pull_transforms();
+        fixture.physics.collect_contact_events();
+        CHECK(fixture.position_of(crate).y < 5.0f);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
     TEST_CASE("colliders - each primitive rests on the ground within 1 cm of its analytic height") {
         for_each_job_mode([](core::jobs::job_system &jobs) {
             physics_fixture fixture(jobs);

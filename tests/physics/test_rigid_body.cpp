@@ -74,6 +74,60 @@ TEST_SUITE("physics/rigid_body") {
         });
     }
 
+    TEST_CASE("rigid_body - a kinematic plate driven by local_transform interpolates between its last two transforms") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity plate = fixture.create_at(math::vec3(0.0f, 5.0f, 0.0f));
+        physics::rigid_body plateBody = {};
+        plateBody.motionType = physics::motion_type::KINEMATIC;
+        plateBody.flags = physics::rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(plate, plateBody));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(plate));
+        fixture.run_step();
+        const scene::interpolated_transform *interpolated = fixture.world.get<scene::interpolated_transform>(plate);
+        REQUIRE(interpolated != nullptr);
+        CHECK(interpolated->current.position == math::vec3(0.0f, 5.0f, 0.0f));
+        CHECK(interpolated->previous.position == interpolated->current.position);
+
+        // The pull never visits this row, so the push is what keeps the render pose following the transform.
+        scene::local_transform *local = fixture.world.get<scene::local_transform>(plate);
+        REQUIRE(local != nullptr);
+        local->position.x += 1.0f;
+        fixture.run_step();
+        interpolated = fixture.world.get<scene::interpolated_transform>(plate);
+        REQUIRE(interpolated != nullptr);
+        CHECK(interpolated->current.position.x == doctest::Approx(1.0f));
+        CHECK(interpolated->current.position.y == doctest::Approx(5.0f));
+        CHECK(interpolated->previous.position.x == doctest::Approx(0.0f));
+        const math::transform halfway = math::transform::lerp(interpolated->previous, interpolated->current, 0.5f);
+        CHECK(halfway.position.x == doctest::Approx(0.5f));
+    }
+
+    TEST_CASE("rigid_body - a body that becomes static before its first push carries no interpolated_transform") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        SUBCASE("the rigid_body switches to STATIC") {
+            const ecs::entity entity = fixture.create_at(math::vec3(0.0f, 1.0f, 0.0f));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(entity));
+            physics::rigid_body *body = fixture.world.get<physics::rigid_body>(entity);
+            REQUIRE(body != nullptr);
+            body->motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(entity));
+            fixture.run_step();
+            CHECK(fixture.physics.has_body(entity));
+            CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(entity));
+        }
+        SUBCASE("the rigid_body goes and the colliders make an implicit static body") {
+            const ecs::entity entity = fixture.create_at(math::vec3(0.0f, 1.0f, 0.0f));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(entity));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(entity));
+            CONJURE_REQUIRE_OK(fixture.world.remove<physics::rigid_body>(entity));
+            fixture.run_step();
+            CHECK(fixture.physics.has_body(entity));
+            CHECK_FALSE(fixture.world.has<scene::interpolated_transform>(entity));
+        }
+    }
+
     TEST_CASE("rigid_body - a velocity written into the component before a step becomes the body velocity") {
         core::jobs::job_system jobs = {};
         physics::physics_settings settings = test_settings();

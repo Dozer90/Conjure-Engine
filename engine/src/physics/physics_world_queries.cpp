@@ -28,8 +28,16 @@ namespace conjure::physics {
 namespace {
 
     /// <summary>
-    /// Collects every ray hit into the caller's span; the body under test is handed to OnBody with
-    /// its lock held, so the normal and entity can be resolved right away.
+    /// The longest ray a query casts: maxDistance is clamped to it, so an infinite one means unlimited
+    /// instead of scaling the direction into infinities and NaNs.
+    /// </summary>
+    constexpr f32 MAX_RAY_DISTANCE = 1.0e6f;
+
+    /// <summary>
+    /// Keeps the out.size() nearest ray hits in the caller's span, unordered (raycast_all sorts them).
+    /// The body under test is handed to OnBody with its lock held, so the normal and entity can be
+    /// resolved right away. Once the span is full a hit replaces the farthest one kept and the early-out
+    /// fraction follows the farthest kept, so the broad phase skips everything beyond it.
     /// </summary>
     class span_ray_collector final : public JPH::CastRayCollector {
         private:
@@ -54,11 +62,15 @@ namespace {
             }
 
             void AddHit(const JPH::RayCastResult &result) override {
-                if (mCount >= mOut.size() || mBody == nullptr) {
-                    ForceEarlyOut();
+                if (mBody == nullptr) {
                     return;
                 }
-                raycast_hit &hit = mOut[mCount];
+                const bool full = mCount == mOut.size();
+                const u32 slot = full ? farthest() : mCount;
+                if (full && result.mFraction >= mOut[slot].fraction) {
+                    return;
+                }
+                raycast_hit &hit = mOut[slot];
                 const JPH::Vec3 point = mRay->GetPointOnRay(result.mFraction);
                 hit.entity = ecs::entity::from_u64(mBody->GetUserData());
                 hit.point = jolt::from_jolt(point);
@@ -67,7 +79,24 @@ namespace {
                 hit.distance = result.mFraction * mMaxDistance;
                 hit.layer = jolt::physics_layer_of(mBody->GetObjectLayer());
                 hit.isTrigger = mBody->IsSensor();
-                ++mCount;
+                if (!full) {
+                    ++mCount;
+                }
+                if (mCount == mOut.size()) {
+                    // Only ever shrinks: the farthest kept hit is replaced by a nearer one or stays.
+                    UpdateEarlyOutFraction(mOut[farthest()].fraction);
+                }
+            }
+
+        private:
+            [[nodiscard]] u32 farthest() const noexcept {
+                u32 found = 0;
+                for (u32 index = 1; index < mCount; ++index) {
+                    if (mOut[index].fraction > mOut[found].fraction) {
+                        found = index;
+                    }
+                }
+                return found;
             }
     };
 
@@ -209,12 +238,16 @@ std::optional<raycast_hit> physics_world::raycast(
     if (s.busy.load(std::memory_order_acquire) || !(maxDistance > 0.0f)) {
         return std::nullopt;
     }
+    if (!is_finite(ray.origin) || !is_finite(ray.direction)) {
+        return std::nullopt;
+    }
+    const f32 distance = std::min(maxDistance, MAX_RAY_DISTANCE);
     const body_record *ignored = s.find_row(filter.ignore);
     const jolt::broad_phase_mask_filter broadPhase(filter);
     const jolt::layer_mask_object_filter objectLayers(filter);
     const jolt::query_body_filter bodies(ignored == nullptr ? JPH::BodyID() : ignored->bodyId, filter.includeTriggers);
 
-    const math::vec3 direction = math::safe_normalize(ray.direction) * maxDistance;
+    const math::vec3 direction = math::safe_normalize(ray.direction) * distance;
     const JPH::RRayCast cast(jolt::to_jolt(ray.origin), jolt::to_jolt(direction));
     JPH::RayCastResult result = {};
     if (!s.physicsSystem->GetNarrowPhaseQuery().CastRay(cast, result, broadPhase, objectLayers, bodies)) {
@@ -232,7 +265,7 @@ std::optional<raycast_hit> physics_world::raycast(
     hit.point = jolt::from_jolt(point);
     hit.normal = jolt::from_jolt(body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point));
     hit.fraction = result.mFraction;
-    hit.distance = result.mFraction * maxDistance;
+    hit.distance = result.mFraction * distance;
     hit.layer = jolt::physics_layer_of(body.GetObjectLayer());
     hit.isTrigger = body.IsSensor();
     return hit;
@@ -252,15 +285,19 @@ u32 physics_world::raycast_all(
     if (s.busy.load(std::memory_order_acquire) || out.empty() || !(maxDistance > 0.0f)) {
         return 0;
     }
+    if (!is_finite(ray.origin) || !is_finite(ray.direction)) {
+        return 0;
+    }
+    const f32 distance = std::min(maxDistance, MAX_RAY_DISTANCE);
     const body_record *ignored = s.find_row(filter.ignore);
     const jolt::broad_phase_mask_filter broadPhase(filter);
     const jolt::layer_mask_object_filter objectLayers(filter);
     const jolt::query_body_filter bodies(ignored == nullptr ? JPH::BodyID() : ignored->bodyId, filter.includeTriggers);
 
-    const math::vec3 direction = math::safe_normalize(ray.direction) * maxDistance;
+    const math::vec3 direction = math::safe_normalize(ray.direction) * distance;
     const JPH::RRayCast cast(jolt::to_jolt(ray.origin), jolt::to_jolt(direction));
     JPH::RayCastSettings settings = {};
-    span_ray_collector collector(out, cast, maxDistance);
+    span_ray_collector collector(out, cast, distance);
     s.physicsSystem->GetNarrowPhaseQuery().CastRay(cast, settings, collector, broadPhase, objectLayers, bodies);
 
     const u32 count = collector.count();
@@ -369,6 +406,9 @@ std::optional<shape_cast_hit> physics_world::shape_cast(
       "physics_world::shape_cast during a push, step or pull (STEP_IN_PROGRESS)"
     );
     if (s.busy.load(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    if (!is_finite(start.position) || !is_finite(start.rotation) || !is_finite(direction)) {
         return std::nullopt;
     }
     const f32 length = glm::length(direction);

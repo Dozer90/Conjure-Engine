@@ -1,3 +1,4 @@
+#include "conjure/testing/assert_capture.h"
 #include "conjure/testing/doctest.h"
 #include "conjure/testing/log_capture.h"
 #include "physics_test_fixture.h"
@@ -55,9 +56,28 @@ namespace {
     };
 
     /// <summary>
+    /// A run of the ramp's six stored indices that one triangle primitive reads.
+    /// </summary>
+    struct index_range {
+        u32 first = 0;
+        u32 count = 6;
+    };
+
+    /// <summary>
+    /// What a test changes in the ramp document: the transform members of its node (empty for the
+    /// default 30 degree rotation about z and 1 m lift), the POSITION count it declares (four are stored)
+    /// and one triangle primitive per index range, all sharing the POSITION accessor.
+    /// </summary>
+    struct ramp_layout {
+        std::string nodeTransform = {};
+        u32 positionCount = 4;
+        std::vector<index_range> primitives = {index_range{}};
+    };
+
+    /// <summary>
     /// Builds a minimal binary glTF (one mesh, one node with a rotation and translation) in memory.
     /// </summary>
-    [[nodiscard]] ramp_source make_ramp_glb() {
+    [[nodiscard]] ramp_source make_ramp_glb(const ramp_layout &layout = {}) {
         const std::array<math::vec3, 4> positions = {
             math::vec3(-2.0f, 0.0f, -1.0f),
             math::vec3(2.0f, 0.0f, -1.0f),
@@ -81,15 +101,29 @@ namespace {
             bin.push_back(std::byte{0});
         }
 
-        // 30 degrees about z: quaternion (x, y, z, w) = (0, 0, sin 15, cos 15), plus a lift of 1 m.
-        const f32 half = math::radians(15.0f);
-        const std::string rotation = std::to_string(std::sin(half)) + "," + std::to_string(std::cos(half));
+        std::string nodeTransform = layout.nodeTransform;
+        if (nodeTransform.empty()) {
+            // 30 degrees about z: quaternion (x, y, z, w) = (0, 0, sin 15, cos 15), plus a lift of 1 m.
+            const f32 half = math::radians(15.0f);
+            const std::string rotation = std::to_string(std::sin(half)) + "," + std::to_string(std::cos(half));
+            nodeTransform = R"("rotation":[0,0,)" + rotation + R"(],"translation":[0,1,0])";
+        }
+        std::string primitives = {};
+        std::string indexAccessors = {};
+        for (usize index = 0; index < layout.primitives.size(); ++index) {
+            const index_range &range = layout.primitives[index];
+            if (index > 0) {
+                primitives += ",";
+            }
+            primitives += R"({"attributes":{"POSITION":0},"indices":)" + std::to_string(index + 1) + "}";
+            indexAccessors += R"(,{"bufferView":1,"byteOffset":)" + std::to_string(range.first * 2)
+              + R"(,"componentType":5123,"count":)" + std::to_string(range.count) + R"(,"type":"SCALAR"})";
+        }
         const std::string json = std::string(R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)")
-          + R"("nodes":[{"mesh":0,"rotation":[0,0,)" + rotation + R"(],"translation":[0,1,0]}],)"
-          + "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
-          + R"("accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3",)"
-          + R"("min":[-2,0,-1],"max":[2,0,1]},)"
-          + "{\"bufferView\":1,\"componentType\":5123,\"count\":6,\"type\":\"SCALAR\"}],"
+          + R"("nodes":[{"mesh":0,)" + nodeTransform + "}],"
+          + R"("meshes":[{"primitives":[)" + primitives + "]}],"
+          + R"("accessors":[{"bufferView":0,"componentType":5126,"count":)" + std::to_string(layout.positionCount)
+          + R"(,"type":"VEC3","min":[-2,0,-1],"max":[2,0,1]})" + indexAccessors + "],"
           + "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":"
           + std::to_string(indexOffset) + ",\"byteLength\":12}],"
           + "\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}]}";
@@ -444,6 +478,110 @@ TEST_SUITE("physics/collision_mesh_asset") {
         CHECK(raw.value().vertex_count() == 4);
     }
 
+    TEST_CASE("collision_mesh_importer - welding merges every duplicate of a vertex that shares a cell with another") {
+        // With a 1 m weld distance the first two vertices share a grid cell but are too far apart to weld; the
+        // third duplicates the second and must still find it although the cell already has a vertex.
+        core::vfs::memory_file_system fileSystem = {};
+        const std::vector<std::byte> obj = bytes_of(
+          "v 0.05 0.05 0.05\nv 0.95 0.95 0.95\nv 0.95 0.95 0.95\nv 5 0 0\nv 0 5 0\nv 0 0 5\n"
+          "f 1 4 5\nf 2 5 6\nf 3 6 4\n"
+        );
+        const core::json::document settings = core::json::object({{"weld_distance", 1.0}});
+        const core::result<assets::import_output> imported = import_bytes(
+          "assets://physics/cell.obj",
+          obj,
+          fileSystem,
+          settings.root()
+        );
+        CONJURE_REQUIRE_OK(imported);
+        const core::result<physics::collision_mesh_asset> mesh =
+          physics::collision_mesh_asset::from_payload(imported.value().assets[0].payload);
+        CONJURE_REQUIRE_OK(mesh);
+        CHECK(mesh.value().vertex_count() == 5);
+        CHECK(mesh.value().triangle_count() == 3);
+    }
+
+    TEST_CASE("collision_mesh_importer - a glTF accessor larger than its buffer view is a parse failure not a crash") {
+        core::vfs::memory_file_system fileSystem = {};
+        ramp_layout layout = {};
+        layout.positionCount = 3000000;
+        const ramp_source oversized = make_ramp_glb(layout);
+        CONJURE_CHECK_ERROR(
+          import_bytes("assets://physics/oversized.glb", oversized.glb, fileSystem),
+          assets::asset_error_code::IMPORT_FAILED
+        );
+    }
+
+    TEST_CASE(
+      "collision_mesh_importer - a glTF whose external buffer file is shorter than its declared byteLength is a "
+      "parse failure not a crash"
+    ) {
+        // The accessor fits the declared buffer, so only the length of the file actually read can catch it.
+        core::vfs::memory_file_system fileSystem = {};
+        CONJURE_REQUIRE_OK(fileSystem.write_file("assets/physics/short.bin", std::vector<std::byte>(48)));
+        const std::string json = std::string(R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],)")
+          + R"("nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],)"
+          + R"("accessors":[{"bufferView":0,"componentType":5126,"count":3000000,"type":"VEC3",)"
+          + R"("min":[0,0,0],"max":[1,1,1]}],)"
+          + R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36000000}],)"
+          + R"("buffers":[{"uri":"short.bin","byteLength":36000000}]})";
+        const core::result<assets::import_output> imported = import_bytes(
+          "assets://physics/short.gltf",
+          bytes_of(json),
+          fileSystem
+        );
+        CONJURE_CHECK_ERROR(imported, assets::asset_error_code::IMPORT_FAILED);
+        if (!imported.has_value()) {
+            CHECK(imported.get_error().message().find("short.bin") != std::string::npos);
+        }
+    }
+
+    TEST_CASE(
+      "collision_mesh_importer - a glTF primitive whose index count is not a multiple of three is a parse failure"
+    ) {
+        // Four indices plus five: the total is a multiple of three, so only a per-primitive check catches it.
+        core::vfs::memory_file_system fileSystem = {};
+        ramp_layout layout = {};
+        layout.primitives = {index_range{0, 4}, index_range{1, 5}};
+        const ramp_source ragged = make_ramp_glb(layout);
+        const core::result<assets::import_output> imported = import_bytes(
+          "assets://physics/ragged.glb",
+          ragged.glb,
+          fileSystem
+        );
+        CONJURE_CHECK_ERROR(imported, assets::asset_error_code::IMPORT_FAILED);
+        if (!imported.has_value()) {
+            CHECK(imported.get_error().message().find("multiple of three") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("collision_mesh_importer - a mirrored glTF node keeps its triangles facing the same way") {
+        core::vfs::memory_file_system fileSystem = {};
+        ramp_layout layout = {};
+        layout.nodeTransform = R"("scale":[-1,1,1])";
+        const ramp_source mirrored = make_ramp_glb(layout);
+        const core::result<assets::import_output> imported = import_bytes(
+          "assets://physics/mirrored.glb",
+          mirrored.glb,
+          fileSystem
+        );
+        CONJURE_REQUIRE_OK(imported);
+        const core::result<physics::collision_mesh_asset> mesh =
+          physics::collision_mesh_asset::from_payload(imported.value().assets[0].payload);
+        CONJURE_REQUIRE_OK(mesh);
+        REQUIRE(mesh.value().triangle_count() == 2);
+        const std::span<const math::vec3> positions = mesh.value().positions();
+        const std::span<const u32> indices = mesh.value().indices();
+        for (u32 triangle = 0; triangle < mesh.value().triangle_count(); ++triangle) {
+            CAPTURE(triangle);
+            const math::vec3 &a = positions[indices[triangle * 3]];
+            const math::vec3 &b = positions[indices[triangle * 3 + 1]];
+            const math::vec3 &c = positions[indices[triangle * 3 + 2]];
+            // The authored winding is counter-clockwise seen from above (+y), the face Jolt collides with.
+            CHECK(glm::cross(b - a, c - a).y > 0.0f);
+        }
+    }
+
     TEST_CASE("collision_mesh_asset - the loader builds the Jolt shape on load") {
         const loaded_mesh loaded(box_mesh(math::vec3(0.5f)));
         const physics::collision_mesh_asset *mesh = loaded.ref().get();
@@ -546,6 +684,97 @@ TEST_SUITE("physics/collision_mesh_asset") {
         fixture.run_steps(3);
         CHECK_FALSE(fixture.physics.has_body(prop));
         CHECK(fixture.physics.stats().bodiesWithoutShape == 1);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE(
+      "collision_mesh_asset - a compound with one unloaded asset stays pending instead of building without it"
+    ) {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        physics::convex_collider unloaded = {};
+        unloaded.mesh = assets::asset_ref<physics::collision_mesh_asset>(core::uuid(3, 4));
+
+        SUBCASE("a new body waits for the asset") {
+            const ecs::entity prop = fixture.create_at(math::vec3(0.0f, 2.0f, 0.0f));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(prop));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(prop));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::convex_collider>(prop, unloaded));
+            fixture.run_steps(3);
+            CHECK_FALSE(fixture.physics.has_body(prop));
+            CHECK(fixture.physics.stats().bodiesWithoutShape == 1);
+        }
+        SUBCASE("an existing body keeps its shape until the asset loads") {
+            const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 2.0f, 0.0f));
+            fixture.run_step();
+            REQUIRE(fixture.physics.has_body(box));
+            unloaded.offset = math::vec3(2.0f, 0.0f, 0.0f);
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::convex_collider>(box, unloaded));
+            fixture.run_steps(3);
+            CHECK(fixture.physics.has_body(box));
+            std::array<ecs::entity, 2> out = {};
+            CHECK(fixture.physics.overlap_sphere(math::vec3(0.0f, 2.0f, 0.0f), 0.1f, out) == 1);
+            CHECK(out[0] == box);
+        }
+        SUBCASE("a body waiting for an asset logs no collider warning") {
+            testing::log_capture logs = {};
+            const ecs::entity prop = fixture.create_at(math::vec3(0.0f, 2.0f, 0.0f));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(prop));
+            physics::box_collider trigger = {};
+            trigger.isTrigger = true;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(prop, trigger));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::convex_collider>(prop, unloaded));
+            fixture.run_steps(5);
+            CHECK_FALSE(logs.contains(core::log_level::WARN, "MIXED_TRIGGER_FLAGS"));
+            CHECK_FALSE(fixture.physics.has_body(prop));
+        }
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE(
+      "collision_mesh_asset - a rigid_body with mass 0 on a mesh_collider creates its body without a mass assert"
+    ) {
+        // A mesh has no volume to derive a mass from, and Jolt builds motion properties for every body a
+        // rigid_body authors (it may change motion type later), static ones included.
+        const loaded_mesh loaded(box_mesh(math::vec3(2.0f, 0.5f, 2.0f)));
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        testing::log_capture logs = {};
+        logs.allow_errors();
+        testing::expect_assert guard = {};
+        std::array<ecs::entity, 2> bodies = {};
+        const std::array<physics::motion_type, 2> motions = {
+            physics::motion_type::STATIC,
+            physics::motion_type::KINEMATIC
+        };
+        for (usize index = 0; index < bodies.size(); ++index) {
+            bodies[index] = fixture.create_at(math::vec3(static_cast<f32>(index) * 10.0f, 0.0f, 0.0f));
+            physics::rigid_body body = {};
+            body.motionType = motions[index];
+            body.mass = 0.0f;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(bodies[index], body));
+            physics::mesh_collider collider = {};
+            collider.mesh = loaded.ref();
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::mesh_collider>(bodies[index], collider));
+        }
+        fixture.run_steps(2);
+        CHECK(fixture.physics.has_body(bodies[0]));
+        CHECK(fixture.physics.has_body(bodies[1]));
+
+        // The kinematic one goes static and back: the motion properties it was created with stay usable.
+        physics::rigid_body *kinematic = fixture.world.get<physics::rigid_body>(bodies[1]);
+        REQUIRE(kinematic != nullptr);
+        kinematic->motionType = physics::motion_type::STATIC;
+        fixture.run_steps(2);
+        kinematic = fixture.world.get<physics::rigid_body>(bodies[1]);
+        REQUIRE(kinematic != nullptr);
+        kinematic->motionType = physics::motion_type::KINEMATIC;
+        fixture.run_steps(2);
+        CHECK(fixture.physics.has_body(bodies[1]));
+        CHECK(guard.count() == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
         CONJURE_CHECK_OK(fixture.physics.validate());
     }
 }

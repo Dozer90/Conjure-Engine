@@ -18,7 +18,8 @@
 // sphere, capsule, convex, mesh), a single leaf at the entity origin stays the leaf, anything else
 // becomes a StaticCompoundShape; leaves are shared through the shape_cache, the world scale wraps the
 // result in a ScaledShape. Every collider problem degrades with a WARN (the body is built without the
-// offending collider) and is reported in the result so the caller can count it.
+// offending collider). A convex or mesh collider whose asset is not loaded sets pendingAsset instead: nothing
+// is built or logged until the asset is there (14_physics.md 3.3, unloaded asset_refs keep the body pending).
 
 namespace conjure::physics {
 
@@ -42,12 +43,10 @@ namespace conjure::physics {
     struct shape_build_result {
         JPH::RefConst<JPH::Shape> shape = {};     // null when no collider could be built
         bool hasCollider = false;                 // at least one collider component is present
-        bool pendingAsset = false;                // a collider references an asset that is not loaded yet
+        // A convex / mesh collider that would be built references an asset that is not loaded: the shape is
+        // null and nothing else was built or logged.
+        bool pendingAsset = false;
         bool isTrigger = false;
-        bool mixedTriggers = false;               // colliders disagreed on isTrigger (built non-trigger)
-        bool invalidScale = false;                // the scale could not be applied (built unscaled)
-        bool unsupportedShape = false;            // a mesh collider was dropped from a dynamic body
-        bool createFailed = false;                // a Jolt ShapeSettings::Create reported an error
         u64 leafKey = 0;                          // cache key of a single shared leaf, else 0
         core::uuid convexAsset = {};
         core::uuid meshAsset = {};
@@ -55,7 +54,7 @@ namespace conjure::physics {
 
     /// <summary>
     /// Builds the shape for the colliders. The result's shape is null when nothing could be built
-    /// (no collider, every collider failed, or an asset is pending).
+    /// (no collider, every collider failed, or an asset is pending, which is checked before anything is built).
     /// </summary>
     [[nodiscard]] shape_build_result build_shape(const shape_build_input &input, shape_cache &cache);
 }

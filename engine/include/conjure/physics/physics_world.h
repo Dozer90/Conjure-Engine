@@ -95,12 +95,14 @@ namespace conjure::physics {
             /// <summary>
             /// Installs the component observers and queues every entity that already carries a body
             /// component. ALREADY_ATTACHED; INVALID_STATE when the registry lacks the physics or scene
-            /// components (register_components / scene::register_components first).
+            /// components (register_components / scene::register_components first); WRONG_THREAD (and an
+            /// assert) off the owner thread.
             /// </summary>
             [[nodiscard]] core::result<void> attach(ecs::world &target);
 
             /// <summary>
-            /// Removes the observers and destroys every body; pending synthesised exits are discarded.
+            /// Removes the observers, destroys every body and removes the interpolated_transform components
+            /// physics added; pending synthesised exits are discarded. The ECS world must not be locked.
             /// </summary>
             void detach();
 
@@ -141,7 +143,8 @@ namespace conjure::physics {
 
             /*---------------------------------------------------------------*/
             // Bodies (queued, applied at the next push_transforms). Owner thread. NO_BODY when the entity
-            // has no body and is not pending; WRONG_THREAD off the owner thread; COMMAND_QUEUE_FULL.
+            // has no body and is not pending; WRONG_THREAD off the owner thread; COMMAND_QUEUE_FULL;
+            // INVALID_ARGUMENT (core) for a non-finite vector or rotation, which is never queued.
 
             [[nodiscard]] bool has_body(ecs::entity target) const noexcept;
             [[nodiscard]] core::result<void> add_force(ecs::entity target, const math::vec3 &force);
@@ -205,10 +208,14 @@ namespace conjure::physics {
             /*---------------------------------------------------------------*/
             // Queries (3.8). Any thread while none of push_transforms, step and pull_transforms runs
             // (those mutate the row tables; STEP_IN_PROGRESS asserts and yields nothing meanwhile). In
-            // the engine that means outside the PHYSICS_STEP and FIXED_END phases.
+            // the engine that means outside the PHYSICS_STEP and FIXED_END phases. Structural ECS changes on
+            // the owner thread (adding or removing body components or parent, destroying a body entity) run
+            // the physics observers, which edit the same tables; queries from other threads must not overlap
+            // them either.
 
             /// <summary>
-            /// Closest hit along the ray within maxDistance.
+            /// Closest hit along the ray within maxDistance. maxDistance is clamped to 1e6 m (infinity means
+            /// unlimited); a non-finite origin or direction hits nothing.
             /// </summary>
             [[nodiscard]] std::optional<raycast_hit> raycast(
               const math::ray &ray,
@@ -217,7 +224,9 @@ namespace conjure::physics {
             ) const;
 
             /// <summary>
-            /// Every hit along the ray sorted by distance, at most out.size(); returns the count written.
+            /// The out.size() nearest hits along the ray, sorted by distance; returns the count written.
+            /// maxDistance is clamped to 1e6 m (infinity means unlimited); a non-finite origin or direction
+            /// hits nothing.
             /// </summary>
             [[nodiscard]] u32 raycast_all(
               const math::ray &ray,
@@ -249,6 +258,7 @@ namespace conjure::physics {
 
             /// <summary>
             /// Sweeps the shape from start along direction (which includes the length); the closest hit.
+            /// A non-finite start or direction hits nothing.
             /// </summary>
             [[nodiscard]] std::optional<shape_cast_hit> shape_cast(
               const cast_shape_desc &shape,

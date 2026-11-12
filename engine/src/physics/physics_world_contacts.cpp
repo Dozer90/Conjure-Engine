@@ -156,6 +156,7 @@ void physics_world::state::collect_events() {
             u32 added = 0;
             u32 removed = 0;
             const raw_contact *firstAdded = nullptr;
+            const raw_contact *firstLive = nullptr;   // first ADDED or PERSISTED record: one with a point
             const raw_contact *firstAny = nullptr;
             f32 impulse = 0.0f;
             u32 points = 0;
@@ -172,9 +173,15 @@ void physics_world::state::collect_events() {
                         if (firstAdded == nullptr) {
                             firstAdded = &contact;
                         }
+                        if (firstLive == nullptr) {
+                            firstLive = &contact;
+                        }
                         break;
                     case raw_contact_kind::PERSISTED:
                         points += contact.pointCount;
+                        if (firstLive == nullptr) {
+                            firstLive = &contact;
+                        }
                         break;
                     case raw_contact_kind::REMOVED:
                         ++removed;
@@ -207,7 +214,11 @@ void physics_world::state::collect_events() {
             event.b = rowB->entity;
             event.layerA = rowA->layer;
             event.layerB = rowB->layer;
-            const raw_contact *source = firstAdded != nullptr ? firstAdded : firstAny;
+            // ENTER reports its first new contact (3.6); a STAY reports a live one, never a REMOVED record (whose
+            // point and normal are zero), and falls back to the first record only when a full buffer dropped
+            // every live one.
+            const raw_contact *liveSource = firstLive != nullptr ? firstLive : firstAny;
+            const raw_contact *source = firstAdded != nullptr ? firstAdded : liveSource;
             if (before == 0 && after > 0) {
                 event.kind = trigger ? contact_kind::TRIGGER_ENTER : contact_kind::ENTER;
                 event.point = source->point;

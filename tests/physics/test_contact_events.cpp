@@ -426,4 +426,48 @@ TEST_SUITE("physics/contact_events") {
         }
         CHECK(enters == 2);
     }
+
+    TEST_CASE("contact_events - a STAY after one sub-shape contact of a compound ends carries a live point") {
+        // A floor and a wall in one static compound and a box in the corner: the two sub-shape contacts have
+        // different normals, so Jolt keeps them as two manifolds instead of reducing them into one.
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, awake_settings());
+        const ecs::entity corner = fixture.create_at(math::vec3(0.0f));
+        physics::box_collider floor = {};
+        floor.halfExtents = math::vec3(5.0f, 0.5f, 5.0f);
+        floor.offset = math::vec3(0.0f, -0.5f, 0.0f);
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(corner, floor));
+        physics::capsule_collider wall = {};
+        wall.radius = 0.5f;
+        wall.halfHeight = 2.0f;
+        wall.offset = math::vec3(1.0f, 2.5f, 0.0f);
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::capsule_collider>(corner, wall));
+        const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 0.5f, 0.0f));
+        fixture.run_steps(30);
+
+        // The box leaves one sub-shape while it keeps touching the other, so one step reports that sub-shape pair
+        // REMOVED and the other PERSISTED; the two subcases put the REMOVED record first and last in the run.
+        math::vec3 push = math::vec3(0.0f);
+        SUBCASE("the box slides away from the wall") {
+            push = math::vec3(-2.0f, 0.0f, 0.0f);
+        }
+        SUBCASE("the box rises along the wall") {
+            push = math::vec3(0.0f, 3.0f, 0.0f);
+        }
+        CONJURE_REQUIRE_OK(fixture.physics.add_impulse(box, push));
+        u32 stays = 0;
+        for (u32 step = 0; step < 10; ++step) {
+            fixture.run_step();
+            for (const physics::contact_event &event : fixture.physics.contact_events()) {
+                if (event.kind != physics::contact_kind::STAY || !involves(event, corner, box)) {
+                    continue;
+                }
+                CAPTURE(step);
+                ++stays;
+                CHECK(event.contactCount > 0);
+                CHECK(event.normal != math::vec3(0.0f));
+            }
+        }
+        CHECK(stays > 0);
+    }
 }

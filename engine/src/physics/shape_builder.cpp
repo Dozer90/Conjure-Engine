@@ -108,7 +108,6 @@ namespace {
       u64 key,
       ecs::entity entity,
       const char *what,
-      bool &createFailed,
       Factory &&factory
     ) {
         JPH::RefConst<JPH::Shape> found = cache.find(key);
@@ -117,7 +116,6 @@ namespace {
         }
         const JPH::Shape::ShapeResult created = factory();
         if (created.HasError()) {
-            createFailed = true;
             CONJURE_LOG_WARN(
               LOG_PHYSICS,
               "entity {}: {} shape failed (SHAPE_CREATE_FAILED): {}",
@@ -136,8 +134,7 @@ namespace {
       const shape_build_input &input,
       shape_cache &cache,
       std::array<leaf, 5> &leaves,
-      usize &count,
-      shape_build_result &out
+      usize &count
     ) {
         const box_collider &box = *input.box;
         const math::vec3 halfExtents = glm::max(glm::abs(box.halfExtents), math::vec3(1.0e-4f));
@@ -147,7 +144,7 @@ namespace {
         key.add(halfExtents);
         key.add(convexRadius);
         leaf &entry = leaves[count];
-        entry.shape = cached_leaf(cache, key.value(), input.entity, "box", out.createFailed, [&]() {
+        entry.shape = cached_leaf(cache, key.value(), input.entity, "box", [&]() {
             return JPH::BoxShapeSettings(jolt::to_jolt(halfExtents), convexRadius).Create();
         });
         if (entry.shape == nullptr) {
@@ -163,8 +160,7 @@ namespace {
       const shape_build_input &input,
       shape_cache &cache,
       std::array<leaf, 5> &leaves,
-      usize &count,
-      shape_build_result &out
+      usize &count
     ) {
         const sphere_collider &sphere = *input.sphere;
         const f32 radius = std::max(std::abs(sphere.radius), 1.0e-4f);
@@ -172,7 +168,7 @@ namespace {
         key.add(static_cast<u8>(leaf_kind::SPHERE));
         key.add(radius);
         leaf &entry = leaves[count];
-        entry.shape = cached_leaf(cache, key.value(), input.entity, "sphere", out.createFailed, [&]() {
+        entry.shape = cached_leaf(cache, key.value(), input.entity, "sphere", [&]() {
             return JPH::SphereShapeSettings(radius).Create();
         });
         if (entry.shape == nullptr) {
@@ -187,8 +183,7 @@ namespace {
       const shape_build_input &input,
       shape_cache &cache,
       std::array<leaf, 5> &leaves,
-      usize &count,
-      shape_build_result &out
+      usize &count
     ) {
         const capsule_collider &capsule = *input.capsule;
         const f32 radius = std::max(std::abs(capsule.radius), 1.0e-4f);
@@ -198,7 +193,7 @@ namespace {
         key.add(radius);
         key.add(halfHeight);
         leaf &entry = leaves[count];
-        entry.shape = cached_leaf(cache, key.value(), input.entity, "capsule", out.createFailed, [&]() {
+        entry.shape = cached_leaf(cache, key.value(), input.entity, "capsule", [&]() {
             return JPH::CapsuleShapeSettings(halfHeight, radius).Create();
         });
         if (entry.shape == nullptr) {
@@ -223,7 +218,7 @@ namespace {
         }
         const collision_mesh_asset *mesh = convex.mesh.get();
         if (mesh == nullptr) {
-            out.pendingAsset = true;
+            // build_shape checked that the asset is loaded before building any leaf.
             return;
         }
         out.convexAsset = convex.mesh.id();
@@ -238,7 +233,6 @@ namespace {
         if (found == nullptr) {
             core::result<JPH::RefConst<JPH::Shape>> built = detail::build_convex_shape(*mesh, convexRadius);
             if (!built.has_value()) {
-                out.createFailed = true;
                 CONJURE_LOG_WARN(LOG_PHYSICS, "entity {}: {}", input.entity, built.get_error().to_string());
                 return;
             }
@@ -263,7 +257,6 @@ namespace {
             return;
         }
         if (input.motion == motion_type::DYNAMIC) {
-            out.unsupportedShape = true;
             CONJURE_LOG_WARN(
               LOG_PHYSICS,
               "entity {}: mesh_collider on a DYNAMIC body is ignored (UNSUPPORTED_SHAPE_FOR_MOTION)",
@@ -273,7 +266,7 @@ namespace {
         }
         const collision_mesh_asset *mesh = meshCollider.mesh.get();
         if (mesh == nullptr || mesh->shapes() == nullptr || mesh->shapes()->meshShape == nullptr) {
-            out.pendingAsset = true;
+            // build_shape checked that the asset is loaded before building any leaf.
             return;
         }
         out.meshAsset = meshCollider.mesh.id();
@@ -288,7 +281,22 @@ namespace {
     }
 
     /// <summary>
-    /// True when the collider is present and marked as a trigger.
+    /// True when a convex or mesh collider that would be built references an asset that is not loaded yet.
+    /// A mesh_collider on a dynamic body is dropped anyway, so its asset does not count.
+    /// </summary>
+    [[nodiscard]] bool asset_pending(const shape_build_input &input) noexcept {
+        if (input.convex != nullptr && !input.convex->mesh.id().is_null() && input.convex->mesh.get() == nullptr) {
+            return true;
+        }
+        if (input.mesh == nullptr || input.mesh->mesh.id().is_null() || input.motion == motion_type::DYNAMIC) {
+            return false;
+        }
+        const collision_mesh_asset *mesh = input.mesh->mesh.get();
+        return mesh == nullptr || mesh->shapes() == nullptr || mesh->shapes()->meshShape == nullptr;
+    }
+
+    /// <summary>
+    /// Counts the colliders present and those marked as a trigger.
     /// </summary>
     void gather_trigger_flags(const shape_build_input &input, u32 &triggers, u32 &colliders) noexcept {
         const auto count = [&](bool present, bool trigger) {
@@ -317,10 +325,15 @@ shape_build_result build_shape(const shape_build_input &input, shape_cache &cach
     if (colliders == 0) {
         return out;
     }
+    // Before anything is built or logged: a body waiting for an asset is retried every push until it loads,
+    // and building the other leaves (or repeating the collider warnings) each time would be wasted.
+    out.pendingAsset = asset_pending(input);
+    if (out.pendingAsset) {
+        return out;
+    }
     if (triggers == colliders) {
         out.isTrigger = true;
     } else if (triggers > 0) {
-        out.mixedTriggers = true;
         CONJURE_LOG_WARN(
           LOG_PHYSICS,
           "entity {}: colliders disagree on isTrigger (MIXED_TRIGGER_FLAGS); the body is not a trigger",
@@ -331,13 +344,13 @@ shape_build_result build_shape(const shape_build_input &input, shape_cache &cach
     std::array<leaf, 5> leaves = {};
     usize leafCount = 0;
     if (input.box != nullptr) {
-        append_box(input, cache, leaves, leafCount, out);
+        append_box(input, cache, leaves, leafCount);
     }
     if (input.sphere != nullptr) {
-        append_sphere(input, cache, leaves, leafCount, out);
+        append_sphere(input, cache, leaves, leafCount);
     }
     if (input.capsule != nullptr) {
-        append_capsule(input, cache, leaves, leafCount, out);
+        append_capsule(input, cache, leaves, leafCount);
     }
     if (input.convex != nullptr) {
         append_convex(input, cache, leaves, leafCount, out);
@@ -364,7 +377,6 @@ shape_build_result build_shape(const shape_build_input &input, shape_cache &cach
         }
         const JPH::Shape::ShapeResult created = compound.Create();
         if (created.HasError()) {
-            out.createFailed = true;
             CONJURE_LOG_WARN(
               LOG_PHYSICS,
               "entity {}: compound shape failed (SHAPE_CREATE_FAILED): {}",
@@ -379,7 +391,6 @@ shape_build_result build_shape(const shape_build_input &input, shape_cache &cach
     if (!is_unit_scale(input.scale)) {
         const JPH::Vec3 scale = jolt::to_jolt(input.scale);
         if (!shape->IsValidScale(scale)) {
-            out.invalidScale = true;
             CONJURE_LOG_WARN(
               LOG_PHYSICS,
               "entity {}: scale {} cannot be applied to its shape (INVALID_SHAPE_SCALE); built unscaled",
@@ -389,7 +400,6 @@ shape_build_result build_shape(const shape_build_input &input, shape_cache &cach
         } else {
             const JPH::Shape::ShapeResult scaled = JPH::ScaledShapeSettings(shape, scale).Create();
             if (scaled.HasError()) {
-                out.invalidScale = true;
                 CONJURE_LOG_WARN(
                   LOG_PHYSICS,
                   "entity {}: scaled shape failed (INVALID_SHAPE_SCALE): {}; built unscaled",

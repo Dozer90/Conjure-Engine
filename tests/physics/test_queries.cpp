@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 using namespace conjure;
@@ -144,9 +145,71 @@ TEST_SUITE("physics/queries") {
         std::array<physics::raycast_hit, 2> two = {};
         const u32 truncated = fixture.physics.raycast_all(down_from(10.0f), 100.0f, two);
         CHECK(truncated == 2);
+        CHECK(two[0].entity == plates[2]);
+        CHECK(two[1].entity == plates[1]);
         CHECK(two[0].distance < two[1].distance);
         CHECK(fixture.physics.raycast_all(down_from(10.0f), 100.0f, std::span<physics::raycast_hit>()) == 0);
         CHECK(fixture.physics.raycast_all(down_from(10.0f), 2.0f, eight) == 0);
+    }
+
+    TEST_CASE("raycast_all - a span smaller than the hit count keeps the nearest hits") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        // The three top plates are kinematic: the broad phase walks its static tree before the moving one, so
+        // a collector that kept the first hits it was handed would return three of the lower, static plates.
+        std::array<ecs::entity, 8> plates = {};
+        for (u32 index = 0; index < plates.size(); ++index) {
+            plates[index] = fixture.spawn_box(
+              math::vec3(0.0f, static_cast<f32>(index) * 2.0f, 0.0f),
+              index >= 5 ? physics::motion_type::KINEMATIC : physics::motion_type::STATIC,
+              math::vec3(2.0f, 0.1f, 2.0f)
+            );
+        }
+        fixture.run_step();
+        std::array<physics::raycast_hit, 3> three = {};
+        const u32 count = fixture.physics.raycast_all(down_from(20.0f), 100.0f, three);
+        REQUIRE(count == 3);
+        CHECK(three[0].entity == plates[7]);
+        CHECK(three[1].entity == plates[6]);
+        CHECK(three[2].entity == plates[5]);
+        CHECK(std::abs(three[0].distance - 5.9f) < 1.0e-3f);
+        CHECK(std::abs(three[2].distance - 9.9f) < 1.0e-3f);
+        std::array<physics::raycast_hit, 8> every = {};
+        CHECK(fixture.physics.raycast_all(down_from(20.0f), 100.0f, every) == 8);
+    }
+
+    TEST_CASE("queries - a raycast with an infinite maxDistance hits like a long finite one") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity ground = fixture.spawn_ground();
+        fixture.run_step();
+        const f32 infinity = std::numeric_limits<f32>::infinity();
+        const std::optional<physics::raycast_hit> unlimited = fixture.physics.raycast(down_from(10.0f), infinity);
+        const std::optional<physics::raycast_hit> finite = fixture.physics.raycast(down_from(10.0f), 1000.0f);
+        REQUIRE(unlimited.has_value());
+        REQUIRE(finite.has_value());
+        CHECK(unlimited->entity == ground);
+        CHECK(std::abs(unlimited->distance - finite->distance) < 1.0e-3f);
+        CHECK(testing::approx_equal(unlimited->point, finite->point, 1.0e-3f));
+        CHECK(testing::approx_equal(unlimited->normal, math::vec3(0.0f, 1.0f, 0.0f), 1.0e-3f));
+        std::array<physics::raycast_hit, 4> all = {};
+        REQUIRE(fixture.physics.raycast_all(down_from(10.0f), infinity, all) == 1);
+        CHECK(std::abs(all[0].distance - 10.0f) < 1.0e-3f);
+
+        // A non-finite origin or direction hits nothing.
+        math::ray broken = down_from(10.0f);
+        broken.origin.x = std::numeric_limits<f32>::quiet_NaN();
+        CHECK_FALSE(fixture.physics.raycast(broken, 100.0f).has_value());
+        CHECK(fixture.physics.raycast_all(broken, 100.0f, all) == 0);
+        broken = down_from(10.0f);
+        broken.direction.x = infinity;
+        CHECK_FALSE(fixture.physics.raycast(broken, 100.0f).has_value());
+        const physics::cast_shape_desc sphere = physics::sphere_shape_desc{};
+        math::transform start = {};
+        start.position = math::vec3(0.0f, 10.0f, 0.0f);
+        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -infinity, 0.0f)).has_value());
+        start.rotation = math::quat(std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f, 0.0f);
+        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -20.0f, 0.0f)).has_value());
     }
 
     TEST_CASE("overlap_sphere - finds exactly the bodies inside") {

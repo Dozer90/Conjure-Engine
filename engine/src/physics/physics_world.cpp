@@ -211,6 +211,13 @@ core::result<void> physics_world::state::queue(body_command command) {
         CONJURE_ASSERT(false, "physics_world: body commands are owner-thread only");
         return core::make_error(physics_error::WRONG_THREAD, "body commands are owner-thread only");
     }
+    // A NaN or infinity reaching Jolt poisons the body (and, through contacts, its neighbours) for good.
+    if (!is_finite(command.vectorA) || !is_finite(command.vectorB) || !is_finite(command.rotation)) {
+        return core::error(
+          core::error_code::INVALID_ARGUMENT,
+          std::format("non-finite value in a body command for entity {}", command.target)
+        );
+    }
     if (command.type != body_command::kind::SET_GRAVITY) {
         const bool known = find_row(command.target) != nullptr || is_pending(command.target);
         if (!known) {
@@ -252,6 +259,10 @@ physics_world::~physics_world() {
 // ECS binding
 
 core::result<void> physics_world::attach(ecs::world &target) {
+    if (!mState->is_owner_thread()) {
+        CONJURE_ASSERT(false, "physics_world::attach is owner-thread only");
+        return core::make_error(physics_error::WRONG_THREAD, "attach is owner-thread only");
+    }
     if (mState->world != nullptr) {
         return core::make_error(physics_error::ALREADY_ATTACHED, "physics_world is already attached");
     }
@@ -322,7 +333,21 @@ void physics_world::detach() {
     }
     CONJURE_ASSERT(mState->is_owner_thread(), "physics_world::detach is owner-thread only");
     mState->remove_observers();
+    // Leftovers of a push that ran while the world was locked are discarded first: an add queued there
+    // would otherwise bring back the component the removals below take away (remove_interpolated skips an
+    // entity that does not hold it yet).
+    mState->ownDeferred->clear();
+    mState->queue_interpolated_removals(*mState->ownDeferred);
     mState->destroy_all_bodies();
+    if (!mState->ownDeferred->empty()) {
+        if (mState->world->is_locked()) {
+            CONJURE_ASSERT(false, "physics_world::detach while the ECS world is locked; interpolated_transform kept");
+        } else {
+            // The observers are gone, so the flush does not call back into physics.
+            const ecs::flush_report report = mState->world->flush(*mState->ownDeferred);
+            CONJURE_UNUSED(report);
+        }
+    }
     mState->ownDeferred->clear();
     mState->ownDeferred.reset();
     mState->world = nullptr;
@@ -552,11 +577,12 @@ u32 physics_world::active_body_count() const noexcept {
 }
 
 std::optional<math::transform> physics_world::body_pose(ecs::entity target) const noexcept {
-    const body_record *row = mState->find_row(target);
-    if (row == nullptr) {
+    // The busy check comes first: the row tables may be changing while a push, step or pull runs.
+    if (mState->busy.load(std::memory_order_acquire)) {
         return std::nullopt;
     }
-    if (mState->busy.load(std::memory_order_acquire)) {
+    const body_record *row = mState->find_row(target);
+    if (row == nullptr) {
         return std::nullopt;
     }
     if (row->kind == record_kind::CHARACTER && row->character != nullptr) {

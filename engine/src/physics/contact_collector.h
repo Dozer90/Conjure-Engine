@@ -73,13 +73,6 @@ namespace conjure::physics {
             [[nodiscard]] std::span<const raw_contact> buffer(u32 threadIndex) const noexcept;
 
             /// <summary>
-            /// Records accepted since the last clear.
-            /// </summary>
-            [[nodiscard]] u32 recorded_count() const noexcept {
-                return mRecorded.load(std::memory_order_relaxed);
-            }
-
-            /// <summary>
             /// Records refused since the last clear.
             /// </summary>
             [[nodiscard]] u32 dropped_count() const noexcept {

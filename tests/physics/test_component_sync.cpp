@@ -9,6 +9,7 @@
 #include "conjure/scene/components.h"
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -305,7 +306,113 @@ TEST_SUITE("physics/component_sync") {
             fixture.physics.pull_transforms();
             const u64 allocations = scope.allocation_count();
             CHECK(allocations == 0);
-            CHECK(fixture.physics.stats().pullMicroseconds < 50000);
+            // Informative only (14_physics.md 10): timing gates belong to the benchmark physics.sync_10k.
+            MESSAGE("pull over 2000 sleeping bodies: " << fixture.physics.stats().pullMicroseconds << " us");
         });
+    }
+
+    TEST_CASE("component_sync - a new dynamic body and character start interpolating from their spawn pose") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity box = fixture.spawn_box(math::vec3(40.0f, 2.0f, 0.0f));
+        const ecs::entity character = fixture.spawn_character(math::vec3(5.0f, 0.0f, 3.0f));
+        // No step yet: scene propagation already renders both from interpolated_transform alone.
+        const scene::interpolated_transform *boxPose = fixture.world.get<scene::interpolated_transform>(box);
+        const scene::interpolated_transform *characterPose =
+          fixture.world.get<scene::interpolated_transform>(character);
+        REQUIRE(boxPose != nullptr);
+        REQUIRE(characterPose != nullptr);
+        CHECK(boxPose->previous.position == math::vec3(40.0f, 2.0f, 0.0f));
+        CHECK(boxPose->current.position == math::vec3(40.0f, 2.0f, 0.0f));
+        CHECK(characterPose->previous.position == math::vec3(5.0f, 0.0f, 3.0f));
+        CHECK(characterPose->current.position == math::vec3(5.0f, 0.0f, 3.0f));
+    }
+
+    TEST_CASE("component_sync - a body that falls asleep has a still interpolated pose") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.timeBeforeSleepSeconds = 0.1f;
+        physics_fixture fixture(jobs, settings);
+        (void)fixture.spawn_ground();
+        const ecs::entity root = fixture.spawn_box(math::vec3(0.0f, 1.0f, 0.0f));
+        // The parented box is written by the serial tail of the pull rather than the chunk pass.
+        const ecs::entity holder = fixture.create_at(math::vec3(5.0f, 0.0f, 0.0f));
+        const ecs::entity child = fixture.spawn_box(math::vec3(0.0f, 1.0f, 0.0f));
+        scene::parent link = {};
+        link.value = holder;
+        CONJURE_REQUIRE_OK(fixture.world.add<scene::parent>(child, link));
+        fixture.run_steps(240);
+        for (const ecs::entity box : {root, child}) {
+            CAPTURE(box);
+            REQUIRE(fixture.settled(box));
+            const scene::interpolated_transform *interpolated = fixture.world.get<scene::interpolated_transform>(box);
+            REQUIRE(interpolated != nullptr);
+            CHECK(interpolated->previous.position == interpolated->current.position);
+            CHECK(interpolated->previous.rotation == interpolated->current.rotation);
+        }
+    }
+
+    TEST_CASE("component_sync - a parented body far from the origin is not teleported by the pull round trip") {
+        // The pull stores local = parent^-1 * world and the push recomposes it. At 3 km a float step is 2.4e-4 m,
+        // so while the solver nudges a resting body every step the recomposed pose can miss the pulled one by more
+        // than the absolute teleport tolerance; each such push teleported and woke the body, which never slept.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.timeBeforeSleepSeconds = 0.1f;
+        physics_fixture fixture(jobs, settings);
+        const math::vec3 origin = math::vec3(3000.1f, 0.0f, 3000.2f);
+        math::vec3 rest = math::vec3(origin.x, 0.5f, origin.z);
+        SUBCASE("the child rests next to its parent") {
+            rest = math::vec3(origin.x, 0.5f, origin.z);
+        }
+        SUBCASE("the child rests near the world origin") {
+            rest = math::vec3(0.0f, 0.5f, 0.0f);
+        }
+        (void)fixture.spawn_box(
+          math::vec3(rest.x, -0.5f, rest.z),
+          physics::motion_type::STATIC,
+          math::vec3(5.0f, 0.5f, 5.0f)
+        );
+        const ecs::entity parent = fixture.create_at(origin);
+        scene::local_transform *parentLocal = fixture.world.get<scene::local_transform>(parent);
+        REQUIRE(parentLocal != nullptr);
+        parentLocal->rotation = glm::angleAxis(1.3f, glm::normalize(math::vec3(1.0f, 1.0f, 0.0f)));
+        math::transform world = {};
+        world.position = rest;
+        const math::transform childPose = parentLocal->to_transform().inverse() * world;
+
+        const ecs::entity child = fixture.spawn_box(childPose.position);
+        scene::local_transform *childLocal = fixture.world.get<scene::local_transform>(child);
+        REQUIRE(childLocal != nullptr);
+        childLocal->rotation = childPose.rotation;
+        scene::parent link = {};
+        link.value = parent;
+        CONJURE_REQUIRE_OK(fixture.world.add<scene::parent>(child, link));
+        fixture.run_steps(240);
+        CHECK(fixture.physics.is_sleeping(child));
+        const scene::interpolated_transform *interpolated = fixture.world.get<scene::interpolated_transform>(child);
+        REQUIRE(interpolated != nullptr);
+        CHECK(interpolated->previous.position == interpolated->current.position);
+    }
+
+    TEST_CASE("component_sync - a 1 mm edit of a root body far from the origin is still a teleport") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.timeBeforeSleepSeconds = 0.1f;
+        physics_fixture fixture(jobs, settings);
+        (void)fixture.spawn_box(
+          math::vec3(2000.0f, -0.5f, 2000.0f),
+          physics::motion_type::STATIC,
+          math::vec3(5.0f, 0.5f, 5.0f)
+        );
+        const ecs::entity box = fixture.spawn_box(math::vec3(2000.0f, 0.5f, 2000.0f));
+        fixture.run_steps(240);
+        REQUIRE(fixture.settled(box));
+        const f32 before = fixture.position_of(box).x;
+        scene::local_transform *local = fixture.world.get<scene::local_transform>(box);
+        REQUIRE(local != nullptr);
+        local->position.x += 0.001f;
+        fixture.run_step();
+        CHECK(std::abs(fixture.position_of(box).x - before - 0.001f) < 2.5e-4f);
     }
 }

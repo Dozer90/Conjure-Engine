@@ -125,7 +125,6 @@ bool physics_world::state::create_character(
     row.kind = record_kind::CHARACTER;
     row.motion = motion_type::KINEMATIC;
     row.layer = layer;
-    row.hasShape = true;
     row.hasParent = world->has_raw(target, ids.parent);
     row.characterMirror = controller;
     row.lastPulled = pose;
