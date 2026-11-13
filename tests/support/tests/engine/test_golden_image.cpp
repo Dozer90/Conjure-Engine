@@ -31,6 +31,19 @@ namespace {
         return result;
     }
 
+    /// <summary>
+    /// A copy of 'base' with a side x side square of 'colour' in its top-left corner.
+    /// </summary>
+    [[nodiscard]] image with_block(const image &base, u32 side, rgba8 colour) {
+        image result = base;
+        for (u32 y = 0; y < side; ++y) {
+            for (u32 x = 0; x < side; ++x) {
+                result.set_pixel(x, y, colour);
+            }
+        }
+        return result;
+    }
+
     [[nodiscard]] bool file_exists(const std::filesystem::path &path) {
         std::error_code ignored = {};
         return std::filesystem::is_regular_file(path, ignored);
@@ -116,6 +129,39 @@ TEST_SUITE("testing/golden_image") {
         CHECK(verdict.mismatchFraction > golden_options{}.maxMismatchFraction);
         CHECK(verdict.meanAbsoluteError <= golden_options{}.maxMeanAbsoluteError);
         CHECK(verdict.message.starts_with("fail"));
+    }
+
+    TEST_CASE("golden_image - a wholly wrong 33x33 block passes the default limits") {
+        // The blind spot D11 documents: at 640x360 up to 0.5 % of the pixels (1,152) may be wholly wrong while the
+        // mean absolute error stays under 1.0, so a small missing object passes and the reference review of 6.2 is
+        // the guard. Limits tight enough to reject this block (a mean absolute error limit below 0.904 or a mismatch
+        // fraction below 0.47 %) flip the first verdict.
+        const golden_options defaults = {};
+        const rgba8 white = rgba8{255, 255, 255, 255};
+        const u32 blockSide = 33;
+        const u32 blockPixels = blockSide * blockSide;
+        const f32 pixelCount = static_cast<f32>(defaults.width * defaults.height);
+        const image reference = solid(defaults.width, defaults.height, rgba8{0, 0, 0, 255});
+        const image block = with_block(reference, blockSide, white);
+        const image largerBlock = with_block(reference, blockSide + 1, white);
+        const f32 expectedError = static_cast<f32>(blockPixels) * 3.0f * 255.0f / (pixelCount * 4.0f);   // 0.904
+
+        const golden_result verdict = golden_image::compare_images(reference, block, defaults);
+
+        CHECK(verdict.passed);
+        CHECK(verdict.mismatchPixelCount == blockPixels);
+        CHECK(verdict.mismatchFraction == doctest::Approx(static_cast<f32>(blockPixels) / pixelCount));
+        CHECK(verdict.meanAbsoluteError == doctest::Approx(expectedError));
+        CHECK(verdict.meanAbsoluteError < defaults.maxMeanAbsoluteError);
+        CHECK(verdict.message.starts_with("pass"));
+
+        // One row and one column more cross the 0.5 % line; the mismatch fraction fails it, not the mean error.
+        const golden_result larger = golden_image::compare_images(reference, largerBlock, defaults);
+
+        CHECK_FALSE(larger.passed);
+        CHECK(larger.mismatchPixelCount == (blockSide + 1) * (blockSide + 1));
+        CHECK(larger.mismatchFraction > defaults.maxMismatchFraction);
+        CHECK(larger.meanAbsoluteError <= defaults.maxMeanAbsoluteError);
     }
 
     TEST_CASE("golden_image - a mean absolute error above the limit fails without any pixel mismatch") {

@@ -17,6 +17,12 @@
 // meant to produce the actual image through a headless_engine and is refused unless the build enabled
 // CONJURE_TEST_GOLDEN_IMAGES; the pure comparison runs everywhere.
 //
+// The default limits (D11) accept a small, wholly wrong region: a pixel counts once however far off it is, so
+// up to 0.5 % of the pixels may differ by 255 in every colour channel while the mean absolute error stays at or
+// below 0.956, under its 1.0 limit. At 640x360 that is about 1,150 pixels, a 33x33 block, and the self-test pins
+// that verdict. Reviewing the reference images of a pull request (08_testing.md 6.2) is the guard against a small
+// missing object.
+//
 // Rendering is not functional yet: a headless engine::application has no swapchain, and the engine's
 // renderer_subsystem drops every camera view in that case instead of pointing it at an off-screen target,
 // so nothing can be drawn into the image render_offscreen would read back. Until the engine offers a
@@ -96,7 +102,8 @@ namespace conjure::testing {
 
             /// <summary>
             /// The pure comparison: no files are read or written. Passes iff the dimensions agree,
-            /// mismatchFraction &lt;= maxMismatchFraction and meanAbsoluteError &lt;= maxMeanAbsoluteError.
+            /// mismatchFraction &lt;= maxMismatchFraction and meanAbsoluteError &lt;= maxMeanAbsoluteError, so a
+            /// small, wholly wrong region passes the defaults (see the file comment).
             /// </summary>
             [[nodiscard]] static golden_result compare_images(
               const core::image &reference,
