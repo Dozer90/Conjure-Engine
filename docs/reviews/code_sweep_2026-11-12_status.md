@@ -4,14 +4,14 @@ Where each finding of [the sweep report](code_sweep_2026-11-12.md) stands. Every
 code by one engineer and checked by a second, then classified: **SMALL** fixes (local, about 60 lines or fewer,
 no open design question) were fixed and reviewed area by area; **CHALLENGING** ones are listed below with the
 shape of a fix for whoever takes them on next; **NEEDS_DECISION** items were decided by the owner on 2026-11-13
-([decisions](code_sweep_2026-11-12_decisions.md)) and await implementation. Ids are `F000` to
+([decisions](code_sweep_2026-11-12_decisions.md)), and the small ones are implemented. Ids are `F000` to
 `F791`, the order of `build/sweep_saved/confirmed.json`, which holds each finding's full evidence.
 
 | Status | All findings | Distinct defects |
 |---|---|---|
 | FIXED | 431 | 411 |
 | CHALLENGING | 254 | 224 |
-| NEEDS_DECISION (decided, not yet implemented) | 99 | 96 |
+| NEEDS_DECISION (decided; 32 implemented, the rest to do) | 99 | 96 |
 | NOT_A_BUG | 8 | 8 |
 
 A finding that repeats another one points at it with *same as*; only the primary carries the plan.

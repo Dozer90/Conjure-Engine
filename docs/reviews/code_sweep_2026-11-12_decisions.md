@@ -10,6 +10,25 @@ A decision becomes binding where it lands: the change that implements it updates
 | Owner's call (another option, a variant or additions) | 13 |
 | Total (covering 99 findings) | 94 |
 
+## Implemented
+
+The 29 decisions of effort S (covering 32 findings) were implemented on 2026-11-14, area by area, each built,
+tested and reviewed:
+
+| Commit | Decisions |
+|---|---|
+| `000ed84` build | F219, F781 |
+| `d2a9ce1` core | F214, F223, F225 (also F586), F232, F615 |
+| `6c519dd` ecs | F636 |
+| `1e88a28` assets | F021, F308 |
+| `3e36be2` scene | F151 (also F363), F635 |
+| `80040b0` renderer | F171, F377, F385, F386, F392, F403 |
+| `a8819f3` bindings | F165, F166, F410, F436, F438, F622, F629, F674, F676 |
+| `ca92309` editor | F730 (also F655) |
+| `b5b8a55` support | F706 |
+
+The 45 decisions of effort M and the 20 of effort L are still to do.
+
 ## Tests and CI
 
 - **F194** (also F119) BLOCKER, tests (audio) / ci. *Where should the ogg/mp3/flac decode test get its audio files, so that it runs instead of failing CI?* **Decided (as recommended, effort L):** A, Commit self-made tone clips to tests/assets. Generate three short 440 Hz mono tones once (for example with ffmpeg, with the command recorded next to them), a few KB each. Commit them as tests/assets/audio/tone.{ogg,mp3,flac} and add '*.flac binary' to .gitattributes. The case reads them with repo_asset() and drops the precondition and the [downloaded] tag, so the compressed decoders run on every leg and on every fresh clone, with no network or licence question. These are the first binary media fixtures in tests/assets. This reverses R62 and 12_audio.md section 10, so those, the 08_testing 5.2 audio row, 09 item 13(d) and audio.md need rewording. The code change is about 20 lines.
