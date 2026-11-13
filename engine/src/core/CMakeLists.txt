@@ -5,8 +5,8 @@
 # conjure_add_core_area(); the umbrella conjure::core links them all and is what other modules use.
 # Area order matters only for the dependencies declared inside each area's CMakeLists.txt.
 #
-# A directory that does not exist yet is skipped so the build keeps working while areas are brought
-# online; the area list below is the complete plan from docs/design/10_core.md.
+# The area list below is the complete plan from docs/design/10_core.md. Every listed area must have its
+# directory: a missing CMakeLists.txt stops the configure instead of surfacing later as unrelated link errors.
 
 set(CONJURE_CORE_AREAS
     foundation      # platform_detect, types, api, build_info, hash, error/result, assert, log, uuid, enum_flags
@@ -40,10 +40,9 @@ target_link_libraries(conjure_core INTERFACE conjure::platform_defines)
 
 foreach(area IN LISTS CONJURE_CORE_AREAS)
     set(areaDir "${CMAKE_CURRENT_SOURCE_DIR}/${area}")
-    if(EXISTS "${areaDir}/CMakeLists.txt")
-        add_subdirectory("${areaDir}")
-        target_link_libraries(conjure_core INTERFACE conjure::core_${area})
-    else()
-        message(STATUS "core: area '${area}' not present yet, skipping")
+    if(NOT EXISTS "${areaDir}/CMakeLists.txt")
+        message(FATAL_ERROR "core: CONJURE_CORE_AREAS lists '${area}' but ${areaDir}/CMakeLists.txt does not exist")
     endif()
+    add_subdirectory("${areaDir}")
+    target_link_libraries(conjure_core INTERFACE conjure::core_${area})
 endforeach()

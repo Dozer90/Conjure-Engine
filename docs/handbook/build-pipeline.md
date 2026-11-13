@@ -28,7 +28,8 @@ The root `CMakeLists.txt` (CMake 3.28+) runs in this order:
 1. `include(cmake/ConjureConfigs.cmake)` **before** `project()`, so `Debug;Development;Distribution` exist
    for every target including fetched ones.
 2. `project(Conjure VERSION 0.1.0 LANGUAGES C CXX)`, then `conjure_derive_config_flags()` copies the
-   `RelWithDebInfo` / `Release` compiler and linker flags into the custom configurations.
+   `RelWithDebInfo` / `Release` compiler and linker flags into the custom configurations (Development without
+   MSVC's incremental linking, section 2).
 3. In-source builds are rejected; `cmake/` is added to `CMAKE_MODULE_PATH`.
 4. Options (section 3) and their consistency checks.
 5. Global settings: C++20 without extensions, C11, position-independent code, `CMAKE_EXPORT_COMPILE_COMMANDS`,
@@ -41,10 +42,16 @@ The root `CMakeLists.txt` (CMake 3.28+) runs in this order:
    `editor`, `runtime`, `tests` (after `enable_testing()`), `samples`, each behind its option.
 8. `conjure_print_configuration_summary()` prints the resulting matrix.
 
-`engine/CMakeLists.txt` walks `CONJURE_ENGINE_MODULES` in dependency order and adds every module directory
-that has a `CMakeLists.txt`; `engine/src/core/CMakeLists.txt` does the same for `CONJURE_CORE_AREAS`.
-Missing directories print a status line and are skipped, so partial trees configure. When
-`CONJURE_WITH_RENDERER` is on it also includes `ConjureShaders` and adds `engine/shaders/` (section 4.6).
+`engine/CMakeLists.txt` walks `CONJURE_ENGINE_MODULES` in dependency order and adds every module directory, as do
+`engine/src/core/CMakeLists.txt` for `CONJURE_CORE_AREAS`, `tests/CMakeLists.txt` for `CONJURE_TEST_MODULES` and
+`tests/core/CMakeLists.txt` for `CONJURE_CORE_TEST_AREAS`. A listed directory without a `CMakeLists.txt` stops the
+configure with a `FATAL_ERROR` naming the list and the path, as do a missing `tests/integration/` and, with
+`CONJURE_BUILD_BENCHMARKS`, a missing `tests/benchmarks/`: a skip could only hide a typo or a lost file that later
+shows up as unrelated link errors. A subsystem still turns off, because each module's `CMakeLists.txt` honours its
+`CONJURE_WITH_*` option (the editor, `CONJURE_BUILD_EDITOR`) and returns early, and the test directory of an optional
+module checks for its module's target (`tests/core` for `conjure::core_<area>`). Only `samples/CMakeLists.txt`
+skips a missing `samples/feature_test/`, until wave 5 adds it. When `CONJURE_WITH_RENDERER` is on,
+`engine/CMakeLists.txt` also includes `ConjureShaders` and adds `engine/shaders/` (section 4.6).
 
 ## 2. Configurations
 
@@ -59,6 +66,11 @@ Missing directories print a status line and are skipped, so partial trees config
   `CMAKE_<LANG>_FLAGS_DISTRIBUTION` from `RELEASE` (same for `EXE/SHARED/MODULE/STATIC` linker flags), and
   maps imported targets that only know the standard configurations with
   `CMAKE_MAP_IMPORTED_CONFIG_DEVELOPMENT "RelWithDebInfo;Release;"` and `..._DISTRIBUTION "Release;RelWithDebInfo;"`.
+- On MSVC, Development does not link incrementally: the derivation turns the `/INCREMENTAL` of CMake's
+  `RelWithDebInfo` linker flags into `/INCREMENTAL:NO`, in a value already cached too, because the benchmarks are
+  enforced in Development (`tests/benchmarks/README.md`) and incremental linking adds padding and jump thunks that
+  Distribution does not have. `/debug` stays; every Development relink of `conjure_shared` and of the test and
+  benchmark executables is a full link, while Debug, the default of `tools/build.py`, keeps incremental linking.
 - Before `project()` it sets `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT` to `$<$<CONFIG:Debug,Development>:ProgramDatabase>`
   unless one is given (CMP0141 takes `/Zi` out of the flag defaults, and CMake's own default names only Debug and
   RelWithDebInfo), so MSVC Development objects carry debug info and Distribution produces no PDB.
@@ -280,6 +292,11 @@ chapter documents them in full; the build-relevant facts are:
   names `..\Lib\Lib.csproj` with backslashes, next to a `Lib/` that holds an `obj/`; it passes only when the
   check reports `Lib/obj`, so it fails when the reference parser returns the path unresolved or resolves it
   against anything but the project's directory.
+- Also independently of Python, seven configure probes (label `build`, 60 s timeout) configure afresh a throwaway
+  `LANGUAGES NONE` project that includes one real list file with a probe directory as its source directory. The six
+  `build.missing_*_configure` entries (engine module, core area, test module, core test area, benchmarks,
+  integration) pass only on the `FATAL_ERROR` of section 1; `build.development_links_without_incremental` only when
+  `conjure_derive_config_flags()` leaves `/INCREMENTAL:NO` in derived, cached and already right Development flags.
 
 ## 8. Third-party dependencies
 

@@ -104,9 +104,11 @@ has its own `README.md` with the same four sections as a module README.
 ## 3. Where tests live
 
 ```
-tests/CMakeLists.txt                   adds support/, then one directory per module (CONJURE_TEST_MODULES), integration/ and
-                                       benchmarks/ when present; registers the Python CTest entries: style.check and
-                                       docs.check, the tools' self-tests and brand.icons_up_to_date (section 4)
+tests/CMakeLists.txt                   adds support/, benchmarks/ with CONJURE_BUILD_BENCHMARKS, then one directory per
+                                       module (CONJURE_TEST_MODULES) and integration/; a listed directory without its
+                                       CMakeLists.txt stops the configure. Registers the Python CTest entries:
+                                       style.check and docs.check, the tools' self-tests and brand.icons_up_to_date
+                                       (section 4)
 tests/support/                         conjure_test_support (and conjure_test_support_shared, the same sources against
                                        conjure::shared): include/conjure/testing/*.h, src/*.cpp, src/test_main.cpp,
                                        src/tracked_global_new.cpp; tests/ holds its self-tests (conjure_support_tests)

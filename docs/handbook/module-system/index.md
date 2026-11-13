@@ -28,10 +28,10 @@ It follows the binding design [`../../design/07_modules.md`](../../design/07_mod
 | Documentation | `engine/src/<module>/README.md`, `docs/handbook/modules/<module>.md`, `docs/api/<module>/` | required by `tools/check_docs.py` |
 
 `engine/CMakeLists.txt` adds the modules in dependency order (`core, ecs, platform, rhi, assets, audio, modules,
-scene, renderer, physics, scripting, engine`) and skips a directory without a `CMakeLists.txt`, so the tree builds
-while waves are brought online. The skill `.claude/skills/add-engine-module/SKILL.md` scaffolds a new engine
-module; [Repository layout](../repository-layout.md) 2 and [Build pipeline](../build-pipeline.md) 4 describe the
-anatomy and the CMake helpers. An engine module never loads at run time.
+scene, renderer, physics, scripting, engine, bindings, editor`) and stops the configure with a `FATAL_ERROR` when a
+listed directory has no `CMakeLists.txt`. The skill `.claude/skills/add-engine-module/SKILL.md` scaffolds a new
+engine module; [Repository layout](../repository-layout.md) 2 and [Build pipeline](../build-pipeline.md) 4
+describe the anatomy and the CMake helpers. An engine module never loads at run time.
 
 ## 2. How a plugin fits the engine
 

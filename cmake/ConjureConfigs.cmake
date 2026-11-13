@@ -53,11 +53,19 @@ function(conjure_derive_config_flags)
         endif()
     endforeach()
 
+    # Development does not link incrementally: MSVC's RelWithDebInfo flags carry /INCREMENTAL, whose function
+    # padding and jump thunks skew the benchmarks enforced in Development (tests/benchmarks/README.md). The rewrite
+    # also runs on a value already in the cache, so a tree configured before it loses /INCREMENTAL as well. Debug
+    # keeps incremental linking. Only MSVC-style linkers know the flag, so elsewhere the replacement finds nothing.
     foreach(kind IN ITEMS EXE SHARED MODULE STATIC)
-        if(NOT CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT)
-            set(CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT "${CMAKE_${kind}_LINKER_FLAGS_RELWITHDEBINFO}"
-                CACHE STRING "Flags used by the linker during Development builds." FORCE)
+        set(developmentLinkerFlags "${CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT}")
+        if(NOT developmentLinkerFlags)
+            set(developmentLinkerFlags "${CMAKE_${kind}_LINKER_FLAGS_RELWITHDEBINFO}")
         endif()
+        string(REGEX REPLACE "(^| )/INCREMENTAL( |$)" "\\1/INCREMENTAL:NO\\2" developmentLinkerFlags
+            "${developmentLinkerFlags}")
+        set(CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT "${developmentLinkerFlags}"
+            CACHE STRING "Flags used by the linker during Development builds." FORCE)
         if(NOT CMAKE_${kind}_LINKER_FLAGS_DISTRIBUTION)
             set(CMAKE_${kind}_LINKER_FLAGS_DISTRIBUTION "${CMAKE_${kind}_LINKER_FLAGS_RELEASE}"
                 CACHE STRING "Flags used by the linker during Distribution builds." FORCE)

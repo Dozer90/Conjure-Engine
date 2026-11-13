@@ -1,12 +1,17 @@
-# Unit, integration and benchmark tests. Every engine module has a matching directory here; a
-# directory is only built when its module target exists (the directory's own CMakeLists.txt
-# checks that), so disabling a subsystem also disables its tests. The root enters this directory for
-# CONJURE_BUILD_TESTS or CONJURE_BUILD_BENCHMARKS: the support library serves both, the test modules, the
-# style, documentation and tool entries and the build entries need the first, the benchmarks the second.
+# Unit, integration and benchmark tests. Every engine module has a matching directory here, and a listed
+# directory without its CMakeLists.txt stops the configure; a directory builds its tests only when its module
+# target exists (the directory's own CMakeLists.txt checks that), so disabling a subsystem also disables its
+# tests. The root enters this directory for CONJURE_BUILD_TESTS or CONJURE_BUILD_BENCHMARKS: the support library
+# serves both, the test modules, the style, documentation and tool entries and the build entries need the first,
+# the benchmarks the second.
 
 add_subdirectory(support)
 
-if(CONJURE_BUILD_BENCHMARKS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+if(CONJURE_BUILD_BENCHMARKS)
+    set(benchmarksList "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+    if(NOT EXISTS "${benchmarksList}")
+        message(FATAL_ERROR "tests: CONJURE_BUILD_BENCHMARKS is ON but ${benchmarksList} does not exist")
+    endif()
     add_subdirectory(benchmarks)
 endif()
 
@@ -34,14 +39,17 @@ set(CONJURE_TEST_MODULES
 
 foreach(module IN LISTS CONJURE_TEST_MODULES)
     set(testDir "${CMAKE_CURRENT_SOURCE_DIR}/${module}")
-    if(EXISTS "${testDir}/CMakeLists.txt")
-        add_subdirectory("${testDir}")
+    if(NOT EXISTS "${testDir}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "tests: CONJURE_TEST_MODULES lists '${module}' but ${testDir}/CMakeLists.txt does not exist")
     endif()
+    add_subdirectory("${testDir}")
 endforeach()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt")
-    add_subdirectory(integration)
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt")
+    message(FATAL_ERROR "tests: ${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt does not exist")
 endif()
+add_subdirectory(integration)
 
 # Style check (docs/design/08_testing.md 7.3 style-and-headers job): tools/check_style.py over every
 # C++ file of the repository plus the test-mirrors-header rule, registered as the CTest entry
@@ -157,4 +165,84 @@ set_tests_properties(build.managed_project_references PROPERTIES
     LABELS "build"
     TIMEOUT 60
     PASS_REGULAR_EXPRESSION "managed build outputs in the source tree:.*/managed_reference_probe/Lib/obj"
+)
+
+# Configure probes: a throwaway project (LANGUAGES NONE, so no compiler is involved), configured afresh on every run,
+# that includes one list file of the build with a probe directory as its source directory. The missing-directory
+# entries pass only when the configure stops with the FATAL_ERROR naming the list or option and the missing path: the
+# "missing" probe has no module, area, test or benchmarks list file, only the support/ that tests/CMakeLists.txt adds
+# first and the foundation/build_info.h.in that engine/src/core/CMakeLists.txt configures before its loop (without
+# them those two list files stop earlier on an unrelated error); the "complete" probe has every test module but no
+# integration/. Their patterns span lines and avoid spaces because CMake wraps the error text at spaces. The
+# link-flags entry includes cmake/ConjureConfigs.cmake and passes only when conjure_derive_config_flags() leaves
+# /INCREMENTAL:NO in the Development linker flags whether it derives them (EXE), finds the old /INCREMENTAL in the
+# cache (SHARED) or finds them right already (MODULE).
+set(configureProbeRoot "${CMAKE_CURRENT_BINARY_DIR}/configure_probe")
+set(configureProbeIncluder [=[
+cmake_minimum_required(VERSION 3.28)
+project(conjure_configure_probe NONE)
+include("${CONJURE_PROBE_LIST}")
+]=])
+file(WRITE "${configureProbeRoot}/missing/CMakeLists.txt" "${configureProbeIncluder}")
+file(WRITE "${configureProbeRoot}/missing/foundation/build_info.h.in" "")
+file(WRITE "${configureProbeRoot}/missing/support/CMakeLists.txt" "")
+file(WRITE "${configureProbeRoot}/complete/CMakeLists.txt" "${configureProbeIncluder}")
+foreach(stubDirectory IN LISTS CONJURE_TEST_MODULES ITEMS support)
+    file(WRITE "${configureProbeRoot}/complete/${stubDirectory}/CMakeLists.txt" "")
+endforeach()
+file(WRITE "${configureProbeRoot}/link_flags/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.28)
+include("${CONJURE_PROBE_LIST}")
+project(conjure_configure_probe NONE)
+conjure_derive_config_flags()
+foreach(kind IN ITEMS EXE SHARED MODULE)
+    if(NOT CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT STREQUAL "/debug /INCREMENTAL:NO")
+        message(FATAL_ERROR "${kind} Development linker flags: '${CMAKE_${kind}_LINKER_FLAGS_DEVELOPMENT}'")
+    endif()
+endforeach()
+message(STATUS "probe: Development links with /INCREMENTAL:NO")
+]=])
+
+function(conjure_add_configure_probe name probe listFile pattern)
+    add_test(NAME build.${name}
+        COMMAND "${CMAKE_COMMAND}" --fresh -S "${configureProbeRoot}/${probe}" -B "${configureProbeRoot}/build/${name}"
+            -G "${CMAKE_GENERATOR}" "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DCONJURE_PROBE_LIST=${listFile}" ${ARGN}
+    )
+    set_tests_properties(build.${name} PROPERTIES LABELS "build" TIMEOUT 60 PASS_REGULAR_EXPRESSION "${pattern}")
+endfunction()
+
+conjure_add_configure_probe(missing_engine_module_fails_configure missing
+    "${PROJECT_SOURCE_DIR}/engine/CMakeLists.txt"
+    "CONJURE_ENGINE_MODULES.*'core'.*/src/core/CMakeLists.txt"
+)
+conjure_add_configure_probe(missing_core_area_fails_configure missing
+    "${PROJECT_SOURCE_DIR}/engine/src/core/CMakeLists.txt"
+    "CONJURE_CORE_AREAS.*'foundation'.*/foundation/CMakeLists.txt"
+)
+conjure_add_configure_probe(missing_test_module_fails_configure missing
+    "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+    "CONJURE_TEST_MODULES.*'core'.*/core/CMakeLists.txt"
+    -DCONJURE_BUILD_TESTS=ON
+)
+conjure_add_configure_probe(missing_benchmarks_fail_configure missing
+    "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+    "CONJURE_BUILD_BENCHMARKS.*/benchmarks/CMakeLists.txt"
+    -DCONJURE_BUILD_BENCHMARKS=ON
+)
+conjure_add_configure_probe(missing_integration_fails_configure complete
+    "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+    "tests:.*/integration/CMakeLists.txt"
+    -DCONJURE_BUILD_TESTS=ON
+)
+conjure_add_configure_probe(missing_core_test_area_fails_configure missing
+    "${CMAKE_CURRENT_SOURCE_DIR}/core/CMakeLists.txt"
+    "CONJURE_CORE_TEST_AREAS.*'foundation'.*/foundation/CMakeLists.txt"
+)
+conjure_add_configure_probe(development_links_without_incremental link_flags
+    "${PROJECT_SOURCE_DIR}/cmake/ConjureConfigs.cmake"
+    "probe: Development links with /INCREMENTAL:NO"
+    "-DCMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO=/debug /INCREMENTAL"
+    "-DCMAKE_SHARED_LINKER_FLAGS_DEVELOPMENT=/debug /INCREMENTAL"
+    "-DCMAKE_MODULE_LINKER_FLAGS_DEVELOPMENT=/debug /INCREMENTAL:NO"
 )
