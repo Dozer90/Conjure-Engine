@@ -1,5 +1,6 @@
 using System.Numerics;
 using Conjure.Components;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -20,9 +21,10 @@ public readonly struct Rigidbody
     }
 
     /// <summary>
-    /// True when the entity carries a rigid body.
+    /// True when the entity carries a rigid body; false in a world without the physics components (a build
+    /// without physics), where Entity.HasComponent&lt;RigidBodyData&gt; throws.
     /// </summary>
-    public bool Exists => Entity.HasComponent<RigidBodyData>();
+    public bool Exists => ComponentType<RigidBodyData>.Id != 0 && Entity.HasComponent<RigidBodyData>();
 
     public unsafe Vector3 LinearVelocity
     {

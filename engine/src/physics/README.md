@@ -17,7 +17,7 @@ or cgltf symbol is reachable from a public header.
 | `physics_error.h` | `physics_error` (21 codes), `physics_error_name`, category `"physics"` |
 | `physics_layers.h` | `MAX_PHYSICS_LAYERS` (32), `physics_layer_mask` (`all`, `none`, `only`, `with`, `without`, `includes`), `physics_layer_table` (`from_json`, `to_json`, `add_layer`, `set_collides`, `collides`, `collision_mask`, `find`, `name`, `count`, `validate`) |
 | `physics_settings.h` | `physics_settings` (Jolt sizing, solver, sleeping, contact and command budgets, `layers`), `validate`, `from_json(physicsSection, layersSection)` |
-| `components.h` | `motion_type`, `rigid_body_flags`, `rigid_body`, `box_collider`, `sphere_collider`, `capsule_collider`, `convex_collider`, `mesh_collider`, `physics_material` (reflected, registered as `conjure.physics.<name>`) |
+| `components.h` | `motion_type`, `rigid_body_flags`, `rigid_body`, `box_collider`, `sphere_collider`, `capsule_collider`, `convex_collider`, `mesh_collider`, `physics_material` (reflected, registered as `conjure.physics.<struct name>`) |
 | `character_controller.h` | `ground_state`, `character_flags`, `character_controller` (68 bytes) |
 | `contact_events.h` | `contact_kind`, `to_string`, `contact_event` (48 bytes) |
 | `queries.h` | `query_filter`, `raycast_hit`, `shape_cast_hit`, `sphere_shape_desc`, `box_shape_desc`, `capsule_shape_desc`, `cast_shape_desc` |

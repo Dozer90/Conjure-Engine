@@ -22,9 +22,10 @@ public readonly struct AudioSource
     }
 
     /// <summary>
-    /// True when the entity carries an audio source.
+    /// True when the entity carries an audio source; false in a world without the audio components (a build
+    /// without the audio subsystem), where Entity.HasComponent&lt;AudioSourceData&gt; throws.
     /// </summary>
-    public bool Exists => Entity.HasComponent<AudioSourceData>();
+    public bool Exists => ComponentType<AudioSourceData>.Id != 0 && Entity.HasComponent<AudioSourceData>();
 
     public unsafe void Play()
     {

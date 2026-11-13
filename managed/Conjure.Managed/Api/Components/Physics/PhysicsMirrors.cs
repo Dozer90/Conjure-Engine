@@ -202,9 +202,9 @@ public struct MeshColliderData : IComponent
 }
 
 /// <summary>
-/// Mirror of physics.material (8 bytes).
+/// Mirror of physics.physics_material (8 bytes).
 /// </summary>
-[NativeComponent("conjure.physics.material")]
+[NativeComponent("conjure.physics.physics_material")]
 [StructLayout(LayoutKind.Sequential)]
 public struct PhysicsMaterialData : IComponent
 {

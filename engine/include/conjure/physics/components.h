@@ -11,7 +11,7 @@
 #include <type_traits>
 
 // The body components (docs/design/14_physics.md 2.3, P7). Plain reflected structs with camelCase fields
-// (R31) named "conjure.physics.<name>"; registered by physics::register_components (register.h). Jolt ids
+// (R31) named "conjure.physics.<struct name>"; registered by physics::register_components (register.h). Jolt ids
 // live only inside physics_world, so components copy into prefabs, archives and world_hash without Jolt
 // knowledge. Fields marked [runtime] are read-only in the inspector but serialised (a saved scene reopens
 // with its velocities); the C# mirrors of 15_bindings.md 2.6 restate these field lists byte for byte (R48).
@@ -127,7 +127,7 @@ namespace conjure::physics {
     };
 
     /// <summary>
-    /// Optional surface properties; combined as sqrt(f1 * f2) and max(r1, r2). "conjure.physics.material".
+    /// Optional surface properties; combined as sqrt(f1 * f2) and max(r1, r2). "conjure.physics.physics_material".
     /// </summary>
     struct physics_material {
         f32 friction = 0.5f;
@@ -201,7 +201,7 @@ CONJURE_REFLECT_STRUCT(conjure::physics::convex_collider, "conjure.physics.conve
 CONJURE_REFLECT_STRUCT(conjure::physics::mesh_collider, "conjure.physics.mesh_collider",
     CONJURE_FIELD(mesh),
     CONJURE_FIELD(isTrigger));
-CONJURE_REFLECT_STRUCT(conjure::physics::physics_material, "conjure.physics.material",
+CONJURE_REFLECT_STRUCT(conjure::physics::physics_material, "conjure.physics.physics_material",
     CONJURE_FIELD(friction, .min = 0.0),
     CONJURE_FIELD(restitution, .min = 0.0));
 
@@ -211,4 +211,4 @@ CONJURE_COMPONENT(conjure::physics::sphere_collider, "conjure.physics.sphere_col
 CONJURE_COMPONENT(conjure::physics::capsule_collider, "conjure.physics.capsule_collider");
 CONJURE_COMPONENT(conjure::physics::convex_collider, "conjure.physics.convex_collider");
 CONJURE_COMPONENT(conjure::physics::mesh_collider, "conjure.physics.mesh_collider");
-CONJURE_COMPONENT(conjure::physics::physics_material, "conjure.physics.material");
+CONJURE_COMPONENT(conjure::physics::physics_material, "conjure.physics.physics_material");

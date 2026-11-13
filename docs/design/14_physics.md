@@ -136,8 +136,10 @@ duplicate -> `DUPLICATE_LAYER`; unknown name in `ignore` -> `UNKNOWN_LAYER`. Lay
 
 ### 2.3 Components (`components.h`, `character_controller.h`)
 
-All components are registered by `physics::register_components` with `CONJURE_COMPONENT(type, "conjure.physics.<name>")`
-and described with `CONJURE_REFLECT_STRUCT` (`10_core.md` 2.11). Fields marked `[runtime]` carry
+All components are registered by `physics::register_components` with
+`CONJURE_COMPONENT(type, "conjure.physics.<struct name>")`, without exception (`physics_material` registers as
+`conjure.physics.physics_material`; its earlier key `conjure.physics.material` was renamed before any content used
+it, sweep F629) and described with `CONJURE_REFLECT_STRUCT` (`10_core.md` 2.11). Fields marked `[runtime]` carry
 `.readOnly = true` in their `field_attributes` and are serialised (so a saved scene reopens with the same velocities)
 but never authored; `[transient]` fields are `CONJURE_FIELD_HIDDEN`.
 
@@ -376,14 +378,19 @@ deferred add / remove of `scene::interpolated_transform` described in step 6 and
 - `REMOVED` of a collider: `mark_rebuild(SHAPE)`, or `destroy_body(row)` when no body-defining component remains
   (`world.mask_of(entity)` minus the removed id). `REMOVED` of `rigid_body`: colliders remain -> rebuild as implicit
   STATIC, else destroy. `REMOVED` of `character_controller`: destroy the character and its inner body. Entity
-  destruction fires `REMOVED` per column (`01_ecs.md` 3.1), so `observe_destroyed` is not needed.
+  destruction fires `REMOVED` per column (`01_ecs.md` 3.1), but `world.mask_of(entity)` still holds every column
+  while those observers run, so a body with more than one body-defining component would survive them;
+  `observe_destroyed` (`on_entity_destroyed`) therefore destroys the body and the character of a destroyed entity.
 
 `destroy_body(row)`: synthesise `EXIT`/`TRIGGER_EXIT` for every entry of `mActivePairs` involving `bodyId` into the
 current step's event list (they are reported by the next `physics.contact_events`, so scripts see the exit one step
-later, consistent with R6), erase those pairs, `BodyInterface::RemoveBody` + `DestroyBody` (characters: inner body
-through the character, then `character = nullptr`), free the row, erase `mRowOfEntity`; when the entity is still
-alive, `deferred.remove<scene::interpolated_transform>(entity)` so the render pose stops following a dead body
-(R47). Late `OnContactRemoved` callbacks for unknown pairs are ignored.
+later, consistent with R6; each names the body's entity), erase those pairs, `BodyInterface::RemoveBody` +
+`DestroyBody` (characters: inner body through the character, then `character = nullptr`), free the row, erase
+`mRowOfEntity`; when the entity is still alive, `deferred.remove<scene::interpolated_transform>(entity)` so the
+render pose stops following a dead body (R47). Late `OnContactRemoved` callbacks for unknown pairs are ignored.
+When the body goes because its entity was destroyed, that entity is no longer alive when the exit is reported, so
+consumers check `is_alive` before touching a participant (sweep F410). A body destroyed while its entity lives on
+(its body components removed, a character swap, a rebuild that replaces it) names that live entity.
 
 `flush_pending_creates()` (start of `push_transforms`, main thread, world unlocked or locked read-only):
 
@@ -919,7 +926,7 @@ paths are testable), `spawn_box(world, position, motion, halfExtents)`, `spawn_g
 | `test_physics_layers.cpp` | default table has `default` colliding with itself; `from_json` sample of 2.2; symmetric `set_collides`; 33 names -> `LAYER_LIMIT_REACHED`; duplicate -> `DUPLICATE_LAYER`; unknown in `ignore` -> `UNKNOWN_LAYER`; `collision_mask` bits; `to_json` round trip canonical-equal |
 | `test_components.cpp` | registration of all eight types succeeds and is idempotent; reflection fields/offsets match `offsetof`; `rigid_body` is 52 bytes and trivially copyable (R48); flags enum ops; `component_to_json/from_json` round trip including `asset_ref` uuid strings; `world_hash` changes when `mass` changes |
 | `test_character_controller.cpp` | capsule on a 30 degree slope with `velocity = (2, 0, 0)` for 120 steps: moves up, `ground == ON_GROUND`, `groundEntity` is the slope; 60 degree slope with `maxSlopeAngleDegrees = 45`: `ON_STEEP_GROUND` and no upward progress; walks into a 2 m wall: x stops within `padding + 1 cm` of the wall face; step onto a 0.3 m stair with `stepHeight 0.4` succeeds, 0.5 m stair blocks; `APPLY_GRAVITY` falls off a ledge and lands (`IN_AIR` then `ON_GROUND`); raycast hits the character's inner body; `character_move` on a non-character -> `NOT_A_CHARACTER` |
-| `test_contact_events.cpp` | box dropped on ground (`ALLOW_SLEEPING` off): exactly one `ENTER`, then one `STAY` per step, one `EXIT` after an impulse lifts it; events sorted by body-id pair with 50 boxes landing in one step (checked against a sorted copy and uniqueness per `(a, b, kind)`); trigger box overlapped by a falling sphere: one `TRIGGER_ENTER`, zero while inside, one `TRIGGER_EXIT`; destroying an entity in contact produces `EXIT` next step and never a dangling entity; `impulse > 0` on ENTER with estimation on and `== 0` with it off; `contact_events()` is empty after the next `push_transforms`; buffer overflow with `maxContactEventsPerStep = 4` drops and counts; sleeping stack reports EXIT once at sleep |
+| `test_contact_events.cpp` | box dropped on ground (`ALLOW_SLEEPING` off): exactly one `ENTER`, then one `STAY` per step, one `EXIT` after an impulse lifts it; events sorted by body-id pair with 50 boxes landing in one step (checked against a sorted copy and uniqueness per `(a, b, kind)`); trigger box overlapped by a falling sphere: one `TRIGGER_ENTER`, zero while inside, one `TRIGGER_EXIT`; destroying an entity in contact produces `EXIT` next step naming the destroyed entity (no longer alive; consumers check `is_alive`, sweep F410), and no later event references it; `impulse > 0` on ENTER with estimation on and `== 0` with it off; `contact_events()` is empty after the next `push_transforms`; buffer overflow with `maxContactEventsPerStep = 4` drops and counts; sleeping stack reports EXIT once at sleep |
 | `test_queries.cpp` | raycast down onto ground hits the ground entity at `distance == 10 +- 1e-3` with normal `(0, 1, 0)`; layer mask excluding the ground returns `nullopt`; `ignore` skips the caster; `raycast_all` through three stacked plates returns three hits sorted by distance into a span of 8 and truncates into a span of 2; `overlap_sphere` finds exactly the bodies inside; `overlap_box` rotated 45 degrees; `shape_cast` sphere stops at the wall with `fraction` within 1e-3 of analytic; triggers excluded unless `includeTriggers`; queries during a step assert (`expect_assert`) |
 | `test_collision_mesh_asset.cpp` | `from_geometry` rejects out-of-range indices and zero triangles (`GEOMETRY_INVALID`); `ramp.glb` imports to the expected vertex/index counts with node transforms baked, byte-identical across two imports; `hull.obj` convex hull wraps all points; a sphere dropped on the ramp mesh collider slides and lands at the analytic x; convex collider stacks on a box |
 | `test_physics_debug_draw.cpp` | counting sink receives > 0 lines/triangles for `SHAPES | BOUNDING_BOXES` with two bodies and 0 with `NONE`; Distribution-style build (`JPH_DEBUG_RENDERER` undefined) compiles the call to a no-op (guarded `#if`) |

@@ -46,6 +46,7 @@ namespace {
     constexpr std::string_view UNDESCRIBABLE_MIRROR_USER = "Conjure.TestScripts.UndescribableMirrorUser";
     constexpr std::string_view SQUAD_USER = "Conjure.TestScripts.SquadUser";
     constexpr std::string_view DYNAMIC_SCHEMA_PROBE = "Conjure.TestScripts.DynamicSchemaProbe";
+    constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
 }
 
 TEST_SUITE("scripting/dod_query") {
@@ -725,5 +726,26 @@ TEST_SUITE("scripting/dod_query") {
         CHECK(scope.chunk_count == 0);
         CHECK(fixture.runtime.open_query_scope_count() == 0);
         fixture.runtime.end_query_scope(12345);                       // unknown scopes are ignored
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F676 a facade's Exists is false when its component type is not registered "
+      "[dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        // The fixture's registry never registers the audio or physics components, as in a build without those
+        // subsystems: ComponentType<T>.Id resolves to 0 (one WARN per name), so Exists answers false instead of
+        // throwing, while Entity.HasComponent<T> keeps throwing so a drifted mirror stays loud.
+        dotnet_fixture fixture = {};
+        const script_entry_id probe = fixture.add_script(fixture.create_entity(), FACADE_EXISTS_PROBE);
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(probe, "AudioSourceExists") == 0);
+        CHECK(fixture.field_i64(probe, "RigidbodyExists") == 0);
+        CHECK(fixture.field_i64(probe, "CharacterControllerExists") == 0);
+        CHECK(fixture.field_string(probe, "HasComponentThrows") == "InvalidOperationException");
+        CHECK(logs.contains(core::log_level::WARN, "component_lookup_type: no component named"));
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

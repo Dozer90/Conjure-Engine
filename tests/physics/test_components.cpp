@@ -50,17 +50,36 @@ TEST_SUITE("physics/components") {
         CHECK(registry.id_of<physics::character_controller>().is_valid());
         CHECK(registry.find(core::string_id("conjure.physics.rigid_body")) == registry.id_of<physics::rigid_body>());
         const ecs::component_id materialId = registry.id_of<physics::physics_material>();
-        CHECK(registry.find(core::string_id("conjure.physics.material")) == materialId);
+        CHECK(registry.find(core::string_id("conjure.physics.physics_material")) == materialId);
         const ecs::component_info &info = registry.info(registry.id_of<physics::convex_collider>());
         REQUIRE(info.assetRefFieldOffsets.size() == 1);
         CHECK(info.assetRefFieldOffsets[0] == offsetof(physics::convex_collider, mesh));
         CHECK(registry.info(registry.id_of<physics::mesh_collider>()).assetRefFieldOffsets.size() == 1);
     }
 
+    TEST_CASE("regression - sweep-2026-11-12 F629: physics_material registers under its struct name") {
+        ecs::component_registry registry = {};
+        CONJURE_REQUIRE_OK(physics::register_components(registry));
+        const ecs::component_id materialId = registry.id_of<physics::physics_material>();
+        REQUIRE(materialId.is_valid());
+        CHECK(registry.info(materialId).name == core::string_id("conjure.physics.physics_material"));
+        CHECK_FALSE(registry.find(core::string_id("conjure.physics.material")).is_valid());
+        const core::reflect::type_info *reflected = core::reflect::type_info_of<physics::physics_material>();
+        REQUIRE(reflected != nullptr);
+        CHECK(reflected->name == "conjure.physics.physics_material");
+        CHECK(
+          registry.info(registry.id_of<physics::box_collider>()).name == core::string_id("conjure.physics.box_collider")
+        );
+        CHECK(
+          registry.info(registry.id_of<physics::character_controller>()).name ==
+          core::string_id("conjure.physics.character_controller")
+        );
+    }
+
     TEST_CASE("components - registration fails cleanly on a conflicting registry") {
         ecs::component_registry registry = {};
         ecs::dynamic_component_desc impostor = {};
-        impostor.name = core::string_id("conjure.physics.material");
+        impostor.name = core::string_id("conjure.physics.physics_material");
         impostor.size = 16;
         impostor.alignment = 8;
         const std::array<ecs::dynamic_field_desc, 1> fields = {

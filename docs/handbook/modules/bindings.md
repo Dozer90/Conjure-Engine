@@ -133,7 +133,11 @@ probes the `[dotnet]` tests drive, among them `BindingRecordSizeProbe` (every AB
 
 Main thread only: every entry asserts `core::jobs::is_main_thread()` and fails softly with `WRONG_THREAD`
 otherwise (logged at ERROR, without touching the last-error buffer). Managed code runs inside the six `EXCLUSIVE`
-scripting systems (R27), so a correct host never hits it. The counters are plain `u32`. The table is owned by
+scripting systems (R27), so a correct host never hits it. The thread is the only check: no entry looks at
+`script_runtime::current_phase()`, because the `OnCreate` / `OnDestroy` that the flushes of `frame_begin`,
+`frame_end` and `set_mode` run have no phase and must reach every entry; `NOT_IN_PHASE` stays in
+`bindings_error.inl` as a reserved code (removing it would renumber the C# statuses) and is never returned
+(`15_bindings.md` 3.2, sweep F166). The counters are plain `u32`. The table is owned by
 `script_runtime`; the bindings only write its slots. `binding_context` pointers are non-owning views valid from
 `initialise()` to `shutdown()`; `script_residency` owns the asset handles scripts request through `asset_load`
 (`asset_release` drops one, `on_before_unload` drops all).
@@ -166,7 +170,10 @@ python tools/build.py --build-dir build/mod_bindings --test -R bindings
 From `09_cross_area_resolutions.md` 4 item 15: `renderer::debug_draw` is not exposed through
 `engine_context`, so `Diagnostics.Draw.*` is a silent success in applications; a command-buffer prefab adoption
 path with expected-repair accounting would remove the bindings-owned fix-up queue; `script_component` has no
-reflection description, so the `ScriptComponentHandle` mirror cannot resolve.
+reflection description, so the `ScriptComponentHandle` mirror cannot resolve. `entity_duplicate` inside a query
+scope answers `STRUCTURE_LOCKED` because `entity_archive::capture` refuses a locked world; a deferred form
+(reserve the copy at once, copy the subtree onto it when the scope ends) is planned with the prefab guid fix
+(`15_bindings.md` 11, sweep F165).
 
 ## Related
 

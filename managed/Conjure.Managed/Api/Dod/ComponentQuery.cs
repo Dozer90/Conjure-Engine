@@ -7,7 +7,10 @@ namespace Conjure.Dod;
 /// A structural-locked scope over every chunk holding the requested components (docs/design/03_scripting.md
 /// 3.9). Use with 'using': the world stays locked until Dispose; structural requests made inside are
 /// deferred to the end of the scope, and a scope still open at the end of the phase is force-closed
-/// with a warning.
+/// with a warning. The query is a mutable ref struct: a copy keeps the scope's chunk pointers after the
+/// original's Dispose, and the spans of its chunks point into native memory. Neither a copy nor a span may be
+/// used after Dispose (undefined; outside Distribution the native side overwrites the chunk views at the end of
+/// the scope, which catches some of these uses, never all).
 /// </summary>
 public unsafe ref struct ComponentQuery
 {

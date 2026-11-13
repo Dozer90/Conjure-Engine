@@ -1,4 +1,5 @@
 using Conjure;
+using Conjure.Components;
 
 namespace Conjure.TestScripts;
 
@@ -145,4 +146,26 @@ public sealed class NonFiniteDefaults : ScriptBehaviour
 
     [Range(0.0, double.PositiveInfinity)]
     public float Reach = 1.0f;
+}
+
+/// <summary>
+/// What the component facades' Exists answers on the probe's entity (sweep F676): in a world without their
+/// components (a build without the audio or physics subsystem) it is false while Entity.HasComponent keeps
+/// throwing; where they are registered it follows the entity's components. Records -1 until OnUpdate ran, then
+/// 0 or 1, and the exception type HasComponent threw ("none" when it answered).
+/// </summary>
+public sealed class FacadeExistsProbe : ScriptBehaviour
+{
+    public int AudioSourceExists = -1;
+    public int RigidbodyExists = -1;
+    public int CharacterControllerExists = -1;
+    public string HasComponentThrows = "";
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        AudioSourceExists = new AudioSource(Entity).Exists ? 1 : 0;
+        RigidbodyExists = new Rigidbody(Entity).Exists ? 1 : 0;
+        CharacterControllerExists = new CharacterController(Entity).Exists ? 1 : 0;
+        HasComponentThrows = ProbeSupport.Catch(() => Entity.HasComponent<AudioSourceData>());
+    }
 }

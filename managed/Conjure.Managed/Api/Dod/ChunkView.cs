@@ -14,8 +14,12 @@ internal struct ColumnIds
 }
 
 /// <summary>
-/// One chunk of a ComponentQuery: spans over the native columns, valid only inside the query scope
-/// (a ref struct cannot be stored, boxed or captured, which enforces that at compile time; D12).
+/// One chunk of a ComponentQuery: spans over the native columns, valid only until the query's Dispose. Being a
+/// ref struct, a ChunkView and its spans cannot be stored in a field, boxed or captured, so the compiler keeps
+/// them on the stack; it does not keep them inside the scope. A span taken before Dispose, or a ChunkView read
+/// from a copy of the query, must not be used after Dispose: doing so is undefined. Outside Distribution the
+/// native side overwrites the chunk views at the end of the scope, which catches some of these uses, never all
+/// (docs/design/03_scripting.md 3.9, D12).
 /// </summary>
 public readonly unsafe ref struct ChunkView
 {

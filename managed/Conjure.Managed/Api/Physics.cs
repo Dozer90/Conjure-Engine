@@ -9,6 +9,8 @@ namespace Conjure;
 /// 2.5). NotSupportedException when the build or the configuration has no physics. Queries return what
 /// they hit and never throw for "nothing hit"; a short span truncates and the full count comes back. A query
 /// without a mask tests every layer; an explicit mask is used as given, so LayerMask.None hits nothing.
+/// Every query (rays, shape casts, overlaps) skips trigger volumes and includes static bodies; the native
+/// query flags are not exposed to C#.
 /// </summary>
 public static unsafe class Physics
 {

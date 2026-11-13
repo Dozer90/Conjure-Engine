@@ -11,7 +11,10 @@
 // Contact events (docs/design/14_physics.md 2.4, 3.6, R6). physics_world::contact_events() returns the
 // events of the last step sorted by ascending (bodyIdA, bodyIdB), then kind: per pair per step at most one
 // ENTER / STAY (or TRIGGER_ENTER) and at most one EXIT (or TRIGGER_EXIT), the exit after the enter.
-// Consumers reporting to b flip the normal.
+// Consumers reporting to b flip the normal. Destroying a body in contact synthesises its EXIT / TRIGGER_EXIT,
+// reported by the next step and naming the body's entity. When the body went because that entity was
+// destroyed, the entity is no longer alive: check world::is_alive before touching a participant. The entity's
+// generation keeps the dead id from matching a reused slot, so no later event references it.
 
 namespace conjure::physics {
 

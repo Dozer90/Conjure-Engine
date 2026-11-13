@@ -162,8 +162,10 @@ int32_t conjure::bindings::entries::scene_active_path(char *utf8, int32_t capaci
     if (loaded.empty()) {
         return 0;
     }
-    // The active scene is the most recently loaded one (a REPLACE load retires everything before it).
-    return marshal::write_utf8(path_of(loaded.back()), utf8, capacity);
+    // The active scene is the first loaded one, Unity's meaning: a REPLACE load unloads everything before it, so
+    // this is the scene of the last non-additive load (or the oldest when every load was additive). Additive loads
+    // never change it; when it is unloaded the oldest remaining scene takes over.
+    return marshal::write_utf8(path_of(loaded.front()), utf8, capacity);
 }
 
 int32_t conjure::bindings::entries::scene_loaded_count(void) {

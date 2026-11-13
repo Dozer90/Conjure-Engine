@@ -473,7 +473,8 @@ namespace conjure::scripting {
             }
 
             /// <summary>
-            /// Phase being run, or COUNT outside a script phase (bindings report NOT_IN_PHASE then; R54).
+            /// Phase being run, or COUNT outside a script phase (query_begin is refused with NOT_IN_PHASE then; the
+            /// bindings entries check the thread only, 15_bindings.md 3.2; R54).
             /// </summary>
             [[nodiscard]] script_phase current_phase() const noexcept {
                 return mCurrentPhase;

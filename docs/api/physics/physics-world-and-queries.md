@@ -99,6 +99,12 @@ pair, so the order is the same whatever the worker count: `a` and `b` (the entit
 synthesises its exits. The engine feeds this span to scripts one fixed step later (`OnCollisionEnter` and
 friends).
 
+> [!WARNING]
+> An `EXIT` or `TRIGGER_EXIT` synthesised because an entity was destroyed still names that entity, which is no
+> longer alive: check `world::is_alive` before touching `a` or `b`. The id keeps its generation, so it never
+> matches an entity that later reuses the slot, and no later event references it. Consumers keyed on entities (a
+> trigger zone counting its occupants) use it to clean up.
+
 ## Queries
 
 A `query_filter` has `layers` (a `physics_layer_mask`, default all), `includeTriggers` (off), `includeStatic` (on)

@@ -36,6 +36,10 @@ script goes away. A script created during `OnUpdate` therefore skips that frame'
 runs at the next fixed step or update, its first `OnLateUpdate` after that. Collision callbacks
 (`OnCollisionEnter(in Collision)`, `OnCollisionExit(in Collision)`, `OnTriggerEnter(Entity other)`,
 `OnTriggerExit(Entity other)`) deliver the contacts of the previous fixed step, one step after they happened.
+An exit caused by destroying the other entity still names it, although it is no longer alive (and, one step
+later, any `other` may have been destroyed since): check `other.IsAlive` (`collision.Other.IsAlive`) before
+touching it. The handle never matches an entity created later, so a script that tracks occupants by entity can
+use it to remove the right one.
 `Entity`, `Transform`, `GetComponent<T>()`, `HasComponent<T>()` and `Destroy()` are available on the base class.
 
 Public fields and `[SerializeField]` private fields are saved with the scene, shown in the inspector
@@ -43,6 +47,10 @@ Public fields and `[SerializeField]` private fields are saved with the scene, sh
 field is stored as a 32-bit integer, so an enum backed by `long` or `ulong` is not serialised (an INFO log names
 the field). JSON has no NaN or infinity: a NaN default is stored as 0 and an infinite one as the largest finite
 value of its type (an INFO log names the field), and a `[Range]` bound that is not finite leaves that side open.
+Serialised `string`, `List<T>` and array fields are never null once the script is created or reloaded: null is
+saved as `""` or as an empty collection, so it comes back that way after a hot reload, a scene load or entering
+play mode (the Unity rule). Initialise collections in the field initialiser and test `Count` or `Length`, not
+null.
 
 ```csharp
 public sealed class Spinner : ScriptBehaviour
@@ -110,11 +118,13 @@ named like mirror padding (`Pad1`): only a `[NativeComponent]` mirror treats `Pa
 `Raycast(origin, direction, maxDistance, out RaycastHit, LayerMask)`, `RaycastAll`, the shape casts,
 `OverlapSphere`, `OverlapBox`, `Gravity` (get and set), `Layer(name)`, `LayerIndex`, `LayerName`, `LayersCollide`.
 A query without a mask tests every layer; a mask you pass is used as given, so `LayerMask.None` (or a computed
-empty mask) hits nothing. `maxDistance` must be finite and non-negative (`ArgumentException` otherwise); there is no
-infinite ray, pass a world-sized distance. A layer index outside the project's layer table throws
-`KeyNotFoundException` from `LayerName` and `LayersCollide` alike. Setting `LinearVelocity` or `AngularVelocity`, or
-calling `CharacterController.Move`, changes the value the matching getter reads only when the physics world accepted
-the request: a refused one (a non-finite vector, a full command queue) throws and leaves the old value in place.
+empty mask) hits nothing. Every query, ray, cast or overlap, skips trigger volumes and includes static bodies;
+C# cannot change either (the native `query_filter` flags are not exposed yet). `maxDistance` must be finite and
+non-negative (`ArgumentException` otherwise); there is no infinite ray, pass a world-sized distance.
+A layer index outside the project's layer table throws `KeyNotFoundException` from `LayerName` and `LayersCollide`
+alike. Setting `LinearVelocity` or `AngularVelocity`, or calling `CharacterController.Move`, changes the value the
+matching getter reads only when the physics world accepted the request: a refused one (a non-finite vector, a full
+command queue) throws and leaves the old value in place.
 
 `AudioSource` plays the clip of an `audio_source` component: `Play`, `Stop`, `Pause`, `Resume`, `IsPlaying`,
 `Volume`, `Pitch`, `Loop`, `Clip`. The static `Audio` class offers `PlayOneShot(clip, position, volume, group)`,
@@ -122,6 +132,11 @@ the request: a refused one (a non-finite vector, a full command queue) throws an
 `engine.audio_sync` system in the same frame; `IsPlaying` is one frame old. Setting `Volume`, `Pitch` or `Loop`
 costs one `component_get` and one `component_set` (no asset bind once the clip is bound); to edit many sources,
 write the spans of a `ComponentQuery` over `AudioSourceData`.
+
+`Exists` on `AudioSource`, `Rigidbody` and `CharacterController` is false whenever the component type does not
+resolve: in a build or world without the subsystem's components, and also for a mirror that drifted from its
+native layout. `Entity.HasComponent<T>()` and `Data` still throw `InvalidOperationException` in both cases, and
+drift also logs a native ERROR, so drift stays loud.
 
 `Input` reads the frame's snapshot: `IsKeyDown` (held), `IsKeyPressed` (this frame), `IsKeyReleased`,
 `MousePosition`, `MouseDelta`, `ScrollDelta`, `IsMouseButtonDown`, the gamepad buttons and axes; the bindings
@@ -143,6 +158,10 @@ for gameplay that must run in a shipped build.
 parent)`, `Prefab.SourceOf(entity)`, `IsInstanceRoot`. The static `Scene` class loads and unloads scene assets by
 path or reference (`Load(path, additive)`, `Unload`, `IsLoaded`, `IsLoadPending`, `ActivePath`, `LoadedCount`,
 `LoadedPath(index)`, `EntityCount`, `StructureVersion`, `GetRoots`); loads complete at the next `FRAME_BEGIN`.
+`ActivePath` follows Unity's meaning: the first loaded scene, which is the scene of the last non-additive load
+(a non-additive load unloads everything before it) or the oldest one when every load was additive. Additive loads
+never change it, and when it is unloaded the oldest remaining scene takes over. `EntityCount` counts the whole
+world all loaded scenes share.
 
 ## Diagnostics and modules
 
@@ -167,10 +186,13 @@ IsLoaded }`; it is read-only, loading is the editor's and the project's business
 `chunk.Entities`. Writes through the spans are writes into the engine's memory, no copies. `Get<T>(column)`
 throws `InvalidOperationException` when `T` is not the component requested at that position of `Begin`, so a wrong
 type or index never reinterprets another component's memory. The scope ends with `Dispose()` (a `using` block),
-which also flushes every structural request made meanwhile. `Begin` is available inside `OnFixedUpdate`,
-`OnUpdate`, `OnLateUpdate`, the collision callbacks and the `OnCreate` / `OnDestroy` the end of those phases runs;
-elsewhere (an `OnCreate` at scene start, frame end or a mode change) it throws `InvalidOperationException` naming
-`NOT_IN_PHASE`.
+which also flushes every structural request made meanwhile. The compiler keeps the query, its chunks and their
+spans on the stack (no class field, box or capture), not inside the scope: a span taken before `Dispose()` or a
+copy of the query must not be used after it. Doing so is undefined; outside Distribution the engine overwrites the
+chunk views when the scope ends, which catches some of these mistakes, never all. `Begin` is available inside
+`OnFixedUpdate`, `OnUpdate`, `OnLateUpdate`, the collision callbacks and the `OnCreate` / `OnDestroy` the end of
+those phases runs; elsewhere (an `OnCreate` at scene start, frame end or a mode change) it throws
+`InvalidOperationException` naming `NOT_IN_PHASE`.
 
 ```csharp
 using (ComponentQuery query = ComponentQuery.Begin<LocalTransform, RigidBodyData>())

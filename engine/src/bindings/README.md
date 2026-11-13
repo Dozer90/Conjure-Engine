@@ -146,7 +146,10 @@ swap storage, so a steady stream of scopes stops allocating once both have grown
 Main thread only: every entry asserts `core::jobs::is_main_thread()` and fails softly with `WRONG_THREAD`
 otherwise (logged at ERROR; the wrong-thread path never touches the last-error buffer or the per-frame log
 bits, which only the main thread owns); the managed SDK throws before reaching native in the normal case.
-The counters are plain `u32` for the same reason. The table is owned by `script_runtime`; the bindings only write its slots. The
+The counters are plain `u32` for the same reason. The thread is the only check: the `OnCreate` / `OnDestroy` run
+by the flushes of `frame_begin`, `frame_end` and `set_mode` have no script phase and must reach every entry, so no
+entry returns `NOT_IN_PHASE`, which stays a reserved code of `bindings_error.inl` (`15_bindings.md` 3.2, sweep
+F166). The table is owned by `script_runtime`; the bindings only write its slots. The
 `binding_context` pointers are non-owning views of the engine services, valid from
 `application::initialise()` to `shutdown()`. `script_residency` owns the asset handles scripts request
 through `asset_load`; `asset_release` drops one, `scene_manager::on_before_unload` drops all.

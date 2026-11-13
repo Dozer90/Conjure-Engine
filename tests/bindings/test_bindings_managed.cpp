@@ -62,6 +62,7 @@ namespace {
     constexpr std::string_view ENGINE_PHASE_PROBE = "Conjure.TestScripts.BindingEnginePhaseProbe";
     constexpr std::string_view ASSET_MISMATCH_PROBE = "Conjure.TestScripts.BindingAssetMismatchProbe";
     constexpr std::string_view PUBLIC_TYPES_PROBE = "Conjure.TestScripts.PublicTypesProbe";
+    constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
     constexpr std::string_view CLIP_PATH = "assets://audio/tone.wav";
     constexpr std::string_view OTHER_PREFAB_PATH = "assets://prefabs/other.prefab";
 
@@ -563,6 +564,28 @@ TEST_SUITE("bindings/bindings_managed") {
         const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), COLOR_PROBE);
         CHECK(fixture.field_i64(probe, "EqualWhite") == 1);
         CHECK(fixture.field_i64(probe, "DifferentBlack") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F676: with the component registered, Exists answers whether the entity has it "
+      "[dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        // The application registers the audio (and, when compiled, physics) components, so Exists falls through to
+        // the entity's own components and HasComponent<AudioSourceData> answers instead of throwing.
+        const ecs::entity speaker = fixture.create("speaker");
+        audio::audio_source source = {};
+        source.playOnStart = false;
+        CONJURE_REQUIRE_OK(fixture.app->context().world->add<audio::audio_source>(speaker, source));
+        const scripting::script_entry_id probe = fixture.attach(speaker, FACADE_EXISTS_PROBE);
+        CHECK(fixture.field_i64(probe, "AudioSourceExists") == 1);
+        CHECK(fixture.field_i64(probe, "RigidbodyExists") == 0);
+        CHECK(fixture.field_i64(probe, "CharacterControllerExists") == 0);
+        CHECK(fixture.field_string(probe, "HasComponentThrows") == "none");
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 

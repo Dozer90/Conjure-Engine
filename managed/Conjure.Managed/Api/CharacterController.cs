@@ -1,5 +1,6 @@
 using System.Numerics;
 using Conjure.Components;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -19,9 +20,11 @@ public readonly struct CharacterController
     }
 
     /// <summary>
-    /// True when the entity carries a character controller.
+    /// True when the entity carries a character controller; false in a world without the physics components (a
+    /// build without physics), where Entity.HasComponent&lt;CharacterControllerData&gt; throws.
     /// </summary>
-    public bool Exists => Entity.HasComponent<CharacterControllerData>();
+    public bool Exists =>
+        ComponentType<CharacterControllerData>.Id != 0 && Entity.HasComponent<CharacterControllerData>();
 
     /// <summary>
     /// Sets the velocity the next fixed step tries to achieve.

@@ -47,7 +47,7 @@ Third-party facts verified against the .NET hosting docs (`native-hosting.md`, `
 | D9 | **`[UnmanagedCallersOnly]` entry points exist only in `Conjure.Managed`** (default ALC). Native never stores a pointer, `GCHandle` or function pointer that targets the game assembly; it refers to instances only by integer slot. | Confines every native-visible pointer to the non-collectible SDK so unloadability is enforceable by review. |
 | D10 | **All managed execution is on the main thread** inside exclusive scheduler systems. Wrong-thread calls are rejected on both sides (`WRONG_THREAD` natively, `InvalidOperationException` in C#). No `Parallel.For` in the SDK. | User scripts are not thread-safe; the 10k budget is met by batching and the DOD span path, not by threads. |
 | D11 | **Exceptions never cross the boundary.** Every `[UnmanagedCallersOnly]` entry is wrapped; the exception is logged through `native.log_write`; three *consecutive* faults of one callback on one instance disable that callback (fault badge in the inspector) until reload. | Engine code never throws or catches; a 60 Hz exception storm is useless to the user. |
-| D12 | **DOD escape hatch**: `ref struct ComponentQuery` / `ChunkView` exposing `Span<T>` over native chunk columns inside a structural-locked scope; mirror structs verified by size + layout hash at first use. | `ref struct` makes "spans must not escape the scope" a compile-time rule; the hash turns layout drift into a logged error, not memory corruption. |
+| D12 | **DOD escape hatch**: `ref struct ComponentQuery` / `ChunkView` exposing `Span<T>` over native chunk columns inside a structural-locked scope; mirror structs verified by size + layout hash at first use. | `ref struct` keeps spans on the stack at compile time (no class field, box or capture), not inside the scope: a span or a query copy used after `Dispose` is undefined, and the non-Distribution overwrite of the chunk views at `query_end` catches only some cases (sweep F674); the hash turns layout drift into a logged error, not memory corruption. |
 | D13 | **`null_script_host` is a C++ fake of the managed side** (implements `conjure_managed_api` in C++, records calls, echoes field blobs, registers fixture classes). | Runtime, store, codecs, reload sequencing and every other module's tests run without .NET; CLR tests carry the CTest label `dotnet`. |
 | D14 | **Export** supports framework-dependent (default) and self-contained (`dotnet publish --self-contained` of `Conjure.Bootstrap`). The exported runtime detects the mode from `runtimeconfig.json` (`includedFrameworks` present => self-contained). | Players should not have to install .NET; both layouts converge on the same handshake. Validated by a CI test per platform. |
 | D15 | ABI uses only blittable, fixed-width types: `uint64_t` entity ids, `int32_t` slots, UTF-8 `(const char *, int32_t)` pairs, `conjure_vec2/3/4`, `conjure_quat_xyzw` (explicit XYZW, converted from `math::quat` by name), `conjure_mat4` (column-major). C# mirrors are `System.Numerics` types. | No marshalling, no hidden allocations, no dependence on glm's quaternion storage order. |
@@ -427,8 +427,11 @@ command `script.reload`, or the controller's own watch on the output `.dll`. Req
 6. `on_reloaded` delegate fires (editor refreshes inspectors). Target for 10k instances: < 250 ms.
 
 Guarantees: fields passing 3.7 survive; everything else (private non-serialised state, statics, event
-subscriptions) is reset. Entities and native components are untouched. Reload in edit mode is steps 1, 4,
-5 (registry only) since no instances exist.
+subscriptions) is reset. Entities and native components are untouched. Neither the field blob nor the scene JSON
+can represent null, so serialised `string`, `List<E>` and `E[]` fields are never null after creation or reload: a
+null string is saved as `""` and a null collection as an empty one, and the instance gets `""` or a new empty
+collection back (the Unity rule; sweep F436). Scripts initialise collections in the field initialiser and test
+`Count` / `Length`, not null. Reload in edit mode is steps 1, 4, 5 (registry only) since no instances exist.
 
 ### 3.9 DOD escape hatch (`Conjure.Dod`)
 
@@ -441,8 +444,10 @@ while (query.NextChunk(out ChunkView chunk)) {
 }
 ```
 
-`ComponentQuery` and `ChunkView` are `ref struct`s: spans cannot be boxed, captured or stored, so they
-cannot outlive the scope (rule enforced by the compiler). `ComponentType<T>.Id` is resolved once per class
+`ComponentQuery` and `ChunkView` are `ref struct`s: they and their spans cannot be boxed, captured or stored in a
+field, so the compiler keeps them on the stack, not inside the scope. A span taken before `Dispose`, or a copy
+of the (mutable) `ComponentQuery` made before the original's `Dispose`, still points at the scope's memory
+afterwards; using either after `Dispose` is undefined (sweep F674). `ComponentType<T>.Id` is resolved once per class
 load through `component_lookup_type(nameHash, Unsafe.SizeOf<T>(), layoutHash)` where both sides compute
 `core::reflect::type_info::layout_hash()` (`10_core.md` 2.11: FNV-1a 64 over `(name, kind, offset, size)` of every
 field in declaration order; C# derives names by lower-casing the first letter and kinds from the field type,
@@ -453,8 +458,9 @@ holds an `ecs::iteration_scope` from `world::lock_iteration()` (the ECS refuses 
 while the scope is open every structural request arriving through the bindings is routed into the script
 runtime's `command_buffer` and flushed at `query_end`, R5), fills a native-owned `conjure_chunk_view[]` valid
 until `query_end`, and conservatively bumps change-detection versions of every requested type. A scope still open
-at phase end is force-closed with a WARN naming the class. Debug builds poison the chunk view array on
-`query_end`.
+at phase end is force-closed with a WARN naming the class. Outside Distribution `query_end` overwrites the chunk
+view array (0xDD), which catches some uses after `Dispose` (a stale copy's next chunk) but not a span already
+handed out, whose column memory is untouched.
 
 Mirrors of native components are `[NativeComponent("conjure.scene.local_transform")]` (the registered component
 name, R61) blittable structs
@@ -646,7 +652,7 @@ namespace conjure::scripting {
             [[nodiscard]] script_host_status status() const noexcept;
             [[nodiscard]] script_mode mode() const noexcept;
 
-            /// <summary>Phase being run, or COUNT outside a script phase (bindings report NOT_IN_PHASE then; R54).</summary>
+            /// <summary>Phase being run, or COUNT outside a script phase (query_begin is refused with NOT_IN_PHASE then; the bindings entries check the thread only, 15 3.2; R54).</summary>
             [[nodiscard]] script_phase current_phase() const noexcept;
             /// <summary>The buffer bindings record structural requests into while world::is_locked(); flushed at query_end and at the phase-end force-close (R5, R54).</summary>
             [[nodiscard]] ecs::command_buffer &deferred_commands() noexcept;

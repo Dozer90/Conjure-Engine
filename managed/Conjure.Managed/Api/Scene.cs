@@ -83,7 +83,10 @@ public static unsafe class Scene
     }
 
     /// <summary>
-    /// The asset path of the active scene ("" for an authored scene without an asset).
+    /// The path of the active scene, Unity's meaning: the first loaded scene. That is the scene of the last
+    /// non-additive load (it unloads everything before it), or the oldest one when every load was additive.
+    /// Additive loads never change it; when it is unloaded the oldest remaining scene takes over. "" when no
+    /// scene is loaded; the uuid text for a scene no asset database names.
     /// </summary>
     public static string ActivePath
     {
@@ -131,7 +134,7 @@ public static unsafe class Scene
     }
 
     /// <summary>
-    /// The number of live entities in the active scene's world.
+    /// The number of live entities in the world every loaded scene shares (not only the active scene's).
     /// </summary>
     public static int EntityCount
     {

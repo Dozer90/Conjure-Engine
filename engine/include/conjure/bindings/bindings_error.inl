@@ -17,7 +17,7 @@
     CONJURE_BINDINGS_STATUS(NOT_FOUND)           /* path, name, layer, module, guid */                                 \
     CONJURE_BINDINGS_STATUS(BUFFER_TOO_SMALL)    /* record-array entries that cannot report a count */                 \
     CONJURE_BINDINGS_STATUS(WRONG_THREAD)                                                                              \
-    CONJURE_BINDINGS_STATUS(NOT_IN_PHASE)        /* called outside a script phase (e.g. from a Task) */                \
+    CONJURE_BINDINGS_STATUS(NOT_IN_PHASE)        /* reserved, never returned: bindings check the thread only */        \
     CONJURE_BINDINGS_STATUS(STRUCTURE_LOCKED)    /* structural request inside a query scope that cannot be deferred */ \
     CONJURE_BINDINGS_STATUS(ASSET_NOT_LOADED)                                                                          \
     CONJURE_BINDINGS_STATUS(ASSET_TYPE_MISMATCH)                                                                       \

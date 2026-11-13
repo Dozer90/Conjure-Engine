@@ -25,6 +25,7 @@ namespace {
 
     constexpr std::string_view SCENE_A = "assets://scenes/a.scene.json";
     constexpr std::string_view SCENE_B = "assets://scenes/b.scene.json";
+    constexpr std::string_view SCENE_C = "assets://scenes/c.scene.json";
 
     struct scene_fixture_pair {
         bare_fixture base = {};
@@ -166,7 +167,7 @@ TEST_SUITE("bindings/prefab_scene_bindings") {
         const std::string active = read_string([&](char *buffer, int32_t capacity) {
             return api.scene_active_path(buffer, capacity);
         });
-        CHECK(active == fixture.sceneB.to_string());
+        CHECK(active == fixture.sceneA.to_string());                      // the first loaded scene
         CHECK(api.scene_loaded_path(0, nullptr, 0) == static_cast<int32_t>(first.size()));
         CHECK(api.scene_loaded_path(2, nullptr, 0) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.scene_loaded_path(-1, nullptr, 0) == to_status(bindings_error::INVALID_ARGUMENT));
@@ -176,6 +177,51 @@ TEST_SUITE("bindings/prefab_scene_bindings") {
         CHECK(api.scene_roots(nullptr, 0) == 5);
         CHECK(some[0] == fixture.base.active().roots()[0].entity.to_u64());
         CHECK(api.scene_roots(some.data(), -1) == to_status(bindings_error::INVALID_ARGUMENT));
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F438: active_path is the first loaded scene, not the latest additive") {
+        scene_fixture_pair fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const assets::asset_id sceneC = fixture.base.publish_scene("gamma", 1, 30, SCENE_C);
+        const utf8_argument pathA = utf8(SCENE_A);
+        const utf8_argument pathB = utf8(SCENE_B);
+        const utf8_argument pathC = utf8(SCENE_C);
+        const auto activePath = [&]() {
+            return read_string([&](char *buffer, int32_t capacity) {
+                return api.scene_active_path(buffer, capacity);
+            });
+        };
+        const auto apply = [&]() {
+            fixture.base.assets.flush();
+            fixture.base.step();
+        };
+
+        REQUIRE(api.scene_request_load(pathB.data, pathB.length, 0) == 0);
+        apply();
+        CHECK(activePath() == fixture.sceneB.to_string());
+        // Additive loads never change the active scene.
+        REQUIRE(api.scene_request_load(pathA.data, pathA.length, 1) == 0);
+        apply();
+        REQUIRE(api.scene_loaded_count() == 2);
+        CHECK(activePath() == fixture.sceneB.to_string());
+        REQUIRE(api.scene_request_load(pathC.data, pathC.length, 1) == 0);
+        apply();
+        REQUIRE(api.scene_loaded_count() == 3);
+        CHECK(activePath() == fixture.sceneB.to_string());
+        // Unloading the active scene hands the role to the oldest remaining one (A, loaded before C).
+        REQUIRE(api.scene_request_unload(pathB.data, pathB.length) == 0);
+        apply();
+        REQUIRE(api.scene_loaded_count() == 2);
+        CHECK(activePath() == fixture.sceneA.to_string());
+        const std::string second = read_string([&](char *buffer, int32_t capacity) {
+            return api.scene_loaded_path(1, buffer, capacity);
+        });
+        CHECK(second == sceneC.to_string());
+        // A REPLACE load unloads everything before it and becomes the active scene.
+        REQUIRE(api.scene_request_load(pathB.data, pathB.length, 0) == 0);
+        apply();
+        REQUIRE(api.scene_loaded_count() == 1);
+        CHECK(activePath() == fixture.sceneB.to_string());
     }
 
     TEST_CASE("scene - active_path is empty without a loaded scene") {

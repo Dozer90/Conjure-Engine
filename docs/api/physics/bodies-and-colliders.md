@@ -59,8 +59,13 @@ holds still in it.
 
 ## The components
 
-All components are plain reflected structs registered under `"conjure.physics.<name>"`; the C# mirrors share
-their layout.
+All components are plain reflected structs registered under `"conjure.physics.<struct name>"` (so
+`physics_material` is `conjure.physics.physics_material`); the C# mirrors share their layout.
+
+> [!NOTE]
+> `physics_material` was registered as `conjure.physics.material` before. A scene saved with that key keeps the
+> old entry in `unresolved_components` when it loads (saved back untouched, but no longer a material on the
+> body); add the material again to restore it.
 
 | Component | Fields | Notes |
 |---|---|---|

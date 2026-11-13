@@ -23,7 +23,7 @@ call counters, marshalling rules and the subsystem that installs it all before `
 | B4 | **Status convention for every bindings-owned `int32_t` entry: `>= 0` success (0, a count, a bool, a needed length), `< 0` failure = `-static_cast<int32_t>(bindings_error)`.** `uint64_t`-returning entries return `0` (`NULL_ENTITY`) on failure. Every failure writes the main-thread last-error buffer read by `diagnostics_last_error`. | One return value per call (no out-status parameter), no allocation, and the message is available only when the caller asks. Core-owned entries keep 03's semantics. |
 | B5 | **Marshalling is blittable or (pointer, length).** Math types memcpy (core guarantees `math::quat` is stored x,y,z,w: glm 1.0.1 default, no define, `static_assert` on `offsetof`; recorded as R58), entity = `uint64_t`, uuid = `conjure_uuid {high, low}`, strings in = UTF-8 pointer + byte length (never NUL-terminated), strings out = caller buffer + capacity, return needed length. No `BSTR`, no `IntPtr` to managed memory held past the call. | D15 of 03; nothing allocates on the hot path; truncation is impossible to miss because the return value says so. |
 | B6 | **Call counters are template thunks, not edits to implementations.** When `!CONJURE_DISTRIBUTION`, `startup` replaces every filled slot (core-owned ones included) with `counting_thunk<Id, Ret(Args...)>::invoke`, a unique forwarding function per entry that increments `sCounters[Id]` and calls the original. In Distribution the raw pointers are installed and `call_counters()` is an empty span. | Scripting's `native_api_core.cpp` needs no bindings dependency (acyclic graph) and no `CONJURE_BINDING_ENTER` macro; the `.inl` already carries `ret` and `args`, which form a function type the template can decompose. |
-| B7 | **R5 routing lives in one helper.** `structural_guard` checks `world.is_locked()`; when locked, structural requests (`prefab_*` instantiate, `entity_duplicate/create_many/set_enabled/set_tag/set_layer`, `transform_set_parent*`, component add/remove performed by bindings) are recorded into `script_runtime::deferred_commands()` and flushed at `query_end`; non-structural writes (`transform_set_local`, velocities) go straight to the column. Entries that cannot be expressed as commands return `-STRUCTURE_LOCKED` instead of silently doing nothing. | The ECS refuses structural calls while locked (01 D6); scripts should not need to know which API is structural, except for the few that are impossible to defer. |
+| B7 | **R5 routing lives in one helper.** `structural_guard` checks `world.is_locked()`; when locked, structural requests (`prefab_*` instantiate, `entity_create_many/set_enabled/set_tag/set_layer`, `transform_set_parent*`, component add/remove performed by bindings) are recorded into `script_runtime::deferred_commands()` and flushed at `query_end`; non-structural writes (`transform_set_local`, velocities) go straight to the column. Entries that cannot be expressed as commands return `-STRUCTURE_LOCKED` instead of silently doing nothing: `entity_duplicate`, because capturing the subtree is itself refused on a locked world (`entity_archive::capture`); scripts duplicate outside the scope (sweep F165). | The ECS refuses structural calls while locked (01 D6); scripts should not need to know which API is structural, except for the few that are impossible to defer. |
 | B8 | **Audio playback is data, not a side channel.** `audio_play/stop/pause/resume` write the `playbackRequest` field of `audio::audio_source` (`12_audio.md` 2.6, R50); `engine.audio_sync` (SYNC) consumes the request, talks to the mixer and writes `isPlaying` back. One-shots with no entity go to `audio_engine::play(clip, play_params{ retain = false })` directly. | Bindings cannot reach the engine's private `audio_subsystem` and must not own an entity -> voice map of its own; the component already is that map (R7). Latency: request in UPDATE, mixer command in SYNC of the same frame. |
 | B9 | **Asset residency from scripts is owned by the subsystem.** `asset_load` stores the returned `asset_handle` in `script_residency` keyed by uuid; `asset_release` erases it; `scene_manager::on_before_unload` and `script_runtime` PLAY -> EDIT clear it. `asset_ref_get` never loads; `AssetRef<T>.Get`-style payload access does not exist in C# (payloads are native). | Scripts get Unity-like `Load()`/`IsLoaded`, and the engine keeps the invariant "residency is owned by handles" (05 D-section). |
 | B10 | **`[NativeComponent]` mirrors are verified by `core::reflect::type_info::layout_hash()`** (`10_core.md` 2.11: FNV-1a 64 over `(name, kind, offset, size)` per field in order). C# computes the same hash with field names derived by lower-casing the first letter of the C# field (`LinearVelocity` -> `linearVelocity`, R31) and kinds derived from the C# field type. The informal "(offset, size) + total size" of 03 3.9 is superseded by this single definition. | One hash definition, owned by core, already implemented there. |
@@ -74,7 +74,7 @@ enum class bindings_error : u16 {
     NOT_FOUND,              // path, name, layer, module, guid
     BUFFER_TOO_SMALL,       // only from record-array entries that cannot report a count
     WRONG_THREAD,
-    NOT_IN_PHASE,           // called outside a script phase (e.g. from a Task)
+    NOT_IN_PHASE,           // reserved, never returned (bindings check the thread only, 3.2); keeps the codes stable
     STRUCTURE_LOCKED,       // structural request inside a query scope that cannot be deferred (B7)
     ASSET_NOT_LOADED,
     ASSET_TYPE_MISMATCH,
@@ -133,7 +133,7 @@ CONJURE_NATIVE_FN(entity,    get_guid,             int32_t,  (uint64_t entity, c
 CONJURE_NATIVE_FN(entity,    find_by_guid,         uint64_t, (const conjure_uuid *guid))
 CONJURE_NATIVE_FN(entity,    find_by_tag,          int32_t,  (const char *utf8, int32_t length, uint64_t *out, int32_t capacity))
 CONJURE_NATIVE_FN(entity,    find_by_layer,        int32_t,  (int32_t layer, uint64_t *out, int32_t capacity))
-CONJURE_NATIVE_FN(entity,    duplicate,            uint64_t, (uint64_t entity))                               // subtree, scripts deep-copied (R29); struct.
+CONJURE_NATIVE_FN(entity,    duplicate,            uint64_t, (uint64_t entity))                               // subtree, scripts deep-copied (R29); STRUCTURE_LOCKED in a scope (3.3)
 CONJURE_NATIVE_FN(entity,    create_many,          int32_t,  (int32_t count, uint64_t parent, uint64_t *out)) // scene::create_entities; struct.
 
 // scene_*  (scene::scene_manager; loads are requests applied at FRAME_BEGIN, never immediate)
@@ -259,6 +259,10 @@ enum class conjure_asset_load_priority : uint8_t { LOW, NORMAL, HIGH };
 
 Snake_case fields are the documented C-ABI exception (R31). Sizes are `static_assert`ed natively and checked in
 `Conjure.Managed.Tests` (`BindingRecordSizesMatchDocumented`); the generator does not parse records (03 4.1), so this table is the contract.
+`conjure_ray_query` and the overlap entries carry no query flags: every bindings query skips trigger volumes and
+includes static bodies (the `physics::query_filter` defaults), and the `Physics` facade says so. Exposing
+`INCLUDE_TRIGGERS` / `EXCLUDE_STATIC` (and `is_trigger` on the hit) waits until a game needs it and is then batched
+with the next ABI revision, so the handshake hash changes once (sweep F622, 11).
 
 ### 2.5 C# facade types (`Conjure.Managed/Api`)
 
@@ -274,7 +278,7 @@ Facades are `readonly struct`s holding one `Entity` (03 4.1) or `static` classes
 | `AudioSource` | `Play()`, `Stop()`, `Pause()`, `Resume()`, `IsPlaying`, `Volume/Pitch/Loop {get;set;}` (component field set on the `AudioSourceData` mirror), `Data` |
 | `Audio` (static) | `PlayOneShot(AssetRef<AudioClipAsset>, Vector3? position = null, float volume = 1, float pitch = 1, string group = null)`, `MasterGain`, `GetGroupGain(string)`, `SetGroupGain(string, float)`, `ClipDuration(AssetRef<AudioClipAsset>)` |
 | `Prefab` | `AssetRef<PrefabAsset> Asset`, `IsLoaded`, `Load()`, `Entity Instantiate(Entity parent = default, TransformData? local = null)`, `int InstantiateMany(int count, Span<Entity> roots, Entity parent = default)`, `static Prefab Find(string path)`, `static AssetRef<PrefabAsset> SourceOf(Entity)`, `static bool IsInstanceRoot(Entity)` |
-| `Scene` (static) | `Load(string path, bool additive = false)` (request), `Load(AssetRef<SceneAsset>, bool additive)`, `Unload(string)`, `IsLoaded`, `IsLoadPending`, `ActivePath`, `LoadedCount`, `LoadedPath(int)`, `EntityCount`, `StructureVersion`, `GetRoots(Span<Entity>)` |
+| `Scene` (static) | `Load(string path, bool additive = false)` (request), `Load(AssetRef<SceneAsset>, bool additive)`, `Unload(string)`, `IsLoaded`, `IsLoadPending`, `ActivePath` (Unity's active scene: the first entry of `loaded_scenes()`, i.e. the last REPLACE load or the oldest additive one; additive loads never change it, sweep F438), `LoadedCount`, `LoadedPath(int)`, `EntityCount`, `StructureVersion`, `GetRoots(Span<Entity>)` |
 | `Input` (static partial; the frame-block half is scripting's) | `CursorMode {get;set;}`, `GamepadName(int)`, `Clipboard {get;set;}`, nested `Input.Inject`: `Key(Key, ButtonAction)`, `MouseButton`, `MouseMove`, `GamepadButton`, `GamepadAxis` |
 | `AssetRef<T> where T : struct, IAssetType` | `AssetId Id`, `IsValid`, `State` (`AssetState`), `IsLoaded`, `Version`, `Load(AssetLoadPriority = Normal)`, `LoadBlocking()`, `Release()`, `Path`, `static AssetRef<T> Find(string path)`; `IAssetType { static abstract string TypeName; }` with tags `TextureAsset`, `MeshAsset`, `MaterialAsset`, `ModelAsset`, `EnvironmentAsset`, `AudioClipAsset`, `PrefabAsset`, `SceneAsset`, `CollisionMeshAsset` (`conjure.physics.collision_mesh`, R44); `AssetTypeId<T>.Value` cached once per class load through `asset_type_id` |
 | `Diagnostics` (static) | `Check(string name, bool passed, string detail = "")`, `Diagnostics.Draw.Line/Box/Sphere/Text(..., Color, float seconds = 0)`, `FrameStats Stats`, `int CallCount(NativeFunction)` (`NativeFunction` is the generated enum of `.inl` indices) |
@@ -312,7 +316,7 @@ empty structs used only with `Has/Add/RemoveComponent`.
 | `CapsuleColliderData` | `physics.capsule_collider` | `float Radius; float HalfHeight; Vector3 Offset; Quaternion Rotation; NativeBool IsTrigger; byte Pad0..2` | 40 |
 | `ConvexColliderData` | `physics.convex_collider` | `AssetRef<CollisionMeshAsset> Mesh; Vector3 Offset; Quaternion Rotation; float ConvexRadius; NativeBool IsTrigger; byte Pad0..2; uint Pad3` | 64 |
 | `MeshColliderData` | `physics.mesh_collider` | `AssetRef<CollisionMeshAsset> Mesh; NativeBool IsTrigger; byte Pad0..2; uint Pad3` | 32 |
-| `PhysicsMaterialData` | `physics.material` | `float Friction; float Restitution` | 8 |
+| `PhysicsMaterialData` | `physics.physics_material` (registered under its struct name like every physics component, sweep F629) | `float Friction; float Restitution` | 8 |
 | `CharacterControllerData` | `physics.character_controller` | `float Radius; float Height; float MaxSlopeAngleDegrees; float StepHeight; float Mass; float MaxStrength; float Padding; byte Layer; CharacterFlags Flags (byte); byte Pad0..1; Vector3 Velocity; GroundState Ground (byte); byte Pad2..4; Vector3 GroundNormal; EntityHandle GroundEntity` (68 bytes natively: the 4-aligned entity handle needs no `Pad5`, `14_physics.md` as implemented) | 68 |
 | `AudioSourceData` | `audio.audio_source` (`12_audio.md` 2.6; registered by the engine's `audio_subsystem`, R7, R50) | `AssetRef<AudioClipAsset> Clip; float Volume; float Pitch; NativeBool Loop; NativeBool Spatial; NativeBool PlayOnStart; NativeBool OneShot; StringId Group; AttenuationModel Attenuation (byte); byte Pad0..2; float MinDistance; float MaxDistance; float Rolloff; AudioPlaybackRequest PlaybackRequest (byte); NativeBool IsPlaying; byte Pad3..8; SourceHandle Handle` (opaque 16 bytes: `ulong Voice; uint ClipVersion; byte Flags; byte Pad0..2`) | 88 |
 | `AudioListenerData` | `audio.audio_listener` | `float Gain; NativeBool Active; byte Pad0..2` | 8 |
@@ -402,8 +406,14 @@ native  counting_thunk<transform_set_local, int32_t(uint64_t, const conjure_tran
 ```
 
 Non-structural writes go straight to the column even inside a query scope (chunks do not move while locked; this
-is what `Span<T>` does). Phase check: `script_runtime::current_phase() != COUNT`, else `NOT_IN_PHASE` (a `Task`
-calling a facade is the case that hits it).
+is what `Span<T>` does). The guard checks the thread only (sweep F166): there is no phase check, because the
+`OnCreate`/`OnDestroy` run by the flushes of `frame_begin`, `frame_end` and `set_mode` run with no phase
+(`current_phase() == COUNT`) and must reach every entry. Managed code installs no `SynchronizationContext`, so a
+`Task` continuation lands off the main thread and gets `WRONG_THREAD`. No bindings entry returns `NOT_IN_PHASE`:
+`NOT_IN_PHASE` is the status of scripting's `query_begin` (`script_error`, 03 3.9), and the bindings enumerator
+stays reserved in `bindings_error.inl`, since removing it would renumber the codes the C# side maps. A main-thread
+phase guard (a "managed callback in progress" depth on `script_runtime`) is the follow-up if a main-thread
+`SynchronizationContext` is ever installed.
 
 ### 3.3 Structural routing while a query scope is open (R5)
 
@@ -419,7 +429,7 @@ struct structural_guard {               // marshal.h; constructed per structural
 |---|---|---|
 | `prefab_instantiate` | `scene::prefab::instantiate(scene, asset, options{ parent, rootTransform })` -> root (`13_scene.md` 3.12) | `commands().instantiate(archive)` -> reserved real id (01 D6); then `commands().add_raw<scene::parent>(root, {parent, APPEND_CHILD})`, `set<scene::local_transform>` when given; scripts inside the archive are deep-copied by `script_component`'s `ops.copy` at flush (R29); returned id is alive immediately, components appear at `query_end`; `scene.apply_hierarchy_changes` links it into the tree the same frame (13 3.7) |
 | `prefab_instantiate_many` | `scene::prefab::instantiate_many` | one `instantiate` command per root (same buffer, same flush) |
-| `entity_duplicate` | `scene::duplicate_subtree(entity)` (R55) | `commands().instantiate(scene_serializer::capture_subtree(scene, entity))` + parent command |
+| `entity_duplicate` | `scene::duplicate_subtree(entity)` (R55) | `-STRUCTURE_LOCKED`, nothing recorded: capturing a subtree is refused on a locked world (`entity_archive::capture`), so the copy has no command form; scripts duplicate outside the scope (sweep F165; a deferred form is planned, 11) |
 | `entity_create_many` | `scene::create_entities(count, NULL_ENTITY, parent, out)` (R55) | `count` x `commands().create_entity()` + `add<scene::local_transform>` + parent |
 | `transform_set_parent*` | `scene::set_parent(child, parent, keepWorld, index)` | `scene::deferred_set_parent(commands(), child, parent, keepWorld, index)` (`13_scene.md` 3.7/4.3, R55): records `set_raw/add_raw/remove_raw<parent>`, the `keepWorld` local transform and `transform_dirty`; `scene.apply_hierarchy_changes` (TRANSFORM, same frame) rebuilds `children` and depth tags without a WARN |
 | `entity_set_enabled`, `set_tag`/`set_layer` without the component | `add`/`remove` | `commands().add_raw/remove_raw` |
@@ -429,7 +439,7 @@ struct structural_guard {               // marshal.h; constructed per structural
 The buffer is `script_runtime::deferred_commands()` (one `ecs::command_buffer` owned by the runtime, required of
 03 by this document, see 8); `query_end` flushes it, and 03's "scope still open at phase end is force-closed"
 flushes it too. Commands on an entity dead at flush are skipped and counted (01 6). A locked request whose
-result cannot be expressed as commands (none in the table today) returns `-STRUCTURE_LOCKED`.
+result cannot be expressed as commands (`entity_duplicate` today) returns `-STRUCTURE_LOCKED`.
 
 ### 3.4 Error propagation to managed exceptions
 
@@ -593,7 +603,8 @@ Shared, scripting-owned and consumed here: `Interop/NativeApi.g.cs` (whole table
 ## 5. Threading and ownership
 
 - **Threading.** Every entry runs on the main thread inside one of the six `EXCLUSIVE` scripting systems (R27,
-  03 D10); `WRONG_THREAD` / `NOT_IN_PHASE` otherwise. The world is unlocked there (01 4.7) except inside a DOD
+  03 D10) or the flushes of `frame_begin`, `frame_end` and `set_mode`; `WRONG_THREAD` off the main thread, the only
+  check (3.2: no entry returns `NOT_IN_PHASE`). The world is unlocked there (01 4.7) except inside a DOD
   scope (B7). Counters, the last-error buffer and the per-frame log bits are plain statics because nothing else
   touches them; `module_registry` reads happen at a sync point (07 4.6); debug draw appends are mutex-guarded by
   the renderer. No bindings code runs on a job thread; no threads are created.
@@ -613,7 +624,7 @@ Shared, scripting-owned and consumed here: `Interop/NativeApi.g.cs` (whole table
 |---|---|
 | Dead or null entity to any entity-taking entry | `-ENTITY_NOT_ALIVE`; predicates return 0; Debug log once per entry per frame |
 | Entity lacks the component (`rigid_body`, `audio_source`, `character_controller`, `local_transform`) | `-COMPONENT_MISSING` naming the component |
-| Subsystem compiled out / disabled / backend cannot answer (e.g. `physics_*` with `CONJURE_WITH_PHYSICS=OFF`, `asset_path_of` on a cooked pack; the `null` window answers clipboard and cursor calls, R57) | stub returns `-NOT_SUPPORTED` naming the entry; C# `NotSupportedException`; counter still increments |
+| Subsystem compiled out / disabled / backend cannot answer (e.g. `physics_*` with `CONJURE_WITH_PHYSICS=OFF`, `asset_path_of` on a cooked pack; the `null` window answers clipboard and cursor calls, R57) | stub returns `-NOT_SUPPORTED` naming the entry; C# `NotSupportedException`; counter still increments. A facade's `Exists` (`AudioSource`, `Rigidbody`, `CharacterController`) answers false when its component type does not resolve (not registered, or a drifted mirror), while `Entity.HasComponent<T>` keeps throwing and drift logs a native ERROR, so a drifted mirror stays loud (sweep F676) |
 | Null pointer with non-zero length, negative capacity, enum out of range, `count < 0` | `-INVALID_ARGUMENT` |
 | Output buffer too small (strings, arrays) | writes what fits, returns the full needed length/count; never an error |
 | Structural request inside a query scope | deferred to `deferred_commands()` (B7); `-STRUCTURE_LOCKED` only for a request with no command form |
@@ -622,7 +633,7 @@ Shared, scripting-owned and consumed here: `Interop/NativeApi.g.cs` (whole table
 | `asset_load_blocking` inside a frame | permitted on main (R23), `WARN` once per frame in Development, `TIMEOUT` -> `-INTERNAL` with the assets message |
 | Scene path unknown | `-SCENE_NOT_FOUND`; `scene_request_unload` of a scene not loaded is a no-op returning 0 |
 | Layer name unknown / module name unknown / asset path unknown | `-NOT_FOUND` |
-| Wrong thread / outside a script phase | `-WRONG_THREAD` / `-NOT_IN_PHASE` (+ `CONJURE_ASSERT` in Debug) |
+| Wrong thread | `-WRONG_THREAD` (+ `CONJURE_ASSERT` in Debug); a main-thread call outside a script phase is served (3.2), `NOT_IN_PHASE` is reserved |
 | `fill_native_table` leaves an owned slot null (only possible with a broken build of `entries_*.cpp`) | `TABLE_INCOMPLETE` error from `startup`; application startup unwinds (06 3.4) |
 | Plugin `native_binding_desc` names a bindings-owned slot | bindings overrides it at step 16 with a `WARN` naming the module (B3) |
 | Mirror layout drift | `component_lookup_type` returns 0 (03), `InvalidOperationException` on first use, logged once; `test_layout_hashes` fails in CI first |
@@ -665,8 +676,8 @@ and are skipped without the SDK, which CI treats as a failure where the SDK is i
 
 **Needs from `scripting` (03):** the `.inl` section and record block reserved for bindings (03 2.1, R54);
 `script_runtime::deferred_commands() -> ecs::command_buffer &` (the buffer `query_end` flushes, R5) and
-`script_runtime::current_phase()` (both in 03 4 now, R54); `generate_native_api.py` extended with `--status`
-(`--out-manifest` exists since wave 3); `[NativeComponent]` and `ComponentType<T>` hashing per B10 (03 3.9, R61); `NameHash`; `null_script_host`.
+`script_runtime::current_phase()` (both in 03 4 now, R54; the entries do not check the phase, 3.2);
+`generate_native_api.py` extended with `--status` (`--out-manifest` exists since wave 3); `[NativeComponent]` and `ComponentType<T>` hashing per B10 (03 3.9, R61); `NameHash`; `null_script_host`.
 
 **Needs from `core` (10):** the x,y,z,w quaternion storage guarantee in `core/math` (B5, R58; otherwise mirrors need an explicit
 `NativeQuaternion` and transforms stop being memcpy-able) with a `static_assert`/`offsetof` check in `tests/core/test_math.cpp`;
@@ -766,7 +777,7 @@ One file per public header plus the topic files of `08_testing.md` 5.2 (`test_bi
 | `test_transform_bindings.cpp` | `get_set_local_roundtrip`, `set_local_stamps_change_detection`, `world_matrix_composes_parent_chain_depth_8`, `set_world_computes_local_against_parent`, `set_parent_keeps_world_by_default`, `set_parent_ex_index_and_no_keep`, `interpolated_missing_is_component_missing`, `dead_entity_status_and_single_debug_log`, `10k_set_local_allocation_free` |
 | `test_entity_bindings.cpp` | `set_name_find_roundtrip`, `parent_root_children_protocol_with_small_buffer`, `enabled_toggles_disabled_tag`, `tag_hash_equals_fnv1a64`, `layer_set_get_find`, `guid_get_find`, `find_by_tag_counts_without_buffer`, `duplicate_copies_subtree_and_scripts_deep`, `create_many_parents_all` |
 | `test_prefab_scene_bindings.cpp` | `request_load_applies_at_frame_begin_not_immediately`, `additive_keeps_existing_entities`, `is_load_pending_until_batch_complete`, `unknown_path_scene_not_found`, `loaded_paths_and_roots_protocol`, `prefab_instantiate_requires_loaded`, `instantiate_with_local_and_parent`, `instantiate_many_roots_distinct`, `source_of_and_is_instance_root`, `payload_not_archive_is_prefab_invalid` |
-| `test_span_scope_routing.cpp` | `structural_requests_inside_scope_land_in_deferred_commands` (prefab, duplicate, create_many, set_parent, set_enabled: `command_count` grows, world unchanged), `span_over_1000_transforms_stays_valid_until_query_end` (column pointer identity before/after the requests, 08 5.2), `query_end_flushes_in_request_order`, `non_structural_writes_apply_immediately_inside_scope`, `instantiate_inside_scope_returns_alive_id`, `dead_at_flush_is_skipped`, `phase_end_force_close_flushes` |
+| `test_span_scope_routing.cpp` | `structural_requests_inside_scope_land_in_deferred_commands` (prefab, create_many, set_parent, set_enabled: `command_count` grows, world unchanged; duplicate is refused with `STRUCTURE_LOCKED` and records nothing), `span_over_1000_transforms_stays_valid_until_query_end` (column pointer identity before/after the requests, 08 5.2), `query_end_flushes_in_request_order`, `non_structural_writes_apply_immediately_inside_scope`, `instantiate_inside_scope_returns_alive_id`, `dead_at_flush_is_skipped`, `phase_end_force_close_flushes` |
 | `test_physics_bindings.cpp` | `raycast_hits_ground_within_1mm`, `raycast_all_sorted_by_distance`, `ignore_entity_and_layer_mask`, `shape_cast_sphere_box_capsule`, `overlap_counts`, `velocity_set_get_after_step`, `force_modes_change_velocity_as_expected`, `move_kinematic_applied_in_push_transforms`, `teleport_resets_velocity`, `sleep_wake`, `gravity_roundtrip`, `layer_index_name_collide_from_project_json`, `character_move_and_grounded`, `no_body_is_component_missing`, `compiled_out_physics_all_not_supported` |
 | `test_audio_bindings.cpp` | `play_sets_request_and_sync_starts_voice` (`null_backend_stats`), `stop_pause_resume_states`, `is_playing_reflects_previous_sync`, `play_on_playing_restarts`, `one_shot_requires_loaded_clip`, `group_and_master_gain_roundtrip`, `clip_duration_from_payload`, `no_source_is_component_missing` |
 | `test_input_bindings.cpp` | `inject_key_visible_next_frame_block` (pressed one frame, then held), `inject_mouse_and_gamepad`, `cursor_mode_roundtrip_on_null_window`, `cursor_mode_bad_value_is_invalid_argument`, `gamepad_name_protocol` (connected slot named, disconnected slot empty), `clipboard_roundtrip_on_null_window` (R57) |
@@ -818,6 +829,12 @@ the C# `FeatureChecklist` reports every count unconditionally and never reads th
   commands with undo (04 4.4), not runtime bindings.
 - Audio automation (fades, curves) above component fields; debug text in Distribution; a 3D text renderer.
 - Script writes to `interpolated_transform` (read-only mirror; physics owns it, R47).
+- A deferred `entity_duplicate` inside a query scope (planned, sweep F165 option C): reserve the copy's root at
+  once and copy the subtree onto it when the scope ends, a new scene operation designed together with the prefab
+  guid fix (sweep F164). Until then the entry answers `-STRUCTURE_LOCKED` there (3.3).
+- Physics query flags from C# (sweep F622): `uint32_t flags` (`INCLUDE_TRIGGERS`, `EXCLUDE_STATIC`) on
+  `conjure_ray_query` (40 -> 48 bytes), a flags parameter on `physics_overlap_sphere/box`, `is_trigger` on
+  `conjure_raycast_hit`, optional C# parameters and `RaycastHit.IsTrigger`; done with the next ABI revision (2.4).
 - Per-call-site rate limiting of dead-entity logs (native sees entries, not managed call sites).
 - A stable ABI across engine versions: `CONJURE_NATIVE_API_VERSION` bumps on any signature change and the editor
   rebuilds the game assembly; no shim layer.
