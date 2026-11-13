@@ -3,14 +3,15 @@
 Where each finding of [the sweep report](code_sweep_2026-11-12.md) stands. Every finding was re-read against the
 code by one engineer and checked by a second, then classified: **SMALL** fixes (local, about 60 lines or fewer,
 no open design question) were fixed and reviewed area by area; **CHALLENGING** ones are listed below with the
-shape of a fix for whoever takes them on next; **NEEDS_DECISION** items wait for the owner. Ids are `F000` to
+shape of a fix for whoever takes them on next; **NEEDS_DECISION** items were decided by the owner on 2026-11-13
+([decisions](code_sweep_2026-11-12_decisions.md)) and await implementation. Ids are `F000` to
 `F791`, the order of `build/sweep_saved/confirmed.json`, which holds each finding's full evidence.
 
 | Status | All findings | Distinct defects |
 |---|---|---|
 | FIXED | 431 | 411 |
 | CHALLENGING | 254 | 224 |
-| NEEDS_DECISION | 99 | 96 |
+| NEEDS_DECISION (decided, not yet implemented) | 99 | 96 |
 | NOT_A_BUG | 8 | 8 |
 
 A finding that repeats another one points at it with *same as*; only the primary carries the plan.
@@ -328,7 +329,10 @@ A finding that repeats another one points at it with *same as*; only the primary
 
 - **F283** MINOR input_state::modifiers copies GLFW's per-event mods, which differ between Win32 and X11 for the modifier keys themselves (`engine/src/platform/input.cpp:177`). Still present. input.cpp:177 and 222 copy the event modifiers, and glfw_window.cpp:862 passes GLFW's mods through. GLFW X11 builds them from xkey.state, which is the state before the event (x11_window.c:1246, 1318), while Win32 uses GetKeyState, which reflects the event itself. A lone Shift tap therefore leaves SHIFT set on X11. The same stale mods also drive ImGui (imgui_layer.cpp:279-282). The right layer is debatable: normalising in input::apply_key changes inject() semantics and leaves ImGui wrong, while normalising in the glfw backend fixes both but cannot be exercised in CI and needs verification on X11 and Wayland hardware. *Fix:* Normalise in glfw_window::on_key, as Dear ImGui's GLFW backend does for X11. If the key is LEFT/RIGHT_SHIFT, CONTROL, ALT or SUPER, set the matching key_modifier_flags bit on PRESS and REPEAT. On RELEASE, clear it unless glfwGetKey(window, other-side key) == GLFW_PRESS; GLFW updates window->keys before the callback. Keep CAPS_LOCK and NUM_LOCK as reported. To make it testable headless, put the pure rule in a platform free function, e.g. `key_modifier_flags apply_own_modifier(key, button_action, key_modifier_flags, bool otherSideDown)` in key.h, and call it from on_key. That is a small public API addition. Risks: Wayland mods arrive in a separate wl_keyboard.modifiers event, so behaviour there needs checking. Do not also derive modifiers from keysDown in input, which would override authored modifiers in injected events. *Test:* tests/platform/test_key.cpp: "key - a modifier key's own press sets and its release clears its modifier flag". It covers LEFT_SHIFT PRESS with NONE giving SHIFT, LEFT_SHIFT RELEASE with SHIFT giving NONE, LEFT_SHIFT RELEASE with otherSideDown keeping SHIFT, and a non-modifier key passing its flags through unchanged. Add a manual X11 check: tap Shift alone, and snapshot().modifiers must be NONE.
 
-## Needs a decision
+## Decided
+
+These findings needed the owner's call. All of them were decided on 2026-11-13; the decision for each, with its
+effort, is in [the decisions page](code_sweep_2026-11-12_decisions.md). The findings themselves are listed below.
 
 ### multi (60)
 
