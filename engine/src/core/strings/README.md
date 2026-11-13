@@ -47,9 +47,15 @@ Headers (`conjure/core/`):
 
 ## Threading
 
-- The `string_id` name table is a process-wide, mutex-guarded `std::unordered_map`. Interning and
-  lookup are safe from any thread; names are never erased, so views returned by `view()`/`c_str()`
-  stay valid for the life of the process. The table is never destroyed (it lives in static raw
+- The `string_id` name table is a process-wide `std::unordered_map` guarded by a `std::shared_mutex`.
+  Lookups (`view()`, `c_str()`, `interned_count()`) take it shared; registration looks the hash up
+  under the shared lock first, so re-interning a known name never serialises readers, and inserts a
+  new name under the exclusive lock (checking again, since another thread may have inserted it in
+  between). Interning and lookup are safe from any thread; names are never erased, so views returned
+  by `view()`/`c_str()` stay valid for the life of the process.
+- That also means `string_id` is for bounded vocabularies (component, event, asset, tag names): every
+  distinct name is kept until the process exits, so unique per-spawn names (an entity name with a
+  counter in it) grow memory without limit. The table is never destroyed (it lives in static raw
   storage; one intentional leak per process), so ids may still be resolved and formatted from
   static destructors during shutdown. Comparison and hashing never touch the table.
 - Everything in `str` is pure and reentrant.

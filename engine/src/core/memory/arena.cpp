@@ -136,13 +136,28 @@ void *arena::allocate(usize bytes, usize alignment) noexcept {
 
 void arena::reset() noexcept {
     mBytesAllocated = 0;
-    if (mFirst == nullptr) {
-        return;
+
+    // Only a regular block is worth keeping: an oversized one was sized for a single past request,
+    // and keeping it would pin that memory until release() whenever it happened to come first.
+    block *keep = nullptr;
+    block *node = mFirst;
+    while (node != nullptr) {
+        block *next = node->next;
+        if (keep == nullptr && node->capacity == mBlockBytes) {
+            keep = node;
+        } else {
+            free_block(node);
+        }
+        node = next;
     }
 
-    free_blocks_after(mFirst);
-    mFirst->used = 0;
-    mCurrent = mFirst;
+    mFirst = keep;
+    mCurrent = keep;
+    if (keep == nullptr) {
+        return;
+    }
+    keep->next = nullptr;
+    keep->used = 0;
 }
 
 void arena::release() noexcept {
@@ -208,14 +223,8 @@ arena::block *arena::acquire_block(usize capacity) noexcept {
     return fresh;
 }
 
-void arena::free_blocks_after(block *keep) noexcept {
-    block *node = keep->next;
-    while (node != nullptr) {
-        block *next = node->next;
-        mBytesReserved -= node->capacity;
-        --mBlockCount;
-        tracked_free(node, block::header_bytes() + node->capacity);
-        node = next;
-    }
-    keep->next = nullptr;
+void arena::free_block(block *node) noexcept {
+    mBytesReserved -= node->capacity;
+    --mBlockCount;
+    tracked_free(node, block::header_bytes() + node->capacity);
 }

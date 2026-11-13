@@ -97,6 +97,12 @@ work; the thread names are prepared on the calling thread, so a worker allocates
 allocation gate opened right after `start()` is never charged a worker's start-up. `stop()` lets the workers finish
 everything queued, joins them and is safe to call twice; the destructor calls it.
 
+> [!IMPORTANT]
+> Running out of threads is not an error `start()` returns. If the operating system refuses to create a worker
+> thread, the `std::system_error` from `std::thread` is not caught and ends the process, exactly like running out of
+> memory. The same holds for the `dedicated_thread` constructor. Keep `workerCount` within what the machine can
+> create; it is a resource limit, not something to recover from.
+
 `schedule(job, priority)` queues one `std::function<void()>` and returns a `job_handle`. `schedule(span, priority)`
 queues a batch under a single handle that completes when every job in it has run. `wait(handle)` blocks until the
 handle completes, **executing queued jobs on the calling thread while it waits**, so waiting from inside a job or
@@ -236,6 +242,8 @@ to ask. `main_thread_id()` returns its id without claiming anything; `reset_main
 
 `dedicated_thread` is a named `std::jthread` for the few loops that genuinely block: file watchers, child-process
 pipe readers, audio streaming. The body receives a `std::stop_token`; the destructor requests a stop and joins.
+The constructor starts the thread; when the operating system refuses, `std::jthread`'s `std::system_error` ends the
+process like an allocation failure (there is no `result` to check).
 
 ```cpp
 bool poll_file_system_for_changes();   // your own code: returns quickly, may block briefly

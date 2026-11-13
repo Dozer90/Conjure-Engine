@@ -13,7 +13,7 @@ and the code win**; the area documents are corrected by the wave 1 documentation
 | C2 | Area dependencies (public link): every area -> `foundation`; `memory` -> none else; `strings` -> none else; `containers` -> none else; `math` -> glm; `time` -> none else; `jobs` -> `containers`, `memory`; `json` -> yyjson (private), `containers`; `vfs` -> `containers`, `strings`; `system` -> stb (private); `reflect` -> `json`, `strings`, `math`, `containers`. No cycles. |
 | C3 | Errors: `core::error {category, code, message}`; each module binds `enum class <module>_error : u16` with `CONJURE_DECLARE_ERROR_CATEGORY(enum, "name", name_fn)`. Core areas that fail at runtime (`json`, `vfs`, `system`, `jobs`) use the generic `core::error_code` and do **not** declare their own category. (Already implemented in `error.h`.) |
 | C4 | No exceptions, no `new`/`delete` outside `memory`, no `std::thread` outside `jobs` (and `system::process`'s pipe reader, which is a `jobs::dedicated_thread`). |
-| C5 | Hashing is FNV-1a (`hash.h`, implemented). `string_id` is the 64-bit FNV-1a of the name; interning is debug-only metadata. |
+| C5 | Hashing is FNV-1a (`hash.h`, implemented). `string_id` is the 64-bit FNV-1a of the name; interning keeps the name as metadata in every configuration (2.4), never freed, so `string_id` is for bounded vocabularies. |
 | C6 | Public headers of core never include a third-party header; glm is the single exception through `conjure/core/math/math.h`. yyjson, stb, OS headers stay in `src/`. |
 | C7 | Every API below is headless and deterministic given the same inputs; `jobs` with 0 workers runs everything inline on the caller. |
 | C8 | Struct fields camelCase, class members `mCamelCase` (R31). Flags are `enum class <x>_flags` + `CONJURE_ENUM_FLAGS(...)`. |
@@ -138,8 +138,11 @@ Headers: `string_id.h`, `string_utils.h`, `bit_vector.h`, `radix_sort.h`.
 - `class string_id`: `constexpr string_id(std::string_view name)` (FNV-1a 64), `constexpr string_id() = default`
   (null, hash 0), `hash() -> u64`, `is_null()`, `operator<=>`/`==` by hash, `std::hash`, `std::formatter` (prints the
   interned name when known, else `#<hex>`), `c_str()`/`view()` returning the interned name or "" when unknown.
-  Interning: runtime-constructed ids register their name in a global, mutex-guarded table **in every configuration**
-  (names are needed by the editor and by modules resolving component names); `constexpr` ids constructed in constant
+  Interning: runtime-constructed ids register their name in a global table **in every configuration** (names are
+  needed by the editor and by modules resolving component names). The table is guarded by a `std::shared_mutex`:
+  lookups take it shared, registration first looks under the shared lock and inserts a new name under the exclusive
+  one. Entries are never erased (views stay valid for the process), so `string_id` is for bounded vocabularies;
+  names generated per spawn grow memory for the life of the process. `constexpr` ids constructed in constant
   expressions are not interned until `intern()` is called or they are first formatted via a runtime construction.
   `string_id::intern(std::string_view) -> string_id` always interns. Collision detection: interning a different
   name with the same hash asserts and logs ERROR (`LOG_CORE`).
@@ -167,13 +170,16 @@ Headers: `allocation_counters.h`, `tracked_allocation.h`, `arena.h`, `pool_alloc
   with `allocation_counters &counters() noexcept` (process-wide) and `memory_snapshot snapshot() noexcept`
   (`struct memory_snapshot { u64 allocationCount; u64 freeCount; u64 allocatedBytes; }`). Counting is cumulative.
 - `void *tracked_allocate(usize bytes, usize alignment = alignof(std::max_align_t)) noexcept` /
-  `void tracked_free(void *pointer, usize bytes) noexcept` (aligned via `_aligned_malloc`/`aligned_alloc`
+  `void tracked_free(void *pointer, usize bytes) noexcept` (aligned via `_aligned_malloc`/`posix_memalign`
   behind `CONJURE_PLATFORM_*`), `tracked_reallocate`. These bump the counters; everything in the engine that needs
-  heap memory outside STL containers goes through them. The test support library's `tracked_global_new.cpp`
-  (wave 1 stage 2) routes global `operator new/delete` through them in test executables only.
+  heap memory outside the standard library and the core containers goes through them. The core containers (2.3:
+  `small_vector`, `stable_vector`, `flat_hash_map`) allocate through `std::allocator` from isolated private
+  functions, so their memory is not counted outside test executables. The test support library's
+  `tracked_global_new.cpp` (wave 1 stage 2) routes global `operator new/delete` through them in test executables only.
 - `class arena`: `explicit arena(usize blockBytes = 64 * KIB)`; `void *allocate(usize bytes, usize alignment) noexcept`
   (bump within the current block; a request larger than a block gets its own block); `template <typename T, typename... Args> T *construct(Args &&...)`
-  (trivially destructible T only, asserted); `reset()` (keeps the first block, frees the rest, addresses invalid);
+  (trivially destructible T only, asserted); `reset()` (keeps the first block whose capacity is the regular block size,
+  if any, and frees every other block, so an oversized block never survives a reset; addresses invalid);
   `release()` frees everything; `bytes_allocated()`, `bytes_reserved()`, `block_count()`. Not thread-safe.
 - `class pool_allocator`: `pool_allocator(usize blockSize, usize alignment, u32 blocksPerSlab)`; `void *allocate() noexcept`
   (returns nullptr when a new slab cannot be obtained; grows by slabs otherwise), `void deallocate(void *block) noexcept`
@@ -214,7 +220,10 @@ Headers: `clock.h`, `random.h`, `event.h`, `delegate.h`, `event_bus.h`.
   (documented; main-thread objects).
 - `template <typename Signature> class delegate`: single-target, non-owning, small (two pointers): binds free
   functions, member functions (`delegate<void(int)>::bind<&foo::bar>(&instance)`), and stateless/capture-small lambdas
-  (fits 16 bytes inline, else `static_assert`); `operator()`, `is_bound()`, `reset()`, comparable.
+  (fits 16 bytes inline, else `static_assert`); `operator()`, `is_bound()`, `reset()`, comparable. Equality compares
+  the invoker and the raw storage: exact for free-function, member, function-pointer and stateless-lambda bindings; a
+  capturing lambda is copied whole, so it compares exactly only when its closure has no padding
+  (`has_unique_object_representations`) and equal captures with padding may compare unequal.
 - `class event_bus`: typed pub/sub for engine-wide events: `template <typename Event> event_subscription subscribe(std::function<void(const Event &)>)`,
   `template <typename Event> void publish(const Event &)` (synchronous), `template <typename Event> void enqueue(Event)`
   + `void dispatch_queued()` (drained by the engine on the main thread); events are plain structs identified by
@@ -265,7 +274,10 @@ for `parallel_for` locality) with a condition-variable sleep when idle (no busy 
 inside a job is allowed; `wait` never deadlocks when called from a worker (it helps). The dispatch of `parallel_for`
 must be allocation-free in steady state after warm-up (ranges carried in a stack-allocated array or a pooled job
 block; the `std::function` body is referenced, not copied). Exceptions thrown by jobs are not supported (engine code
-never throws); a job that throws terminates via `std::terminate` by design. `thread_index()` is a `thread_local`.
+never throws); a job that throws terminates via `std::terminate` by design. Thread creation failure is resource
+exhaustion, like `std::bad_alloc`: when the operating system refuses a thread, the `std::system_error` from
+`start()`'s `std::thread` or `dedicated_thread`'s `std::jthread` ends the process and is not a `result` error
+(`docs/CONVENTIONS.md` section 3, sweep F225/F586). `thread_index()` is a `thread_local`.
 
 Tests (`test_job_system.cpp`, `test_parallel_for.cpp`, `test_main_thread.cpp`, `test_dedicated_thread.cpp`): run every
 behavioural test twice via `SUBCASE`s with 0 and 8 workers (`[parallel]` tag); counting with atomics; `wait` from inside

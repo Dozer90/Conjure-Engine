@@ -353,8 +353,8 @@ void command_buffer::shrink_to_fit() noexcept {
 }
 
 void command_buffer::recycle_arena() noexcept {
-    // arena::reset() keeps its first block and frees the rest, so a recording that spilled into more
-    // blocks would re-acquire them from the heap on every repeat. Like a vector's capacity, the buffer
+    // arena::reset() keeps only its first regular-sized block and frees the rest, so a recording that spilled into
+    // more blocks would re-acquire them from the heap on every repeat. Like a vector's capacity, the buffer
     // instead keeps room for its peak: the arena is rebuilt with a single block as large as the blocks
     // the last recording spanned together. That is the recorded bytes rounded up to whole
     // COMMAND_ARENA_BLOCK_BYTES blocks plus the unused tail of every block the recording spilled past,

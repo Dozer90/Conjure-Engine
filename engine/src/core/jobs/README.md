@@ -128,6 +128,11 @@ message; every consumer of the umbrella header inherits the requirement.
   `maxQueuedJobs` of zero or above `MAX_QUEUED_JOBS`, more than `MAX_WORKER_COUNT` (256) workers or
   an empty name prefix. Empty jobs/bodies assert and are skipped. Exceptions from jobs are
   unsupported (engine code never throws).
+- **Thread creation failure is fatal.** When the operating system refuses to create a thread,
+  `std::thread` (in `start()`) and `std::jthread` (in the `dedicated_thread` constructor) throw
+  `std::system_error`. Engine code never catches, so it ends the process like `std::bad_alloc`; it is
+  resource exhaustion inside the standard library and deliberately outside `result<>`
+  (`docs/CONVENTIONS.md` section 3). `start()` has no rollback path for a half-created pool.
 
 ## Threading model
 

@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <shared_mutex>
 #include <unordered_map>
 
 using namespace conjure::core;
@@ -17,7 +18,11 @@ using namespace conjure::core;
 
 namespace {
     struct name_table {
-        std::mutex mutex = {};
+        // Shared for lookups and for registrations of names that are already known, which is by far
+        // the common case (the same runtime names are constructed again and again, and hierarchy
+        // views and log formatting resolve them every frame); exclusive only to insert a new name.
+        std::shared_mutex mutex = {};
+
         // Node-based so the strings never move: views handed out by find() stay valid for the
         // lifetime of the process. Entries are never erased.
         std::unordered_map<conjure::u64, std::string> names = {};
@@ -38,11 +43,25 @@ namespace {
 void conjure::core::detail::register_string_id_name(conjure::u64 hash, std::string_view name) {
     name_table &names = table();
 
-    // The lock covers only the map: logging and asserting below call out to user code (sinks,
+    // The locks cover only the map: logging and asserting below call out to user code (sinks,
     // the assert handler) that may itself resolve or construct ids, which would re-enter the
     // non-recursive mutex on this thread.
     std::string existing = {};
+    bool known = false;
     {
+        const std::shared_lock lock(names.mutex);
+        const auto found = names.names.find(hash);
+        if (found != names.names.end()) {
+            if (found->second == name) {
+                return;
+            }
+            known = true;
+            existing = found->second;
+        }
+    }
+
+    // Another thread may insert the same hash between the two locks, so the insertion checks again.
+    if (!known) {
         const std::scoped_lock lock(names.mutex);
         const auto [slot, inserted] = names.names.try_emplace(hash, name);
         if (inserted || slot->second == name) {
@@ -65,7 +84,7 @@ void conjure::core::detail::register_string_id_name(conjure::u64 hash, std::stri
 
 std::string_view conjure::core::detail::find_string_id_name(conjure::u64 hash) noexcept {
     name_table &names = table();
-    const std::scoped_lock lock(names.mutex);
+    const std::shared_lock lock(names.mutex);
 
     const auto found = names.names.find(hash);
     if (found == names.names.end()) {
@@ -76,7 +95,7 @@ std::string_view conjure::core::detail::find_string_id_name(conjure::u64 hash) n
 
 conjure::usize conjure::core::detail::string_id_name_count() noexcept {
     name_table &names = table();
-    const std::scoped_lock lock(names.mutex);
+    const std::shared_lock lock(names.mutex);
     return names.names.size();
 }
 

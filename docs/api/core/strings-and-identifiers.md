@@ -83,8 +83,15 @@ with hash 0; `is_null()` tests for it.
 
 `string_id` works as a key in `std::unordered_map` (via `std::hash`), in `flat_hash_map`, and in sorted containers
 (`<=>` compares hashes). `std::format("{}", id)` prints the interned name or `#` followed by the 16-digit hex hash
-when the name is unknown. Interning and lookup are thread-safe; names are never removed, so a `view()` stays valid
-for the life of the process.
+when the name is unknown. Interning and lookup are thread-safe, and lookups (and re-interning a name the table
+already holds) only take a shared lock, so many threads can resolve names at once. Names are never removed, so a
+`view()` stays valid for the life of the process.
+
+> [!WARNING]
+> `string_id` is for bounded vocabularies: component, event, asset, tag and module names. Every distinct name that
+> is interned stays in memory until the process exits, so building ids from names generated per spawn or per frame
+> (`"bullet_18342"`) grows memory without limit. That includes entity names and tags, which are `string_id`s: give
+> spawned entities a shared name ("bullet") and tell them apart by entity, not by a unique name.
 
 ## Hashing
 

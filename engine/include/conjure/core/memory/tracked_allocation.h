@@ -8,11 +8,15 @@
 
 // Counted, aligned heap allocation.
 //
-// Everything in the engine that needs heap memory outside STL containers goes through these three
-// functions: they are the only place core::memory touches the system allocator, and every call bumps
-// the process-wide allocation_counters. Alignment is honoured exactly (up to any power of two the
-// system allocator accepts; 4096 is tested) and the implementation is the platform's aligned
-// allocator, so the result must be released with tracked_free, never with free() or delete.
+// Everything in the engine that needs heap memory outside the standard library and the core
+// containers goes through these three functions. The core containers (small_vector, stable_vector,
+// flat_hash_map) allocate through std::allocator from isolated private functions instead, so their
+// memory is not counted outside test executables (there, tracked_global_new.cpp routes operator new
+// through tracked_allocate). These functions are the only place core::memory touches the system
+// allocator, and every call bumps the process-wide allocation_counters. Alignment is honoured exactly
+// (up to any power of two the system allocator accepts; 4096 is tested) and the implementation is the
+// platform's aligned allocator (_aligned_malloc on Windows, posix_memalign elsewhere), so the result
+// must be released with tracked_free, never with free() or delete.
 
 namespace conjure::core::memory {
 

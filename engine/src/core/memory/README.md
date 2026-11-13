@@ -1,7 +1,10 @@
 # core/memory
 
-Counted heap allocation and the engine's allocators. Everything that needs heap memory outside STL
-containers goes through this area, so the process-wide counters see every block the engine acquires.
+Counted heap allocation and the engine's allocators. Everything that needs heap memory outside the
+standard library and the core containers goes through this area, so the process-wide counters see every
+block the engine acquires by hand. The core containers (`small_vector`, `stable_vector`,
+`flat_hash_map`) allocate through `std::allocator` from isolated private functions and are not counted
+(test executables count them anyway, because `tracked_global_new.cpp` routes `operator new` here).
 Design: `docs/design/10_core.md` section 2.5. Public headers: `conjure/core/memory/`, umbrella
 `conjure/core/memory/memory.h`. Namespace `conjure::core::memory`.
 
@@ -12,8 +15,8 @@ Design: `docs/design/10_core.md` section 2.5. Public headers: `conjure/core/memo
 - `tracked_allocation.h`: `tracked_allocate(bytes, alignment)`, `tracked_free(pointer, bytes)`,
   `tracked_reallocate(...)`, `DEFAULT_ALIGNMENT`, `MAX_ALLOCATION_BYTES`, `is_power_of_two`, `align_up`,
   `is_aligned`.
-- `arena.h`: `arena`, a bump allocator over a chain of blocks; `reset()` keeps the first block,
-  `release()` frees all, `construct<T>` for trivially destructible types.
+- `arena.h`: `arena`, a bump allocator over a chain of blocks; `reset()` keeps the first regular-sized
+  block, `release()` frees all, `construct<T>` for trivially destructible types.
 - `pool_allocator.h`: `pool_allocator(blockSize, alignment, blocksPerSlab, maxSlabs = 0)`, fixed-size
   blocks in slabs; `allocate()` returns nullptr on exhaustion, `shrink_to_fit()` frees empty slabs.
 - `frame_allocator.h`: `frame_allocator(arenaBytes, threadBlockBytes)`, per-frame scratch memory with
@@ -39,10 +42,12 @@ overloads, or 16-byte aligned types end up under-aligned on MSVC only.
 ## Allocator behaviour
 
 - `arena`: a request that does not fit a regular block gets a dedicated block linked behind the current
-  one, so the current block keeps serving small requests. `reset()` frees every block but the first and
-  rewinds it; `release()` frees everything and the next `allocate()` starts over. Addresses are stable
-  until either call. `bytes_allocated()` counts requested bytes, `bytes_reserved()` block capacities.
-  A moved-from arena is empty and usable.
+  one, so the current block keeps serving small requests. `reset()` keeps the first block whose capacity
+  is the regular block size (if any), rewinds it and frees every other block, so an oversized block never
+  survives a reset wherever it sits in the chain (an arena whose first request of every cycle is oversized
+  re-acquires that block every cycle; a larger block size fixes that). `release()` frees everything and
+  the next `allocate()` starts over. Addresses are stable until either call. `bytes_allocated()` counts
+  requested bytes, `bytes_reserved()` block capacities. A moved-from arena is empty and usable.
 - `pool_allocator`: the requested alignment is raised to at least `alignof(void *)`, because a free
   block stores its free-list link in place; `alignment()` reports that raised value and `allocate_as()`
   checks types against it. The block stride is `blockSize` rounded up to that alignment and to a

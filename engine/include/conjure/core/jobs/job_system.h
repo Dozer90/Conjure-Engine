@@ -102,7 +102,10 @@ namespace conjure::core::jobs {
             /// right after start() is never charged a worker's start-up. Fails with INVALID_STATE
             /// when already running and with INVALID_ARGUMENT for a queue capacity of zero or above
             /// MAX_QUEUED_JOBS, a worker count above MAX_WORKER_COUNT or a null/empty thread name
-            /// prefix. Statistics are reset.
+            /// prefix. Statistics are reset. Resource exhaustion is not one of the reported failures:
+            /// if the operating system refuses to create a worker thread, the std::system_error that
+            /// std::thread throws is not caught (engine code never catches) and ends the process like
+            /// an allocation failure (docs/CONVENTIONS.md section 3).
             /// </summary>
             [[nodiscard]] result<void> start(const job_system_desc &desc);
 

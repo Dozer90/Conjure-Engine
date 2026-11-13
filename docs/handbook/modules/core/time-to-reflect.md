@@ -29,7 +29,7 @@ Purpose: clocks, randomness, events, delegates and the engine-wide event bus (`c
 | `conjure/core/clock.h` | `clock` (virtual `now_seconds`, `sleep_until`), `steady_clock` (sleeps until 2 ms before the deadline, then spins), `manual_clock` (`advance`, `set`), `default_clock()`, `ticks_now` / `ticks_to_seconds` / `ticks_per_second`, `stopwatch` (`start`, `elapsed_seconds`, `restart`) |
 | `conjure/core/random.h` | `random::engine` (= `std::mt19937_64`), `default_engine()` (thread-local), `seed` / `current_seed` (`DEFAULT_SEED = 0x5EED`), `uniform` (integers inclusive, floats half-open), `chance`, `unit_vector3`, `random_engine` |
 | `conjure/core/event.h` | `event<Args...>` (multicast, subscription order, reentrancy-safe), `event_subscription` (RAII, move-only, inert after the event dies) |
-| `conjure/core/delegate.h` | `delegate<Return(Args...)>`: two pointers of inline storage, binds free functions, member functions and trivially copyable callables (`CAN_BIND`) |
+| `conjure/core/delegate.h` | `delegate<Return(Args...)>`: two pointers of inline storage, binds free functions, member functions and trivially copyable callables (`CAN_BIND`); `operator==` compares the invoker and the raw storage, so it is exact except for capturing lambdas whose closure has padding |
 | `conjure/core/event_bus.h` | `event_bus`: `subscribe<Event>`, synchronous `publish`, thread-safe `enqueue`, `dispatch_queued()` (drained by the engine each frame), `queued_count`, `clear_queue`, `subscriber_count` |
 
 ### 1.2 Algorithms

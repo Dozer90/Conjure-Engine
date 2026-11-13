@@ -394,6 +394,48 @@ TEST_SUITE("core/string_id") {
         }
     }
 
+    TEST_CASE("string_id - threads racing to intern the same new names store each once without a collision") {
+        // Every thread registers the same fresh names in the same order, so most first registrations
+        // miss under the shared lock on several threads at once and meet again at the exclusive insert,
+        // which must recognise the name another thread has just stored.
+        testing::expect_assert asserts = {};
+        testing::log_capture logs = {};
+        constexpr int THREAD_COUNT = 8;
+        constexpr int NAME_COUNT = 256;
+        const usize before = string_id::interned_count();
+
+        std::atomic<int> ready = 0;
+        std::atomic<bool> go = false;
+        std::atomic<int> mismatches = 0;
+        std::vector<std::thread> threads = {};
+        for (int threadIndex = 0; threadIndex < THREAD_COUNT; ++threadIndex) {
+            threads.emplace_back([&ready, &go, &mismatches] {
+                ready.fetch_add(1);
+                while (!go.load()) {
+                    std::this_thread::yield();
+                }
+                for (int index = 0; index < NAME_COUNT; ++index) {
+                    const std::string name = std::format("string_id.test.race.{}", index);
+                    if (string_id(std::string_view(name)).view() != name) {
+                        mismatches.fetch_add(1);
+                    }
+                }
+            });
+        }
+        while (ready.load() < THREAD_COUNT) {
+            std::this_thread::yield();
+        }
+        go.store(true);
+        for (std::thread &thread : threads) {
+            thread.join();
+        }
+
+        CHECK(asserts.count() == 0);
+        CHECK(logs.count(log_level::ERR) == 0);
+        CHECK(mismatches.load() == 0);
+        CHECK(string_id::interned_count() == before + NAME_COUNT);
+    }
+
     TEST_CASE("string_id - names stay readable while other threads intern") {
         constexpr int READER_COUNT = 4;
         constexpr int WRITER_COUNT = 4;

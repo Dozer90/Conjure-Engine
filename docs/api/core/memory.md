@@ -52,7 +52,9 @@ std::span<draw_command> build_commands(arena &scratch, u32 count) {
 
 Every heap acquisition made through this area (and, in test executables, every `new`) bumps three process-wide
 counters: `allocationCount`, `freeCount` and `allocatedBytes`. They are cumulative and never decrease, so "live
-allocations" is `allocationCount - freeCount`, which `memory_snapshot::live_count()` computes.
+allocations" is `allocationCount - freeCount`, which `memory_snapshot::live_count()` computes. Memory the standard
+library and the [containers](containers.md) obtain (`std::vector`, `small_vector`, `stable_vector`,
+`flat_hash_map`, ...) comes from `std::allocator` and is not counted in a game or the editor.
 
 ```cpp
 #include "conjure/core/memory/allocation_counters.h"
@@ -95,15 +97,19 @@ allocation.
 
 An `arena` is a bump allocator over a chain of blocks (`DEFAULT_ARENA_BLOCK_BYTES`, 64 KiB, unless you pass a
 block size). Individual allocations are never freed; `reset()` recycles everything at once and keeps the first
-block for reuse, `release()` returns every block to the heap. A request larger than a block gets a block of its
-own, so the current block keeps serving small requests. It is the right tool for parsers, command buffers and
-per-load scratch data.
+regular-sized block for reuse, `release()` returns every block to the heap. A request larger than a block gets a
+block of its own, so the current block keeps serving small requests; such an oversized block never survives a
+`reset()`. It is the right tool for parsers, command buffers and per-load scratch data.
+
+> [!TIP]
+> If the first request of every cycle is larger than the block size, each cycle allocates that block again after
+> `reset()`. Choose a block size that holds your largest regular request.
 
 | Call | Behaviour |
 |---|---|
 | `allocate(bytes, alignment = DEFAULT_ALIGNMENT)` | bumps the cursor; `nullptr` for zero bytes, a bad alignment (asserts) or an exhausted heap |
 | `construct<T>(args...)` | allocates and constructs a *trivially destructible* `T`, or returns `nullptr` |
-| `reset()` | invalidates everything, keeps the first block |
+| `reset()` | invalidates everything, keeps the first regular-sized block and frees every other one |
 | `release()` | invalidates everything, frees every block; the arena stays usable |
 | `bytes_allocated()` / `bytes_reserved()` / `block_count()` / `block_bytes()` / `owns(pointer)` | statistics and checks |
 

@@ -126,8 +126,9 @@ Purpose: cache-friendly containers, header-only templates in `namespace conjure:
   iteration starts after an empty anchor slot so `erase(iterator)` returns the next unvisited element.
 - Checked access never throws: `at()` is fatal on a miss in every configuration; `operator[]` and position
   arguments assert and early-out in Debug/Development.
-- Every container allocates through `std::allocator` from one or two private functions, the only places to
-  touch when tracked allocation is wired in.
+- Every container allocates through `std::allocator` from one or two private functions, so container memory
+  is not seen by `memory::counters()` outside test executables (`docs/design/10_core.md` 2.5); those
+  functions are the only places to touch if containers are ever routed through `tracked_allocate`.
 
 ### 3.3 Threading
 
@@ -165,8 +166,10 @@ Purpose: hashed identifiers, ASCII string helpers, a packed bit set and a stable
 
 ### 4.3 Threading
 
-The name table is a process-wide mutex-guarded map that is never destroyed (views stay valid through static
-destructors); comparison never touches it; `bit_vector` is a plain value type.
+The name table is a process-wide map guarded by a `std::shared_mutex` (lookups and re-registration of a known
+name shared, a new name exclusive) that is never destroyed (views stay valid through static destructors);
+comparison never touches it; `bit_vector` is a plain value type. Entries are never erased, so `string_id` is for
+bounded vocabularies: unique per-spawn names grow memory for the life of the process.
 
 ### 4.4 Tests
 
@@ -183,7 +186,7 @@ Purpose: counted heap allocation and the engine's allocators (`namespace conjure
 |---|---|
 | `conjure/core/memory/allocation_counters.h` | `allocation_counters` (three cumulative atomics), `memory_snapshot` (`live_count()`), `counters()`, `snapshot()`, `record_allocation`, `record_free` |
 | `conjure/core/memory/tracked_allocation.h` | `tracked_allocate(bytes, alignment)`, `tracked_free(pointer, bytes)`, `tracked_reallocate`, `DEFAULT_ALIGNMENT`, `MAX_ALLOCATION_BYTES` (`PTRDIFF_MAX`), `is_power_of_two`, `align_up`, `is_aligned` |
-| `conjure/core/memory/arena.h` | `arena(blockBytes = 64 KiB)`: bump allocator over a chain of blocks, `allocate`, `construct<T>` (trivially destructible), `reset()` keeps the first block, `release()` frees all |
+| `conjure/core/memory/arena.h` | `arena(blockBytes = 64 KiB)`: bump allocator over a chain of blocks, `allocate`, `construct<T>` (trivially destructible), `reset()` keeps the first regular-sized block and frees every other one, `release()` frees all |
 | `conjure/core/memory/pool_allocator.h` | `pool_allocator(blockSize, alignment, blocksPerSlab, maxSlabs = 0)`: fixed-size blocks in slabs, `allocate()` returns `nullptr` on exhaustion, `deallocate`, `construct`/`destroy`, `shrink_to_fit`, `owns` |
 | `conjure/core/memory/frame_allocator.h` | `frame_allocator(arenaBytes, threadBlockBytes)`: per-frame, per-thread scratch with heap overflow; `allocate`, `allocate_span<T>`, `construct<T>`, `reset`, `high_water_bytes`, `overflow_count`, `epoch` |
 | `conjure/core/memory/memory.h` | umbrella |
@@ -193,7 +196,11 @@ Purpose: counted heap allocation and the engine's allocators (`namespace conjure
 - Counting is cumulative (nothing is decremented); `tracked_reallocate` counts one free plus one allocation.
   `tracked_allocation.cpp` is the only platform backend (`_aligned_malloc` on Windows, `posix_memalign`
   elsewhere); requests above `MAX_ALLOCATION_BYTES` are refused before the runtime sees them so size
-  arithmetic above never wraps.
+  arithmetic above never wraps. Everything outside the standard library and the core containers allocates
+  through it.
+- `arena::reset()` keeps the first block whose capacity is the regular block size and frees every other block,
+  so a dedicated oversized block never survives a reset wherever it sits in the chain. An arena whose first
+  request of every cycle is oversized re-allocates that block every cycle; a larger block size fixes that.
 - The pool keeps a sorted slab table and a free bitmap per slab, so `allocate`/`deallocate`/`owns` are
   O(log slabCount) and a double free is detected.
 - The frame allocator is the **epoch-based** design: a thread claims a block with one compare-exchange that

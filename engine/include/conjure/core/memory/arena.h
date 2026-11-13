@@ -30,7 +30,7 @@ namespace conjure::core::memory {
             struct block;
 
             usize mBlockBytes = DEFAULT_ARENA_BLOCK_BYTES;
-            block *mFirst = nullptr;        // head of the chain, kept across reset()
+            block *mFirst = nullptr;        // head of the chain
             block *mCurrent = nullptr;      // block that bump allocations are served from
             usize mBytesAllocated = 0;
             usize mBytesReserved = 0;
@@ -73,8 +73,11 @@ namespace conjure::core::memory {
             }
 
             /// <summary>
-            /// Invalidates every allocation. The first block is kept for reuse, every other block is
-            /// returned to the heap.
+            /// Invalidates every allocation. The first block whose capacity is the regular block size
+            /// is kept for reuse, if there is one; every other block is returned to the heap. A
+            /// dedicated oversized block therefore never survives a reset, wherever it sits in the
+            /// chain: an arena whose first request of every cycle is oversized re-allocates that block
+            /// every cycle, which a larger block size avoids.
             /// </summary>
             void reset() noexcept;
 
@@ -121,6 +124,6 @@ namespace conjure::core::memory {
 
         private:
             block *acquire_block(usize capacity) noexcept;
-            void free_blocks_after(block *keep) noexcept;
+            void free_block(block *node) noexcept;
     };
 }

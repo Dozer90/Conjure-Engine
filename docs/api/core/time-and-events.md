@@ -207,6 +207,13 @@ if (onHit) {
 Delegates are comparable (same target on the same instance), `reset()` unbinds, and `is_bound()` / `operator bool`
 tell you whether a target is set.
 
+> [!NOTE]
+> Equality compares the bound target and its stored bytes. It is exact for free functions, member functions,
+> function pointers and lambdas that capture nothing. A capturing lambda is stored whole, padding included, so two
+> bindings with equal captures compare equal only when the closure has no padding
+> (`std::has_unique_object_representations_v`); a lambda capturing a `bool` next to a pointer may compare unequal
+> to an identical one. Do not rely on `==` to find such a binding again.
+
 > [!TIP]
 > Several listeners, or a lambda that owns state? Use `event<>` (multicast, owning handlers) or `std::function`. A
 > `delegate` is for exactly one, non-owning callback.

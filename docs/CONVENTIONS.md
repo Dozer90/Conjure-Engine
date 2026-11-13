@@ -44,6 +44,11 @@ No Hungarian notation beyond the `m`/`s` prefixes.
 - Engine code never throws and never catches (third-party code may). Return
   `conjure::core::result<T>` or `conjure::core::error` for recoverable failures and use
   `CONJURE_ASSERT` for programmer errors.
+- Resource exhaustion inside the standard library is fatal and outside `result<>`: the
+  `std::bad_alloc` of a container, string or `std::function` that cannot allocate, and the
+  `std::system_error` that `std::thread` / `std::jthread` throw when the operating system refuses to
+  create a thread, are never caught by engine code, so they end the process (`std::terminate`). A
+  `result<T>` reports recoverable failures only.
 - No raw owning pointers. Use `std::unique_ptr`, `std::shared_ptr` (sparingly), engine handles,
   or value types. Raw pointers and references are non-owning views only.
 - No `new`/`delete` outside allocators. No `malloc` outside `core::memory`.

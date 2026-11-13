@@ -20,8 +20,14 @@
 //   if (id == "ecs.position"_sid) { ... }                    // compile-time hash, never locks
 //
 // A string_id is the 64-bit FNV-1a hash of its name (hash.h). Comparison, hashing and storage
-// never touch the name; the name is kept in a process-wide, mutex-guarded table so tools (the
-// editor, module loaders, log output) can show it again.
+// never touch the name; the name is kept in a process-wide table so tools (the editor, module
+// loaders, log output) can show it again. The table is guarded by a reader-writer lock: lookups and
+// registrations of names it already holds share it, only a new name takes it exclusively.
+//
+// Bounded vocabularies only. Interned names are never freed (view() hands out views that stay valid
+// for the life of the process), so string_id is meant for names drawn from a bounded set: component,
+// event, asset, tag and module names. Names generated per spawn or per frame ("bullet_18342") are each
+// kept forever and grow the table, and the process's memory, without limit.
 //
 // Interning rules. The constructor interns only when it is *not* constant-evaluated, and the
 // language decides that, not the spelling at the call site:
@@ -62,6 +68,8 @@ namespace conjure::core {
     /// <summary>
     /// A string reduced to its 64-bit FNV-1a hash. Trivially copyable and comparable by hash;
     /// the original spelling is available through view()/c_str() once the id has been interned.
+    /// Meant for bounded vocabularies: an interned name is never freed, so unique per-spawn names
+    /// grow memory for the life of the process (see the header comment).
     /// </summary>
     class CONJURE_API string_id {
         private:

@@ -170,7 +170,12 @@ namespace conjure::core {
 
             /// <summary>
             /// Two delegates are equal when they invoke the same target on the same instance (or the
-            /// same captured state). Unbound delegates are equal to each other.
+            /// same captured state). Unbound delegates are equal to each other. The comparison is of
+            /// the invoker and the raw inline storage, which is exact for free-function, member,
+            /// function-pointer and stateless-lambda bindings. A capturing lambda is copied whole,
+            /// padding included, so its equality is exact only when the closure has no padding
+            /// (std::has_unique_object_representations_v); otherwise two bindings with equal captures
+            /// (a bool next to a pointer, say) may compare unequal.
             /// </summary>
             [[nodiscard]] bool operator==(const delegate &other) const noexcept {
                 return mInvoke == other.mInvoke && mStorage == other.mStorage;

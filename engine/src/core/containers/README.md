@@ -66,8 +66,9 @@ hook and gives the area its static library (`conjure::core_containers`). Design:
 
 Every container allocates through `std::allocator` from one or two private functions
 (`allocate_storage`/`deallocate_storage`, `allocate_chunk`/`deallocate_chunk`,
-`allocate_table`/`deallocate_table`); `slot_map` and `flat_map` sit on `std::vector`. Those are the
-only places to touch when the memory area's tracked allocation is wired in.
+`allocate_table`/`deallocate_table`); `slot_map` and `flat_map` sit on `std::vector`. The containers' memory
+is therefore not counted by `memory::counters()` outside test executables (`docs/design/10_core.md` 2.5), and those
+are the only places to touch if containers are ever routed through `tracked_allocate`.
 
 ## Threading
 

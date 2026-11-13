@@ -141,7 +141,7 @@ TEST_SUITE("core/arena") {
         CHECK(scratch.bytes_reserved() == 128);
     }
 
-    TEST_CASE("arena - reset keeps the first block, frees the rest and reuses the first address") {
+    TEST_CASE("arena - reset keeps the first regular block, frees the rest and reuses its address") {
         arena scratch(64);
         void *first = scratch.allocate(64);
         REQUIRE(scratch.allocate(64) != nullptr);
@@ -160,6 +160,52 @@ TEST_SUITE("core/arena") {
         void *reused = scratch.allocate(16);
         CHECK(reused == first);
         CHECK(snapshot().allocationCount == before.allocationCount);
+    }
+
+    TEST_CASE("regression - F223 arena reset frees an oversized first block and keeps the regular one after it") {
+        // The first request is oversized, so its dedicated block heads the chain; the next request
+        // needs a regular block, linked behind it.
+        arena scratch(256);
+        REQUIRE(scratch.allocate(1000) != nullptr);
+        void *regular = scratch.allocate(16);
+        REQUIRE(regular != nullptr);
+        REQUIRE(scratch.block_count() == 2);
+        const memory_snapshot before = snapshot();
+
+        scratch.reset();
+
+        CHECK(snapshot().freeCount == before.freeCount + 1);
+        CHECK(scratch.block_count() == 1);
+        CHECK(scratch.bytes_reserved() == 256);
+        CHECK(scratch.bytes_allocated() == 0);
+        CHECK_FALSE(scratch.owns(regular));
+
+        void *reused = scratch.allocate(16);
+        CHECK(reused == regular);
+        CHECK(snapshot().allocationCount == before.allocationCount);
+    }
+
+    TEST_CASE("arena - reset frees an arena that holds only an oversized block") {
+        arena scratch(256);
+        REQUIRE(scratch.allocate(1000) != nullptr);
+        REQUIRE(scratch.block_count() == 1);
+        const memory_snapshot before = snapshot();
+
+        scratch.reset();
+
+        CHECK(snapshot().freeCount == before.freeCount + 1);
+        CHECK(scratch.block_count() == 0);
+        CHECK(scratch.bytes_reserved() == 0);
+        CHECK(scratch.bytes_allocated() == 0);
+
+        // The next cycle starts over with a regular block, which later resets keep.
+        REQUIRE(scratch.allocate(16) != nullptr);
+        CHECK(scratch.block_count() == 1);
+        CHECK(scratch.bytes_reserved() == 256);
+        CHECK(snapshot().allocationCount == before.allocationCount + 1);
+        scratch.reset();
+        CHECK(scratch.block_count() == 1);
+        CHECK(snapshot().freeCount == before.freeCount + 1);
     }
 
     TEST_CASE("arena - reset on an empty arena is harmless") {
