@@ -61,6 +61,8 @@ namespace conjure::editor {
         mState = play_state::PLAYING;
         mSessionStartFrame = mContext->frame_index();
         mSimulationFrames = 0;
+        mSessionStartFixedStep = mContext->engine().time().fixedStepIndex;
+        mSessionStartFixedTime = mContext->engine().time().fixedTime;
         mWarnedUnrecordedEdit = false;
         emit_state();
         return core::result<void>::success();
@@ -75,6 +77,10 @@ namespace conjure::editor {
             mPendingStep->reply.fail(protocol_error_code::CANCELLED, "play stopped before the step completed");
             mPendingStep.reset();
         }
+        // Kept for play.* until the next start(), not derived from the engine's clocks then: project.open restarts
+        // them while editing.
+        mEndedFixedSteps = simulation_fixed_steps();
+        mEndedSimulationTime = simulation_time();
         set_script_mode(false);
         if (mSnapshot.has_value()) {
             const core::result<void> restored = scene::restore(mContext->scene(), *mSnapshot);
@@ -93,7 +99,6 @@ namespace conjure::editor {
         mSelectionBackup.clear();
         mContext->undo().set_frozen(false);
         mState = play_state::EDITING;
-        mSimulationFrames = 0;
         emit_state();
         mContext->emit_selection_changed();
         return core::result<void>::success();
@@ -195,13 +200,28 @@ namespace conjure::editor {
         );
     }
 
+    u64 play_controller::simulation_fixed_steps() const noexcept {
+        if (mState == play_state::EDITING) {
+            return mEndedFixedSteps;
+        }
+        return mContext->engine().time().fixedStepIndex - mSessionStartFixedStep;
+    }
+
+    f64 play_controller::simulation_time() const noexcept {
+        if (mState == play_state::EDITING) {
+            return mEndedSimulationTime;
+        }
+        // fixedTime, not time: time keeps running while paused (UPDATE still runs), the simulation does not.
+        return mContext->engine().time().fixedTime - mSessionStartFixedTime;
+    }
+
     core::json::document play_controller::describe() const {
         core::json::document document = core::json::document::object();
         document.set("state", to_string(mState));
         document.set("frame", mContext->frame_index());
         document.set("simulationFrame", mSimulationFrames);
-        document.set("simulationTime", mContext->engine().time().time);
-        document.set("fixedStepIndex", mContext->engine().time().fixedStepIndex);
+        document.set("simulationTime", simulation_time());
+        document.set("fixedStepIndex", simulation_fixed_steps());
         return document;
     }
 

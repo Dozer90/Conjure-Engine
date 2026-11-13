@@ -138,11 +138,18 @@ namespace conjure::editor::support {
             "profiler.frame_stats",
             "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) "
             "and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and "
-            "the entity count.",
+            "the entity count. simulationTime and fixedStepIndex are the engine's clocks (engine_time.time and "
+            "fixedStepIndex) since the engine started, which project.open restarts; they are not the play session's "
+            "clocks play.state reports.",
             R"({"type":"object","properties":{"frames":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"cpuMs":{"type":"number"},"gpuMs":{"type":["number","null"]},)"
             R"("systems":{"type":"array"},"phases":{"type":"array"},)"
-            R"("drawCalls":{"type":"integer"},"entityCount":{"type":"integer"}},"additionalProperties":true})",
+            R"("drawCalls":{"type":"integer"},"entityCount":{"type":"integer"},)"
+            R"("simulationTime":{"type":"number",)"
+            R"("description":"the engine's scaled seconds since it started, which project.open restarts"},)"
+            R"("fixedStepIndex":{"type":"integer",)"
+            R"("description":"the engine's fixed steps since it started, which project.open restarts"}},)"
+            R"("additionalProperties":true})",
             command_flags::NONE,
             &profiler_frame_stats
           )

@@ -354,6 +354,16 @@ Any mutating command while not `EDITING` executes but is not recorded; the first
 emits `warning {code:"UNRECORDED_PLAY_EDIT"}`. Budget for the scene module: 10k entities capture +
 restore < 50 ms combined.
 
+Every `play.*` result and the `play.state` event are `{state, frame, simulationFrame, simulationTime,
+fixedStepIndex}`. `frame` is the engine frame (`engine_time.frameIndex`); the other three are the clocks of the
+play session, read from the simulation clock (code sweep of 2026-11-12, F730 and F655). `play.start` records the
+engine's `fixedTime` and `fixedStepIndex`; `simulationTime` and `fixedStepIndex` are the differences from them,
+and `simulationFrame` counts the frames simulated since (a `play.step` counts one). The three stop while paused
+(only a `play.step` moves them) and while editing, and the ended session's values stay until the next
+`play.start`, so `play.stop` answers with them. The engine's `time` is not used: it keeps running while paused.
+`profiler.frame_stats` reports the engine's clocks since the engine started (`project.open` restarts them) under
+the names `simulationTime` (`engine_time.time`) and `fixedStepIndex`, and its summary says so.
+
 ### 3.8 Picking
 
 `picker::pick(ray, candidates, mode)`; candidates are `pick_candidate { core::uuid guid; math::aabb
@@ -875,9 +885,9 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `script.compile` | P A | `{}` -> `{succeeded, diagnostics:[{file, line, column, severity, code, message}], durationMs}` (`scripting::managed_build_runner`) |
 | `script.reload` / `script.gc` | P / P | `{}` (`hot_reload_controller::request(immediate = true)`, applied before the next frame's first script phase) / `{}` -> `{zombies}` (`collect_garbage`); names per R15 |
 | `script.attach` | M S | `{entity, className, fields?}` (sugar for `component.add script`) |
-| `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state}` |
-| `play.step` | A | `{fixedSteps?}` -> `{state, frame}` |
-| `play.state` | | -> `{state, frame, simulationTime}` |
+| `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7) |
+| `play.step` | A | `{fixedSteps?}` -> same as `play.state` |
+| `play.state` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7) |
 | `play.persist` | S | `{**entity**, component?, path?, children?}` (no component = ENTITY scope; component without path = COMPONENT) -> `{entries, promoted}`; PLAYING or PAUSED only |
 | `play.unpersist` | S | `{entity?, component?, path?, all?}` -> `{entries}` |
 | `play.persisted` | | -> `{entries:[{entity, name, scope, component, path, children, before, current, clientId}]}` (`before` from the snapshot, `current` live) |
@@ -897,7 +907,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `module.list` / `module.discover` | / | -> `{modules:[{name, version, state, lastError, providedBy}]}` / `{directory}` -> `{added}` |
 | `module.load` / `module.unload` / `module.reload` | M / M / M | `{name}` / `{name, policy?:"refuse_if_in_use"\|"remove_instances"}` / `{name, scope?:"full"\|"managed_only"}`; each only enqueues `module_manager::request_*`, applied at the next frame start (async completion through the `module.state` event; the editor auto-saves the scene and stops play before a reload; R14) |
 | `module.build` | P A | `{name}` -> `{succeeded, diagnostics}` (runs the project's CMake build for the editor's config through `core::process`, then `request_reload`) |
-| `profiler.frame_stats` | | `{frames?}` -> `{cpuMs, gpuMs, systems:[{name, ms}], drawCalls, entityCount}` |
+| `profiler.frame_stats` | | `{frames?}` -> `{cpuMs, gpuMs, systems:[{name, ms}], drawCalls, entityCount, simulationTime, fixedStepIndex}` (the last two are the engine's clocks since the engine started (`project.open` restarts them), not the play session's, 3.7) |
 
 Events: `log`, `selection.changed`, `play.state`, `scene.changed {revision, label}`, `scene.loaded {path}`,
 `progress {operation, fraction, message}` (export, imports, module builds), `script.compiled`, `script.reloaded`,

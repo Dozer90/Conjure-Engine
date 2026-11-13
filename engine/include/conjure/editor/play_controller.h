@@ -15,7 +15,10 @@
 // Play mode in the editing world (docs/design/04_editor.md D9, 3.7). EDITING keeps the engine PAUSED and the
 // script runtime in EDIT mode; play.start captures a scene snapshot, freezes the undo stack and runs the engine;
 // play.stop restores the snapshot (guids preserved), remaps the selection and thaws the undo stack. play.step
-// runs exactly n fixed steps through application::step_fixed and answers once they ran.
+// runs exactly n fixed steps through application::step_fixed and answers once they ran. The clocks play.* report
+// belong to the play session: play.start records the engine's fixedTime and fixedStepIndex, the session's time
+// and fixed steps count from there (they stop while paused), and the ended session's values stay until the next
+// play.start.
 
 namespace conjure::editor {
 
@@ -47,6 +50,10 @@ namespace conjure::editor {
             play_state mState = play_state::EDITING;
             u64 mSessionStartFrame = 0;
             u64 mSimulationFrames = 0;
+            u64 mSessionStartFixedStep = 0;
+            f64 mSessionStartFixedTime = 0.0;
+            u64 mEndedFixedSteps = 0;
+            f64 mEndedSimulationTime = 0.0;
             bool mWarnedUnrecordedEdit = false;
 
         public:
@@ -58,14 +65,15 @@ namespace conjure::editor {
 
         public:
             /// <summary>
-            /// EDITING -> PLAYING: snapshot, freeze undo, PLAY scripts, RUNNING engine. WRONG_PLAY_STATE
-            /// otherwise; a failed snapshot is INTERNAL and nothing changes.
+            /// EDITING -> PLAYING: snapshot, freeze undo, PLAY scripts, RUNNING engine, the session's clocks
+            /// back to 0. WRONG_PLAY_STATE otherwise; a failed snapshot is INTERNAL and nothing changes.
             /// </summary>
             [[nodiscard]] core::result<void> start();
 
             /// <summary>
             /// PLAYING or PAUSED -> EDITING: PAUSED engine, EDIT scripts, snapshot restored (a failed restore
-            /// logs an ERROR and leaves the scene empty), selection remapped, undo thawed, play.state emitted.
+            /// logs an ERROR and leaves the scene empty), selection remapped, undo thawed, play.state emitted with
+            /// the ended session's clocks, which stay until the next start().
             /// </summary>
             [[nodiscard]] core::result<void> stop();
 
@@ -111,18 +119,33 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Frames simulated since play.start (0 while EDITING).
+            /// Frames simulated in this play session (play.step counts one); while EDITING the count of the
+            /// session that ended last (0 before the first play.start).
             /// </summary>
             [[nodiscard]] u64 simulation_frame() const noexcept {
                 return mSimulationFrames;
             }
+
+            /// <summary>
+            /// Fixed steps run in this play session, from the engine's fixedStepIndex at play.start; while EDITING
+            /// the count of the session that ended last (0 before the first play.start).
+            /// </summary>
+            [[nodiscard]] u64 simulation_fixed_steps() const noexcept;
+
+            /// <summary>
+            /// Simulated seconds of this play session, from the engine's fixedTime at play.start: it advances only
+            /// with fixed steps, so it stops while paused; while EDITING the time of the session that ended last.
+            /// </summary>
+            [[nodiscard]] f64 simulation_time() const noexcept;
 
             [[nodiscard]] bool has_pending_step() const noexcept {
                 return mPendingStep.has_value();
             }
 
             /// <summary>
-            /// The state and frame as the play.state event and commands report them.
+            /// The play.state event and the play.* results: {state, frame (the engine frame), simulationFrame,
+            /// simulationTime, fixedStepIndex}, the last three from this play session (simulation_frame(),
+            /// simulation_time(), simulation_fixed_steps()).
             /// </summary>
             [[nodiscard]] core::json::document describe() const;
 

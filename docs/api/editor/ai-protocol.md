@@ -80,6 +80,20 @@ Events: `log`, `selection.changed`, `play.state`, `scene.changed`, `scene.loaded
 `script.reloaded`, `asset.imported`, `module.state`, `command.executed`, `client.connected`,
 `client.disconnected`, `events.dropped`, `warning`.
 
+Every `play.*` command answers, and every `play.state` event carries, `{state, frame, simulationFrame,
+simulationTime, fixedStepIndex}`. `frame` is the engine frame; the other three are the clocks of the play session.
+`play.start` sets them to 0. `simulationTime` (seconds) and `fixedStepIndex` advance with fixed steps only, so they
+stand still while paused except for a `play.step`, and `simulationFrame` counts the frames simulated. `play.stop`
+answers with the ended session's values, and `play.state` keeps reporting them until the next `play.start`.
+`profiler.frame_stats` has two fields of the same names that are instead the engine's clocks (`engine_time.time` and
+`fixedStepIndex`, the clocks game code reads) since the engine started: they run on across play sessions, and
+`project.open` restarts them.
+
+```
+-> {"id":40,"cmd":"play.step","args":{"fixedSteps":3}}
+<- {"id":40,"ok":true,"result":{"state":"paused","frame":912,"simulationFrame":121,"simulationTime":2.0,"fixedStepIndex":120}}
+```
+
 > [!TIP]
 > Pass `guid` / `guids` / `uuid` to `entity.create`, `entity.create_many`, `prefab.create` and
 > `prefab.instantiate` in a command file: the replay then produces the same guids, and the saved scene is

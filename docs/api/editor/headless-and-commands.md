@@ -155,6 +155,11 @@ the selection's `on_changed` and for `play.stop`), and `selection.get` / `set` /
 script runtime in `EDIT` mode; `start()` snapshots the scene, freezes undo and runs; `pause()` / `resume()`;
 `step(fixedSteps, reply)` runs exactly `n` fixed steps and answers when they ran; `stop()` restores the snapshot
 (guids preserved), remaps the selection and thaws undo. `state()`, `describe()`, `to_string(play_state)`.
+The clocks of the play session are `simulation_frame()`, `simulation_time()` and `simulation_fixed_steps()`:
+`start()` sets them to 0 by recording the engine's `fixedTime` and `fixedStepIndex`, the time and the fixed steps
+advance with fixed steps only (so they stand still while paused), and after `stop()` they keep the ended
+session's values until the next `start()`. `describe()` reports them as `simulationFrame`, `simulationTime` and
+`fixedStepIndex` beside `state` and the engine `frame`.
 
 ## Picking, screenshots, camera, console
 
@@ -217,6 +222,7 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 | `bool command_dispatcher::replaying()` | an undo or redo step (or a batch rollback) is being applied |
 | `f32 editor_camera::world_units_per_pixel(f32)` / `f32 editor_context::viewport_aspect()` | viewport scale and shape |
 | `result<void> play_controller::start()` / `stop()` / `pause()` / `resume()` / `step(u32, async_reply)` | play mode |
+| `u64 play_controller::simulation_frame()` / `f64 simulation_time()` / `u64 simulation_fixed_steps()` | the play session's clocks |
 | `pick_result pick(const math::ray &, span<const pick_candidate>, const pick_context &, pick_mode)` | picking |
 | `void screenshot_service::request(const screenshot_request &, async_reply)` / `bool available()` | screenshots |
 | `static result<ecs::entity> entity_ref::resolve(const json::value &, scene::scene &)` | guid or path to entity |

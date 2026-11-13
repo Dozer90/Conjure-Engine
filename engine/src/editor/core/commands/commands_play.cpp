@@ -55,10 +55,17 @@ namespace conjure::editor::support {
     }
 
     void register_play_commands(command_registry &registry) {
+        // The simulation clocks belong to the play session (play_controller.h); profiler.frame_stats reports the
+        // engine's clocks under two of the same names.
         const std::string stateSchema =
           R"({"type":"object","properties":{"state":{"type":"string","enum":["editing","playing","paused"]},)"
-          R"("frame":{"type":"integer"},"simulationFrame":{"type":"integer"},"simulationTime":{"type":"number"},)"
-          R"("fixedStepIndex":{"type":"integer"}}})";
+          R"("frame":{"type":"integer","description":"the engine frame, engine_time.frameIndex"},)"
+          R"("simulationFrame":{"type":"integer","description":"frames simulated in this play session"},)"
+          R"("simulationTime":{"type":"number","description":"simulated seconds of this play session: fixed )"
+          R"(steps only, so it stops while paused"},)"
+          R"("fixedStepIndex":{"type":"integer","description":"fixed steps run in this play session"}},)"
+          R"("description":"play.start sets the session clocks to 0; while editing they keep the values of the )"
+          R"(session that ended last"})";
         add_command(
           registry,
           make_command(
@@ -119,7 +126,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "play.state",
-            "The play state, engine frame, simulation frame and time.",
+            "The play state, engine frame and the clocks of the play session: simulation frames, simulated time "
+            "and fixed steps.",
             std::string(EMPTY_SCHEMA),
             stateSchema,
             command_flags::NONE,

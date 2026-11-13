@@ -1938,18 +1938,23 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
@@ -1975,18 +1980,23 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
@@ -2013,23 +2023,28 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
             "name": "play.state",
-            "summary": "The play state, engine frame, simulation frame and time.",
+            "summary": "The play state, engine frame and the clocks of the play session: simulation frames, simulated time and fixed steps.",
             "flags": [],
             "owner": "editor",
             "args": {
@@ -2047,18 +2062,23 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
@@ -2092,18 +2112,23 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
@@ -2130,18 +2155,23 @@
                         ]
                     },
                     "frame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "the engine frame, engine_time.frameIndex"
                     },
                     "simulationFrame": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "frames simulated in this play session"
                     },
                     "simulationTime": {
-                        "type": "number"
+                        "type": "number",
+                        "description": "simulated seconds of this play session: fixed steps only, so it stops while paused"
                     },
                     "fixedStepIndex": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "fixed steps run in this play session"
                     }
-                }
+                },
+                "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
             }
         },
         {
@@ -2326,7 +2356,7 @@
         },
         {
             "name": "profiler.frame_stats",
-            "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and the entity count.",
+            "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and the entity count. simulationTime and fixedStepIndex are the engine's clocks (engine_time.time and fixedStepIndex) since the engine started, which project.open restarts; they are not the play session's clocks play.state reports.",
             "flags": [],
             "owner": "editor",
             "args": {
@@ -2361,6 +2391,14 @@
                     },
                     "entityCount": {
                         "type": "integer"
+                    },
+                    "simulationTime": {
+                        "type": "number",
+                        "description": "the engine's scaled seconds since it started, which project.open restarts"
+                    },
+                    "fixedStepIndex": {
+                        "type": "integer",
+                        "description": "the engine's fixed steps since it started, which project.open restarts"
                     }
                 },
                 "additionalProperties": true
@@ -3832,5 +3870,5 @@
         "UNAUTHORISED",
         "INTERNAL"
     ],
-    "schemaHash": "9babb47223c6c8e1"
+    "schemaHash": "8311bf621a4ba23f"
 }
