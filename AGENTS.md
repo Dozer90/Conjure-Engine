@@ -93,6 +93,16 @@ Concurrent builds must use separate build directories: pass `--build-dir build/<
 `tools/build.py` (for example `python tools/build.py --build-dir build/core_math --target
 conjure_core_math_tests --test -R core_math`; add `--no-configure` on later runs).
 
+Private build directories are temporary: a full Debug tree is 11 to 13 GB, and stale ones once filled 360 GB.
+Reuse the same names across rounds of parallel work instead of inventing new ones. Whoever creates a private
+directory removes it once no further round will use it (an agent that starts other agents removes theirs too):
+`python tools/prune_builds.py <name> ... --delete`. `python tools/prune_builds.py` on its own lists every build
+tree with its size, its last change and what `--delete` would do. Use `--older-than <days>` or `--all` only when
+no one else is building: on Linux and macOS the tool cannot tell that a tree is in use (on Windows it leaves a
+tree untouched while a file in it is open or a program runs from it). It removes only directories directly under
+`build/` that hold the `CMakeCache.txt` of an out-of-source build configured on this host, never follows a link,
+and keeps the presets' binary directories unless `--include-presets` is given.
+
 ## 5. Build configurations
 
 | Configuration | Purpose |

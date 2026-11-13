@@ -75,8 +75,12 @@ python tools/build.py --build-dir build/<your-name> --no-configure --target conj
 
 Raw equivalents, in a shell where `vcvars64.bat` is imported: `cmake --preset <preset> -B build/<your-name>`,
 `cmake --build build/<your-name> --target <target>`, `ctest --test-dir build/<your-name> -R <module>`.
-Everything under `build/` is ignored by git. A public header change in a lower wave is a change to that
-module with its own tests; higher waves never patch around it (`docs/ARCHITECTURE.md` section 11).
+Everything under `build/` is ignored by git. Private trees are temporary (a full Debug tree is 11 to 13 GB):
+reuse your names across rounds, and once no further round will use them remove them with
+`python tools/prune_builds.py <your-name> --delete`
+([Getting started](getting-started.md#6-private-build-directories)). A public header change in a lower wave is
+a change to that module with its own tests; higher waves never patch around it (`docs/ARCHITECTURE.md`
+section 11).
 
 ## 5. The review checklist
 

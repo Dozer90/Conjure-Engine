@@ -66,6 +66,21 @@ commands, for a shell where `vcvars64.bat` is already imported, are `cmake --pre
 build/<my-name>`, `cmake --build build/<my-name> --target <target>` and
 `ctest --test-dir build/<my-name> -R <module>`.
 
+A private tree is temporary (a full Debug tree is 11 to 13 GB): reuse its name across rounds and remove it
+once no further round will use it.
+
+```bash
+python tools/prune_builds.py                          # list build trees: size, last change, action
+python tools/prune_builds.py <my-name> --delete       # remove yours
+python tools/prune_builds.py --older-than 3 --delete  # remove trees unchanged for three days
+```
+
+The tool removes only directories directly under `build/` that hold the `CMakeCache.txt` of an out-of-source
+build configured on this host, never follows a link, and keeps the presets' binary directories (`build/<preset>`)
+unless `--include-presets` is given; without `--delete` it changes nothing. On Windows it leaves a tree untouched
+while a file in it is open or a program runs from it; elsewhere it cannot tell, so run `--older-than` or `--all`
+only when no one else is building.
+
 ## Reading failures
 
 - `error C2xxx` / `error:` lines are compiler errors. Fix the code; never weaken warnings.

@@ -268,9 +268,10 @@ chapter documents them in full; the build-relevant facts are:
 - `tests/CMakeLists.txt` registers `tools/check_style.py --tests-mirror-headers` plus its self-test as the
   CTest entries `style.check` and `style.check_tool` (label `style`), `tools/check_docs.py` plus its self-test
   as `docs.check` and `docs.check_tool` (label `docs`), and the self-tests of `tools/build.py`,
-  `tools/download_test_assets.py` and `tools/generate_native_api.py` as `build.driver_tool`,
-  `test_assets.downloader_tool` and `native_api.generator_tool` (label `tools`), each with a 120 s timeout,
-  when a Python 3 interpreter is found. The self-tests live in `tools/tests/` and never touch the network.
+  `tools/prune_builds.py`, `tools/download_test_assets.py` and `tools/generate_native_api.py` as
+  `build.driver_tool`, `build.prune_tool`, `test_assets.downloader_tool` and `native_api.generator_tool` (label
+  `tools`), each with a 120 s timeout, when a Python 3 interpreter is found. The self-tests live in `tools/tests/`
+  and never touch the network.
 - Independently of Python, it registers `build.abi_identity_non_ascii_path` (label `build`, 60 s timeout):
   `cmake/ConjureSharedLibrary.cmake` in script mode over a header list that names a path with a non-ASCII
   directory, which fails if the list is read back truncated.

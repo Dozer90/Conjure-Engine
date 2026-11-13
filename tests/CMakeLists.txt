@@ -73,13 +73,18 @@ if(Python3_Interpreter_FOUND)
     )
     set_tests_properties(docs.check_tool PROPERTIES LABELS "docs" TIMEOUT 120)
 
-    # Self-tests of the build driver's preset resolution, the test-asset downloader (fake transfers, never
-    # the network) and the native API generator's table parser.
+    # Self-tests of the build driver's preset resolution, the build-tree pruner (a fake build/ folder), the
+    # test-asset downloader (fake transfers, never the network) and the native API generator's table parser.
     add_test(NAME build.driver_tool
         COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_build.py"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set_tests_properties(build.driver_tool PROPERTIES LABELS "tools" TIMEOUT 120)
+    add_test(NAME build.prune_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_prune_builds.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(build.prune_tool PROPERTIES LABELS "tools" TIMEOUT 120)
     add_test(NAME test_assets.downloader_tool
         COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_download_test_assets.py"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"

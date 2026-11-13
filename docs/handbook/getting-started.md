@@ -29,7 +29,7 @@ documentation site and how to start the editor and the runtime you built.
 | C++20 compiler | MSVC 19.40+ (VS 2022 17.10 or VS 2026), GCC 13+, Clang 16+ | Warnings are errors on every compiler (`cmake/ConjureWarnings.cmake`). |
 | C++ standard library | libstdc++ 10+, MSVC 19.28+, libc++ 18+ (Xcode 16+) | `core::jobs::dedicated_thread` needs `std::jthread` and `std::stop_token`; `engine/src/core/jobs/CMakeLists.txt` checks at configure time. |
 | .NET SDK | 8.0+ | Needed for scripting (`CONJURE_WITH_SCRIPTING=ON`, the default); `cmake/FindNetHost.cmake` locates `nethost.h` and `libnethost`. A machine without the host pack still configures: the root `CMakeLists.txt` turns scripting and the managed build off for that tree with a CMake warning (the configure summary shows `Scripting ... OFF`). Configure with `-DCONJURE_WITH_SCRIPTING=OFF` to make that explicit and silent. |
-| Python | 3 | `tools/build.py`, `tools/check_style.py`, `tools/check_docs.py`, `tools/docs.py`, `tools/download_test_assets.py`. |
+| Python | 3 | `tools/build.py`, `tools/prune_builds.py`, `tools/check_style.py`, `tools/check_docs.py`, `tools/docs.py`, `tools/download_test_assets.py`. |
 
 Platform packages, as installed by `.github/workflows/ci.yml`:
 
@@ -173,6 +173,38 @@ With `--build-dir`, `tools/build.py` runs `cmake --preset <preset> -B <dir>`, `c
 `ctest --test-dir <dir> --output-on-failure` instead of the preset forms. Everything under `build/` is
 ignored by git. `--clean` removes the directory first, clearing the read-only bit git leaves on fetched
 pack files on Windows.
+
+A private directory is temporary. A full Debug tree is 11 to 13 GB, so reuse its name across rounds of work
+and remove it once no further round will use it; `tools/prune_builds.py` lists and removes build trees:
+
+```bash
+python tools/prune_builds.py                          # every build tree: size, last change, action
+python tools/prune_builds.py core_math --delete       # remove named trees (core_math or build/core_math)
+python tools/prune_builds.py --older-than 3 --delete  # remove trees unchanged for three days
+python tools/prune_builds.py --all --keep core_math --delete
+```
+
+It only touches directories directly under `build/` that hold a `CMakeCache.txt` and no `CMakeLists.txt`, and
+whose recorded source directory exists on this host outside the tree. The comparison is by file identity, so an
+in-source scratch project stays safe however its path is spelled (a junction, a symbolic link, a `subst`
+drive), and a tree configured from WSL is listed only in WSL, a tree configured on Windows only on Windows. It
+never follows a link or junction, and it keeps the presets' binary directories (`build/<preset>`, including
+those of `CMakeUserPresets.json` and of included preset files, with inheritance and the macros resolved as CMake
+does; a macro it cannot know, such as `$vendor{}`, stands for any text in its place, so `$vendor{x}-dev`
+protects every name ending in `-dev`) unless `--include-presets` is given. Without `--delete` it only reports.
+A tree's last change is the newest modification of any file or directory in it, whatever the generator.
+
+To remove a tree it first renames it to a private name next to it (`NAME.prune-<process id>`) and checks that
+what it renamed is still the directory it listed, so another agent that recreates or relinks `build/NAME`
+meanwhile cannot redirect the removal; whenever the removal stops, the tree is renamed back. On Windows removal
+works through extended-length paths, so files past 260 characters go too, and deletes read-only files (git
+leaves fetched pack files read-only) without clearing the read-only bit their other hard links share. It leaves
+a tree untouched while a file in it is held open, a process works in it, or a program or library runs from it.
+On Linux and macOS it makes read-only, unreadable and unsearchable directories inside the tree accessible,
+refuses to start on a tree when `build/` itself is not writable, and keeps a tree that is or holds a mount
+point; it cannot tell that a tree is in use there, so run `--older-than` or `--all` only when no one else is
+building. `CMakeCache.txt` goes last: a tree that could not be removed completely stays listed, and running the
+command again retries it.
 
 ## 7. Build options
 

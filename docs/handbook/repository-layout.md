@@ -141,6 +141,7 @@ Conventions worth knowing when looking for something:
 | Script | Role |
 |---|---|
 | `tools/build.py` | cross-platform build driver: default preset per host, MSVC environment import, `--build-dir`, `--target`, `--test -R/-L`, `--clean` |
+| `tools/prune_builds.py` | lists the build trees directly under `build/` with size and last change, and removes stale or named ones (`--older-than`, `--all`, `--keep`, `--delete`) while keeping the presets' binary directories ([Getting started](getting-started.md#6-private-build-directories)) |
 | `tools/check_style.py` | mechanical style rules over `engine/`, `editor/`, `runtime/`, `tests/`, `samples/`; `--tests-mirror-headers`; CTest entry `style.check` |
 | `tools/style_exceptions.json` | the two exception tables read by `check_style.py` |
 | `tools/check_exports.py` | reports public classes, free functions and `extern` variables without `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); every module by default (or the modules named); CTest `exports.check_annotations`, `exports.check_tool`, `exports.count_shared_library` |
@@ -150,7 +151,7 @@ Conventions worth knowing when looking for something:
 | `tools/ctest_check_skips.py` | fails a CI run when a skipped test carries no allowed label or name tag, reading the ctest JUnit output; used in `ci.yml` and `nightly.yml`, with `--self-test` in `style-and-headers` |
 | `tools/generate_native_api.py` | generates `native_api_hash.h`, `NativeApi.g.cs` and `docs/generated/native_api_manifest.json` from `native_api.inl`, and `BindingStatus.g.cs` from `bindings_error.inl`; CTest `conjure_scripting_api_generated_up_to_date` runs `--check` |
 | `tools/generate_brand_icons.py`, `tools/tests/test_generate_brand_icons.py` | the editor icon ([Logo and application icon](brand.md)); CTest `brand.icons_up_to_date` and `brand.icons_tool` |
-| `tools/tests/test_build.py`, `test_check_style.py`, `test_download_test_assets.py`, `test_generate_native_api.py` | the self-tests of `build.py`, `check_style.py`, `download_test_assets.py` and `generate_native_api.py`; CTest `build.driver_tool`, `style.check_tool`, `test_assets.downloader_tool`, `native_api.generator_tool` |
+| `tools/tests/test_build.py`, `test_prune_builds.py`, `test_check_style.py`, `test_download_test_assets.py`, `test_generate_native_api.py` | the self-tests of `build.py`, `prune_builds.py`, `check_style.py`, `download_test_assets.py` and `generate_native_api.py`; CTest `build.driver_tool`, `build.prune_tool`, `style.check_tool`, `test_assets.downloader_tool`, `native_api.generator_tool` |
 | `tools/docs.py` | `install`, `serve`, `build`, `check` for the documentation site |
 | `tools/docs_requirements.txt` | pinned MkDocs toolchain |
 | `tools/download_test_assets.py`, `tools/test_assets.json`, `tools/test_assets.lock` | downloads the public fixtures listed in the manifest into `tests/.downloaded/`, verifies every file against the SHA-256 pinned in the committed lock (a file the lock does not know is pinned on first download and the lock is committed with the change; `--verify` and `--locked` fail on an unpinned asset), writes the `.assets_ready` stamp |
