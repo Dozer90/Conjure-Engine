@@ -74,7 +74,7 @@ core::result<instantiate_report> scene::instantiate_archive(
           options.parent);
     }
 
-    // Shape and depth before anything exists, so a failure leaves the world untouched.
+    // Shape, depth and layer range before anything exists, so a failure leaves the world untouched.
     CONJURE_TRY_ASSIGN(const archive_shape shape, detail::compute_archive_shape(*archive, mIds));
     const u32 baseDepth = options.parent.is_null() ? 0u : static_cast<u32>(mTree.depth_of(options.parent)) + 1u;
     for (u32 entry = 0; entry < entryCount; ++entry) {
@@ -94,6 +94,7 @@ core::result<instantiate_report> scene::instantiate_archive(
               rootDepth + shape.depth[entry]);
         }
     }
+    CONJURE_TRY(detail::check_layers(*archive, mIds));
 
     // Guids: KEEP must not collide with the index or inside the archive; count > 1 regenerates everything.
     const guid_policy policy = count > 1 ? guid_policy::REGENERATE_ALL : options.guids;

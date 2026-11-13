@@ -488,6 +488,10 @@ core::result<void> scene::set_local_transform(ecs::entity target, const local_tr
     return core::result<void>::success();
 }
 
+core::result<void> scene::set_local_transform(ecs::entity target, const math::transform &value) {
+    return set_local_transform(target, local_transform::from_transform(value));
+}
+
 core::result<void> scene::set_world_transform(ecs::entity target, const math::transform &value) {
     if (!mWorld->is_alive(target)) {
         return not_alive("set_world_transform", target);

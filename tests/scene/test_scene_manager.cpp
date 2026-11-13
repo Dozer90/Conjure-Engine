@@ -691,6 +691,13 @@ TEST_SUITE("scene/scene_manager") {
             CONJURE_REQUIRE_OK(fs.write_text_file("scenes/loop.scene.json", loop));
             CONJURE_CHECK_ERROR(manager.load_file(fs, "scenes/loop.scene.json"), scene_error::HIERARCHY_CYCLE);
         }
+        SUBCASE("a layer outside 0..31") {
+            const std::string layered = "{\"format\":\"conjure.scene\",\"version\":1,\"name\":\"layered\","
+              "\"settings\":{},\"roots\":[],\"archive\":{\"entities\":["
+              "{\"components\":{\"conjure.scene.layer\":{\"index\":32}}}]}}";
+            CONJURE_REQUIRE_OK(fs.write_text_file("scenes/layered.scene.json", layered));
+            CONJURE_CHECK_ERROR(manager.load_file(fs, "scenes/layered.scene.json"), scene_error::BAD_FORMAT);
+        }
 
         // Nothing was unloaded or created: the loaded scene, its settings and the authored entity stay.
         CHECK(manager.is_loaded(loaded.value()));

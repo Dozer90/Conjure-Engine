@@ -948,4 +948,30 @@ TEST_SUITE("scene/scene") {
         CHECK(target.tree().parent_of(restoredLeaf) == restored);
         CONJURE_CHECK_OK(target.validate());
     }
+
+    TEST_CASE("scene - set_local_transform takes the math::transform local_transform_of returns") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity root = fixture.create("root");
+        const ecs::entity child = fixture.create("child", root);
+        CONJURE_REQUIRE_OK(target.set_local_transform(root, at(10.0f, 0.0f, 0.0f)));
+        fixture.step();
+
+        // The getter's result goes back into the setter, edited or as it is, without from_transform.
+        math::transform moved = target.local_transform_of(child).value();
+        moved.position = math::vec3(1.0f, 2.0f, 3.0f);
+        moved.scale = math::vec3(2.0f);
+        CONJURE_REQUIRE_OK(target.set_local_transform(child, moved));
+        REQUIRE(fixture.world.has<scene::local_transform>(child));
+        CHECK(*fixture.world.get<scene::local_transform>(child) == scene::local_transform::from_transform(moved));
+        CONJURE_REQUIRE_OK(target.set_local_transform(child, target.local_transform_of(child).value()));
+        CHECK(*fixture.world.get<scene::local_transform>(child) == scene::local_transform::from_transform(moved));
+
+        // The write stamps the chunk like the local_transform overload, so the next pass picks it up.
+        fixture.step();
+        CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(child)), math::vec3(11.0f, 2.0f, 3.0f));
+
+        CONJURE_CHECK_ERROR(target.set_local_transform(ecs::entity{900, 1}, moved), scene_error::INVALID_ENTITY);
+        CONJURE_CHECK_OK(target.validate());
+    }
 }

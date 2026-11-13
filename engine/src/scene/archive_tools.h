@@ -249,10 +249,24 @@ namespace conjure::scene::detail {
     }
 
     /// <summary>
+    /// BAD_FORMAT naming the first entry whose layer index is 32 or more. set_layer refuses such a value,
+    /// but a file, a prefab or a raw component write can carry one. instantiate_archive runs this before it
+    /// creates anything, and every capture (capture, capture_subtree, save_scene) runs it too, so the scene
+    /// never hands out an archive it would refuse to instantiate. A capture passes the entity of every
+    /// entry in 'entities', and the message then names that entity instead of the entry.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_layers(
+      const ecs::entity_archive &archive,
+      const scene_component_ids &ids,
+      std::span<const ecs::entity> entities = {}
+    );
+
+    /// <summary>
     /// Everything instantiate_archive rejects before creating anything, evaluated for an archive whose
     /// roots become scene roots of an empty world: validate(), entries without components
-    /// (BAD_FORMAT), the hierarchy shape (HIERARCHY_CYCLE, HIERARCHY_TOO_DEEP) and duplicate guids. A
-    /// REPLACE load runs this before it unloads the current content, so a bad file leaves it intact.
+    /// (BAD_FORMAT), the hierarchy shape (HIERARCHY_CYCLE, HIERARCHY_TOO_DEEP), layer indices of 32 or
+    /// more (BAD_FORMAT) and duplicate guids. A REPLACE load runs this before it unloads the current
+    /// content, so a bad file leaves it intact.
     /// </summary>
     [[nodiscard]] core::result<void> check_loadable(const ecs::entity_archive &archive, const scene_component_ids &ids);
 

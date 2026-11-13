@@ -35,6 +35,8 @@ core::result<scene_snapshot> capture(const scene &source) {
         source.tree().collect_subtree(entry.entity, entities);
     }
     CONJURE_TRY_ASSIGN(snapshot.archive, ecs::entity_archive::capture(source.world(), entities));
+    // restore() would refuse this layer only after it cleared the scene: refuse it now, while nothing is lost.
+    CONJURE_TRY(detail::check_layers(snapshot.archive, source.ids(), entities));
     snapshot.settings = source.settings();
     snapshot.name = std::string(source.name());
     snapshot.structureVersion = source.structure_version();

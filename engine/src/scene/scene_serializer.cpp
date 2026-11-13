@@ -36,6 +36,8 @@ namespace {
         std::vector<ecs::entity> entities = {};
         scene_serializer::collect_hierarchy_order(source, entities);
         CONJURE_TRY_ASSIGN(ecs::entity_archive archive, ecs::entity_archive::capture(source.world(), entities));
+        // A file that loading would refuse is never written.
+        CONJURE_TRY(detail::check_layers(archive, source.ids(), entities));
         document.archive = std::make_shared<const ecs::entity_archive>(std::move(archive));
         return document;
     }
@@ -295,6 +297,9 @@ core::result<ecs::entity_archive> scene_serializer::capture_subtree(
     std::vector<ecs::entity> entities = {};
     source.tree().collect_subtree(root, entities);
     CONJURE_TRY_ASSIGN(ecs::entity_archive captured, ecs::entity_archive::capture(source.world(), entities, options));
+    // Duplicates, prefab documents and the editor's undo payloads are instantiated later: refuse a layer that
+    // instantiation would refuse while the subtree still exists.
+    CONJURE_TRY(detail::check_layers(captured, source.ids(), entities));
     if (options.keepExternalReferences || !captured.entries().front().mask.test(source.ids().parent)) {
         return captured;
     }

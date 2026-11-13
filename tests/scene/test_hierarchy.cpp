@@ -350,6 +350,7 @@ TEST_SUITE("scene/hierarchy") {
         // A transformless entity ignores keepWorld and set_world_transform refuses it.
         CONJURE_CHECK_OK(target.set_parent(middle, other, true));
         CONJURE_CHECK_ERROR(target.set_world_transform(middle, math::transform{}), scene_error::NO_TRANSFORM);
-        CONJURE_CHECK_ERROR(target.set_local_transform(middle, {}), scene_error::NO_TRANSFORM);
+        CONJURE_CHECK_ERROR(target.set_local_transform(middle, scene::local_transform{}), scene_error::NO_TRANSFORM);
+        CONJURE_CHECK_ERROR(target.set_local_transform(middle, math::transform{}), scene_error::NO_TRANSFORM);
     }
 }

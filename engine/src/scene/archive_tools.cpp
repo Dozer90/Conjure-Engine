@@ -1,6 +1,7 @@
 #include "scene/archive_tools.h"
 
 #include "conjure/scene/scene_error.h"
+#include "conjure/scene/scene_manager.h"
 
 #include "conjure/core/assert.h"
 #include "conjure/core/error.h"
@@ -308,12 +309,43 @@ core::error conjure::scene::detail::prefab_roots_error(const prefab_root_report 
       "{}: a prefab needs exactly one root at entry 0; found {} roots", what, report.value);
 }
 
+core::result<void> conjure::scene::detail::check_layers(
+  const ecs::entity_archive &archive,
+  const scene_component_ids &ids,
+  std::span<const ecs::entity> entities
+) {
+    for (u32 index = 0; index < archive.entity_count(); ++index) {
+        const std::optional<layer> value = read_component<layer>(archive, index, ids.layer);
+        if (!value.has_value() || static_cast<u32>(value->index) < layer_table::LAYER_COUNT) {
+            continue;
+        }
+        if (index < entities.size()) {
+            return core::make_error(
+              scene_error::BAD_FORMAT,
+              "entity {} has layer {}; layers are 0..{}",
+              entities[index],
+              value->index,
+              layer_table::LAYER_COUNT - 1
+            );
+        }
+        return core::make_error(
+          scene_error::BAD_FORMAT,
+          "archive entry {} has layer {}; layers are 0..{}",
+          index,
+          value->index,
+          layer_table::LAYER_COUNT - 1
+        );
+    }
+    return core::result<void>::success();
+}
+
 core::result<void> conjure::scene::detail::check_loadable(
   const ecs::entity_archive &archive,
   const scene_component_ids &ids
 ) {
     CONJURE_TRY(archive.validate());
     CONJURE_TRY(compute_archive_shape(archive, ids));
+    CONJURE_TRY(check_layers(archive, ids));
     return check_unique_guids(archive, ids);
 }
 

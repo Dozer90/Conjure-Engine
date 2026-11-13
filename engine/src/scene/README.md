@@ -94,16 +94,23 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   chunk-granular), so `scene.transform_propagation_10k_sparse` (10 of 100 roots in one 67-row chunk)
   recomputes 6,770 of its 10,000 rows, 68 % of the dense scenario.
 - **Instantiation (3.9).** `instantiate_archive` validates the archive, its shape (pre-order, depths,
-  cycles) and the guid policy before anything exists, then runs `world::instantiate_batch` once with its
-  `outEntities` vector, which reports every created id copy-major in entry order (entries without
-  components included, so an empty entity in a file becomes a plain root). Guids are regenerated and
-  rebound where the policy says so (the two regenerate policies also give a null guid a fresh one; `KEEP`,
-  which snapshot restore and REPLACE loads use, leaves it null); the link pass gathers the children of
-  every new internal node in a side table, sorts them by the persisted sibling index, renumbers through the
-  live `parent` links and records the `children` component together with depth tags, companions, dirty
-  and inactive tags and the root overrides into one flush, so each entity of the archive moves once;
-  archive roots attach under `options.parent`, a live external parent or the root list. The bind pass
-  then resolves every `asset_ref` through `asset_manager::bind_slot`.
+  cycles), every `layer` index (`detail::check_layers`: 32 or more is `BAD_FORMAT` naming the entry, S15;
+  `layer` is a grouping label, never a render mask) and the guid policy before anything exists, then runs
+  `world::instantiate_batch` once with its `outEntities` vector, which reports every created id copy-major
+  in entry order (entries without components included, so an empty entity in a file becomes a plain
+  root). Guids are regenerated and rebound where the policy says so (the two regenerate policies also give
+  a null guid a fresh one; `KEEP`, which snapshot restore and REPLACE loads use, leaves it null); the link
+  pass gathers the children of every new internal node in a side table, sorts them by the persisted
+  sibling index, renumbers through the live `parent` links and records the `children` component together
+  with depth tags, companions, dirty and inactive tags and the root overrides into one flush, so each
+  entity of the archive moves once; archive roots attach under `options.parent`, a live external parent or
+  the root list. The bind pass then resolves every `asset_ref` through `asset_manager::bind_slot`.
+- **Captures (S15).** `capture`, `capture_subtree` (and so `duplicate_subtree`, `save_subtree` and the
+  prefab `build_document`, `diff` and `apply`) and `save_scene` run `detail::check_layers` on what they
+  captured, with the captured entities, so a layer of 32 or more is `BAD_FORMAT` naming the entity before
+  anything is destroyed or written. Otherwise play/stop (whose `restore` clears first), the editor's
+  destroy undo and a saved file would carry a value that instantiation refuses. `refresh_instances` skips
+  an instance whose `diff` fails, so it never reverts one.
 - **Files.** Header keys `format`, `version`, `name`, `settings` (canonical), `roots` (guid strings),
   `archive` (`ecs::write_archive_json` of every entity in hierarchy order, component keys in id order).
   Unknown components survive through `unresolved_components`; save -> load -> save is byte-identical.
@@ -116,15 +123,17 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   entity. `diff` matches entries by link guid, compares components as canonical JSON with the instance's
   local entity references remapped to the asset's indices (so an added entity never shifts the others),
   and treats `parent` by parent guid plus sibling index. `revert` first checks that the current asset still
-  fits at the instance's place (archive, single root, depth limit) and only then re-instantiates there with
-  the old root guid, so those failures leave the instance untouched; `apply` writes the link guids as entry
-  guids (a link guid already used by an earlier entity, as after a duplicate, gets a fresh one) and drops
-  the root marker; `unpack` stops at nested instance roots unless recursive. `prefab_builder` produces a
-  document from nodes and components by registered name (the engine's model converter uses it).
+  fits at the instance's place (archive, single root, depth limit, layer range) and only then
+  re-instantiates there with the old root guid, so those failures leave the instance untouched; `apply`
+  writes the link guids as entry guids (a link guid already used by an earlier entity, as after a
+  duplicate, gets a fresh one) and drops the root marker; `unpack` stops at nested instance roots unless
+  recursive. `prefab_builder` produces a document from nodes and components by registered name (the
+  engine's model converter uses it).
 - **Snapshots.** A `scene_snapshot` is the typed archive of every entity in hierarchy order plus the root
   order, owners, settings, name and the structure version at capture (informational: `restore` cannot
   rewind the counter, its clear and instantiate bump it like any structural change); `restore` clears the
-  scene and instantiates with `KEEP` guids (an empty scene stays empty on failure).
+  scene and instantiates with `KEEP` guids (an empty scene stays empty on failure), and `capture` refuses a
+  layer of 32 or more so a captured snapshot never fails that way.
 - **Scene manager.** `load` goes through `load_blocking` (dependencies first) and keeps the handle in the
   record's `asset_load_batch`; `load_file` parses from a `vfs::file_system` and loads the referenced assets
   as a batch; `request_load` queues a handle that `apply_pending_loads` (FRAME_BEGIN) applies once
@@ -137,10 +146,10 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   any entity is left (authored content, raw entities), fires `on_before_unload` once more with
   `SCENE_ID_AUTHORED` and the remaining roots before `scene::clear()`; a scene a handler loaded meanwhile
   is cleared and retired with the rest. REPLACE first runs everything `instantiate_archive` would reject
-  (`detail::check_loadable`: validation, empty entries, shape, duplicate guids) so a bad file leaves the
-  current content in place, then unloads everything (`scene::clear()` last), takes the file's settings
-  and name and keeps guids; ADDITIVE regenerates colliding guids with one WARN. `info()` and
-  `loaded_scenes()` gather a record's roots from the scene on every call (a `restore()` or a reparent
+  (`detail::check_loadable`: validation, empty entries, shape, layer range, duplicate guids) so a bad
+  file leaves the current content in place, then unloads everything (`scene::clear()` last), takes the
+  file's settings and name and keeps guids; ADDITIVE regenerates colliding guids with one WARN. `info()`
+  and `loaded_scenes()` gather a record's roots from the scene on every call (a `restore()` or a reparent
   changes them), so `loaded_scene_info::roots` is never stale.
 
 ## Deviations from `13_scene.md` worth knowing

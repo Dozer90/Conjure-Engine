@@ -49,7 +49,9 @@ namespace conjure::scene {
     };
 
     /// <summary>
-    /// Captures every entity of the tree, the root order and owners, the settings and the name.
+    /// Captures every entity of the tree, the root order and owners, the settings and the name. BAD_FORMAT
+    /// naming the entity when one carries a layer index of 32 or more, which restore would refuse only
+    /// after clearing the scene.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<scene_snapshot> capture(const scene &source);
 

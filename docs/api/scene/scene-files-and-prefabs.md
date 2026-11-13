@@ -62,11 +62,14 @@ A `.scene.json` file is a small header plus the ECS archive of every entity in h
 `load_scene(scene, document, owner, guids)` instantiates it: every entity in its final archetype, children and
 depth tags linked, the roots ordered as the header lists them, and every `asset_ref` field bound through the
 asset manager (the bind pass). `load_scene_file` does all three. Save, load, save again is byte-identical;
-components the registry does not know survive untouched in `unresolved_components`.
+components the registry does not know survive untouched in `unresolved_components`. A save refuses a scene whose
+entity carries a `layer` index of 32 or more (`BAD_FORMAT` naming the entity, nothing written), because loading
+would refuse the file.
 
-Errors: `BAD_FORMAT` (wrong format name, missing archive, malformed roots or settings), `UNSUPPORTED_VERSION`,
-`DUPLICATE_GUID` with `guid_policy::KEEP`, `HIERARCHY_CYCLE`, `HIERARCHY_TOO_DEEP`, and the ECS's
-`SERIALIZATION_FAILED` for a malformed component. Nothing is created when a load fails.
+Errors: `BAD_FORMAT` (wrong format name, missing archive, malformed roots or settings, or a `layer` index of 32 or
+more, naming the entry), `UNSUPPORTED_VERSION`, `DUPLICATE_GUID` with `guid_policy::KEEP`, `HIERARCHY_CYCLE`,
+`HIERARCHY_TOO_DEEP`, and the ECS's `SERIALIZATION_FAILED` for a malformed component. Nothing is created when a
+load fails.
 
 `guid_policy` says what happens to the file's guids: `KEEP` (a collision fails the load), `REGENERATE_ON_CONFLICT`
 (colliding entries get fresh guids with one WARN) or `REGENERATE_ALL` (prefabs and copies). Both regenerate
@@ -106,7 +109,10 @@ colliding guids with one WARN. Ids retired by an unload or a REPLACE are never r
 
 A prefab is a `prefab_document {name, archive}` whose entry 0 is the single root. `prefab::build_document(scene,
 root, name)` captures a subtree (references to entities outside the subtree become null); the `conjure.scene.prefab`
-asset type publishes it as `prefab_asset {archive, name, rootGuid, dependencies, id}`.
+asset type publishes it as `prefab_asset {archive, name, rootGuid, dependencies, id}`. Like every subtree capture
+(`capture_subtree`, `save_subtree`, `duplicate_subtree`, and `diff` and `apply`, which capture the instance), it
+refuses an entity whose `layer` index is 32 or more with `BAD_FORMAT` naming the entity, because instantiating
+the result would fail.
 
 Instances are fully materialised: `prefab::instantiate(scene, asset, options)` creates real entities with fresh
 guids, puts `prefab_instance {asset_ref<prefab_asset>}` on the root and `prefab_link {assetGuid}` on every
@@ -118,7 +124,7 @@ transform, and can skip the bind pass.
 |---|---|
 | `prefab::instance_root_of(scene, entity)` | the nearest ancestor (itself included) carrying `prefab_instance` |
 | `prefab::diff(scene, root)` | `prefab_diff` of `entity_diff {assetGuid, instanceEntity, kind, components}` entries: `ADDED`, `REMOVED` or `MODIFIED` with the component names; components are compared as canonical JSON with local references remapped, and the parent link by parent guid and sibling index |
-| `prefab::revert(scene, root)` | replaces the instance with a fresh one at the same place, keeping the root's guid, name and transform; when the current asset no longer fits there (`HIERARCHY_TOO_DEEP`, `PREFAB_MULTIPLE_ROOTS`) the instance is left untouched |
+| `prefab::revert(scene, root)` | replaces the instance with a fresh one at the same place, keeping the root's guid, name and transform; when the current asset no longer fits there (`HIERARCHY_TOO_DEEP`, `PREFAB_MULTIPLE_ROOTS`, `BAD_FORMAT` for a `layer` index of 32 or more) the instance is left untouched |
 | `prefab::apply(scene, root)` | the instance as a new document: link guids become entry guids (a link guid already used by an earlier entity gets a fresh one), the root loses its marker |
 | `prefab::refresh_instances(scene, prefabId, onlyUnmodified = true)` | reverts every instance of the asset; returns how many |
 | `prefab::unpack(scene, root, recursive = false)` | removes the markers, stopping at nested instance roots unless recursive |
@@ -126,7 +132,8 @@ transform, and can skip the bind pass.
 
 Errors: `NOT_A_PREFAB_INSTANCE`, `PREFAB_NOT_LOADED` (the root's `prefab_instance` reference is not resident),
 `PREFAB_MULTIPLE_ROOTS` for a document whose entry 0 is not the only root, `BAD_FORMAT` for a document with an
-empty archive, and `DUPLICATE_GUID` from `parse_prefab` when two entries share a guid.
+empty archive or a `layer` index of 32 or more (an entity in the captured subtree, or an entry of the instantiated
+asset), and `DUPLICATE_GUID` from `parse_prefab` when two entries share a guid.
 
 `prefab_builder(registry)` builds a document without naming any C++ component type: `add_node(parentIndex, name,
 transform)`, then `add_component_json(node, componentName, value)`, `add_component_raw(node, id, bytes)` or
@@ -141,7 +148,10 @@ order, owners, settings, name and the structure version at capture; no JSON is i
 play and stop. The structure version is informational: `restore` cannot rewind the counter, which keeps counting
 up through the restore like through any other structural change.
 `restore(scene, snapshot)` clears the scene and instantiates the snapshot with the guids kept; on failure the
-scene is left empty rather than half-restored. `snapshot.entity_count()` says how much it holds.
+scene is left empty rather than half-restored. `snapshot.entity_count()` says how much it holds. Because a failed
+restore cannot give the scene back, `capture` refuses what `restore` would refuse: an entity whose `layer` index is
+32 or more fails the capture with `BAD_FORMAT` naming the entity, so play never starts on a scene that stop would
+lose.
 
 ## API summary
 

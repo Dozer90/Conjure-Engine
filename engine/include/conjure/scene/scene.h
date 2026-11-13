@@ -398,6 +398,13 @@ namespace conjure::scene {
             [[nodiscard]] core::result<void> set_local_transform(ecs::entity target, const local_transform &value);
 
             /// <summary>
+            /// The same write from a math::transform (through local_transform::from_transform), so the
+            /// result of local_transform_of feeds it directly. A bare {} argument is ambiguous between the
+            /// two overloads: name the type.
+            /// </summary>
+            [[nodiscard]] core::result<void> set_local_transform(ecs::entity target, const math::transform &value);
+
+            /// <summary>
             /// Sets the local transform so that the world transform equals 'value' (fresh ancestor walk).
             /// </summary>
             [[nodiscard]] core::result<void> set_world_transform(ecs::entity target, const math::transform &value);

@@ -19,7 +19,7 @@ components are, and how transforms reach the renderer every frame. Headers: `con
 | Reparent, keeping the world pose | `scene.set_parent(child, newParent, keepWorld = true, index)` |
 | Reparent from inside a system (world locked) | `scene.deferred_set_parent(commands, child, newParent, ...)` |
 | Reorder among siblings or roots | `scene.set_sibling_index(entity, index)`, `scene.set_root_order(ordered)` |
-| Edit the local transform | `scene.set_local_transform(entity, value)`, `scene.set_world_transform(entity, value)` |
+| Edit the local transform | `scene.set_local_transform(entity, value)` (a `local_transform`, or the `math::transform` that `local_transform_of` returns), `scene.set_world_transform(entity, value)` |
 | Read a transform | `scene.local_transform_of(entity)`, `scene.world_transform_of(entity)` (fresh walk) or the `world_transform` component (last frame's pass) |
 | Name, tag, layer, enabled | `set_name`, `set_tag`, `set_layer`, `set_enabled`; `name_of`, `tag_of`, `layer_of`, `is_enabled`, `is_active` |
 | Find entities | `scene.find_path("Root/Child")`, `find_by_name`, `find_by_tag`, `find_by_layer`, `find_guid`, `resolve_guid` |
@@ -64,7 +64,7 @@ any other component; the scene keeps the ones that describe structure consistent
 | `render_world_transform { mat4 matrix }` | what the renderer reads: the world matrix, or the interpolated physics pose, transient | `scene.propagate_transforms` |
 | `interpolated_transform { previous, current }` | the last two fixed-step poses, transient | physics only (defined here, added and written there) |
 | `transform_state`, `transform_dirty`, `depth_tag<1..31>` | propagation bookkeeping and the depth of every entity, transient and hidden | the scene |
-| `name { string_id value }`, `tag { string_id value }`, `layer { u8 index }` | identity and grouping; layer bit `1 << index` matches the renderer's layer masks | you (through the setters) |
+| `name { string_id value }`, `tag { string_id value }`, `layer { u8 index }` | identity and grouping; `layer` (0..31) groups entities for `find_by_layer`, scripts and the editor and does not change what a camera draws | you (through the setters) |
 | `guid { uuid value }` | the stable editor identity, indexed by the scene | the scene (`create_entity`, `ensure_guid`, `set_guid`) |
 | `disabled`, `inactive` | the entity is switched off / an ancestor is | `set_enabled` |
 | `local_bounds { aabb box }` | local-space bounds; `scene.world_bounds(e)` transforms them, transient | engine subsystems |
@@ -72,6 +72,18 @@ any other component; the scene keeps the ones that describe structure consistent
 
 `scene_component_ids::resolve(registry)` gives you every id at once (`parent`, `localTransform`, `depth[d]`,
 ...) when you write a system over these columns; `is_complete()` tells you `register_components` has run.
+
+> [!NOTE]
+> The scene `layer` is a label, not a render mask. A camera draws a mesh when the mesh's
+> `mesh_renderer_component::layerMask` shares a bit with the camera's `camera_component::layerMask`; the bits are
+> numbered like the 32 layers, so you can keep the two in step yourself. Sprites are not masked: every camera
+> draws them. `set_layer` refuses 32 and above with `OUT_OF_RANGE`. A raw component write can still store such an
+> index, so every capture refuses it first with `BAD_FORMAT` naming the entity, before anything is lost: `capture`
+> (the play/stop snapshot), `save_scene`, `capture_subtree`, `duplicate_subtree`, `save_subtree` and the prefab
+> functions that capture an instance (`build_document`, `diff`, `apply`). A scene file or prefab that carries one
+> fails with `BAD_FORMAT` naming the entry, before any entity is created; a hand-built snapshot that carries one
+> fails the same way, but `restore` has already cleared the scene by then and leaves it empty, as any failed
+> restore does.
 
 > [!TIP]
 > Use `scene.set_parent` rather than writing `parent` yourself. A raw write still works (the scene repairs the
@@ -162,7 +174,7 @@ entity, computed now.
 | `result<void> deferred_set_parent(ecs::command_buffer &, entity child, entity parent, bool keepWorld = true, u32 index = APPEND_CHILD)` | reparent from a locked world |
 | `result<void> set_sibling_index(entity, u32)`, `set_root_order(span<const entity>)` | ordering |
 | `result<void> add_transform(entity, const local_transform & = {})` | gives an entity a transform and its companions |
-| `result<void> set_local_transform(entity, const local_transform &)`, `set_world_transform(entity, const math::transform &)` | pose edits |
+| `result<void> set_local_transform(entity, const local_transform &)`, `set_local_transform(entity, const math::transform &)`, `set_world_transform(entity, const math::transform &)` | pose edits; the `math::transform` overload takes what `local_transform_of` returns, and a bare `{}` must name its type |
 | `optional<math::transform> local_transform_of(entity) const`, `world_transform_of(entity) const` | pose reads |
 | `optional<math::aabb> world_bounds(entity) const`, `subtree_bounds(entity) const` | bounds from `local_bounds` |
 | `result<uuid> ensure_guid(entity)`, `result<void> set_guid(entity, const uuid &)`, `optional<uuid> guid_of(entity) const` | identity |

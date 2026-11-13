@@ -82,7 +82,8 @@ namespace {
 
     /// <summary>
     /// What instantiating 'asset' under 'parentEntity' (null = a scene root) would reject, checked before
-    /// revert destroys the instance it replaces: the archive, its single root and the depth limit.
+    /// revert destroys the instance it replaces: the archive, its single root, the depth limit and the
+    /// layer range.
     /// </summary>
     [[nodiscard]] core::result<void> check_reinstantiable(
       const scene &target,
@@ -103,7 +104,7 @@ namespace {
             return core::make_error(scene_error::HIERARCHY_TOO_DEEP, "prefab {} would reach depth {} under entity {}",
               asset.id, baseDepth + height, parentEntity);
         }
-        return core::result<void>::success();
+        return detail::check_layers(*asset.archive, ids);
     }
 }
 

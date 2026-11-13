@@ -174,7 +174,10 @@ namespace conjure::scene {
     };
 
     /// <summary>
-    /// Layer 0..31; bit (1 &lt;&lt; index) matches the renderer's layerMask. Names live in layer_table.
+    /// Layer 0..31, a grouping index for find_by_layer, scripts and the editor; names live in layer_table.
+    /// It does not decide what a camera draws: mesh_renderer_component::layerMask against the camera's
+    /// layerMask does (the same bit numbering), and sprites are not masked. Captures (snapshot, save,
+    /// duplicate, prefab) and instantiate_archive refuse an index of 32 or more with BAD_FORMAT.
     /// </summary>
     struct layer {
         u8 index = 0;

@@ -106,7 +106,8 @@ join guarantees it.
 
 ## 5. Instantiation and the link pass
 
-`instantiate_archive` validates the archive, its shape (pre-order, depths, cycles) and the guid policy before
+`instantiate_archive` validates the archive, its shape (pre-order, depths, cycles), every `layer` index
+(`detail::check_layers`: 32 or more is `BAD_FORMAT` naming the entry; 13 S15) and the guid policy before
 anything exists, then runs `world::instantiate_batch` once with an `outEntities` vector, which reports every
 created id copy-major in entry order (entries without components included, so an empty entity in a file is a
 plain root). Guids are regenerated and rebound where the policy says so (both regenerate policies also give a
@@ -116,6 +117,16 @@ the `children` component together with depth tags, companions, dirty and inactiv
 into one flush. Archive roots attach under `options.parent`, a live external parent or the root list. The bind
 pass then resolves every `asset_ref` through `asset_manager::bind_slot` (R25) and lists the bound ids in the
 report.
+
+The `layer` component is a grouping label for `find_by_layer`, scripts and the editor. The renderer extraction
+never reads it: a mesh's visibility is `mesh_renderer_component::layerMask & camera_component::layerMask`, and
+sprites are not masked. The range check exists because `set_layer` is not the only writer: a file, a prefab or a
+raw component write (the editor's `component.set` goes through `component_from_json`, which ignores the reflected
+maximum) can carry any `u8`, and every archive reaches the world through `instantiate_archive`. Every capture
+runs the same check with the captured entities, so the message names the entity: `capture`, `capture_subtree`
+(and so `duplicate_subtree`, `build_document` and `save_subtree`) and `save_scene`. Without it, play/stop would
+lose the scene (`restore` clears before it instantiates), the editor's undo of `entity.destroy` could not bring
+the subtree back, and a saved file would fail to load.
 
 ## 6. Files, prefabs and snapshots
 
@@ -130,15 +141,16 @@ guids (`DUPLICATE_GUID`).
 Prefab instances are fully materialised (S9): `prefab_instance` on the root, `prefab_link` on every entity.
 `diff` matches entries by link guid, compares components as canonical JSON with the instance's local references
 remapped to the asset's indices, and treats `parent` by parent guid plus sibling index. `revert` checks that the
-asset still fits at the instance's place (archive, single root, depth limit) before it destroys anything, then
-re-instantiates there with the old root guid; `apply` writes the link guids as entry guids (a repeated link guid,
-as a duplicated entity carries, gets a fresh one) and drops the root marker; `unpack` stops at nested instance
-roots unless recursive. `prefab_builder` produces a document from nodes and components by registered name (also
-reserving `name` and `local_transform`, which come from `add_node`).
+asset still fits at the instance's place (archive, single root, depth limit, layer range) before it destroys
+anything, then re-instantiates there with the old root guid; `apply` writes the link guids as entry guids (a
+repeated link guid, as a duplicated entity carries, gets a fresh one) and drops the root marker; `unpack` stops at
+nested instance roots unless recursive. `prefab_builder` produces a document from nodes and components by
+registered name (also reserving `name` and `local_transform`, which come from `add_node`).
 
 A `scene_snapshot` is the typed archive of every entity in hierarchy order plus the root order, owners, settings,
 name and the structure version at capture (informational, not restored); `restore` clears the scene and
-instantiates with `KEEP` guids.
+instantiates with `KEEP` guids, and `capture` refuses a layer of 32 or more (section 5), so a captured snapshot
+never fails its restore that way.
 
 The importers (`conjure.scene.scene_importer`, `conjure.scene.prefab_importer`) canonicalise the file and record
 every asset reference as a dependency, so a `scene_manager::load` brings the referenced assets first. The asset
@@ -156,9 +168,10 @@ held across an event, because a handler may load or unload scenes: the record is
 whose scene a handler unloaded returns `SCENE_NOT_LOADED` without touching the newer scene in its slot.
 `unload_all` fires the event once more with `SCENE_ID_AUTHORED` and the remaining roots when entities outlive the
 records (authored content), before `scene::clear()`, and retires any scene a handler loaded meanwhile. REPLACE
-first runs everything `instantiate_archive` would reject (`detail::check_loadable`) so a bad file leaves the
-current content in place, then unloads everything, takes the file's settings and name and keeps guids; ADDITIVE
-regenerates colliding guids with one WARN. `info()` and `loaded_scenes()` gather a record's roots on every call.
+first runs everything `instantiate_archive` would reject (`detail::check_loadable`, layer range included) so a
+bad file leaves the current content in place, then unloads everything, takes the file's settings and name and
+keeps guids; ADDITIVE regenerates colliding guids with one WARN. `info()` and `loaded_scenes()` gather a record's
+roots on every call.
 
 ## 8. Threading model
 

@@ -405,7 +405,7 @@ namespace conjure::editor::support {
                     if (local.has_value()) {
                         math::transform moved = *local;
                         moved.position += offset * static_cast<f32>(index + 1);
-                        (void) scene.set_local_transform(copy.value(), scene::local_transform::from_transform(moved));
+                        (void) scene.set_local_transform(copy.value(), moved);
                     }
                 }
             }
@@ -475,7 +475,7 @@ namespace conjure::editor::support {
                 return wrap(moved.get_error());
             }
             if (wantedLocal.has_value() && previousLocal.has_value()) {
-                CONJURE_TRY(scene.set_local_transform(entity, scene::local_transform::from_transform(*wantedLocal)));
+                CONJURE_TRY(scene.set_local_transform(entity, *wantedLocal));
             }
             CONJURE_TRY_ASSIGN(const std::string guid, guid_string(scene, entity));
             core::json::document inverseArgs = core::json::object({
@@ -545,7 +545,7 @@ namespace conjure::editor::support {
                 CONJURE_TRY(scene.set_world_transform(entity, next));
             } else {
                 CONJURE_TRY_ASSIGN(const math::transform next, read_transform(invocation.args, "args", *previousLocal));
-                CONJURE_TRY(scene.set_local_transform(entity, scene::local_transform::from_transform(next)));
+                CONJURE_TRY(scene.set_local_transform(entity, next));
             }
             CONJURE_TRY_ASSIGN(const std::string guid, guid_string(scene, entity));
             const math::transform resulting = scene.local_transform_of(entity).value_or(*previousLocal);

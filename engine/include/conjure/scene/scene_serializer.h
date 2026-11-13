@@ -70,7 +70,8 @@ namespace conjure::scene {
         public:
             /// <summary>
             /// Writes the scene (header keys format, version, name, settings, roots, archive) into the
-            /// writer; every entity of the tree in hierarchy order.
+            /// writer; every entity of the tree in hierarchy order. BAD_FORMAT naming the entity, and
+            /// nothing written, when one carries a layer index of 32 or more (loading would refuse it).
             /// </summary>
             [[nodiscard]] static core::result<void> save_scene(const scene &source, core::json::writer &out);
 
@@ -165,7 +166,9 @@ namespace conjure::scene {
             /// <summary>
             /// Captures a subtree in hierarchy order (root first). Without keepExternalReferences the
             /// root's parent link is dropped so entry 0 is a true root; with it the link is kept for
-            /// undo payloads. INVALID_ENTITY for a dead root.
+            /// undo payloads. INVALID_ENTITY for a dead root; BAD_FORMAT naming the entity when one carries
+            /// a layer index of 32 or more, which instantiation would refuse (so duplicate_subtree,
+            /// save_subtree and prefab::build_document, diff and apply refuse it too).
             /// </summary>
             [[nodiscard]] static core::result<ecs::entity_archive> capture_subtree(
               const scene &source,

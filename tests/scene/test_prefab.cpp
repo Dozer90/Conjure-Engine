@@ -1020,6 +1020,44 @@ TEST_SUITE("scene/prefab") {
         fixture.step();
     }
 
+    TEST_CASE("regression - code sweep F151 revert to an asset with a layer of 32 or more keeps the instance") {
+        scene_fixture fixture = {};
+        register_prefab_types(fixture);
+        scene::scene &target = fixture.active();
+        const lamp_parts lamp = build_lamp(fixture);
+        CONJURE_REQUIRE_OK(target.set_layer(lamp.bulb, 3));
+        // The asset comes from JSON: build_document refuses to capture a layer of 32 or more.
+        const std::string text = "{\"format\":\"conjure.prefab\",\"version\":1,\"name\":\"lamp\",\"archive\":{"
+          "\"entities\":[{\"components\":{\"conjure.scene.name\":{\"value\":\"Lamp\"}}},"
+          "{\"components\":{\"conjure.scene.parent\":{\"value\":0,\"siblingIndex\":0},"
+          "\"conjure.scene.layer\":{\"index\":40}}}]}}";
+        const core::result<core::json::document> parsed = core::json::document::parse(text);
+        CONJURE_REQUIRE_OK(parsed);
+        const core::result<scene::prefab_document> document =
+          scene::scene_serializer::parse_prefab(parsed.value().root(), fixture.registry);
+        CONJURE_REQUIRE_OK(document);
+        const assets::asset_id id = publish_prefab(fixture, document.value(), 46);
+        const core::result<assets::asset_handle> loaded = fixture.assets.load_blocking(id);
+        CONJURE_REQUIRE_OK(loaded);
+        const scene::prefab_asset *asset = loaded.value().get<scene::prefab_asset>();
+        REQUIRE(asset != nullptr);
+
+        // The asset loads; only instantiating it is refused, so revert must refuse before it destroys.
+        CONJURE_CHECK_ERROR(scene::prefab::instantiate(target, *asset), scene_error::BAD_FORMAT);
+        const assets::asset_ref<scene::prefab_asset> reference = loaded.value().ref<scene::prefab_asset>();
+        CONJURE_REQUIRE_OK(scene::prefab::mark_instance(target, lamp.root, reference));
+        const core::uuid rootGuid = target.guid_of(lamp.root).value();
+
+        CONJURE_CHECK_ERROR(scene::prefab::revert(target, lamp.root), scene_error::BAD_FORMAT);
+        REQUIRE(target.contains(lamp.root));
+        REQUIRE(target.contains(lamp.bulb));
+        CHECK(target.guid_of(lamp.root).value() == rootGuid);
+        CHECK(target.tree().parent_of(lamp.bulb) == lamp.root);
+        CHECK(target.layer_of(lamp.bulb) == 3);
+        CHECK(fixture.world.has<scene::prefab_instance>(lamp.root));
+        fixture.step();
+    }
+
     TEST_CASE("prefab_builder - unresolved_components id is refused") {
         scene_fixture fixture = {};
         scene::prefab_builder builder(fixture.registry);

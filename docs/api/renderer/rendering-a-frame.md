@@ -164,6 +164,12 @@ layerMask; castsShadows; receivesShadows}`, `sprite_component`, `camera_componen
 priority; isMain; postProcess}`, `light_component {light lightData}` and `environment_component`.
 `register_components(core::reflect::type_registry &)` registers their descriptions.
 
+The engine copies `mesh_renderer_component::layerMask` into each `mesh_instance` and `camera_component::layerMask`
+into each view, so those two masks alone decide which camera draws which mesh. The scene's `layer` component is a
+grouping label for `find_by_layer`, scripts and the editor and plays no part (its 32 layers use the same bit
+numbering, so a game can keep them in step). Sprites carry no mask: every view draws every sprite, and
+`sprite_component::layer` is a sort key, not a visibility layer.
+
 ## ImGui (editor builds)
 
 `imgui_renderer` draws `ImDrawData` into a framebuffer: the engine's `imgui_layer` owns the ImGui context and
