@@ -112,22 +112,35 @@ Everything beyond a budget is clamped and logged, never fatal: views past `MAX_V
 orthographic height not above zero, or a non-finite value) renders with those fields clamped or reset to the
 defaults, with one WARN per view until its camera is valid again.
 
+A view draws an instance when the two layer masks share a bit (`instance.layerMask & view.layerMask`). The sun's
+shadow cascades are culled with each view's own mask. The shadows of spot and point lights live in one atlas
+shared by every view of the frame, so its casters are culled with the union of the masks of every view that
+draws with shadows (every view without `SKIP_SHADOWS`).
+
+> [!NOTE]
+> Every view sees the local-light shadows of its own casters, whatever the view order. A view may also see the
+> shadows of casters on layers that only another view renders.
+
 ## Targets and read-back
 
 `create_render_target(render_target_desc {size, colourFormat, withDepth})` returns a `render_target_id`;
 `get_render_target(id)` gives `size()`, `colour_texture()` (a `gpu_texture_id` you may draw as a sprite or in
-ImGui) and `frames_rendered()`; `resize_render_target(id, size)` recreates it; `destroy_render_target(id)` frees
-it. `read_back(id)` waits for the GPU and returns a `core::image` (RGBA8); on the null device the image is
-zero-filled and the right size. It fails with `NOT_FOUND` for an unknown target, `rhi_error::DEVICE_LOST` on a lost
-device and `RESOURCE_CREATION_FAILED` when the staging texture cannot be created or mapped, never with a blank
-image. `is_render_target_colour_format(format)` tells you which `rhi::texture_format`s a target accepts.
+ImGui) and `frames_rendered()`; `resize_render_target(id, size)` recreates its textures and keeps both the target
+id and the `colour_texture()` id, so a sprite or an ImGui handle that shows the target keeps working after the
+resize; `destroy_render_target(id)` frees it. `read_back(id)` waits for the GPU and returns a `core::image`
+(RGBA8); on the null device the image is zero-filled and the right size. It fails with `NOT_FOUND` for an unknown
+target, `rhi_error::DEVICE_LOST` on a lost device and `RESOURCE_CREATION_FAILED` when the staging texture cannot be
+created or mapped, never with a blank image. `is_render_target_colour_format(format)` tells you which
+`rhi::texture_format`s a target accepts.
 
 ## Sprites and debug drawing
 
 A `sprite` has a texture id, a `worldFromLocal` matrix (pixel space, y down, for `SCREEN` sprites), a UV
 rectangle, a colour, a `size` (world units or pixels), a `sprite_space` and a layer / order pair; the renderer
 sorts world-space sprites with the 3D scene and screen-space ones on top.
-`sprite_batcher` is the CPU batching the renderer uses, exposed for tools that want the vertex runs.
+`sprite_batcher` is the CPU batching the renderer uses, exposed for tools that want the vertex runs. Past
+`MAX_SPRITES_PER_FRAME`, screen-space sprites (the HUD) keep their place: the world-space sprites last in sort
+order, the front-most ones, are dropped first, with one WARN naming the count per space.
 
 `debug_draw_buffer` collects lines (`line`, `box`, `sphere`, `frustum`, `axes`, `grid`); each shape takes a
 `debug_depth` after its colour (after `length` for `axes`; `sphere` takes its segment count after it):
@@ -141,6 +154,15 @@ argument, so it can never be passed where the facade expects the duration. Verti
 scene.debugDraw.box(bounds, math::vec4(1.0f, 0.0f, 0.0f, 1.0f), renderer::debug_depth::OVERLAY);
 debugDraw.line(from, to, math::vec4(0.0f, 1.0f, 0.0f, 1.0f), 2.0f);   // depth-tested, kept for two seconds
 ```
+
+World-space sprites and debug lines draw into the HDR target before exposure, bloom and the tonemapper, so they
+are post-processed like the 3D scene: a debug colour scales with the exposure, and a bright sprite can bloom.
+Screen-space sprites draw after the tonemapper and keep their authored colours.
+
+> [!TIP]
+> A 2D game whose world sprites should keep their authored colours sets `camera_component::postProcess` to
+> `false` (a hand-built view sets `view_flags::NO_POST_PROCESS`). The view then skips exposure and bloom and
+> tonemaps with `NONE`.
 
 ## The null device and statistics
 

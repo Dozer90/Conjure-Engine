@@ -6,6 +6,7 @@
 #include "renderer_test_support.h"
 
 #include "conjure/renderer/gltf_importer.h"
+#include "conjure/renderer/light.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/model_asset.h"
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -257,6 +259,63 @@ TEST_SUITE("renderer/gltf_importer") {
         CONJURE_CHECK_APPROX(result.model.nodes()[1].localTransform.position, math::vec3(0.0f, 1.0f, 0.0f));
         REQUIRE(result.warnings.size() == 1);
         CHECK(result.warnings[0].find("generateTangents") != std::string::npos);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F392 a light without a range gets one from its intensity and wrapT warns"
+    ) {
+        // KHR_lights_punctual leaves a point or spot light's range undefined (infinite); the importer kept
+        // light's default 10 m. It now uses the distance at which intensity / d^2 falls to
+        // GLTF_LIGHT_RANGE_CUTOFF, clamped, and warns. texture_asset holds one wrap mode: wrapS is used,
+        // and a sampler whose wrapT differs is warned about.
+        CHECK(GLTF_IMPORTER_VERSION == 2);   // imported models change
+        const std::string document = embedded_document(
+          TRIANGLE_POSITIONS,
+          std::string(R"("bufferViews": [{"buffer": 0, "byteLength": 36}], )") +
+            R"("accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}], )" +
+            R"("meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}], )" +
+            R"("samplers": [{"wrapS": 33071, "wrapT": 10497}, {"wrapS": 33648, "wrapT": 33648}], )" +
+            R"("extensionsUsed": ["KHR_lights_punctual"], "extensions": {"KHR_lights_punctual": {"lights": [)" +
+            R"({"name": "bulb", "type": "point", "intensity": 10}, {"type": "spot", "intensity": 1000000}, )" +
+            R"({"type": "point", "intensity": 0}, {"type": "directional", "intensity": 3}, )" +
+            R"({"type": "point", "intensity": 10, "range": 4}]}}, "nodes": [{"mesh": 0}, )" +
+            R"({"extensions": {"KHR_lights_punctual": {"light": 0}}}, )" +
+            R"({"extensions": {"KHR_lights_punctual": {"light": 1}}}, )" +
+            R"({"extensions": {"KHR_lights_punctual": {"light": 2}}}, )" +
+            R"({"extensions": {"KHR_lights_punctual": {"light": 3}}}, )" +
+            R"({"extensions": {"KHR_lights_punctual": {"light": 4}}}], )" +
+            R"("scenes": [{"nodes": [0, 1, 2, 3, 4, 5]}], "scene": 0)"
+        );
+        const gltf_importer importer = {};
+        const gltf_import_result result = import_or_fail(importer, bytes_of(document));
+        const std::span<const model_node> nodes = result.model.nodes();
+        REQUIRE(nodes.size() == 6);
+        REQUIRE(nodes[1].hasLight);
+        CHECK(nodes[1].lightData.range == doctest::Approx(std::sqrt(10.0f / GLTF_LIGHT_RANGE_CUTOFF)));
+        CHECK(nodes[1].lightData.range == doctest::Approx(31.62f).epsilon(1.0e-3));
+        CHECK(nodes[2].lightData.type == light_type::SPOT);
+        CHECK(nodes[2].lightData.range == doctest::Approx(GLTF_MAX_LIGHT_RANGE));
+        CHECK(nodes[3].lightData.range == doctest::Approx(GLTF_MIN_LIGHT_RANGE));
+        CHECK(nodes[4].lightData.type == light_type::DIRECTIONAL);
+        CHECK(nodes[4].lightData.range == doctest::Approx(light().range));   // directional lights ignore it
+        CHECK(nodes[5].lightData.range == doctest::Approx(4.0f));
+        const auto warned = [](const gltf_import_result &imported, std::string_view fragment) {
+            return std::ranges::count_if(imported.warnings, [fragment](const std::string &warning) {
+                return warning.find(fragment) != std::string::npos;
+            });
+        };
+        CHECK(result.warnings.size() == 4);
+        CHECK(warned(result, "has no range") == 3);
+        CHECK(warned(result, "light 0 ('bulb') has no range; using 31.6 m") == 1);
+        CHECK(warned(result, "sampler 0: wrapT REPEAT differs from wrapS CLAMP_TO_EDGE") == 1);
+        CHECK(warned(result, "sampler 1") == 0);
+
+        // Lights that are not imported are not warned about.
+        gltf_import_options options = {};
+        options.importLights = false;
+        const gltf_import_result unlit = import_or_fail(importer, bytes_of(document), options);
+        CHECK(warned(unlit, "has no range") == 0);
+        CHECK(unlit.warnings.size() == 1);
     }
 
     TEST_CASE("gltf_importer - unsupported features warn and are skipped") {

@@ -200,11 +200,12 @@ namespace {
     /// also exercises the atlas, the environment and every post-process pass: the first two frames
     /// size the view states, draw regions, graph entries, cull scratch and null device trackers; from
     /// then on the whole frame, device bookkeeping included, stays off the heap. Shared by the serial
-    /// case and the [parallel] one (culling and the instance fill on 'jobs').
+    /// case and the [parallel] one (culling and the instance fill on 'jobs'). The raw null device keeps
+    /// NVRHI's validation layer, whose own bookkeeping is not under test, out of the measurement.
     /// </summary>
     void check_frame_allocation_gate(core::jobs::job_system *jobs) {
         log_capture logs = {};
-        headless_renderer fixture = make_headless_renderer(false, jobs);
+        headless_renderer fixture = make_raw_headless_renderer(jobs);
         const scene_assets assets = upload_assets(*fixture);
         const render_target_id target = make_target(*fixture, math::uvec2(320, 180));
         render_scene scene = {};
@@ -237,7 +238,7 @@ namespace {
     /// given, which is the [parallel] case).
     /// </summary>
     void check_extract_allocation_gate(core::jobs::job_system *jobs) {
-        headless_renderer fixture = make_headless_renderer(false, jobs);
+        headless_renderer fixture = make_raw_headless_renderer(jobs);
         const scene_assets assets = upload_assets(*fixture);
         const math::uvec2 targetSize(320, 180);
         const render_target_id target = make_target(*fixture, targetSize);
@@ -740,6 +741,43 @@ TEST_SUITE("renderer/null_frame") {
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().viewsRendered == 2);
         CHECK_FALSE(fixture->stats().executed("shadow_atlas"));
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F377 the shadow atlas culls its casters with every shadowing view's layer mask"
+    ) {
+        // The scene-wide atlas was culled with the layer mask of the view that renders it (the first one
+        // with shadows), so the local-light shadows every other view saw depended on the view order. Its
+        // casters now come from the union of the masks of the views that draw with shadows.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(64, 64));
+        render_scene scene = {};
+        scene.views.push_back(grid_view(target));
+        scene.views.push_back(grid_view(target));
+        scene.views[0].layerMask = 1u << 2;   // renders the atlas, sees none of the casters
+        scene.views[1].layerMask = 1u << 1;
+        fill_grid(scene, assets, 4);
+        for (mesh_instance &instance : scene.meshes) {
+            instance.layerMask = 1u << 1;
+        }
+        scene.lights.push_back(caster_light(light_type::POINT, math::vec3(0.0f, 2.0f, -4.0f), 10.0f, 1));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().count("shadow_atlas") == 1);
+        const u32 drawnWithShadows = fixture->stats().instancesDrawn;
+
+        // The same views in the other order draw the same casters into the atlas.
+        std::swap(scene.views[0], scene.views[1]);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().instancesDrawn == drawnWithShadows);
+
+        // A view that skips shadows adds no layers: the atlas is still rendered, without casters.
+        scene.views[0].flags = view_flags::SKIP_SHADOWS;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().count("shadow_atlas") == 1);
+        CHECK(fixture->stats().instancesDrawn < drawnWithShadows);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("regression - inserting a light at the front keeps the other lights' atlas tiles") {

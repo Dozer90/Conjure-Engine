@@ -72,7 +72,10 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   textures map to zero-filled memory (readback is zero, 02_renderer.md 6); `queryFormatSupport`
   answers like a D3D12 device (integer formats are not `ShaderSample`, block-compressed formats are
   not `RenderTarget`). Command lists count draws, instances, dispatches, clears, writes, copies and
-  keep `beginMarker` names in recording order; they also track the states set explicitly
+  keep `beginMarker` names in recording order; they do not check for misuse (recording on a closed
+  list, a second `open()` and a draw without a graphics state all succeed): that is NVRHI's
+  validation layer's job, so tests that want misuse caught create the null device with
+  `enableDebugLayer` (the renderer fixtures do). They also track the states set explicitly
   (`beginTracking*State`, `set*State`, `setPermanent*State`) so `getTextureSubresourceState` /
   `getBufferState` report them. The implicit transitions of automatic barriers (`setGraphicsState`,
   clears, copies, writes) are not modelled; an untracked resource reports its `initialState` when

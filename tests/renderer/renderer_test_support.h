@@ -18,9 +18,15 @@
 
 // Helpers shared by the renderer tests.
 //
-//   headless_renderer fixture = make_headless_renderer();          // null device, real shader index
+//   headless_renderer fixture = make_headless_renderer();          // validated null device, real shader index
 //   CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);       // [gpu] cases, WARP through software_device_desc()
 //   headless_renderer gpu = make_headless_renderer(true);           // the WARP device
+//   headless_renderer gate = make_raw_headless_renderer();          // allocation gates: no validation layer
+//
+// The null device runs under NVRHI's validation layer (enableDebugLayer), so command-list misuse such
+// as recording on a closed list or drawing without a graphics state logs an ERROR, which fails every
+// case holding a log_capture (sweep-2026-11-12 F171). The allocation gates use the raw device instead:
+// they measure the renderer, not the validation layer's own bookkeeping.
 //
 // renderer_test_support.cpp installs the SOFTWARE_GPU_ADAPTER probe (08_testing.md 3.2) from a
 // static initialiser, the same way tests/rhi does, so the [gpu] cases skip cleanly where no software
@@ -43,13 +49,27 @@ namespace conjure::testing::renderer_support {
     /// </summary>
     [[nodiscard]] std::filesystem::path shader_source_directory();
 
-    [[nodiscard]] rhi::device_desc null_device_desc();
+    /// <summary>
+    /// Description of a null device, optionally wrapped in NVRHI's validation layer.
+    /// </summary>
+    [[nodiscard]] rhi::device_desc null_device_desc(bool enableDebugLayer = false);
+
+    /// <summary>
+    /// Description of the software (WARP) D3D12 device the [gpu] cases use.
+    /// </summary>
     [[nodiscard]] rhi::device_desc software_device_desc();
 
     /// <summary>
-    /// Creates a null (or WARP) device or fails the case.
+    /// Creates a null device under NVRHI's validation layer, or the WARP device when 'software' is set,
+    /// or fails the case.
     /// </summary>
     [[nodiscard]] std::unique_ptr<rhi::device> make_device(bool software = false);
+
+    /// <summary>
+    /// Creates a null device without NVRHI's validation layer or fails the case; for the allocation
+    /// gates only.
+    /// </summary>
+    [[nodiscard]] std::unique_ptr<rhi::device> make_raw_device();
 
     /// <summary>
     /// Opens the shader index conjure_shaders built, or fails the case.
@@ -97,6 +117,11 @@ namespace conjure::testing::renderer_support {
       bool software = false,
       core::jobs::job_system *jobs = nullptr
     );
+
+    /// <summary>
+    /// A headless renderer on make_raw_device() or fails the case; for the allocation gates only.
+    /// </summary>
+    [[nodiscard]] headless_renderer make_raw_headless_renderer(core::jobs::job_system *jobs = nullptr);
 
     /// <summary>
     /// A deterministic asset id for tests: {0x7E57, index}.

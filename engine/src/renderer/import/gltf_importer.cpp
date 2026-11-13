@@ -11,6 +11,7 @@
 #include <cgltf.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -35,6 +36,7 @@ namespace {
     constexpr int GLTF_FILTER_NEAREST_MIPMAP_LINEAR = 9986;
     constexpr int GLTF_WRAP_CLAMP = 33071;
     constexpr int GLTF_WRAP_MIRROR = 33648;
+    constexpr int GLTF_WRAP_REPEAT = 10497;
 
     // glTF caps byteStride at 252; cgltf does not, and cgltf_validate multiplies the stride by the
     // element count without an overflow check.
@@ -518,6 +520,22 @@ namespace {
         return built;
     }
 
+    /// <summary>
+    /// The glTF name of a sampler wrap mode (a GL enum value), for import warnings.
+    /// </summary>
+    [[nodiscard]] std::string_view gltf_wrap_name(cgltf_int mode) noexcept {
+        if (mode == GLTF_WRAP_CLAMP) {
+            return "CLAMP_TO_EDGE";
+        }
+        if (mode == GLTF_WRAP_MIRROR) {
+            return "MIRRORED_REPEAT";
+        }
+        if (mode == GLTF_WRAP_REPEAT) {
+            return "REPEAT";
+        }
+        return "unknown";
+    }
+
     void apply_sampler(const cgltf_sampler *sampler, texture_asset &texture) noexcept {
         if (sampler == nullptr) {
             return;
@@ -676,6 +694,18 @@ namespace {
         return desc;
     }
 
+    /// <summary>
+    /// The range of a point or spot light the glTF gives none (KHR_lights_punctual: infinite): where
+    /// its inverse-square falloff drops to GLTF_LIGHT_RANGE_CUTOFF, clamped to the importer's bounds.
+    /// </summary>
+    [[nodiscard]] f32 range_from_intensity(f32 intensity) noexcept {
+        // A dark (or negative) light reaches nowhere: the shortest range.
+        if (!(intensity > 0.0f)) {
+            return GLTF_MIN_LIGHT_RANGE;
+        }
+        return std::clamp(std::sqrt(intensity / GLTF_LIGHT_RANGE_CUTOFF), GLTF_MIN_LIGHT_RANGE, GLTF_MAX_LIGHT_RANGE);
+    }
+
     [[nodiscard]] light import_light(const cgltf_light &source) noexcept {
         light value = {};
         switch (source.type) {
@@ -694,7 +724,12 @@ namespace {
         }
         value.colour = math::vec3(source.color[0], source.color[1], source.color[2]);
         value.intensity = source.intensity;
-        value.range = source.range > 0.0f ? source.range : value.range;
+        // Directional lights ignore the range and keep the default.
+        if (source.range > 0.0f) {
+            value.range = source.range;
+        } else if (value.type != light_type::DIRECTIONAL) {
+            value.range = range_from_intensity(source.intensity);
+        }
         if (value.type == light_type::SPOT) {
             value.innerConeRadians = source.spot_inner_cone_angle;
             value.outerConeRadians = source.spot_outer_cone_angle > 0.0f ? source.spot_outer_cone_angle
@@ -885,6 +920,35 @@ core::result<gltf_import_result> gltf_importer::import_bytes(
     }
     if (data.animations_count > 0) {
         result.warnings.push_back("animations are not supported and were ignored");
+    }
+    const cgltf_size importedLights = options.importLights ? data.lights_count : 0;
+    for (cgltf_size index = 0; index < importedLights; ++index) {
+        const cgltf_light &source = data.lights[index];
+        if (source.type == cgltf_light_type_directional || source.range > 0.0f) {
+            continue;
+        }
+        result.warnings.push_back(
+          std::format(
+            "light {} ('{}') has no range; using {:.1f} m from its intensity (fixed at import)",
+            index,
+            source.name != nullptr ? source.name : "",
+            range_from_intensity(source.intensity)
+          )
+        );
+    }
+    // texture_asset holds one wrap mode (the .ctex format has one wrap byte).
+    for (cgltf_size index = 0; index < data.samplers_count; ++index) {
+        const cgltf_sampler &sampler = data.samplers[index];
+        if (sampler.wrap_s != sampler.wrap_t) {
+            result.warnings.push_back(
+              std::format(
+                "sampler {}: wrapT {} differs from wrapS {}; wrapS is used on both axes",
+                index,
+                gltf_wrap_name(sampler.wrap_t),
+                gltf_wrap_name(sampler.wrap_s)
+              )
+            );
+        }
     }
 
     // Textures: one per glTF texture, decoded in the colour space of its first use.

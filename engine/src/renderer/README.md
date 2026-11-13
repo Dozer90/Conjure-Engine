@@ -38,17 +38,22 @@ the HLSL defines to keep the two in step.
 
 1. `begin_frame`: acquire the back buffer (when a swapchain exists), open the frame command list,
    flush the queued asset uploads under the 64 MB budget, collect the graveyard.
-2. `prepare`: build sprites and debug lines once, allocate the local-light shadow atlas scene-wide
-   (importance measured from view 0), then per view: cull on jobs, build instanced draw lists (opaque
-   / masked sorted by material and mesh, blended far to near), sort the lights (directional first),
-   build the cascades of the first shadowing sun, fill the view constants.
+2. `prepare`: build sprites and debug lines once (past `MAX_SPRITES_PER_FRAME` the batcher keeps the
+   `SCREEN` sprites and drops the `WORLD` sprites last in sort order), allocate the local-light shadow
+   atlas scene-wide (importance measured from view 0; casters culled with `atlasLayerMask`, the union
+   of the layer masks of the views without `SKIP_SHADOWS`), then per view: cull on jobs, build
+   instanced draw lists (opaque / masked sorted by material and mesh, blended far to near), sort the
+   lights (directional first), build the cascades of the first shadowing sun (the view's own mask),
+   fill the view constants.
 3. `render_view_graph`: one render graph per view, passes added only when they have work:
    `shadow_cascade_0..3`, `shadow_atlas`, `depth_prepass`, `light_cull`, `ssao_gtao`, `ssao_blur_h/v`,
    `forward_opaque`, `skybox`, `forward_blend`, `world_sprites`, `debug_draw`, `exposure_histogram`,
    `exposure_adapt`, `bloom_down_0..5`, `bloom_up_4..0`, `tonemap`, `screen_sprites` and `blit` (only
    when the target is not `RGBA8_SRGB`). The graph validates (read before write asserts in Debug,
    logs an ERROR and skips the pass), culls backwards, computes lifetimes and takes its transients
-   from the pool (no aliasing, NVRHI automatic barriers).
+   from the pool (no aliasing, NVRHI automatic barriers). `world_sprites` and `debug_draw` write `hdr`
+   before exposure, bloom and the tonemapper; 2D views that want authored colours set
+   `NO_POST_PROCESS` (the camera's `postProcess = false`).
 4. ImGui into the swapchain (editor builds).
 5. `end_frame`: close, execute, present, evict idle transients and binding sets, fill `render_stats`.
 
@@ -105,7 +110,10 @@ call, the mirrors live in heap entries whose addresses survive table growth, and
 during a frame is retired (its GPU handles get an extra graveyard reference) and freed at the next
 `collect()`, so every reference the frame resolved stays valid until the frame is submitted. No
 NVRHI object is created outside `flush_uploads`: releasing a texture only marks the materials that
-used it, and the next flush rebinds them on the render thread.
+used it, and the next flush rebinds them on the render thread. `resize_render_target` (render thread,
+after `wait_idle`) keeps the target's colour id: `replace_external_texture` points the id's entry at
+the new texture and the replacement target's own id is unregistered, so an ImGui handle or a sprite
+holding the id follows the resize.
 
 ## Deviations from the design
 
@@ -154,7 +162,10 @@ HDR inputs are generated in the tests (no binary assets). The allocation gates
 culling in `test_renderer_null_frame.cpp`, the warm `cull_scratch` in `test_culling.cpp`, the rebuilt
 graph in `test_render_graph.cpp` and the repeated atlas allocation in `test_shadow_atlas_allocator.cpp`.
 Their benchmark counterparts are `renderer.extract_10k` and `renderer.null_frame_10k`
-(`tests/benchmarks/bench_render_null_frame.cpp`, thresholds `allocs: 0`).
+(`tests/benchmarks/bench_render_null_frame.cpp`, thresholds `allocs: 0`). Every other case gets its
+null device from `renderer_test_support` with NVRHI's validation layer on (`enableDebugLayer`), so
+command-list misuse logs an ERROR and fails any case holding a `log_capture`; the gates use the raw
+device (`make_raw_device`, `make_raw_headless_renderer`) to measure the renderer alone.
 
 ```
 python tools/build.py --target conjure_renderer_tests --test -R renderer

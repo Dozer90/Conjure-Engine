@@ -255,6 +255,13 @@ TEST_SUITE("renderer/pipeline_cache") {
         constantsDesc.debugName = "constants";
         nvrhi::BufferHandle constants = native.createBuffer(constantsDesc);
         REQUIRE(constants != nullptr);
+        // A structured view needs a buffer with a stride (NVRHI's validation layer refuses a constant buffer).
+        nvrhi::BufferDesc structuredDesc = {};
+        structuredDesc.byteSize = 256;
+        structuredDesc.structStride = 16;
+        structuredDesc.debugName = "structured";
+        nvrhi::BufferHandle structured = native.createBuffer(structuredDesc);
+        REQUIRE(structured != nullptr);
         nvrhi::TextureDesc textureDesc = {};
         textureDesc.width = 4;
         textureDesc.height = 4;
@@ -273,7 +280,7 @@ TEST_SUITE("renderer/pipeline_cache") {
             desc.addItem(nvrhi::BindingSetItem::PushConstants(1, 16));
             desc.addItem(nvrhi::BindingSetItem::Texture_SRV(0, texture));
             desc.addItem(nvrhi::BindingSetItem::Texture_SRV(1, texture));
-            desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, constants));
+            desc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(2, structured));
             desc.addItem(nvrhi::BindingSetItem::Sampler(0, sampler));
             desc.addItem(nvrhi::BindingSetItem::Sampler(1, sampler));
             return desc;

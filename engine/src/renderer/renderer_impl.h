@@ -82,6 +82,7 @@ namespace conjure::renderer {
         std::vector<u32> atlasRequestLights = {};                 // scene light index per request
         core::flat_hash_map<u64, u32> atlasKeyOccurrences = {};  // lights sharing an atlas key this frame
         bool atlasRendered = false;                               // a prepared view owns the atlas pass this frame
+        u32 atlasLayerMask = 0;                                   // union of the shadowing views' layer masks
         u32 lastViewOverflow = 0;
         u32 lastLightOverflow = 0;
         u32 invalidCameraViews = 0;                               // one bit per view index: its invalid camera WARNed

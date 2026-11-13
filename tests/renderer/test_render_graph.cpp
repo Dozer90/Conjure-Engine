@@ -102,8 +102,14 @@ namespace {
         std::vector<std::string> log = {};
         render_graph graph = {};
 
-        graph_fixture() {
-            device = renderer_support::make_device();
+        graph_fixture() :
+            graph_fixture(renderer_support::make_device()) {}
+
+        /// <summary>
+        /// Over the given device: the allocation gate passes the raw null device (no validation layer).
+        /// </summary>
+        explicit graph_fixture(std::unique_ptr<rhi::device> fixtureDevice) :
+            device(std::move(fixtureDevice)) {
             nvrhi::IDevice &native = *device->native_device();
             framebuffers = std::make_unique<framebuffer_cache>(native);
             pool = std::make_unique<transient_pool>(native, framebuffers.get());
@@ -411,7 +417,7 @@ TEST_SUITE("renderer/render_graph") {
         // reset() keeps the pass entries and their declaration vectors, compile keeps its scratch
         // and the pool hands back the same transients, so the per-view graph of a steady-state frame
         // never touches the heap (renderer.null_frame_10k, allocs 0).
-        graph_fixture fixture = {};
+        graph_fixture fixture(renderer_support::make_raw_device());
         graph_resource hdr = INVALID_GRAPH_RESOURCE;
         graph_resource target = INVALID_GRAPH_RESOURCE;
         scripted_pass x("x", fixture.log, [&](pass_builder &builder) {
@@ -473,7 +479,7 @@ TEST_SUITE("renderer/render_graph") {
         // frame before it creates them for all three slots at once, so the next frames (the other
         // slots) create none and a steady pass count is allocation-free from its second frame.
         log_capture logs = {};
-        std::unique_ptr<rhi::device> device = renderer_support::make_device();
+        std::unique_ptr<rhi::device> device = renderer_support::make_raw_device();   // allocation gate below
         nvrhi::IDevice &native = *device->native_device();
         const auto created = [&]() {
             return device->null_stats().value().timerQueriesCreated;
@@ -665,5 +671,40 @@ TEST_SUITE("renderer/render_graph") {
         CHECK(fixture.stats.count(passes.front()->name()) == MAX_VIEWS);
         CHECK(fixture.stats.count(passes.back()->name()) == MAX_VIEWS);
         CHECK(std::string_view(fixture.stats.passNames.back()) == passes.back()->name());
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F171 the renderer fixtures' null device logs command-list misuse") {
+        // The null command list only counts what it records: drawing on a list that is not open or
+        // without a graphics state succeeds on it. The renderer fixtures therefore run the null device
+        // under NVRHI's validation layer, which logs the misuse as an ERROR (failing every case that
+        // holds a log_capture); only the allocation gates keep the raw device.
+        const auto misuse = [](rhi::device &device) {
+            nvrhi::CommandListHandle commandList = device.native_device()->createCommandList();
+            REQUIRE(commandList != nullptr);
+            commandList->draw(nvrhi::DrawArguments());
+            commandList->open();
+            commandList->draw(nvrhi::DrawArguments());
+            commandList->close();
+        };
+        {
+            log_capture logs = {};
+            logs.allow_errors();
+            std::unique_ptr<rhi::device> device = renderer_support::make_device();
+            CHECK(device->desc().enableDebugLayer);
+            misuse(*device);
+            CHECK(logs.contains(core::log_level::ERR, "must be opened"));
+            CHECK(logs.contains(core::log_level::ERR, "Graphics state is not set"));
+            CHECK(logs.count(core::log_level::ERR) == 2);
+        }
+        renderer_support::headless_renderer fixture = renderer_support::make_headless_renderer();
+        CHECK(fixture.device->desc().enableDebugLayer);
+
+        log_capture quiet = {};
+        std::unique_ptr<rhi::device> raw = renderer_support::make_raw_device();
+        CHECK_FALSE(raw->desc().enableDebugLayer);
+        misuse(*raw);
+        CHECK(quiet.count(core::log_level::ERR) == 0);
+        renderer_support::headless_renderer gate = renderer_support::make_raw_headless_renderer();
+        CHECK_FALSE(gate.device->desc().enableDebugLayer);
     }
 }

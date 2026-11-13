@@ -29,8 +29,18 @@
 namespace conjure::renderer {
 
     inline constexpr std::string_view GLTF_IMPORTER_ID = "conjure.renderer.gltf";
-    inline constexpr u32 GLTF_IMPORTER_VERSION = 1;
+    inline constexpr u32 GLTF_IMPORTER_VERSION = 2;
     inline constexpr std::array<std::string_view, 2> GLTF_EXTENSIONS = {".gltf", ".glb"};
+
+    /// <summary>
+    /// A point or spot light without a glTF range gets the distance at which its inverse-square falloff,
+    /// intensity / d^2, drops to GLTF_LIGHT_RANGE_CUTOFF lux: sqrt(intensity / GLTF_LIGHT_RANGE_CUTOFF)
+    /// metres (about 32 m for 10 cd), clamped to [GLTF_MIN_LIGHT_RANGE, GLTF_MAX_LIGHT_RANGE] because the
+    /// range is also the light's shadow far plane and bounds its light-culling tiles. Fixed at import.
+    /// </summary>
+    inline constexpr f32 GLTF_LIGHT_RANGE_CUTOFF = 0.01f;
+    inline constexpr f32 GLTF_MIN_LIGHT_RANGE = 0.1f;
+    inline constexpr f32 GLTF_MAX_LIGHT_RANGE = 100.0f;
 
     struct gltf_import_options {
         bool generateTangents = true;

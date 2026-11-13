@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
 #include "renderer_test_support.h"
 
 #include "renderer/read_back_decode.h"
@@ -8,8 +9,10 @@
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
+#include "conjure/renderer/sprite_batch.h"
 
 #include "conjure/core/image.h"
+#include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 #include "conjure/rhi/texture_format.h"
@@ -163,7 +166,7 @@ TEST_SUITE("renderer/render_target") {
         CHECK(fixture->get_render_target(created.value())->frames_rendered() == 2);
     }
 
-    TEST_CASE("render_target - resize keeps the id, replaces the textures and resets the frame count") {
+    TEST_CASE("render_target - resize keeps the ids, replaces the textures and resets the frame count") {
         headless_renderer fixture = make_headless_renderer();
         render_target_desc desc = {};
         desc.size = math::uvec2(16, 16);
@@ -183,7 +186,7 @@ TEST_SUITE("renderer/render_target") {
         CHECK(target->desc().colourFormat == desc.colourFormat);
         CHECK(target->has_depth());
         CHECK(target->colour_texture().is_valid());
-        CHECK(target->colour_texture() != before);
+        CHECK(target->colour_texture() == before);
         CHECK(target->frames_rendered() == 0);
         // Rendering into the resized target works and the read-back has the new size.
         CONJURE_REQUIRE_OK(fixture->render(scene));
@@ -202,6 +205,43 @@ TEST_SUITE("renderer/render_target") {
           fixture->resize_render_target(render_target_id(), math::uvec2(4, 4)),
           core::error_code::NOT_FOUND
         );
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F385 a sprite showing a target's colour texture survives its resize") {
+        // resize_render_target used to retire the colour id and adopt the replacement's, so a handle taken
+        // before the resize (an ImGui image of the editor viewport, a sprite) resolved to a stale id and
+        // drew the fallback. The id now stays and follows the new texture.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        core::result<render_target_id> shown = fixture->create_render_target(desc);
+        core::result<render_target_id> screen = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(shown);
+        CONJURE_REQUIRE_OK(screen);
+        const gpu_texture_id handle = fixture->get_render_target(shown.value())->colour_texture();
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), screen.value()));
+        sprite image = {};
+        image.texture = handle;
+        image.space = sprite_space::SCREEN;
+        image.size = math::vec2(8.0f);
+        scene.sprites.push_back(image);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().spritesDrawn == 1);
+        CHECK(fixture->stats().fallbacksUsed == 0);
+
+        CONJURE_REQUIRE_OK(fixture->resize_render_target(shown.value(), math::uvec2(48, 32)));
+        CHECK(fixture->get_render_target(shown.value())->colour_texture() == handle);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().spritesDrawn == 1);
+        CHECK(fixture->stats().fallbacksUsed == 0);
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "stale or unknown"));
+
+        // Destroying the target retires the id as before.
+        fixture->destroy_render_target(shown.value());
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().fallbacksUsed >= 1);
     }
 
     TEST_CASE("render_target - destroy forgets the target and views into it are skipped") {

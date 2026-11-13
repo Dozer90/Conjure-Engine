@@ -170,8 +170,9 @@ namespace conjure::renderer {
             [[nodiscard]] core::result<render_target_id> create_render_target(const render_target_desc &desc);
 
             /// <summary>
-            /// Recreates the target's textures at a new size. Fails with NOT_FOUND for an unknown id and
-            /// INVALID_ARGUMENT for a zero size.
+            /// Recreates the target's textures at a new size (waiting for the GPU to go idle). The target id
+            /// and its colour_texture() id stay the same; the id resolves to the new texture from here on.
+            /// Fails with NOT_FOUND for an unknown id and INVALID_ARGUMENT for a zero size.
             /// </summary>
             [[nodiscard]] core::result<void> resize_render_target(render_target_id id, math::uvec2 size);
 

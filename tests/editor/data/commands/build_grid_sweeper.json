@@ -1109,7 +1109,8 @@
           "cameraData": {
             "projection": "ORTHOGRAPHIC",
             "orthographicHeight": 10.0
-          }
+          },
+          "postProcess": false
         }
       }
     }

@@ -1035,6 +1035,25 @@ void gpu_resource_cache::unregister_external_texture(gpu_texture_id id) {
     mRetiredTextures.push_back(std::move(record));
 }
 
+bool gpu_resource_cache::replace_external_texture(
+  gpu_texture_id id,
+  nvrhi::ITexture *texture,
+  rhi::texture_format format,
+  u32 width,
+  u32 height
+) {
+    const std::scoped_lock lock(mMutex);
+    entry<gpu_texture> *record = live_entry(mTextures, id);
+    if (record == nullptr) {
+        return false;
+    }
+    record->mirror.texture = texture;
+    record->mirror.format = format;
+    record->mirror.width = width;
+    record->mirror.height = height;
+    return true;
+}
+
 const gpu_texture &gpu_resource_cache::fallback_texture(material_texture slot) const noexcept {
     switch (slot) {
         case material_texture::NORMAL:

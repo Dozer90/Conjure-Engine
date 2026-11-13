@@ -162,8 +162,8 @@ Its steps, which are the pattern for any scene an agent builds:
    then one `component.set_many` placing every cell (`transform.position`) and setting the mines and
    adjacent counts (`script.scripts[0].fields.mine`, `...adjacent`), so the layout is one undo entry.
 5. `GameState` entity with its script fields (`width`, `height`, `mines`), an orthographic `Camera`
-   (`camera.cameraData.projection` = `ORTHOGRAPHIC`), `view.set_mode {"mode":"2d"}`, `view.focus`,
-   `selection.set`.
+   (`camera.cameraData.projection` = `ORTHOGRAPHIC`, `camera.postProcess` = `false` so the sprites keep their
+   authored colours), `view.set_mode {"mode":"2d"}`, `view.focus`, `selection.set`.
 6. Verify with `scene.query {"with":["prefab_instance"],"fields":["script.scripts[0].fields.mine"]}`.
 7. Play-test: `play.start`, `input.inject {"button":"LEFT","position":[320,240],"action":"tap"}`,
    `play.pause`, `play.step {"fixedSteps":3}`, `entity.get` to read state, `play.stop` (the scene is

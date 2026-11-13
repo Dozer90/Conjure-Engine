@@ -580,9 +580,21 @@ core::result<void> renderer::resize_render_target(render_target_id id, math::uve
     if (targetState.depth != nullptr) {
         mImpl->framebuffers->remove_texture(targetState.depth.Get());
     }
-    mImpl->resources->unregister_external_texture(targetState.colourId);
+    // The target keeps its colour id, so an ImGui handle or a sprite holding it follows the new texture
+    // (both resolve the id every frame); the replacement's own id is the one retired.
     render_target::impl &createdState = renderer_access::state(**created);
+    const gpu_texture_id colourId = targetState.colourId;
+    const bool replaced = mImpl->resources->replace_external_texture(
+      colourId,
+      createdState.colour.Get(),
+      desc.colourFormat,
+      size.x,
+      size.y
+    );
+    CONJURE_VERIFY(replaced, "resize_render_target: the target's colour id is not registered");
+    mImpl->resources->unregister_external_texture(createdState.colourId);
     targetState = std::move(createdState);
+    targetState.colourId = colourId;
     createdState = render_target::impl();
     static_cast<void>(mImpl->targets.erase(replacement.value()));
     return core::result<void>();
@@ -816,14 +828,24 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
     }
 
     // Shadow atlas: scene-wide, importance measured from the first view's camera, rendered by the
-    // first view that draws with shadows (prepare_view).
+    // first view that draws with shadows (prepare_view). Its casters are culled with the union of the
+    // layer masks of every view that draws with shadows, so the result does not depend on which view
+    // renders it: each view sees at least its own casters' shadows, possibly also those of casters on
+    // layers it does not render itself.
     const math::vec3 primaryCamera = viewCount > 0 ? scene.views[0].cameraPosition : math::vec3(0.0f);
     state.atlasRequests.clear();
     state.atlasRequestLights.clear();
     state.atlasKeyOccurrences.clear();
     state.atlasRendered = false;
     const bool shadowsEnabled = scene.shadows.enabled;
+    state.atlasLayerMask = 0;
     if (shadowsEnabled) {
+        for (u32 viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+            const render_view &view = scene.views[viewIndex];
+            if (!has_flag(view.flags, view_flags::SKIP_SHADOWS)) {
+                state.atlasLayerMask |= view.layerMask;
+            }
+        }
         std::vector<u32> &casters = state.shadowCasters;
         casters.clear();
         for (u32 index = 0; index < scene.lights.size(); ++index) {
@@ -1168,7 +1190,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
                 list.atlasY = tile.y;
                 list.atlasSize = tile.size;
                 cull_options tileOptions = {};
-                tileOptions.layerMask = view.layerMask;
+                tileOptions.layerMask = state.atlasLayerMask;
                 tileOptions.shadowCastersOnly = true;
                 const math::mat4 &clip = state.atlasTileData[base + face].clipFromWorld;
                 const math::frustum lightFrustum = frustum_from_clip(clip);

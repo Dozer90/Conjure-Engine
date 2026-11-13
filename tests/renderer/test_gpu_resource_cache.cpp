@@ -426,6 +426,46 @@ TEST_SUITE("renderer/gpu_resource_cache") {
         fixture.cache->unregister_external_texture(id);
     }
 
+    TEST_CASE("gpu_resource_cache - replacing an external texture keeps its id and resolves to the new texture") {
+        cache_fixture fixture(3);
+        nvrhi::TextureDesc desc = {};
+        desc.width = 16;
+        desc.height = 8;
+        desc.format = nvrhi::Format::SRGBA8_UNORM;
+        desc.isRenderTarget = true;
+        desc.debugName = "external";
+        nvrhi::TextureHandle original = fixture.device->native_device()->createTexture(desc);
+        desc.width = 40;
+        desc.height = 20;
+        desc.format = nvrhi::Format::RGBA16_FLOAT;
+        nvrhi::TextureHandle resized = fixture.device->native_device()->createTexture(desc);
+        REQUIRE(original != nullptr);
+        REQUIRE(resized != nullptr);
+        const gpu_texture_id id = fixture.cache->register_external_texture(
+          original,
+          rhi::texture_format::RGBA8_SRGB,
+          16,
+          8
+        );
+        CHECK(fixture.cache->replace_external_texture(id, resized, rhi::texture_format::RGBA16_FLOAT, 40, 20));
+        CHECK(fixture.cache->is_texture_ready(id));
+        CHECK(fixture.cache->texture_count() == 1);
+        const gpu_texture &mirror = fixture.cache->resolve_texture(id);
+        CHECK(mirror.texture == resized.Get());
+        CHECK(mirror.format == rhi::texture_format::RGBA16_FLOAT);
+        CHECK(mirror.width == 40);
+        CHECK(mirror.height == 20);
+        CHECK(mirror.wrap == texture_wrap::CLAMP);
+        CHECK(fixture.cache->fallbacks_used() == 0);
+
+        // A stale or unknown id is refused and changes nothing.
+        const gpu_texture_id unknown = {};
+        fixture.cache->unregister_external_texture(id);
+        CHECK_FALSE(fixture.cache->replace_external_texture(id, original, rhi::texture_format::RGBA8_SRGB, 16, 8));
+        CHECK_FALSE(fixture.cache->replace_external_texture(unknown, original, rhi::texture_format::RGBA8_SRGB, 16, 8));
+        CHECK(fixture.cache->texture_count() == 0);
+    }
+
     TEST_CASE("gpu_resource_cache - enqueue is safe from job threads and every upload lands") {
         cache_fixture fixture(3);
         core::jobs::job_system jobs = {};

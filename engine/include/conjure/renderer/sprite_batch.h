@@ -68,9 +68,11 @@ namespace conjure::renderer {
 
     /// <summary>
     /// Sorts sprites by (space, layer, order, texture), emits 4 vertices and 6 indices per sprite
-    /// and splits the result into runs. The capacity is MAX_SPRITES_PER_FRAME; sprites beyond it are
-    /// dropped (in sorted order, the last ones) and counted, with a WARN logged once per change of
-    /// the dropped count.
+    /// and splits the result into runs. The capacity is MAX_SPRITES_PER_FRAME and SCREEN sprites (the
+    /// HUD) take their slots first: beyond it the WORLD sprites last in sort order (the front-most) are
+    /// dropped, then, only when SCREEN sprites alone exceed the cap, the last SCREEN sprites. Dropped
+    /// sprites are counted, with a WARN naming the count per space logged once per change of the
+    /// dropped count.
     /// </summary>
     class CONJURE_API sprite_batcher {
         private:
@@ -110,7 +112,7 @@ namespace conjure::renderer {
             }
 
             /// <summary>
-            /// Sprites dropped by the last build because the cap was reached.
+            /// Sprites dropped by the last build because the cap was reached (both spaces).
             /// </summary>
             [[nodiscard]] u32 dropped_count() const noexcept {
                 return mDropped;

@@ -250,6 +250,20 @@ namespace conjure::renderer {
             );
             void unregister_external_texture(gpu_texture_id id);
 
+            /// <summary>
+            /// Points a registered external texture's id at another texture of the given format and size
+            /// (a resized render target's new colour texture), so whoever holds the id follows it. Render
+            /// thread, with the GPU idle: references resolve_texture returned for the id now see the new
+            /// texture. Returns false for a stale or unknown id.
+            /// </summary>
+            [[nodiscard]] bool replace_external_texture(
+              gpu_texture_id id,
+              nvrhi::ITexture *texture,
+              rhi::texture_format format,
+              u32 width,
+              u32 height
+            );
+
             [[nodiscard]] const gpu_mesh &fallback_mesh() const noexcept {
                 return mFallbackMesh;
             }

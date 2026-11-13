@@ -58,7 +58,9 @@ namespace conjure::renderer {
 
             /// <summary>
             /// The colour texture registered with the renderer's texture table, so the editor can bind
-            /// it through imgui_renderer::register_texture.
+            /// it through imgui_renderer::register_texture. The id stays the same across
+            /// renderer::resize_render_target and then resolves to the new texture, so a registered ImGui
+            /// handle or a sprite holding it keeps showing the target.
             /// </summary>
             [[nodiscard]] gpu_texture_id colour_texture() const noexcept;
 

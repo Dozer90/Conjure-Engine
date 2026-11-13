@@ -132,6 +132,17 @@ malformed files are `PARSE_FAILURE` (the document is validated first: an accesso
 its buffer, a `byteStride` above 252, a node cycle or a `COLOR_0` that is not `VEC3` or `VEC4` is malformed),
 missing buffers `NOT_FOUND`, points and lines `UNSUPPORTED`. Node trees of any depth import.
 
+A glTF point or spot light without a `range` (infinite in glTF) gets the distance at which its light,
+`intensity / d^2`, falls to `GLTF_LIGHT_RANGE_CUTOFF` (0.01 lux): `sqrt(intensity / GLTF_LIGHT_RANGE_CUTOFF)`,
+about 32 m for 10 candela, clamped to `GLTF_MIN_LIGHT_RANGE` and `GLTF_MAX_LIGHT_RANGE` (0.1 m and 100 m), with a
+warning. The range is also the light's shadow far plane and decides how much of the screen its light culling
+touches. A directional light keeps the default range, which it ignores. A texture uses its sampler's `wrapS` on
+both axes, because a `texture_asset` holds one wrap mode; a sampler whose `wrapT` differs is a warning.
+
+> [!WARNING]
+> The derived range is fixed at import: raising the light's intensity later, in the editor or a script, does not
+> lengthen it. Set `range` yourself when you change the intensity a lot.
+
 `gltf_asset_importer` is the pipeline adapter: the model is the primary asset, meshes, materials and textures are
 sub-assets with stable uuids (`mesh/<i>`, `material/<i>`, `texture/<i>`), and the model depends on them so a
 load brings everything. Its settings JSON mirrors the options (`gltf_import_options_from_json`,

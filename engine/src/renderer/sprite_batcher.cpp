@@ -53,17 +53,26 @@ u64 sprite_batcher::sort_key(const sprite &value) noexcept {
 void sprite_batcher::build(std::span<const sprite> sprites) {
     clear();
 
+    // SCREEN sprites (the HUD) take their slots first so UI never vanishes under a burst of world
+    // sprites: the overflow drops the WORLD sprites last in sort order, the front-most ones. The counts
+    // use sort_key's own split (WORLD, then every other value), so they partition the sorted order exactly.
     const usize total = sprites.size();
-    const usize emitted = std::min<usize>(total, MAX_SPRITES_PER_FRAME);
+    const usize worldCount = static_cast<usize>(std::ranges::count(sprites, sprite_space::WORLD, &sprite::space));
+    const usize screenCount = total - worldCount;
+    const usize emittedScreen = std::min<usize>(screenCount, MAX_SPRITES_PER_FRAME);
+    const usize emittedWorld = std::min<usize>(worldCount, MAX_SPRITES_PER_FRAME - emittedScreen);
+    const usize emitted = emittedWorld + emittedScreen;
     mDropped = static_cast<u32>(total - emitted);
     if (mDropped != mLastWarnedDropped) {
         if (mDropped > 0) {
             CONJURE_LOG_WARN(
               LOG_RENDERER,
-              "sprite_batcher: {} sprites exceed MAX_SPRITES_PER_FRAME ({}); the last {} in sort order are dropped",
+              "sprite_batcher: {} sprites exceed MAX_SPRITES_PER_FRAME ({}); {} WORLD and {} SCREEN sprites, the last "
+              "of each space in sort order, are dropped",
               total,
               MAX_SPRITES_PER_FRAME,
-              mDropped
+              worldCount - emittedWorld,
+              screenCount - emittedScreen
             );
         }
         mLastWarnedDropped = mDropped;
@@ -85,7 +94,10 @@ void sprite_batcher::build(std::span<const sprite> sprites) {
     mVertices.reserve(emitted * 4);
     mIndices.reserve(emitted * 6);
 
-    for (usize sorted = 0; sorted < emitted; ++sorted) {
+    // The sorted order is every WORLD sprite, then every SCREEN sprite: emit the first emittedWorld
+    // of the former and the first emittedScreen of the latter.
+    for (usize slot = 0; slot < emitted; ++slot) {
+        const usize sorted = slot < emittedWorld ? slot : worldCount + (slot - emittedWorld);
         const sprite &value = sprites[mOrder[sorted]];
         const u32 baseVertex = static_cast<u32>(mVertices.size());
         const u32 firstIndex = static_cast<u32>(mIndices.size());

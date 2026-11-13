@@ -56,6 +56,29 @@ namespace {
     };
 
     const probe_installer sProbeInstaller = {};
+
+    /// <summary>
+    /// Opens the shader index on 'device' and creates the renderer over both, or fails the case.
+    /// </summary>
+    [[nodiscard]] headless_renderer renderer_on(std::unique_ptr<rhi::device> device, core::jobs::job_system *jobs) {
+        headless_renderer fixture = {};
+        fixture.device = std::move(device);
+        fixture.shaders = open_shaders(*fixture.device);
+        core::result<std::unique_ptr<renderer::renderer>> created =
+          renderer::renderer::create(headless_desc(*fixture.device, *fixture.shaders, jobs));
+        CONJURE_REQUIRE_OK(created);
+        fixture.instance = std::move(created).value();
+        return fixture;
+    }
+
+    /// <summary>
+    /// Creates a device from 'desc' or fails the case.
+    /// </summary>
+    [[nodiscard]] std::unique_ptr<rhi::device> device_from(const rhi::device_desc &desc) {
+        core::result<std::unique_ptr<rhi::device>> created = rhi::device::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        return std::move(created).value();
+    }
 }
 
 std::filesystem::path conjure::testing::renderer_support::shader_directory() {
@@ -66,9 +89,10 @@ std::filesystem::path conjure::testing::renderer_support::shader_source_director
     return std::filesystem::path(CONJURE_TEST_SHADER_SOURCE_DIR);
 }
 
-rhi::device_desc conjure::testing::renderer_support::null_device_desc() {
+rhi::device_desc conjure::testing::renderer_support::null_device_desc(bool enableDebugLayer) {
     rhi::device_desc desc = {};
     desc.backend = rhi::graphics_backend::NULL_DEVICE;
+    desc.enableDebugLayer = enableDebugLayer;
     return desc;
 }
 
@@ -80,11 +104,11 @@ rhi::device_desc conjure::testing::renderer_support::software_device_desc() {
 }
 
 std::unique_ptr<rhi::device> conjure::testing::renderer_support::make_device(bool software) {
-    core::result<std::unique_ptr<rhi::device>> created = rhi::device::create(
-      software ? software_device_desc() : null_device_desc()
-    );
-    CONJURE_REQUIRE_OK(created);
-    return std::move(created).value();
+    return device_from(software ? software_device_desc() : null_device_desc(true));
+}
+
+std::unique_ptr<rhi::device> conjure::testing::renderer_support::make_raw_device() {
+    return device_from(null_device_desc(false));
 }
 
 std::unique_ptr<rhi::shader_library> conjure::testing::renderer_support::open_shaders(rhi::device &device) {
@@ -123,14 +147,11 @@ headless_renderer conjure::testing::renderer_support::make_headless_renderer(
   bool software,
   core::jobs::job_system *jobs
 ) {
-    headless_renderer fixture = {};
-    fixture.device = make_device(software);
-    fixture.shaders = open_shaders(*fixture.device);
-    core::result<std::unique_ptr<renderer::renderer>> created =
-      renderer::renderer::create(headless_desc(*fixture.device, *fixture.shaders, jobs));
-    CONJURE_REQUIRE_OK(created);
-    fixture.instance = std::move(created).value();
-    return fixture;
+    return renderer_on(make_device(software), jobs);
+}
+
+headless_renderer conjure::testing::renderer_support::make_raw_headless_renderer(core::jobs::job_system *jobs) {
+    return renderer_on(make_raw_device(), jobs);
 }
 
 assets::asset_id conjure::testing::renderer_support::test_asset_id(u64 index) noexcept {

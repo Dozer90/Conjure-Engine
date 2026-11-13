@@ -57,10 +57,13 @@ defines to keep the two in step.
 
 1. `begin_frame`: acquire the back buffer (when a swapchain exists), open the frame command list, flush the queued
    asset uploads under the 64 MB budget, collect the graveyard.
-2. `prepare`: build sprites and debug lines once, allocate the local-light shadow atlas scene-wide (importance
-   measured from view 0), then per view: cull on jobs, build instanced draw lists (opaque / masked sorted by
+2. `prepare`: build sprites and debug lines once (past `MAX_SPRITES_PER_FRAME`, `sprite_batcher` keeps every
+   `SCREEN` sprite it can and drops the `WORLD` sprites last in sort order first), allocate the local-light shadow
+   atlas scene-wide (importance measured from view 0; casters culled with `atlasLayerMask`, the union of the layer
+   masks of the views without `SKIP_SHADOWS`, so the first shadowing view that renders it does not decide what
+   the others see), then per view: cull on jobs, build instanced draw lists (opaque / masked sorted by
    material and mesh, blended far to near), sort the lights (directional first), build the cascades of the first
-   shadowing sun, fill the view constants.
+   shadowing sun (culled with the view's own mask), fill the view constants.
 3. `render_view_graph`: one render graph per view, passes added only when they have work: `shadow_cascade_0..3`,
    `shadow_atlas`, `depth_prepass`, `light_cull`, `ssao_gtao`, `ssao_blur_h/v`, `forward_opaque`, `skybox`,
    `forward_blend`, `world_sprites`, `debug_draw`, `exposure_histogram`, `exposure_adapt`, `bloom_down_0..5`,
@@ -69,6 +72,10 @@ defines to keep the two in step.
    lifetimes and takes its transients from the pool (no aliasing, NVRHI automatic barriers).
 4. ImGui into the swapchain (editor builds).
 5. `end_frame`: close, execute, present, evict idle transients and binding sets, fill `render_stats`.
+
+`world_sprites` and `debug_draw` run before exposure, bloom and the tonemapper, so world sprites and debug lines
+are post-processed like the 3D scene; `screen_sprites` runs after the tonemapper. A 2D project that wants its
+sprites' authored colours sets the camera's `postProcess = false` (`NO_POST_PROCESS` on its view).
 
 Conventions: reverse-Z everywhere (near = 1, far = 0, `GreaterOrEqual`), classic NVRHI binding sets with
 `registerSpaceIsDescriptorSet`, a volatile constant buffer at `b0` and 16 bytes of push constants at `b1` in
@@ -85,6 +92,12 @@ them. An entry released during a frame is retired (its GPU handles get an extra 
 the next `collect()`, so every reference the frame resolved stays valid until the frame is submitted; the mirrors
 live in heap entries whose addresses survive table growth, and `resolve_*` lock per call.
 
+A render target's colour texture is an external entry (`register_external_texture`; the cache never destroys it).
+`resize_render_target` builds the replacement target, waits for the GPU to go idle, then points the old entry at
+the new texture with `replace_external_texture` and unregisters the replacement's own id, so `colour_texture()`
+keeps its id across a resize. ImGui and the sprite pass resolve the id every frame (ImGui rebuilds its binding set
+when the texture changes), so a handle taken before the resize follows it.
+
 ## 4. Assets and importers
 
 The five asset types (`mesh`, `texture`, `material`, `model`, `environment`) have CPU-only loaders (R10: no device
@@ -94,6 +107,11 @@ subscribes to `asset_manager` events and calls `upload_*` on LOADED / RELOADED a
 The glTF adapter makes the model the primary asset with meshes, materials and textures as sub-assets with stable
 uuids and declared dependencies, so a blocking load of the model brings everything
 (`tests/integration/test_assets_renderer_headless.cpp` proves the whole path on the null device).
+A point or spot light without a glTF `range` gets `sqrt(intensity / GLTF_LIGHT_RANGE_CUTOFF)`, clamped to
+`[GLTF_MIN_LIGHT_RANGE, GLTF_MAX_LIGHT_RANGE]` (`range_from_intensity` in `import/gltf_importer.cpp`), with a
+warning; a sampler whose `wrapT` differs from `wrapS` is a warning (`texture_asset` holds one wrap mode). Any
+change to what the importer produces bumps `GLTF_IMPORTER_VERSION` (2 since the derived range), which re-imports
+cached models.
 
 ## 5. Threading model
 
@@ -144,6 +162,12 @@ around the EXTRACT phase, `set_imgui_draw_data` / `imgui()` for `imgui_layer`, a
 cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG and HDR inputs are
 generated in the tests (no binary assets). `tests/integration/test_assets_renderer_headless.cpp` covers the
 asset pipeline into the renderer.
+
+The null command list only counts what it records, so `renderer_test_support` (`make_device`,
+`make_headless_renderer`) creates the null device with `enableDebugLayer`: NVRHI's validation layer then logs
+misuse (recording on a closed list, a draw without a graphics state, a binding set whose resource does not fit
+its slot) as an ERROR, which fails every case holding a `log_capture`. The allocation gates use `make_raw_device` /
+`make_raw_headless_renderer` instead, so they measure the renderer and not the validation layer's bookkeeping.
 
 ```
 python tools/build.py --build-dir build/mod_renderer --target conjure_renderer_tests --test -R renderer

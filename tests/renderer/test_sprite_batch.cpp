@@ -152,26 +152,59 @@ TEST_SUITE("renderer/sprite_batch") {
         CHECK(batcher.sprite_count() == 3);
     }
 
-    TEST_CASE("sprite_batcher - sprites beyond MAX_SPRITES_PER_FRAME are dropped in sort order with one WARN") {
+    TEST_CASE("sprite_batcher - sprites beyond MAX_SPRITES_PER_FRAME drop world sprites before screen sprites") {
         log_capture logs = {};
         std::vector<sprite> sprites(MAX_SPRITES_PER_FRAME + 2, make_sprite(sprite_space::WORLD, 0, 0, 1));
-        // The two highest sort keys are the screen sprites: those are the ones dropped.
+        // The screen sprites (the HUD) have the highest sort keys but keep their slots: the two world
+        // sprites last in sort order (layer 5, the front-most) are the ones dropped.
         sprites[0] = make_sprite(sprite_space::SCREEN, 0, 0, 1);
         sprites[1] = make_sprite(sprite_space::SCREEN, 0, 0, 2);
+        sprites[2] = make_sprite(sprite_space::WORLD, 5, 0, 3);
+        sprites[3] = make_sprite(sprite_space::WORLD, 5, 0, 3);
         sprite_batcher batcher = {};
         batcher.build(sprites);
         CHECK(batcher.sprite_count() == MAX_SPRITES_PER_FRAME);
         CHECK(batcher.dropped_count() == 2);
-        REQUIRE(batcher.runs().size() == 1);
-        CHECK(batcher.runs()[0].space == sprite_space::WORLD);
+        const std::span<const sprite_run> runs = batcher.runs();
+        REQUIRE(runs.size() == 3);
+        CHECK(runs[0].space == sprite_space::WORLD);
+        CHECK(runs[0].texture == texture(1));
+        CHECK(runs[0].indexCount == (MAX_SPRITES_PER_FRAME - 2) * 6);
+        CHECK(runs[1].space == sprite_space::SCREEN);
+        CHECK(runs[1].texture == texture(1));
+        CHECK(runs[1].firstIndex == (MAX_SPRITES_PER_FRAME - 2) * 6);
+        CHECK(runs[2].space == sprite_space::SCREEN);
+        CHECK(runs[2].texture == texture(2));
+        CHECK(runs[2].indexCount == 6);
         CHECK(logs.count(core::log_level::WARN) == 1);
         CHECK(logs.contains(core::log_level::WARN, "exceed MAX_SPRITES_PER_FRAME"));
+        CHECK(logs.contains(core::log_level::WARN, "2 WORLD and 0 SCREEN sprites"));
         // The same overflow again does not warn again; a different one does.
         batcher.build(sprites);
         CHECK(logs.count(core::log_level::WARN) == 1);
         sprites.push_back(make_sprite(sprite_space::SCREEN, 0, 0, 3));
         batcher.build(sprites);
         CHECK(batcher.dropped_count() == 3);
+        CHECK(batcher.runs().size() == 4);
+        CHECK(batcher.runs().back().texture == texture(3));
         CHECK(logs.count(core::log_level::WARN) == 2);
+        CHECK(logs.contains(core::log_level::WARN, "3 WORLD and 0 SCREEN sprites"));
+    }
+
+    TEST_CASE("sprite_batcher - more screen sprites than MAX_SPRITES_PER_FRAME drop every world sprite") {
+        // Screen sprites alone fill the cap: they keep sort order among themselves, the last ones drop.
+        log_capture logs = {};
+        std::vector<sprite> sprites(MAX_SPRITES_PER_FRAME + 1, make_sprite(sprite_space::SCREEN, 0, 0, 1));
+        sprites[0] = make_sprite(sprite_space::SCREEN, 1, 0, 2);
+        sprites.push_back(make_sprite(sprite_space::WORLD, 0, 0, 3));
+        sprites.push_back(make_sprite(sprite_space::WORLD, 0, 0, 3));
+        sprite_batcher batcher = {};
+        batcher.build(sprites);
+        CHECK(batcher.sprite_count() == MAX_SPRITES_PER_FRAME);
+        CHECK(batcher.dropped_count() == 3);
+        REQUIRE(batcher.runs().size() == 1);
+        CHECK(batcher.runs()[0].space == sprite_space::SCREEN);
+        CHECK(batcher.runs()[0].texture == texture(1));
+        CHECK(logs.contains(core::log_level::WARN, "2 WORLD and 1 SCREEN sprites"));
     }
 }

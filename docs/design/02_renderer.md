@@ -41,7 +41,7 @@ rhi (wave 2): device / swapchain / shader_library over nvrhi backends null | d3d
 | R14 | **Shader build**: `conjure_add_shaders()` enumerates `source;entry;stage;defines` entries, runs `dxc` (DXIL, `-T xx_6_5`, `-HV 2018`) and `glslang` (SPIR-V, `vulkan1.2`) per permutation with NVRHI's default Vulkan binding offsets, writes `shaders/index.json`, and supports `CONJURE_SPIRV_COMPILER=glslang|dxc`. `shader_library` resolves `(name, entry, defines)` -> blob. | Honours the fixed decision. glslang's README (checked 2026-11-06) marks its HLSL front-end deprecated since April 2026 with removal at the next major version, so `Dependencies.cmake` must pin a pre-removal tag and the compiler switch keeps the long-term path open without touching shader sources. |
 | R15 | **NVRHI stays in `src/`.** Public `rhi` headers forward-declare `nvrhi::IDevice` / `nvrhi::ITexture` only (no includes) and expose non-owning `native_*()` accessors used by `conjure_renderer`. | Satisfies "no third-party headers in public headers" literally without inventing a parallel type system over NVRHI. |
 | R16 | **`imgui_renderer` is part of `conjure_renderer`**, compiled out under `CONJURE_DISTRIBUTION`, implements `ImGuiBackendFlags_RendererHasTextures` (ImGui >= 1.92 texture protocol). | One NVRHI consumer; the texture protocol is required by upstream for all backends. |
-| R17 | **Null backend** = full `nvrhi::IDevice` implementation (`engine/src/rhi/backends/null/`) that stores descriptors and returns valid handles; command lists record only counters and debug-marker names into `null_device_stats`. The whole renderer (graph, culling, sorting, stats, readback) runs on it in CTest. | Requirement 4 of the brief (everything testable headless). |
+| R17 | **Null backend** = full `nvrhi::IDevice` implementation (`engine/src/rhi/backends/null/`) that stores descriptors and returns valid handles; command lists record only counters and debug-marker names into `null_device_stats`. The whole renderer (graph, culling, sorting, stats, readback) runs on it in CTest. Command-list misuse checks are NVRHI's validation layer's (`enableDebugLayer`), not the null list's: the renderer tests run the null device under it, except the allocation gates (10; sweep-2026-11-12 F171). | Requirement 4 of the brief (everything testable headless). Re-implementing NVRHI's validation in the null list would duplicate it for about 40 recording methods. |
 
 ### 1.2 Explicit non-goals for v1
 Skinning, GPU-driven culling/indirect draws, TAA, order-independent transparency, block-compressed
@@ -271,7 +271,10 @@ so casters behind the camera still cast. Layer masks are tested first.
 
 A pure-2D scene (no meshes, no lights, no environment) allocates only `hdr`, `ldr` and the sprite
 buffer; everything else is culled. With `NO_POST_PROCESS`, `hdr` is still used (sprites may exceed
-1.0) but exposure is forced to 1 and the operator to `NONE`.
+1.0) but exposure is forced to 1 and the operator to `NONE`. Post-processing stays on by default for world
+sprites and debug lines, which draw into `hdr` before exposure, bloom and the tonemapper; screen sprites draw after
+it. A 2D project opts out per camera with `camera_component::postProcess = false`, which sets `NO_POST_PROCESS` on
+its view; the Grid Sweeper build script does so (sweep F403).
 
 ### 3.4 Shadows
 Cascades (`cascade_builder`): splits `lerp(uniform, logarithmic, 0.7)` over
@@ -284,7 +287,13 @@ Atlas (`shadow_atlas_allocator`): quadtree over 4096^2 with leaf sizes 1024, 512
 shadow-casting local lights are sorted by importance; the requested `shadowResolution` is granted
 while space remains, otherwise halved down to 256, otherwise the light renders unshadowed
 (`render_stats::shadowTilesDropped`). A light that keeps its size keeps its tile across frames
-(stable map coordinates). Filtering (`shadows.hlsli`): `HARD` 1 comparison tap; `PCF` 16-tap
+(stable map coordinates). The atlas is scene-wide and rendered once, by the first view that draws with
+shadows; its casters are culled with the union of the layer masks of every view without `SKIP_SHADOWS`,
+computed before the per-view loop, so the result does not depend on the view order: every view sees at least
+its own casters' local-light shadows and may also see those of casters on layers only another view renders.
+Cascades use each view's own mask (sweep-2026-11-12 F377). Planned: a per-camera opt-in to isolated atlas
+culling for split-screen scenes whose halves are different worlds; the union stays the default.
+Filtering (`shadows.hlsli`): `HARD` 1 comparison tap; `PCF` 16-tap
 Poisson disk rotated by a per-pixel interleaved-gradient-noise angle, radius `shadows.pcfRadiusTexels`
 (default 1.5); `PCSS` 16-tap blocker search -> penumbra `(dReceiver - dBlocker) * sourceRadius /
 dBlocker` -> 16-tap PCF with that radius, clamped to 8 texels. All taps use `SampleCmpLevelZero`.
@@ -339,7 +348,10 @@ uploaded with one `writeBuffer`, and yields `sprite_run { space, texture, firstI
 one `drawIndexed` per run. `WORLD` vertices are world space (quad of `size` centred on the
 transform); `SCREEN` vertices are pixel space, origin top-left, y down, projected with an
 orthographic matrix from the viewport. Texture filter is the texture's `sampler_filter`
-(`LINEAR` or `POINT` for pixel art). Capped at `MAX_SPRITES_PER_FRAME` with a once-per-change WARN.
+(`LINEAR` or `POINT` for pixel art). Capped at `MAX_SPRITES_PER_FRAME` with a once-per-change WARN that names
+the dropped count per space. `SCREEN` sprites (the HUD) take their slots first, `min(screen count, cap)`, and the
+remaining slots go to `WORLD` sprites in sort order, so the overflow drops the front-most world sprites and UI
+never vanishes under a burst of world sprites (sweep-2026-11-12 F386).
 
 ### 3.10 Debug draw
 `debug_draw_buffer` (in the write scene) collects `line/box/sphere/frustum/axes/grid` as
@@ -359,7 +371,10 @@ texture, upload, `SetTexID`, `SetStatus(OK)`), `WantUpdates` (upload `UpdateRect
 `WantDestroy` (release once `UnusedFrames > 0`, `SetTexID(ImTextureID_Invalid)`,
 `SetStatus(Destroyed)`); then write vertices/indices with `writeBuffer`, set projection via push
 constants, and per `ImDrawCmd` set scissor + binding set and `drawIndexed`. `register_texture(
-gpu_texture_id) -> ImTextureID` exposes render-target colour textures to the editor viewport.
+gpu_texture_id) -> ImTextureID` exposes render-target colour textures to the editor viewport. A target's
+colour id is stable across `resize_render_target`: the resize waits for the GPU, points the id's cache entry at
+the new texture (`gpu_resource_cache::replace_external_texture`) and retires the replacement's id, so the handle
+the viewport registered once follows every panel resize (sweep-2026-11-12 F385).
 Shutdown destroys everything in `ImGui::GetPlatformIO().Textures`. ImGuizmo needs nothing extra.
 
 ### 3.12 Shader build (`cmake/ConjureShaders.cmake`)
@@ -719,9 +734,15 @@ flat per face, missing tangents via UV derivatives + Gram-Schmidt, missing colou
 widened to `R32_UINT`; `pbrMetallicRoughness` -> `material_desc` 1:1 (metallic in B, roughness in G
 as glTF defines, no swizzle, occlusion in R); `normalTexture.scale`, `occlusionTexture.strength`,
 `emissiveFactor`, `KHR_materials_emissive_strength`, `alphaMode/alphaCutoff/doubleSided`,
-`KHR_materials_unlit` -> `unlit`, `KHR_lights_punctual` -> `model_node::light`; base colour and
-emissive textures import as `SRGB`, all others `LINEAR`; samplers map to `LINEAR`/`POINT` + wrap mode
-on the texture asset; skins, animations, `KHR_texture_transform` warn and skip.
+`KHR_materials_unlit` -> `unlit`, `KHR_lights_punctual` -> `model_node::light` (a point or spot light without
+`range`, infinite in glTF, gets `sqrt(intensity / GLTF_LIGHT_RANGE_CUTOFF)`, where `intensity / d^2` falls to
+0.01 lux, about 32 m for 10 cd, clamped to `[GLTF_MIN_LIGHT_RANGE, GLTF_MAX_LIGHT_RANGE]` = [0.1, 100] m because
+the range is also the shadow far plane, the importance weight and the light-culling extent; a warning names it;
+fixed at import, so a later intensity change does not move it; directional lights ignore range; sweep-2026-11-12
+F392); base colour and emissive textures import as `SRGB`, all others `LINEAR`; samplers map to
+`LINEAR`/`POINT` + wrap mode on the texture asset (`wrapS`; a sampler whose `wrapT` differs warns, since
+`.ctex` holds one wrap mode); skins, animations, `KHR_texture_transform` warn and skip. Any change to the
+importer's output bumps `GLTF_IMPORTER_VERSION` (2 since the derived range).
 
 `components.h` holds plain structs registered with `core::reflect` through
 `register_components()`; the renderer does not depend on `ecs`. The engine's `renderer_subsystem` registers them
@@ -916,7 +937,7 @@ renderer: `test_camera` (reverse-Z near -> 1 and far -> 0 for perspective and or
 `test_material_asset` (defaults equal glTF defaults, json round trip, texture flags from missing refs),
 `test_environment_asset` (CPU bake of a constant environment returns the radiance in SH band 0 and a constant prefiltered chain, two bakes are byte-identical, inline and 8-worker bakes are byte-identical, `.cenv` round trip),
 `test_gltf_importer` (fixtures: node tree, material factors, missing normals/tangents generated, strips triangulated, unsupported extension warns, missing buffer -> error, points -> `UNSUPPORTED`, 16-bit indices widened),
-`test_sprite_batcher` (sort by space/layer/order/texture, run count, pixel-space transform, cap at `MAX_SPRITES_PER_FRAME`),
+`test_sprite_batcher` (sort by space/layer/order/texture, run count, pixel-space transform, cap at `MAX_SPRITES_PER_FRAME` dropping world sprites before screen sprites),
 `test_debug_draw` (box emits 24 vertices, sphere/frustum counts, timed entries expire, concurrent append from 8 jobs),
 `test_tonemap_reference` (ACES/Reinhard/AgX monotonic, 0 -> 0, large input <= 1, Reinhard reaches 1 at the white point, `NONE` is identity below 1),
 `test_exposure_math` (EV100 <-> luminance, `exposure` formula, adaptation converges with up/down speeds),
@@ -924,8 +945,14 @@ renderer: `test_camera` (reverse-Z near -> 1 and far -> 0 for perspective and or
 `test_gpu_resource_cache` (upload from a worker thread resolves after one frame, stale generation -> fallback and one WARN, deferred release after `bufferCount + 1` frames),
 `test_renderer_null_frame` (10,000 instances, 64 lights, 4 shadowed: expected `passNames` in order, draw/instance counts, zero views is a no-op, `NO_POST_PROCESS` culls exposure/bloom, headless view targeting the swapchain is skipped),
 `test_renderer_failures` (missing shader -> `SHADER_NOT_FOUND` naming the key, `MAX_LIGHTS_PER_VIEW` clamp, device lost -> `DEVICE_LOST` and no further recording),
-`test_render_target` (create/resize/destroy, `read_back` size and zero fill),
+`test_render_target` (create/resize/destroy, the colour id kept across a resize, `read_back` size and zero fill),
 `test_imgui_renderer` (two command lists -> two draws, `WantCreate/WantUpdates/WantDestroy` handled, scissor clamp, texture registration).
+
+The renderer tests' null device runs under NVRHI's validation layer (`renderer_test_support`: `make_device`,
+`make_headless_renderer` set `enableDebugLayer`), so command-list misuse logs an ERROR and fails every case
+holding a `log_capture`. The allocation gates (`null_frame` frames 3 to 10 and extraction, the rebuilt render
+graph, the timer ring) use the raw null device (`make_raw_device`, `make_raw_headless_renderer`) so they measure
+the renderer, not the validation layer's own bookkeeping (sweep-2026-11-12 F171).
 
 benchmarks (`tests/benchmarks`): `bench_culling_10k`, `bench_draw_list_10k` (< 2 ms cull + sort + batch),
 `bench_render_graph_compile`, `bench_render_null_frame` (full `render()` CPU time for the 10k scene, target < 3 ms).
