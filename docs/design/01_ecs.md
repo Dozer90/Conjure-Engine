@@ -28,6 +28,7 @@ below; implementers decide nothing architectural.
 | D9 | **Hierarchy stays in `scene`.** ECS offers observers (which may only enqueue), `observe_destroyed`, reflection-driven entity-field remap, `changed<T>`, O(1) random access and batch instantiation. `destroy_entity` never cascades. | ECS cannot get hierarchy semantics wrong if it has none. |
 | D10 | **Prefab base = `entity_archive`:** an in-memory, typed copy of N entities (component bytes produced by `ops.copy`), entity references inside the set stored as local indices. JSON (de)serialisation operates on archives. `instantiate_batch` places entities directly in their final archetype. | One pipeline: world <-> archive <-> JSON serves prefab assets, scene files, copy/paste, undo and C# `Spawn()`. |
 | D11 | **Error model:** operations on dead/stale entities return `core::result` errors; contract violations (structural call while locked, wrong thread, observer mutating directly) `CONJURE_ASSERT` *and* return an error so Distribution stays defined. Unknown component names on load are preserved verbatim in `unresolved_components`. | Scripts hit stale handles routinely; a crash there is unacceptable. Data authored with an unloaded module must survive a round trip. |
+| D12 | **Accessors that refresh or rebuild lazily are non-const, with no `mutable` caches.** `query::chunk_count`, `entity_count` and `matches` (and `view::entity_count`, which forwards) call `refresh()` first, which appends to the cached matches; `scheduler::stages` rebuilds a dirty phase first, which allocates and can fail. The query.h and scheduler.h summaries and the API page say so. | `const` keeps meaning "no state changes, safe to call from several threads at once"; `mutable` caches would make two threads reading one const query race on its match list. No caller needs a const variant (code sweep 2026-11-12, F636). |
 
 Rejected: sparse sets (violates the brief, multi-component iteration not contiguous); 32-bit packed ids (8-bit
 generations wrap in seconds); per-row dirty bits (state to keep consistent across swap-removes); a singleton
@@ -527,10 +528,10 @@ class chunk_view {                 // holds archetype *, chunk *, stamp version,
 class query {                      // value type; query(world &, query_desc); caches archetype * matches
     public:
         template <typename Callable> void for_each_chunk(Callable &&callable);     // callable(chunk_view &)
-        [[nodiscard]] uint32_t chunk_count();                   // refreshes first
-        [[nodiscard]] uint32_t entity_count();
+        [[nodiscard]] uint32_t chunk_count();                   // refreshes first, hence non-const (D12)
+        [[nodiscard]] uint32_t entity_count();                  // refreshes first, hence non-const (D12)
         [[nodiscard]] chunk_view chunk(uint32_t index);         // flat index over matches (bindings)
-        [[nodiscard]] std::span<archetype *const> matches();
+        [[nodiscard]] std::span<archetype *const> matches();    // refreshes first, hence non-const (D12)
         [[nodiscard]] const query_desc &desc() const noexcept;
         void refresh();
 };
@@ -695,7 +696,7 @@ class scheduler {                  // world *, job_system *, unique_ptr<system_r
 
         /// <summary>Runs only the systems of the phase whose flags contain every bit of required (R2).</summary>
         void run_phase_filtered(system_phase target, const frame_info &frame, system_flags required);
-        [[nodiscard]] std::span<const stage_info> stages(system_phase target);   // builds if dirty
+        [[nodiscard]] std::span<const stage_info> stages(system_phase target);   // builds if dirty (D12)
         [[nodiscard]] std::span<const system_timing> last_timings(system_phase target) const noexcept;
 };
 ```

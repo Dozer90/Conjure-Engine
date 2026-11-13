@@ -15,6 +15,10 @@
 // matching its description and refreshes incrementally (new archetypes only). Iteration locks the
 // world for its duration, so structural calls made from a callback fail with STRUCTURE_LOCKED and the
 // callback must use a command_buffer instead.
+//
+// chunk_count, entity_count and matches refresh lazily before they answer, so they are deliberately
+// non-const (01_ecs.md D12): a refresh appends to the cached matches, and hiding that behind mutable
+// members would make two threads calling a const method on one query race on the cache.
 
 namespace conjure::ecs {
 
@@ -91,12 +95,14 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// Number of chunks the next iteration would visit (refreshes first).
+            /// Number of chunks the next iteration would visit. Refreshes lazily first (archetypes created
+            /// since the last refresh join the cached matches), so it is non-const by design.
             /// </summary>
             [[nodiscard]] u32 chunk_count();
 
             /// <summary>
-            /// Number of entities in the chunks the next iteration would visit (refreshes first).
+            /// Number of entities in the chunks the next iteration would visit. Refreshes lazily first, so it
+            /// is non-const by design.
             /// </summary>
             [[nodiscard]] u32 entity_count();
 
@@ -108,7 +114,7 @@ namespace conjure::ecs {
             [[nodiscard]] chunk_view chunk(u32 index);
 
             /// <summary>
-            /// The matching archetypes (refreshes first).
+            /// The matching archetypes. Refreshes lazily first, so it is non-const by design.
             /// </summary>
             [[nodiscard]] std::span<archetype *const> matches();
 

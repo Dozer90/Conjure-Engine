@@ -141,7 +141,9 @@ namespace conjure::ecs {
             void run_phase_filtered(system_phase target, const frame_info &frame, system_flags required);
 
             /// <summary>
-            /// The stages of a phase (built if dirty).
+            /// The stages of a phase. A phase left dirty by add_system, remove_system or set_enabled is
+            /// rebuilt here first, which allocates and can fail, so the method is non-const by design
+            /// (01_ecs.md D12). Empty for an out-of-range phase or a failed rebuild.
             /// </summary>
             [[nodiscard]] std::span<const stage_info> stages(system_phase target);
 

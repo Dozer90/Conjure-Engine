@@ -95,6 +95,12 @@ hands out a `chunk_view` per non-empty matching chunk; `chunk_count()`, `entity_
 index for bindings; hold `world.lock_iteration()` while using the result), `matches()`, `desc()`, `reset(desc)`
 and `refresh()` complete it.
 
+> [!NOTE]
+> `chunk_count()`, `entity_count()` and `matches()` refresh the cached matches before they answer, so they are not
+> `const`, and neither is a view's `entity_count()`. Call them on a query or view you hold by value or by non-const
+> reference. They stay non-const on purpose: a `const` call that quietly updated the cache would race when two
+> threads read the same query.
+
 A `chunk_view` is one chunk of one archetype: up to a few hundred entities whose components sit in contiguous
 columns.
 
@@ -185,7 +191,9 @@ so it may make structural changes directly; `DISABLED` skips it; `RUNS_WHILE_PAU
 be compiled out, with one `DEBUG` log each when the system is added), `remove_system(id)` and
 `set_enabled(id, bool)` take it back, `finalise()` builds every
 phase's stages now, and `run_phase(phase, frame)` runs the phase. `stages(phase)` shows the `stage_info` groups,
-`last_timings(phase)` the microseconds per system, `system(id)` and `system_count()` the registrations.
+`last_timings(phase)` the microseconds per system, `system(id)` and `system_count()` the registrations. Like the
+query counters, `stages(phase)` is not `const`: it first rebuilds a phase whose systems changed since the last
+build, and returns an empty span when that rebuild fails.
 
 ```cpp
 scheduler systems(game, &jobs);                        // jobs: a started core::jobs::job_system

@@ -123,8 +123,11 @@ source, stamps the destination chunk and fires `ADDED` for the added columns. `a
 ### 3.2 Queries and change detection
 
 `query::refresh()` scans `[mSeenArchetypeCount, archetype_count())` and keeps archetypes with
-`mask.contains_all(with) && !mask.contains_any(without)`: O(new archetypes). Iteration skips empty archetypes and
-chunks, holds an `iteration_scope` and, with a `changed` mask, visits a chunk only when one listed column's
+`mask.contains_all(with) && !mask.contains_any(without)`: O(new archetypes). `chunk_count`, `entity_count` and
+`matches` call it first, so they (and `view::entity_count`) are non-const on purpose: `mMatches` and
+`mSeenArchetypeCount` are not `mutable`, because a const accessor that refreshed would race when two threads read
+one query (D12; `scheduler::stages` follows the same rule, 3.4). Iteration skips empty archetypes and chunks,
+holds an `iteration_scope` and, with a `changed` mask, visits a chunk only when one listed column's
 version exceeds `sinceVersion` (`chunk_passes`). The world version starts at 1 and is bumped at the start of
 every structural call, flush and system run. Non-const `chunk_view::get<T>`, `column_data(id, true)`,
 `world::get<T>()`, `get_raw(.., true)`, `component_ref::write()`, `set` and `component_from_json` stamp the
@@ -175,9 +178,10 @@ registration order as the tiebreak (a cycle is detected incrementally in `add_sy
 then greedy append-only packing: a system joins the current stage when no predecessor is in it, it is not
 `EXCLUSIVE`, the stage is not exclusive, and for every member `s`: `(writes & (s.reads | s.writes)).none() &&
 (reads & s.writes).none()`. Stages are rebuilt lazily after `add_system`, `remove_system` and `set_enabled`;
-`finalise()` builds every phase now. `system_desc::resolveAccess` (filled by `make_system`) is called at
-`add_system` to merge pack-derived masks into `reads` / `writes`, so a `system_desc` needs no registry at
-construction.
+`finalise()` builds every phase now. `stages(phase)` rebuilds a dirty phase before returning it (an empty span
+when that fails), which allocates, so it is non-const like the query counters (3.2).
+`system_desc::resolveAccess` (filled by `make_system`) is called at `add_system` to merge pack-derived masks into
+`reads` / `writes`, so a `system_desc` needs no registry at construction.
 
 `scheduler.cpp`: `run_phase` walks the stages; an exclusive stage bumps the version and runs on the caller
 with the world unlocked, then flushes; every other stage takes an `iteration_scope`, schedules its systems as
