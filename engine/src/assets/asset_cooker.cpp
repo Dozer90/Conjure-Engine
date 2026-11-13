@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,6 +29,24 @@ namespace {
     /// </summary>
     bool can_cook(asset_record_status status) noexcept {
         return status == asset_record_status::OK || status == asset_record_status::IMPORT_FAILED;
+    }
+
+    /// <summary>
+    /// Strays an includeAll cook leaves out with a warning: files no importer handles and sources
+    /// deleted from disk. Broken project state (META_INVALID, DUPLICATE_UUID) still fails the cook.
+    /// </summary>
+    bool is_skippable_stray(asset_record_status status) noexcept {
+        return status == asset_record_status::NO_IMPORTER || status == asset_record_status::MISSING_SOURCE;
+    }
+
+    /// <summary>
+    /// True when the settings ask for the asset by name, as a root or in alwaysInclude.
+    /// </summary>
+    bool is_named(const cook_settings &settings, const asset_id &id) noexcept {
+        const bool isRoot = std::find(settings.roots.begin(), settings.roots.end(), id) != settings.roots.end();
+        const bool isAlwaysIncluded =
+          std::find(settings.alwaysInclude.begin(), settings.alwaysInclude.end(), id) != settings.alwaysInclude.end();
+        return isRoot || isAlwaysIncluded;
     }
 }
 
@@ -66,11 +85,17 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
         return std::move(scanned).get_error();
     }
 
-    // Roots: the requested ones, the always-included ones and every engine asset; or everything.
+    // Roots: the requested ones, the always-included ones and every engine asset; or everything but
+    // the strays nothing names, so a stray or deleted file does not block an export of the project.
     std::vector<asset_id> roots = {};
+    std::vector<const asset_record *> skippedStrays = {};
     const std::vector<asset_record> records = mDatabase->records();
     if (settings.includeAll) {
         for (const asset_record &record : records) {
+            if (is_skippable_stray(record.status) && !is_named(settings, record.id)) {
+                skippedStrays.push_back(&record);
+                continue;
+            }
             roots.push_back(record.id);
         }
     } else {
@@ -154,6 +179,26 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
     // Import failures are already listed ahead of these, so for an asset whose import failed the
     // import message is the one kept by the per-id deduplication below.
     report.failures.insert(report.failures.end(), memberFailures.begin(), memberFailures.end());
+
+    // A skipped stray that a member depends on is one of those failures, not a warning.
+    for (const asset_record *stray : skippedStrays) {
+        const bool reached = std::any_of(memberFailures.begin(), memberFailures.end(), [stray](
+          const cook_failure &failure
+        ) {
+            return failure.id == stray->id;
+        });
+        if (reached) {
+            continue;
+        }
+        const std::optional<std::string> path = mDatabase->asset_path_of(stray->id);
+        std::string warning = std::format(
+          "'{}' skipped: record is {}",
+          path.value_or(std::string()),
+          to_string(stray->status)
+        );
+        CONJURE_LOG_WARN(LOG_ASSETS, "cook: {}", warning);
+        report.warnings.push_back(std::move(warning));
+    }
 
     // Every member must have a valid blob now; types unregistered since import are failures too.
     pack_writer writer = {};

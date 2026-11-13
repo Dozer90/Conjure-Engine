@@ -278,7 +278,9 @@ jobs in flight and returns queued slots to `UNLOADED`.
 first `bind` or `load`, never freed before the manager shuts down, so the pointer stays valid for the manager's
 lifetime. It is read-only outside the module: `object` (the published payload or `nullptr`), `version`,
 `state`, `strongRefs`, `type`, `id` and `index`, all atomics apart from `id` and `index`. `bind_slot(id)` is the
-untyped bind the scene bind pass uses; `make_handle(id)` binds and returns a handle without loading.
+untyped bind the scene bind pass uses; `make_handle(id)` binds and returns a handle without loading. A slot bound
+before its asset exists learns its type later: an untyped bind (`bind_slot`, `make_handle`), `load` or `pin` of a
+uuid that no source can type asks the sources again on each call, until one can.
 
 ## Ids, states and flags
 

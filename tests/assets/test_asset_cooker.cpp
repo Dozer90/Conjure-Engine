@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace conjure;
@@ -58,6 +60,10 @@ namespace {
             return reader;
         }
     };
+
+    bool has_warning(const cook_report &report, std::string_view text) {
+        return std::find(report.warnings.begin(), report.warnings.end(), text) != report.warnings.end();
+    }
 }
 
 TEST_SUITE("assets/asset_cooker") {
@@ -160,22 +166,90 @@ TEST_SUITE("assets/asset_cooker") {
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export/manifest.json"));
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export"));
 
+        // The stray orphan.xyz nothing names or references is a warning, not a failure (F021).
         const cook_report &last = fixture.cooker.last_report();
-        REQUIRE(last.failures.size() == 2);
-        std::vector<std::string> paths = {};
-        for (const cook_failure &failure : last.failures) {
-            paths.push_back(failure.assetPath);
-        }
-        std::sort(paths.begin(), paths.end());
-        CHECK(paths[0] == "assets://broken.ta");
-        CHECK(paths[1] == "assets://orphan.xyz");
+        REQUIRE(last.failures.size() == 1);
+        CHECK(last.failures[0].assetPath == "assets://broken.ta");
+        CHECK(has_warning(last, "'assets://orphan.xyz' skipped: record is NO_IMPORTER"));
         CHECK(last.assetCount == 0);
-        CHECK(logs.count(core::log_level::ERR) >= 2);
+        CHECK(logs.count(core::log_level::ERR) >= 1);
 
         // The good assets were still imported, so a cook of only them succeeds afterwards.
         core::result<cook_report> partial = fixture.cooker.cook(fixture.settings_for({fixture.top}));
         CONJURE_REQUIRE_OK(partial);
         CHECK(partial.value().assetCount == 3);
+    }
+
+    TEST_CASE("asset_cooker - includeAll skips unnamed NO_IMPORTER and MISSING_SOURCE records with a warning") {
+        cook_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.pipeline.write_source("orphan.xyz", "no importer");
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->remove("assets/alone.ta"));
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->remove("assets/alone.ta.meta"));
+        cook_settings settings = fixture.settings_for({});
+        settings.includeAll = true;
+        core::result<cook_report> report = fixture.cooker.cook(settings);
+        CONJURE_REQUIRE_OK(report);
+        const std::optional<asset_record> alone = fixture.pipeline.database->find(fixture.alone);
+        REQUIRE(alone.has_value());
+        CHECK(alone->status == asset_record_status::MISSING_SOURCE);
+
+        CHECK(report.value().failures.empty());
+        CHECK(report.value().assetCount == 3);
+        CHECK(report.value().warnings.size() == 2);
+        CHECK(has_warning(report.value(), "'assets://alone.ta' skipped: record is MISSING_SOURCE"));
+        CHECK(has_warning(report.value(), "'assets://orphan.xyz' skipped: record is NO_IMPORTER"));
+        CHECK(logs.contains(core::log_level::WARN, "'assets://orphan.xyz' skipped"));
+        pack_reader reader = fixture.open_pack();
+        CHECK(reader.toc().size() == 3);
+        CHECK(reader.find(fixture.top) != nullptr);
+        CHECK(reader.find(fixture.alone) == nullptr);
+    }
+
+    TEST_CASE("asset_cooker - includeAll still fails on a stray that roots or alwaysInclude name") {
+        cook_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        fixture.pipeline.write_source("orphan.xyz", "no importer");
+        CONJURE_REQUIRE_OK(fixture.pipeline.database->scan());
+        const asset_id orphan = fixture.pipeline.id_of("orphan.xyz");
+        cook_settings settings = fixture.settings_for({});
+        settings.includeAll = true;
+        SUBCASE("a root") {
+            settings.roots = {orphan};
+        }
+        SUBCASE("alwaysInclude") {
+            settings.alwaysInclude = {orphan};
+        }
+
+        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), asset_error_code::IMPORT_FAILED);
+        const cook_report &last = fixture.cooker.last_report();
+        REQUIRE(last.failures.size() == 1);
+        CHECK(last.failures[0].id == orphan);
+        CHECK(last.failures[0].message == "record is NO_IMPORTER");
+        CHECK(last.warnings.empty());
+        CHECK_FALSE(fixture.pipeline.fileSystem->exists("export"));
+    }
+
+    TEST_CASE("asset_cooker - includeAll still fails on a deleted source a cooked asset depends on") {
+        cook_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        CONJURE_REQUIRE_OK(fixture.cooker.cook(fixture.settings_for({fixture.top})));
+
+        // 'top' stays up to date, so the closure still follows its recorded dependency on 'mid'.
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->remove("assets/mid.ta"));
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->remove("assets/mid.ta.meta"));
+        cook_settings settings = fixture.settings_for({});
+        settings.includeAll = true;
+        settings.outputDirectory = "export_all";
+        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), asset_error_code::IMPORT_FAILED);
+        const cook_report &last = fixture.cooker.last_report();
+        REQUIRE(last.failures.size() == 1);
+        CHECK(last.failures[0].id == fixture.mid);
+        CHECK(last.failures[0].message == "record is MISSING_SOURCE");
+        CHECK(last.warnings.empty());
+        CHECK_FALSE(fixture.pipeline.fileSystem->exists("export_all"));
     }
 
     TEST_CASE("asset_cooker - invalid settings and unknown roots fail before anything is written") {

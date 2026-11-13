@@ -24,7 +24,11 @@ namespace conjure::assets {
         std::string platform = {};             // informational; the database's cache platform is used
         std::vector<asset_id> roots = {};
         std::vector<asset_id> alwaysInclude = {};
-        bool includeAll = false;               // every record instead of the closure of the roots
+
+        // Every record instead of the closure of the roots, except NO_IMPORTER and MISSING_SOURCE records, which
+        // are skipped with a warning; they still fail the cook when roots or alwaysInclude name them or a member
+        // depends on them.
+        bool includeAll = false;
         bool writeManifest = true;
     };
 
@@ -69,9 +73,10 @@ namespace conjure::assets {
         public:
             /// <summary>
             /// Scans, computes the closure (roots + alwaysInclude + every engine:// asset, or all
-            /// records), drops EXCLUDE_FROM_PACK types, imports stale members, verifies every blob
-            /// and writes the pack. IMPORT_FAILED with every failure listed in the report when any
-            /// member cannot be cooked; nothing is written then.
+            /// records but the unnamed NO_IMPORTER and MISSING_SOURCE ones, which become report
+            /// warnings unless a member depends on them), drops EXCLUDE_FROM_PACK types, imports stale
+            /// members, verifies every blob and writes the pack. IMPORT_FAILED with every failure listed
+            /// in the report when any member cannot be cooked; nothing is written then.
             /// </summary>
             [[nodiscard]] core::result<cook_report> cook(const cook_settings &settings);
 

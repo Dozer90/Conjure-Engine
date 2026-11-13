@@ -130,7 +130,9 @@ namespace conjure::assets {
     };
 
     /// <summary>
-    /// Owns every slot, payload and the load pipeline. Outlives every handle.
+    /// Owns every slot, payload and the load pipeline. Outlives every handle. An untyped bind
+    /// (bind_slot, make_handle), load or pin of a uuid that no source can type asks the sources
+    /// again on each call, until one can.
     /// </summary>
     class CONJURE_API asset_manager {
         private:

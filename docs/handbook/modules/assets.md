@@ -68,6 +68,12 @@ acquire load of `slot.object`. The field order of `asset_ref` is a contract (R25
 an `ASSET_REF` field as its leading uuid and zeroes the rest on read, and the ECS serialiser records the same
 offsets for the scene bind pass (`asset_manager::bind_slot`).
 
+A slot's `type` is taken from the sources while it is still `INVALID` (`state::find_or_create`), so a slot bound
+before its asset is imported or created learns its type later. The price: an untyped bind (`bind_slot`,
+`make_handle`), `load` or `pin` of a uuid that no source can type asks the sources again on each call, until one
+can (`bind<T>` records `T` instead). The 2026-11-12 sweep kept this (F308, won't fix): only uuids no source knows
+pay, and caching the miss would need a change signal on the public `asset_source` interface.
+
 ### 2.2 Type identity
 
 `make_asset_type_id(name)` is a `constexpr` 64-bit FNV-1a implemented in the module so blob headers and pack
@@ -279,12 +285,14 @@ is deferred (`hot_reload_report::deferred`) and reloaded by a later `update()` o
 
 `asset_cooker::cook`: validate settings (`INVALID_ARGUMENT` for an empty output directory, `NOT_FOUND` for an
 unknown root), `scan()`, roots = `roots` + `alwaysInclude` + every `engine://` record (or all records with
-`includeAll`), then **alternate** `dependency_closure` and `import` until no member of the closure is left to
-import (each source at most once per cook, `importedThisCook`), because a source's dependencies are only known
-once it has been imported; only members of the final closure are reported as non-cookable. Drop
-`EXCLUDE_FROM_PACK` types, fail with `IMPORT_FAILED` and write nothing if any member failed (every failure in
-the report; the good imports stay in the cache), otherwise `pack_writer::add` every blob (re-verifying
-`payloadHash`), `write` the pack and the manifest, both `tmp + rename`.
+`includeAll`, minus the `NO_IMPORTER` and `MISSING_SOURCE` strays that `roots` and `alwaysInclude` do not name;
+a skipped stray outside the final closure becomes a `cook_report::warnings` entry and a WARN, one a member
+depends on gets the usual non-cookable failure; sweep F021), then **alternate** `dependency_closure` and
+`import` until no member of the closure is left to import (each source at most once per cook,
+`importedThisCook`), because a source's dependencies are only known once it has been imported; only members of
+the final closure are reported as non-cookable. Drop `EXCLUDE_FROM_PACK` types, fail with `IMPORT_FAILED` and
+write nothing if any member failed (every failure in the report; the good imports stay in the cache), otherwise
+`pack_writer::add` every blob (re-verifying `payloadHash`), `write` the pack and the manifest, both `tmp + rename`.
 
 `pack_writer::build` sorts entries by uuid, deduplicates payloads by `(payloadHash, payloadSize, bytes)`,
 aligns each payload to 16 bytes and writes the 64-byte header, the 72-byte TOC entries, the dependency table,

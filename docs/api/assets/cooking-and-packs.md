@@ -139,14 +139,16 @@ imported at most once per cook), re-verifies every blob and writes `content.cpak
 `writeManifest` is false) into `outputDirectory`. It is **all or nothing**: if any member of the final closure
 fails, the call fails with `IMPORT_FAILED`, nothing is written and `last_report().failures` lists every failing
 asset with its path and message. An asset that only an older version of the graph referenced (a texture deleted
-and replaced in its material) does not fail the cook.
+and replaced in its material) does not fail the cook. With `includeAll`, a stray file no importer handles and a
+source deleted from disk do not fail it either: they are left out and listed in `warnings`. A corrupt or duplicate
+`.meta`, a dependency cycle or a failed import still fail an `includeAll` cook.
 
 | `cook_settings` | Meaning |
 |---|---|
 | `outputDirectory` | where the two files go (required) |
 | `platform` | informational; the database's cache platform is what gets cooked |
 | `roots` / `alwaysInclude` | the assets to ship and the assets to ship even if nothing references them |
-| `includeAll` | ship every record instead of a closure |
+| `includeAll` | ship every record instead of a closure; `NO_IMPORTER` and `MISSING_SOURCE` records are skipped with a warning (`'<path>' skipped: record is NO_IMPORTER`); one that `roots` or `alwaysInclude` names or a shipped asset depends on still fails the cook |
 | `writeManifest` | also write `manifest.json` (default true) |
 
 `cook_report`: `assetCount`, `packBytes`, `duplicatesRemoved`, `contentHash`, `failures` (`cook_failure { id,

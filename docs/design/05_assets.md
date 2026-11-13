@@ -216,6 +216,12 @@ reading refs during parallel systems. Benchmark `bench_asset_ref_get`: 10,000 ca
 type from `mSource->type_of(id)` when known, else from `T`; if the recorded type differs from `T`,
 log ERROR once per uuid and return an unbound ref. Binding never loads.
 
+An untyped bind (`bind_slot`, `make_handle`), `load` or `pin` of a uuid that no source can type leaves `mType`
+INVALID and asks the sources again on each call, until one can, so a slot bound before its asset is imported or
+created learns its type later. Decided in the 2026-11-12 code sweep (F308, won't fix): the repeated lookup only
+costs for uuids no source knows (already broken references), and caching the miss would need a change signal on
+the public `asset_source` interface.
+
 ### 3.3 Async load pipeline (identical in editor and runtime)
 
 ```
@@ -334,12 +340,20 @@ texture). Failure keeps the old payload, returns to LOADED, fires `RELOAD_FAILED
 
 ```
 asset_cooker::cook(settings) -> result<cook_report>
-    database.scan(); roots = mRoots + mAlwaysInclude + every engine:// asset (all records if mIncludeAll)
+    database.scan(); roots = mRoots + mAlwaysInclude + every engine:// asset
+        (mIncludeAll: all records but NO_IMPORTER / MISSING_SOURCE ones that mRoots and mAlwaysInclude
+         do not name; each skipped one not in the closure -> report.mWarnings)
     closure = database.dependency_closure(roots) minus ASSET_TYPE_EXCLUDE_FROM_PACK types
     import stale members in parallel; any failure -> error(IMPORT_FAILED), report.mFailures, write nothing
     pack_writer: add each blob (re-verify payloadHash), sort by uuid, dedup payloads by
                  (payloadHash, payloadSize), write content.cpak.tmp, rename; write manifest.json
 ```
+
+`mIncludeAll` is the export's fallback when the project has no startup scene, so a stray file no importer
+handles or a source deleted from disk must not block it. Decided in the 2026-11-12 code sweep (F021): those two
+statuses are skipped with a warning (`'<path>' skipped: record is NO_IMPORTER`), which the export report copies.
+`META_INVALID`, `DUPLICATE_UUID`, `CYCLIC_DEPENDENCY` and `IMPORT_FAILED` still fail the cook, and so does a
+skipped status on a record that `mRoots` or `mAlwaysInclude` names or that a member depends on.
 
 ---
 
@@ -763,6 +777,7 @@ total strong refs == 0; release: log and continue). Slots are owned by the manag
 | Reload fails | Old payload stays published, state back to LOADED, event RELOAD_FAILED |
 | Source removed while loaded | Payload stays loaded; record `MISSING_SOURCE`; future loads FAIL `NOT_FOUND` |
 | Cook: any import failure | Nothing written; `cook_report::mFailures` lists every failing asset |
+| Cook with `mIncludeAll`: `NO_IMPORTER` / `MISSING_SOURCE` record nothing names or depends on | Skipped; one `cook_report::mWarnings` entry each (F021) |
 | `load_blocking` exceeds timeout | FAILED(`TIMEOUT`) |
 | Shutdown with in-flight jobs | `shutdown()` sets SHUTTING_DOWN, waits for jobs, discards completions |
 | Manager destroyed with live handles | Debug assert; release log |
@@ -908,7 +923,7 @@ in parallel after step 5 (6-8 independent; 9 needs 6-8; 10 needs 9; 11 needs 3-4
 | `test_hot_reload.cpp` | texture -> material -> consumer fixture: modify leaf -> leaf RELOADED with version+1 and new pointer, material (flagged) reloaded once after the leaf, consumer (unflagged) untouched but sees new version; settings change in meta -> reimport; side-file change reloads owner; removal keeps payload; failed reload keeps old payload and fires RELOAD_FAILED; `a -> b -> c` each reloaded exactly once in order; `CACHE_MISS` self-heals |
 | `test_asset_source.cpp` | contract suite over memory, cache, pack and composite sources (`contains`, `type_of`, `find_by_path`, `read`); composite resolves in order; `swap_source` while loaded |
 | `test_asset_pack.cpp` | writer/reader round trip; TOC sorted; binary search hit/miss; identical payloads stored once; corrupt header, bad content hash, truncated blob rejected at `open()`; name table lookup; writing twice is byte-identical |
-| `test_asset_cooker.cpp` | closure from roots excludes unreferenced assets; `mAlwaysInclude` and `mIncludeAll`; `EXCLUDE_FROM_PACK` honoured; stale blobs imported during cook; one failing asset -> error and no files written; manifest matches TOC; two cooks byte-identical |
+| `test_asset_cooker.cpp` | closure from roots excludes unreferenced assets; `mAlwaysInclude` and `mIncludeAll`; `EXCLUDE_FROM_PACK` honoured; stale blobs imported during cook; one failing asset -> error and no files written; `mIncludeAll` skips unnamed `NO_IMPORTER` / `MISSING_SOURCE` records with a warning and still fails on named or depended-on ones; manifest matches TOC; two cooks byte-identical |
 
 Integration (`tests/integration/`): `test_assets_renderer_headless.cpp` (wave 3: PNG -> texture
 through the null RHI; glTF -> model/mesh/material/texture sub-assets with external and embedded

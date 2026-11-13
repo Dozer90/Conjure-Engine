@@ -26,7 +26,7 @@ and through the optional `progress_fn(step, fraction)`:
 | Step | What happens | Skipped when |
 |---|---|---|
 | `build_game_module` | builds the project's native module in Distribution through CMake | `buildNativeModule` is false or the project has no `module.json` with a binary |
-| `cook_assets` | `asset_cooker::cook` from the startup scene and `alwaysInclude` into `<out>/cooked/content.cpak` + `manifest.json` | never |
+| `cook_assets` | `asset_cooker::cook` from the startup scene and `alwaysInclude` into `<out>/cooked/content.cpak` + `manifest.json`; a project without a startup scene, or whose startup scene is not a known asset, cooks every asset (`includeAll`): stray files no importer handles and deleted sources are skipped with an export warning (`'<path>' skipped: record is NO_IMPORTER`) unless `alwaysInclude` names them or a cooked asset depends on them, and any other unloadable asset still fails the step | never |
 | `publish_managed` | `dotnet publish` of the bootstrap and `dotnet build` of the game scripts into `<out>/managed`; the `.pdb` symbols are left out unless the project's `scripting.debug_symbols` is true, and a framework-dependent export does not publish the bootstrap's apphost (a self-contained one must) | `publishManaged` is false or scripting is disabled |
 | `export_modules` | `module_manager::export_layout(<out>, DISTRIBUTION)` | never (writes nothing without modules) |
 | `copy_runtime` | copies `conjure_runtime`, `conjure_shared` (and `nethost` on Windows) from `distributionDirectory`, plus `shaders/` (every `index.json` and `.dxil` / `.spv` blob, subfolders included; the build's `.d` depfiles are left out) | `copyRuntime` / `copyShaders` are false |

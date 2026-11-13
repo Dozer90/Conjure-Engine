@@ -76,7 +76,9 @@ written into the blob header and compared at scan; mtime + size only decides whe
 Every cache, meta, pack and snapshot write is `tmp + rename`. The cooker alternates
 `dependency_closure` and `import` until no member of the closure is left to import (each source at
 most once per cook), because a source's dependencies are only known once it has been imported; only
-members of the final closure can fail the cook.
+members of the final closure can fail the cook. With `includeAll`, `NO_IMPORTER` and `MISSING_SOURCE` records
+that `roots` and `alwaysInclude` do not name are not roots: each one outside the final closure becomes a
+`cook_report::warnings` entry, so a stray or deleted file does not block an export.
 
 Records without a usable uuid (corrupt, duplicate or unwritable meta) carry a transient uuid that is
 never persisted, so they are browsable (`records()`, `find_by_path`) and loads of them fail with
