@@ -13,8 +13,10 @@
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/ecs/command_buffer.h"
+#include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/view.h"
+#include "conjure/ecs/world.h"
 #include "conjure/scene/components.h"
 
 #include <algorithm>
@@ -136,6 +138,19 @@ void audio_subsystem::register_systems(ecs::scheduler &scheduler, engine_context
           added.get_error().to_string()
         );
     }
+
+    // A source that goes takes its voice with it. REMOVED fires for a removed component and for every
+    // component of a destroyed entity (world::clear and a scene unload included), before the data is gone.
+    if (mObservers.empty() && mServices->world != nullptr) {
+        const ecs::component_id sourceId = mServices->components->id_of<audio::audio_source>();
+        mObservers.push_back(mServices->world->observe(
+          sourceId,
+          ecs::component_event::REMOVED,
+          [this](ecs::world &, ecs::entity target, ecs::component_id, ecs::command_buffer &) {
+              this->release_voice_of(target);
+          }
+        ));
+    }
 }
 
 void audio_subsystem::begin_frame(engine_context &context) {
@@ -154,6 +169,14 @@ void audio_subsystem::end_frame(engine_context &context) {
 }
 
 void audio_subsystem::shutdown(engine_context &context) {
+    // The observer first: it reaches the audio engine, which goes next.
+    if (mServices->world != nullptr) {
+        for (const ecs::observer_id id : mObservers) {
+            mServices->world->unobserve(id);
+        }
+    }
+    mObservers.clear();
+    mVoices.clear();
     context.audio = nullptr;
     mServices->audio.reset();
     mPositions.clear();
@@ -195,20 +218,27 @@ void audio_subsystem::sync(ecs::system_context &context) {
     mPositions.clear();
 
     context.view<audio::audio_source, ecs::maybe<const scene::world_transform>>().for_each(
-      [&](ecs::entity, audio::audio_source &source, const scene::world_transform *transform) {
+      [&](ecs::entity entity, audio::audio_source &source, const scene::world_transform *transform) {
+          adopt_or_reset(entity, source);
           bool valid = engine.is_valid(source.handle.voice);
-          if (!valid && source.isPlaying) {
-              // The voice ended (or the component was copied with a dead handle): the state catches up.
-              source.isPlaying = false;
+          if (!valid && source.handle.voice.is_valid()) {
+              // The engine let the voice go by itself (it was stolen for a more important one): the state
+              // catches up and the record is dropped. FLAG_STARTED_ONCE stays, so playOnStart does not
+              // start it again.
+              mVoices.erase(entity);
               source.handle.voice = {};
+          }
+          if (!valid) {
+              source.isPlaying = false;
           }
 
           switch (source.playbackRequest) {
               case audio::audio_playback_request::PLAY:
-                  if (valid) {
-                      engine.stop(source.handle.voice, 0.0f);
-                  }
-                  start_voice(source);
+                  // The old voice is given back, not only stopped: a retained voice that is merely
+                  // stopped stays in the engine's table for good, one entry per replay.
+                  release_voice_of(entity);
+                  source.handle.voice = {};
+                  start_voice(entity, source);
                   valid = engine.is_valid(source.handle.voice);
                   ++mStats.requestsHandled;
                   break;
@@ -237,7 +267,7 @@ void audio_subsystem::sync(ecs::system_context &context) {
           source.playbackRequest = audio::audio_playback_request::NONE;
 
           if (!valid && source.playOnStart && !source.handle.started_once()) {
-              start_voice(source);
+              start_voice(entity, source);
               valid = engine.is_valid(source.handle.voice);
           }
 
@@ -294,6 +324,15 @@ void audio_subsystem::finish_one_shots(ecs::system_context &context) {
         if (!ended) {
             return;
         }
+        // A copy that carries another entity's handle sees that voice end too; only the owner gives it back
+        // and may destroy its entity for it (the copy is reset by the next engine.audio_sync).
+        const auto owned = mVoices.find(entity);
+        if (owned == mVoices.end() || owned->second != source.handle.voice) {
+            return;
+        }
+        // The voice is retained, so it stays in the engine's table until it is released.
+        engine.release(source.handle.voice);
+        mVoices.erase(owned);
         source.isPlaying = false;
         source.handle.voice = {};
         if (source.oneShot) {
@@ -303,7 +342,7 @@ void audio_subsystem::finish_one_shots(ecs::system_context &context) {
     });
 }
 
-void audio_subsystem::start_voice(audio::audio_source &source) {
+void audio_subsystem::start_voice(ecs::entity entity, audio::audio_source &source) {
     audio::audio_engine &engine = *mServices->audio;
     audio::play_params params = audio::play_params_from(source, group_of(source));
     core::result<audio::voice_id> started = engine.play(source.clip, params);
@@ -314,7 +353,40 @@ void audio_subsystem::start_voice(audio::audio_source &source) {
     source.handle.voice = started.value();
     source.handle.clipVersion = source.clip.version();
     source.handle.flags |= audio::source_handle::FLAG_STARTED_ONCE;
+    mVoices.insert_or_assign(entity, started.value());
     ++mStats.voicesStarted;
+}
+
+void audio_subsystem::adopt_or_reset(ecs::entity entity, audio::audio_source &source) {
+    const auto owned = mVoices.find(entity);
+    const audio::voice_id ownedVoice = owned != mVoices.end() ? owned->second : audio::voice_id{};
+    if (source.handle.voice == ownedVoice) {
+        return;
+    }
+    // The handle is plain component bytes: a duplicated entity, a prefab instance of a playing source and a
+    // restored scene snapshot all carry one that names a voice this entity never started. Releasing or
+    // steering through it would act on another entity's voice (or on whatever reuses its slot), so the
+    // component starts over as a fresh one instead; its entity's own voice, if the component no longer names
+    // it, is given back.
+    if (ownedVoice.is_valid()) {
+        mServices->audio->release(ownedVoice);
+        mVoices.erase(owned);
+    }
+    source.handle = {};
+    source.isPlaying = false;
+}
+
+void audio_subsystem::release_voice_of(ecs::entity entity) {
+    const auto owned = mVoices.find(entity);
+    if (owned == mVoices.end()) {
+        return;
+    }
+    if (mServices->audio != nullptr) {
+        // Stops it with the engine's short ramp when it still plays and frees the entry once the mixer
+        // acknowledged; a voice that already ended is freed at once.
+        mServices->audio->release(owned->second);
+    }
+    mVoices.erase(owned);
 }
 
 audio::group_id audio_subsystem::group_of(const audio::audio_source &source) const noexcept {

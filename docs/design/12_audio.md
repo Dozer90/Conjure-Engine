@@ -717,6 +717,13 @@ warnings stay suppressed. Only `miniaudio_backend.cpp` and `decoder_impl.cpp` in
 - `engine.audio_finish_one_shots` (FRAME_END): `end_frame()`; for each id in `finished_voices()` whose component has
   `oneShot` -> `command_buffer.destroy_entity`, otherwise clear `handle.voice` and set `isPlaying = false`. Component
   voices are retained, so `world::observe(audio_source, REMOVED)` -> `release(voice)` (`01_ecs.md` 8).
+- Voice ownership (code sweep F144; none of the releases above existed, so every component voice stayed in the
+  table and a destroyed emitter played on). The subsystem records which voice each entity owns (`entity -> voice_id`)
+  and releases it when it ends (`audio_finish_one_shots`), when a `PLAY` request replaces it (implemented as release
+  and a new voice, not `seek(0)`) and in the `REMOVED` observer, which also covers a destroyed entity, a scene unload
+  and `world::clear`. The record is the truth, not `handle`: the handle is plain component bytes that a duplicated
+  entity or a restored snapshot carries along, so a component whose `handle.voice` is not the voice its entity owns
+  is reset to a fresh component (its own voice, `playOnStart` applies) and never releases or steers the original's.
 - Pause: the editor's PAUSED simulation mode calls `set_paused(true / false)` (R13); SYNC keeps running so inspector
   edits take effect when play resumes.
 

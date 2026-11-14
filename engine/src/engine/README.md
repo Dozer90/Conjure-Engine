@@ -136,6 +136,11 @@ renderer runs, its `render_frame` verdict is replaced for the next `frames` fram
   (R53) and the scene `layers` list.
 - The renderer and audio component types are registered into the ECS whenever the libraries are compiled,
   even with rendering or audio disabled, so a headless server still loads scenes that carry them.
+- `audio_subsystem` owns the voices of `audio_source` components. They are retained voices, so nothing but
+  the subsystem gives them back: it keeps an `entity -> voice_id` record and releases a voice when it ends, when
+  a `PLAY` request replaces it and when the component or entity goes (a `REMOVED` observer). A component whose
+  `handle` names a voice its entity does not own is a copy (duplicate, prefab, restored snapshot) and is reset
+  to a fresh component instead of being allowed to act on the original's voice (code sweep F144).
 - `ecs_module_consumer` keeps trivially copyable columns in place across a reload instead of snapshotting
   them: component ids are stable per name and a layout change is refused at `validate()`.
 - Extraction is serial on the main thread (R8 v1: job-parallel preparation lives inside the renderer).

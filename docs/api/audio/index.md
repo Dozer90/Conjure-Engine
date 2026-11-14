@@ -113,7 +113,8 @@ The `engine.audio_sync` system runs once per frame, also while the game is pause
    delta since last frame) and calls `set_listener()`.
 2. **Sources.** For every `audio_source`: a source without a voice that has `playOnStart` (first sight) or
    `playbackRequest == PLAY` and a loaded clip is started with `play(clip, play_params_from(source,
-   find_group(source.group)))`; `PLAY` on a playing voice restarts it with `seek(0)`; `STOP`, `PAUSE` and `RESUME`
+   find_group(source.group)))`; `PLAY` on a playing voice replaces it (the old voice is released with a short
+   fade and a new one starts from the beginning); `STOP`, `PAUSE` and `RESUME`
    call `stop()`, `pause()` and `resume()`. Then `playbackRequest` is reset and `isPlaying = is_playing(voice)`.
    An edited component (`changed<audio_source>`) is pushed to its voice with `apply_source()`. A voice that
    ended or was stolen clears `handle`; a reloaded clip (`clip.version()` changed) is stopped and replayed.
@@ -121,8 +122,11 @@ The `engine.audio_sync` system runs once per frame, also while the game is pause
    `update(deltaTime)`.
 
 At frame end, `engine.audio_finish_one_shots` calls `end_frame()` and walks `finished_voices()`: a source with
-`oneShot` has its entity destroyed, any other loses its `handle` and gets `isPlaying = false`. Component voices
-are always retained; removing the component releases the voice.
+`oneShot` has its entity destroyed, any other loses its `handle` and gets `isPlaying = false`; either way the
+voice is released. Component voices are always retained and the engine gives each one back: when it ends, when a
+`PLAY` replaces it, and when the component or its entity goes (a scene unload included), so a destroyed emitter
+stops sounding. A copied component (a duplicated entity, a prefab made from a playing source) does not share the
+original's voice: it starts its own.
 
 ```cpp
 #include "conjure/audio/audio_engine.h"
