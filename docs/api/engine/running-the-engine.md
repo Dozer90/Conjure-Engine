@@ -189,6 +189,7 @@ project errors (`PROJECT_NOT_FOUND`, `PROJECT_PARSE_FAILED`, `PROJECT_INVALID`, 
 | `void request_quit(exit_code = OK)` / `bool is_quit_requested()` / `exit_code current_exit_code()` | stopping |
 | `void set_simulation_mode(simulation_mode)` / `step_fixed(u32)` / `cancel_fixed_steps()` / `set_time_scale(f32)` | editor play, pause and step (`cancel_fixed_steps` drops a step the next frame has not run yet) |
 | `engine_context &context()` / `const engine_time &time()` / `const frame_stats &stats()` / `layer_stack &layers()` | what the application exposes |
+| `std::filesystem::path engine_directory() const` / `managed_directory() const` | the running executable's directory, where `shaders/`, `managed/` and the plugins are found; and the managed SDK directory the script host uses, always absolute (`scripting.managedDirectory` when set, else `engine_directory() / "managed"`). A tool that builds game scripts passes it to MSBuild as `ConjureManagedDir` |
 | `void post_to_main_thread(std::function<void()>)` | thread-safe hand-off to the main thread before the next frame |
 | `std::string_view to_string(exit_code)` / `engine_error_name(engine_error)` | names for logs |
 

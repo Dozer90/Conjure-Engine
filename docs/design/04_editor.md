@@ -885,7 +885,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `script.create` | M P | `{name, template?:"Behaviour"\|"Empty", namespace?}` -> `{path}` |
 | `script.delete` | M P | `{path, project?}` -> `{path, projectRemoved}`: deletes a script source under `<project>/scripts/` (undo writes it back); `project: true` also removes the project file when no source is left |
 | `script.read` / `script.write` / `script.list` | P (write M) | `{path}` / `{path, source}` (inside `<project>/scripts/`) / -> `{scripts:[{className, path, fields}]}` |
-| `script.compile` | P A | `{}` -> `{succeeded, diagnostics:[{file, line, column, severity, code, message}], durationMs}` (`scripting::managed_build_runner`) |
+| `script.compile` | P A | `{}` -> `{succeeded, diagnostics:[{file, line, column, severity, code, message}], durationMs}` (`scripting::managed_build_runner`; `ConjureManagedDir` is `application::managed_directory()`, the absolute SDK directory the script host uses) |
 | `script.reload` / `script.gc` | P / P | `{}` (`hot_reload_controller::request(immediate = true)`, applied before the next frame's first script phase) / `{}` -> `{zombies}` (`collect_garbage`); names per R15 |
 | `script.attach` | M S | `{entity, className, fields?}` (sugar for `component.add script`) |
 | `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7) |

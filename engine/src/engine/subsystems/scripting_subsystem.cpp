@@ -4,6 +4,7 @@
 
 #include "engine/module_consumers/scripting_module_consumer.h"
 
+#include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
@@ -105,9 +106,10 @@ core::result<void> scripting_subsystem::post_startup(engine_context &context) {
     scripting::script_runtime_config runtimeConfig = {};
     runtimeConfig.host.backend =
       config.scripting.useNullHost ? scripting::script_backend::NULL_HOST : scripting::script_backend::DOTNET;
-    runtimeConfig.host.managedDirectory = config.scripting.managedDirectory.empty()
-      ? mServices->engineDirectory / "managed"
-      : config.scripting.managedDirectory;
+    // The one resolution of the SDK directory: the editor's script.compile builds against the same one.
+    runtimeConfig.host.managedDirectory = context.app != nullptr
+      ? context.app->managed_directory()
+      : mServices->engineDirectory / "managed";
     runtimeConfig.initialMode = config.editor ? scripting::script_mode::EDIT : scripting::script_mode::PLAY;
 
     std::filesystem::path assemblyPath = config.scripting.gameAssembly;

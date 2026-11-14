@@ -5,7 +5,7 @@
 
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/string_utils.h"
-#include "conjure/engine/engine_config.h"
+#include "conjure/engine/application.h"
 
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
     #include "conjure/scripting/managed_build.h"
@@ -343,12 +343,14 @@ namespace conjure::editor::support {
             return std::format("{}.{}", ns, className);
         }
 
+        /// <summary>
+        /// The managed SDK directory dotnet builds the scripts against: the one the engine's script host uses,
+        /// absolute. It used to fall back to the relative "managed", which MSBuild resolves against
+        /// <project>/scripts, where no SDK is, so every build in a shipped editor failed (code sweep F084).
+        /// </summary>
         std::filesystem::path managed_directory(editor_context &context) {
-            const engine::engine_config *config = context.engine_context().config;
-            if (config != nullptr && !config->scripting.managedDirectory.empty()) {
-                return config->scripting.managedDirectory;
-            }
-            return std::filesystem::path("managed");
+            const engine::application *app = context.engine_context().app;
+            return app != nullptr ? app->managed_directory() : std::filesystem::path();
         }
 
         core::json::document script_fields_json(editor_context &context, std::string_view className) {
@@ -636,7 +638,15 @@ namespace conjure::editor::support {
             scripting::build_request request = {};
             request.projectPath = project;
             request.configuration = std::string(configuration);
-            request.properties.emplace_back("ConjureManagedDir", managed_directory(context).generic_string());
+            // script.reload loads bin/<configuration>/Game.dll, so the build is told to put it there. Left to
+            // MSBuild the folder depends on the environment: a Platform variable, which every Visual Studio
+            // developer prompt sets, turns it into bin/<platform>/<configuration>/.
+            request.outputDirectory = root / "bin" / std::filesystem::path(std::string(configuration));
+            // Without a directory the property is left out and the project's own check names what is missing.
+            const std::filesystem::path managed = managed_directory(context);
+            if (!managed.empty()) {
+                request.properties.emplace_back("ConjureManagedDir", managed.generic_string());
+            }
             request.timeoutSeconds = std::max(1.0, context.dispatcher().async_timeout_seconds() * 0.9);
             using report_slot = std::optional<scripting::build_report>;
             std::shared_ptr<report_slot> report = std::make_shared<report_slot>();

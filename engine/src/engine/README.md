@@ -125,6 +125,11 @@ renderer runs, its `render_frame` verdict is replaced for the next `frames` fram
 - `rendering_settings::shaderDirectory`, `scripting_settings::managedDirectory` and
   `scripting_settings::useNullHost` were added so tests and tools can run the real renderer on the null
   device and the scripting runtime on the null host.
+- `application::engine_directory()` and `application::managed_directory()` publish the executable's directory
+  and the resolved managed SDK directory (absolute; `scripting.managedDirectory` when set, else
+  `<executable>/managed`). The scripting subsystem and the editor's `script.compile` both take the SDK from
+  `managed_directory()`, so the host and the build never disagree (code sweep F084: the editor passed the
+  relative `managed` to MSBuild, which resolved it against `<project>/scripts`).
 - `layer::on_imgui_end` was added so the ImGui frame can end after every layer drew (R9) without the
   frame loop knowing about ImGui.
 - `engine_error` gained `NONE` and `EXPORT_FAILED`; `project_description` carries the raw `physicsSection`

@@ -6,6 +6,7 @@
 #include "conjure/core/process.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/engine/application.h"
 
 #include <cctype>
 #include <filesystem>
@@ -330,23 +331,52 @@ TEST_SUITE("editor/commands_script") {
         CHECK(response.errorMessage.find("dotnet") != std::string::npos);
     }
 
-    TEST_CASE("script.compile - with dotnet present the build runs and reports diagnostics or succeeds") {
-        if (!editor_test::dotnet_available()) {
-            MESSAGE("dotnet is not installed: the real build path is exercised only where it is");
+    TEST_CASE("regression - code sweep F084 script.compile builds against the managed SDK next to the executable"
+      * doctest::timeout(300)) {
+        std::error_code probe = {};
+        const bool sdkBuilt = std::filesystem::is_regular_file(
+          editor_test::managed_directory() / "Conjure.Managed.dll",
+          probe
+        );
+        if (!editor_test::dotnet_available() || !sdkBuilt) {
+            MESSAGE("dotnet or Conjure.Managed.dll is missing: the real build runs only where both exist");
             return;
         }
         editor_test::headless_editor editor = {};
         editor.context().set_dotnet_executable("dotnet");
-        editor.log().allow_errors();
+        // The editor is configured with no managed directory, as a shipped one is: the SDK is the one next to
+        // the executable, which for this test executable is the build's bin/managed.
+        const engine::application *app = editor.context().engine_context().app;
+        REQUIRE(app != nullptr);
+        REQUIRE(app->desc().config.scripting.managedDirectory.empty());
+        REQUIRE(std::filesystem::equivalent(app->managed_directory(), editor_test::managed_directory(), probe));
+
         (void) editor.ok("script.create", core::json::object({{"name", "Compiled"}}));
+        (void) editor.ok("script.create", core::json::object({{"name", "Marker"}, {"template", "Empty"}}));
         const protocol_response response = editor.send("script.compile");
-        if (response.ok) {
-            CHECK(response.result.root().contains("succeeded"));
-            CHECK(response.result.root()["diagnostics"].is_array());
-        } else {
-            // Conjure.Managed.dll is not next to the test executable: the build fails for that reason.
-            CHECK(response.errorCode == protocol_error_code::COMPILE_FAILED);
-        }
+        // The build used to get ConjureManagedDir=managed, which MSBuild resolved against <project>/scripts,
+        // and so answered COMPILE_FAILED whatever the scripts said.
+        REQUIRE_MESSAGE(response.ok, response.errorMessage << " " << response.errorDetails.to_string());
+        CHECK(response.result.root()["succeeded"].as_bool(false));
+        CHECK(response.result.root()["errors"].as_i64(-1) == 0);
+        CHECK(response.result.root()["exitCode"].as_i64(-1) == 0);
+        CHECK(response.result.root()["diagnostics"].is_array());
+        // Where script.reload looks for it, whatever the environment says: under a Visual Studio developer
+        // prompt (which CTest runs in when tools/build.py starts it) Platform=x64 is set, and MSBuild left to
+        // itself then writes bin/x64/Debug/Game.dll.
+        const std::filesystem::path scripts = editor.project_directory() / "scripts";
+        CHECK(std::filesystem::is_regular_file(scripts / "bin" / "Debug" / "Game.dll"));
+        CHECK_FALSE(std::filesystem::exists(scripts / "bin" / "x64", probe));
+
+        // A source that does not compile is still the build's verdict, with its diagnostics.
+        (void) editor.ok(
+          "script.write",
+          core::json::object({{"path", "Broken.cs"}, {"source", "namespace Game; public class Broken { int x = ; }"}})
+        );
+        editor.log().allow_errors();
+        const protocol_response broken = editor.send("script.compile");
+        REQUIRE_FALSE(broken.ok);
+        CHECK(broken.errorCode == protocol_error_code::COMPILE_FAILED);
     }
 
     TEST_CASE("script.attach - adds the script component with fields, undo removes it or restores the previous set") {

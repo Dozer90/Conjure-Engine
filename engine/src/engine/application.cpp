@@ -304,6 +304,26 @@ void application::set_simulation_mode(simulation_mode mode) noexcept {
     mSimulationMode = mode;
 }
 
+std::filesystem::path application::engine_directory() const {
+    // Startup step 5 records it; before that, and after shutdown, the answer is asked again.
+    if (mServices != nullptr && !mServices->engineDirectory.empty()) {
+        return mServices->engineDirectory;
+    }
+    return executable_directory();
+}
+
+std::filesystem::path application::managed_directory() const {
+    const std::filesystem::path &configured = mDesc.config.scripting.managedDirectory;
+    if (configured.empty()) {
+        return engine_directory() / "managed";
+    }
+    // Absolute for every consumer: the script host would take a relative path against the current directory
+    // and MSBuild against the script project's, which are not the same place (code sweep F084).
+    std::error_code failed = {};
+    const std::filesystem::path absolute = std::filesystem::absolute(configured, failed);
+    return failed ? configured : absolute;
+}
+
 
 /*===========================================================================*/
 /*===========================================================================*/

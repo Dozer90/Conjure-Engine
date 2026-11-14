@@ -17,6 +17,7 @@
 #include "conjure/core/types.h"
 #include "conjure/modules/module_service.h"
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -244,6 +245,21 @@ namespace conjure::engine {
             [[nodiscard]] const application_desc &desc() const noexcept {
                 return mDesc;
             }
+
+            /// <summary>
+            /// The directory of the running executable (absolute). The engine finds what ships with it next to
+            /// the executable: shaders/, managed/, engine/ and its plugins (06 3.4 steps 5, 7 and 15).
+            /// </summary>
+            [[nodiscard]] std::filesystem::path engine_directory() const;
+
+            /// <summary>
+            /// The directory holding Conjure.Managed.dll and the bootstrap, always absolute: the configuration's
+            /// scripting.managedDirectory when set (a relative one is taken against the current directory),
+            /// otherwise engine_directory() / "managed". The script host starts from it, and a tool that
+            /// builds game scripts hands it to MSBuild as ConjureManagedDir (the editor's script.compile), so
+            /// both always mean the same SDK.
+            /// </summary>
+            [[nodiscard]] std::filesystem::path managed_directory() const;
 
             /// <summary>
             /// Every subsystem in startup order: the built-in adapters, then the user-added ones. Empty before

@@ -13,8 +13,10 @@
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/exit_code.h"
+#include "engine/executable_path.h"
 
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
@@ -321,6 +323,39 @@ TEST_SUITE("engine/application") {
         CHECK(log == expected);
         CHECK_FALSE(app.is_inside_frame());
         app.shutdown();
+    }
+
+    TEST_CASE("application - engine_directory is the executable's directory before, during and after a run") {
+        application app(engine_test::make_desc(engine_test::inline_config()));
+        const std::filesystem::path expected = executable_directory();
+        CHECK(expected.is_absolute());
+        CHECK(app.engine_directory() == expected);
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK(app.engine_directory() == expected);
+        app.shutdown();
+        CHECK(app.engine_directory() == expected);
+    }
+
+    TEST_CASE("regression - code sweep F084 managed_directory is absolute and is what the script host is given") {
+        // Unset: the SDK that ships next to the executable.
+        engine_config config = engine_test::inline_config();
+        config.scripting.managedDirectory.clear();
+        application defaults(engine_test::make_desc(config));
+        CHECK(defaults.managed_directory() == executable_directory() / "managed");
+        CHECK(defaults.managed_directory().is_absolute());
+
+        // An absolute setting is used as given.
+        const std::filesystem::path elsewhere = std::filesystem::temp_directory_path() / "conjure_sdk";
+        config.scripting.managedDirectory = elsewhere;
+        application configured(engine_test::make_desc(config));
+        CHECK(configured.managed_directory() == elsewhere);
+
+        // A relative one is made absolute once, against the current directory, so the script host and a build
+        // tool that resolves paths against its own project directory still mean the same place.
+        config.scripting.managedDirectory = std::filesystem::path("sdk") / "managed";
+        application relative(engine_test::make_desc(config));
+        CHECK(relative.managed_directory().is_absolute());
+        CHECK(relative.managed_directory() == std::filesystem::current_path() / "sdk" / "managed");
     }
 
     TEST_CASE("application - add_subsystem rejects null and late additions") {
