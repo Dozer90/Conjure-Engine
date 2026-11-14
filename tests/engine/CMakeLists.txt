@@ -93,6 +93,11 @@ if(TARGET conjure_shaders)
         CONJURE_TEST_SHADER_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${engineShaderDir}>"
     )
 endif()
+# The cases that open the shader library next to the executable cannot pass in a multi-configuration tree
+# (bin/<Config>/ against bin/shaders, code sweep F329) and are compiled out there.
+if(CONJURE_IS_MULTI_CONFIG)
+    target_compile_definitions(conjure_engine_tests PRIVATE CONJURE_TEST_MULTI_CONFIG=1)
+endif()
 
 # Every public header of the module must compile on its own (build-only check, part of ALL).
 conjure_header_check(conjure_engine)

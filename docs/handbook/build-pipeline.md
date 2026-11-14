@@ -222,12 +222,12 @@ the plugins it loads share one engine copy. `tests/modules/` is the suite that n
 permutation to DXIL with `dxc` (`CONJURE_RHI_D3D12`) and to SPIR-V with glslang or `dxc -spirv`
 (`CONJURE_RHI_VULKAN`, chosen by `CONJURE_SPIRV_COMPILER`), and `cmake/ConjureShaderIndex.cmake` writes
 `<OUTPUT_DIR>/index.json` at build time for `rhi::shader_library`. `engine/shaders/CMakeLists.txt` declares the
-engine's own list as the target `conjure_shaders` into `${PROJECT_BINARY_DIR}/shaders`; the list holds the RHI
-fullscreen-triangle pair and every renderer pass shader (`engine/src/renderer/assets/shader_asset.cpp` lists the
-same permutations), and `conjure_renderer` and the test executables that render (rhi, renderer, engine, editor,
-integration, benchmarks) depend on it. Compiler lookup, depfiles and the index
-format are in [RHI module](modules/rhi.md#5-shader-pipeline); the user-facing side is 📘 API:
-[Shaders](../api/rhi/shaders.md).
+engine's own list as the target `conjure_shaders` into `${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders`
+(`build/<preset>/bin/shaders`, next to the executables, where the engine looks by default); the list holds the RHI
+fullscreen-triangle pair and every renderer pass shader (`engine/src/renderer/assets/shader_asset.cpp` lists the same
+permutations), and `conjure_renderer` and the test executables that render (rhi, renderer, engine, editor, integration,
+benchmarks) depend on it. Compiler lookup, depfiles and the index format are in
+[RHI module](modules/rhi.md#5-shader-pipeline); the user-facing side is 📘 API: [Shaders](../api/rhi/shaders.md).
 
 ## 5. Warnings as errors
 

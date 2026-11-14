@@ -180,7 +180,7 @@ Nothing in this table is committed; `.gitignore` covers all of it.
 | `build/`, `out/`, `install/`, `export/` | CMake presets, `tools/build.py --build-dir`, future export | every build tree, including private ones |
 | `build/<preset>/generated/include/conjure/core/build_info.h` | `configure_file()` in `engine/src/core/CMakeLists.txt` | edit `build_info.h.in` or the `project()` version, never the output |
 | `build/<preset>/generated/include/conjure/modules/abi_identity.h` | the `conjure_abi_identity` target (`cmake/ConjureSharedLibrary.cmake`) | header hash, compiler major and runtime facts; rewritten at build time when a public header changes |
-| `build/<preset>/shaders/` (`*.dxil`, `*.spv`, `index.json`) | `conjure_add_shaders()` from `engine/shaders/CMakeLists.txt` | read by `rhi::shader_library`; depfiles make a changed `.hlsli` rebuild its permutations |
+| `build/<preset>/bin/shaders/` (`*.dxil`, `*.spv`, `index.json`) | `conjure_add_shaders()` from `engine/shaders/CMakeLists.txt` | read by `rhi::shader_library` from next to the executable; depfiles make a changed `.hlsli` rebuild its permutations |
 | `build/<preset>/test_modules/<name>/` | `tests/modules/CMakeLists.txt` | the fixture plugins' `module.json` copies and `bin/<platform>-<arch>-<config>/` binaries |
 | `build/<preset>/_deps/` | FetchContent | cached in CI keyed by the hash of `third_party/CMakeLists.txt` |
 | `build/<preset>/tests/.../header_check/<target>/*.cpp` | `conjure_header_check()` | one stub per public header, regenerated only when the header list changes |

@@ -1,15 +1,17 @@
 # The engine's shaders (docs/design/02_renderer.md 3.12). Every permutation is listed here as
 # "source;entry;stage;defines" and compiled by conjure_add_shaders() into
-# ${PROJECT_BINARY_DIR}/shaders with an index.json that rhi::shader_library reads. The fullscreen
-# triangle is the pair that proves the pipeline on every CI platform; the rest are the renderer's
-# pass shaders (engine/src/renderer/assets/shader_asset.cpp lists the same permutations, and
-# engine/src/renderer/pipeline_cache.cpp creates a pipeline from each).
+# ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders with an index.json that rhi::shader_library reads: the
+# engine opens <executable directory>/shaders by default (renderer_subsystem::shader_directory), so the
+# blobs are built next to conjure_editor and conjure_runtime, where an export's distribution directory
+# also takes them from. The fullscreen triangle is the pair that proves the pipeline on every CI
+# platform; the rest are the renderer's pass shaders (engine/src/renderer/assets/shader_asset.cpp lists
+# the same permutations, and engine/src/renderer/pipeline_cache.cpp creates a pipeline from each).
 
 # Every shared .hlsli is listed as a DEPENDENCIES entry: generators without depfile support (the
 # windows-vs preset) rebuild the blobs from this list, and sourceHash in index.json covers them.
 conjure_add_shaders(
     TARGET conjure_shaders
-    OUTPUT_DIR "${PROJECT_BINARY_DIR}/shaders"
+    OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/shared"
     DEPENDENCIES
         "${CMAKE_CURRENT_SOURCE_DIR}/shared/brdf.hlsli"

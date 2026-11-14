@@ -25,13 +25,16 @@
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_manager.h"
+#include "engine/executable_path.h"
 #include "engine/subsystems/model_prefab_converter.h"
 #include "engine/subsystems/renderer_components.h"
 #include "engine/subsystems/renderer_subsystem.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 // renderer_subsystem (docs/design/06_engine_loop.md 3.4 step 13, 09 R7/R8/R10 and section 3): the renderer
@@ -104,6 +107,33 @@ TEST_SUITE("engine/renderer_subsystem") {
         config.rendering.shaderDirectory = "D:/custom";
         CHECK(renderer_subsystem::shader_directory(config, "C:/engine") == std::filesystem::path("D:/custom"));
     }
+
+// A multi-configuration tree puts the executables in bin/<Config>/ and the shaders in bin/shaders, so the
+// default lookup cannot work there until code sweep F329 gives each configuration its own shader directory.
+#if !defined(CONJURE_TEST_MULTI_CONFIG) || !CONJURE_TEST_MULTI_CONFIG
+    TEST_CASE("regression - code sweep F027 the shader index is built beside the executable") {
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        const engine_config config = engine_config::defaults();
+        REQUIRE(config.rendering.shaderDirectory.empty());
+        const std::filesystem::path beside = renderer_subsystem::shader_directory(config, executable_directory());
+        CHECK(std::filesystem::is_regular_file(beside / "index.json"));
+        // The directory conjure_shaders builds into is the one the engine opens by default.
+        std::error_code ignored = {};
+        CHECK(std::filesystem::equivalent(beside, engine_test::shader_directory(), ignored));
+    }
+
+    TEST_CASE("regression - code sweep F027 a renderer starts with no shader directory configured") {
+        // What conjure_editor and conjure_runtime do on a windowed start: no rendering.shaderDirectory, so the
+        // library is opened next to the executable.
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        config.rendering.shaderDirectory.clear();
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK(app.context().renderer != nullptr);
+        app.shutdown();
+    }
+#endif
 
     TEST_CASE("renderer_subsystem - a loaded mesh is uploaded and extracted with the camera view") {
         REQUIRE_FALSE(engine_test::shader_directory().empty());

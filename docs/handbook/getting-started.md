@@ -57,7 +57,7 @@ Build products land in predictable places so executables find each other without
 | Path | Content |
 |---|---|
 | `build/<preset>/bin/` | `conjure_editor`, `conjure_runtime`, `conjure_shared`, the test executables and helper programs (`conjure_process_child`); `managed/` holds the C# assemblies |
-| `build/<preset>/shaders/` | compiled shaders and `index.json` (target `conjure_shaders`) |
+| `build/<preset>/bin/shaders/` | compiled shaders and `index.json` (target `conjure_shaders`), next to the executables that open them |
 | `build/<preset>/lib/` | the static library of every engine module and core area (`conjure_<module>.lib`, `conjure_core_<area>.lib` on MSVC; `lib*.a` on GCC and Clang) |
 | `build/<preset>/generated/include/conjure/core/build_info.h` | generated from `engine/src/core/foundation/build_info.h.in` |
 | `build/<preset>/_deps/` | FetchContent sources and builds of the pinned third-party libraries |
@@ -275,13 +275,12 @@ build/<preset>/bin/conjure_runtime --project build/minimal_project
 build/<preset>/bin/conjure_runtime --project build/minimal_project --headless --frames 60
 ```
 
-> [!CAUTION]
-> A windowed start from the build tree fails today with `engine.RENDERER_INIT_FAILED`: `conjure_shaders` writes
-> `build/<preset>/shaders/`, while the engine opens `shaders/index.json` next to the executable and no flag
-> overrides it (code sweep 2026-11-12, B2). Until that is fixed, copy the shaders next to the executables first
-> (`cp -r build/<preset>/shaders build/<preset>/bin/`) or use the `--headless` lines.
+A windowed start opens `shaders/index.json` next to the executable, which is where `conjure_shaders` builds it
+(`build/<preset>/bin/shaders/`), so both executables run from a fresh single-configuration build tree as they are.
+The multi-configuration `windows-vs` tree is the exception: its executables land in `bin/<Config>/` and do not find
+the shaders (code sweep 2026-11-12, F329).
 
-The first editor line opens a window over the project (see the caution above); the second runs the requests of a
+The first editor line opens a window over the project; the second runs the requests of a
 JSON array or NDJSON file without a window and exits with 0 when every command succeeded and 1 when one failed
 (`--keep-going` continues past a failure), writing the responses and events to the `--out` file instead of standard
 output. The runtime runs the same project as a game with no editor code; `--headless --frames 60` is the smoke test
