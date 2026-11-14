@@ -59,6 +59,21 @@ core::result<void> null_swapchain::resize(u32 width, u32 height) {
     if (width == 0 || height == 0) {
         return core::make_error(rhi_error::INVALID_DESC, "swapchain size must be non-zero, got {}x{}", width, height);
     }
+    // DXGI's ResizeBuffers refuses while anything outside the swapchain references a back buffer. The null
+    // chain refuses the same way, so "drop the framebuffers over the back buffers, then resize" is a rule
+    // the headless tests enforce and not one only a real window can break (code sweep F044).
+    for (u32 index = 0; index < mBackBuffers.size(); ++index) {
+        const unsigned long references = mBackBuffers[index]->GetRefCount();
+        if (references > 1) {
+            return core::make_error(
+              rhi_error::SWAPCHAIN_CREATION_FAILED,
+              "null swapchain resize refused: back buffer {} is still referenced {} time(s) outside the swapchain "
+              "(a framebuffer over it must be released first)",
+              index,
+              references - 1
+            );
+        }
+    }
     mDesc.width = width;
     mDesc.height = height;
     mBackBuffers.clear();

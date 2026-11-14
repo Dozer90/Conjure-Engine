@@ -607,10 +607,13 @@ uint64_t null_device::executeCommandLists(
         if (pCommandLists == nullptr || pCommandLists[index] == nullptr) {
             continue;
         }
-        const null_command_list *commandList = dynamic_cast<const null_command_list *>(pCommandLists[index]);
+        null_command_list *commandList = dynamic_cast<null_command_list *>(pCommandLists[index]);
         if (commandList != nullptr && commandList->is_open()) {
             report_error("executeCommandLists: a command list is still open");
             continue;
+        }
+        if (commandList != nullptr) {
+            commandList->release_references();
         }
         ++submitted;
     }

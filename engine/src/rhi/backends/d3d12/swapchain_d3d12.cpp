@@ -62,6 +62,10 @@ d3d12_swapchain::d3d12_swapchain(d3d12_device_backend &backend, const swapchain_
     mDesc(desc) {}
 
 d3d12_swapchain::~d3d12_swapchain() {
+    // The last present is still on the queue and references the buffers; DXGI gives them their final release
+    // when the swapchain goes, which the debug layer reports as OBJECT_DELETED_WHILE_STILL_IN_USE (and breaks
+    // on) unless the queue has drained first. flush_queues() returns at once on a removed device.
+    mBackend.flush_queues();
     release_back_buffers();
 }
 
@@ -184,10 +188,13 @@ core::result<void> d3d12_swapchain::present() {
 }
 
 core::result<void> d3d12_swapchain::resize(u32 width, u32 height) {
-    // Every buffer reference must be gone before ResizeBuffers: wait for the GPU, drop the NVRHI
-    // wrappers and let NVRHI release what its finished command lists still hold.
+    // Every buffer reference must be gone before ResizeBuffers: wait for the GPU (NVRHI's command lists,
+    // then the present queued behind them, which waitForIdle does not cover), drop the NVRHI wrappers and
+    // let NVRHI release what its finished command lists still hold. References held by the caller (a
+    // framebuffer over a back buffer) are the caller's to drop first; ResizeBuffers refuses otherwise.
     nvrhi::IDevice *device = mBackend.nvrhi_device();
     device->waitForIdle();
+    mBackend.flush_queues();
     release_back_buffers();
     device->runGarbageCollection();
 

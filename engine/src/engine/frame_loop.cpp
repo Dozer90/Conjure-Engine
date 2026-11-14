@@ -395,14 +395,20 @@ void frame_loop::apply_resize(math::uvec2 size) {
     if (mServices->swapchain == nullptr) {
         return;
     }
-    const core::result<void> resized = mServices->swapchain->resize(size.x, size.y);
+    // The renderer resizes its own swapchain: it must release its framebuffers over the back buffers before
+    // the buffers can be recreated (renderer::resize_swapchain). Without a renderer nothing else holds them.
+    core::result<void> resized = core::result<void>::success();
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    if (mServices->renderer != nullptr) {
+        resized = mServices->renderer->resize_swapchain(size);
+    } else {
+        resized = mServices->swapchain->resize(size.x, size.y);
+    }
+#else
+    resized = mServices->swapchain->resize(size.x, size.y);
+#endif
     if (resized.has_value()) {
         mResizeFailures = 0;
-#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
-        if (mServices->renderer != nullptr) {
-            mServices->renderer->on_swapchain_resized();
-        }
-#endif
         return;
     }
     ++mResizeFailures;

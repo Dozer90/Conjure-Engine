@@ -208,10 +208,14 @@ namespace conjure::renderer {
             [[nodiscard]] core::result<void> render(const render_scene &scene);
 
             /// <summary>
-            /// Called by the engine when the swapchain was resized: drops the framebuffers that
-            /// referenced the old back buffers.
+            /// Resizes the swapchain the renderer presents to; the engine calls it for a framebuffer resize
+            /// instead of swapchain::resize. The renderer holds framebuffers over the back buffers (the
+            /// view targets and the ImGui pass), and a swapchain cannot recreate buffers that are still
+            /// referenced, so this waits for the GPU, drops those framebuffers and the binding sets and
+            /// only then resizes. Fails with INVALID_ARGUMENT without a swapchain and otherwise with what
+            /// swapchain::resize reports; after a failure the caches are empty and refill on the next frame.
             /// </summary>
-            void on_swapchain_resized();
+            [[nodiscard]] core::result<void> resize_swapchain(math::uvec2 size);
 
             /// <summary>
             /// Device loss: stops recording and drops the GPU mirrors; every later render() fails with

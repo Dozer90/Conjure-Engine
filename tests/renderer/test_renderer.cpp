@@ -23,9 +23,11 @@
 #include "conjure/core/types.h"
 #include "conjure/rhi/device.h"
 #include "conjure/rhi/null_device_stats.h"
+#include "conjure/rhi/rhi_error.h"
 #include "conjure/rhi/shader_library.h"
 #include "conjure/rhi/swapchain.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -303,12 +305,71 @@ TEST_SUITE("renderer/renderer") {
         CHECK(stats->acquires == 1);
         CHECK(stats->presents == 1);
         CHECK(stats->commandListsSubmitted == 1);
-        // A resize notification drops the cached framebuffers; the next frame still renders.
-        CONJURE_REQUIRE_OK(swapchain.value()->resize(128, 64));
-        instance.on_swapchain_resized();
+        // The renderer resizes its swapchain; the next frame still renders.
+        CONJURE_REQUIRE_OK(instance.resize_swapchain(math::uvec2(128, 64)));
+        CHECK(swapchain.value()->desc().width == 128);
+        CHECK(swapchain.value()->desc().height == 64);
         CONJURE_REQUIRE_OK(instance.render(scene));
         CHECK(instance.stats().viewsRendered == 1);
         created.value().reset();
+    }
+
+    TEST_CASE("regression - code sweep F044 resize_swapchain drops the back-buffer framebuffers before the resize") {
+        log_capture logs = {};
+        std::unique_ptr<rhi::device> device = make_device();
+        std::unique_ptr<rhi::shader_library> shaders = open_shaders(*device);
+        rhi::swapchain_desc swapchainDesc = {};
+        swapchainDesc.width = 64;
+        swapchainDesc.height = 32;
+        core::result<std::unique_ptr<rhi::swapchain>> swapchain = rhi::swapchain::create(
+          *device,
+          rhi::native_window(),
+          swapchainDesc
+        );
+        CONJURE_REQUIRE_OK(swapchain);
+        renderer_desc desc = headless_desc(*device, *shaders);
+        desc.swapchain = swapchain.value().get();
+        core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        renderer_type &instance = *created.value();
+
+        // One frame per back buffer, so the framebuffer cache holds a framebuffer over each of them.
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), render_target_id()));
+        for (u32 frame = 0; frame < swapchain.value()->buffer_count(); ++frame) {
+            CONJURE_REQUIRE_OK(instance.render(scene));
+        }
+
+        // The order the engine used to follow (resize, then tell the renderer): the swapchain refuses, as
+        // IDXGISwapChain::ResizeBuffers does on a real window, and stays as it was.
+        const core::result<void> refused = swapchain.value()->resize(128, 64);
+        CONJURE_CHECK_ERROR(refused, rhi::rhi_error::SWAPCHAIN_CREATION_FAILED);
+        CHECK(swapchain.value()->desc().width == 64);
+
+        // Through the renderer the framebuffers go first and the resize succeeds, again and again.
+        const std::array<math::uvec2, 3> sizes = {math::uvec2(128, 64), math::uvec2(31, 17), math::uvec2(640, 360)};
+        for (const math::uvec2 size : sizes) {
+            CAPTURE(size.x);
+            CONJURE_REQUIRE_OK(instance.resize_swapchain(size));
+            CHECK(swapchain.value()->desc().width == size.x);
+            CHECK(swapchain.value()->desc().height == size.y);
+            CONJURE_REQUIRE_OK(instance.render(scene));
+            CONJURE_REQUIRE_OK(instance.render(scene));
+            CHECK(instance.stats().viewsRendered == 1);
+            CHECK(instance.stats().viewsSkipped == 0);
+        }
+
+        // A zero size is the swapchain's INVALID_DESC and leaves the renderer rendering.
+        CONJURE_CHECK_ERROR(instance.resize_swapchain(math::uvec2(0, 64)), rhi::rhi_error::INVALID_DESC);
+        CONJURE_REQUIRE_OK(instance.render(scene));
+        CHECK(instance.stats().viewsRendered == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        created.value().reset();
+    }
+
+    TEST_CASE("renderer - resize_swapchain without a swapchain is INVALID_ARGUMENT") {
+        headless_renderer fixture = make_headless_renderer();
+        CONJURE_CHECK_ERROR(fixture->resize_swapchain(math::uvec2(64, 64)), core::error_code::INVALID_ARGUMENT);
     }
 
     TEST_CASE(

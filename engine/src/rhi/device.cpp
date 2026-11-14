@@ -74,6 +74,7 @@ device::~device() {
     // device the API removed since the last poll must not be waited on, so this is the polling is_lost().
     if (!is_lost()) {
         mImpl->nvrhiDevice->waitForIdle();
+        mImpl->backend->flush_queues();
         mImpl->nvrhiDevice->runGarbageCollection();
     }
     CONJURE_LOG_INFO(LOG_RHI, "destroying {} device", to_string(mImpl->desc.backend));
@@ -116,6 +117,12 @@ core::result<std::unique_ptr<device>> device::create(const device_desc &desc) {
     }
 
     const device_capabilities &capabilities = state.backend->capabilities();
+    const char *debugLayer = "off";
+    if (desc.enableDebugLayer) {
+        debugLayer = "on";
+    } else if (state.backend->debug_layer_inherited()) {
+        debugLayer = "on (enabled by an earlier device of this process)";
+    }
     CONJURE_LOG_INFO(
       LOG_RHI,
       "created {} device on '{}' ({} MiB dedicated video memory, compute queue {}, debug layer {})",
@@ -123,7 +130,7 @@ core::result<std::unique_ptr<device>> device::create(const device_desc &desc) {
       capabilities.adapterName,
       capabilities.dedicatedVideoMemoryBytes / MIB,
       capabilities.computeQueue ? "yes" : "no",
-      desc.enableDebugLayer ? "on" : "off"
+      debugLayer
     );
     return created;
 }
@@ -163,7 +170,10 @@ void device::wait_idle() {
     if (!mImpl->nvrhiDevice->waitForIdle()) {
         CONJURE_LOG_ERROR(LOG_RHI, "waitForIdle failed on the {} device; marking it lost", to_string(backend()));
         mImpl->messages->mark_lost();
+        return;
     }
+    // waitForIdle covers what NVRHI executed; the backend waits for what the API queued behind it (a present).
+    mImpl->backend->flush_queues();
 }
 
 std::optional<null_device_stats> device::null_stats() const {

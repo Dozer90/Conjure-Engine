@@ -75,8 +75,12 @@ namespace conjure::rhi {
             [[nodiscard]] core::result<void> present();
 
             /// <summary>
-            /// Recreates the back buffers at a new size after waiting for the GPU; an image acquired but
-            /// not yet presented is discarded. Fails with rhi_error::INVALID_DESC for a zero size,
+            /// Recreates the back buffers at a new size after waiting for the GPU (the last present
+            /// included); an image acquired but not yet presented is discarded. The caller must first
+            /// release everything it holds over a back buffer (a framebuffer, a texture handle): while a
+            /// reference is left, D3D12 and the null backend refuse with SWAPCHAIN_CREATION_FAILED.
+            /// renderer::resize_swapchain does both in the right order. Fails with rhi_error::INVALID_DESC
+            /// for a zero size,
             /// rhi_error::DEVICE_LOST, rhi_error::OUT_OF_DATE (Vulkan: the surface is currently empty,
             /// e.g. the window is minimised; retry later) or rhi_error::SWAPCHAIN_CREATION_FAILED. Every
             /// back_buffer() pointer is invalid afterwards; after a failure buffer_count() may be 0, and

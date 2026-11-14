@@ -57,6 +57,10 @@ void null_command_list::close() {
     });
 }
 
+void null_command_list::release_references() noexcept {
+    mReferencedResources.clear();
+}
+
 void null_command_list::clearState() {}
 
 

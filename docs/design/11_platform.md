@@ -224,7 +224,8 @@ for e in events:
     if layers.dispatch_event(e): continue          (ImGui / editor consumed it)
     input.apply(e)                                 (window events are accepted and ignored except focus_event)
     close_event             -> engine request_quit(OK)
-    framebuffer_resized_event (w, h > 0) -> swapchain.resize ; renderer.on_swapchain_resized
+    framebuffer_resized_event (w, h > 0) -> renderer.resize_swapchain (releases its framebuffers over the back
+                                            buffers, then swapchain.resize; code sweep F044)
     focus_event             -> pacer.set_unfocused(!focused)
 input.end_frame()                                  publishes the snapshot read by scripting / bindings / systems
 ```

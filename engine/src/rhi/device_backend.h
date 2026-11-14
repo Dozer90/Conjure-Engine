@@ -77,6 +77,21 @@ namespace conjure::rhi {
             [[nodiscard]] virtual bool poll_device_removed() noexcept = 0;
 
             /// <summary>
+            /// Blocks until the work the API queued outside NVRHI has left the queues. nvrhi's waitForIdle
+            /// only covers the command lists NVRHI executed itself, so a D3D12 backend waits here for the
+            /// DXGI present that followed them; device::wait_idle() calls it after waitForIdle. The default
+            /// does nothing (null: no queue; Vulkan: vkDeviceWaitIdle already covers every queue). Never
+            /// blocks on a removed device.
+            /// </summary>
+            virtual void flush_queues() noexcept;
+
+            /// <summary>
+            /// True when the device runs under an API debug layer it did not ask for. The D3D12 layer is
+            /// process-wide: once a device enabled it, every later device of the process has it too.
+            /// </summary>
+            [[nodiscard]] virtual bool debug_layer_inherited() const noexcept;
+
+            /// <summary>
             /// This backend as the null device, or nullptr.
             /// </summary>
             [[nodiscard]] virtual null_backend::null_device *as_null() noexcept;

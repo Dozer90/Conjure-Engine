@@ -20,7 +20,7 @@ conjure::renderer`.
 | Render what the engine extracted | `render_scene &scene = begin_extract(); ... end_extract(); render_frame();` |
 | Render a scene you built yourself | `render(scene)` |
 | Render off-screen | `create_render_target(desc)`, set `render_view::target`, `read_back(target)` for the pixels |
-| React to window events | `on_swapchain_resized()`, `on_device_lost()` |
+| React to window events | `resize_swapchain(size)`, `on_device_lost()` |
 | Know what happened | `stats()` (`render_stats`), `frame_count()`, `pending_upload_count()`, `is_lost()` |
 | Draw sprites | push `sprite` values into `render_scene::sprites` (world or screen space) |
 | Draw debug lines | `render_scene::debugDraw.line(...)`, `box`, `sphere`, `frustum`, `axes`, `grid`; `debug_draw` for timed shapes |
@@ -210,7 +210,8 @@ when disabled); `register_texture(gpuTextureId)` returns the `ImTextureID` to sh
 | `result<render_target_id> create_render_target(const render_target_desc &)`, `result<void> resize_render_target(id, uvec2)`, `void destroy_render_target(id)`, `render_target *get_render_target(id)` | targets |
 | `render_scene &begin_extract()`, `void end_extract()`, `result<void> render_frame()` | the engine's frame |
 | `result<void> render(const render_scene &)` | render one scene now |
-| `void on_swapchain_resized()`, `void on_device_lost()`, `bool is_lost() const` | device events |
+| `result<void> resize_swapchain(math::uvec2 size)` | resize the swapchain the renderer presents to: it drops its framebuffers over the back buffers first, which `swapchain::resize` alone cannot do |
+| `void on_device_lost()`, `bool is_lost() const` | device events |
 | `void set_imgui_draw_data(ImDrawData *)`, `imgui_renderer *imgui()` | editor UI |
 | `result<core::image> read_back(render_target_id)` | pixels of a target |
 | `const render_stats &stats() const`, `u64 frame_count() const`, `u32 pending_upload_count() const` | statistics |

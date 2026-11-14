@@ -486,7 +486,8 @@ step_frame():
   3  window.pump_events()                         GLFW, main thread only
        for each event: if layers.dispatch_event() -> consumed, else input.apply(event)
        close requested             -> request_quit(exit_code::OK)
-       framebuffer resized (w,h>0) -> swapchain.resize(w, h); renderer.on_swapchain_resized()
+       framebuffer resized (w,h>0) -> renderer.resize_swapchain(w, h)   (drops its back-buffer framebuffers,
+                                      then swapchain.resize; swapchain.resize(w, h) directly without a renderer)
        focus lost/gained           -> pacer.set_unfocused(flag)
      input.end_frame()                            publishes the immutable input snapshot for this frame
   4  mainThreadQueue.drain()                      tasks posted from workers (core::jobs::post_to_main_thread)
@@ -880,7 +881,7 @@ post-load asset_ref bind pass (R25).
 
 **Needs from `renderer` (wave 3, area B):** `renderer::create(renderer_desc)`, the renderer-owned
 `render_scene_pair` with `begin_extract() -> render_scene &` / `end_extract()`, `render_frame() -> result<void>`
-(job-parallel preparation, one command list, present), `on_swapchain_resized`, `on_device_lost`,
+(job-parallel preparation, one command list, present), `resize_swapchain`, `on_device_lost`,
 `set_imgui_draw_data`, `register_asset_types`, `upload_*` / `release_*` / `find_*`, tolerance of the `null`
 device (R8). The renderer does not depend on `ecs`: `renderer_subsystem` registers the renderer components and
 owns `engine.render_sync` (SYNC, `RUNS_WHILE_PAUSED`) and `engine.render_extract` (EXTRACT, `RUNS_WHILE_PAUSED`)

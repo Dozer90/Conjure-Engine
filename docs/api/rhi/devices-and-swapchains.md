@@ -99,7 +99,8 @@ Fill a `device_desc` and call `device::create()`. The description is kept verbat
 the message quotes the API's reason, for example an adapter index past the last adapter.
 
 Once you have a device: `run_garbage_collection()` once per frame releases what finished command lists no
-longer need, `wait_idle()` blocks until the GPU is idle (and marks the device lost when the wait fails), and
+longer need, `wait_idle()` blocks until the GPU is idle, the last present included (and marks the device lost
+when the wait fails), and
 `native_device()` returns the non-owning NVRHI device that engine modules record through.
 
 > [!TIP]
@@ -145,8 +146,11 @@ Each frame, `acquire()` returns the index of the back buffer to draw into and `p
 `current_index()` repeats the last `acquire()` result and `desc()` reports the current configuration: the size
 follows `resize()`, the format and buffer count are as created. `owner()` is the device.
 
-`resize(width, height)` waits for the GPU, recreates the back buffers and discards an image that was acquired
-but not presented. Zero is `INVALID_DESC`; `OUT_OF_DATE` on Vulkan means the surface is currently empty (a
+`resize(width, height)` waits for the GPU (the last present included), recreates the back buffers and discards
+an image that was acquired but not presented. Release everything you hold over a back buffer first (a
+framebuffer, a texture handle): while a reference is left, D3D12 and the null backend refuse with
+`SWAPCHAIN_CREATION_FAILED`. With a renderer, call `renderer::resize_swapchain(size)` instead, which drops the
+renderer's own framebuffers and then resizes. Zero is `INVALID_DESC`; `OUT_OF_DATE` on Vulkan means the surface is currently empty (a
 minimised window), so keep the old size and try again later. A resize the API refuses
 (`SWAPCHAIN_CREATION_FAILED`) can leave the swapchain without back buffers; on every backend `acquire()` and
 `present()` then return `OUT_OF_DATE` until a later resize succeeds.

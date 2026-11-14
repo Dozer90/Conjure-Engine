@@ -225,6 +225,9 @@ TEST_SUITE("rhi/swapchain") {
     TEST_CASE("regression - code sweep F288 [gpu] after a failed D3D12 resize acquire and present report OUT_OF_DATE") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
+        // When the executable runs as one process, an earlier case has switched the D3D12 debug layer on for
+        // good, and the layer reports the refusal provoked below as an ERROR of its own.
+        logs.allow_errors();
         const std::unique_ptr<device> created = make_software_device();
         core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
           *created,
@@ -256,6 +259,105 @@ TEST_SUITE("rhi/swapchain") {
         CONJURE_CHECK_OK(target.present());
         created->wait_idle();
         CHECK_FALSE(created->is_lost());
+    }
+
+    TEST_CASE(
+      "regression - code sweep F011 [gpu] a D3D12 swapchain under the debug layer presents, resizes and dies cleanly"
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // No allow_errors(): the debug layer's messages are routed to the log, so an error it raises (and the
+        // 0x87D break it follows OBJECT_DELETED_WHILE_STILL_IN_USE with) fails the case.
+        log_capture logs = {};
+        std::unique_ptr<device> created = make_software_device(true);
+        core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
+          *created,
+          headless_window(),
+          small_swapchain_desc(256, 128)
+        );
+        CONJURE_REQUIRE_OK(chain);
+        swapchain &target = *chain.value();
+        nvrhi::IDevice *native = created->native_device();
+        nvrhi::CommandListHandle commandList = native->createCommandList();
+        REQUIRE(commandList != nullptr);
+        const nvrhi::Color clearColour(0.3f, 0.2f, 0.1f, 1.0f);
+        const auto presentFrames = [&](u32 frameCount) {
+            for (u32 frame = 0; frame < frameCount; ++frame) {
+                CAPTURE(frame);
+                const core::result<u32> acquired = target.acquire();
+                CONJURE_REQUIRE_OK(acquired);
+                nvrhi::ITexture *backBuffer = target.back_buffer(acquired.value());
+                REQUIRE(backBuffer != nullptr);
+                commandList->open();
+                commandList->clearTextureFloat(backBuffer, nvrhi::AllSubresources, clearColour);
+                commandList->close();
+                native->executeCommandList(commandList);
+                CONJURE_CHECK_OK(target.present());
+            }
+        };
+
+        presentFrames(6);
+        // Straight after a present, with no wait_idle from the caller: the resize waits for the present itself.
+        CONJURE_REQUIRE_OK(target.resize(64, 48));
+        CHECK(target.back_buffer(0)->getDesc().width == 64);
+        presentFrames(2);
+        // The swapchain dies with its last present still queued, as it does when an application quits.
+        commandList = nullptr;
+        chain.value().reset();
+        CHECK_FALSE(created->is_lost());
+        created.reset();
+        // Warnings are not counted: a machine without the optional "Graphics Tools" feature warns that the
+        // layer is unavailable and runs the same sequence without it.
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F011 [gpu] a device after a debug-layer device reports the inherited layer") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        {
+            const std::unique_ptr<device> first = make_software_device(true);
+            CHECK(logs.contains(core::log_level::INFO, "debug layer on)"));
+        }
+        // The layer is an optional Windows feature ("Graphics Tools"); where it is missing nothing is inherited.
+        const bool layerInstalled = !logs.contains(core::log_level::WARN, "debug layer requested but unavailable");
+        const std::unique_ptr<device> second = make_software_device(false);
+        const std::string_view inherited = "debug layer on (enabled by an earlier device of this process)";
+        CHECK(logs.contains(core::log_level::INFO, inherited) == layerInstalled);
+        CHECK(logs.contains(core::log_level::INFO, "debug layer off)") == !layerInstalled);
+    }
+
+    TEST_CASE("regression - code sweep F044 a null swapchain refuses to resize while a back buffer is referenced") {
+        log_capture logs = {};
+        const std::unique_ptr<device> created = make_null_device();
+        core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
+          *created,
+          headless_window(),
+          small_swapchain_desc(64, 32)
+        );
+        CONJURE_REQUIRE_OK(chain);
+        swapchain &target = *chain.value();
+
+        // What a renderer's framebuffer cache does: a framebuffer keeps its attachments alive.
+        nvrhi::FramebufferDesc framebufferDesc = {};
+        framebufferDesc.addColorAttachment(target.back_buffer(1));
+        nvrhi::FramebufferHandle framebuffer = created->native_device()->createFramebuffer(framebufferDesc);
+        REQUIRE(framebuffer != nullptr);
+
+        const core::result<void> refused = target.resize(128, 64);
+        CONJURE_CHECK_ERROR(refused, rhi_error::SWAPCHAIN_CREATION_FAILED);
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.get_error().message().find("back buffer 1 is still referenced 1 time(s)") != std::string::npos);
+        // Refused before anything changed: the chain is the one it was.
+        CHECK(target.desc().width == 64);
+        CHECK(target.buffer_count() == 3);
+        CHECK(created->null_stats().value().resizes == 0);
+        CONJURE_CHECK_OK(target.acquire());
+        CONJURE_CHECK_OK(target.present());
+
+        framebuffer = nullptr;
+        CONJURE_REQUIRE_OK(target.resize(128, 64));
+        CHECK(target.desc().width == 128);
+        CHECK(target.back_buffer(1)->getDesc().height == 64);
+        CHECK(created->null_stats().value().resizes == 1);
     }
 
     TEST_CASE("swapchain - [gpu] D3D12 rejects window handles it cannot present to") {

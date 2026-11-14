@@ -4,6 +4,7 @@
 
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
+#include "conjure/testing/test_environment.h"
 
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
@@ -20,7 +21,8 @@
 // 0, both with the build's runtime and with the copy the export placed into the folder (also without --project:
 // the project.json next to the executable, the double-click launch), a development project boots directly, the
 // flags reach the engine configuration, a path outside the active code page survives, and --help exits 0 with
-// the whole option list on a piped standard output.
+// the whole option list on a piped standard output. One [window] case (CONJURE_TEST_WINDOW=1, never in CI) runs
+// the runtime on a real window and a real graphics device.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -63,6 +65,25 @@ TEST_SUITE("runtime/runtime_boot") {
         INFO(output);
         CHECK(result.exitCode == static_cast<i32>(exit_code::OK));
         CHECK(contains(output, "shutting down after 60 frame(s)"));
+    }
+
+    TEST_CASE("regression - code sweep F071 [window] a windowed run from the build tree exits 0 after thirty frames") {
+        CONJURE_TEST_REQUIRE(precondition::REAL_WINDOW);
+        log_capture logs = {};
+        temp_directory directory("runtime_windowed");
+        const std::filesystem::path projectDir = directory.path() / "project";
+        write_tiny_project(projectDir);
+
+        // No --headless and no shader directory: a real window, the default graphics device with its swapchain
+        // (under the API's debug layer in a Debug build) and the shader library next to the executable (F027).
+        // The run used to die at shutdown with 0x87D, the swapchain's buffers released under their last present.
+        const core::process_result result = run_runtime({"--project", path_argument(projectDir), "--frames", "30"});
+        const std::string output = all_output(result);
+        INFO(output);
+        CHECK(result.exitCode == static_cast<i32>(exit_code::OK));
+        CHECK(contains(output, "device with swapchain"));
+        CHECK(contains(output, "shutting down after 30 frame(s)"));
+        CHECK_FALSE(contains(output, "[ERROR]"));
     }
 
     TEST_CASE("regression - review 4 without --project the runtime runs the project.json next to the executable") {

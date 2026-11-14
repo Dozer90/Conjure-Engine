@@ -19,7 +19,9 @@
 // The D3D12 backend (docs/design/02_renderer.md 9 step 3): DXGI factory, adapter selection
 // (hardware adapters by GPU preference or WARP when preferSoftwareAdapter), ID3D12Device with
 // the optional debug layer, one queue per NVRHI queue type and nvrhi::d3d12::createDevice over
-// them. Device removal is read from ID3D12Device::GetDeviceRemovedReason.
+// them. Device removal is read from ID3D12Device::GetDeviceRemovedReason. With the debug layer on, its
+// messages are routed to LOG_RHI (ID3D12InfoQueue1, Windows 11) so a validation error is in the engine log
+// and fails a test's log_capture instead of only reaching an attached debugger.
 
 namespace conjure::rhi {
     class message_callback;
@@ -38,7 +40,12 @@ namespace conjure::rhi::d3d12_backend {
             Microsoft::WRL::ComPtr<ID3D12CommandQueue> mComputeQueue = nullptr;
             Microsoft::WRL::ComPtr<ID3D12CommandQueue> mCopyQueue = nullptr;
             nvrhi::d3d12::DeviceHandle mNvrhiDevice = nullptr;
+            // flush_queues(): a fence signalled on the graphics queue behind whatever DXGI queued there.
+            Microsoft::WRL::ComPtr<ID3D12Fence> mFlushFence = nullptr;
+            void *mFlushEvent = nullptr;            // the Win32 event the fence completes
+            u64 mFlushValue = 0;                    // the last value signalled on mFlushFence
             bool mAllowTearing = false;
+            bool mDebugLayerInherited = false;      // the layer is on because an earlier device enabled it
 
         public:
             explicit d3d12_device_backend(message_callback &messages);
@@ -57,6 +64,15 @@ namespace conjure::rhi::d3d12_backend {
               const swapchain_desc &desc
             ) override;
             [[nodiscard]] bool poll_device_removed() noexcept override;
+
+            /// <summary>
+            /// Signals a fence on the graphics queue and waits for it, so every command list and every DXGI
+            /// present queued so far has finished. A swapchain's buffers may only be released (destruction,
+            /// ResizeBuffers) after this: nvrhi's waitForIdle stops at the last command list NVRHI executed
+            /// and never sees the present behind it. Returns at once on a removed device.
+            /// </summary>
+            void flush_queues() noexcept override;
+            [[nodiscard]] bool debug_layer_inherited() const noexcept override;
 
             [[nodiscard]] IDXGIFactory4 *factory() const noexcept {
                 return mFactory.Get();
@@ -77,6 +93,9 @@ namespace conjure::rhi::d3d12_backend {
         private:
             [[nodiscard]] core::result<void> select_adapter(const device_desc &desc);
             [[nodiscard]] core::result<void> create_queues();
+            [[nodiscard]] core::result<void> create_flush_fence();
+            void route_debug_messages();
+            void release_flush_fence() noexcept;
     };
 
     /// <summary>

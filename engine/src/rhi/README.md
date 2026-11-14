@@ -99,8 +99,11 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   starts the marker-name recording: a test that asserts on the pass stream resets first.
 - **Null swapchain.** `bufferCount` textures in the `Present` state with `keepInitialState`;
   `acquire()` returns the current index and `present()` advances it, so acquire/present pairs
-  cycle `0, 1, 2, 0, ...`; `resize` recreates the buffers and restarts at 0. Zero sizes are
-  `INVALID_DESC`. The window handle is ignored. On every backend `buffer_count()` is the number of
+  cycle `0, 1, 2, 0, ...`; `resize` recreates the buffers and restarts at 0, and refuses with
+  `SWAPCHAIN_CREATION_FAILED` (changing nothing) while a back buffer is referenced outside the
+  swapchain, as `IDXGISwapChain::ResizeBuffers` does, so a caller that resizes before dropping its
+  framebuffers fails headless too. A null command list drops what it references when it is executed,
+  as NVRHI's queue does once the GPU has finished. Zero sizes are `INVALID_DESC`. The window handle is ignored. On every backend `buffer_count()` is the number of
   back buffers that exist right now (`back_buffer(i)` is non-null exactly for `i < buffer_count()`),
   which is 0 after a failed resize until a later one succeeds.
 - **D3D12.** DXGI factory (with `DXGI_CREATE_FACTORY_DEBUG` when the debug layer is on and
@@ -112,7 +115,11 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   `Present` state, `keepInitialState`) carries the sRGB format. A `native_window` of kind `NONE`
   creates a composition swapchain that is never attached to a visual: nothing is shown, but the real
   acquire / clear / present / resize path runs, which is how the `[gpu]` tests work on WARP without a
-  window. Tearing is used only with `vsync = false` when DXGI reports support. A resize that fails in
+  window. Tearing is used only with `vsync = false` when DXGI reports support. Before a back buffer
+  is released (swapchain destruction, `resize`) and in `device::wait_idle()`, `flush_queues()` waits
+  on a private fence for the present queued behind NVRHI's last command list, which `waitForIdle`
+  does not cover; releasing earlier is `OBJECT_DELETED_WHILE_STILL_IN_USE` under the debug layer.
+  The debug layer's messages are routed to `LOG_RHI` (`ID3D12InfoQueue1`). A resize that fails in
   `ResizeBuffers` or while wrapping leaves no back buffers (a wrap that fails half-way drops the ones it
   made), and `acquire()` / `present()` return `OUT_OF_DATE` until a resize succeeds, as on Vulkan.
 - **Vulkan.** Instance, surface, physical device, device and `VkSwapchainKHR` over

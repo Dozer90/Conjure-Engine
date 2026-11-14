@@ -41,7 +41,8 @@ namespace conjure::rhi::null_backend {
             null_device &mDevice;   // set by the only constructor; the device owns and outlives its command lists
             nvrhi::CommandListParameters mParameters = {};
             bool mOpen = false;
-            std::vector<nvrhi::ResourceHandle> mReferencedResources = {};   // liveness until the next open()
+            // What the recording uses, kept alive until the list is executed (or opened again).
+            std::vector<nvrhi::ResourceHandle> mReferencedResources = {};
             core::flat_hash_map<subresource_key, nvrhi::ResourceStates, subresource_key_hash> mTextureStates = {};
             core::flat_hash_map<nvrhi::IBuffer *, nvrhi::ResourceStates> mBufferStates = {};
 
@@ -53,6 +54,14 @@ namespace conjure::rhi::null_backend {
             [[nodiscard]] bool is_open() const noexcept {
                 return mOpen;
             }
+
+            /// <summary>
+            /// Drops the references the recording holds; null_device::executeCommandLists calls it. NVRHI
+            /// hands them to the queue until the GPU has finished the list, and the null GPU finishes a
+            /// list the moment it is executed, so nothing a submitted frame used (a framebuffer over a
+            /// swapchain buffer) stays referenced by its command list. The storage is kept.
+            /// </summary>
+            void release_references() noexcept;
 
             // nvrhi::ICommandList
             void open() override;

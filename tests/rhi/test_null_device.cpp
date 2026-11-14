@@ -1026,10 +1026,14 @@ TEST_SUITE("rhi/null_device") {
             commandList->writeBuffer(buffer, "abcd", 4, 0);
             commandList->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::RenderTarget);
             commandList->close();
-            native.executeCommandList(commandList);
-            // The command list references the texture and buffer until it is reopened or released.
+            // The recording references the texture and buffer until the list is executed, reopened or released.
             CHECK(texture->GetRefCount() == 2);
             CHECK(buffer->GetRefCount() == 2);
+            native.executeCommandList(commandList);
+            // The null GPU has finished a list the moment it is executed, which is when NVRHI's queue lets go
+            // of what the list used: a swapchain can then recreate a back buffer the last frame drew into.
+            CHECK(texture->GetRefCount() == 1);
+            CHECK(buffer->GetRefCount() == 1);
         }
         guard.check();
     }

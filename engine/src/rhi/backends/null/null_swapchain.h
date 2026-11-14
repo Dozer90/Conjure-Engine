@@ -14,7 +14,9 @@
 // The null swapchain (docs/design/02_renderer.md 7): bufferCount null textures in the Present
 // state; acquire() returns the current index and present() advances it, so acquire/present pairs
 // cycle 0, 1, ..., bufferCount - 1, 0. Every call is counted in null_device_stats. An armed
-// null_fault::PRESENT makes one present() report device loss the way a real backend does.
+// null_fault::PRESENT makes one present() report device loss the way a real backend does, and
+// resize() refuses with SWAPCHAIN_CREATION_FAILED while a back buffer is referenced outside the
+// swapchain, as IDXGISwapChain::ResizeBuffers does (the chain is left as it was).
 
 namespace conjure::rhi::null_backend {
 

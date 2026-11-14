@@ -1538,9 +1538,27 @@ core::result<void> renderer::render(const render_scene &scene) {
 /*===========================================================================*/
 // Events
 
-void renderer::on_swapchain_resized() {
-    mImpl->framebuffers->clear();
-    mImpl->bindingSets->clear();
+core::result<void> renderer::resize_swapchain(math::uvec2 size) {
+    impl &state = *mImpl;
+    CONJURE_ASSERT(
+      state.renderThread == std::this_thread::get_id(),
+      "renderer::resize_swapchain from a foreign thread"
+    );
+    rhi::swapchain *swapchain = state.desc.swapchain;
+    if (swapchain == nullptr) {
+        return core::make_error(core::error_code::INVALID_ARGUMENT, "resize_swapchain: the renderer has no swapchain");
+    }
+    // The order is the point (code sweep F044): the cached framebuffers reference the back buffers, and
+    // neither DXGI nor the null backend recreates buffers that are still referenced. The last frame's command
+    // list references the framebuffers in turn, so the GPU goes idle first and the collection that follows
+    // lets the device release what that command list held.
+    if (!state.desc.device->is_lost()) {
+        state.desc.device->wait_idle();
+    }
+    state.framebuffers->clear();
+    state.bindingSets->clear();
+    state.desc.device->run_garbage_collection();
+    return swapchain->resize(size.x, size.y);
 }
 
 void renderer::on_device_lost() {

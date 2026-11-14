@@ -17,11 +17,15 @@
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
+#include "conjure/rhi/device.h"
+#include "conjure/rhi/shader_library.h"
+#include "conjure/rhi/swapchain.h"
 
 #include <array>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <vector>
 
 // [gpu] cases (docs/design/02_renderer.md 10): the frame on the WARP D3D12 device with analytic
@@ -669,6 +673,69 @@ TEST_SUITE("renderer/gpu") {
         // 0.43 of direct light on top of the 0.25 ambient.
         CHECK(aligned > misaligned + 0.03f);
         CHECK(aligned == doctest::Approx(0.75f).epsilon(0.15));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F044 [gpu] rendering, resizing the swapchain and rendering again succeeds") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // The debug layer is on and its messages reach the log: a back buffer released while the queue still
+        // uses it, or a ResizeBuffers refused over a live framebuffer, fails the case.
+        log_capture logs = {};
+        rhi::device_desc deviceDesc = software_device_desc();
+        deviceDesc.enableDebugLayer = true;
+        core::result<std::unique_ptr<rhi::device>> device = rhi::device::create(deviceDesc);
+        CONJURE_REQUIRE_OK(device);
+        std::unique_ptr<rhi::shader_library> shaders = open_shaders(*device.value());
+        rhi::swapchain_desc swapchainDesc = {};
+        swapchainDesc.width = 160;
+        swapchainDesc.height = 96;
+        core::result<std::unique_ptr<rhi::swapchain>> swapchain = rhi::swapchain::create(
+          *device.value(),
+          rhi::native_window(),
+          swapchainDesc
+        );
+        CONJURE_REQUIRE_OK(swapchain);
+        renderer_desc desc = headless_desc(*device.value(), *shaders);
+        desc.swapchain = swapchain.value().get();
+        core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        renderer_type &instance = *created.value();
+
+        const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 16, 32);
+        const gpu_mesh_id sphere = instance.upload_mesh(test_asset_id(1), sphereMesh);
+        const gpu_material_id material = instance.upload_material(test_asset_id(2), white_rough());
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), render_target_id(), 0.6f));
+        scene.meshes.push_back(instance_at(sphere, material, math::vec3(0.0f), sphereMesh.bounds()));
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.direction = math::vec3(0.0f, 0.0f, -1.0f);
+        sun.intensity = math::HALF_PI;
+        scene.lights.push_back(sun);
+
+        // More frames than back buffers: every buffer has a cached framebuffer and a present behind it.
+        for (u32 frame = 0; frame < 5; ++frame) {
+            CONJURE_REQUIRE_OK(instance.render(scene));
+        }
+        const std::array<math::uvec2, 3> sizes = {math::uvec2(96, 64), math::uvec2(320, 200), math::uvec2(1, 1)};
+        for (const math::uvec2 size : sizes) {
+            CAPTURE(size.x);
+            // Straight after a present: the resize itself must wait for it.
+            CONJURE_REQUIRE_OK(instance.resize_swapchain(size));
+            CHECK(swapchain.value()->desc().width == size.x);
+            CHECK(swapchain.value()->desc().height == size.y);
+            for (u32 frame = 0; frame < 4; ++frame) {
+                CONJURE_REQUIRE_OK(instance.render(scene));
+                CHECK(instance.stats().viewsRendered == 1);
+            }
+        }
+        CHECK_FALSE(device.value()->is_lost());
+
+        // Teardown in the engine's order, with the last present still queued.
+        created.value().reset();
+        swapchain.value().reset();
+        shaders.reset();
+        device.value().reset();
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

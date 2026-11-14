@@ -27,7 +27,7 @@ Dear ImGui (only with `CONJURE_BUILD_EDITOR`, never in Distribution).
 | ImGui | `imgui_renderer.h` | `imgui/imgui_renderer.cpp` |
 
 Shaders live in `engine/shaders/` and are compiled by `conjure_add_shaders` into
-`<build>/shaders/index.json`; `shader_asset::built_in_programs()` lists every permutation the
+`<build>/bin/shaders/index.json`; `shader_asset::built_in_programs()` lists every permutation the
 renderer loads and `pipeline_cache` turns each into a pipeline at `renderer::create`. The structs in
 `shared/gpu_types.hlsli` are mirrored in `gpu_types.h` with static_asserted sizes; the tests re-read
 the HLSL defines to keep the two in step.
@@ -56,6 +56,12 @@ the HLSL defines to keep the two in step.
    `NO_POST_PROCESS` (the camera's `postProcess = false`).
 4. ImGui into the swapchain (editor builds).
 5. `end_frame`: close, execute, present, evict idle transients and binding sets, fill `render_stats`.
+
+A window resize goes through `renderer::resize_swapchain(size)`, never through `swapchain::resize` alone: the
+framebuffer cache holds a framebuffer over every back buffer a view or the ImGui pass has drawn into, and a
+swapchain cannot recreate buffers that are still referenced (D3D12 refuses, and so does the null backend, so the
+order is tested headless). The call waits for the GPU, clears the framebuffer and binding-set caches, collects
+what the last command list held and only then resizes (code sweep F044).
 
 ### Steady-state frames allocate nothing
 

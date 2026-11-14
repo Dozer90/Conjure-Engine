@@ -10,6 +10,9 @@
 #include "conjure/core/log.h"
 #include "conjure/core/string_utils.h"
 
+#include <d3d12sdklayers.h>
+
+#include <atomic>
 #include <format>
 #include <string>
 #include <utility>
@@ -21,6 +24,35 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
     constexpr D3D_FEATURE_LEVEL MINIMUM_FEATURE_LEVEL = D3D_FEATURE_LEVEL_11_0;
+
+    // EnableDebugLayer is process-wide and cannot be undone: every device created after the first one that
+    // asked for the layer runs under it, whatever its own description says.
+    std::atomic<bool> sDebugLayerEnabled = false;
+
+    // flush_queues() re-checks for device removal this often while it waits, so a device that dies under the
+    // wait (whose fence may never signal the event) cannot hang shutdown.
+    constexpr DWORD FLUSH_POLL_MILLISECONDS = 100;
+
+    /// <summary>
+    /// ID3D12InfoQueue1 callback: debug-layer errors and corruption become ERROR lines, warnings WARN lines.
+    /// Called on whichever thread made the offending D3D12 call.
+    /// </summary>
+    void CALLBACK log_debug_message(
+      D3D12_MESSAGE_CATEGORY category,
+      D3D12_MESSAGE_SEVERITY severity,
+      D3D12_MESSAGE_ID id,
+      LPCSTR description,
+      void *context
+    ) {
+        CONJURE_UNUSED(category);
+        CONJURE_UNUSED(context);
+        const char *text = description != nullptr ? description : "";
+        if (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION || severity == D3D12_MESSAGE_SEVERITY_ERROR) {
+            CONJURE_LOG_ERROR(LOG_RHI, "d3d12 debug layer (message {}): {}", static_cast<int>(id), text);
+        } else if (severity == D3D12_MESSAGE_SEVERITY_WARNING) {
+            CONJURE_LOG_WARN(LOG_RHI, "d3d12 debug layer (message {}): {}", static_cast<int>(id), text);
+        }
+    }
 
     core::error creation_failure(const char *what, HRESULT result) {
         return core::make_error(rhi_error::DEVICE_CREATION_FAILED, "{} failed with {}", what, describe_hresult(result));
@@ -62,9 +94,11 @@ d3d12_device_backend::~d3d12_device_backend() {
     // GetDeviceRemovedReason (the same poll device::is_lost() performs).
     if (mNvrhiDevice != nullptr && !mMessages.is_lost() && !poll_device_removed()) {
         mNvrhiDevice->waitForIdle();
+        flush_queues();
         mNvrhiDevice->runGarbageCollection();
     }
     mNvrhiDevice = nullptr;
+    release_flush_fence();
 }
 
 
@@ -79,6 +113,7 @@ core::result<void> d3d12_device_backend::initialise(const device_desc &desc) {
         const HRESULT debugResult = D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
         if (SUCCEEDED(debugResult)) {
             debug->EnableDebugLayer();
+            sDebugLayerEnabled.store(true, std::memory_order_release);
             factoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
             if (desc.enableGpuValidation) {
                 ComPtr<ID3D12Debug1> debug1 = nullptr;
@@ -123,8 +158,14 @@ core::result<void> d3d12_device_backend::initialise(const device_desc &desc) {
         return creation_failure("D3D12CreateDevice", deviceResult);
     }
     mDevice->SetName(L"conjure d3d12 device");
+    const bool debugLayerActive = sDebugLayerEnabled.load(std::memory_order_acquire);
+    mDebugLayerInherited = debugLayerActive && !desc.enableDebugLayer;
+    if (debugLayerActive) {
+        route_debug_messages();
+    }
 
     CONJURE_TRY(create_queues());
+    CONJURE_TRY(create_flush_fence());
 
     nvrhi::d3d12::DeviceDesc nvrhiDesc = {};
     nvrhiDesc.errorCB = &mMessages;
@@ -165,6 +206,33 @@ bool d3d12_device_backend::poll_device_removed() noexcept {
         return false;
     }
     return mDevice->GetDeviceRemovedReason() != S_OK;
+}
+
+bool d3d12_device_backend::debug_layer_inherited() const noexcept {
+    return mDebugLayerInherited;
+}
+
+void d3d12_device_backend::flush_queues() noexcept {
+    if (mFlushFence == nullptr || mGraphicsQueue == nullptr || mMessages.is_lost() || poll_device_removed()) {
+        return;
+    }
+    ++mFlushValue;
+    if (FAILED(mGraphicsQueue->Signal(mFlushFence.Get(), mFlushValue))) {
+        return;
+    }
+    if (mFlushFence->GetCompletedValue() >= mFlushValue) {
+        return;
+    }
+    if (FAILED(mFlushFence->SetEventOnCompletion(mFlushValue, static_cast<HANDLE>(mFlushEvent)))) {
+        return;
+    }
+    // A removed device completes its fences with UINT64_MAX, but the event is not guaranteed to fire for it:
+    // poll between bounded waits.
+    while (WaitForSingleObject(static_cast<HANDLE>(mFlushEvent), FLUSH_POLL_MILLISECONDS) == WAIT_TIMEOUT) {
+        if (mFlushFence->GetCompletedValue() >= mFlushValue || poll_device_removed()) {
+            return;
+        }
+    }
 }
 
 
@@ -245,6 +313,53 @@ core::result<void> d3d12_device_backend::create_queues() {
     );
     CONJURE_TRY_ASSIGN(mCopyQueue, create_queue(*mDevice.Get(), D3D12_COMMAND_LIST_TYPE_COPY, L"conjure copy queue"));
     return core::result<void>::success();
+}
+
+core::result<void> d3d12_device_backend::create_flush_fence() {
+    const HRESULT created = mDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFlushFence));
+    if (FAILED(created)) {
+        return creation_failure("ID3D12Device::CreateFence", created);
+    }
+    mFlushFence->SetName(L"conjure queue flush fence");
+    // Auto-reset, initially unsignalled: one waiter (the render thread) per SetEventOnCompletion.
+    mFlushEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (mFlushEvent == nullptr) {
+        return creation_failure("CreateEventW", HRESULT_FROM_WIN32(GetLastError()));
+    }
+    return core::result<void>::success();
+}
+
+void d3d12_device_backend::route_debug_messages() {
+    // ID3D12InfoQueue1 exists from Windows 11 on; without it the messages still reach an attached debugger.
+    ComPtr<ID3D12InfoQueue1> infoQueue = nullptr;
+    if (FAILED(mDevice.As(&infoQueue))) {
+        return;
+    }
+    // The registration is never withdrawn: it lives in the device and dies with it, so the messages of the
+    // final releases in ~d3d12_device_backend are still logged. The callback is a free function without
+    // context and therefore valid for as long as the device can call it.
+    DWORD cookie = 0;
+    const HRESULT registered = infoQueue->RegisterMessageCallback(
+      &log_debug_message,
+      D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+      nullptr,
+      &cookie
+    );
+    if (FAILED(registered)) {
+        CONJURE_LOG_WARN(
+          LOG_RHI,
+          "d3d12: debug layer messages are not routed to the log ({})",
+          describe_hresult(registered)
+        );
+    }
+}
+
+void d3d12_device_backend::release_flush_fence() noexcept {
+    mFlushFence = nullptr;
+    if (mFlushEvent != nullptr) {
+        CloseHandle(static_cast<HANDLE>(mFlushEvent));
+        mFlushEvent = nullptr;
+    }
 }
 
 

@@ -34,6 +34,12 @@ null_backend::null_device *device_backend::as_null() noexcept {
     return nullptr;
 }
 
+void device_backend::flush_queues() noexcept {}
+
+bool device_backend::debug_layer_inherited() const noexcept {
+    return false;
+}
+
 
 /*===========================================================================*/
 /*===========================================================================*/

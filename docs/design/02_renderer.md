@@ -682,8 +682,10 @@ namespace conjure::renderer {
             /// <summary>Renders one scene. Render thread only. Fails only with rhi_error::DEVICE_LOST.</summary>
             [[nodiscard]] core::result<void> render(const render_scene &scene);
 
-            /// <summary>Called by the engine when the swapchain was resized.</summary>
-            void on_swapchain_resized();
+            /// <summary>Resizes the swapchain: waits for the GPU, drops the framebuffers over the back buffers,
+            /// then swapchain::resize. The engine calls it for a framebuffer resize (code sweep F044: a
+            /// swapchain cannot recreate buffers that are still referenced).</summary>
+            [[nodiscard]] core::result<void> resize_swapchain(math::uvec2 size);
 
             /// <summary>Device loss: stops recording and drops GPU mirrors; the engine then quits (R8).</summary>
             void on_device_lost();

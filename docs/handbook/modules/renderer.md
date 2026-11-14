@@ -46,7 +46,7 @@ so `index.json` exists before the renderer is used.
 | ImGui | `imgui_renderer.h` | `imgui/imgui_renderer.cpp` |
 
 Shaders live in `engine/shaders/` and are compiled by `conjure_add_shaders` (the permutation list in
-`engine/shaders/CMakeLists.txt`) into `<build>/shaders/index.json`; `shader_asset::built_in_programs()` lists the
+`engine/shaders/CMakeLists.txt`) into `<build>/bin/shaders/index.json`; `shader_asset::built_in_programs()` lists the
 same permutations and `pipeline_cache` turns each into a pipeline at `renderer::create`. The structs in
 `shared/gpu_types.hlsli` are mirrored in `gpu_types.h` with static-asserted sizes; the tests re-read the HLSL
 defines to keep the two in step.
@@ -149,7 +149,7 @@ atlas overflow). A stale gpu id draws the fallback and WARNs once.
 The wave-4 `renderer_subsystem` has everything it needs: `renderer::register_asset_types(types, importers,
 jobs)` for the asset manager, `components.h` `register_components(type_registry)` for the ECS registration (the
 `CONJURE_COMPONENT` specialisations live in the subsystem), `begin_extract` / `end_extract` / `render_frame`
-around the EXTRACT phase, `set_imgui_draw_data` / `imgui()` for `imgui_layer`, and `on_swapchain_resized` /
+around the EXTRACT phase, `set_imgui_draw_data` / `imgui()` for `imgui_layer`, and `resize_swapchain` /
 `on_device_lost` for the window and device events. `model_asset -> prefab` is the engine's job over
 `scene::prefab_builder` (`add_node`, `add_component_json` by registered name).
 
