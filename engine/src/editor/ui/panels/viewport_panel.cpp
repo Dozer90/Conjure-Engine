@@ -1,11 +1,20 @@
 #include "conjure/editor/ui/panels/viewport_panel.h"
 
+#include "editor/core/scene_view.h"
 #include "editor/ui/ui_support.h"
 
 #include "conjure/editor/editor_camera.h"
+#include "conjure/editor/log_category.h"
 #include "conjure/editor/picker.h"
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/selection_set.h"
+
+#include "conjure/core/log.h"
+
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #include "conjure/renderer/imgui_renderer.h"
+    #include "conjure/renderer/renderer.h"
+#endif
 
 #include <imgui.h>
 
@@ -24,12 +33,22 @@ namespace conjure::editor::ui {
         constexpr f32 ZOOM_PER_WHEEL_TICK = 0.9f;
         constexpr f32 SNAP_FIELD_WIDTH = 70.0f;
         constexpr f32 MIN_SNAP_STEP = 0.001f;           // ImGuizmo silently skips steps near zero
+        constexpr ImU32 BACKDROP_COLOUR = IM_COL32(30, 31, 36, 255);    // behind the scene picture, opaque
     }
 
     viewport_panel::viewport_panel() :
-        editor_panel("Viewport") {}
+        editor_panel("Viewport"),
+        mSceneView(std::make_unique<scene_view>()) {}
 
-    viewport_panel::~viewport_panel() = default;
+    viewport_panel::~viewport_panel() {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        // The texture id first: it names the target's colour texture, which goes with the scene view.
+        renderer::renderer *owner = mSceneView->owner();
+        if (mSceneTexture != 0 && owner != nullptr && owner->imgui() == mTextureOwner) {
+            owner->imgui()->unregister_texture(mSceneTexture);
+        }
+#endif
+    }
 
     void viewport_panel::draw_contents(editor_context &context) {
         draw_toolbar(context);
@@ -42,8 +61,11 @@ namespace conjure::editor::ui {
         // view.pick from a protocol client builds its ray with the shape the user sees.
         context.set_viewport_aspect(mRectSize.x / std::max(mRectSize.y, 1.0f));
 
-        // An ordinary (opaque) window whose content area is an input surface; it does not show the scene through
-        // the editor camera yet (code sweep 2026-11-12 B10).
+        // The scene through the editor camera, then the input surface over the same rectangle.
+        if (draw_scene_picture(context, mRectMin, mRectSize)) {
+            ++mPicturesDrawn;
+        }
+        ImGui::SetCursorScreenPos(origin);
         ImGui::InvisibleButton(
           "##viewport_surface",
           available,
@@ -85,6 +107,71 @@ namespace conjure::editor::ui {
         if (context.debug_draw().grid && !context.has_scene()) {
             drawList->AddText(ImVec2(origin.x + 6.0f, origin.y + 22.0f), IM_COL32(180, 180, 180, 200), "no scene open");
         }
+    }
+
+    bool viewport_panel::draw_scene_picture(editor_context &context, const math::vec2 &origin, const math::vec2 &size) {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        renderer::renderer *renderer = context.renderer();
+        renderer::imgui_renderer *backend = renderer != nullptr ? renderer->imgui() : nullptr;
+        if (backend == nullptr) {
+            // No window: nothing could show the picture, so none is drawn (view.screenshot renders its own).
+            return false;
+        }
+        // The target is as large as the rectangle is on screen: ImGui lays out in logical units, the
+        // framebuffer scale turns them into pixels.
+        const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+        const math::uvec2 pixels(
+          static_cast<u32>(std::max(std::lround(size.x * std::max(scale.x, 0.0f)), 1L)),
+          static_cast<u32>(std::max(std::lround(size.y * std::max(scale.y, 0.0f)), 1L))
+        );
+        // Resizing waits for the GPU, so the target keeps its size while a mouse button is down: dragging a
+        // splitter would otherwise stall every frame. The picture is stretched meanwhile and snaps to the
+        // rectangle when the button goes up.
+        const bool settled = !ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        if (!mSceneView->is_valid() || mSceneView->owner() != renderer || settled) {
+            const core::result<void> sized = mSceneView->ensure(*renderer, pixels);
+            if (!sized.has_value()) {
+                if (!mTargetFailureLogged) {
+                    mTargetFailureLogged = true;
+                    CONJURE_LOG_WARN(
+                      LOG_EDITOR,
+                      "viewport: no {}x{} render target, the scene is not shown: {}",
+                      pixels.x,
+                      pixels.y,
+                      sized.get_error().to_string()
+                    );
+                }
+                return false;
+            }
+            mTargetFailureLogged = false;
+        }
+        // The colour texture's id survives a resize, so one registration lasts as long as the ImGui renderer.
+        if (mSceneTexture == 0 || mTextureOwner != backend) {
+            mSceneTexture = backend->register_texture(mSceneView->colour_texture());
+            mTextureOwner = backend;
+        }
+        const bool twoD = context.current_view_mode() == editor_context::view_mode::TWO_D;
+        mSceneView->submit(make_editor_camera_view(context.camera(), mSceneView->target(), !twoD));
+        if (mSceneTexture == 0) {
+            return false;
+        }
+        // The target is transparent where the scene drew nothing. An opaque backdrop keeps what lies behind
+        // the panel from showing through the picture: the window's translucent background and, behind it,
+        // whatever a scene camera drew into the back buffer.
+        ImGui::GetWindowDrawList()->AddRectFilled(
+          support::to_imvec(origin),
+          support::to_imvec(origin + size),
+          BACKDROP_COLOUR
+        );
+        ImGui::SetCursorScreenPos(support::to_imvec(origin));
+        ImGui::Image(static_cast<ImTextureID>(mSceneTexture), support::to_imvec(size));
+        return true;
+#else
+        (void) context;
+        (void) origin;
+        (void) size;
+        return false;
+#endif
     }
 
     void viewport_panel::pick_at(editor_context &context, const math::vec2 &viewportUv, bool additive) {

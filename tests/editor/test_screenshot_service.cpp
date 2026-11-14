@@ -7,6 +7,7 @@
 #include "conjure/core/image.h"
 #include "conjure/core/json/document.h"
 #include "conjure/editor/editor_context.h"
+#include "conjure/editor/editor_error.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/screenshot_service.h"
 #include "conjure/engine/application.h"
@@ -38,6 +39,55 @@ namespace {
           reinterpret_cast<const std::byte *>(text.data()) + text.size()
         );
     }
+
+    /// <summary>
+    /// A backend whose frames the test draws by hand: frame_rendered() answers true once per 'drawn = true'.
+    /// It refuses the requests for the camera named in 'refusedCamera' and remembers, in order, the paths of
+    /// the requests it began and captured.
+    /// </summary>
+    class staged_backend final : public screenshot_backend {
+        public:
+            u32 begun = 0;
+            u32 prepared = 0;
+            u32 captured = 0;
+            u32 abandoned = 0;
+            bool drawn = false;
+            std::string refusedCamera = {};
+            std::vector<std::string> begunPaths = {};
+            std::vector<std::string> capturedPaths = {};
+
+        public:
+            core::result<void> begin(const screenshot_request &request) override {
+                if (!refusedCamera.empty() && request.camera == refusedCamera) {
+                    return make_editor_error(protocol_error_code::COMPONENT_NOT_FOUND, "no such camera");
+                }
+                ++begun;
+                begunPaths.push_back(request.path.generic_string());
+                return core::result<void>::success();
+            }
+
+            void prepare_frame(const screenshot_request &request) override {
+                (void) request;
+                ++prepared;
+            }
+
+            bool frame_rendered(const screenshot_request &request) override {
+                (void) request;
+                return std::exchange(drawn, false);
+            }
+
+            core::result<core::image> capture(const screenshot_request &request) override {
+                ++captured;
+                capturedPaths.push_back(request.path.generic_string());
+                core::image image(request.width, request.height);
+                image.fill(core::rgba8{9, 9, 9, 255});
+                return image;
+            }
+
+            void abandon() noexcept override {
+                ++abandoned;
+            }
+    };
 }
 
 TEST_SUITE("editor/screenshot_service") {
@@ -266,6 +316,140 @@ TEST_SUITE("editor/screenshot_service") {
         CHECK(response->errorCode == protocol_error_code::NOT_AVAILABLE);
         CHECK(response->errorMessage.find("--offscreen") == std::string::npos);
         CHECK(response->errorMessage.find("window") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F104 the service counts a waited frame only once the backend drew one") {
+        editor_test::headless_editor editor = {};
+        screenshot_service &service = editor.context().screenshots();
+        std::unique_ptr<staged_backend> owned = std::make_unique<staged_backend>();
+        staged_backend *backend = owned.get();
+        service.set_backend(std::move(owned));
+        std::optional<protocol_response> captured = std::nullopt;
+        const u32 client = editor.context().events().register_client({});
+        editor.context().register_response_sink(client, [&captured](const protocol_response &response) {
+            captured = response;
+        });
+        protocol_request request = {};
+        request.id = make_id(9);
+        request.command = "view.screenshot";
+        request.args = core::json::object({
+          {"path", (editor.project_directory() / "staged.png").generic_string()},
+          {"width", 8},
+          {"height", 8},
+          {"waitFrames", 1},
+        });
+        request.clientId = client;
+        CHECK_FALSE(editor.context().dispatcher().dispatch(request).has_value());
+        CHECK(backend->begun == 1);
+
+        // Nothing drawn yet, however often the service is ticked: the request waits and keeps asking for its
+        // frame. It used to be captured by the first tick, in the frame it arrived in.
+        service.tick();
+        service.tick();
+        CHECK(backend->captured == 0);
+        CHECK(backend->prepared == 2);
+        CHECK(service.pending_count() == 1);
+
+        // One drawn frame is the frame the request itself asked for; waitFrames 1 wants one more.
+        backend->drawn = true;
+        service.tick();
+        CHECK(backend->captured == 0);
+        CHECK(backend->prepared == 3);
+        service.tick();
+        CHECK(backend->captured == 0);
+        backend->drawn = true;
+        service.tick();
+        CHECK(backend->captured == 1);
+        CHECK(service.pending_count() == 0);
+        for (u32 frame = 0; frame < 1000 && !captured.has_value(); ++frame) {
+            editor.pump(1);
+        }
+        REQUIRE(captured.has_value());
+        CHECK(captured->ok);
+
+        // Cancelling tells the backend to let go without touching the engine.
+        captured.reset();
+        request.id = make_id(10);
+        CHECK_FALSE(editor.context().dispatcher().dispatch(request).has_value());
+        CHECK(backend->abandoned == 0);
+        service.cancel_pending();
+        CHECK(backend->abandoned == 1);
+        CHECK(service.pending_count() == 0);
+        editor.context().unregister_response_sink(client);
+        editor.context().events().unregister_client(client);
+    }
+
+    TEST_CASE("regression - code sweep F104 screenshots asked for together are taken one at a time, in order") {
+        editor_test::headless_editor editor = {};
+        screenshot_service &service = editor.context().screenshots();
+        std::unique_ptr<staged_backend> owned = std::make_unique<staged_backend>();
+        staged_backend *backend = owned.get();
+        backend->refusedCamera = "game";
+        service.set_backend(std::move(owned));
+        std::vector<protocol_response> answers = {};
+        const u32 client = editor.context().events().register_client({});
+        editor.context().register_response_sink(client, [&answers](const protocol_response &response) {
+            answers.push_back(response);
+        });
+        const std::string first = (editor.project_directory() / "first.png").generic_string();
+        const std::string refused = (editor.project_directory() / "refused.png").generic_string();
+        const std::string third = (editor.project_directory() / "third.png").generic_string();
+        const auto ask = [&](i64 id, const std::string &path, const std::string &camera) {
+            protocol_request request = {};
+            request.id = make_id(id);
+            request.command = "view.screenshot";
+            request.args = core::json::object({{"path", path}, {"width", 4}, {"height", 4}, {"camera", camera}});
+            request.clientId = client;
+            CHECK_FALSE(editor.context().dispatcher().dispatch(request).has_value());
+        };
+        // Three requests in one frame, as a client that pipelines them sends them. Only the first is with the
+        // backend: all of them used to be begun at once into the backend's one target, and the first was
+        // answered with the picture of the last.
+        ask(21, first, "editor");
+        ask(22, refused, "game");
+        ask(23, third, "editor");
+        CHECK(service.pending_count() == 3);
+        CHECK(backend->begunPaths == std::vector<std::string>{first});
+
+        // Nothing drawn: the first keeps waiting and the others keep their place.
+        service.tick();
+        CHECK(backend->captured == 0);
+        CHECK(backend->begun == 1);
+        CHECK(service.pending_count() == 3);
+
+        // The first is captured; in the same tick the second is begun and refused, and the third is begun and
+        // waits for a frame of its own.
+        backend->drawn = true;
+        service.tick();
+        CHECK(backend->capturedPaths == std::vector<std::string>{first});
+        CHECK(backend->begunPaths == std::vector<std::string>{first, third});
+        CHECK(service.pending_count() == 1);
+        service.tick();
+        CHECK(backend->captured == 1);
+
+        backend->drawn = true;
+        service.tick();
+        CHECK(backend->capturedPaths == std::vector<std::string>{first, third});
+        CHECK(service.pending_count() == 0);
+        for (u32 frame = 0; frame < 1000 && answers.size() < 3; ++frame) {
+            editor.pump(1);
+        }
+        REQUIRE(answers.size() == 3);
+        u32 succeeded = 0;
+        for (const protocol_response &answer : answers) {
+            if (answer.ok) {
+                ++succeeded;
+                continue;
+            }
+            CHECK(answer.id.root().as_i64() == 22);
+            CHECK(answer.errorCode == protocol_error_code::COMPONENT_NOT_FOUND);
+        }
+        CHECK(succeeded == 2);
+        CHECK(std::filesystem::is_regular_file(first));
+        CHECK(std::filesystem::is_regular_file(third));
+        CHECK_FALSE(std::filesystem::exists(refused));
+        editor.context().unregister_response_sink(client);
+        editor.context().events().unregister_client(client);
     }
 
     TEST_CASE("memory_screenshot_backend - counts begins and captures") {

@@ -81,6 +81,9 @@ TEST_SUITE("editor/ui/panels/viewport_panel") {
         panel.draw(editor.context());
         scope.end_frame();
         CHECK(panel.pick_count() == 0);
+        // Headless there is no ImGui renderer to show a picture with: the panel is the input surface alone
+        // and asks the engine for no view.
+        CHECK(panel.pictures_drawn() == 0);
     }
 
     TEST_CASE("viewport_panel - pick_at selects the sprite under the centre and clears on a miss") {

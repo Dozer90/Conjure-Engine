@@ -72,6 +72,8 @@ set(CONJURE_EDITOR_CORE_SOURCES
     core/picker.cpp
     core/play_controller.cpp
     core/reflection_path.cpp
+    core/scene_view.cpp
+    core/scene_view.h
     core/schema_validator.cpp
     core/screenshot_service.cpp
     core/selection_set.cpp

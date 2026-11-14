@@ -63,6 +63,7 @@ namespace conjure::renderer {
         nvrhi::SamplerHandle pointClampSampler = nullptr;
 
         render_scene_pair pair = {};
+        std::vector<render_view> submittedViews = {};             // submit_view(): taken by the next end_extract()
         core::slot_map<std::unique_ptr<render_target>, render_target_id> targets = {};
         sprite_batcher sprites = {};
         shadow_atlas_allocator atlas;

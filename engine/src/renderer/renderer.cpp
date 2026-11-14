@@ -631,7 +631,25 @@ render_scene &renderer::begin_extract() {
 }
 
 void renderer::end_extract() {
-    mImpl->pair.end_extract();
+    impl &state = *mImpl;
+    // The submitted views join the scene after its own cameras, in submission order, and are forgotten: a
+    // view is rendered for exactly one frame per submit_view().
+    if (!state.submittedViews.empty()) {
+        render_scene &scene = state.pair.write();
+        scene.views.insert(scene.views.end(), state.submittedViews.begin(), state.submittedViews.end());
+        state.submittedViews.clear();
+    }
+    state.pair.end_extract();
+}
+
+void renderer::submit_view(const render_view &view) {
+    impl &state = *mImpl;
+    CONJURE_ASSERT(state.renderThread == std::this_thread::get_id(), "renderer::submit_view from a foreign thread");
+    state.submittedViews.push_back(view);
+}
+
+u32 renderer::submitted_view_count() const noexcept {
+    return static_cast<u32>(mImpl->submittedViews.size());
 }
 
 core::result<void> renderer::render_frame() {

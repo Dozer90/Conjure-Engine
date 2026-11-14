@@ -676,6 +676,73 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
+    TEST_CASE("regression - code sweep F104 [gpu] a submitted view shows the scene in its own render target") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // What the editor's viewport does: the scene's own camera draws to the swapchain while a second view,
+        // submitted for the frame, draws the same scene through another camera into an off-screen target.
+        log_capture logs = {};
+        std::unique_ptr<rhi::device> device = make_device(true);
+        std::unique_ptr<rhi::shader_library> shaders = open_shaders(*device);
+        rhi::swapchain_desc swapchainDesc = {};
+        swapchainDesc.width = 160;
+        swapchainDesc.height = 96;
+        core::result<std::unique_ptr<rhi::swapchain>> swapchain = rhi::swapchain::create(
+          *device,
+          rhi::native_window(),
+          swapchainDesc
+        );
+        CONJURE_REQUIRE_OK(swapchain);
+        renderer_desc desc = headless_desc(*device, *shaders);
+        desc.swapchain = swapchain.value().get();
+        core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        renderer_type &instance = *created.value();
+        const render_target_id target = make_target(instance);
+
+        const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
+        const gpu_mesh_id sphere = instance.upload_mesh(test_asset_id(1), sphereMesh);
+        const gpu_material_id material = instance.upload_material(test_asset_id(2), white_rough());
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.direction = math::vec3(0.0f, 0.0f, -1.0f);
+        sun.intensity = math::HALF_PI;
+        sun.castsShadows = false;
+
+        // The off-screen camera looks at the sphere from +z; the swapchain camera from the side.
+        render_view offscreen = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target, 0.6f);
+        offscreen.flags = view_flags::NO_POST_PROCESS;
+        // The first frame flushes the uploads; the second one draws the mesh.
+        for (u32 frame = 0; frame < 2; ++frame) {
+            render_scene &scene = instance.begin_extract();
+            scene.views.push_back(look_at_view(math::vec3(5.0f, 0.0f, 0.0f), math::vec3(0.0f), render_target_id()));
+            scene.meshes.push_back(instance_at(sphere, material, math::vec3(0.0f), sphereMesh.bounds()));
+            scene.lights.push_back(sun);
+            scene.shadows.enabled = false;
+            scene.ssao.enabled = false;
+            instance.submit_view(offscreen);
+            instance.end_extract();
+            CONJURE_REQUIRE_OK(instance.render_frame());
+            CHECK(instance.stats().viewsRendered == 2);
+        }
+
+        core::result<core::image> readBack = instance.read_back(target);
+        CONJURE_REQUIRE_OK(readBack);
+        const core::image &image = readBack.value();
+        const math::mat4 clipFromWorld = clip_from_world_of(offscreen);
+        // The lit sphere at the projected centre, nothing in the corner.
+        const core::rgba8 centre = pixel_at(image, clipFromWorld, math::vec3(0.0f, 0.0f, 1.0f));
+        CHECK(linear_luminance(centre) == doctest::Approx(0.75f).epsilon(0.25));
+        CHECK(centre.a == 255);
+        const core::rgba8 corner = image.pixel(2, 2);
+        CHECK(corner.r == 0);
+        CHECK(corner.g == 0);
+        CHECK(corner.b == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+
+        created.value().reset();
+        swapchain.value().reset();
+    }
+
     TEST_CASE("regression - code sweep F044 [gpu] rendering, resizing the swapchain and rendering again succeeds") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         // The debug layer is on and its messages reach the log: a back buffer released while the queue still

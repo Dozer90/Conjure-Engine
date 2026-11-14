@@ -399,6 +399,21 @@ the main thread. The service hands the `core::image` to a job that encodes it wi
 (any other `format` is `INVALID_ARGS`), writes the file and completes the reply with `{path, width, height,
 frame}`. `null` RHI -> `NOT_AVAILABLE` (also in headless CI; area H's tests assert that code).
 
+As built (code sweep F104): the view is not appended during EXTRACT. `renderer::submit_view(view)` queues a view
+that the next `end_extract()` appends to the extracted scene, for one frame per call, and the editor submits
+through `scene_view` (`engine/src/editor/core/scene_view.h`, private: the renderer is a private dependency of the
+editor libraries), which owns the render target. The viewport panel keeps one `scene_view` at the panel's size in
+framebuffer pixels, submits `make_editor_camera_view(camera, target, postProcess)` every frame, registers the
+target's colour texture with `imgui_renderer::register_texture` and draws it under its input surface; the view's
+projection equals `editor_camera::projection_matrix` for the target's aspect, so the pick ray and the gizmo agree
+with the picture. The target keeps its size while a mouse button is down (a resize waits for the GPU). The
+screenshot backend resolves `camera` with `resolve_camera_view` ("editor", "game" = the camera the engine shows
+first, or an entity; `renderer::make_camera_view` is the one place a camera component becomes a view), submits it
+on every frame the request waits, and the service counts a waited frame only when one was rendered into the
+target: a request that arrives over the protocol is ticked in its own frame, before anything was drawn for it.
+Still open: a scene camera keeps drawing into the back buffer behind the editor's panels (the Scene / Game split of
+D18), and a real device without a window (`--offscreen`) is still refused by the engine configuration.
+
 ### 3.11 Headless runner
 
 `conjure_editor --headless --exec commands.json --project <dir> [--out responses.ndjson] [--keep-going]

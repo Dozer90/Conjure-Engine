@@ -7,6 +7,7 @@
 #include "conjure/engine/application.h"
 #include "conjure/engine/imgui_layer.h"
 #include "conjure/platform/event.h"
+#include "conjure/platform/null_backend.h"
 #include "conjure/platform/window.h"
 
 #if defined(CONJURE_BUILD_EDITOR) && CONJURE_BUILD_EDITOR
@@ -50,6 +51,37 @@ TEST_SUITE("engine/imgui_layer") {
         CHECK_FALSE(layer->is_frame_open());
         app.shutdown();
         CHECK(layer->context() == nullptr);
+    }
+
+    TEST_CASE("regression - a minimised window keeps ImGui's display size, so no window is moved into a corner") {
+        application app(engine_test::make_desc(engine_test::inline_config()));
+        imgui_layer *layer = static_cast<imgui_layer *>(app.layers().push_overlay(std::make_unique<imgui_layer>()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        platform::null_backend *window = app.context().window->as_null();
+        REQUIRE(window != nullptr);
+        window->simulate_resize(1280, 720);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        ImGui::SetCurrentContext(layer->context());
+        CHECK(ImGui::GetIO().DisplaySize.x == doctest::Approx(1280.0f));
+        CHECK(ImGui::GetIO().DisplaySize.y == doctest::Approx(720.0f));
+
+        // Minimised: the window has no framebuffer. A frame laid out for a 1 x 1 display would clamp every
+        // ImGui window to the top-left corner, and the windows would stay there after the restore.
+        window->simulate_minimise(true);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CONJURE_REQUIRE_OK(app.step_frame());
+        REQUIRE(app.context().window->is_minimised());
+        CHECK(ImGui::GetIO().DisplaySize.x == doctest::Approx(1280.0f));
+        CHECK(ImGui::GetIO().DisplaySize.y == doctest::Approx(720.0f));
+
+        // Restored at another size: the display follows again.
+        window->simulate_minimise(false);
+        window->simulate_resize(1024, 600);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(ImGui::GetIO().DisplaySize.x == doctest::Approx(1024.0f));
+        CHECK(ImGui::GetIO().DisplaySize.y == doctest::Approx(600.0f));
+        CHECK(layer->stats().framesBegun == layer->stats().framesRendered);
+        app.shutdown();
     }
 
     TEST_CASE("imgui_layer - forwards input events and never consumes them without a capturing widget") {

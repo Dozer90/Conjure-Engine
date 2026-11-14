@@ -151,9 +151,14 @@ the menu bar, the panel instances and `<project>/.conjure/editor_layout.ini`. Pa
 in `ui/panels/`) own only UI state and submit commands through the dispatcher: hierarchy (flat rows from
 `hierarchy_cache`, one pre-order walk per structural change, a list clipper so 10,000 entities cost the visible
 rows, D11), inspector (`component.get` per component, `property_drawer_registry` per field kind, `component.set`
-with the drag session as coalesce key), viewport (orbit camera, `view.pick`, `gizmo_controller` over ImGuizmo
-dispatching `component.set_many` inside a transaction), asset browser, console, history, toolbar, profiler, AI
-session, export dialog. `imgui_frame_scope` lets the UI tests draw every panel on the null RHI without the engine's
+with the drag session as coalesce key), viewport (the scene through the editor camera as an image, orbit camera,
+`view.pick`, `gizmo_controller` over ImGuizmo dispatching `component.set_many` inside a transaction), asset
+browser, console, history, toolbar, profiler, AI session, export dialog. The viewport's picture comes from a
+`scene_view` (`core/scene_view.h`, private): a render target the size of the panel in framebuffer pixels and the
+editor camera's view, submitted every frame with `renderer::submit_view`; the target's colour texture is
+registered once with `imgui_renderer::register_texture` (its id survives a resize) and drawn under the input
+surface, over an opaque backdrop because the target is transparent where the scene drew nothing. The panel is
+destroyed by `editor_layer::on_detach`, before the renderer goes. `imgui_frame_scope` lets the UI tests draw every panel on the null RHI without the engine's
 layer. `editor_layer::on_attach` also sets the window icon from `ui/editor_icon` (the logo's PNGs, generated into
 `ui/editor_icon_data.cpp`); the [Logo and application icon](../brand.md) chapter covers the icon end to end.
 
@@ -180,8 +185,10 @@ without a job system the encode runs inline. Sockets are non-blocking and polled
 - Panels: an `editor_panel` subclass registered in `panel_registry`; modules add `panel_desc` records and link
   `conjure::thirdparty::imgui_interface` (`EDITOR_UI`).
 - Property drawers: `property_drawer_registry::set(kind, drawer)`.
-- Screenshot backends: `screenshot_backend` (`memory_screenshot_backend` for tests, the renderer backend over
-  `read_back`).
+- Screenshot backends: `screenshot_backend` (`memory_screenshot_backend` for tests, the renderer backend over a
+  `scene_view` and `read_back`): `begin` when the request is accepted, `prepare_frame` on every frame it waits,
+  `frame_rendered` to tell the service a frame was drawn, `capture`, and `abandon` when the engine restarts or
+  shuts down under a waiting request (the renderer may be gone, so nothing may be destroyed through it).
 - Transports: a `protocol_transport` implementation added through `protocol_server::add_transport`.
 
 ## 10. Tests
@@ -210,7 +217,9 @@ python tools/build.py --build-dir build/mod_editor --target conjure_editor_tests
 ## 11. Open items
 
 From `09_cross_area_resolutions.md` 4 item 15: off-screen rendering (`--offscreen`, `view.screenshot` with
-pixels) needs a renderer view hook and an engine configuration that allows a real backend without a window; a
+pixels) has its renderer view hook (`renderer::submit_view`, code sweep F104) but still needs an engine
+configuration that allows a real backend without a window; the scene cameras still draw into the back buffer
+behind the editor's panels until the Scene / Game split of `04_editor.md` D18 exists; a
 pre-load consumer hook on `modules_subsystem` would remove the unload / load dance of
 `install_module_consumer`; a public `importer_registry` accessor on `asset_database` would replace the importer
 inference of `reflection.asset_types`; `scene::root_index_of` and an id-independent `ecs::world_hash` would

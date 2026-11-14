@@ -20,6 +20,8 @@
 #include "conjure/renderer/components.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/model_asset.h"
+#include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/scene/components.h"
 #include "conjure/scene/prefab.h"
@@ -215,6 +217,47 @@ TEST_SUITE("engine/renderer_subsystem") {
         // The test's own reference goes before shutdown: the manager asserts on live handles.
         CONJURE_REQUIRE_OK(app.context().world->destroy_entity(cube.value()));
         handle = assets::asset_handle{};
+        app.shutdown();
+    }
+
+    TEST_CASE("regression - code sweep F104 a submitted view is drawn into its own target by the engine frame") {
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer::renderer *instance = app.context().renderer;
+        REQUIRE(instance != nullptr);
+        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        REQUIRE(subsystem != nullptr);
+        CONJURE_UNUSED(create_camera(app));
+
+        renderer::render_target_desc targetDesc = {};
+        targetDesc.size = math::uvec2(96, 64);
+        const core::result<renderer::render_target_id> target = instance->create_render_target(targetDesc);
+        CONJURE_REQUIRE_OK(target);
+        renderer::render_view view = {};
+        view.viewFromWorld = glm::lookAt(math::vec3(0.0f, 2.0f, 8.0f), math::vec3(0.0f), math::vec3(0.0f, 1.0f, 0.0f));
+        view.cameraPosition = math::vec3(0.0f, 2.0f, 8.0f);
+        view.target = target.value();
+
+        // Headless there is no swapchain, so the scene camera is counted but draws nowhere; the submitted view
+        // has its target and is what the frame renders. This is how the editor's viewport and screenshots get
+        // their picture of the scene.
+        instance->submit_view(view);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(subsystem->stats().views == 1);
+        CHECK(instance->stats().viewsRendered == 1);
+        CHECK(instance->submitted_view_count() == 0);
+        REQUIRE(instance->get_render_target(target.value()) != nullptr);
+        CHECK(instance->get_render_target(target.value())->frames_rendered() == 1);
+
+        // Not submitted again: the next frame leaves the target alone.
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(instance->stats().viewsRendered == 0);
+        CHECK(instance->get_render_target(target.value())->frames_rendered() == 1);
+        CHECK(logs.count(core::log_level::WARN) == 0);
         app.shutdown();
     }
 

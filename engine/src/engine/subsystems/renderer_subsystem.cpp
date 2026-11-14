@@ -39,17 +39,6 @@ namespace {
         const f32 length = glm::length(rotated);
         return length > 1.0e-6f ? rotated / length : local;
     }
-
-    /// <summary>
-    /// A view matrix from a camera's world matrix: the rigid inverse (scale is dropped so a scaled parent does
-    /// not warp the projection).
-    /// </summary>
-    [[nodiscard]] math::mat4 view_from_world(const math::mat4 &worldFromCamera) noexcept {
-        const math::vec3 position = math::vec3(worldFromCamera[3]);
-        const math::vec3 forward = rotate_direction(worldFromCamera, math::vec3(0.0f, 0.0f, -1.0f));
-        const math::vec3 up = rotate_direction(worldFromCamera, math::vec3(0.0f, 1.0f, 0.0f));
-        return glm::lookAt(position, position + forward, up);
-    }
 }
 
 /*===========================================================================*/
@@ -227,14 +216,7 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
       .without<scene::inactive>()
       .for_each([&](ecs::entity, const renderer::camera_component &camera, const render_transform &transform) {
           camera_candidate candidate = {};
-          candidate.view.cameraData = camera.cameraData;
-          candidate.view.viewFromWorld = view_from_world(transform.matrix);
-          candidate.view.cameraPosition = math::vec3(transform.matrix[3]);
-          candidate.view.layerMask = camera.layerMask;
-          candidate.view.flags = renderer::view_flags::NONE;
-          if (!camera.postProcess) {
-              candidate.view.flags |= renderer::view_flags::NO_POST_PROCESS;
-          }
+          candidate.view = renderer::make_camera_view(camera, transform.matrix);
           if (mServices->debugDraw != nullptr) {
               candidate.view.flags |= renderer::view_flags::DRAW_DEBUG;
           }

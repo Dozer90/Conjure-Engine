@@ -76,6 +76,46 @@ TEST_SUITE("renderer/components") {
         static_assert(std::is_trivially_copyable_v<environment_component>, "memcpy relocated");
     }
 
+    TEST_CASE("make_camera_view - the view is the rigid inverse of the camera's world matrix with its settings") {
+        camera_component cameraValue = {};
+        cameraValue.cameraData.projection = projection_type::ORTHOGRAPHIC;
+        cameraValue.cameraData.orthographicHeight = 6.0f;
+        cameraValue.layerMask = 0x5u;
+        cameraValue.postProcess = false;
+
+        // At (1, 2, 3), turned 90 degrees about +y (so it looks along -x) and scaled: the scale must not reach
+        // the view matrix, or a scaled parent would warp the projection.
+        const math::mat4 rotation = glm::rotate(math::mat4(1.0f), math::HALF_PI, math::vec3(0.0f, 1.0f, 0.0f));
+        const math::mat4 worldFromCamera = glm::translate(math::mat4(1.0f), math::vec3(1.0f, 2.0f, 3.0f)) * rotation *
+          glm::scale(math::mat4(1.0f), math::vec3(3.0f, 0.5f, 2.0f));
+        const render_target_id target = render_target_id::from_u64(0x0000000100000007ull);
+        const render_view view = make_camera_view(cameraValue, worldFromCamera, target);
+
+        CONJURE_CHECK_APPROX(view.cameraPosition, math::vec3(1.0f, 2.0f, 3.0f));
+        CHECK(view.cameraData == cameraValue.cameraData);
+        CHECK(view.layerMask == 0x5u);
+        CHECK(view.target == target);
+        CHECK(view.flags == view_flags::NO_POST_PROCESS);
+        // The camera's own position is the view-space origin, a point one unit ahead of it (along world -x)
+        // is one unit down the view's -z axis, and world up stays up.
+        CONJURE_CHECK_APPROX(math::vec3(view.viewFromWorld * math::vec4(1.0f, 2.0f, 3.0f, 1.0f)), math::vec3(0.0f));
+        CONJURE_CHECK_APPROX(
+          math::vec3(view.viewFromWorld * math::vec4(0.0f, 2.0f, 3.0f, 1.0f)),
+          math::vec3(0.0f, 0.0f, -1.0f)
+        );
+        CONJURE_CHECK_APPROX(
+          math::vec3(view.viewFromWorld * math::vec4(1.0f, 3.0f, 3.0f, 1.0f)),
+          math::vec3(0.0f, 1.0f, 0.0f)
+        );
+
+        // The defaults: the swapchain, every layer, post-processing on.
+        const render_view plain = make_camera_view(camera_component{}, math::mat4(1.0f));
+        CHECK_FALSE(plain.target.is_valid());
+        CHECK(plain.flags == view_flags::NONE);
+        CHECK(plain.layerMask == 0xFFFFFFFFu);
+        CONJURE_CHECK_APPROX(plain.viewFromWorld, math::mat4(1.0f));
+    }
+
     TEST_CASE("components - the reflected type names are the documented ones") {
         CHECK(core::reflect::reflect_traits<mesh_renderer_component>::NAME == MESH_RENDERER_COMPONENT_TYPE_NAME);
         CHECK(core::reflect::reflect_traits<sprite_component>::NAME == SPRITE_COMPONENT_TYPE_NAME);

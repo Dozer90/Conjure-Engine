@@ -234,11 +234,18 @@ void imgui_layer::on_frame_begin(engine_context &context) {
     if (mWindow != nullptr) {
         const math::uvec2 logical = mWindow->window_size();
         const math::uvec2 framebuffer = mWindow->framebuffer_size();
-        io.DisplaySize = ImVec2(static_cast<f32>(std::max(logical.x, 1u)), static_cast<f32>(std::max(logical.y, 1u)));
-        io.DisplayFramebufferScale = ImVec2(
-          static_cast<f32>(std::max(framebuffer.x, 1u)) / io.DisplaySize.x,
-          static_cast<f32>(std::max(framebuffer.y, 1u)) / io.DisplaySize.y
-        );
+        // A minimised window reports no size (0 x 0 for the window, the framebuffer or both). ImGui moves
+        // every window back inside the display it is told about, so a frame laid out for an empty display
+        // would pile all of them into the top-left corner, where they stay after the restore. The last real
+        // size is kept until the window has one again.
+        const bool hasSize = logical.x > 0 && logical.y > 0 && framebuffer.x > 0 && framebuffer.y > 0;
+        if (hasSize && !mWindow->is_minimised()) {
+            io.DisplaySize = ImVec2(static_cast<f32>(logical.x), static_cast<f32>(logical.y));
+            io.DisplayFramebufferScale = ImVec2(
+              static_cast<f32>(framebuffer.x) / io.DisplaySize.x,
+              static_cast<f32>(framebuffer.y) / io.DisplaySize.y
+            );
+        }
     }
     const f32 delta = context.time != nullptr ? context.time->unscaledDeltaTime : 1.0f / 60.0f;
     io.DeltaTime = std::max(delta, 1.0e-6f);

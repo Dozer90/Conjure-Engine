@@ -89,8 +89,11 @@ step 16, when the bindings module is built: `CONJURE_EDITOR_WITH_BINDINGS`); `vi
 and `script.compile` / `module.build` spawn `dotnet` / `cmake` when present (`module.build` always runs the
 `cmake` on the PATH; `config` and `target` must be plain names, and only MSVC / GCC / Clang / CMake diagnostic
 lines count as errors or warnings). `--offscreen` asks for a real device without a swapchain; when the engine
-configuration refuses it the editor logs a warning and falls back to the null device. A screenshot is captured on
-the main thread and encoded and written on a `core::jobs` job that posts the completion back. `--exec file.json`
+configuration refuses it the editor logs a warning and falls back to the null device. A screenshot draws the scene
+through its camera into a render target (`core/scene_view.h`: `scene_view`, `make_editor_camera_view`,
+`resolve_camera_view`; the viewport panel shows the editor camera the same way), is captured on the main thread
+once a frame has been rendered into the target, and is encoded and written on a `core::jobs` job that posts the
+completion back; screenshots asked for together are taken one at a time, in request order. `--exec file.json`
 runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3). `--ai-stdio` reads stdin
 in 64 KiB chunks through a `line_splitter` on a reader thread whose state is shared through a `shared_ptr`: the
 thread is left blocked at exit (documented) and never touches the destroyed transport. Once standard input

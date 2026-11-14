@@ -673,8 +673,15 @@ namespace conjure::renderer {
             /// <summary>Clears the write slot of the owned render_scene_pair and returns it for EXTRACT (R8).</summary>
             [[nodiscard]] render_scene &begin_extract();
 
-            /// <summary>Swaps the pair; the extracted scene is immutable from here on.</summary>
+            /// <summary>Appends the views queued by submit_view(), then swaps the pair; the extracted scene is
+            /// immutable from here on.</summary>
             void end_extract();
+
+            /// <summary>Queues a view no scene camera stands for (the editor's viewport camera, a screenshot):
+            /// the next end_extract() appends it to the extracted scene, for one frame per call. Views render
+            /// in order and before the ImGui pass, so a panel shows a target the frame it was drawn (code
+            /// sweep F104).</summary>
+            void submit_view(const render_view &view);
 
             /// <summary>Renders the last extracted scene: render(pair.read()). Main/render thread only.</summary>
             [[nodiscard]] core::result<void> render_frame();

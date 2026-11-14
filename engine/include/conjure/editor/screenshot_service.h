@@ -17,9 +17,11 @@
 // asked number of frames, captures an RGBA8 image through its backend on the main thread, then hands the image
 // to a core::jobs job that encodes the PNG and writes the file (a 16384 x 16384 capture must not stall the
 // frame); the job posts the completion back to the main thread, which answers {path, width, height, frame}.
-// Without a job system the encode runs inline. The renderer backend captures a render target through
-// renderer::read_back; on the null RHI (every headless run) there is no backend and the request fails with
-// NOT_AVAILABLE. Tests install a memory backend that paints a solid colour.
+// Without a job system the encode runs inline. The renderer backend draws the scene through the requested
+// camera ("editor", "game" or a camera entity) into a render target of the requested size and captures it
+// through renderer::read_back once a frame has been rendered into it; on the null RHI (every headless run)
+// there is no backend and the request fails with NOT_AVAILABLE. Tests install a memory backend that paints a
+// solid colour.
 
 namespace conjure::editor {
 
@@ -36,7 +38,10 @@ namespace conjure::editor {
     };
 
     /// <summary>
-    /// Produces the pixels. begin() runs when the request is accepted, capture() after the wait.
+    /// Produces the pixels. begin() runs when the request is accepted and arranges for the picture to be drawn
+    /// in the frame being built; prepare_frame() runs on every later frame the request still waits, to have it
+    /// drawn again; frame_rendered() says whether a frame has been drawn since it was last asked; capture()
+    /// runs once enough frames were.
     /// </summary>
     class CONJURE_API screenshot_backend {
         public:
@@ -48,7 +53,29 @@ namespace conjure::editor {
 
         public:
             [[nodiscard]] virtual core::result<void> begin(const screenshot_request &request) = 0;
+
+            /// <summary>
+            /// Asks for the picture to be drawn in the frame being built. The default does nothing (a backend
+            /// that needs no frame, such as memory_screenshot_backend).
+            /// </summary>
+            virtual void prepare_frame(const screenshot_request &request);
+
+            /// <summary>
+            /// True when a frame was drawn for the request since the last call (or since begin()). The service
+            /// counts a waited frame only then, so a request is never captured before the engine has rendered
+            /// what begin() asked for. The default is true.
+            /// </summary>
+            [[nodiscard]] virtual bool frame_rendered(const screenshot_request &request);
+
             [[nodiscard]] virtual core::result<core::image> capture(const screenshot_request &request) = 0;
+
+            /// <summary>
+            /// Forgets what begin() set up without touching the engine. The service calls it when it cancels
+            /// its waiting requests, which happens when the engine restarts or shuts down: the renderer the
+            /// backend drew with may already be gone, and takes its own resources with it. The default does
+            /// nothing.
+            /// </summary>
+            virtual void abandon() noexcept;
     };
 
     /// <summary>
@@ -83,6 +110,7 @@ namespace conjure::editor {
                 screenshot_request request = {};
                 async_reply reply = {};
                 u32 framesLeft = 0;
+                bool begun = false;     // the backend's begin() ran for it; only the first request's has
             };
 
             editor_context *mContext = nullptr;
@@ -112,13 +140,17 @@ namespace conjure::editor {
             /// <summary>
             /// Validates and parks a request: INVALID_ARGS for an empty path, a zero size or a format other than
             /// "png"; NOT_AVAILABLE without a backend. On failure the reply is completed with that error.
+            /// Pictures are taken one at a time, in request order: a request made while another waits is
+            /// begun with the backend when its turn comes, and a refusal by the backend (a camera that does
+            /// not exist) is answered then.
             /// </summary>
             void request(const screenshot_request &value, async_reply reply);
 
             /// <summary>
-            /// Once per frame: counts down the waits, captures the due requests and hands each image to a job
-            /// that encodes, writes and completes the reply on the main thread (IO_ERROR when the file cannot be
-            /// written).
+            /// Once per frame, for the first request: counts down its wait (a frame counts once the backend
+            /// drew one for it), has the backend draw it again while it waits, captures it when due and hands
+            /// the image to a job that encodes, writes and completes the reply on the main thread (IO_ERROR
+            /// when the file cannot be written); the request behind it is begun in the same call.
             /// </summary>
             void tick();
 

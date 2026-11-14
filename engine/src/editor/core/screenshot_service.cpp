@@ -1,5 +1,7 @@
 #include "conjure/editor/screenshot_service.h"
 
+#include "editor/core/scene_view.h"
+
 #include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/log_category.h"
@@ -8,11 +10,7 @@
 #include "conjure/core/jobs/main_thread.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/uuid.h"
-
-#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
-    #include "conjure/renderer/render_target.h"
-    #include "conjure/renderer/renderer.h"
-#endif
+#include "conjure/engine/engine_config.h"
 
 #include <format>
 #include <memory>
@@ -34,53 +32,6 @@ namespace conjure::editor {
             }
             return image.save_png(request.path);
         }
-
-#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
-        /// <summary>
-        /// Captures a render target through renderer::read_back. The engine offers no hook to append a view
-        /// for the editor camera yet, so the target holds the renderer's clear colour; the frame still goes
-        /// through the real device and the read-back path.
-        /// </summary>
-        class renderer_screenshot_backend final : public screenshot_backend {
-            private:
-                renderer::renderer *mRenderer = nullptr;
-                renderer::render_target_id mTarget = {};
-
-            public:
-                explicit renderer_screenshot_backend(renderer::renderer &target) noexcept :
-                    mRenderer(&target) {}
-
-                ~renderer_screenshot_backend() override {
-                    if (mTarget.is_valid()) {
-                        mRenderer->destroy_render_target(mTarget);
-                    }
-                }
-
-            public:
-                core::result<void> begin(const screenshot_request &request) override {
-                    if (mTarget.is_valid()) {
-                        mRenderer->destroy_render_target(mTarget);
-                        mTarget = {};
-                    }
-                    renderer::render_target_desc desc = {};
-                    desc.size = math::uvec2(request.width, request.height);
-                    desc.withDepth = true;
-                    CONJURE_TRY_ASSIGN(mTarget, mRenderer->create_render_target(desc));
-                    return core::result<void>::success();
-                }
-
-                core::result<core::image> capture(const screenshot_request &request) override {
-                    (void) request;
-                    if (!mTarget.is_valid()) {
-                        return make_editor_error(protocol_error_code::INTERNAL, "no render target to read back");
-                    }
-                    core::result<core::image> image = mRenderer->read_back(mTarget);
-                    mRenderer->destroy_render_target(mTarget);
-                    mTarget = {};
-                    return image;
-                }
-        };
-#endif
     }
 
     /*===========================================================================*/
@@ -89,6 +40,17 @@ namespace conjure::editor {
 
     screenshot_backend::screenshot_backend() = default;
     screenshot_backend::~screenshot_backend() = default;
+
+    void screenshot_backend::prepare_frame(const screenshot_request &request) {
+        (void) request;
+    }
+
+    bool screenshot_backend::frame_rendered(const screenshot_request &request) {
+        (void) request;
+        return true;
+    }
+
+    void screenshot_backend::abandon() noexcept {}
 
     memory_screenshot_backend::memory_screenshot_backend(core::rgba8 colour) :
         mColour(colour) {}
@@ -133,7 +95,7 @@ namespace conjure::editor {
           config->rendering.backend == engine::rhi_backend_choice::NULL_DEVICE) {
             return nullptr;
         }
-        return std::make_unique<renderer_screenshot_backend>(*target);
+        return make_renderer_screenshot_backend(context, *target);
 #else
         (void) context;
         return nullptr;
@@ -209,32 +171,60 @@ namespace conjure::editor {
             );
             return;
         }
-        const core::result<void> begun = mBackend->begin(value);
-        if (!begun.has_value()) {
-            reply.fail(classify_error(begun.get_error()), begun.get_error().message());
-            return;
-        }
         pending entry = {};
         entry.request = value;
         entry.reply = reply;
         entry.framesLeft = value.waitFrames + 1;
+        // One picture at a time: a backend draws into a single target, so a request made while another waits
+        // is begun by tick() when its turn comes. Two begun at once used to share the target, and the first
+        // was answered with the second's picture.
+        if (mPending.empty()) {
+            const core::result<void> begun = mBackend->begin(value);
+            if (!begun.has_value()) {
+                reply.fail(classify_error(begun.get_error()), begun.get_error().message());
+                return;
+            }
+            entry.begun = true;
+        }
         mPending.push_back(std::move(entry));
     }
 
     void screenshot_service::tick() {
-        for (usize index = 0; index < mPending.size();) {
-            pending &entry = mPending[index];
-            if (entry.framesLeft > 0) {
+        // Only the first request is with the backend; the ones behind it wait their turn.
+        while (!mPending.empty()) {
+            pending &entry = mPending.front();
+            if (!entry.begun) {
+                const core::result<void> begun = mBackend == nullptr
+                  ? core::result<void>(make_editor_error(protocol_error_code::NOT_AVAILABLE, "no screenshot backend"))
+                  : mBackend->begin(entry.request);
+                if (!begun.has_value()) {
+                    // Out of the queue before the reply: a completion may dispatch against this service.
+                    const async_reply refused = entry.reply;
+                    mPending.erase(mPending.begin());
+                    if (refused.valid()) {
+                        refused.fail(classify_error(begun.get_error()), begun.get_error().message());
+                    }
+                    continue;
+                }
+                entry.begun = true;
+            }
+            // A frame is waited only once the backend has drawn one for the request. A request made by a
+            // protocol client is ticked in the very frame it arrived, before anything was rendered for it: it
+            // used to be captured right there, an empty target.
+            const bool rendered = mBackend == nullptr || mBackend->frame_rendered(entry.request);
+            if (rendered && entry.framesLeft > 0) {
                 --entry.framesLeft;
             }
-            if (entry.framesLeft > 0) {
-                ++index;
-                continue;
+            if (!rendered || entry.framesLeft > 0) {
+                if (mBackend != nullptr) {
+                    mBackend->prepare_frame(entry.request);
+                }
+                return;
             }
             // Take the entry out first: the inline encode path completes the reply, and a completion may
             // dispatch further commands against this service.
             const pending due = std::move(entry);
-            mPending.erase(mPending.begin() + static_cast<isize>(index));
+            mPending.erase(mPending.begin());
             core::result<core::image> captured = mBackend == nullptr
               ? core::result<core::image>(make_editor_error(
                 protocol_error_code::NOT_AVAILABLE,
@@ -258,6 +248,11 @@ namespace conjure::editor {
             }
         }
         mPending.clear();
+        // Requests are cancelled when the engine restarts or shuts down. The renderer the backend holds a
+        // target in may be gone by now, so the backend lets go of it without calling into it.
+        if (mBackend != nullptr) {
+            mBackend->abandon();
+        }
     }
 
     void screenshot_service::encode_and_complete(screenshot_request request, async_reply reply, core::image image) {

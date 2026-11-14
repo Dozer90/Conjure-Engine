@@ -53,6 +53,34 @@ namespace {
         }
         return core::result<void>();
     }
+
+    /// <summary>
+    /// A local direction carried into world space by a matrix and normalised; the local direction itself
+    /// when the matrix collapses it.
+    /// </summary>
+    [[nodiscard]] math::vec3 rotate_direction(const math::mat4 &matrix, const math::vec3 &local) noexcept {
+        const math::vec3 rotated = math::vec3(matrix * math::vec4(local, 0.0f));
+        const f32 length = glm::length(rotated);
+        return length > 1.0e-6f ? rotated / length : local;
+    }
+}
+
+render_view conjure::renderer::make_camera_view(
+  const camera_component &camera,
+  const math::mat4 &worldFromCamera,
+  render_target_id target
+) noexcept {
+    const math::vec3 position = math::vec3(worldFromCamera[3]);
+    const math::vec3 forward = rotate_direction(worldFromCamera, math::vec3(0.0f, 0.0f, -1.0f));
+    const math::vec3 up = rotate_direction(worldFromCamera, math::vec3(0.0f, 1.0f, 0.0f));
+    render_view view = {};
+    view.cameraData = camera.cameraData;
+    view.viewFromWorld = glm::lookAt(position, position + forward, up);
+    view.cameraPosition = position;
+    view.target = target;
+    view.layerMask = camera.layerMask;
+    view.flags = camera.postProcess ? view_flags::NONE : view_flags::NO_POST_PROCESS;
+    return view;
 }
 
 core::result<void> conjure::renderer::register_components(core::reflect::type_registry &registry) {

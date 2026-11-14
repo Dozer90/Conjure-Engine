@@ -6,6 +6,7 @@
 #include "conjure/renderer/limits.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
+#include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/sprite_batch.h"
 #include "conjure/renderer/texture_asset.h"
 
@@ -84,6 +85,19 @@ namespace conjure::renderer {
     inline constexpr std::string_view CAMERA_COMPONENT_TYPE_NAME = "conjure.renderer.camera";
     inline constexpr std::string_view LIGHT_COMPONENT_TYPE_NAME = "conjure.renderer.light";
     inline constexpr std::string_view ENVIRONMENT_COMPONENT_TYPE_NAME = "conjure.renderer.environment";
+
+    /// <summary>
+    /// The view a camera component at a world matrix renders: the view matrix is the rigid inverse of
+    /// the matrix (its scale is dropped, so a scaled parent does not warp the projection), with the
+    /// camera's position, camera data and layer mask, NO_POST_PROCESS unless postProcess, into 'target'
+    /// (invalid = the swapchain). The engine's extraction builds the scene cameras' views with it and
+    /// the editor's screenshots through a scene camera do too, so both show the same picture.
+    /// </summary>
+    [[nodiscard]] CONJURE_API render_view make_camera_view(
+      const camera_component &camera,
+      const math::mat4 &worldFromCamera,
+      render_target_id target = {}
+    ) noexcept;
 
     /// <summary>
     /// Registers the enums, the nested camera and light structs and the five components with a

@@ -20,6 +20,7 @@ conjure::renderer`.
 | Render what the engine extracted | `render_scene &scene = begin_extract(); ... end_extract(); render_frame();` |
 | Render a scene you built yourself | `render(scene)` |
 | Render off-screen | `create_render_target(desc)`, set `render_view::target`, `read_back(target)` for the pixels |
+| Add a view of your own to the engine's frame | `submit_view(view)` every frame it should be drawn (an editor viewport, a screenshot) |
 | React to window events | `resize_swapchain(size)`, `on_device_lost()` |
 | Know what happened | `stats()` (`render_stats`), `frame_count()`, `pending_upload_count()`, `is_lost()` |
 | Draw sprites | push `sprite` values into `render_scene::sprites` (world or screen space) |
@@ -209,6 +210,7 @@ when disabled); `register_texture(gpuTextureId)` returns the `ImTextureID` to sh
 | `gpu_mesh_id find_mesh(const asset_id &) const` (and texture, material, environment) | id lookup |
 | `result<render_target_id> create_render_target(const render_target_desc &)`, `result<void> resize_render_target(id, uvec2)`, `void destroy_render_target(id)`, `render_target *get_render_target(id)` | targets |
 | `render_scene &begin_extract()`, `void end_extract()`, `result<void> render_frame()` | the engine's frame |
+| `void submit_view(const render_view &)`, `u32 submitted_view_count() const` | queue a view no scene camera stands for: the next `end_extract()` appends it to the extracted scene, for one frame per call; it renders after the scene's own views and before the ImGui pass, so a panel can show its target in the same frame |
 | `result<void> render(const render_scene &)` | render one scene now |
 | `result<void> resize_swapchain(math::uvec2 size)` | resize the swapchain the renderer presents to: it drops its framebuffers over the back buffers first, which `swapchain::resize` alone cannot do |
 | `void on_device_lost()`, `bool is_lost() const` | device events |
@@ -219,6 +221,7 @@ when disabled); `register_texture(gpuTextureId)` returns the `ImTextureID` to sh
 | `mat4 clip_from_view(const camera &, f32 aspectRatio)`, `frustum frustum_from_clip(const mat4 &)`, `ray ray_from_viewport(...)` | `camera.h` |
 | `u16 clamp_shadow_resolution(u16)` | `light.h` |
 | `result<void> register_components(core::reflect::type_registry &)` | `components.h` |
+| `render_view make_camera_view(const camera_component &, const mat4 &worldFromCamera, render_target_id = {})` | `components.h`: the view a camera component at a world matrix renders (rigid inverse of the matrix, the camera's data, layer mask and `NO_POST_PROCESS` unless `postProcess`); what the engine's extraction and the editor's screenshots both use |
 
 ## See also
 

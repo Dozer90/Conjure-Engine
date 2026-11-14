@@ -367,6 +367,49 @@ TEST_SUITE("renderer/renderer") {
         created.value().reset();
     }
 
+    TEST_CASE("regression - code sweep F104 a submitted view joins the next extracted scene for one frame") {
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc targetDesc = {};
+        targetDesc.size = math::uvec2(64, 32);
+        const core::result<render_target_id> target = fixture->create_render_target(targetDesc);
+        CONJURE_REQUIRE_OK(target);
+        const render_view view = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target.value());
+
+        // Queued before the frame's extraction opens (the editor's tick) and while it is open (a panel
+        // drawing): both join the scene EXTRACT wrote, which had no view of its own here.
+        fixture->submit_view(view);
+        CHECK(fixture->submitted_view_count() == 1);
+        const render_scene &writing = fixture->begin_extract();
+        CHECK(writing.views.empty());
+        fixture->submit_view(view);
+        CHECK(fixture->submitted_view_count() == 2);
+        fixture->end_extract();
+        CHECK(fixture->submitted_view_count() == 0);
+        CONJURE_REQUIRE_OK(fixture->render_frame());
+        CHECK(fixture->stats().viewsRendered == 2);
+        CHECK(fixture->stats().viewsSkipped == 0);
+        REQUIRE(fixture->get_render_target(target.value()) != nullptr);
+        CHECK(fixture->get_render_target(target.value())->frames_rendered() == 2);
+
+        // A view is drawn for one frame per submit_view: the next frame has none.
+        static_cast<void>(fixture->begin_extract());
+        fixture->end_extract();
+        CONJURE_REQUIRE_OK(fixture->render_frame());
+        CHECK(fixture->stats().viewsRendered == 0);
+        CHECK(fixture->get_render_target(target.value())->frames_rendered() == 2);
+
+        // A view whose target was destroyed in the meantime is skipped and counted, not drawn elsewhere.
+        fixture->destroy_render_target(target.value());
+        fixture->submit_view(view);
+        static_cast<void>(fixture->begin_extract());
+        fixture->end_extract();
+        CONJURE_REQUIRE_OK(fixture->render_frame());
+        CHECK(fixture->stats().viewsRendered == 0);
+        CHECK(fixture->stats().viewsSkipped == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
     TEST_CASE("renderer - resize_swapchain without a swapchain is INVALID_ARGUMENT") {
         headless_renderer fixture = make_headless_renderer();
         CONJURE_CHECK_ERROR(fixture->resize_swapchain(math::uvec2(64, 64)), core::error_code::INVALID_ARGUMENT);

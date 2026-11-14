@@ -48,6 +48,7 @@ set(CONJURE_EDITOR_TEST_SOURCES
     test_protocol_robustness.cpp
     test_reflection_commands.cpp
     test_reflection_path.cpp
+    test_scene_view.cpp
     test_schema_validator.cpp
     test_screenshot_service.cpp
     test_selection_set.cpp

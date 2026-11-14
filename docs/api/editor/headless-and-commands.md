@@ -182,10 +182,14 @@ follows the cursor at any zoom), `to_json()` / `apply_json()` (what `view.get_ca
 exchange, `fov` in degrees). The viewport keeps orbiting or panning while a drag that started on it continues
 outside the panel.
 `screenshot_service` parks a `screenshot_request { path, camera, format, width, height, waitFrames }`, captures
-through a `screenshot_backend` on the main thread after the wait and encodes the PNG on a job; the renderer
-backend reads a render target back, tests install `memory_screenshot_backend`, and headless there is no backend
-(`available()` false, `NOT_AVAILABLE`). `view.screenshot`'s `camera` is `"editor"`, `"game"` or an entity by guid,
-path or name that must carry a camera component (`COMPONENT_NOT_FOUND` otherwise); the service receives its guid.
+through a `screenshot_backend` on the main thread after the wait and encodes the PNG on a job. The renderer
+backend draws the scene through the requested camera into a render target of the requested size and reads it
+back; a frame counts as waited only once the engine has rendered one for the request
+(`screenshot_backend::frame_rendered`), so the capture is never an empty target. Pictures are taken one at a
+time, in request order: a request made while another waits is begun when its turn comes. Tests install
+`memory_screenshot_backend`, and headless there is no backend (`available()` false, `NOT_AVAILABLE`).
+`view.screenshot`'s `camera` is `"editor"`, `"game"` or an entity by guid, path or name that must carry a camera
+component (`COMPONENT_NOT_FOUND` otherwise); the service receives its guid.
 `console_buffer` is the log ring the `console.read` command and the console panel read (`install_sink()`,
 `read(console_query)`, `clear()`): `read` returns the oldest matches up to `limit`, or with `console_query::newest`
 the newest ones (still oldest first), which is what the panel draws so new lines keep appearing past its limit.

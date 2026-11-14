@@ -192,9 +192,27 @@ namespace conjure::renderer {
             [[nodiscard]] render_scene &begin_extract();
 
             /// <summary>
-            /// Swaps the pair; the extracted scene is immutable from here on.
+            /// Appends the views queued by submit_view() to the scene being written, then swaps the pair;
+            /// the extracted scene is immutable from here on.
             /// </summary>
             void end_extract();
+
+            /// <summary>
+            /// Queues a view that no scene camera stands for: the editor's viewport camera, a screenshot
+            /// through a chosen camera. The next end_extract() appends the queued views to the extracted
+            /// scene, after the scene's own, and forgets them, so each call renders the view for one
+            /// frame; call it again every frame the view should be drawn, at any point before that
+            /// frame's end_extract(). The views render in submission order and before the ImGui pass, so
+            /// a panel may show a render target in the frame it was drawn into. A view normally names a
+            /// render target (an invalid one means the swapchain); one whose target was destroyed is
+            /// skipped and counted in render_stats::viewsSkipped. Render thread.
+            /// </summary>
+            void submit_view(const render_view &view);
+
+            /// <summary>
+            /// Views queued by submit_view() that no end_extract() has taken yet.
+            /// </summary>
+            [[nodiscard]] u32 submitted_view_count() const noexcept;
 
             /// <summary>
             /// Renders the last extracted scene: render(pair.read()). Render thread only.
