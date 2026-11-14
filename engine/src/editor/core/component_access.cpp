@@ -5,6 +5,8 @@
 #include "conjure/core/json/writer.h"
 #include "conjure/core/string_utils.h"
 #include "conjure/ecs/serialization.h"
+#include "conjure/scene/components.h"
+#include "conjure/scene/scene.h"
 #include "conjure/scene/scene_serializer.h"
 
 #include <array>
@@ -86,6 +88,31 @@ namespace conjure::editor::access {
             entity.index = static_cast<u32>(*index);
             entity.generation = static_cast<u32>(*generation);
             return entity;
+        }
+
+        /// <summary>
+        /// Writes the layer component through scene::set_layer, which owns the 0..31 range that every capture
+        /// (snapshot, save, duplicate, prefab) relies on; the reflected range is only an inspector hint. The value
+        /// is read into a copy first, so a refused write leaves the component as it was.
+        /// </summary>
+        [[nodiscard]] core::result<void> write_layer(
+          scene::scene &scene,
+          ecs::entity entity,
+          const ecs::component_info &info,
+          const core::json::value &in
+        ) {
+            const ecs::world &world = scene.world();
+            const scene::layer *current = world.get<scene::layer>(entity);
+            scene::layer value = current != nullptr ? *current : scene::layer{};
+            const core::result<void> read = ecs::read_component_json(info, &value, in);
+            if (!read.has_value()) {
+                return make_editor_error(protocol_error_code::INVALID_ARGS, read.get_error().message());
+            }
+            const core::result<void> layered = scene.set_layer(entity, value.index);
+            if (!layered.has_value()) {
+                return make_editor_error(protocol_error_code::INVALID_ARGS, layered.get_error().message());
+            }
+            return core::result<void>::success();
         }
     }
 
@@ -240,6 +267,9 @@ namespace conjure::editor::access {
         }
         core::json::document internal = core::json::document::from_value(external);
         CONJURE_TRY(internalise_entity_refs(internal, info.reflection, scene));
+        if (id == scene.ids().layer) {
+            return write_layer(scene, entity, info, internal.root());
+        }
         const core::result<void> applied = ecs::component_from_json(world, entity, id, internal.root());
         if (!applied.has_value()) {
             return make_editor_error(protocol_error_code::INVALID_ARGS, applied.get_error().message());

@@ -3,6 +3,7 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/editor/builtin_commands.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/editor_context.h"
@@ -10,6 +11,9 @@
 #include "conjure/editor/log_category.h"
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/engine/application.h"
+#include "conjure/engine/engine_config.h"
+#include "conjure/scene/scene_manager.h"
 
 #include <filesystem>
 #include <format>
@@ -18,6 +22,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 // editor_context.h: the service owner every command runs against.
@@ -58,6 +64,19 @@ namespace {
         }
         return payloads;
     }
+
+    /// <summary>
+    /// A scene file with one named root entity.
+    /// </summary>
+    std::string one_entity_scene_text(std::string_view name, std::string_view guid) {
+        return std::format(
+          R"({{"format":"conjure.scene","version":1,"name":"{0}","settings":{{}},"roots":["{1}"],)"
+          R"("archive":{{"entities":[{{"components":{{"conjure.scene.name":{{"value":"{0}"}},)"
+          R"("conjure.scene.guid":{{"value":"{1}"}}}}}}]}}}})",
+          name,
+          guid
+        );
+    }
 }
 
 TEST_SUITE("editor/editor_context") {
@@ -83,6 +102,36 @@ TEST_SUITE("editor/editor_context") {
         CHECK(context.registry().size() == builtin_command_count());
         CHECK(context.play().is_editing());
         CHECK(context.frame_index() == context.engine().time().frameIndex);
+    }
+
+    TEST_CASE("regression - N3 the open scene is the first loaded scene, not a later additive one") {
+        engine::application_desc desc = {};
+        desc.config = engine::engine_config::headless_defaults();
+        desc.config.scripting.enabled = false;
+        engine::application application(std::move(desc));
+        CONJURE_REQUIRE_OK(application.initialise());
+        REQUIRE(application.context().scenes != nullptr);
+        scene::scene_manager &scenes = *application.context().scenes;
+        core::vfs::memory_file_system files = {};
+        CONJURE_REQUIRE_OK(files.write_text_file(
+          "scenes/first.scene.json",
+          one_entity_scene_text("First", "7a3c1e52-0d4b-4f6a-9b2e-3c5d7e9f1a01")
+        ));
+        CONJURE_REQUIRE_OK(files.write_text_file(
+          "scenes/added.scene.json",
+          one_entity_scene_text("Added", "7a3c1e52-0d4b-4f6a-9b2e-3c5d7e9f1a02")
+        ));
+        CONJURE_REQUIRE_OK(scenes.load_file(files, "scenes/first.scene.json", scene::load_mode::REPLACE));
+        CONJURE_REQUIRE_OK(scenes.load_file(files, "scenes/added.scene.json", scene::load_mode::ADDITIVE));
+        REQUIRE(scenes.loaded_scenes().size() == 2);
+
+        // Declared after the application so it is destroyed first; the engine shuts down while the context's module
+        // consumer is still alive, as editor_application::shutdown does it.
+        editor_context context(application, nullptr, true, false);
+        CHECK(context.has_scene());
+        CHECK(context.scene_path() == "scenes/first.scene.json");
+        CHECK_FALSE(context.scene_dirty());
+        application.shutdown();
     }
 
     TEST_CASE("editor_context - the revision counts mutations and marks the scene dirty") {

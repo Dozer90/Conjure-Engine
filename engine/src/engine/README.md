@@ -51,7 +51,9 @@ unknown members of the section are dropped on `save()` like those of every other
 `frame_loop::run_frame()` is 06 3.1 verbatim. The scheduler receives one `ecs::frame_info` per phase built by
 `make_frame_info(engine_time)`; `inFixedStep` is true only inside FIXED_UPDATE / PHYSICS_STEP / FIXED_END.
 PAUSED runs UPDATE / LATE_UPDATE through `run_phase_filtered(RUNS_WHILE_PAUSED)`; STEP_ONCE and
-`step_fixed(n)` leave the mode PAUSED afterwards (R13). EXTRACT runs only when a renderer exists.
+`step_fixed(n)` leave the mode PAUSED afterwards (R13). A `step_fixed` request runs even while PAUSED, so
+`cancel_fixed_steps()` drops one the next frame has not consumed (the editor's `play.stop`). EXTRACT runs only when
+a renderer exists.
 
 A startup scene whose source no longer imports (`asset_record_status::IMPORT_FAILED`, the cache keeps the old
 blob) is `STARTUP_SCENE_FAILED` for the runtime; the editor loads the cached copy. `physics_subsystem` marks the

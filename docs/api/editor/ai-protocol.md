@@ -60,7 +60,7 @@ line still parses.
 | `ENTITY_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `TYPE_NOT_FOUND`, `PATH_NOT_FOUND`, `ASSET_NOT_FOUND` | a reference did not resolve |
 | `PROJECT_NOT_OPEN`, `SCENE_NOT_OPEN`, `WRONG_PLAY_STATE` (`details.state`) | a precondition |
 | `NOT_AVAILABLE`, `IO_ERROR`, `COMPILE_FAILED` (`details.diagnostics`) | the environment: a null backend, a file, a build (`script.reload` answers `PATH_NOT_FOUND` when no assembly was built yet and `IO_ERROR` when the runtime cannot load the one that exists) |
-| `BUSY`, `TIMEOUT`, `CANCELLED` | the asynchronous queue (also `BUSY`: a second `script.compile` while one runs) |
+| `BUSY`, `TIMEOUT`, `CANCELLED` | the asynchronous queue (also `BUSY`: a second `script.compile` while one runs, and `play.start` while a `project.open` waits for its restart) |
 | `UNAUTHORISED`, `INTERNAL` | the handshake, an invariant |
 
 ## The catalogue

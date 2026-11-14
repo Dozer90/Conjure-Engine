@@ -717,6 +717,12 @@ namespace conjure::engine {
             /// </summary>
             void step_fixed(uint32_t fixedSteps) noexcept;
 
+            /// <summary>
+            /// Drops a step_fixed request the next frame has not consumed (editor play.stop: a forced step
+            /// overrides PAUSED and would simulate the restored editing scene).
+            /// </summary>
+            void cancel_fixed_steps() noexcept;
+
             /// <summary>Frames until quit or maxFrames, then shutdown(). Returns the process exit code.</summary>
             [[nodiscard]] int run();
 

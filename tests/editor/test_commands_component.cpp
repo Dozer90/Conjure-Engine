@@ -10,8 +10,10 @@
 #include "conjure/core/uuid.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/scene/scene.h"
 
 #include <array>
+#include <optional>
 #include <string>
 
 // component.* (docs/design/04_editor.md 3.5, R40): values move through JSON only.
@@ -396,5 +398,59 @@ TEST_SUITE("editor/commands_component") {
           core::json::object({{"entity", guid}, {"path", "name.value"}, {"value", "Fine"}})
         );
         CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Fine");
+    }
+
+    TEST_CASE("regression - N4 component.set, component.add and entity.create refuse a layer index of 32 or more") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Layered");
+        const std::optional<core::uuid> parsedGuid = core::uuid::parse(guid);
+        REQUIRE(parsedGuid.has_value());
+        const auto layerIndex = [&editor](const std::string &entity) {
+            return editor.ok(
+              "component.get",
+              core::json::object({{"entity", entity}, {"path", "layer.index"}})
+            ).root()["value"].as_i64();
+        };
+        (void) editor.ok(
+          "component.add",
+          core::json::object({{"entity", guid}, {"type", "layer"}, {"value", core::json::object({{"index", 5}})}})
+        );
+        CHECK(layerIndex(guid) == 5);
+        CHECK(editor.fail(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "layer.index"}, {"value", 32}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "layer"}, {"value", core::json::object({{"index", 200}})}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(layerIndex(guid) == 5);
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", guid}, {"path", "layer.index"}, {"value", 31}})
+        );
+        CHECK(layerIndex(guid) == 31);
+        CHECK(editor.scene().layer_of(editor.scene().find_guid(*parsedGuid)) == 31);
+        // Every capture accepts what the write path let through.
+        (void) editor.ok("scene.save");
+        (void) editor.ok("play.start");
+        (void) editor.ok("play.stop");
+
+        const std::string other = editor.create_entity("Other");
+        CHECK(editor.fail(
+          "component.add",
+          core::json::object({{"entity", other}, {"type", "layer"}, {"value", core::json::object({{"index", 40}})}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "component.get",
+          core::json::object({{"entity", other}, {"path", "layer"}})
+        ) == protocol_error_code::COMPONENT_NOT_FOUND);
+        CHECK(editor.fail(
+          "entity.create",
+          core::json::object({
+            {"name", "Refused"},
+            {"components", core::json::object({{"layer", core::json::object({{"index", 99}})}})},
+          })
+        ) == protocol_error_code::INVALID_ARGS);
     }
 }

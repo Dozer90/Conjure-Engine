@@ -280,6 +280,11 @@ namespace conjure::editor {
         mPendingProject.reset();
         const std::filesystem::path previous = mOptions.projectPath;
         CONJURE_LOG_INFO(LOG_EDITOR, "opening project '{}'", next.generic_string());
+        if (mContext != nullptr && !mContext->play().is_editing()) {
+            // As in shutdown(): the play snapshot and the frozen undo stack refer to the old engine's scene, and
+            // rebind keeps the play controller, so no play session may cross the restart.
+            (void) mContext->play().stop();
+        }
         mEngine->shutdown();
         std::unique_ptr<engine::application> old = std::move(mEngine);
         core::result<void> started = start_engine(next);

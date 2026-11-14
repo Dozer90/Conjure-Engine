@@ -144,6 +144,13 @@ namespace conjure::engine {
             void step_fixed(u32 fixedSteps) noexcept;
 
             /// <summary>
+            /// Drops a step_fixed request the next frame has not consumed yet, so that frame runs as the
+            /// simulation mode says. Editor play.stop calls it: a forced step overrides PAUSED, and a step
+            /// left behind would run the simulation over the restored editing scene. A no-op without a request.
+            /// </summary>
+            void cancel_fixed_steps() noexcept;
+
+            /// <summary>
             /// Frames until quit or maxFrames, then shutdown(). Returns the process exit code; a step_frame
             /// failure logs, sets RUNTIME_FAILURE and stops. INIT_FAILURE when the application was never
             /// initialised (the caller forgot initialise()).

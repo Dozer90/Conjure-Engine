@@ -39,6 +39,15 @@ namespace conjure::editor {
               std::format("play.start needs the editing state (currently {})", to_string(mState))
             );
         }
+        // project.open refuses while playing; this is the reverse order. The restart at the end of this frame
+        // would otherwise carry the session, with its snapshot of the old project's scene, into the new project.
+        const editor_host *host = mContext->host();
+        if (host != nullptr && host->has_pending_project_open()) {
+            return make_editor_error(
+              protocol_error_code::BUSY,
+              "play.start: a project.open is pending; play after the engine has restarted"
+            );
+        }
         core::result<scene::scene_snapshot> snapshot = scene::capture(mContext->scene());
         if (!snapshot.has_value()) {
             return make_editor_error(
@@ -74,6 +83,8 @@ namespace conjure::editor {
         }
         mContext->engine().set_simulation_mode(engine::simulation_mode::PAUSED);
         if (mPendingStep.has_value()) {
+            // A forced step overrides PAUSED: one the engine has not run yet would simulate the restored scene.
+            mContext->engine().cancel_fixed_steps();
             mPendingStep->reply.fail(protocol_error_code::CANCELLED, "play stopped before the step completed");
             mPendingStep.reset();
         }

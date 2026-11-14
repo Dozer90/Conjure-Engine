@@ -81,7 +81,8 @@ file pair.
 Entities cross the protocol as guids or hierarchy paths (`entity_ref`); component fields as reflection paths
 (`reflection_path`: alias, unique suffix or registered name, then fields and array indices) read and written
 through `ecs::component_to_json` / `component_from_json` (R40) and `component_access` (entity refs as guid
-strings, the alias table `editor.schema` publishes).
+strings, the alias table `editor.schema` publishes). `component_access::write_component` sends the `layer`
+component through `scene::set_layer`, so the editor never stores an index the scene's captures refuse.
 
 ## 3. Undo and play mode
 
@@ -93,9 +94,12 @@ several subtrees (`entity.destroy_many`) are one `editor.batch` whose children r
 Play mode (D9): `play.start` captures a `scene_snapshot`, freezes the stack and runs the engine; `play.stop`
 restores the snapshot byte for byte (guids preserved) and remaps the selection, its primary included (the backup
 names the primary last); `play.step` runs exactly `n` fixed steps through `application::step_fixed` and answers
-once they ran (R13). `editor_context::selection_payload` is the one builder of `{guids, primary}` (`primary` null
-for an empty selection): every `selection.changed` carries it through `emit_selection_changed`, the selection's
-`on_changed` handler and `play.stop` alike, and the `selection.*` answers add `entities` and `count` to it.
+once they ran (R13), and a `play.stop` before then calls `application::cancel_fixed_steps`, because a forced step
+runs even while PAUSED. No play session crosses an engine restart: `play.start` answers `BUSY` while a
+`project.open` is pending, and `apply_pending_project_open` stops play before it shuts the old engine down.
+`editor_context::selection_payload` is the one builder of `{guids, primary}` (`primary` null for an empty
+selection): every `selection.changed` carries it through `emit_selection_changed`, the selection's `on_changed`
+handler and `play.stop` alike, and the `selection.*` answers add `entities` and `count` to it.
 
 ## 4. The protocol
 

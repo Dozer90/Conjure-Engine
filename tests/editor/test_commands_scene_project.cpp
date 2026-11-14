@@ -9,7 +9,10 @@
 #include "conjure/core/json/document.h"
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_options.h"
+#include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/editor/undo_stack.h"
+#include "conjure/engine/application.h"
 #include "conjure/engine/project.h"
 
 #include <array>
@@ -263,6 +266,28 @@ TEST_SUITE("editor/commands_scene_project") {
           "project.open",
           core::json::object({{"path", (other / "nowhere").generic_string()}})
         ) == protocol_error_code::ASSET_NOT_FOUND);
+    }
+
+    TEST_CASE("regression - N2 a play session never crosses a project restart") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path other = editor.project_directory() / "second";
+        (void) editor.ok("project.create", core::json::object({{"path", other.generic_string()}, {"name", "Second"}}));
+        (void) editor.create_entity("Old project");
+        (void) editor.ok("play.start");
+        CHECK(editor.fail(
+          "project.open",
+          core::json::object({{"path", other.generic_string()}})
+        ) == protocol_error_code::WRONG_PLAY_STATE);
+        // A host request does not go through project.open's play-state check: the restart itself leaves play.
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(other));
+        editor.pump(1);
+        CHECK_FALSE(editor.application().has_pending_project_open());
+        REQUIRE(editor.context().project() != nullptr);
+        CHECK(editor.context().project()->description().name == "Second");
+        CHECK(editor.context().play().is_editing());
+        CHECK_FALSE(editor.context().undo().frozen());
+        CHECK(editor.context().engine().current_simulation_mode() == engine::simulation_mode::PAUSED);
+        CHECK(editor.ok("play.state").root()["state"].as_string() == "editing");
     }
 
     TEST_CASE("project.export - produces a runnable folder with the cooked content") {

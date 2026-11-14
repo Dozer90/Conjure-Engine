@@ -49,7 +49,8 @@ filled (📘 [The native table](../bindings/native-table.md)),
 creates the context, pushes the frame layer and, with a factory, the UI layer, and starts the protocol server.
 `run()` exports (`--export`), executes (`--exec`) or loops frames; `pump_frame()` runs one engine frame and
 applies a pending `project.open`; `request_open_project(dir)` restarts the engine on another project at the next
-frame boundary (the AI port file moves with it); `make_engine_desc(options, projectPath)` shows the merged engine
+frame boundary (the AI port file moves with it), stopping a play session first, and `play.start` answers `BUSY`
+while such a restart is pending; `make_engine_desc(options, projectPath)` shows the merged engine
 configuration. A headless `--ai-stdio` session without a TCP server ends `run()` with 0 once standard input
 ends.
 
@@ -120,6 +121,12 @@ Entity names must be addressable by a hierarchy path: `entity.create` (`args.nam
 (`component.set`, `component.set_many`, `entity.create`'s `components.name`) refuse the empty name and one holding
 `/` with `INVALID_ARGS`. Undo still restores such a name when a scene file or an import gave it. Identical names
 are allowed; an ambiguous path answers with `details.candidates`.
+
+A write of the `layer` component (`component.set`, `component.add`'s `value`, `entity.create`'s `components.layer`)
+goes through `scene::set_layer` and refuses an index of 32 or more with `INVALID_ARGS`, leaving the component as it
+was: every capture (`play.start`'s snapshot, `scene.save`, `entity.duplicate`, a prefab) refuses such an index. The
+`0..31` range `reflection.components` reports for the field is otherwise only an inspector hint; the write path does
+not enforce reflected ranges.
 
 A component path whose leading segments spell a full registered name (`transform.rig.weight` with a registered
 `transform.rig`) addresses that type, even when its first segment is an alias or another type's short name; the

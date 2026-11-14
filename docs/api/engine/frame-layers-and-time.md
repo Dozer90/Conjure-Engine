@@ -38,7 +38,9 @@ begin_frame (engine_time) -> frame_memory.reset -> pump events, layers.on_event,
 
 While `simulation_mode::PAUSED` the fixed loop is skipped and UPDATE / LATE_UPDATE run only the systems flagged
 `RUNS_WHILE_PAUSED`; TRANSFORM, SYNC and EXTRACT keep running so an editor still renders edits. `STEP_ONCE` runs
-one frame and returns to PAUSED; `application::step_fixed(n)` runs exactly `n` fixed steps in the next frame.
+one frame and returns to PAUSED; `application::step_fixed(n)` runs exactly `n` fixed steps in the next frame, even
+while PAUSED, and `cancel_fixed_steps()` drops such a request before that frame consumes it (the editor's
+`play.stop` does, so a step never runs over the restored editing scene).
 
 ## Layers
 

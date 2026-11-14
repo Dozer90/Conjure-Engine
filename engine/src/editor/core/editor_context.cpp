@@ -393,15 +393,15 @@ namespace conjure::editor {
         } else {
             mProject.reset();
         }
-        // A startup scene the engine loaded counts as the open scene.
+        // A startup scene the engine loaded counts as the open scene. It is the active scene, the first loaded one
+        // (F438, as Scene.ActivePath): a scene loaded additively during startup must not become the save target.
         if (context.scenes != nullptr) {
             const std::vector<scene::loaded_scene_info> loaded = context.scenes->loaded_scenes();
             if (!loaded.empty()) {
-                std::string path = loaded.back().path;
+                const scene::loaded_scene_info &active = loaded.front();
+                std::string path = active.path;
                 if (path.empty() && context.assetDatabase != nullptr) {
-                    const std::optional<std::string> assetPath = context.assetDatabase->asset_path_of(
-                      loaded.back().asset
-                    );
+                    const std::optional<std::string> assetPath = context.assetDatabase->asset_path_of(active.asset);
                     path = assetPath.value_or("");
                 }
                 mSceneOpen = true;

@@ -7,7 +7,10 @@
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
+#include "conjure/engine/application.h"
+#include "conjure/engine/project.h"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -248,6 +251,49 @@ TEST_SUITE("editor/play_controller") {
         CHECK(editor.fail("play.step") == protocol_error_code::BUSY);
         editor.pump(2);
         CHECK_FALSE(editor.context().play().has_pending_step());
+        (void) editor.ok("play.stop");
+    }
+
+    TEST_CASE("regression - N1 play.stop in the same frame as play.step runs no fixed step while editing") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("play.start");
+        editor.pump(1);
+        (void) editor.ok("play.pause");
+        protocol_request step = {};
+        step.id = make_id(1);
+        step.command = "play.step";
+        step.args = core::json::object({{"fixedSteps", 3}});
+        step.clientId = editor.client_id();
+        CHECK_FALSE(editor.context().dispatcher().dispatch(step).has_value());
+        REQUIRE(editor.context().play().has_pending_step());
+        (void) editor.ok("play.stop");
+        CHECK_FALSE(editor.context().play().has_pending_step());
+        const u64 stopped = editor.context().engine().time().fixedStepIndex;
+        editor.pump(2);
+        CHECK(editor.context().engine().time().fixedStepIndex == stopped);
+        CHECK(editor.context().engine().time().fixedStepsThisFrame == 0);
+        CHECK(editor.context().play().is_editing());
+    }
+
+    TEST_CASE("regression - N2 play.start is refused while a project.open is pending") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path other = editor.project_directory() / "second";
+        (void) editor.ok("project.create", core::json::object({{"path", other.generic_string()}, {"name", "Second"}}));
+        (void) editor.ok("project.open", core::json::object({{"path", other.generic_string()}}));
+        REQUIRE(editor.application().has_pending_project_open());
+        CHECK(editor.fail("play.start") == protocol_error_code::BUSY);
+        CHECK(editor.context().play().is_editing());
+        CHECK_FALSE(editor.context().undo().frozen());
+
+        editor.pump(1);
+        CHECK_FALSE(editor.application().has_pending_project_open());
+        REQUIRE(editor.context().project() != nullptr);
+        CHECK(editor.context().project()->description().name == "Second");
+        CHECK(editor.context().play().is_editing());
+        CHECK(editor.context().engine().current_simulation_mode() == engine::simulation_mode::PAUSED);
+        // Once the engine has restarted, play works on the new project.
+        (void) editor.ok("scene.new", core::json::object({{"name", "Played"}}));
+        (void) editor.ok("play.start");
         (void) editor.ok("play.stop");
     }
 }

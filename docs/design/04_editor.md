@@ -336,14 +336,17 @@ insertion pass), assign names and guids in a batch, then apply per-entity overri
 (editing)    the engine runs in simulation_mode::PAUSED while EDITING: TRANSFORM/SYNC/EXTRACT still run, the
              fixed loop (physics) and UPDATE systems without RUNS_WHILE_PAUSED do not; script_runtime is in
              script_mode::EDIT (no managed instances)                                            (R13)
-play.start   require EDITING; persist_list.clear(); mSnapshot = scene_serializer::capture(scene); mSelection = selection.guids()
+play.start   require EDITING, and no pending project.open (BUSY: its restart would carry the session over)
+             persist_list.clear(); mSnapshot = scene_serializer::capture(scene); mSelection = selection.guids()
              undo.set_frozen(true); script_runtime.set_mode(PLAY); engine.set_simulation_mode(RUNNING)
              state = PLAYING; emit play.state
 play.pause   PLAYING -> PAUSED; engine.set_simulation_mode(PAUSED)
 play.resume  PAUSED -> PLAYING; engine.set_simulation_mode(RUNNING)
 play.step    {fixedSteps?=1} PAUSED only; async: engine.step_fixed(n) makes the next frame run exactly n fixed
              steps and return to PAUSED; the reply completes when engine_time.fixedStepIndex has advanced by n
-play.stop    engine.set_simulation_mode(PAUSED); captured = persist_list.capture(scene) (3.13, before restore)
+play.stop    engine.set_simulation_mode(PAUSED); a pending play.step: engine.cancel_fixed_steps() (a forced step
+             overrides PAUSED) and its reply fails CANCELLED
+             captured = persist_list.capture(scene) (3.13, before restore)
              script_runtime.set_mode(EDIT); scene_serializer::restore(scene, mSnapshot)
              (failure -> ERROR log, empty scene, state EDITING; never a crash; captured values are dropped)
              selection.set(existing guids of mSelection); undo.set_frozen(false)
@@ -847,7 +850,7 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `history.list` / `history.clear` | | `{limit?}` -> `{entries:[{label, clientId}], cursor}` |
 | `console.read` / `console.clear` | | `{sinceSeq?, minLevel?, category?, limit?}` -> `{entries:[{seq, frame, level, category, message}]}` |
 | `project.create` | M | `{path, name, template?}` -> `{path}` |
-| `project.open` | | `{path}` -> `project.info` |
+| `project.open` | | `{path}` -> `project.info` (`WRONG_PLAY_STATE` while playing; the engine restarts at the end of the frame, `play.start` answers `BUSY` until then, and the restart stops any play session first) |
 | `project.save` / `project.info` / `project.list_scenes` | M P / P / P | |
 | `project.set_settings` | M P | `{settings}` (startupScene, window title/size, ...) |
 | `project.export` | A P | `{directory, config?}` -> `{directory, runtimePath, bytes, durationMs}` |

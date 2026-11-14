@@ -203,6 +203,11 @@ void application::step_fixed(u32 fixedSteps) noexcept {
     mFixedStepsPending = true;
 }
 
+void application::cancel_fixed_steps() noexcept {
+    mPendingFixedSteps = 0;
+    mFixedStepsPending = false;
+}
+
 int application::run() {
     if (mState != application_state::RUNNING) {
         CONJURE_LOG_ERROR(LOG_ENGINE, "run() on an application that was not initialised ({})", to_string(mState));

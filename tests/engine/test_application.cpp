@@ -198,6 +198,28 @@ TEST_SUITE("engine/application") {
         app.shutdown();
     }
 
+    TEST_CASE("regression - N1 cancel_fixed_steps drops a step_fixed request before the next frame") {
+        application app(engine_test::make_desc(engine_test::inline_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        CONJURE_REQUIRE_OK(app.step_frame());
+        app.set_simulation_mode(simulation_mode::PAUSED);
+        const u64 steps = app.time().fixedStepIndex;
+        app.step_fixed(3);
+        app.cancel_fixed_steps();
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(app.time().fixedStepsThisFrame == 0);
+        CHECK(app.time().fixedStepIndex == steps);
+        CHECK(app.current_simulation_mode() == simulation_mode::PAUSED);
+
+        // Without a request it changes nothing, and a later request still runs in full.
+        app.cancel_fixed_steps();
+        app.step_fixed(2);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(app.time().fixedStepsThisFrame == 2);
+        CHECK(app.time().fixedStepIndex == steps + 2);
+        app.shutdown();
+    }
+
     TEST_CASE("regression - review finding 5: step_fixed at the step cap keeps time and fixedTime together") {
         engine_config config = engine_test::inline_config();
         REQUIRE(config.time.maxFixedStepsPerFrame == 8);
