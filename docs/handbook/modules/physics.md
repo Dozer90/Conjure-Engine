@@ -141,8 +141,9 @@ changes rebuild the character in place with the same inner body id.
 
 Payload `{u32 vertexCount; u32 indexCount; u32 reserved[2]; f32 positions[][3]; (16-aligned) u32 indices[]}`;
 the loader builds the `MeshShape` on the load job; convex hulls are built per (asset, version, convexRadius) in
-the shape cache. The importer reads glTF / GLB (cgltf with the engine's memory and VFS hooks) baking node
-transforms, and OBJ (quads, relative indices), welds vertices (`weld_distance`, default 1e-4 m) and emits one
+the shape cache. The importer claims `.obj` by extension only: a glTF is a render model by extension and reaches
+this importer when its `.meta` names it (code sweep F137). It reads glTF / GLB (cgltf with the engine's memory and
+VFS hooks) baking node transforms, and OBJ (quads, relative indices), welds vertices (`weld_distance`, default 1e-4 m) and emits one
 primary asset; the same bytes import byte-identically. glTF input is validated before it is read
 (`cgltf_validate`, external buffers against their declared length, per-primitive triangle counts) and mirrored
 nodes keep their winding (importer version 2). `on_asset_reloaded` marks every body using the asset for a

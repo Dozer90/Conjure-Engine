@@ -172,10 +172,25 @@ TEST_SUITE("physics/register") {
         CHECK(importers.importers().size() == 1);
         const assets::asset_importer *importer = importers.find(physics::COLLISION_MESH_IMPORTER_ID);
         REQUIRE(importer != nullptr);
-        CHECK(importers.find_for_extension(".gltf") == importer);
-        CHECK(importers.find_for_extension(".GLB") == importer);
         CHECK(importers.find_for_extension("obj") == importer);
         CHECK(importers.find_for_extension(".fbx") == nullptr);
         CONJURE_CHECK_ERROR(physics::register_asset_types(types, importers), assets::asset_error_code::TYPE_DUPLICATE);
+    }
+
+    TEST_CASE("regression - code sweep F137 the collision mesh importer claims .obj by extension and no glTF") {
+        assets::asset_type_registry types = {};
+        assets::importer_registry importers = {};
+        CONJURE_REQUIRE_OK(physics::register_asset_types(types, importers));
+        const assets::asset_importer *importer = importers.find(physics::COLLISION_MESH_IMPORTER_ID);
+        REQUIRE(importer != nullptr);
+        REQUIRE(importer->extensions().size() == 1);
+        CHECK(importer->extensions()[0] == ".obj");
+        CHECK(importers.find_for_path("level/ramp.obj") == importer);
+        // A glTF is a render model by extension; it reaches this importer through a .meta that names it
+        // (test_collision_mesh_asset.cpp imports ramp.glb that way), never by being scanned.
+        CHECK(importers.find_for_extension(".gltf") == nullptr);
+        CHECK(importers.find_for_extension(".GLB") == nullptr);
+        CHECK(importers.find_for_path("level/ramp.glb") == nullptr);
+        CHECK(importers.find_for_path("level/ramp.gltf") == nullptr);
     }
 }

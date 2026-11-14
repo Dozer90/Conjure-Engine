@@ -11,6 +11,7 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,37 @@
 using namespace conjure;
 using namespace conjure::assets;
 using namespace conjure::assets::testing;
+
+namespace {
+    /// <summary>
+    /// test_importer under another id that claims no extension and upper-cases by default: it reads the same
+    /// sources but only gets one whose .meta names it, like the collision-mesh importer and a .glb.
+    /// </summary>
+    class shout_importer final : public asset_importer {
+        public:
+            static constexpr std::string_view ID = "conjure.test.shout";
+
+        private:
+            test_importer mInner = {};
+
+        public:
+            [[nodiscard]] std::string_view id() const noexcept override {
+                return ID;
+            }
+            [[nodiscard]] u32 version() const noexcept override {
+                return 3;
+            }
+            [[nodiscard]] std::span<const std::string_view> extensions() const noexcept override {
+                return {};
+            }
+            [[nodiscard]] core::json::document default_settings() const override {
+                return core::json::object({{"upper", true}});
+            }
+            [[nodiscard]] core::result<import_output> import(import_context &context) const override {
+                return mInner.import(context);
+            }
+    };
+}
 
 TEST_SUITE("assets/asset_database") {
 
@@ -632,6 +664,48 @@ TEST_SUITE("assets/asset_database") {
         CHECK(text_of(fixture.cache().read(id).value().payload) == "LOWER");
         CONJURE_CHECK_ERROR(fixture.database->write_meta(test_id(9), edited), asset_error_code::NOT_FOUND);
         CONJURE_CHECK_ERROR(fixture.database->read_meta(test_id(9)), asset_error_code::NOT_FOUND);
+    }
+
+    TEST_CASE("asset_database - set_importer imports a source with an importer that does not claim its extension") {
+        pipeline_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.importers.register_importer(std::make_unique<shout_importer>()));
+        fixture.write_source("a.ta", "lower");
+        fixture.scan_and_import();
+        const asset_id id = fixture.id_of("a.ta");
+        // By extension the source belongs to the importer that claims ".ta".
+        CHECK(fixture.database->find(id)->importerId == test_importer::ID);
+        CHECK(text_of(fixture.cache().read(id).value().payload) == "lower");
+
+        // "Import as": the meta names the other importer with its version and default settings, the uuid stays
+        // and the asset is stale until it is imported again.
+        CONJURE_REQUIRE_OK(fixture.database->set_importer(id, shout_importer::ID));
+        CHECK(fixture.database->find(id)->importerId == shout_importer::ID);
+        CHECK(fixture.database->find(id)->importerVersion == 3);
+        core::result<asset_meta> meta = fixture.database->read_meta(id);
+        CONJURE_REQUIRE_OK(meta);
+        CHECK(meta.value().id == id);
+        CHECK(meta.value().importerId == shout_importer::ID);
+        CHECK(meta.value().importerVersion == 3);
+        CHECK(meta.value().settings.root()["upper"].as_bool(false));
+        CHECK(fixture.database->stale_ids() == std::vector<asset_id>{id});
+        CONJURE_REQUIRE_OK(fixture.database->import_stale(fixture.jobs));
+        CHECK(text_of(fixture.cache().read(id).value().payload) == "LOWER");
+
+        // Naming the importer the meta already has keeps the settings the user gave it.
+        asset_meta edited = meta.value();
+        edited.settings = core::json::object({{"upper", false}});
+        CONJURE_REQUIRE_OK(fixture.database->write_meta(id, edited));
+        CONJURE_REQUIRE_OK(fixture.database->set_importer(id, shout_importer::ID));
+        CHECK_FALSE(fixture.database->read_meta(id).value().settings.root()["upper"].as_bool(true));
+
+        // The meta wins at the next scan: the extension's importer does not take the file back.
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.database->find(id)->importerId == shout_importer::ID);
+
+        CONJURE_CHECK_ERROR(fixture.database->set_importer(id, "conjure.test.nope"), asset_error_code::NO_IMPORTER);
+        CHECK(fixture.database->find(id)->importerId == shout_importer::ID);
+        const core::result<void> unknownAsset = fixture.database->set_importer(test_id(9), shout_importer::ID);
+        CONJURE_CHECK_ERROR(unknownAsset, asset_error_code::NOT_FOUND);
     }
 
     TEST_CASE("asset_database - corrupt metas are never overwritten and loads of them fail") {

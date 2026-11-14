@@ -138,7 +138,7 @@
         },
         {
             "name": "asset.import",
-            "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. Undo removes a copied file; importing a file already inside the project records nothing.",
+            "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. importer names the importer to use instead of the one chosen by extension (a .glb as \"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
             "flags": [
                 "mutates",
                 "requires_project"
@@ -151,6 +151,9 @@
                         "type": "string"
                     },
                     "destination": {
+                        "type": "string"
+                    },
+                    "importer": {
                         "type": "string"
                     },
                     "options": {
@@ -225,7 +228,7 @@
         },
         {
             "name": "asset.reimport",
-            "summary": "Cooks an asset again and reloads it.",
+            "summary": "Cooks an asset again and reloads it. importer switches the asset to another registered importer first (\"reimport as\"): the uuid is kept, the settings become that importer's defaults.",
             "flags": [
                 "requires_project"
             ],
@@ -234,6 +237,9 @@
                 "type": "object",
                 "properties": {
                     "asset": {
+                        "type": "string"
+                    },
+                    "importer": {
                         "type": "string"
                     }
                 },
@@ -3870,5 +3876,5 @@
         "UNAUTHORISED",
         "INTERNAL"
     ],
-    "schemaHash": "8311bf621a4ba23f"
+    "schemaHash": "8993c28697f4287e"
 }

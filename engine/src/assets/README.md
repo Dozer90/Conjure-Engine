@@ -42,7 +42,11 @@ Private: `asset_slot_table.{h,cpp}` (slots + `slot_data`), `completion_queue.h`,
 `importer_registry::find_for_path(path)` picks the importer whose registered extension is the longest
 suffix of the file name (a `.scene.json` importer wins over a `.json` one, R45); the database uses it at
 scan, at `add_file` and for a meta without an importer, while `find_for_extension` keeps matching one
-extension exactly.
+extension exactly. `register_importer` logs a WARN when an extension is already claimed: the first
+registered importer stays the one chosen by extension and the second applies only where a `.meta` names
+it. An importer may read formats it does not claim (the collision-mesh importer reads glTF but claims
+only `.obj`); `asset_database::set_importer(id, importerId)` is the "import as" that pins such an importer
+in a file's `.meta` with its default settings (code sweep F137).
 
 Deviations from `05_assets.md` worth knowing: `asset_type_registry::types()` returns
 `std::span<const asset_type_desc *const>` (descriptions live in their own heap blocks so a `find()`

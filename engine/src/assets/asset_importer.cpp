@@ -177,6 +177,26 @@ core::result<void> importer_registry::register_importer(std::unique_ptr<asset_im
         return core::error(core::error_code::ALREADY_EXISTS, std::format("importer '{}' is already registered", id));
     }
 
+    // Two importers claiming one extension is legal but never silent: the first registered stays the
+    // importer by extension (find_for_path, find_for_extension) and the second applies only where a .meta
+    // names it. Without the line a whole file type quietly goes to whichever module registered first
+    // (code sweep F137: every glTF model became a collision mesh).
+    for (const std::string_view extension : importer->extensions()) {
+        const asset_importer *owner = find_for_extension(extension);
+        if (owner != nullptr) {
+            CONJURE_LOG_WARN(
+              LOG_ASSETS,
+              "importer '{}' claims '{}', which '{}' already imports: '{}' stays the importer by extension and "
+              "'{}' applies only to a file whose .meta names it",
+              id,
+              extension,
+              owner->id(),
+              owner->id(),
+              id
+            );
+        }
+    }
+
     CONJURE_LOG_DEBUG(LOG_ASSETS, "registered importer '{}' (version {})", id, importer->version());
     mView.push_back(importer.get());
     mImporters.push_back(std::move(importer));

@@ -144,7 +144,9 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
   tables, not only the Jolt update.
 - **Collision meshes.** Payload `{u32 vertexCount; u32 indexCount; u32 reserved[2]; f32 positions[][3];
   (16-aligned) u32 indices[]}`; the loader builds the `MeshShape` on the load job; convex hulls are built
-  per (asset, version, convexRadius) in the shape cache. The importer reads glTF / GLB (cgltf with the
+  per (asset, version, convexRadius) in the shape cache. The importer claims `.obj` by extension only: a
+  glTF is a render model by extension and reaches this importer when its `.meta` names it (code sweep
+  F137). It reads glTF / GLB (cgltf with the
   engine's memory and VFS hooks) baking node transforms, and OBJ (quads, relative indices), welds
   vertices (`weld_distance`, default 1e-4 m; every welded vertex is chained into its grid cell, the lowest
   index within reach wins) and emits one primary asset; the same bytes import byte-identically. glTF input

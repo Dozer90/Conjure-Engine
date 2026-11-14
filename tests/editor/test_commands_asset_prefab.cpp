@@ -21,6 +21,27 @@ using namespace conjure;
 using namespace conjure::editor;
 
 namespace {
+    // One triangle with an embedded buffer: three u16 indices, then three POSITION vectors.
+    constexpr std::string_view TRIANGLE_GLTF = R"({
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"mesh": 0, "name": "triangle"}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 1}, "indices": 0}]}],
+  "buffers": [{
+    "uri": "data:application/octet-stream;base64,AAABAAIAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAA=",
+    "byteLength": 44
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 6, "target": 34963},
+    {"buffer": 0, "byteOffset": 8, "byteLength": 36, "target": 34962}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5123, "count": 3, "type": "SCALAR", "max": [2], "min": [0]},
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1, 1, 0], "min": [0, 0, 0]}
+  ]
+})";
+
     void write_file(const std::filesystem::path &path, std::string_view text) {
         std::error_code ignored = {};
         std::filesystem::create_directories(path.parent_path(), ignored);
@@ -242,6 +263,66 @@ TEST_SUITE("editor/commands_asset_prefab") {
         const core::json::document result = editor.ok("asset.reimport", core::json::object({{"asset", uuid}}));
         CHECK(result.root()["uuid"].as_string() == uuid);
         CHECK(result.root()["status"].as_string() == "OK");
+    }
+
+    TEST_CASE("regression - code sweep F137 asset.import makes a glTF a render model, collision only when asked") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path models = editor.project_directory() / "assets" / "models";
+        write_file(models / "crate.gltf", TRIANGLE_GLTF);
+        write_file(models / "crate_collision.gltf", TRIANGLE_GLTF);
+
+        // By extension a glTF is a render model, whatever else can read it.
+        const core::json::document model = editor.ok(
+          "asset.import",
+          core::json::object({{"source", "models/crate.gltf"}})
+        );
+        CHECK(model.root()["type"].as_string() == "conjure.renderer.model");
+        CHECK(model.root()["importer"].as_string() == "conjure.renderer.gltf");
+        CHECK(model.root()["status"].as_string() == "OK");
+        CHECK(model.root()["subAssets"].size() >= 1);
+
+        // "Import as": the importer is named, so the same format becomes collision geometry.
+        const core::json::document collision = editor.ok(
+          "asset.import",
+          core::json::object({
+            {"source", "models/crate_collision.gltf"},
+            {"importer", "conjure.physics.collision_mesh_importer"},
+            {"options", core::json::object({{"weld_distance", 0.01}})},
+          })
+        );
+        const std::string collisionUuid = std::string(collision.root()["uuid"].as_string());
+        CHECK(collision.root()["type"].as_string() == "conjure.physics.collision_mesh");
+        CHECK(collision.root()["importer"].as_string() == "conjure.physics.collision_mesh_importer");
+        CHECK(collision.root()["status"].as_string() == "OK");
+        // The options are settings of the importer that ran, on top of its defaults.
+        const core::json::document info = editor.ok("asset.info", core::json::object({{"asset", collisionUuid}}));
+        CHECK(info.root()["settings"]["weld_distance"].as_f64(0.0) == doctest::Approx(0.01));
+
+        // "Reimport as" switches an asset back and keeps its uuid.
+        const core::json::document switched = editor.ok(
+          "asset.reimport",
+          core::json::object({{"asset", collisionUuid}, {"importer", "conjure.renderer.gltf"}})
+        );
+        CHECK(switched.root()["uuid"].as_string() == collisionUuid);
+        CHECK(switched.root()["type"].as_string() == "conjure.renderer.model");
+        CHECK(switched.root()["importer"].as_string() == "conjure.renderer.gltf");
+        // A plain reimport afterwards keeps the importer the .meta now names.
+        const core::json::document again = editor.ok("asset.reimport", core::json::object({{"asset", collisionUuid}}));
+        CHECK(again.root()["importer"].as_string() == "conjure.renderer.gltf");
+
+        // An importer that is not registered is the caller's mistake and changes nothing.
+        CHECK(editor.fail(
+          "asset.reimport",
+          core::json::object({{"asset", collisionUuid}, {"importer", "conjure.nope"}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "asset.import",
+          core::json::object({{"source", "models/crate.gltf"}, {"importer", 7}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", collisionUuid}})
+        ).root()["importer"].as_string() == "conjure.renderer.gltf");
     }
 
     TEST_CASE("prefab.* - create, instantiate, apply and unpack with undo at every step") {

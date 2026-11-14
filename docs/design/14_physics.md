@@ -324,7 +324,11 @@ struct physics_stats {
 `indices() -> std::span<const u32>`, `bounds() -> math::aabb`, `triangle_count()` and `[[nodiscard]] static core::result<collision_mesh_asset>
 from_geometry(std::span<const math::vec3>, std::span<const u32>)` (validates indices, drops degenerate triangles; tests
 and procedural terrain). `collision_mesh_importer` (`.gltf`, `.glb` via cgltf, `.obj` via a small reader) bakes node
-transforms, merges primitives and welds vertices (`weldDistance`, default 1e-4 m), deterministically. The Jolt shape
+transforms, merges primitives and welds vertices (`weldDistance`, default 1e-4 m), deterministically. It claims only
+`.obj` by extension: a `.gltf` or `.glb` is a render model by extension (`conjure.renderer.gltf`) and becomes
+collision geometry when its `.meta` names this importer (`asset_database::set_importer`, the editor's `asset.import` /
+`asset.reimport` with `importer`). Both importers once claimed the glTF extensions and the one registered first,
+this one, took every model (code sweep F137); `importer_registry` now warns when an extension is claimed twice. The Jolt shape
 is built at load time on the asset job, not cooked: `JPH::MeshShape` binary state is version-bound and a 100k triangle
 build is ~20 ms, inside the async budget of `05_assets.md`.
 

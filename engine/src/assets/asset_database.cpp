@@ -1485,6 +1485,27 @@ core::result<void> asset_database::write_meta(const asset_id &id, const asset_me
     return core::status::success();
 }
 
+core::result<void> asset_database::set_importer(const asset_id &id, std::string_view importerId) {
+    CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_database::set_importer is main-thread only");
+    const asset_importer *importer = mImporters->find(importerId);
+    if (importer == nullptr) {
+        return make_asset_error(
+          asset_error_code::NO_IMPORTER,
+          std::format("importer '{}' is not registered", importerId)
+        );
+    }
+    CONJURE_TRY_ASSIGN(asset_meta meta, read_meta(id));
+    if (meta.importerId == importer->id()) {
+        return core::status::success();
+    }
+    // The sub-asset table stays: it is identity (D1), so the uuids of a model's meshes survive a
+    // switch to another importer and back.
+    meta.importerId = std::string(importer->id());
+    meta.importerVersion = importer->version();
+    meta.settings = importer->default_settings();
+    return write_meta(id, meta);
+}
+
 core::result<void> asset_database::mark_source_missing(const asset_id &id) {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_database::mark_source_missing is main-thread only");
     return set_source_status(id, false);

@@ -132,8 +132,12 @@ while grounded is a jump. Characters have an inner kinematic body, so rays hit t
 ## Collision meshes
 
 `collision_mesh_asset` (`conjure.physics.collision_mesh`) is positions plus triangle indices with bounds,
-imported from `.gltf`, `.glb` or `.obj` by the importer `register_asset_types` adds (node transforms baked,
-vertices welded, one asset per file). `from_geometry(positions, indices)`, `from_payload(bytes)` and
+imported from `.obj`, `.gltf` or `.glb` by the importer `register_asset_types` adds (node transforms baked,
+vertices welded, one asset per file). An `.obj` is a collision mesh as soon as it is in the project. A glTF is a
+render model by default, so name the importer to get collision geometry from one: keep the collision shape in its
+own file (`level_collision.glb`) and import it with `asset.import` and
+`"importer": "conjure.physics.collision_mesh_importer"`, or call `asset_database::set_importer(id,
+physics::COLLISION_MESH_IMPORTER_ID)` in code. `from_geometry(positions, indices)`, `from_payload(bytes)` and
 `to_payload()` are the in-code forms; `positions()`, `indices()`, `bounds()`, `vertex_count()` and
 `triangle_count()` read it. The loader builds the Jolt shape on the load job, so a `mesh_collider` referencing a
 loaded asset creates its body at the next push without a stall; convex hulls are built per asset, version and

@@ -4,7 +4,10 @@
 #include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
 
+#include "conjure/assets/asset_database.h"
 #include "conjure/assets/asset_manager.h"
+#include "conjure/assets/asset_meta.h"
+#include "conjure/assets/asset_types.h"
 #include "conjure/core/clock.h"
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/file_system.h"
@@ -23,15 +26,23 @@
 #include "conjure/scene/scene_serializer.h"
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    #include "conjure/physics/collision_mesh_asset.h"
     #include "conjure/physics/components.h"
     #include "conjure/physics/physics_world.h"
 #endif
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #include "conjure/renderer/gltf_importer.h"
+    #include "conjure/renderer/model_asset.h"
     #include "conjure/renderer/renderer.h"
 #endif
 
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 // The headless application (docs/design/06_engine_loop.md 7, 10 "test_application_headless", D8): null
@@ -86,6 +97,39 @@ namespace {
     /// <summary>
     /// The descriptor of a project boot: the project's settings applied over the inline configuration.
     /// </summary>
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS && defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    // One triangle with an embedded buffer: three u16 indices, then three POSITION vectors.
+    constexpr std::string_view TRIANGLE_GLTF = R"({
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"mesh": 0, "name": "triangle"}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 1}, "indices": 0}]}],
+  "buffers": [{
+    "uri": "data:application/octet-stream;base64,AAABAAIAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAA=",
+    "byteLength": 44
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 6, "target": 34963},
+    {"buffer": 0, "byteOffset": 8, "byteLength": 36, "target": 34962}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5123, "count": 3, "type": "SCALAR", "max": [2], "min": [0]},
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3", "max": [1, 1, 0], "min": [0, 0, 0]}
+  ]
+})";
+
+    constexpr std::string_view WEDGE_OBJ = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n";
+
+    void write_text(const std::filesystem::path &path, std::string_view text) {
+        std::error_code ignored = {};
+        std::filesystem::create_directories(path.parent_path(), ignored);
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.is_open());
+        stream << text;
+    }
+#endif
+
     [[nodiscard]] application_desc project_desc(project loaded, u64 maxFrames) {
         engine_config config = engine_test::inline_config();
         config.projectPath = loaded.root_directory();
@@ -310,6 +354,49 @@ TEST_SUITE("engine/application_headless") {
         CHECK(app.context().world->entity_count() == 2);
         CHECK(app.run() == 0);
     }
+
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS && defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    TEST_CASE("regression - code sweep F137 a fresh .gltf imports as a render model when physics is registered too") {
+        // The whole engine, so both modules register their importers in the engine's own order: physics
+        // first, which used to give it every glTF.
+        log_capture logs = {};
+        temp_directory directory("engine_gltf_importer");
+        project loaded = engine_test::write_project(directory.path(), "models", "scenes/start.scene.json");
+        author_start_scene(loaded.assets_directory());
+        write_text(loaded.assets_directory() / "models" / "triangle.gltf", TRIANGLE_GLTF);
+        write_text(loaded.assets_directory() / "collision" / "wedge.obj", WEDGE_OBJ);
+
+        application app(project_desc(std::move(loaded), 2));
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.context().assetDatabase != nullptr);
+        const assets::asset_database &database = *app.context().assetDatabase;
+
+        const std::optional<assets::asset_id> modelId = database.find_by_path("assets://models/triangle.gltf");
+        REQUIRE(modelId.has_value());
+        const std::optional<assets::asset_record> model = database.find(*modelId);
+        REQUIRE(model.has_value());
+        CHECK(model->importerId == renderer::GLTF_IMPORTER_ID);
+        CHECK(model->type == assets::asset_type_traits<renderer::model_asset>::id());
+        CHECK(model->status == assets::asset_record_status::OK);
+        // The .meta written at the first scan is what pins the importer for good.
+        const core::result<assets::asset_meta> meta = database.read_meta(*modelId);
+        CONJURE_REQUIRE_OK(meta);
+        CHECK(meta.value().importerId == renderer::GLTF_IMPORTER_ID);
+
+        // The format only the collision importer claims still goes to it.
+        const std::optional<assets::asset_id> wedgeId = database.find_by_path("assets://collision/wedge.obj");
+        REQUIRE(wedgeId.has_value());
+        const std::optional<assets::asset_record> wedge = database.find(*wedgeId);
+        REQUIRE(wedge.has_value());
+        CHECK(wedge->importerId == physics::COLLISION_MESH_IMPORTER_ID);
+        CHECK(wedge->type == assets::asset_type_traits<physics::collision_mesh_asset>::id());
+        CHECK(wedge->status == assets::asset_record_status::OK);
+
+        // No two engine importers claim one extension: the registry would have said so.
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "already imports"));
+        app.shutdown();
+    }
+#endif
 
     TEST_CASE("application_headless - a missing startup scene is fatal for the runtime and a warning for the editor") {
         log_capture logs = {};

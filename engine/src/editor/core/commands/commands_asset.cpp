@@ -180,6 +180,34 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
+        /// args.importer of asset.import and asset.reimport: makes the named importer the one the asset's .meta
+        /// names before the import ("import as"), for a file an importer reads without claiming its extension
+        /// (a .glb as collision geometry). Absent, the meta is left alone. INVALID_ARGS for a value that is not
+        /// the id of a registered importer.
+        /// </summary>
+        core::result<void> apply_importer_argument(
+          assets::asset_database &database,
+          const assets::asset_id &id,
+          const core::json::value &args
+        ) {
+            if (!args.contains("importer")) {
+                return core::result<void>::success();
+            }
+            const std::string_view importer = args["importer"].as_string("");
+            if (importer.empty()) {
+                return invalid_args("args.importer: expected the id of a registered importer");
+            }
+            const core::result<void> switched = database.set_importer(id, importer);
+            if (!switched.has_value()) {
+                if (switched.get_error().is(assets::asset_error_code::NO_IMPORTER)) {
+                    return invalid_args(std::format("args.importer: {}", switched.get_error().message()));
+                }
+                return wrap(switched.get_error());
+            }
+            return core::result<void>::success();
+        }
+
+        /// <summary>
         /// "assets://<relative>" when an absolute path names an existing file under the project's assets
         /// directory, "" otherwise. Both sides go through weakly_canonical, which resolves links and answers the
         /// on-disk spelling (drive letter and directory case on Windows), and containment is tested per component.
@@ -300,6 +328,9 @@ namespace conjure::editor::support {
                 existing = added.value();
             }
             const assets::asset_id id = *existing;
+            // The importer first: switching resets the settings to the new importer's defaults, and the options
+            // are settings of the importer that will run.
+            CONJURE_TRY(apply_importer_argument(*database, id, invocation.args));
             const core::json::value options = invocation.args["options"];
             if (options.is_object()) {
                 core::result<assets::asset_meta> meta = database->read_meta(id);
@@ -461,6 +492,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(assets::asset_database *database, require_database(context));
             CONJURE_TRY_ASSIGN(const std::string_view reference, require_string(invocation.args, "asset"));
             CONJURE_TRY_ASSIGN(const assets::asset_id id, resolve_asset(*database, reference));
+            CONJURE_TRY(apply_importer_argument(*database, id, invocation.args));
             CONJURE_TRY(import_now(context, *database, id));
             if (context.assets() != nullptr) {
                 context.assets()->reload(id);
@@ -675,8 +707,11 @@ namespace conjure::editor::support {
           make_command(
             "asset.import",
             "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta "
-            "settings. Undo removes a copied file; importing a file already inside the project records nothing.",
+            "settings. importer names the importer to use instead of the one chosen by extension (a .glb as "
+            "\"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's "
+            "defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
             R"({"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"},)"
+            R"("importer":{"type":"string"},)"
             R"("options":{"type":"object","additionalProperties":true}},"required":["source"]})",
             ANY_OBJECT_SCHEMA.data(),
             command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
@@ -733,8 +768,10 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "asset.reimport",
-            "Cooks an asset again and reloads it.",
-            R"({"type":"object","properties":{"asset":{"type":"string"}},"required":["asset"]})",
+            "Cooks an asset again and reloads it. importer switches the asset to another registered importer first "
+            "(\"reimport as\"): the uuid is kept, the settings become that importer's defaults.",
+            R"({"type":"object","properties":{"asset":{"type":"string"},"importer":{"type":"string"}},)"
+            R"("required":["asset"]})",
             ANY_OBJECT_SCHEMA.data(),
             command_flags::REQUIRES_PROJECT,
             &asset_reimport

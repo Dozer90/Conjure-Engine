@@ -106,6 +106,10 @@ Flags in a descriptor: `mutates` (recorded for undo and marks the scene dirty), 
   entry (nothing was created, so undo never deletes a user file); a module's `mutates` command is
   recorded as `no_undo`; `module.build` always runs the `cmake` on the PATH with `config` / `target`
   restricted to plain names.
+- **Importers**: a file is cooked by the importer that claims its extension: a `.gltf` / `.glb` is a render
+  model (`conjure.renderer.gltf`), an `.obj` a collision mesh. Pass `importer` to `asset.import` or
+  `asset.reimport` to use another registered one, such as `"conjure.physics.collision_mesh_importer"` for
+  collision geometry kept in its own glTF file; the settings then become that importer's defaults.
 - **Scripts** live in `<project>/scripts/`; `script.create` writes a template and `Game.csproj`,
   `script.attach` adds the class to an entity (fields in `script.scripts[i].fields`), `script.compile`
   runs `dotnet build` (`NOT_AVAILABLE` without a .NET SDK, `COMPILE_FAILED` with diagnostics).

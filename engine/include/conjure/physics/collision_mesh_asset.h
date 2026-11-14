@@ -14,10 +14,12 @@
 #include <vector>
 
 // The conjure.physics.collision_mesh asset (docs/design/14_physics.md 2.7, P14, R44): positions and
-// triangle indices cooked from .gltf / .glb / .obj sources by collision_mesh_importer, loaded by a CPU-only
-// loader that builds the Jolt mesh shape on the load job. Cooked payload (little-endian, sections aligned
-// to 16 bytes): { u32 vertexCount; u32 indexCount; u32 reserved[2]; f32 position[vertexCount][3];
-// (padding) u32 index[indexCount]; }.
+// triangle indices cooked from .obj, .gltf and .glb sources by collision_mesh_importer, loaded by a CPU-only
+// loader that builds the Jolt mesh shape on the load job. The importer claims .obj by extension; a .gltf or
+// .glb is a render model by extension and becomes collision geometry when its .meta names
+// COLLISION_MESH_IMPORTER_ID (the editor's asset.import / asset.reimport take an "importer"). Cooked payload
+// (little-endian, sections aligned to 16 bytes): { u32 vertexCount; u32 indexCount; u32 reserved[2];
+// f32 position[vertexCount][3]; (padding) u32 index[indexCount]; }.
 
 namespace conjure::physics {
 

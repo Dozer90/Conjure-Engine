@@ -1,8 +1,10 @@
 #include "conjure/testing/doctest.h"
+#include "conjure/testing/log_capture.h"
 #include "assets_test_support.h"
 
 #include "conjure/assets/asset_importer.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/log.h"
 #include "conjure/core/vfs/memory_file_system.h"
 
 #include <array>
@@ -124,6 +126,35 @@ TEST_SUITE("assets/asset_importer") {
         CHECK(registry.find_for_path("x..gz") == gz);
         CHECK(registry.find_for_extension("gz") == gz);
         CHECK(registry.find_for_extension(".GZ") == gz);
+    }
+
+    TEST_CASE("regression - code sweep F137 a second importer for a claimed extension is reported and stays second") {
+        conjure::testing::log_capture logs = {};
+        importer_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.register_importer(std::make_unique<suffix_importer>("conjure.test.model", ".glb")));
+        CHECK(logs.count(core::log_level::WARN) == 0);
+
+        // Accepted, but never silently: a whole file type must not go to whichever module registered first.
+        CONJURE_REQUIRE_OK(
+          registry.register_importer(std::make_unique<suffix_importer>("conjure.test.collision", "GLB"))
+        );
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(
+          core::log_level::WARN,
+          "importer 'conjure.test.collision' claims 'GLB', which 'conjure.test.model' already imports"
+        ));
+        const asset_importer *model = registry.find("conjure.test.model");
+        CHECK(registry.find_for_path("props/crate.glb") == model);
+        CHECK(registry.find_for_extension(".glb") == model);
+        // The second importer is still there for a .meta that names it.
+        CHECK(registry.find("conjure.test.collision") != nullptr);
+
+        // A longer suffix is a different claim, not a clash (R45).
+        CONJURE_REQUIRE_OK(
+          registry.register_importer(std::make_unique<suffix_importer>("conjure.test.special", ".collision.glb"))
+        );
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(registry.find_for_path("props/crate.collision.glb") == registry.find("conjure.test.special"));
     }
 
     TEST_CASE("importer_registry - a duplicate id, a null importer and an unknown unregister fail") {

@@ -214,7 +214,10 @@ namespace conjure::assets {
             [[nodiscard]] virtual u32 version() const noexcept = 0;
 
             /// <summary>
-            /// Lower-case extensions with the dot (".png"). Matched case-insensitively.
+            /// The extensions this importer claims for a file without a .meta: lower-case, with the dot
+            /// (".png"), matched case-insensitively. An importer may read formats it does not claim
+            /// because another importer owns them by default; those files reach it when their .meta
+            /// names it (a .glb as collision geometry instead of a render model).
             /// </summary>
             [[nodiscard]] virtual std::span<const std::string_view> extensions() const noexcept = 0;
 
@@ -249,7 +252,9 @@ namespace conjure::assets {
         public:
             /// <summary>
             /// ALREADY_EXISTS when an importer with the same id is registered; INVALID_ARGUMENT
-            /// for a null importer or an empty id.
+            /// for a null importer or an empty id. An extension another importer already claims is
+            /// accepted with a WARN naming both: the earlier importer stays the one chosen by
+            /// extension and the new one applies only to a file whose .meta names it.
             /// </summary>
             [[nodiscard]] core::result<void> register_importer(std::unique_ptr<asset_importer> importer);
 

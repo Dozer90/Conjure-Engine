@@ -36,8 +36,8 @@ namespace conjure::physics {
     [[nodiscard]] CONJURE_API core::result<void> register_systems(ecs::scheduler &scheduler, physics_world &world);
 
     /// <summary>
-    /// Registers conjure.physics.collision_mesh (version 1) with its CPU-only loader and the
-    /// .gltf / .glb / .obj importer.
+    /// Registers conjure.physics.collision_mesh (version 1) with its CPU-only loader and its importer,
+    /// which claims .obj by extension and also reads a .gltf or .glb whose .meta names it.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> register_asset_types(
       assets::asset_type_registry &types,

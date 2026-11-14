@@ -336,6 +336,17 @@ namespace conjure::assets {
             [[nodiscard]] core::result<void> write_meta(const asset_id &id, const asset_meta &meta);
 
             /// <summary>
+            /// Makes a registered importer the one a primary's .meta names ("import as"): the way to
+            /// import a file with an importer that reads its format without claiming its extension, such
+            /// as a .glb as collision geometry instead of a render model. The meta takes the importer's
+            /// version and default settings, since the previous importer's settings mean nothing to it,
+            /// and the asset is stale until its next import; its uuid is kept. Naming the importer the
+            /// meta already has changes nothing. NO_IMPORTER for an id that is not registered; otherwise
+            /// the errors of read_meta and write_meta.
+            /// </summary>
+            [[nodiscard]] core::result<void> set_importer(const asset_id &id, std::string_view importerId);
+
+            /// <summary>
             /// Persists the records to <cacheRoot>/db.bin. Purely a cache; rebuilt when missing.
             /// </summary>
             [[nodiscard]] core::result<void> save_snapshot() const;

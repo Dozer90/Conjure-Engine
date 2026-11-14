@@ -19,6 +19,7 @@ game; the runtime only reads packs ([Cooking, caches and packs](cooking-and-pack
 | Find out what the project contains | `asset_database::records()`, `find(id)`, `find_by_path(path)`, `asset_path_of(id)` |
 | Re-import what changed | `database.scan()` then `database.import_stale(jobs)` |
 | Change an asset's import settings | `read_meta(id)`, edit `settings`, `write_meta(id, meta)` |
+| Import a file with an importer other than its extension's | `set_importer(id, importerId)`, then `import` |
 | Rename, create or delete an asset from a tool | `move_asset`, `create_asset`, `delete_asset` |
 | Pick up file changes while the editor runs | `polling_file_watcher` plus `hot_reload_controller::update()` each frame |
 
@@ -82,6 +83,7 @@ during `scan()`); then `add_mount()` the roots (`"assets"`, `"engine"`), `open()
 | `result<asset_id> add_file(assetPath)` / `result<asset_id> create_asset(assetPath, importerId, bytes)` | register a new source (and write it); `create_asset` removes the source again when its `.meta` cannot be written |
 | `result<void> move_asset(id, newAssetPath)` / `result<void> delete_asset(id)` | rename keeps every uuid; delete removes source, `.meta`, blobs and records |
 | `result<asset_meta> read_meta(id)` / `result<void> write_meta(id, meta)` | the sidecar; a changed uuid is refused; a new importer or new settings make the asset stale |
+| `result<void> set_importer(id, importerId)` | "import as": the `.meta` names another registered importer and takes its default settings, the uuid is kept and the asset is stale; `NO_IMPORTER` for an unknown id. For an importer that reads a format without claiming its extension (a `.glb` as `conjure.physics.collision_mesh_importer`) |
 | `result<void> save_snapshot()` | persists `db.bin` (a cache; `scan()` saves it too) |
 | `vector<asset_record> records()` / `usize record_count()` / `optional<asset_record> find(id)` | browse |
 | `bool contains(id)` / `optional<asset_type_id> type_of(id)` / `optional<asset_record_status> status_of(id)` | allocation-free lookups |

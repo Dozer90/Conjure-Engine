@@ -838,10 +838,14 @@ compare cached material `version()` during extraction.
 `12_audio.md` 2.2). The loader is CPU-only: the clip payload is self-contained and no `audio_engine` takes part in
 `finalise` (R43). `audio` depends publicly on `assets` for `register_asset_types` and `asset_ref<audio_clip>`.
 
-**Offers to `physics`.** `conjure.physics.collision_mesh` (`.gltf .glb .obj`, `collision_mesh_importer`,
-`14_physics.md` 2.7): positions + indices cooked deterministically; the CPU-only loader builds the Jolt shape on
-the asset job and `finalise` publishes it. A `.glb` that is also a render model is imported a second time as
-collision geometry through `.meta` importer selection (R44).
+**Offers to `physics`.** `conjure.physics.collision_mesh` (`collision_mesh_importer`, `14_physics.md` 2.7; it claims
+`.obj` by extension and also reads `.gltf` / `.glb`): positions + indices cooked deterministically; the CPU-only
+loader builds the Jolt shape on the asset job and `finalise` publishes it. A glTF is a render model by extension;
+one that should be collision geometry is a file whose `.meta` names the collision importer (R44), which
+`asset_database::set_importer(id, importerId)` writes: the uuid is kept, the settings become that importer's
+defaults and the asset is stale until imported. An importer may read formats it does not claim, and
+`importer_registry::register_importer` warns when two importers claim one extension (the first registered stays the
+importer by extension), so a file type never goes silently to whichever module registered first (code sweep F137).
 
 **Offers to `scene`.** `conjure.scene.scene` (`.scene.json`) and `conjure.scene.prefab` (`.prefab.json`; R45): the
 importer canonicalises the JSON and extracts every `asset_ref` uuid as a dependency via reflection,

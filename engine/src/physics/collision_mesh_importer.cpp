@@ -27,7 +27,12 @@ namespace conjure::physics::detail {
 
 namespace {
 
-    constexpr std::array<std::string_view, 3> EXTENSIONS = {".gltf", ".glb", ".obj"};
+    // The extensions claimed for a file without a meta. .gltf and .glb are read too (import() takes
+    // everything that is not .obj as glTF) but are not claimed: by extension a glTF is a render model
+    // (conjure.renderer.gltf), and collision geometry from one is chosen by naming this importer in the
+    // file's .meta (14_physics.md 2.7; code sweep F137: both importers claimed them and the one
+    // registered first, this one, took every model).
+    constexpr std::array<std::string_view, 1> EXTENSIONS = {".obj"};
     constexpr usize CGLTF_HEADER_BYTES = 16;
 
     [[nodiscard]] std::string_view text_of(std::span<const std::byte> bytes) noexcept {
