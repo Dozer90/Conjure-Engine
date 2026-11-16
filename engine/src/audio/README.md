@@ -63,11 +63,11 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   use a balance law so a stereo clip at gain `g` renders at amplitude `g`; `set_spatial()` on a
   stereo voice sends `SET_DOWNMIX` so the law follows the flag (A10). Pitch is a per-voice step
   `pitch * clipRate / mixRate * dopplerRatio` through a linear interpolator; cooked PCM keeps its
-  source rate (A9). `STOP` on a PAUSED voice, or on a voice of a paused group or under the master
-  pause, ends it at once (it is silent already) instead of fading it back in; a frozen voice could
-  not run its fade, so it would otherwise keep its slot until the unpause. `PLAY` starts paused
-  from the voice's `userPaused` flag alone (seeded from `startPaused`), so `resume()` while a voice
-  waits in PRIMING starts it playing.
+  source rate (A9). `STOP` on a PAUSED voice, or on a voice whose group is frozen (by its own pause
+  or an ancestor's) or under the master pause, ends it at once (it is silent already) instead of
+  fading it back in; a frozen voice could not run its fade, so it would otherwise keep its slot
+  until the unpause. `PLAY` starts paused from the voice's `userPaused` flag alone (seeded from
+  `startPaused`), so `resume()` while a voice waits in PRIMING starts it playing.
 - **Streaming.** STREAMED clips keep the encoded file; `play()` opens a `streaming_decoder` on one of
   32 stream slots (attached to the voice before the open so a clip that fails to decode releases
   the slot again), each with a 16384-frame SPSC `stream_ring`. The open passes the clip's probed
@@ -83,8 +83,21 @@ files that include `miniaudio.h`), one `.cpp` per public header.
   target becomes the decoder's `position()`, so a seek the decoder refuses (WARN) continues and
   reports from where the decoder stands; a second seek during `WAIT_PRIME` resets the ring again.
 - **Groups.** `group_table` keeps the tree (depth <= 8), recomputes effective gains depth-first on
-  every change and reports the changed slots; `remove_group` reparents children and voices and bumps
-  the slot generation. Settings groups name their parents (`group_desc::parentName`) because ids do
+  every change and reports the changed slots; `remove_group` reparents children and voices and
+  retires the id (the slot gets a new generation when it is reused). Pause is hierarchical like
+  gain (A17, code sweep F319): each slot keeps its own `paused` flag and an `effectivePaused` flag
+  (own or the parent's effective one): `create()`
+  seeds it from the parent (a group under a paused parent starts frozen), and the same walk
+  recomputes it in `set_paused()` and `remove()` (the subtrees of the reparented children drop a
+  pause the retired group held). The engine sends `SET_GROUP_PAUSED` with the effective flag for
+  each changed slot, so the mixer still tests one bit per voice; `group_info` and `null_group_stats`
+  report both flags. A subtree pause is therefore one command per group, not one atomic step: on a
+  real device the callback may drain the ring between two of them, so groups of one subtree can
+  freeze or resume apart: normally one 256-frame block, longer when the main thread is preempted
+  between two pushes (nothing bounds that), and an `update()` apart if the ring spills. Voices that
+  must stay sample-synchronised share a group or are held with `set_paused()`. The whole-mixer
+  pause of `set_paused()` is a separate flag (`SET_MASTER_PAUSED`) and is not part of
+  `effectivePaused`. Settings groups name their parents (`group_desc::parentName`) because ids do
   not exist before construction.
 - **Device loss.** The miniaudio notification callback only stores `device_state`. The first LOST
   that `update()` observes puts the engine into its own `recovering` state (a failed `start()`
@@ -159,7 +172,8 @@ fallback. The `regression - audio review N ...` cases pin the bugs the module re
 (recovery stall, stream slot leak, forged WAV length, STOP on a paused voice, stereo `set_spatial`,
 streamed seeks racing a decode job or a pending PAUSE); the `regression - code sweep Fnnn ...`
 cases pin the code sweep fixes (STOP under a paused group or master, `resume()` of a waiting
-`startPaused` voice, a wrapping PCM frame count, a refused or retargeted streamed seek).
+`startPaused` voice, a wrapping PCM frame count, a refused or retargeted streamed seek, a group
+pause that reaches descendant groups).
 
 ```
 python tools/build.py --build-dir build/mod_audio --target conjure_audio_tests --test -R audio

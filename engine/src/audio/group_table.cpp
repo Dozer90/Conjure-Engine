@@ -1,6 +1,7 @@
 #include "audio/group_table.h"
 #include "conjure/audio/audio_error.h"
 
+#include "conjure/core/assert.h"
 #include "conjure/core/error.h"
 
 #include <cmath>
@@ -91,6 +92,7 @@ core::result<group_id> group_table::create(const group_desc &desc) {
     created.gain = clamp_group_gain(desc.gain);
     created.effectiveGain = created.gain * parentSlot->effectiveGain;
     created.paused = false;
+    created.effectivePaused = parentSlot->effectivePaused;
     ++mLiveCount;
     rebuild_infos();
     return group_id{index, created.generation};
@@ -112,7 +114,7 @@ core::result<group_removal> group_table::remove(group_id id) {
         slot &child = mSlots[index];
         if (child.live && index != id.index && child.parentIndex == id.index) {
             child.parentIndex = removal.parentIndex;
-            recompute_subtree(index, removal.changedGains);
+            recompute_subtree(index, removal.changedGains, removal.changedPaused);
         }
     }
 
@@ -122,6 +124,7 @@ core::result<group_removal> group_table::remove(group_id id) {
     retired.gain = 1.0f;
     retired.effectiveGain = 1.0f;
     retired.paused = false;
+    retired.effectivePaused = false;
     retired.parentIndex = MASTER_INDEX;
     --mLiveCount;
     rebuild_infos();
@@ -163,22 +166,30 @@ group_change_list group_table::set_gain(group_id id, f32 gain) {
         return changed;
     }
     mutableTarget.gain = clamped;
-    recompute_subtree(id.index, changed);
+    // The walk refreshes both effective values; a gain change leaves every paused flag as it was.
+    group_change_list pausedChanges = {};
+    recompute_subtree(id.index, changed, pausedChanges);
+    CONJURE_ASSERT(pausedChanges.empty(), "group_table::set_gain changed an effective paused flag");
     rebuild_infos();
     return changed;
 }
 
-bool group_table::set_paused(group_id id, bool paused) noexcept {
+group_change_list group_table::set_paused(group_id id, bool paused) {
+    group_change_list changed = {};
     if (resolve(id) == nullptr) {
-        return false;
+        return changed;
     }
     slot &target = mSlots[id.index];
     if (target.paused == paused) {
-        return false;
+        return changed;
     }
     target.paused = paused;
+    // The walk refreshes both effective values; a pause change leaves every effective gain as it was.
+    group_change_list gainChanges = {};
+    recompute_subtree(id.index, gainChanges, changed);
+    CONJURE_ASSERT(gainChanges.empty(), "group_table::set_paused changed an effective gain");
     rebuild_infos();
-    return true;
+    return changed;
 }
 
 f32 group_table::effective_gain(u8 index) const noexcept {
@@ -188,11 +199,11 @@ f32 group_table::effective_gain(u8 index) const noexcept {
     return mSlots[index].effectiveGain;
 }
 
-bool group_table::paused(u8 index) const noexcept {
+bool group_table::effective_paused(u8 index) const noexcept {
     if (index >= MAX_GROUPS || !mSlots[index].live) {
         return false;
     }
-    return mSlots[index].paused;
+    return mSlots[index].effectivePaused;
 }
 
 std::optional<group_info> group_table::info(group_id id) const noexcept {
@@ -207,6 +218,7 @@ std::optional<group_info> group_table::info(group_id id) const noexcept {
     info.gain = target->gain;
     info.effectiveGain = target->effectiveGain;
     info.paused = target->paused;
+    info.effectivePaused = target->effectivePaused;
     return info;
 }
 
@@ -236,18 +248,27 @@ u32 group_table::depth_of(u8 index) const noexcept {
     return depth;
 }
 
-void group_table::recompute_subtree(u8 rootIndex, group_change_list &changed) {
+void group_table::recompute_subtree(u8 rootIndex, group_change_list &changedGains, group_change_list &changedPaused) {
     slot &root = mSlots[rootIndex];
-    const f32 parentEffective = rootIndex == MASTER_INDEX ? 1.0f : mSlots[root.parentIndex].effectiveGain;
+    const bool isMaster = rootIndex == MASTER_INDEX;
+    const f32 parentEffective = isMaster ? 1.0f : mSlots[root.parentIndex].effectiveGain;
     const f32 effective = root.gain * parentEffective;
     if (std::abs(effective - root.effectiveGain) > GAIN_EPSILON) {
-        changed.push_back(rootIndex);
+        changedGains.push_back(rootIndex);
     }
     root.effectiveGain = effective;
 
+    // Pause is inherited like gain (A17): a group is silent while it or any ancestor is paused.
+    const bool parentPaused = isMaster ? false : mSlots[root.parentIndex].effectivePaused;
+    const bool effectivePaused = root.paused || parentPaused;
+    if (effectivePaused != root.effectivePaused) {
+        changedPaused.push_back(rootIndex);
+    }
+    root.effectivePaused = effectivePaused;
+
     for (u8 index = 1; index < MAX_GROUPS; ++index) {
         if (mSlots[index].live && index != rootIndex && mSlots[index].parentIndex == rootIndex) {
-            recompute_subtree(index, changed);
+            recompute_subtree(index, changedGains, changedPaused);
         }
     }
 }

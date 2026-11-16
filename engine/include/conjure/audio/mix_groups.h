@@ -10,13 +10,15 @@
 #include <type_traits>
 
 // Mix groups (docs/design/12_audio.md 2.4): a gain tree rooted at MASTER_GROUP. The main thread
-// owns the tree and sends each group's effective gain (the product up the chain) to the mixer.
+// owns the tree and sends each group's effective gain (the product up the chain) and effective
+// paused flag (its own flag or any ancestor's) to the mixer.
 
 namespace conjure::audio {
 
     /// <summary>
     /// Handle of a mix group: slot index plus the generation issued when the slot was last created.
-    /// remove_group() bumps the generation so stale ids are rejected.
+    /// remove_group() retires the id at once and a reused slot gets a new generation, so stale ids
+    /// are rejected.
     /// </summary>
     struct group_id {
         u8 index = 0;
@@ -55,7 +57,9 @@ namespace conjure::audio {
     };
 
     /// <summary>
-    /// Main-thread view of a group.
+    /// Main-thread view of a group. 'paused' is the group's own flag (what set_group_paused() last
+    /// stored); 'effectivePaused' says whether its voices are frozen, which is also the case while
+    /// any ancestor is paused.
     /// </summary>
     struct group_info {
         group_id id = {};
@@ -64,6 +68,7 @@ namespace conjure::audio {
         f32 gain = 1.0f;
         f32 effectiveGain = 1.0f;           // gain * parent's effectiveGain
         bool paused = false;
+        bool effectivePaused = false;       // paused || parent's effectivePaused
 
         [[nodiscard]] bool operator==(const group_info &other) const noexcept = default;
     };

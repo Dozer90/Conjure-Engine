@@ -216,8 +216,9 @@ namespace conjure::audio {
 
             /// <summary>
             /// Fades the voice out over fadeSeconds, then it reports STOPPED. No-op for an invalid id
-            /// or an already ended voice. A voice that is paused, or whose group or the master is
-            /// paused, ends at once without a fade.
+            /// or an already ended voice. A voice that is paused, or whose group is frozen (paused
+            /// itself or through an ancestor group, group_info::effectivePaused), or while the master
+            /// is paused, ends at once without a fade.
             /// </summary>
             void stop(voice_id voice, f32 fadeSeconds = DEFAULT_RAMP_SECONDS);
 
@@ -369,14 +370,17 @@ namespace conjure::audio {
             // Groups
 
             /// <summary>
+            /// Creates a group under desc.parent (or desc.parentName). Its own paused flag starts
+            /// clear, but a group created under a paused ancestor is frozen from the start.
             /// Errors: GROUP_LIMIT_REACHED, DUPLICATE_GROUP (name taken or null), INVALID_GROUP
             /// (unknown parent id or name), GROUP_CYCLE (depth would exceed MAX_GROUP_DEPTH).
             /// </summary>
             [[nodiscard]] core::result<group_id> create_group(const group_desc &desc);
 
             /// <summary>
-            /// Reparents children and moves voices to the parent before retiring the id.
-            /// INVALID_GROUP for MASTER_GROUP or a stale id.
+            /// Reparents children and moves voices to the parent before retiring the id. A pause
+            /// the group held goes with it: its children and voices follow the parent's effective
+            /// paused flag from then on. INVALID_GROUP for MASTER_GROUP or a stale id.
             /// </summary>
             [[nodiscard]] core::result<void> remove_group(group_id group);
 
@@ -392,14 +396,23 @@ namespace conjure::audio {
             void set_group_gain(group_id group, f32 gain);
 
             /// <summary>
-            /// Freezes (or releases) every voice of the group: cursors hold, output is silence.
-            /// Stale id: no-op with a TRACE.
+            /// Sets the group's own paused flag. Pause is hierarchical, like gain: a paused group
+            /// freezes its own voices and those of every descendant group (cursors hold, output is
+            /// silence), and a group plays again only once neither it nor any ancestor is paused, so
+            /// releasing a child under a paused parent changes group_info::paused but not
+            /// group_info::effectivePaused. set_group_paused(MASTER_GROUP, true) therefore freezes
+            /// every voice; it is a flag of its own, independent of set_paused() and is_paused().
+            /// The flags reach the mixer as one command per group, so groups of one subtree may
+            /// freeze or resume at different times: normally at most one MIX_BLOCK_FRAMES block
+            /// apart, and with no upper bound when the main thread is interrupted in the middle of
+            /// the call or the command ring spills. Voices that must stay sample-synchronised belong
+            /// in the same group, or are held with set_paused(). Stale id: no-op with a TRACE.
             /// </summary>
             void set_group_paused(group_id group, bool paused);
 
             /// <summary>
-            /// Name, parent, gain, effective gain and paused flag of a live group; nullopt for a
-            /// stale id. Main thread.
+            /// Name, parent, gain, effective gain, own paused flag and effective paused flag (own or
+            /// any ancestor's) of a live group; nullopt for a stale id. Main thread.
             /// </summary>
             [[nodiscard]] std::optional<group_info> group(group_id group) const noexcept;
 
@@ -414,7 +427,8 @@ namespace conjure::audio {
             void set_master_gain(f32 gain);
 
             /// <summary>
-            /// Pauses or resumes the whole mixer; cursors hold, output is silence.
+            /// Pauses or resumes the whole mixer; cursors hold, output is silence. Independent of
+            /// the group flags: group_info::effectivePaused does not report it.
             /// </summary>
             void set_paused(bool paused);
 

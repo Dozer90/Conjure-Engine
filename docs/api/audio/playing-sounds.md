@@ -159,7 +159,7 @@ bool poll_intro(audio_engine &engine, voice_id intro) {
 
 | Call | Effect |
 |---|---|
-| `stop(voice, fadeSeconds = 0.005)` | fade to silence, then `STOPPED`; `stop_all(fade)` for every voice. A paused voice, or one whose group or the master is paused, ends at once without a fade |
+| `stop(voice, fadeSeconds = 0.005)` | fade to silence, then `STOPPED`; `stop_all(fade)` for every voice. A paused voice, or one whose group is frozen (paused itself or through an ancestor group) or while the master is paused, ends at once without a fade |
 | `pause(voice)` / `resume(voice)` | hold and continue the cursor; a paused voice still counts as `is_playing()`. `resume()` on a voice still `PRIMING` cancels `startPaused`: it starts playing |
 | `seek(voice, seconds)` | jump (clamped to the clip length); a streamed voice resumes a few frames later, and a seek its decoder cannot reach continues from where the decoder stands (`voice()` reports that frame, WARN) |
 | `set_volume`, `set_pitch`, `set_pan`, `set_loop`, `set_priority`, `set_group` | one field each; volume ramps over 5 ms so it never clicks |
@@ -185,6 +185,10 @@ Groups form a tree under `MASTER_GROUP` (at most 32 groups, 8 deep). A group's *
 multiplied up the chain, and every voice is multiplied by the effective gain of its group, so one
 `set_group_gain()` moves a whole category. Groups are named with a `string_id`; `find_group(name)` looks one up
 (the null name is `MASTER_GROUP`, an unknown name gives an id whose `is_valid()` is false).
+
+Pause follows the tree the same way: `set_group_paused(id, true)` freezes the voices of that group and of every
+group below it, and a group plays again only once neither it nor any ancestor is paused. `group_info::paused` is
+the group's own flag, `group_info::effectivePaused` says whether its voices are frozen right now.
 
 ```cpp
 #include "conjure/audio/audio_engine.h"
@@ -219,11 +223,24 @@ void apply_options(audio_engine &engine, f32 musicSlider, f32 effectsSlider, boo
 
 | Call | Effect |
 |---|---|
-| `create_group(desc)` | `GROUP_LIMIT_REACHED`, `DUPLICATE_GROUP` (taken or null name), `INVALID_GROUP` (unknown parent), `GROUP_CYCLE` (too deep) |
-| `remove_group(id)` | children and voices move to the parent; `INVALID_GROUP` for `MASTER_GROUP` |
+| `create_group(desc)` | `GROUP_LIMIT_REACHED`, `DUPLICATE_GROUP` (taken or null name), `INVALID_GROUP` (unknown parent), `GROUP_CYCLE` (too deep); a group created under a paused group starts frozen |
+| `remove_group(id)` | children and voices move to the parent and follow its pause from then on (a pause the removed group held goes with it); `INVALID_GROUP` for `MASTER_GROUP` |
 | `set_group_gain(id, gain)` / `set_master_gain(gain)` | gain in `[0, 2]`; descendants update too |
-| `set_group_paused(id, bool)` / `set_paused(bool)` | freeze a group or the whole mixer; cursors hold, output is silence |
-| `group(id)` / `groups()` | `group_info { id, name, parent, gain, effectiveGain, paused }` |
+| `set_group_paused(id, bool)` | freeze a group and every group below it; cursors hold, output is silence |
+| `set_paused(bool)` / `is_paused()` | freeze the whole mixer; a flag of its own, not reported by `effectivePaused` |
+| `group(id)` / `groups()` | `group_info { id, name, parent, gain, effectiveGain, paused, effectivePaused }` |
+
+> [!NOTE]
+> `set_group_paused(MASTER_GROUP, true)` freezes every voice, like `set_paused(true)`, but the two flags are
+> independent: each must be released by the call that set it, and `is_paused()` reports only `set_paused()`.
+
+> [!WARNING]
+> A group pause reaches the mixer group by group, so the groups of one subtree may freeze or resume at different
+> times: usually at most one 256-frame mixer block apart, and with no fixed upper limit (the call can be
+> interrupted between two groups, and a frame that sends more commands than the mixer takes at once delivers the
+> rest an update later).
+> Voices that must stay sample-synchronised, such as the stems of one piece of music, belong in the **same group**,
+> or are held with `set_paused()`, which freezes the whole mixer in one step.
 
 > [!TIP]
 > Declare the groups in `audio_settings::groups` (the project file does this) rather than creating them at run

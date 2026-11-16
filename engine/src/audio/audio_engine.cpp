@@ -196,6 +196,18 @@ struct conjure::audio::detail::audio_engine_helpers {
         }
     }
 
+    /// <summary>
+    /// Tells the mixer the effective paused flag of a group slot: the group's own flag or any
+    /// ancestor's (A17), false for a free slot.
+    /// </summary>
+    static void push_group_paused(engine_state &state, u8 groupIndex) {
+        voice_command command = {};
+        command.kind = command_kind::SET_GROUP_PAUSED;
+        command.groupIndex = groupIndex;
+        command.payload.flag = state.groups.effective_paused(groupIndex);
+        push_command(state, command);
+    }
+
     [[nodiscard]] static voice_command voice_message(const voice_slot &slot, command_kind kind) noexcept {
         voice_command command = {};
         command.kind = kind;
@@ -854,6 +866,7 @@ struct conjure::audio::detail::audio_engine_helpers {
             entry.gain = group.gain;
             entry.effectiveGain = group.effectiveGain;
             entry.paused = group.paused;
+            entry.effectivePaused = group.effectivePaused;
             stats.groups.push_back(entry);
         }
     }
@@ -1897,11 +1910,8 @@ core::result<group_id> audio_engine::create_group(const group_desc &desc) {
     command.groupIndex = created.index;
     command.payload.scalar = engine.groups.effective_gain(created.index);
     helpers::push_command(engine, command);
-    voice_command pausedCommand = {};
-    pausedCommand.kind = command_kind::SET_GROUP_PAUSED;
-    pausedCommand.groupIndex = created.index;
-    pausedCommand.payload.flag = false;
-    helpers::push_command(engine, pausedCommand);
+    // A group created under a paused ancestor starts frozen, so a voice played into it stays silent.
+    helpers::push_group_paused(engine, created.index);
     return created;
 }
 
@@ -1933,11 +1943,12 @@ core::result<void> audio_engine::remove_group(group_id group) {
         command.payload.scalar = engine.groups.effective_gain(index);
         helpers::push_command(engine, command);
     }
-    voice_command reset = {};
-    reset.kind = command_kind::SET_GROUP_PAUSED;
-    reset.groupIndex = group.index;
-    reset.payload.flag = false;
-    helpers::push_command(engine, reset);
+    // The reparented children no longer inherit a pause the retired group held; the retired slot
+    // itself reads false now, which clears the mixer's flag for the slot's next occupant.
+    for (const u8 index : removal.changedPaused) {
+        helpers::push_group_paused(engine, index);
+    }
+    helpers::push_group_paused(engine, group.index);
     return {};
 }
 
@@ -1976,12 +1987,10 @@ void audio_engine::set_group_paused(group_id group, bool paused) {
         CONJURE_LOG_TRACE(LOG_AUDIO, "set_group_paused() with an invalid group id");
         return;
     }
-    engine.groups.set_paused(group, paused);
-    voice_command command = {};
-    command.kind = command_kind::SET_GROUP_PAUSED;
-    command.groupIndex = group.index;
-    command.payload.flag = paused;
-    helpers::push_command(engine, command);
+    const group_change_list changed = engine.groups.set_paused(group, paused);
+    for (const u8 index : changed) {
+        helpers::push_group_paused(engine, index);
+    }
 }
 
 std::optional<group_info> audio_engine::group(group_id group) const noexcept {

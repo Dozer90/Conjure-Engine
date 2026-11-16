@@ -44,7 +44,7 @@ namespace conjure::audio {
     };
 
     /// <summary>
-    /// Snapshot of one group.
+    /// Snapshot of one group ('effectivePaused' is the group's own flag or any ancestor's).
     /// </summary>
     struct null_group_stats {
         group_id id = {};
@@ -52,6 +52,7 @@ namespace conjure::audio {
         f32 gain = 1.0f;
         f32 effectiveGain = 1.0f;
         bool paused = false;
+        bool effectivePaused = false;
     };
 
     /// <summary>

@@ -180,7 +180,7 @@ After each update the engine writes a snapshot into `stats()`:
 | `activeVoices`, `underruns`, `commandsApplied` | mixer counters |
 | `listener` | the `listener_state` in effect |
 | `voices[MAX_VOICES]` | per mixer slot: `state`, `cursorFrames`, `gain`, `pan`, `step`, `loop`, `groupIndex` |
-| `groups` | per group: `id`, `name`, `gain`, `effectiveGain`, `paused` |
+| `groups` | per group: `id`, `name`, `gain`, `effectiveGain`, `paused`, `effectivePaused` (own flag or any ancestor's) |
 
 `set_capture_frames(n)` keeps the last `n` rendered stereo frames in `captured()` so a test can assert on
 sample values; `virtual_time()` is the seconds rendered since `start()`. `simulate_device_loss()` and

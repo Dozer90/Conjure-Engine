@@ -79,8 +79,8 @@ render(out, frameCount):
     for block in split(frameCount, MIX_BLOCK_FRAMES):           256 frames: the ramp granularity
         apply_commands()                                         drain the command ring; drop generation mismatches
         zero mMixBlock
-        STOPPING slot while its group or the master is paused: STOPPED at once (no fade)
-        for slot in PLAYING | PAUSED | STOPPING, group and master not paused:
+        STOPPING slot while its group is frozen or the master is paused: STOPPED at once (no fade)
+        for slot in PLAYING | PAUSED | STOPPING, group not frozen and master not paused:
             advance gain ramp (per frame) and pan ramp (per block)
             PCM:    s = lerp(samples, cursor); STREAMED: s = stream.pop_frame() (empty -> 0, one UNDERRUN per block)
             downmix ? mono = 0.5 * (l + r); apply pan law; g = gainCurrent * mGroupGain[groupIndex]
@@ -95,8 +95,8 @@ Pan laws (`mixer.h` header comment): a mono or downmixed spatial voice uses cons
 balance law (`left = min(1, 1 - pan)`, `right = min(1, 1 + pan)`) so a stereo clip at gain `g` renders at
 amplitude `g`. `SET_DOWNMIX` switches the law when `set_spatial()` flips a stereo voice. Pitch is the per-voice
 `step = pitch * clipRate / mixRate * dopplerRatio` through a linear interpolator; cooked PCM keeps its source
-rate (A9). A `STOP` on a `PAUSED` voice, or on a voice whose group or the master is paused, ends it at once: a
-frozen voice cannot run its fade, and its slot (wanted by a voice waiting to steal it) must not wait for an unpause.
+rate (A9). A `STOP` on a `PAUSED` voice, or one whose group is frozen (`effectivePaused`) or under the master pause,
+ends it at once: a frozen voice cannot run its fade, and a voice waiting to steal its slot must not wait for an unpause.
 
 ### 2.2 Rules inside `render`
 
@@ -189,10 +189,12 @@ live in slot 0, depth at most `MAX_GROUP_DEPTH` = 8. A group's `effectiveGain` i
 (`group_change_list`, a `small_vector<u8, 32>`); the engine turns each into one `SET_GROUP_GAIN { index,
 effectiveGain }`. The mixer therefore multiplies one number per voice (`mGroupGain[groupIndex]`) and never walks
 the tree. `remove()` reparents children, reports where voices must move (the engine sends `SET_GROUP` per voice)
-and bumps the slot generation so stale `group_id`s are rejected; `remove(MASTER_GROUP)` is `INVALID_GROUP`.
+and retires the id at once (a reused slot gets a new generation); `remove(MASTER_GROUP)` is `INVALID_GROUP`.
 `group_desc::parentName` resolves parents by name because settings groups are declared before any id exists;
-construction creates them in dependency order. Paused flags live beside the gains (`SET_GROUP_PAUSED`,
-`SET_MASTER_PAUSED`): a paused group's voices are skipped without advancing their cursors (a stopping one ends).
+construction creates them in dependency order. Pause is hierarchical like gain (A17, F319): `effectivePaused` is the
+slot's own flag or its parent's; `create()` seeds it, the same walk recomputes it in `set_paused()` and `remove()`,
+and the engine sends one `SET_GROUP_PAUSED` per changed slot (so a subtree can freeze a block apart on a real device).
+The mixer tests that one bit per voice (and `SET_MASTER_PAUSED`'s) and skips it without advancing (a stopping one ends).
 
 ## 6. Spatialisation
 
@@ -350,7 +352,7 @@ and expects `tests/.downloaded/audio/tone.{ogg,mp3,flac}`.
 | `select_device` keeps the previous device, or falls back to null with `last_backend_error()` when no device starts; mutators called off the main thread assert | `test_audio_engine.cpp` |
 | STOP under a paused group or master, and a group pause during a STOP fade (F022) | `test_mixer.cpp` |
 | a PCM `frameCount` that wraps the size check (F183); a streamed payload whose format disagrees with its header; the import warning for PCM-only settings on a streamed clip (F321) | `test_clip_asset.cpp` |
-| effective gain product; 0.5 in Music (0.5) under master (0.5) renders at 0.125; limits, duplicates, cycles; `remove_group` moves voices and children; paused group freezes cursors; settings groups by `parentName` | `test_mix_groups.cpp` |
+| effective gain product; 0.5 in Music (0.5) under master (0.5) renders at 0.125; limits, duplicates, cycles; `remove_group` moves voices and children; paused group freezes cursors; hierarchical pause (`regression - code sweep F319`: descendants, `MASTER_GROUP`, a group created under a paused one, `remove_group` lifting an inherited pause from a subtree; own against effective flag, one command per changed group, stale id, slot reuse); settings groups by `parentName` | `test_mix_groups.cpp` |
 | every attenuation model at `minDistance`, LINEAR reaches 0, monotonic curves; pan right / left / ahead / behind / rotated; Doppler approaching / receding / clamp | `test_spatialisation.cpp` |
 | ramp step bounded; fractional-cursor interpolation; downmix; output clamp; generation mismatch drops a command; event overflow keeps FINISHED | `test_mixer.cpp` |
 | WAV probe / decode within 1e-4 (16-bit) and 1e-6 (float); `forceMono`, `sampleRate`, `normalize`; truncated and random input; streaming reads equal the full decode; `[downloaded]` formats | `test_decoder.cpp` |

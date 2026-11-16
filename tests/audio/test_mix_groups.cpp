@@ -38,6 +38,24 @@ namespace {
         }
         return std::nullopt;
     }
+
+    voice_id play_loop_in(audio_engine &engine, group_id group) {
+        play_params params = {};
+        params.group = group;
+        params.loop = true;
+        params.retain = true;
+        const core::result<voice_id> voice = engine.play(testing::make_sine_pcm(440.0, 1.0), params);
+        CONJURE_REQUIRE_OK(voice);
+        return voice.value();
+    }
+
+    // Steps two frames and says whether the voice's cursor moved (a looping one-second clip never
+    // returns to the same frame within two frames).
+    bool advances(audio_engine &engine, voice_id voice) {
+        const u64 cursorBefore = engine.voice(voice)->cursorFrames;
+        testing::step_frames(engine, 2);
+        return engine.voice(voice)->cursorFrames != cursorBefore;
+    }
 }
 
 TEST_SUITE("audio/mix_groups") {
@@ -61,6 +79,7 @@ TEST_SUITE("audio/mix_groups") {
         CHECK(master->gain == doctest::Approx(1.0));
         CHECK(master->effectiveGain == doctest::Approx(1.0));
         CHECK_FALSE(master->paused);
+        CHECK_FALSE(master->effectivePaused);
         CHECK(engine.groups().size() == 1);
         CHECK(engine.find_group(core::string_id()) == MASTER_GROUP);
         CHECK_FALSE(engine.find_group("nothing"_sid).is_valid());
@@ -254,6 +273,8 @@ TEST_SUITE("audio/mix_groups") {
 
         engine.set_group_paused(music.value(), true);
         CHECK(engine.group(music.value())->paused);
+        CHECK(engine.group(music.value())->effectivePaused);
+        CHECK_FALSE(engine.group(MASTER_GROUP)->effectivePaused);
         backend.set_capture_frames(1600);
         testing::step_frames(engine, 3);
         CHECK(engine.voice(voice.value())->cursorFrames == cursorBefore);
@@ -261,9 +282,452 @@ TEST_SUITE("audio/mix_groups") {
         CHECK(engine.is_playing(voice.value()));
 
         engine.set_group_paused(music.value(), false);
+        CHECK_FALSE(engine.group(music.value())->paused);
+        CHECK_FALSE(engine.group(music.value())->effectivePaused);
         testing::step_frames(engine, 2);
         CHECK(engine.voice(voice.value())->cursorFrames > cursorBefore);
         CHECK(testing::peak_of(backend.captured()) > 0.1f);
+    }
+
+    TEST_CASE("regression - code sweep F319 pausing a group freezes the voices of its descendant groups") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        null_backend &backend = *engine.null_backend_instance();
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const core::result<group_id> deepest = engine.create_group(named("Deepest", inner.value()));
+        CONJURE_REQUIRE_OK(deepest);
+        const core::result<group_id> sibling = engine.create_group(named("Sibling"));
+        CONJURE_REQUIRE_OK(sibling);
+        const voice_id innerVoice = play_loop_in(engine, inner.value());
+        const voice_id deepestVoice = play_loop_in(engine, deepest.value());
+        testing::step_frames(engine, 2);
+        const u64 innerCursor = engine.voice(innerVoice)->cursorFrames;
+        const u64 deepestCursor = engine.voice(deepestVoice)->cursorFrames;
+        CHECK(innerCursor > 0);
+        CHECK(deepestCursor > 0);
+
+        engine.set_group_paused(music.value(), true);
+        CHECK(engine.group(music.value())->paused);
+        CHECK(engine.group(music.value())->effectivePaused);
+        CHECK_FALSE(engine.group(inner.value())->paused);
+        CHECK(engine.group(inner.value())->effectivePaused);
+        CHECK_FALSE(engine.group(deepest.value())->paused);
+        CHECK(engine.group(deepest.value())->effectivePaused);
+        CHECK_FALSE(engine.group(sibling.value())->effectivePaused);
+        CHECK_FALSE(engine.group(MASTER_GROUP)->effectivePaused);
+        // groups() is a cached list of its own, so it has to show the same flags as group(id).
+        REQUIRE(engine.groups().size() == 5);
+        for (const group_info &group : engine.groups()) {
+            CAPTURE(group.id.index);
+            const bool isDescendant = group.id == inner.value() || group.id == deepest.value();
+            CHECK(group.effectivePaused == (group.id == music.value() || isDescendant));
+            CHECK(group.paused == (group.id == music.value()));
+        }
+
+        backend.set_capture_frames(1600);
+        testing::step_frames(engine, 3);
+        CHECK(engine.voice(innerVoice)->cursorFrames == innerCursor);
+        CHECK(engine.voice(deepestVoice)->cursorFrames == deepestCursor);
+        CHECK(testing::peak_of(backend.captured()) == doctest::Approx(0.0));
+        CHECK(engine.is_playing(innerVoice));
+        CHECK(engine.is_playing(deepestVoice));
+
+        engine.set_group_paused(music.value(), false);
+        CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+        CHECK_FALSE(engine.group(deepest.value())->effectivePaused);
+        for (const group_info &group : engine.groups()) {
+            CAPTURE(group.id.index);
+            CHECK_FALSE(group.effectivePaused);
+            CHECK_FALSE(group.paused);
+        }
+        testing::step_frames(engine, 2);
+        CHECK(engine.voice(innerVoice)->cursorFrames > innerCursor);
+        CHECK(engine.voice(deepestVoice)->cursorFrames > deepestCursor);
+        CHECK(testing::peak_of(backend.captured()) > 0.1f);
+    }
+
+    TEST_CASE("regression - code sweep F319 pausing MASTER_GROUP freezes the voices of every group") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        null_backend &backend = *engine.null_backend_instance();
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const voice_id masterVoice = play_loop_in(engine, MASTER_GROUP);
+        const voice_id musicVoice = play_loop_in(engine, music.value());
+        const voice_id innerVoice = play_loop_in(engine, inner.value());
+        testing::step_frames(engine, 2);
+
+        engine.set_group_paused(MASTER_GROUP, true);
+        CHECK(engine.group(MASTER_GROUP)->paused);
+        CHECK(engine.group(MASTER_GROUP)->effectivePaused);
+        CHECK(engine.group(music.value())->effectivePaused);
+        CHECK(engine.group(inner.value())->effectivePaused);
+        // The group flag of master is not the whole-mixer pause of set_paused().
+        CHECK_FALSE(engine.is_paused());
+
+        testing::step_frames(engine, 1);
+        backend.set_capture_frames(1600);
+        CHECK_FALSE(advances(engine, masterVoice));
+        CHECK_FALSE(advances(engine, musicVoice));
+        CHECK_FALSE(advances(engine, innerVoice));
+        CHECK(testing::peak_of(backend.captured()) == doctest::Approx(0.0));
+
+        engine.set_group_paused(MASTER_GROUP, false);
+        CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+        CHECK(advances(engine, masterVoice));
+        CHECK(advances(engine, musicVoice));
+        CHECK(advances(engine, innerVoice));
+    }
+
+    TEST_CASE("regression - code sweep F319 a group created under a paused group starts frozen") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        null_backend &backend = *engine.null_backend_instance();
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        engine.set_group_paused(music.value(), true);
+
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        group_desc byName = {};
+        byName.name = core::string_id("Named");
+        byName.parentName = core::string_id("Inner");
+        const core::result<group_id> viaName = engine.create_group(byName);
+        CONJURE_REQUIRE_OK(viaName);
+        CHECK_FALSE(engine.group(inner.value())->paused);
+        CHECK(engine.group(inner.value())->effectivePaused);
+        CHECK_FALSE(engine.group(viaName.value())->paused);
+        CHECK(engine.group(viaName.value())->effectivePaused);
+
+        const voice_id innerVoice = play_loop_in(engine, inner.value());
+        const voice_id namedVoice = play_loop_in(engine, viaName.value());
+        backend.set_capture_frames(1600);
+        testing::step_frames(engine, 3);
+        CHECK(engine.voice(innerVoice)->cursorFrames == 0);
+        CHECK(engine.voice(namedVoice)->cursorFrames == 0);
+        CHECK(testing::peak_of(backend.captured()) == doctest::Approx(0.0));
+        CHECK(engine.is_playing(innerVoice));
+
+        engine.set_group_paused(music.value(), false);
+        CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+        CHECK_FALSE(engine.group(viaName.value())->effectivePaused);
+        CHECK(advances(engine, innerVoice));
+        CHECK(advances(engine, namedVoice));
+    }
+
+    TEST_CASE("regression - code sweep F319 remove_group lifts the pause its children inherited from it") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        // A third level: the removal has to release the whole reparented subtree, not only the direct children.
+        const core::result<group_id> deepest = engine.create_group(named("Deepest", inner.value()));
+        CONJURE_REQUIRE_OK(deepest);
+        const voice_id musicVoice = play_loop_in(engine, music.value());
+        const voice_id innerVoice = play_loop_in(engine, inner.value());
+        const voice_id deepestVoice = play_loop_in(engine, deepest.value());
+        testing::step_frames(engine, 2);
+        engine.set_group_paused(music.value(), true);
+        testing::step_frames(engine, 1);
+        CHECK(engine.group(deepest.value())->effectivePaused);
+        CHECK_FALSE(advances(engine, musicVoice));
+        CHECK_FALSE(advances(engine, innerVoice));
+        CHECK_FALSE(advances(engine, deepestVoice));
+
+        CONJURE_REQUIRE_OK(engine.remove_group(music.value()));
+        CHECK(engine.group(inner.value())->parent == MASTER_GROUP);
+        CHECK_FALSE(engine.group(inner.value())->paused);
+        CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+        CHECK(engine.group(deepest.value())->parent == inner.value());
+        CHECK_FALSE(engine.group(deepest.value())->paused);
+        CHECK_FALSE(engine.group(deepest.value())->effectivePaused);
+        CHECK(engine.voice(musicVoice)->group == MASTER_GROUP);
+        CHECK(advances(engine, musicVoice));
+        CHECK(advances(engine, innerVoice));
+        CHECK(advances(engine, deepestVoice));
+    }
+
+    TEST_CASE("mix_groups - remove_group keeps the pause of a remaining ancestor and a child's own pause") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> top = engine.create_group(named("Top"));
+        CONJURE_REQUIRE_OK(top);
+        const core::result<group_id> middle = engine.create_group(named("Middle", top.value()));
+        CONJURE_REQUIRE_OK(middle);
+        const core::result<group_id> inner = engine.create_group(named("Inner", middle.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const voice_id middleVoice = play_loop_in(engine, middle.value());
+        const voice_id innerVoice = play_loop_in(engine, inner.value());
+        testing::step_frames(engine, 2);
+
+        SUBCASE("the grandparent is paused: children and moved voices stay frozen") {
+            engine.set_group_paused(top.value(), true);
+            CONJURE_REQUIRE_OK(engine.remove_group(middle.value()));
+            CHECK(engine.group(inner.value())->parent == top.value());
+            CHECK_FALSE(engine.group(inner.value())->paused);
+            CHECK(engine.group(inner.value())->effectivePaused);
+            CHECK(engine.voice(middleVoice)->group == top.value());
+            testing::step_frames(engine, 1);
+            CHECK_FALSE(advances(engine, middleVoice));
+            CHECK_FALSE(advances(engine, innerVoice));
+
+            engine.set_group_paused(top.value(), false);
+            CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+            CHECK(advances(engine, middleVoice));
+            CHECK(advances(engine, innerVoice));
+        }
+        SUBCASE("the child is paused itself: it stays frozen, the moved voices play") {
+            engine.set_group_paused(middle.value(), true);
+            engine.set_group_paused(inner.value(), true);
+            CONJURE_REQUIRE_OK(engine.remove_group(middle.value()));
+            CHECK(engine.group(inner.value())->paused);
+            CHECK(engine.group(inner.value())->effectivePaused);
+            testing::step_frames(engine, 1);
+            CHECK(advances(engine, middleVoice));
+            CHECK_FALSE(advances(engine, innerVoice));
+
+            engine.set_group_paused(inner.value(), false);
+            CHECK(advances(engine, innerVoice));
+        }
+    }
+
+    TEST_CASE("mix_groups - a group plays again only once neither it nor an ancestor is paused") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const voice_id voice = play_loop_in(engine, inner.value());
+        testing::step_frames(engine, 2);
+
+        engine.set_group_paused(inner.value(), true);
+        engine.set_group_paused(music.value(), true);
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(advances(engine, voice));
+
+        // Releasing the parent leaves the child's own pause in force.
+        engine.set_group_paused(music.value(), false);
+        CHECK(engine.group(inner.value())->paused);
+        CHECK(engine.group(inner.value())->effectivePaused);
+        CHECK_FALSE(engine.group(music.value())->effectivePaused);
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(advances(engine, voice));
+
+        // Releasing the child under a paused parent clears its own flag only.
+        engine.set_group_paused(music.value(), true);
+        engine.set_group_paused(inner.value(), false);
+        CHECK_FALSE(engine.group(inner.value())->paused);
+        CHECK(engine.group(inner.value())->effectivePaused);
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(advances(engine, voice));
+
+        engine.set_group_paused(music.value(), false);
+        CHECK_FALSE(engine.group(inner.value())->effectivePaused);
+        CHECK(advances(engine, voice));
+    }
+
+    TEST_CASE("mix_groups - set_group_paused sends one command per group whose effective flag changes") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> first = engine.create_group(named("First", music.value()));
+        CONJURE_REQUIRE_OK(first);
+        const core::result<group_id> second = engine.create_group(named("Second", music.value()));
+        CONJURE_REQUIRE_OK(second);
+        CONJURE_REQUIRE_OK(engine.create_group(named("Unrelated")));
+
+        u64 sent = engine.stats().commandsSent;
+        engine.set_group_paused(music.value(), true);
+        CHECK(engine.stats().commandsSent == sent + 3);
+
+        // An unchanged flag sends nothing.
+        sent = engine.stats().commandsSent;
+        engine.set_group_paused(music.value(), true);
+        CHECK(engine.stats().commandsSent == sent);
+
+        // A child paused under a paused parent changes its own flag, not what the mixer plays.
+        engine.set_group_paused(first.value(), true);
+        CHECK(engine.stats().commandsSent == sent);
+        CHECK(engine.group(first.value())->paused);
+
+        // Releasing the parent releases the parent and the child that holds no pause of its own.
+        engine.set_group_paused(music.value(), false);
+        CHECK(engine.stats().commandsSent == sent + 2);
+        CHECK(engine.group(first.value())->effectivePaused);
+        CHECK_FALSE(engine.group(second.value())->effectivePaused);
+
+        // A leaf changes alone.
+        sent = engine.stats().commandsSent;
+        engine.set_group_paused(second.value(), true);
+        CHECK(engine.stats().commandsSent == sent + 1);
+    }
+
+    TEST_CASE("mix_groups - set_group_paused with a stale or null id changes no group") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        CONJURE_REQUIRE_OK(engine.remove_group(music.value()));
+
+        // While the slot is free, the stale id addresses nothing.
+        u64 sent = engine.stats().commandsSent;
+        engine.set_group_paused(music.value(), true);
+        engine.set_group_paused(group_id{}, true);
+        CHECK(engine.stats().commandsSent == sent);
+
+        // Once the slot has a new occupant, only the generation tells the stale id from the live one.
+        const core::result<group_id> reused = engine.create_group(named("Reused"));
+        CONJURE_REQUIRE_OK(reused);
+        REQUIRE(reused.value().index == music.value().index);
+        REQUIRE(reused.value().generation != music.value().generation);
+        const core::result<group_id> reusedChild = engine.create_group(named("ReusedChild", reused.value()));
+        CONJURE_REQUIRE_OK(reusedChild);
+
+        sent = engine.stats().commandsSent;
+        engine.set_group_paused(music.value(), true);
+        engine.set_group_paused(group_id{}, true);
+        CHECK(engine.stats().commandsSent == sent);
+        CHECK_FALSE(engine.group(reused.value())->paused);
+        CHECK_FALSE(engine.group(reused.value())->effectivePaused);
+        CHECK_FALSE(engine.group(reusedChild.value())->paused);
+        CHECK_FALSE(engine.group(reusedChild.value())->effectivePaused);
+        for (const group_info &group : engine.groups()) {
+            CAPTURE(group.id.index);
+            CHECK_FALSE(group.paused);
+            CHECK_FALSE(group.effectivePaused);
+        }
+    }
+
+    TEST_CASE("mix_groups - the slot of a removed paused group is reused unpaused") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        engine.set_group_paused(music.value(), true);
+        testing::step_frames(engine, 1);
+        CONJURE_REQUIRE_OK(engine.remove_group(music.value()));
+
+        const core::result<group_id> reused = engine.create_group(named("Reused"));
+        CONJURE_REQUIRE_OK(reused);
+        REQUIRE(reused.value().index == music.value().index);
+        CHECK_FALSE(engine.group(reused.value())->paused);
+        CHECK_FALSE(engine.group(reused.value())->effectivePaused);
+        const voice_id voice = play_loop_in(engine, reused.value());
+        testing::step_frames(engine, 1);
+        CHECK(advances(engine, voice));
+    }
+
+    TEST_CASE("mix_groups - pausing the top of the deepest chain reaches the last group") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        std::vector<group_id> chain = {};
+        group_id parent = MASTER_GROUP;
+        for (u32 depth = 1; depth <= MAX_GROUP_DEPTH; ++depth) {
+            CAPTURE(depth);
+            const core::result<group_id> created = engine.create_group(named("depth" + std::to_string(depth), parent));
+            CONJURE_REQUIRE_OK(created);
+            chain.push_back(created.value());
+            parent = created.value();
+        }
+        const voice_id voice = play_loop_in(engine, chain.back());
+        testing::step_frames(engine, 2);
+
+        const u64 sent = engine.stats().commandsSent;
+        engine.set_group_paused(chain.front(), true);
+        CHECK(engine.stats().commandsSent == sent + MAX_GROUP_DEPTH);
+        for (const group_id id : chain) {
+            CAPTURE(id.index);
+            CHECK(engine.group(id)->effectivePaused);
+            CHECK(engine.group(id)->paused == (id == chain.front()));
+        }
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(advances(engine, voice));
+
+        engine.set_group_paused(chain.front(), false);
+        for (const group_id id : chain) {
+            CAPTURE(id.index);
+            CHECK_FALSE(engine.group(id)->effectivePaused);
+        }
+        CHECK(advances(engine, voice));
+    }
+
+    TEST_CASE("mix_groups - a voice moved between groups follows the pause of the group it is in") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const core::result<group_id> effects = engine.create_group(named("Effects"));
+        CONJURE_REQUIRE_OK(effects);
+        const voice_id voice = play_loop_in(engine, effects.value());
+        testing::step_frames(engine, 2);
+        engine.set_group_paused(music.value(), true);
+        CHECK(advances(engine, voice));
+
+        engine.set_group(voice, inner.value());
+        testing::step_frames(engine, 1);
+        CHECK_FALSE(advances(engine, voice));
+
+        engine.set_group(voice, effects.value());
+        testing::step_frames(engine, 1);
+        CHECK(advances(engine, voice));
+    }
+
+    TEST_CASE("mix_groups - stop under a paused ancestor group ends the voice at once without a fade") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        null_backend &backend = *engine.null_backend_instance();
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        const voice_id voice = play_loop_in(engine, inner.value());
+        testing::step_frames(engine, 2);
+        engine.set_group_paused(music.value(), true);
+        testing::step_frames(engine, 1);
+
+        backend.set_capture_frames(2 * testing::FRAME_FRAMES);
+        engine.stop(voice, 1.0f);
+        testing::step_frames(engine, 2);
+        CHECK_FALSE(engine.is_playing(voice));
+        CHECK(engine.voice(voice)->state == voice_state::STOPPED);
+        CHECK(testing::peak_of(backend.captured()) == doctest::Approx(0.0));
+    }
+
+    TEST_CASE("mix_groups - null_backend_stats reports the own and the effective paused flag of each group") {
+        testing::log_capture logs = {};
+        audio_engine engine(testing::null_settings());
+        const core::result<group_id> music = engine.create_group(named("Music"));
+        CONJURE_REQUIRE_OK(music);
+        const core::result<group_id> inner = engine.create_group(named("Inner", music.value()));
+        CONJURE_REQUIRE_OK(inner);
+        engine.set_group_paused(music.value(), true);
+        engine.update(testing::FRAME_SECONDS);
+
+        const std::optional<null_group_stats> musicStats = group_stats(engine, music.value());
+        REQUIRE(musicStats.has_value());
+        CHECK(musicStats->paused);
+        CHECK(musicStats->effectivePaused);
+        const std::optional<null_group_stats> innerStats = group_stats(engine, inner.value());
+        REQUIRE(innerStats.has_value());
+        CHECK_FALSE(innerStats->paused);
+        CHECK(innerStats->effectivePaused);
+        const std::optional<null_group_stats> masterStats = group_stats(engine, MASTER_GROUP);
+        REQUIRE(masterStats.has_value());
+        CHECK_FALSE(masterStats->paused);
+        CHECK_FALSE(masterStats->effectivePaused);
     }
 
     TEST_CASE("mix_groups - groups declared in settings are created with their named parents") {

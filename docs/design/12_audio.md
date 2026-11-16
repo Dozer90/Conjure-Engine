@@ -32,6 +32,7 @@ The module plays `audio_clip` assets through **voices**, mixes voices into **gro
 | A14 | Device loss is handled on the main thread in `update(dt)`: the backend's notification sets an atomic `device_state`; the engine retries `start()` with a 1 s backoff up to `maxRecoveryAttempts` (5), then swaps to a `null` backend (WARN) so voices keep finishing and `is_playing` stays truthful. Voices are frozen (not advanced) while the device is down. | Unplugging headphones must not hang gameplay logic that waits for a sound to end. |
 | A15 | Clamp rules are applied **at the API boundary on the main thread**, never in the callback: `volume` and group gain in `[0, 2]`, `pitch` in `[0.25, 4]`, `pan` in `[-1, 1]`, `minDistance >= 0.01`, `maxDistance >= minDistance`, `rolloff` in `[0, 10]`, `dopplerFactor` in `[0, 10]`, Doppler pitch ratio in `[0.5, 2]`; NaN becomes the default. Mixed output is hard-clamped to `[-1, 1]`. | Garbage in from scripts never produces NaN or infinite gain in the callback. |
 | A16 | Performance targets: 256 simultaneous voices; `mixer::render` allocation-free (asserted by `conjure::testing::allocation_scope`); `audio_engine::update(dt)` plus `end_frame()` with 256 active voices < 0.1 ms main-thread time (`bench_audio`); engine memory fixed after construction (~6 MB: mixer slots, 32 stream rings of 16384 stereo frames, mix block, rings). | `00_brief.md` requirement 2 leaves audio a small slice of the frame. |
+| A17 | **Group pause is hierarchical, like group gain** (code sweep F319). Each group keeps its own `paused` flag (what `set_group_paused` stored) and an **effective paused flag**: its own flag or any ancestor's. The main thread recomputes the effective flag with the same subtree walk as the gains in `set_group_paused` and `remove_group` (the whole subtree of each reparented child follows the new parent, as do the moved voices; a pause the removed group held goes with it), seeds it from the parent in `create_group` (a group created under a paused ancestor starts frozen), and sends `SET_GROUP_PAUSED` with the effective flag for every group whose flag changed. **The subtree is not frozen in one step:** the flags reach the mixer as one command per group, and the callback applies whatever has arrived at the top of each `MIX_BLOCK_FRAMES` block, so on a real device two groups of one subtree can freeze or resume apart: normally one block (256 frames), longer when the main thread is preempted between two pushes (nothing bounds that), or an `update()` apart when the command ring is full and the rest of the batch spills. Voices that must stay sample-synchronised belong in the same group, or are held with the whole-mixer `set_paused()`, which is a single command. `group_info` and `null_group_stats` report both (`paused`, `effectivePaused`). `set_group_paused(MASTER_GROUP, true)` therefore freezes every voice; it stays a flag of its own, independent of the whole-mixer `set_paused()` / `is_paused()`, which `effectivePaused` does not report. | The usual bus model: pausing `Music` must pause `Music/Ambience`, as its gain already scales it. Before, `set_group_paused` flipped one bit, so even pausing `MASTER_GROUP` left the voices of child groups playing. The mixer is unchanged: it still tests one bit per voice, which is also why a subtree pause is one command per group and not atomic within a block; a block-atomic subtree pause would need a mixer change and a decision of its own. |
 
 ## 2. Data model
 
@@ -75,7 +76,8 @@ namespace conjure::audio {
 `voice_id` (`voice.h`) wraps a `core::slot_key`: `struct voice_id { core::slot_key key = {}; is_valid(); to_u64();
 static from_u64(u64); <=>; }`, 8 bytes, trivially copyable, mirrored by the C# `readonly struct AudioSource`
 (`03_scripting.md` 4.1). `group_id` (`mix_groups.h`) is `{ u8 index = 0; u8 generation = 0; }` with
-`MASTER_GROUP = { 0, 1 }`; `remove_group` bumps the slot's generation so stale ids are rejected.
+`MASTER_GROUP = { 0, 1 }`; `remove_group` retires the id at once, and `create_group` gives a reused slot a new
+generation, so stale ids are rejected.
 
 ### 2.2 Clip (`clip.h`)
 
@@ -163,9 +165,10 @@ u16 channels; }` with `step = pitch * clipRate / mixRate`. Main-thread slot (`vo
 ### 2.4 Groups (`mix_groups.h`)
 
 `struct group_desc { core::string_id name; group_id parent = MASTER_GROUP; f32 gain = 1.0f; }` and
-`struct group_info { group_id id; core::string_id name; group_id parent; f32 gain; f32 effectiveGain; bool paused; }`.
+`struct group_info { group_id id; core::string_id name; group_id parent; f32 gain; f32 effectiveGain; bool paused;
+bool effectivePaused; }` (`paused` is the group's own flag, `effectivePaused` its own flag or any ancestor's, A17).
 The main thread owns `std::array<group_slot, MAX_GROUPS>`; the mixer owns `std::array<f32, MAX_GROUPS>` of effective
-gains plus a paused bit per group, written only by commands.
+gains plus an effective paused bit per group, written only by commands.
 
 ### 2.5 Listener and spatial maths (`spatialisation.h`)
 
@@ -309,8 +312,9 @@ render(out, frameCount):                                 no allocation, locks, l
         clamp mix to [-1, 1]; copy to out
 ```
 
-Paused groups and the master pause skip voices without advancing cursors. `groupGain[]` is a plain array written only
-by commands applied at the top of the same block.
+Paused groups and the master pause skip voices without advancing cursors. The group bit the mixer tests is the
+effective flag (the group's own or any ancestor's, A17), so the callback never walks the tree. `groupGain[]` is a
+plain array written only by commands applied at the top of the same block.
 
 ### 3.4 Stop, pause, release, end of frame
 
@@ -320,12 +324,29 @@ by commands applied at the top of the same block.
 acknowledged one-shot (FINISHED or STOPPED), releases its shared pointers and stream slot, and publishes the frame's
 finished ids through `finished_voices()` (a span valid until the next `end_frame()`).
 
-### 3.5 Group gains
+### 3.5 Group gains and group pause
 
 `set_group_gain(group, gain)`: clamp, store, recompute `effectiveGain` for the group and its descendants (depth-first
 over at most 32 entries), push one `SET_GROUP_GAIN { index, effectiveGain }` per changed group. `create_group` fails
 with `GROUP_LIMIT_REACHED`, `DUPLICATE_GROUP`, `GROUP_CYCLE` or `INVALID_GROUP` (unknown parent); `remove_group`
-reparents children and moves voices to the parent (`SET_GROUP` per voice) before bumping the generation.
+reparents children and moves voices to the parent (`SET_GROUP` per voice) before retiring the id.
+
+`set_group_paused(group, paused)` (A17): store the group's own flag, recompute `effectivePaused = paused ||
+parent.effectivePaused` over the same subtree walk, push one `SET_GROUP_PAUSED { index, effectivePaused }` per group
+whose effective flag changed (none when the flag is unchanged, or when an ancestor already holds the group paused).
+`create_group` seeds the new group's effective flag from its parent and sends it; `remove_group` recomputes the
+subtree of each reparented child against its new parent, sends the groups that changed, and clears the retired
+slot's bit for its next occupant. Releasing a child under a paused parent clears only its own flag; it plays once
+every ancestor is released too.
+
+The commands of one call are pushed one after the other and the callback drains the ring at the top of every block
+(3.3), so a subtree pause is not atomic on a real device: a block can render with the parent frozen and a descendant
+group still playing (or the reverse on release), which normally leaves their voices `MIX_BLOCK_FRAMES` frames apart.
+That is no upper bound: a main thread preempted between two pushes leaves them apart for as many blocks as the
+callback renders meanwhile, and commands that spill from a full ring arrive an `update()` later. The null backend
+renders on the calling thread (inside `update()` or `render_frames()`), never between two pushes of one call, so
+tests never see it. Voices that must stay sample-synchronised share one group or are held with `set_paused()`, a
+single command (A17).
 
 ### 3.6 Voice stealing
 
@@ -519,12 +540,12 @@ mix_callback callback; void *user; }`, the requested mix format (channels fixed 
 10 ms at 48 kHz; miniaudio may round), device name (empty = default) and the callback the backend drives. Stats
 structs (`null_backend.h`, all fields initialised): `null_voice_stats { voice_state state; u64 cursorFrames; f32 gain;
 f32 pan; f64 step; bool loop; u8 groupIndex; }`, `null_group_stats { group_id id; core::string_id name; f32 gain;
-f32 effectiveGain; bool paused; }`, `null_backend_stats { f64 virtualTimeSeconds; u64 framesRendered; u32 renderCalls;
-u32 activeVoices; u32 underruns; u32 commandsApplied; listener_state listener; std::array<null_voice_stats, MAX_VOICES>
-voices; std::vector<null_group_stats> groups; }`. `null_backend::update(dt)` renders exactly `round(dt * sampleRate)`
-frames (carrying the fractional remainder) through the registered callback in `MIX_BLOCK_FRAMES` blocks; the engine
-then writes the voice / group / listener snapshot into `stats()` through a private friend hook, so `08_testing.md`
-4.4's `audio_stats()` reads one struct.
+f32 effectiveGain; bool paused; bool effectivePaused; }`, `null_backend_stats { f64 virtualTimeSeconds;
+u64 framesRendered; u32 renderCalls; u32 activeVoices; u32 underruns; u32 commandsApplied; listener_state listener;
+std::array<null_voice_stats, MAX_VOICES> voices; std::vector<null_group_stats> groups; }`.
+`null_backend::update(dt)` renders exactly `round(dt * sampleRate)` frames (carrying the fractional remainder)
+through the registered callback in `MIX_BLOCK_FRAMES` blocks; the engine then writes the voice / group / listener
+snapshot into `stats()` through a private friend hook, so `08_testing.md` 4.4's `audio_stats()` reads one struct.
 
 ### 4.4 `audio_engine.h`
 
@@ -599,7 +620,7 @@ namespace conjure::audio {
             [[nodiscard]] core::result<void> remove_group(group_id group);
             [[nodiscard]] group_id find_group(core::string_id name) const noexcept;   // Null name = MASTER
             void set_group_gain(group_id group, f32 gain);
-            void set_group_paused(group_id group, bool paused);
+            void set_group_paused(group_id group, bool paused);                    // Group and descendants (A17)
             [[nodiscard]] std::optional<group_info> group(group_id group) const noexcept;
             [[nodiscard]] std::span<const group_info> groups() const noexcept;
             void set_master_gain(f32 gain);
@@ -786,7 +807,7 @@ tests use `tests/.downloaded/audio/tone.{ogg,mp3,flac}` behind `precondition::DO
 | `test_decoder.cpp` | WAV generated in-test (mono / stereo, 16-bit and f32, 22050 / 44100 / 48000 Hz, 1 and 48000 frames): `probe` reports format and length; `decode_to_pcm` reproduces the sine within 1e-4 (16-bit) / 1e-6 (f32); `forceMono` averages channels; `sampleRate` conversion scales the frame count; `normalize` peak = 1; truncated header -> `DECODE_FAILED`; empty span -> `INVALID_CLIP`; random bytes -> error, never an assert; `streaming_decoder` read in 1000-frame chunks equals the full decode, `seek` to the middle, read past the end returns 0; `[downloaded]` ogg / mp3 / flac decode to the expected length within 1 %; WAV decoding is allocation-free after `open()` |
 | `test_clip_asset.cpp` | importer: `.wav` -> PCM blob with a correct header; `storage: streamed` keeps the original bytes byte-identical; `auto` switches at the threshold; `forceMono` / `sampleRate` / `normalize`; corrupt input -> `IMPORT_FAILED` with a message; unknown extension not claimed; `default_settings` round trips through JSON; two imports byte-identical. Loader: blob -> `audio_clip` via `memory_asset_source` + `load_blocking`; bad magic / version / size -> `INVALID_CLIP`; fallback served for a FAILED slot; reload publishes a new `pcm` pointer while an old `shared_ptr` stays valid |
 | `test_voice.cpp` | `play_params` defaults; clamping of every field (volume 5 -> 2, pitch 0 -> 0.25, NaN -> default, `maxDistance < minDistance` fixed up); `voice_info` defaults |
-| `test_mix_groups.cpp` | MASTER exists; `create_group` by name with parent; `find_group`; effective gain is the product up the chain; a parent gain change updates children in `null_backend_stats::groups`; a voice at volume 0.5 in `Music` (0.5) under master (0.5) renders at 0.125 (capture); `GROUP_LIMIT_REACHED` at 33; `DUPLICATE_GROUP`; `GROUP_CYCLE`; `remove_group` moves voices and children; `remove_group(MASTER)` refused; `set_group_paused` freezes cursors |
+| `test_mix_groups.cpp` | MASTER exists; `create_group` by name with parent; `find_group`; effective gain is the product up the chain; a parent gain change updates children in `null_backend_stats::groups`; a voice at volume 0.5 in `Music` (0.5) under master (0.5) renders at 0.125 (capture); `GROUP_LIMIT_REACHED` at 33; `DUPLICATE_GROUP`; `GROUP_CYCLE`; `remove_group` moves voices and children; `remove_group(MASTER)` refused; `set_group_paused` freezes cursors; hierarchical pause (A17, `regression - code sweep F319`): a paused group freezes its descendants' voices, `MASTER_GROUP` freezes every group without setting `is_paused()`, a group created under a paused group starts frozen, `remove_group` lifts an inherited pause from the whole reparented subtree and keeps a remaining ancestor's or the child's own; own against effective flag, through `group()` and `groups()`; one `SET_GROUP_PAUSED` per changed group and none for an unchanged flag or a stale id (also once its slot is reused); a removed paused group's slot is reused unpaused; the deepest chain; a voice moved between groups; `stop` under a paused ancestor; both flags in `null_backend_stats::groups` |
 | `test_components.cpp` | `audio_source` / `audio_listener` trivially copyable; `sizeof(audio_source) == 88`; reflection lists the fields in order with offsets equal to `offsetof`; `playbackRequest`, `isPlaying`, `handle` hidden and absent from JSON; `clip` kind `ASSET_REF`; ranges present; JSON round trip of a source with a uuid clip; `attenuation_model` and `audio_playback_request` reflected |
 | `test_audio_device.cpp` | `backend_desc` defaults; `audio_device_info` of the null backend (`"Null Output"`, default) |
 | `test_audio_backend.cpp` | `create_backend(NULL_BACKEND)` succeeds; `create_backend(AUTO)` never fails; `start` with a null callback -> `INVALID_SETTINGS`; `state()` STOPPED -> RUNNING -> STOPPED |
