@@ -7,7 +7,9 @@
 #include "conjure/engine/engine_error.h"
 
 #include <array>
+#include <format>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -91,6 +93,57 @@ TEST_SUITE("engine/command_line") {
         CHECK(parsed.value().help);
         CHECK_FALSE(command_line_help().empty());
         CHECK(command_line_help().find("--headless") != std::string_view::npos);
+    }
+
+    TEST_CASE("command_line - --log-level takes every level name in any case, off included") {
+        struct expectation {
+            std::string_view text = "";
+            core::log_level level = core::log_level::INFO;
+        };
+        constexpr std::array<expectation, 9> EXPECTED = {{
+          {"trace", core::log_level::TRACE},
+          {"debug", core::log_level::DEBUG},
+          {"info", core::log_level::INFO},
+          {"warn", core::log_level::WARN},
+          {"error", core::log_level::ERR},
+          {"fatal", core::log_level::FATAL},
+          {"off", core::log_level::OFF},
+          {"OFF", core::log_level::OFF},
+          {"Warn", core::log_level::WARN},
+        }};
+        for (const expectation &expected : EXPECTED) {
+            CAPTURE(expected.text);
+            const core::result<command_line_options> parsed = parse({"--log-level", expected.text});
+            CONJURE_REQUIRE_OK(parsed);
+            REQUIRE(parsed.value().logLevel.has_value());
+            CHECK(*parsed.value().logLevel == expected.level);
+        }
+
+        // "off" is a request for silence, not a parse failure: it reaches the configuration as OFF.
+        const core::result<command_line_options> silenced = parse({"--log-level", "off"});
+        CONJURE_REQUIRE_OK(silenced);
+        engine_config config = engine_config::defaults();
+        apply_command_line(silenced.value(), config);
+        CHECK(config.logLevel == core::log_level::OFF);
+    }
+
+    TEST_CASE("command_line - an unknown --log-level is BAD_ARGUMENTS and names the value") {
+        constexpr std::array<std::string_view, 7> UNKNOWN = {"loud", "of", "offf", "err", "warning", "3", ""};
+        for (const std::string_view name : UNKNOWN) {
+            CAPTURE(name);
+            const core::result<command_line_options> parsed = parse({"--log-level", name});
+            CONJURE_CHECK_ERROR(parsed, engine_error::BAD_ARGUMENTS);
+            if (!parsed.has_value()) {
+                const std::string &message = parsed.get_error().message();
+                CHECK_MESSAGE(message.find("--log-level") != std::string::npos, message);
+                CHECK_MESSAGE(message.find(std::format("unknown log level '{}'", name)) != std::string::npos, message);
+            }
+        }
+
+        // Without --log-level nothing is set, so the configuration keeps its own level.
+        const core::result<command_line_options> absent = parse({"--headless"});
+        CONJURE_REQUIRE_OK(absent);
+        CHECK_FALSE(absent.value().logLevel.has_value());
     }
 
     TEST_CASE("command_line - unknown flags and their values are returned unrecognised") {

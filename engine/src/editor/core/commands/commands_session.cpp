@@ -56,11 +56,14 @@ namespace conjure::editor::support {
                 subscribed.push_back(name.as_string());
             }
             if (invocation.args.contains("minLogLevel")) {
-                const core::log_level level = core::parse_log_level(string_or(invocation.args, "minLogLevel", "info"));
-                if (level == core::log_level::OFF) {
+                // "off" parses, and is rejected on purpose: OFF is not a level a line can have, so it cannot
+                // be the minimum of a filter (code sweep F209).
+                const std::optional<core::log_level> level =
+                  core::parse_log_level(string_or(invocation.args, "minLogLevel", "info"));
+                if (!level.has_value() || *level == core::log_level::OFF) {
                     return invalid_args("args.minLogLevel: expected trace, debug, info, warn, error or fatal");
                 }
-                context.events().set_min_log_level(invocation.clientId, level);
+                context.events().set_min_log_level(invocation.clientId, *level);
             }
             context.events().set_subscriptions(invocation.clientId, mask);
             command_outcome outcome = {};

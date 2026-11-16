@@ -187,6 +187,7 @@ result<void> memory_file_system::write_file(std::string_view path, std::span<con
     if (normalized.empty()) {
         return is_a_directory(path);
     }
+    CONJURE_TRY(internal::validate_new_path(normalized, path));
 
     const std::scoped_lock lock(mMutex);
     CONJURE_TRY_ASSIGN(node *parent, ensure_directory_locked(path_utils::parent(normalized)));
@@ -209,7 +210,8 @@ result<void> memory_file_system::write_file(std::string_view path, std::span<con
 }
 
 result<void> memory_file_system::write_file_atomic(std::string_view path, std::span<const std::byte> data) {
-    // Every write already swaps the whole contents under the lock, which is as atomic as it gets.
+    // Every write already swaps the whole contents under the lock, which is as atomic as it gets, and
+    // there is no device to flush: the tree lives and dies with the process.
     return write_file(path, data);
 }
 
@@ -262,6 +264,8 @@ result<void> memory_file_system::rename(std::string_view from, std::string_view 
     if (source.empty() || destination.empty()) {
         return root_is_immutable();
     }
+    // Only the destination is a name this call creates; the source may be any name that exists.
+    CONJURE_TRY(internal::validate_new_path(destination, to));
 
     const std::scoped_lock lock(mMutex);
     node *sourceParent = mRoot->find(path_utils::parent(source));
@@ -316,6 +320,7 @@ result<void> memory_file_system::remove_all(std::string_view path) {
 result<void> memory_file_system::create_directories(std::string_view path) {
     CONJURE_TRY_ASSIGN(const std::string normalized, internal::resolve_backend_path(path));
     CONJURE_TRY(check_writable());
+    CONJURE_TRY(internal::validate_new_path(normalized, path));
 
     const std::scoped_lock lock(mMutex);
     const node *existing = mRoot->find(normalized);

@@ -98,6 +98,33 @@ namespace {
     core::error leaves_mount(std::string_view assetPath) {
         return core::error(core::error_code::INVALID_ARGUMENT, std::format("'{}' leaves its mount", assetPath));
     }
+
+    /// <summary>
+    /// The first segment of a normalised path relative to a mount root that the file system would refuse
+    /// to create (path_utils::is_portable_name), or an empty view when every segment is a portable name.
+    /// </summary>
+    std::string_view first_unportable_name(std::string_view relative) noexcept {
+        usize start = 0;
+        while (start < relative.size()) {
+            usize end = relative.find('/', start);
+            if (end == std::string_view::npos) {
+                end = relative.size();
+            }
+            const std::string_view name = relative.substr(start, end - start);
+            if (!name.empty() && !path_utils::is_portable_name(name)) {
+                return name;
+            }
+            start = end + 1;
+        }
+        return {};
+    }
+
+    core::error not_portable(std::string_view assetPath, std::string_view name) {
+        return core::error(
+          core::error_code::INVALID_ARGUMENT,
+          std::format("'{}' has a name that is not portable: '{}'", assetPath, name)
+        );
+    }
 }
 
 std::string_view conjure::assets::to_string(asset_record_status status) noexcept {
@@ -1110,6 +1137,12 @@ core::result<asset_id> asset_database::create_asset(
     if (!stays_in_mount(relative)) {
         return leaves_mount(assetPath);
     }
+    // The file system refuses such a name anyway (10_core.md C12); refusing it here is a bad argument rather
+    // than a failed write, and the same answer move_asset gives.
+    const std::string_view unportable = first_unportable_name(relative);
+    if (!unportable.empty()) {
+        return not_portable(assetPath, unportable);
+    }
     const asset_importer *importer = mImporters->find(importerId);
     if (importer == nullptr) {
         return make_asset_error(
@@ -1261,6 +1294,14 @@ core::result<void> asset_database::move_asset(const asset_id &id, std::string_vi
     const std::string newRelative = path_utils::normalize(parts->relativePath);
     if (!stays_in_mount(newRelative)) {
         return leaves_mount(newAssetPath);
+    }
+    // Checked before anything moves (code sweep F753). The file system refuses to create a name that is not
+    // portable, but the .meta of "rock." is "rock..meta", which is one: the meta would move, the source would
+    // be refused, and the meta would have to be moved back, which fails in turn when the asset's present name
+    // is not portable either (a source made on another platform) and strands the asset's identity.
+    const std::string_view unportable = first_unportable_name(newRelative);
+    if (!unportable.empty()) {
+        return not_portable(newAssetPath, unportable);
     }
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {

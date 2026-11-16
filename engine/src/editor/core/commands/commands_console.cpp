@@ -13,11 +13,14 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const u32 limit, u32_or(invocation.args, "limit", 200));
             query.limit = limit;
             if (invocation.args.contains("minLevel")) {
-                const core::log_level level = core::parse_log_level(string_or(invocation.args, "minLevel", "trace"));
-                if (level == core::log_level::OFF) {
+                // "off" parses, and is rejected on purpose: OFF is not a level a line can have, so it cannot
+                // be the minimum of a filter (code sweep F209).
+                const std::optional<core::log_level> level =
+                  core::parse_log_level(string_or(invocation.args, "minLevel", "trace"));
+                if (!level.has_value() || *level == core::log_level::OFF) {
                     return invalid_args("args.minLevel: expected trace, debug, info, warn, error or fatal");
                 }
-                query.minLevel = level;
+                query.minLevel = *level;
             }
             query.category = std::string(string_or(invocation.args, "category", ""));
             const std::vector<console_record> records = invocation.context.console().read(query);

@@ -14,7 +14,9 @@ namespace conjure::core::vfs {
     /// A file_system kept entirely in memory. Used by tests, by the cooker for staging output and
     /// wherever a scratch tree is needed. Every operation takes one mutex, so the instance is
     /// safe to share between threads; write times come from a counter that increases with every
-    /// mutation, which keeps them deterministic.
+    /// mutation, which keeps them deterministic. Names of new entries follow the same portable
+    /// rule as on disk (file_system.h), so a test against this backend refuses what a project
+    /// folder would refuse.
     /// </summary>
     class CONJURE_API memory_file_system final : public file_system {
         private:

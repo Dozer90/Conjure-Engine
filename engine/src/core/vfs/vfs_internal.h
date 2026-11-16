@@ -22,6 +22,29 @@ namespace conjure::core::vfs::internal {
     [[nodiscard]] result<std::string> resolve_backend_path(std::string_view path);
 
     /// <summary>
+    /// Why 'name' (one path segment) may not be given to a new entry, or an empty view when it may. The
+    /// rule is the same on every platform and backend, so content authored anywhere opens everywhere
+    /// (code sweep F753). A name is refused when it
+    ///   - is empty or holds a path separator ('/' or '\'),
+    ///   - holds a control character (U+0000 to U+001F, U+007F) or one of : * ? " < > |,
+    ///   - ends with a dot or a space (Windows drops both, so the entry would land under another name),
+    ///   - is a Windows device name, in any case and with any extension: CON, PRN, AUX, NUL, COM1 to
+    ///     COM9, LPT1 to LPT9 ("nul", "Aux.txt", "com1.tar.gz").
+    /// The returned text completes the sentence "the name '...' <text>".
+    /// </summary>
+    [[nodiscard]] std::string_view portable_name_problem(std::string_view name) noexcept;
+
+    /// <summary>
+    /// Checks the path of an entry about to be created (write_file, write_file_atomic,
+    /// create_directories, the destination of rename): every segment of the already normalised
+    /// 'normalizedPath' must pass portable_name_problem, whether or not it exists already.
+    /// INVALID_ARGUMENT names the first segment that does not, quoting 'displayPath', the path as the
+    /// caller wrote it. The root ("") passes. Reading, describing, listing and removing never call this,
+    /// so entries that already carry such a name stay reachable.
+    /// </summary>
+    [[nodiscard]] result<void> validate_new_path(std::string_view normalizedPath, std::string_view displayPath);
+
+    /// <summary>
     /// Splits an already normalised relative path into its segments ("" yields none).
     /// </summary>
     [[nodiscard]] std::vector<std::string_view> split_segments(std::string_view normalizedPath);

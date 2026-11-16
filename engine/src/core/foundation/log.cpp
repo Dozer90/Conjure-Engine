@@ -32,7 +32,7 @@ std::string_view conjure::core::to_string(log_level level) noexcept {
     return LEVEL_NAMES[index];
 }
 
-log_level conjure::core::parse_log_level(std::string_view name) noexcept {
+std::optional<log_level> conjure::core::parse_log_level(std::string_view name) noexcept {
     for (conjure::usize index = 0; index < LEVEL_NAMES.size(); ++index) {
         const std::string_view candidate = LEVEL_NAMES[index];
         if (candidate.size() != name.size()) {
@@ -53,7 +53,7 @@ log_level conjure::core::parse_log_level(std::string_view name) noexcept {
             return static_cast<log_level>(index);
         }
     }
-    return log_level::OFF;
+    return std::nullopt;
 }
 
 

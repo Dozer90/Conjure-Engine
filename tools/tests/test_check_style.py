@@ -151,6 +151,112 @@ def define_of_macro_name(checker, root: pathlib.Path) -> None:
 
 
 #------------------------------------------------------------------------------
+# thread-outside-jobs
+#------------------------------------------------------------------------------
+
+def thread_outside_jobs_reported(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp", "int value = 0;\nstd::thread worker;\nstd::jthread other;\n")
+    write(root, "engine/include/conjure/foo/bar.h", "#pragma once\n\nstruct bar {\n    std::thread mThread;\n};\n")
+    write(root, "editor/src/main.cpp", "std::vector<std::thread> pool;\n")
+    write(root, "runtime/src/main.cpp", "auto reader = std::jthread([] {});\n")
+    result = run(checker, root)
+    reported = sorted(line.split(": ")[0] for line in result.of_rule("thread-outside-jobs"))
+    assert reported == [
+        "editor/src/main.cpp:1", "engine/include/conjure/foo/bar.h:4", "engine/src/foo/bar.cpp:2",
+        "engine/src/foo/bar.cpp:3", "runtime/src/main.cpp:1",
+    ], result.findings
+    assert result.code == 1, result.code
+
+
+def thread_in_jobs_allowed(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/core/jobs/dedicated_thread.cpp", "std::jthread thread;\nstd::vector<std::thread> pool;\n")
+    write(root, "engine/src/core/jobs/detail/worker.cpp", "std::thread worker;\n")
+    write(root, "engine/include/conjure/core/jobs/dedicated_thread.h", "#pragma once\n\nstd::jthread mThread;\n")
+    result = run(checker, root)
+    assert not result.of_rule("thread-outside-jobs"), result.findings
+
+    # Only the two jobs folders are allowed: a folder that merely starts with the name, the jobs folder of
+    # another module and the other core areas are not.
+    write(root, "engine/src/core/jobs_extra/pool.cpp", "std::thread worker;\n")
+    write(root, "engine/src/foo/jobs/pool.cpp", "std::thread worker;\n")
+    write(root, "engine/src/core/system/process.cpp", "std::thread reader;\n")
+    write(root, "engine/include/conjure/core/system/process.h", "#pragma once\n\nstd::thread mReader;\n")
+    result = run(checker, root)
+    assert len(result.of_rule("thread-outside-jobs")) == 4, result.findings
+
+
+def thread_names_that_create_no_thread(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "std::thread::id owner = std::this_thread::get_id();\n"
+          "unsigned count = std::thread::hardware_concurrency();\n"
+          "void wait() { std::this_thread::yield(); }\n"
+          "my::thread worker;\nstd::threading value;\n")
+    result = run(checker, root, "engine/src/foo/bar.cpp")
+    assert not result.of_rule("thread-outside-jobs"), result.findings
+
+
+def thread_in_comment_or_string(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "// std::thread is confined to core::jobs\n/* std::jthread too */\n"
+          "const char *TEXT_LINE = \"std::thread worker;\";\nstd::thread real;\n")
+    result = run(checker, root, "engine/src/foo/bar.cpp")
+    lines = [line.split(":")[1] for line in result.of_rule("thread-outside-jobs")]
+    assert lines == ["4"], result.findings
+
+
+def thread_in_tests_is_the_other_rule(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_bar.cpp", "std::thread worker;\n")
+    write(root, "tests/foo/test_allowed.cpp", "std::thread worker;\n")
+    write(root, "tools/style_exceptions.json",
+          "{ \"forbidden_in_tests\": { \"tests/foo/test_allowed.cpp\": \"the area sits below core::jobs\" } }")
+    result = run(checker, root)
+    assert not result.of_rule("thread-outside-jobs"), result.findings
+    forbidden = result.of_rule("forbidden-in-tests")
+    assert len(forbidden) == 1 and forbidden[0].startswith("tests/foo/test_bar.cpp:1:"), result.findings
+
+
+def thread_created_without_the_type_reported(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "auto pending = std::async(std::launch::async, [] {});\n"
+          "int started = pthread_create(&handle, nullptr, &entry, nullptr);\n")
+    write(root, "editor/src/main.cpp", "HANDLE reader = ::CreateThread (nullptr, 0, &entry, nullptr, 0, nullptr);\n")
+    write(root, "runtime/src/main.cpp",
+          "auto first = _beginthread(&entry, 0, nullptr);\n"
+          "auto second = _beginthreadex(nullptr, 0, &entry, nullptr, 0, nullptr);\n")
+    # No folder is allowed these, the jobs folders included: core::jobs creates std::thread / std::jthread objects.
+    write(root, "engine/src/core/jobs/job_system.cpp", "std::jthread worker;\nauto pending = std::async([] {});\n")
+    write(root, "engine/include/conjure/core/jobs/pool.h",
+          "#pragma once\n\nint start() { return pthread_create(nullptr, nullptr, nullptr, nullptr); }\n")
+    result = run(checker, root)
+    # Each finding is "<path>:<line>: thread-outside-jobs: <name> creates a thread ...".
+    reported = sorted(line.split(" creates a thread ")[0] for line in result.of_rule("thread-outside-jobs"))
+    assert reported == [
+        "editor/src/main.cpp:1: thread-outside-jobs: CreateThread",
+        "engine/include/conjure/core/jobs/pool.h:3: thread-outside-jobs: pthread_create",
+        "engine/src/core/jobs/job_system.cpp:2: thread-outside-jobs: std::async",
+        "engine/src/foo/bar.cpp:1: thread-outside-jobs: std::async",
+        "engine/src/foo/bar.cpp:2: thread-outside-jobs: pthread_create",
+        "runtime/src/main.cpp:1: thread-outside-jobs: _beginthread",
+        "runtime/src/main.cpp:2: thread-outside-jobs: _beginthreadex",
+    ], result.findings
+    assert result.code == 1, result.code
+
+
+def thread_call_names_that_create_no_thread(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "// std::async and pthread_create( are not used here\n"
+          "const char *TEXT_LINE = \"CreateThread(_beginthreadex(\";\n"
+          "auto value = std::async_value;\nint named = my_pthread_create(nullptr);\n"
+          "auto work = CreateThreadpoolWork(&entry, nullptr, nullptr);\nvoid on_begin_thread();\n"
+          "auto pending = my::async([] {});\nauto entry = &pthread_create;\n")
+    # Test code has its own rule, which does not look for these.
+    write(root, "tests/foo/test_bar.cpp", "auto pending = std::async([] {});\nint started = pthread_create();\n")
+    result = run(checker, root)
+    assert not result.of_rule("thread-outside-jobs"), result.findings
+    assert not result.of_rule("forbidden-in-tests"), result.findings
+
+
+#------------------------------------------------------------------------------
 # tests-mirror-headers
 #------------------------------------------------------------------------------
 
@@ -263,6 +369,18 @@ CASES = [
     ("windows-macro - an ALL_CAPS const constant is checked", all_caps_const_checked),
     ("windows-macro - a camelCase const local is a variable, not a constant", camel_case_const_local_is_variable),
     ("windows-macro - a #define of a Windows macro name is reported", define_of_macro_name),
+    ("thread-outside-jobs - a std::thread or std::jthread in engine, editor or runtime code is reported",
+     thread_outside_jobs_reported),
+    ("thread-outside-jobs - the two jobs folders of core are the only allowed places", thread_in_jobs_allowed),
+    ("thread-outside-jobs - std::thread::id, hardware_concurrency and std::this_thread are not reported",
+     thread_names_that_create_no_thread),
+    ("thread-outside-jobs - a comment or a string literal is not reported", thread_in_comment_or_string),
+    ("thread-outside-jobs - test code is left to forbidden-in-tests and its exception table",
+     thread_in_tests_is_the_other_rule),
+    ("thread-outside-jobs - std::async and the raw OS thread calls are reported in every folder",
+     thread_created_without_the_type_reported),
+    ("thread-outside-jobs - a name that only resembles a thread call, a comment and a string are not reported",
+     thread_call_names_that_create_no_thread),
     ("tests-mirror-headers - one test file cannot mirror two headers", one_test_file_two_headers),
     ("tests-mirror-headers - the test in the header's sub-directory wins", sub_directory_test_wins),
     ("tests-mirror-headers - a test file no CMakeLists.txt lists does not count", unlisted_test_file),

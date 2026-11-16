@@ -322,3 +322,31 @@ enum my_enum_as_flags : unsigned int {
     FLAG_FOR_Z = 1 << 2,
     FLAG_FOR_XYZ = FLAG_FOR_X | FLAG_FOR_Y | FLAG_FOR_Z
 }
+
+// A type states its own copy and move behaviour with '= delete' and '= default'; there is no
+// base class for it, so a reader sees in the class what it allows. A type that owns something
+// and may change hands, but must never be duplicated, deletes its copy operations and defaults
+// its moves. The moves must be written out: deleting the copies alone removes them too. They
+// are 'noexcept' (docs/CONVENTIONS.md section 3): a move that cannot throw lets std::vector keep
+// its strong guarantee when it grows, and for a type that can also be copied it is what makes
+// the vector move instead of copy. These lines sit with the constructors and stay in the header.
+class my_non_copyable_but_movable_class {
+    private:
+        // Defaulted moves are only correct when every member moves correctly by itself, as a
+        // standard container or a std::unique_ptr does. A type holding a raw handle writes its
+        // two move operations by hand in the .cpp instead.
+        std::vector<float> mSamples;
+
+    public:
+        my_non_copyable_but_movable_class();
+        ~my_non_copyable_but_movable_class();
+
+        my_non_copyable_but_movable_class(const my_non_copyable_but_movable_class &) = delete;
+        my_non_copyable_but_movable_class &operator=(const my_non_copyable_but_movable_class &) = delete;
+
+        my_non_copyable_but_movable_class(my_non_copyable_but_movable_class &&) noexcept = default;
+        my_non_copyable_but_movable_class &operator=(my_non_copyable_but_movable_class &&) noexcept = default;
+};
+
+// A type whose address is handed out (other objects keep a pointer or reference to it) writes
+// the same four lines with '= delete' on the two move operations as well.

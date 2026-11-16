@@ -1,6 +1,7 @@
 // POSIX backend of core::process: posix_spawnp with pipes, the child in its own process group so
-// kill() and the timeout take the whole tree down, and one reader thread that poll()s both pipes
-// so a child writing to both streams never blocks on a full pipe.
+// kill() and the timeout take the whole tree down, and one reader thread (a named
+// jobs::dedicated_thread) that poll()s both pipes so a child writing to both streams never blocks
+// on a full pipe.
 
 #include "conjure/core/process.h"
 
@@ -307,12 +308,11 @@ class process::state {
         pid_t mProcessId = -1;
         unique_fd mStandardOutputRead = {};
         unique_fd mStandardErrorRead = {};
-        // The pipe reader is a plain std::thread, the documented exception to "no std::thread
-        // outside core::jobs" (docs/design/10_core.md C4): C2 limits system's dependencies to
-        // foundation and stb, so jobs::dedicated_thread is out of reach here.
-        std::thread mReader = {};
         detail::process_output mOutput = {};
         detail::completion_latch mReaderDone = {};
+        // A named jobs::dedicated_thread (docs/design/10_core.md C4). Declared after the buffers
+        // and the latch it writes to, so those outlive a reader that is still being joined.
+        detail::pipe_reader mReader = {};
         steady_clock::time_point mStartTime = {};
         f64 mTimeoutSeconds = 0;
         // Read by is_running() and kill() from other threads while wait() runs.
@@ -352,11 +352,9 @@ process::state::state(launch &&launched) :
     mStandardErrorRead(std::move(launched.standardErrorRead)),
     mTimeoutSeconds(detail::clamp_timeout(launched.timeoutSeconds)) {
     if (mStandardOutputRead.is_valid() || mStandardErrorRead.is_valid()) {
-        mReaderDone.expect_one();
         mHasReader.store(true);
-        mReader = std::thread([this] {
+        mReader.start(detail::COMBINED_READER_NAME, mReaderDone, [this] {
             drain_pipes(mStandardOutputRead.get(), mStandardErrorRead.get(), &mOutput);
-            mReaderDone.arrive();
         });
     }
     mStartTime = steady_clock::now();
@@ -518,9 +516,7 @@ void process::state::wait_exit() noexcept {
 }
 
 void process::state::join_reader() {
-    if (mReader.joinable()) {
-        mReader.join();
-    }
+    mReader.join();
 }
 
 i32 process::state::exit_code() const noexcept {

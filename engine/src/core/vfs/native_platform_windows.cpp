@@ -85,6 +85,28 @@ namespace {
         );
     }
 
+    // Writes all of 'data' at the handle's file position. Returns the Win32 error code, ERROR_SUCCESS
+    // when every byte was taken.
+    DWORD write_all(HANDLE handle, std::span<const std::byte> data) noexcept {
+        // WriteFile moves at most a DWORD per call; large spans are written in pieces.
+        constexpr usize MAX_CHUNK = usize{1} << 30;
+        usize total = 0;
+        while (total < data.size()) {
+            const DWORD chunk = static_cast<DWORD>(std::min(data.size() - total, MAX_CHUNK));
+            DWORD written = 0;
+            if (WriteFile(handle, data.data() + total, chunk, &written, nullptr) == 0) {
+                return GetLastError();
+            }
+            if (written == 0) {
+                // A synchronous write to a disk file takes everything or fails; a call that claims
+                // success without progress would otherwise spin here for ever.
+                return ERROR_WRITE_FAULT;
+            }
+            total += written;
+        }
+        return ERROR_SUCCESS;
+    }
+
     // The NT object-manager spelling of an absolute Win32 path: "C:\x" -> "\??\C:\x",
     // "\\server\share\x" -> "\??\UNC\server\share\x", "\\?\C:\x" -> "\??\C:\x".
     std::wstring to_nt_path(const std::filesystem::path &path) {
@@ -226,6 +248,57 @@ bool internal::is_being_deleted(const std::filesystem::path &path, const std::er
 
 void internal::close_read_handle(std::intptr_t value) noexcept {
     CloseHandle(reinterpret_cast<HANDLE>(value));
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Writing
+
+result<void> internal::write_file_flushed(
+  const std::filesystem::path &path,
+  std::span<const std::byte> data,
+  std::string_view displayPath
+) {
+    // Readers may look at the file while it is written (an indexer, a virus scanner); nobody else writes it.
+    const HANDLE handle = CreateFileW(
+      path.c_str(),
+      GENERIC_WRITE,
+      FILE_SHARE_READ,
+      nullptr,
+      CREATE_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr
+    );
+    if (handle == INVALID_HANDLE_VALUE) {
+        return io_failure("open for writing", displayPath, GetLastError());
+    }
+
+    const DWORD writeError = write_all(handle, data);
+    if (writeError != ERROR_SUCCESS) {
+        CloseHandle(handle);
+        return io_failure("write", displayPath, writeError);
+    }
+
+    // The write above only reached the system cache. FlushFileBuffers returns once the file's data and
+    // metadata are on the device and the device has been told to empty its own write cache.
+    const DWORD flushError = FlushFileBuffers(handle) != 0 ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
+    if (flushError == ERROR_SUCCESS) {
+        note_flushed_file();
+        return result<void>::success();
+    }
+    if (flush_is_unsupported(flushError)) {
+        note_unflushable_volume(displayPath);
+        return result<void>::success();
+    }
+    return io_failure("flush", displayPath, flushError);
+}
+
+bool internal::flush_is_unsupported(u32 platformError) noexcept {
+    // What a driver without a flush routine answers (some RAM disks and redirectors). Everything else,
+    // ERROR_ACCESS_DENIED and the device errors included, is a flush that was attempted and failed.
+    return platformError == ERROR_INVALID_FUNCTION || platformError == ERROR_NOT_SUPPORTED;
 }
 
 

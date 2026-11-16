@@ -2,6 +2,7 @@
 
 // Helpers shared by the platform backends of the system area. Private to engine/src/core/system.
 
+#include "conjure/core/jobs/dedicated_thread.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/result.h"
@@ -10,7 +11,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -144,4 +147,76 @@ namespace conjure::core::detail {
             /// </summary>
             [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline);
     };
+
+    /// <summary>
+    /// Name of the thread that drains a child's standard output on Windows, as debuggers and
+    /// profilers show it. Like the two names below it fits the 15 bytes Linux keeps for a thread
+    /// name, so no platform cuts it short.
+    /// </summary>
+    inline constexpr std::string_view STANDARD_OUTPUT_READER_NAME = "process-stdout";
+
+    /// <summary>
+    /// Name of the thread that drains a child's standard error on Windows.
+    /// </summary>
+    inline constexpr std::string_view STANDARD_ERROR_READER_NAME = "process-stderr";
+
+    /// <summary>
+    /// Name of the one thread that drains both pipes of a child on POSIX.
+    /// </summary>
+    inline constexpr std::string_view COMBINED_READER_NAME = "process-pipes";
+
+    /// <summary>
+    /// The thread that drains the captured pipes of a child: a named jobs::dedicated_thread, which
+    /// is the only way core::system creates a thread (docs/design/10_core.md C2 and C4). Both
+    /// process backends start their readers through this class. The thread ends when its drain
+    /// function returns, which is when every writer of the pipe is gone: a stop request cannot
+    /// interrupt a blocking read, so the owner ends a reader by killing the writers. Not
+    /// thread-safe: start(), join() and destruction belong to one thread, as process::start(),
+    /// wait() and destruction do.
+    /// </summary>
+    class pipe_reader {
+        private:
+            std::optional<jobs::dedicated_thread> mThread = {};
+
+        public:
+            pipe_reader() = default;
+
+            /// <summary>
+            /// Joins a reader that is still running; the owner makes sure its pipe has closed.
+            /// </summary>
+            ~pipe_reader() = default;
+
+            pipe_reader(const pipe_reader &) = delete;
+            pipe_reader &operator=(const pipe_reader &) = delete;
+
+            pipe_reader(pipe_reader &&) = delete;
+            pipe_reader &operator=(pipe_reader &&) = delete;
+
+        public:
+            /// <summary>
+            /// Registers one party with 'done' and starts a thread called 'name' that runs 'drain'
+            /// and then arrives at 'done'. 'done' and everything 'drain' touches must outlive the
+            /// thread. An empty 'drain' and a second call both assert and start nothing. When the
+            /// operating system refuses the thread the process ends, as for every dedicated_thread
+            /// (docs/CONVENTIONS.md section 3).
+            /// </summary>
+            void start(std::string_view name, completion_latch &done, std::function<void()> drain);
+
+            /// <summary>
+            /// True from start() until join() has returned.
+            /// </summary>
+            [[nodiscard]] bool joinable() const noexcept;
+
+            /// <summary>
+            /// Waits for the drain function to return. No-op when never started or already joined.
+            /// </summary>
+            void join();
+    };
+
+    /// <summary>
+    /// How many pipe_reader threads this process has started. A statistic: the process tests read
+    /// it to see that a backend drains each captured pipe through a pipe_reader, the one place
+    /// core::system creates a thread, and through nothing else. It only ever grows. Thread-safe.
+    /// </summary>
+    [[nodiscard]] u64 started_pipe_reader_count() noexcept;
 }

@@ -13,7 +13,9 @@
 #include <format>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -21,6 +23,11 @@
 // The default drawers: one ImGui widget per field kind over the component's JSON form (04_editor.md 4.2).
 // Each drawer edits the JSON value in place and returns true when the widget reported a change, so the
 // inspector writes exactly what the agent protocol would write.
+//
+// Floats follow the reflection JSON encoding (10_core.md C15): a finite value is a number, +infinity the string
+// "inf", -infinity the string "-inf" and NaN null. The float drawers read all four and write back what they read
+// for everything the user did not change, so an infinite or NaN value is shown as inf, -inf or nan and survives
+// an edit of a neighbouring component. They never add one: a non-finite value the user typed is not written.
 
 namespace conjure::editor::ui {
 
@@ -75,6 +82,30 @@ namespace conjure::editor::ui {
         [[nodiscard]] f32 float_bound(f64 value) noexcept {
             const f64 largest = static_cast<f64>(std::numeric_limits<f32>::max());
             return static_cast<f32>(std::clamp(value, -largest, largest));
+        }
+
+        constexpr std::string_view POSITIVE_INFINITY_TEXT = "inf";
+        constexpr std::string_view NEGATIVE_INFINITY_TEXT = "-inf";
+
+        /// <summary>
+        /// The value of a float in reflection JSON: a number, "inf", "-inf" or null (NaN). 'fallback' for anything
+        /// else, a missing value included.
+        /// </summary>
+        [[nodiscard]] f64 read_float(const core::json::value &source, f64 fallback) noexcept {
+            if (source.is_string()) {
+                const std::string_view text = source.as_string();
+                if (text == POSITIVE_INFINITY_TEXT) {
+                    return std::numeric_limits<f64>::infinity();
+                }
+                if (text == NEGATIVE_INFINITY_TEXT) {
+                    return -std::numeric_limits<f64>::infinity();
+                }
+                return fallback;
+            }
+            if (source.is_valid() && source.is_null()) {
+                return std::numeric_limits<f64>::quiet_NaN();
+            }
+            return source.as_f64(fallback);
         }
 
         void show_tooltip(const property_draw_context &context) {
@@ -199,14 +230,15 @@ namespace conjure::editor::ui {
                 lower = -std::numeric_limits<f64>::infinity();
                 upper = std::numeric_limits<f64>::infinity();
             }
-            // A slider needs both bounds within ImGui's float slider limits (half the float range); otherwise the
-            // clamped drag takes the saturated bounds.
+            f64 current = read_float(value.root(), 0.0);
+            // A slider needs both bounds within ImGui's float slider limits (half the float range) and a finite
+            // value to place its grab at; otherwise the clamped drag takes the saturated bounds. The drag leaves
+            // an infinity or a NaN alone until a number is typed over it, and shows it as inf, -inf or nan.
             const f64 sliderLimit = static_cast<f64>(std::numeric_limits<f32>::max()) / 2.0;
-            const bool sliderFits = std::isfinite(lower) && std::isfinite(upper) && lower < upper &&
-              lower >= -sliderLimit && upper <= sliderLimit;
+            const bool sliderFits = std::isfinite(current) && std::isfinite(lower) && std::isfinite(upper) &&
+              lower < upper && lower >= -sliderLimit && upper <= sliderLimit;
             ImGui::BeginDisabled(context.readOnly);
             bool changed = false;
-            f64 current = value.root().as_f64(0.0);
             if (singlePrecision) {
                 f32 single = static_cast<f32>(current);
                 if (sliderFits) {
@@ -278,28 +310,65 @@ namespace conjure::editor::ui {
                 return false;
             }
             for (usize index = 0; index < out.size(); ++index) {
-                out[index] = source[index].as_f32(0.0f);
+                out[index] = static_cast<f32>(read_float(source[index], 0.0));
             }
             return true;
         }
 
+        /// <summary>
+        /// The inverse of read_floats: a document cannot hold a non-finite number, so an infinity goes back as its
+        /// string and a NaN as null.
+        /// </summary>
         core::json::document floats_to_json(std::span<const f32> values) {
             core::json::document array = core::json::document::array();
             for (const f32 value : values) {
-                array.push_back(value);
+                if (std::isnan(value)) {
+                    array.push_back(nullptr);
+                } else if (std::isinf(value)) {
+                    array.push_back(value > 0.0f ? POSITIVE_INFINITY_TEXT : NEGATIVE_INFINITY_TEXT);
+                } else {
+                    array.push_back(value);
+                }
             }
             return array;
+        }
+
+        [[nodiscard]] bool all_finite(std::span<const f32> values) noexcept {
+            return std::all_of(values.begin(), values.end(), [](f32 value) { return std::isfinite(value); });
+        }
+
+        /// <summary>
+        /// What an edit of a row of floats may write. A component the widget left non-finite goes back to what it
+        /// was: either it was not touched (the infinity or NaN the value holds), or the user typed "inf" or "nan"
+        /// or dragged a NaN, which adds nothing a field can use. Returns true when a component still differs from
+        /// 'before'.
+        /// </summary>
+        [[nodiscard]] bool accept_float_edit(std::span<const f32> before, std::span<f32> after) noexcept {
+            bool changed = false;
+            for (usize index = 0; index < after.size(); ++index) {
+                if (!std::isfinite(after[index])) {
+                    after[index] = before[index];
+                    continue;
+                }
+                // A NaN before compares unequal to the number typed over it, as it must.
+                changed = changed || after[index] != before[index];
+            }
+            return changed;
         }
 
         template <usize Count>
         bool draw_vector(const property_draw_context &context, core::json::document &value, bool asColour) {
             std::array<f32, Count> components = {};
             (void) read_floats(value.root(), components);
+            const std::array<f32, Count> before = components;
+            // A colour picker converts its channels to bytes, which an infinity or a NaN has no value for: such a
+            // colour is drawn as plain numbers until every channel is finite again.
+            const bool asPicker = asColour && all_finite(components);
             ImGui::BeginDisabled(context.readOnly);
             bool changed = false;
-            if (asColour && Count == 4) {
+            if (asPicker && Count == 4) {
                 changed = ImGui::ColorEdit4(label_of(context), components.data(), ImGuiColorEditFlags_Float);
-            } else if (asColour && Count == 3) {
+            } else if (asPicker && Count == 3) {
                 changed = ImGui::ColorEdit3(label_of(context), components.data(), ImGuiColorEditFlags_Float);
             } else {
                 changed = ImGui::DragScalarN(
@@ -312,10 +381,11 @@ namespace conjure::editor::ui {
             }
             ImGui::EndDisabled();
             show_tooltip(context);
-            if (changed) {
-                value = floats_to_json(components);
+            if (!changed || !accept_float_edit(before, components)) {
+                return false;
             }
-            return changed;
+            value = floats_to_json(components);
+            return true;
         }
 
         [[nodiscard]] bool looks_like_colour(const property_draw_context &context) noexcept {
@@ -379,8 +449,14 @@ namespace conjure::editor::ui {
               storage->GetFloat(keys.quaternion[2])
             );
             std::array<f32, 3> degrees = {};
-            // q and -q are the same rotation, hence the absolute value.
-            if (storage->GetBool(keys.valid) && std::abs(glm::dot(cached, rotation)) >= 1.0f - 1.0e-6f) {
+            if (!all_finite(components)) {
+                // A quaternion with an infinite or NaN component is no rotation, so its three angles are NaN,
+                // shown as nan. They are set here, not decomposed: a NaN that arithmetic produced (an infinity
+                // normalises through inf * 0) may carry a sign, which the C library prints ("-nan(ind)", "-nan").
+                // Typing an angle repairs the rotation, with the angles that are still not numbers taken as zero.
+                degrees.fill(std::numeric_limits<f32>::quiet_NaN());
+            } else if (storage->GetBool(keys.valid) && std::abs(glm::dot(cached, rotation)) >= 1.0f - 1.0e-6f) {
+                // q and -q are the same rotation, hence the absolute value.
                 for (usize axis = 0; axis < degrees.size(); ++axis) {
                     degrees[axis] = storage->GetFloat(keys.degrees[axis]);
                 }
@@ -389,12 +465,16 @@ namespace conjure::editor::ui {
                 degrees = {euler.x, euler.y, euler.z};
                 store_euler(keys, degrees, rotation);
             }
+            const std::array<f32, 3> before = degrees;
             ImGui::BeginDisabled(context.readOnly);
             const bool changed = ImGui::DragFloat3(label_of(context), degrees.data(), 0.5f, 0.0f, 0.0f, "%.1f deg");
             ImGui::EndDisabled();
             show_tooltip(context);
-            if (!changed) {
+            if (!changed || !accept_float_edit(before, degrees)) {
                 return false;
+            }
+            for (f32 &angle : degrees) {
+                angle = std::isfinite(angle) ? angle : 0.0f;
             }
             const math::quat updated = glm::normalize(math::quat(glm::radians(math::vec3(
               degrees[0],
@@ -410,6 +490,7 @@ namespace conjure::editor::ui {
         bool draw_mat4(const property_draw_context &context, core::json::document &value) {
             std::array<f32, 16> cells = {};
             (void) read_floats(value.root(), cells);
+            const std::array<f32, 16> before = cells;
             bool changed = false;
             ImGui::TextUnformatted(label_of(context));
             ImGui::BeginDisabled(context.readOnly);
@@ -422,10 +503,11 @@ namespace conjure::editor::ui {
             }
             ImGui::PopID();
             ImGui::EndDisabled();
-            if (changed) {
-                value = floats_to_json(cells);
+            if (!changed || !accept_float_edit(before, cells)) {
+                return false;
             }
-            return changed;
+            value = floats_to_json(cells);
+            return true;
         }
 
         bool draw_transform(const property_draw_context &context, core::json::document &value) {
@@ -599,7 +681,13 @@ namespace conjure::editor::ui {
             context.field = &field;
             context.label = field.name;
             context.readOnly = readOnly || field.attributes.readOnly;
-            core::json::document value = core::json::document::from_value(object.root()[field.name]);
+            const core::json::value member = object.root()[field.name];
+            core::json::document value = core::json::document::from_value(member);
+            if (!member.is_valid() && (field.kind == field_kind::F32 || field.kind == field_kind::F64)) {
+                // A member the object does not hold copies as null, which a float drawer reads as NaN. Null means
+                // NaN only where the object holds it: a missing float starts at zero like every other number.
+                value = core::json::document::from_value(core::json::object({{"v", 0.0}}).root()["v"]);
+            }
             bool fieldChanged = false;
             if (field.kind == field_kind::STRUCT && field.structType != nullptr) {
                 if (ImGui::TreeNodeEx(field.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {

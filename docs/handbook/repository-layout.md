@@ -85,7 +85,7 @@ depends on `foundation`; the remaining dependencies are listed in `engine/src/co
 
 | Area | `engine/src/core/<area>/` | Public headers | Test target |
 |---|---|---|---|
-| `foundation` | `assert.cpp`, `error.cpp`, `log.cpp`, `uuid.cpp`, `local_time_{windows,posix}.cpp`, private `local_time.h`, `console_output.h`, `build_info.h.in` | flat: `conjure/core/platform_detect.h`, `types.h`, `api.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h`, `non_copyable.h`; generated `build_info.h` | `conjure_core_foundation_tests` |
+| `foundation` | `assert.cpp`, `error.cpp`, `log.cpp`, `uuid.cpp`, `local_time_{windows,posix}.cpp`, private `local_time.h`, `console_output.h`, `build_info.h.in` | flat: `conjure/core/platform_detect.h`, `types.h`, `api.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h`; generated `build_info.h` | `conjure_core_foundation_tests` |
 | `math` | `aabb.cpp`, `frustum.cpp`, `ray.cpp`, `transform.cpp`, `projection.cpp`, private `look_rotation.{h,cpp}` | `conjure/core/math.h` plus `conjure/core/math/*.h` | `conjure_core_math_tests` |
 | `containers` | `containers.cpp` | `conjure/core/containers/*.h` (header-only templates) | `conjure_core_containers_tests` |
 | `strings` | `string_id.cpp`, `string_utils.cpp`, `bit_vector.cpp`, `radix_sort.cpp` | flat: `conjure/core/string_id.h`, `string_utils.h`, `bit_vector.h`, `radix_sort.h` | `conjure_core_strings_tests` |

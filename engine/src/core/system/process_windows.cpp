@@ -1,6 +1,6 @@
 // Windows backend of core::process: CreateProcessW with anonymous pipes, a job object so kill()
-// and the timeout take the whole process tree down, and one reader thread per captured pipe so
-// a child writing to both streams never blocks on a full pipe.
+// and the timeout take the whole process tree down, and one reader thread per captured pipe (a
+// named jobs::dedicated_thread) so a child writing to both streams never blocks on a full pipe.
 
 #include "conjure/core/process.h"
 
@@ -16,7 +16,6 @@
 #include <chrono>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -389,13 +388,12 @@ class process::state {
         unique_handle mJobHandle = {};
         unique_handle mStandardOutputRead = {};
         unique_handle mStandardErrorRead = {};
-        // The pipe readers are plain std::threads, the documented exception to "no std::thread
-        // outside core::jobs" (docs/design/10_core.md C4): C2 limits system's dependencies to
-        // foundation and stb, so jobs::dedicated_thread is out of reach here.
-        std::thread mStandardOutputReader = {};
-        std::thread mStandardErrorReader = {};
         detail::process_output mOutput = {};
         detail::completion_latch mReadersDone = {};
+        // Named jobs::dedicated_threads (docs/design/10_core.md C4). Declared after the buffers
+        // and the latch they write to, so those outlive a reader that is still being joined.
+        detail::pipe_reader mStandardOutputReader = {};
+        detail::pipe_reader mStandardErrorReader = {};
         steady_clock::time_point mStartTime = {};
         f64 mTimeoutSeconds = 0;
         u32 mProcessId = 0;
@@ -417,7 +415,7 @@ class process::state {
         void terminate() noexcept;
 
     private:
-        void start_reader(std::thread &reader, HANDLE pipe, bool isStandardError);
+        void start_reader(detail::pipe_reader &reader, std::string_view name, HANDLE pipe, bool isStandardError);
         void join_readers();
 };
 
@@ -429,10 +427,10 @@ process::state::state(launch &&launched) :
     mTimeoutSeconds(detail::clamp_timeout(launched.timeoutSeconds)),
     mProcessId(launched.processId) {
     if (mStandardOutputRead.is_valid()) {
-        start_reader(mStandardOutputReader, mStandardOutputRead.get(), false);
+        start_reader(mStandardOutputReader, detail::STANDARD_OUTPUT_READER_NAME, mStandardOutputRead.get(), false);
     }
     if (mStandardErrorRead.is_valid()) {
-        start_reader(mStandardErrorReader, mStandardErrorRead.get(), true);
+        start_reader(mStandardErrorReader, detail::STANDARD_ERROR_READER_NAME, mStandardErrorRead.get(), true);
     }
     mStartTime = steady_clock::now();
 }
@@ -536,21 +534,20 @@ void process::state::terminate() noexcept {
     TerminateProcess(mProcessHandle.get(), exitCode);
 }
 
-void process::state::start_reader(std::thread &reader, HANDLE pipe, bool isStandardError) {
-    mReadersDone.expect_one();
-    reader = std::thread([this, pipe, isStandardError] {
+void process::state::start_reader(
+  detail::pipe_reader &reader,
+  std::string_view name,
+  HANDLE pipe,
+  bool isStandardError
+) {
+    reader.start(name, mReadersDone, [this, pipe, isStandardError] {
         drain_pipe(pipe, &mOutput, isStandardError);
-        mReadersDone.arrive();
     });
 }
 
 void process::state::join_readers() {
-    if (mStandardOutputReader.joinable()) {
-        mStandardOutputReader.join();
-    }
-    if (mStandardErrorReader.joinable()) {
-        mStandardErrorReader.join();
-    }
+    mStandardOutputReader.join();
+    mStandardErrorReader.join();
 }
 
 

@@ -89,12 +89,14 @@ namespace conjure::core::vfs {
             /// When both URIs lead to the same backend, directly or through nested mount tables, it
             /// renames (so two schemes over one backend behave like one). Across backends a file is
             /// copied and the source removed; a directory is UNSUPPORTED. The base contract's codes
-            /// still apply there, judged by the backends that store the two files: INVALID_ARGUMENT
-            /// for the root of a backend at either end, ALREADY_EXISTS for a directory at 'to',
-            /// NOT_FOUND when the parent of 'to' is missing, PERMISSION_DENIED for a read-only
-            /// source, all checked before anything is copied. The copy is written atomically. If the
-            /// source cannot be removed afterwards, a copy that created a new file is removed again,
-            /// but a file it replaced is not restored.
+            /// still apply there, judged by the backends that store the two files and in the order
+            /// of a backend's own rename: PERMISSION_DENIED for an escape or a read-only backend at
+            /// either end, INVALID_ARGUMENT for the root of a backend at either end and for a name
+            /// at 'to' that is not portable, and only then the lookups: NOT_FOUND for a missing
+            /// 'from', ALREADY_EXISTS for a directory at 'to', NOT_FOUND when the parent of 'to' is
+            /// missing. All of it is checked before anything is copied. The copy is written
+            /// atomically. If the source cannot be removed afterwards, a copy that created a new
+            /// file is removed again, but a file it replaced is not restored.
             /// </summary>
             [[nodiscard]] result<void> rename(std::string_view from, std::string_view to) override;
             [[nodiscard]] result<void> remove(std::string_view uri) override;

@@ -919,6 +919,58 @@ TEST_SUITE("assets/asset_database") {
         CHECK(fixture.fileSystem->exists("assets/inside.ta"));
     }
 
+    TEST_CASE("regression - code sweep F753: create_asset and move_asset refuse a name that is not portable first") {
+        // The file system refuses to create such a name, but move_asset renames the .meta first, and the meta
+        // of "x." is "x..meta", a name it takes: the meta moved, the source was refused and the meta had to be
+        // moved back (IO_ERROR, and a stranded meta when the way back was refused too). The destination's
+        // directory had been created by then as well. Both calls now check every segment before anything is
+        // created, moved or written, and answer with the code of a bad argument.
+        pipeline_fixture fixture = {};
+        fixture.write_source("old/a.ta", "A");
+        fixture.scan_and_import();
+        const asset_id id = fixture.id_of("old/a.ta");
+
+        const std::vector<std::string> unportable = {
+          "assets://x.",
+          "assets://fresh/x.",
+          "assets://fresh/x.ta ",
+          "assets://fresh ./x.ta",
+          "assets://fresh/nul.ta",
+          "assets://fresh/what?.ta",
+          "assets://fresh/a:b.ta",
+          "assets://fresh/tab\there.ta",
+        };
+        for (const std::string &path : unportable) {
+            CAPTURE(path);
+            CONJURE_CHECK_ERROR(fixture.database->move_asset(id, path), core::error_code::INVALID_ARGUMENT);
+            CONJURE_CHECK_ERROR(
+              fixture.database->create_asset(path, test_importer::ID, bytes_of("x")),
+              core::error_code::INVALID_ARGUMENT
+            );
+        }
+        const core::result<void> moved = fixture.database->move_asset(id, "assets://fresh/x.");
+        REQUIRE_FALSE(moved.has_value());
+        CHECK_MESSAGE(moved.get_error().message().find("'x.'") != std::string::npos, moved.get_error().message());
+
+        // Nothing was created on the way, not even the directory a destination named, and the pair is where
+        // it was.
+        CHECK_FALSE(fixture.fileSystem->exists("assets/fresh"));
+        CHECK_FALSE(fixture.fileSystem->exists("assets/x..meta"));
+        CHECK(fixture.fileSystem->exists("assets/old/a.ta"));
+        CHECK(fixture.fileSystem->exists("assets/old/a.ta.meta"));
+        CHECK(fixture.database->asset_path_of(id) == "assets://old/a.ta");
+        CHECK(fixture.database->record_count() == 1);
+
+        CONJURE_REQUIRE_OK(fixture.database->scan());
+        CHECK(fixture.id_of("old/a.ta") == id);
+        CHECK(fixture.database->record_count() == 1);
+
+        // A name that only resembles one of them is fine.
+        CONJURE_REQUIRE_OK(fixture.database->move_asset(id, "assets://fresh/nulls.x..ta"));
+        CHECK(fixture.fileSystem->exists("assets/fresh/nulls.x..ta.meta"));
+        CHECK(fixture.id_of("fresh/nulls.x..ta") == id);
+    }
+
     TEST_CASE("regression - a meta that cannot be written leaves its source META_INVALID and the scan succeeds") {
         pipeline_fixture fixture = {};
         conjure::testing::log_capture logs = {};

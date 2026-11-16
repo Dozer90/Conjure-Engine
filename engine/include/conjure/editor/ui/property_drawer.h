@@ -14,6 +14,11 @@
 // reads a component as JSON, hands each field's value to the drawer for its kind and, when the widget
 // reports a change, writes the new value back through component.set. Modules may replace the drawer of a
 // kind for their own tooling.
+//
+// A float arrives in the reflection JSON encoding (docs/design/10_core.md C15): a number, the string "inf" or
+// "-inf" for an infinity, null for NaN. The built-in drawers show those as inf, -inf and nan, write them back
+// unchanged when a neighbouring field or component is edited and never add one (a typed "inf" is not written);
+// a replacement drawer for a float kind receives the same values.
 
 namespace conjure::editor::ui {
 
@@ -68,7 +73,8 @@ namespace conjure::editor::ui {
 
             /// <summary>
             /// Draws a whole reflected object: every field of the description, nested structs as tree nodes.
-            /// Returns true when any field changed; 'object' is updated in place.
+            /// Returns true when any field changed; 'object' is updated in place. A float member 'object' does not
+            /// hold is drawn as 0; it is NaN only where 'object' holds null.
             /// </summary>
             bool draw_object(const core::reflect::type_info &type, core::json::document &object, bool readOnly) const;
 

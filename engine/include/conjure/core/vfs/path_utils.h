@@ -68,4 +68,15 @@ namespace conjure::core::vfs::path_utils {
     /// rules of the volume a path will be used on.
     /// </summary>
     [[nodiscard]] CONJURE_API std::string relative_to(std::string_view path, std::string_view base);
+
+    /// <summary>
+    /// True when 'name' (one path segment, not a path) may be given to a new file or directory: the
+    /// rule every file_system applies wherever it creates an entry, on every platform, so that content
+    /// authored on one opens on all of them. A name is not portable when it is empty, holds a path
+    /// separator, a control character (U+0000 to U+001F, U+007F) or one of : * ? " < > |, ends with a
+    /// dot or a space, or is a Windows device name in any case and with any extension (CON, PRN, AUX,
+    /// NUL, COM1 to COM9, LPT1 to LPT9: "nul", "Aux.txt"). Check a name the user typed with this before
+    /// creating the entry; file_system reports the same verdict as INVALID_ARGUMENT.
+    /// </summary>
+    [[nodiscard]] CONJURE_API bool is_portable_name(std::string_view name) noexcept;
 }

@@ -306,14 +306,15 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
   `CONJURE_PUBLIC_HEADERS` in its own translation unit with the project warning set; the aggregate target
   `conjure_header_check` is part of `ALL`, so a header that does not include what it uses breaks the default
   build. `tests/core/CMakeLists.txt` calls it for every core area.
-- **Style check.** `python tools/check_style.py --tests-mirror-headers` (CTest `style.check`, label `style`)
-  scans `engine/`, `editor/`, `runtime/`, `tests/`, `samples/` and reports `path:line: rule: message` for:
-  `tabs`, `line-length` (120), `crlf`, `trailing-whitespace`, `pragma-once`, `using-namespace` (headers),
-  `windows-macro` (enumerators or constants named `ERROR`, `DELETE`, `IN`, `min`, ...), `enum-class`
-  (plain enums only for `*_flags`), `include-order` (own module, other Conjure, third-party, standard
-  library, blank line between groups, quotes for Conjure headers), `third-party-include` (public headers),
-  `doctest-include`, `test-case-name`, `forbidden-in-tests`, `file-name` (snake_case) and
-  `tests-mirror-headers`. Exit code 0 clean, 1 findings, 2 usage error.
+- **Style check.** `python tools/check_style.py --tests-mirror-headers` (CTest `style.check`, label `style`) scans
+  `engine/`, `editor/`, `runtime/`, `tests/`, `samples/` and reports `path:line: rule: message` for: `tabs`,
+  `line-length` (120), `crlf`, `trailing-whitespace`, `pragma-once`, `using-namespace` (headers), `windows-macro`
+  (enumerators or constants named `ERROR`, `DELETE`, `IN`, `min`, ...), `enum-class` (plain enums only for
+  `*_flags`), `include-order` (own module, other Conjure, third-party, standard library, blank line between
+  groups, quotes for Conjure headers), `third-party-include` (public headers), `doctest-include`,
+  `test-case-name`, `forbidden-in-tests`, `thread-outside-jobs` (non-test code: no `std::thread` / `std::jthread`
+  outside the two `core/jobs` folders, `std::async` and the raw OS thread calls nowhere), `file-name`
+  (snake_case) and `tests-mirror-headers`. Exit code 0 clean, 1 findings, 2 usage error.
 - **Export check.** `python tools/check_exports.py [module ...]` (every module by default or with `--all`; name
   modules to check only those) reports public classes with out-of-line members, namespace-scope prototypes and
   `extern` variables that lack `CONJURE_API` (`docs/design/07_modules.md` 5 and 9); output `path:line: kind:
@@ -360,9 +361,10 @@ Filter with `ctest -L <label>` or `python tools/build.py --test -L <label>`; `-R
 `bench_context::measure`, fixed warm-up and measured iterations, min / p50 / p95 / p99 and the exact
 allocation count of the worst iteration; `conjure/bench/bench_runner.h`: the command line, thresholds, JSON
 output and exit codes), the executable `conjure_benchmarks` with one scenario file per module (`bench_core`,
-`bench_ecs`, `bench_scene`, `bench_physics`, `bench_render_null_frame`, `bench_scripts_update_phase`,
-`bench_full_frame_10k`; every row of 08 7.1 has a scenario), `thresholds.json` with the `desktop` and `ci`
-machine classes (`ci` is 3x looser), and the self-tests `conjure_benchmarks_tests` (label `benchmarks`). Every
+`bench_ecs`, `bench_scene`, `bench_assets`, `bench_physics`, `bench_render_null_frame`,
+`bench_scripts_update_phase`, `bench_full_frame_10k`; every row of 08 7.1 has a scenario), `thresholds.json`
+with the `desktop` and `ci` machine classes (`ci` is 3x looser), and the self-tests
+`conjure_benchmarks_tests` (label `benchmarks`). Every
 scenario is one CTest entry `benchmark.<module>.<scenario>` under the label `benchmark` (plus the module name;
 the scripting scenarios add `scripting` and `dotnet`), excluded from the default presets. Thresholds are
 enforced in Development and Distribution and only reported in Debug; `--enforce` / `--no-enforce` override. A

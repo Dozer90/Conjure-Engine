@@ -66,7 +66,7 @@ Everything else can be read on demand.
 
 | Page | Covers |
 |---|---|
-| [Data types](core/data-types.md) | `u8`..`u64`, `f32`, `usize`, `byte`, `KIB`/`MIB`/`GIB`, flag enumerations, `non_copyable`, `uuid`, platform and build macros |
+| [Data types](core/data-types.md) | `u8`..`u64`, `f32`, `usize`, `byte`, `KIB`/`MIB`/`GIB`, flag enumerations, deleting copies, `uuid`, platform and build macros |
 | [Errors and results](core/errors-and-results.md) | `result<T>`, `status`, `error`, `error_code`, `make_error`, `CONJURE_TRY`, `CONJURE_TRY_ASSIGN`, error categories |
 | [Logging and assertions](core/logging-and-assertions.md) | log categories and levels, sinks, `CONJURE_LOG_*`, `CONJURE_ASSERT`, `CONJURE_VERIFY`, the assert handler |
 | [Math](core/math.md) | vectors, matrices, quaternions, transforms, bounding volumes, rays, rectangles |

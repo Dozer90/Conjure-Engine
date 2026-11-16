@@ -140,8 +140,9 @@ step_frame()
 Thread model (`06_engine_loop.md` 5, R38): main thread = orchestration, all structural world changes, all
 managed code (scripting systems are `EXCLUSIVE`), ImGui, GPU resource creation, submission. Job workers =
 `PARALLEL` systems over chunks, Jolt jobs, asset IO/decode/import, renderer culling/sorting/fill, IBL bake.
-Only sanctioned extra thread: `core::jobs::dedicated_thread` for the editor's blocking stdin reader; the
-miniaudio callback belongs to the audio backend. Nothing else creates threads.
+Only sanctioned extra threads: `core::jobs::dedicated_thread`s for the editor's blocking stdin reader and for the
+pipe readers of `core::system::process` (`10_core.md` C14); the miniaudio callback belongs to the audio backend.
+Nothing else creates threads.
 
 Pause (R13): the editor keeps the engine in `simulation_mode::PAUSED` while editing (fixed loop and
 non-`RUNS_WHILE_PAUSED` UPDATE systems skipped; TRANSFORM/SYNC/EXTRACT still run so edits render) and

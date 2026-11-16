@@ -11,9 +11,10 @@
 #include <system_error>
 
 // The pieces of the native backend that need operating system calls: replacing a file in a single
-// step and reading a file through a handle that lets other callers rename or delete it meanwhile
-// (std::ifstream denies that on Windows). The free functions are implemented once per platform in
-// native_platform_<platform>.cpp; read_handle itself lives in native_platform.cpp.
+// step, writing a file so that it has reached the storage device, and reading a file through a handle
+// that lets other callers rename or delete it meanwhile (std::ifstream denies that on Windows). The
+// free functions are implemented once per platform in native_platform_<platform>.cpp; read_handle and
+// the flush statistics live in native_platform.cpp.
 
 namespace conjure::core::vfs::internal {
 
@@ -93,6 +94,57 @@ namespace conjure::core::vfs::internal {
     /// Releases a raw handle obtained through open_read_handle. Used by read_handle only.
     /// </summary>
     void close_read_handle(std::intptr_t value) noexcept;
+
+    /// <summary>
+    /// Creates or truncates the regular file at 'path', writes 'data' and has the operating system
+    /// push the file to its storage device before returning: FlushFileBuffers on Windows, fsync on
+    /// POSIX. After a successful return the contents are on the device: a crash or a power cut cannot
+    /// leave the name pointing at torn or missing data, so the file may replace another one
+    /// (write_file_atomic, code sweep F243). The directory entry is not flushed, so a file created by
+    /// this call may itself be gone after a power cut. Two limits: a volume whose driver has no flush
+    /// at all (flush_is_unsupported) still takes the write, without this guarantee, and logs one
+    /// warning per process; on macOS the flush is fsync, which hands the data to the drive without
+    /// waiting for the drive's own write cache, so the guarantee there is only as strong as that
+    /// cache. The parent directory must exist. On failure the file may be left behind partly written;
+    /// the caller removes it. IO_FAILURE carries the operating system's text; 'displayPath' is used in
+    /// messages.
+    /// </summary>
+    [[nodiscard]] result<void> write_file_flushed(
+      const std::filesystem::path &path,
+      std::span<const std::byte> data,
+      std::string_view displayPath
+    );
+
+    /// <summary>
+    /// True when a flush refused with 'platformError' means the volume or its driver has no flush, not
+    /// that the device failed: ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED on Windows, EINVAL and
+    /// ENOTSUP on POSIX. write_file_flushed keeps such a file; every other code fails the write.
+    /// </summary>
+    [[nodiscard]] bool flush_is_unsupported(u32 platformError) noexcept;
+
+    /// <summary>
+    /// How many files write_file_flushed has pushed to their storage device in this process. A
+    /// statistic: tests and benchmarks read it to see that a write was durable. It only ever grows.
+    /// </summary>
+    [[nodiscard]] u64 flushed_file_count() noexcept;
+
+    /// <summary>
+    /// Counts one flushed file. Called by write_file_flushed only, right after the flush succeeded.
+    /// </summary>
+    void note_flushed_file() noexcept;
+
+    /// <summary>
+    /// Records that the volume holding 'displayPath' cannot flush: the first call of the process logs
+    /// a WARN, later ones are silent, so a project on such a volume does not log on every save. Called
+    /// by write_file_flushed only.
+    /// </summary>
+    void note_unflushable_volume(std::string_view displayPath);
+
+    /// <summary>
+    /// True once note_unflushable_volume has logged its WARN in this process; it never becomes false
+    /// again. Tests read it to know whether the next report is the first.
+    /// </summary>
+    [[nodiscard]] bool unflushable_volume_reported() noexcept;
 
     /// <summary>
     /// Moves 'source' over 'target' so that readers see either the old or the new file, never a

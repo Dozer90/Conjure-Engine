@@ -363,6 +363,111 @@ TEST_SUITE("core/mount_table") {
         CHECK_FALSE(mounts.assets->exists("file.txt"));
     }
 
+    TEST_CASE("mount_table - a name that is not portable is refused through a mount as by the backend itself") {
+        mounted_pair mounts = {};
+        REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));
+
+        CHECK(code_of(mounts.table.write_file("assets://dir/bad:name", to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.write_file_atomic("assets://nul", to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.write_text_file("assets://trailing.", "x")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.create_directories("cooked://what?/sub")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "assets://star*.txt")) == error_code::INVALID_ARGUMENT);
+
+        // The scheme separator is no part of any name, and reading through the mount judges none.
+        REQUIRE(mounts.table.write_file("assets://dir/good-name", to_bytes("x")));
+        CHECK(code_of(mounts.table.read_file("assets://dir/bad:name")) == error_code::NOT_FOUND);
+        CHECK(code_of(mounts.table.remove("cooked://trailing ")) == error_code::NOT_FOUND);
+        CHECK(enumerate_all(*mounts.assets, "", enumerate_flags::RECURSIVE).value().paths
+              == std::vector<std::string>{"dir", "dir/good-name", "file.txt"});
+        CHECK(enumerate_all(*mounts.cooked, "", enumerate_flags::RECURSIVE).value().paths.empty());
+    }
+
+    TEST_CASE(
+      "mount_table - rename across mounts onto a name that is not portable is INVALID_ARGUMENT and copies nothing"
+    ) {
+        mounted_pair mounts = {};
+        REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));
+        REQUIRE(mounts.table.create_directories("cooked://dir"));
+        const u64 writesBefore = mounts.cooked->write_counter();
+
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://dir/bad:n")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://aux")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://dir/f.txt.")) == error_code::INVALID_ARGUMENT);
+        // The name is judged before the destination's parent is looked for.
+        CHECK(code_of(mounts.table.rename("assets://file.txt", "cooked://missing/f?")) == error_code::INVALID_ARGUMENT);
+
+        CHECK(mounts.cooked->write_counter() == writesBefore);
+        CHECK(mounts.assets->read_text_file("file.txt").value() == "f");
+        CHECK(enumerate_all(*mounts.cooked, "", enumerate_flags::RECURSIVE).value().paths
+              == std::vector<std::string>{"dir"});
+
+        // The source may carry any name; only the destination is created.
+        CHECK(code_of(mounts.table.rename("assets://bad:name", "cooked://dir/good.txt")) == error_code::NOT_FOUND);
+    }
+
+    TEST_CASE(
+      "regression - code sweep F753: rename across mounts judges the destination name before it looks up either file"
+    ) {
+        // The contract of rename gives one order for every backend: an escape and a read-only backend
+        // first, then the name of the destination, then the lookups. A move between two backends used
+        // to look the source up first, so the same call answered NOT_FOUND or UNSUPPORTED through a
+        // mount table and INVALID_ARGUMENT on one backend.
+        mounted_pair mounts = {};
+        REQUIRE(mounts.table.create_directories("assets://dir"));
+        REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));
+        REQUIRE(mounts.table.create_directories("cooked://dir"));
+        const u64 assetWritesBefore = mounts.assets->write_counter();
+        const u64 cookedWritesBefore = mounts.cooked->write_counter();
+        mount_table &table = mounts.table;
+
+        // A missing source and a directory source: the name is refused before either is noticed.
+        CHECK(code_of(table.rename("assets://missing", "cooked://bad:name")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://gone/deep.txt", "cooked://dir/nul.txt")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://dir", "cooked://trailing.")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://dir", "cooked://missing/what?")) == error_code::INVALID_ARGUMENT);
+        // The same calls within one backend, directly and through the table.
+        CHECK(code_of(mounts.assets->rename("missing", "bad:name")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://missing", "assets://bad:name")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://dir", "assets://trailing.")) == error_code::INVALID_ARGUMENT);
+
+        // With a portable name the lookups answer as before.
+        CHECK(code_of(table.rename("assets://missing", "cooked://good.txt")) == error_code::NOT_FOUND);
+        CHECK(code_of(table.rename("assets://dir", "cooked://good")) == error_code::UNSUPPORTED);
+
+        // An escape at either end ranks above the name.
+        CHECK(code_of(table.rename("assets://../x", "cooked://bad:name")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(table.rename("assets://missing", "cooked://../bad:name")) == error_code::PERMISSION_DENIED);
+
+        // So does a read-only backend at either end, whether or not the source exists.
+        mounts.assets->set_read_only(true);
+        CHECK(code_of(table.rename("assets://missing", "cooked://bad:name")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(table.rename("assets://file.txt", "cooked://bad:name")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(table.rename("assets://missing", "cooked://good.txt")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(mounts.assets->rename("missing", "bad:name")) == error_code::PERMISSION_DENIED);
+        mounts.assets->set_read_only(false);
+        mounts.cooked->set_read_only(true);
+        CHECK(code_of(table.rename("assets://file.txt", "cooked://bad:name")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(table.rename("assets://missing", "cooked://bad:name")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(table.rename("assets://missing", "cooked://good.txt")) == error_code::PERMISSION_DENIED);
+        mounts.cooked->set_read_only(false);
+
+        // The root of a backend is no name at all and keeps its own refusal at either end.
+        CHECK(code_of(table.rename("assets://", "cooked://bad:name")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(table.rename("assets://missing", "cooked://")) == error_code::INVALID_ARGUMENT);
+
+        // Nothing was copied, created or removed by any of the refused calls.
+        CHECK(mounts.assets->write_counter() == assetWritesBefore);
+        CHECK(mounts.cooked->write_counter() == cookedWritesBefore);
+        CHECK(mounts.assets->read_text_file("file.txt").value() == "f");
+        CHECK(enumerate_all(*mounts.cooked, "", enumerate_flags::RECURSIVE).value().paths
+              == std::vector<std::string>{"dir"});
+
+        // And the move itself still works once the name is one every platform takes.
+        REQUIRE(table.rename("assets://file.txt", "cooked://dir/file.txt"));
+        CHECK(mounts.cooked->read_text_file("dir/file.txt").value() == "f");
+        CHECK_FALSE(mounts.assets->exists("file.txt"));
+    }
+
     TEST_CASE("mount_table - rename across mounts from a read-only mount is PERMISSION_DENIED and copies nothing") {
         mounted_pair mounts = {};
         REQUIRE(mounts.table.write_file("assets://file.txt", to_bytes("f")));

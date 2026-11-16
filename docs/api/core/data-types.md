@@ -2,9 +2,9 @@
 
 📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
 
-The small set of types and macros every other Conjure header builds on: fixed-width numbers, flag enumerations, the
-copy-control base classes, 128-bit identifiers and the platform macros. Include `conjure/core/types.h` for the
-numbers; the other headers are named in the section that covers them.
+The small set of types and macros every other Conjure header builds on: fixed-width numbers, flag enumerations,
+128-bit identifiers and the platform macros, plus the way a type forbids copying. Include `conjure/core/types.h` for
+the numbers; the other headers are named in the section that covers them.
 
 ## At a glance
 
@@ -14,7 +14,7 @@ numbers; the other headers are named in the section that covers them.
 | Write "64 KiB" without counting zeros | `64 * KIB` (`KIB`, `MIB`, `GIB`) |
 | Combine options with `\|` and test them | `enum class my_flags : u32 { NONE = 0, ... };` + `CONJURE_ENUM_FLAGS(my_flags);` then `has_flag()` |
 | Convert an enumerator to its integer | `to_underlying(value)` |
-| Stop a class from being copied | derive from `non_copyable` (moves stay) or `non_movable` |
+| Stop a class from being copied | delete its copy operations yourself: `my_type(const my_type &) = delete;` (there is no base class for it) |
 | A stable identifier for an asset or a prefab | `uuid::generate()`, `uuid::parse()`, `uuid::to_string()` |
 | Know whether asserts are compiled in | `#if CONJURE_ASSERTS_ENABLED` |
 | Silence an unused variable | `CONJURE_UNUSED(value)` |
@@ -103,24 +103,48 @@ Everything is `constexpr`, so flags can be combined in constant expressions and 
 
 ## Non-copyable and non-movable types
 
-`conjure/core/non_copyable.h` provides two base classes for types that own something with an identity:
+Conjure has no base class for this. A type that owns something with an identity says so itself, in standard C++,
+by deleting or defaulting its copy and move operations. Every engine type does the same, so what a class allows
+is readable in the class.
 
-- `non_copyable`: deletes copy construction and assignment, keeps moves. Use it for resources that can change
-  hands (a file handle, a GPU buffer).
-- `non_movable`: deletes copies and moves. Use it for objects whose address is handed out (singletons, systems
-  that other code points at).
+- Copies deleted, moves defaulted: a resource that can change hands (a file handle, a GPU buffer).
+- Copies and moves deleted: an object whose address is handed out (a system other code points at).
 
 ```cpp
-#include "conjure/core/non_copyable.h"
+#include <cstddef>
+#include <vector>
 
-class render_device : conjure::core::non_movable {
+class texture_upload {
+    private:
+        std::vector<std::byte> mPixels;
+
+    public:
+        texture_upload() = default;
+        ~texture_upload() = default;
+
+        texture_upload(const texture_upload &) = delete;
+        texture_upload &operator=(const texture_upload &) = delete;
+
+        texture_upload(texture_upload &&) noexcept = default;
+        texture_upload &operator=(texture_upload &&) noexcept = default;
+};
+
+class render_device {
     public:
         render_device() = default;
         ~render_device() = default;
+
+        render_device(const render_device &) = delete;
+        render_device &operator=(const render_device &) = delete;
+
+        render_device(render_device &&) = delete;
+        render_device &operator=(render_device &&) = delete;
 };
 ```
 
-Both have protected constructors and destructors, so they can only be used as bases.
+`noexcept` on the defaulted moves tells the standard containers that moving cannot fail, so `std::vector` keeps its
+strong exception guarantee when it grows (and, for a type that is also copyable, moves instead of copying). Deleting
+the copies alone already suppresses the implicit moves, so a type that should move must default them as shown.
 
 ## UUIDs
 
@@ -191,7 +215,6 @@ for static builds) and `CONJURE_PLUGIN_EXPORT` for entry points a plugin exports
 | `bool has_any_flag(E value, E flags)` | at least one bit set |
 | `E with_flag(E value, E flag)` / `E without_flag(E value, E flag)` | modified copies |
 | `underlying to_underlying(E value)` | enumerator to integer |
-| `class non_copyable` / `class non_movable` | copy-control base classes |
 | `uuid()` / `uuid(u64 high, u64 low)` | null identifier / from halves |
 | `static uuid uuid::generate()` | random version-4 identifier, thread-safe |
 | `static std::optional<uuid> uuid::parse(std::string_view)` | parse canonical text |

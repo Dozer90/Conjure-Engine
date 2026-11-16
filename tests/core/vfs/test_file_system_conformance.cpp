@@ -888,6 +888,182 @@ TEST_SUITE("core/file_system_conformance") {
     }
 
     /*-----------------------------------------------------------------------*/
+    // Names of new entries
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "regression - code sweep F753: a name that is not portable is INVALID_ARGUMENT wherever an entry is created"
+    ) {
+        // A ':' in a later segment made Windows write an alternate data stream of another file and leave a
+        // 0-byte file behind, a trailing dot or space was dropped so the entry landed under another name,
+        // and a device name never reached the disk at all; the memory backend took every one of them.
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+        REQUIRE(fileSystem.write_file("notes.txt", to_bytes("kept")));
+        REQUIRE(fileSystem.write_file("dir/source.txt", to_bytes("source")));
+
+        using namespace std::string_view_literals;
+        const std::array<std::string_view, 30> refused = {
+            "notes.txt:draft",   "fresh:stream",   "dir/in:side.txt", "what?.txt",      "star*.txt",
+            "quote\".txt",       "less<.txt",      "greater>.txt",    "pipe|.txt",      "tab\there.txt",
+            "bell\x07"sv,        "delete\x7F"sv,   "trailing.",       "trailing ",      "dots...",
+            "dir./file.txt",     "dir /file.txt",  "dir/deep /x/y",   "nul",            "NUL.txt",
+            "Con",               "aux.tar.gz",     "prn .txt",        "com1",           "COM9.log",
+            "lpt1",              "Lpt5.dat",       "dir/aux/file",    "dir/nul.txt",    "a/b/c:d/e.txt"
+        };
+        for (const std::string_view path : refused) {
+            CAPTURE(path);
+            CHECK(code_of(fileSystem.write_file(path, to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+            CHECK(code_of(fileSystem.write_file_atomic(path, to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+            CHECK(code_of(fileSystem.write_text_file(path, "x")) == error_code::INVALID_ARGUMENT);
+            CHECK(code_of(fileSystem.create_directories(path)) == error_code::INVALID_ARGUMENT);
+            CHECK(code_of(fileSystem.rename("dir/source.txt", path)) == error_code::INVALID_ARGUMENT);
+        }
+
+        // Nothing was created, no stream was attached to the file that exists and the source of the
+        // refused renames is where it was.
+        const result<enumeration> listing = enumerate_all(fileSystem, "", enumerate_flags::RECURSIVE);
+        REQUIRE(listing);
+        CHECK(listing->paths == std::vector<std::string>{"dir", "dir/source.txt", "notes.txt"});
+        CHECK(fileSystem.read_text_file("notes.txt").value() == "kept");
+        CHECK(fileSystem.stat("notes.txt").value().size == 4);
+        CHECK(fileSystem.read_text_file("dir/source.txt").value() == "source");
+    }
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "file_system_conformance - a refused name is reported with the path and the segment at fault"
+    ) {
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+
+        const result<void> written = fileSystem.write_file("saves\\slot 1 /state.bin", to_bytes("x"));
+        REQUIRE_FALSE(written);
+        const std::string &message = written.get_error().message();
+        CHECK(written.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+        CHECK_MESSAGE(message.find("saves\\slot 1 /state.bin") != std::string::npos, message);
+        CHECK_MESSAGE(message.find("'slot 1 '") != std::string::npos, message);
+        CHECK_MESSAGE(message.find("ends with a dot or a space") != std::string::npos, message);
+
+        const result<void> device = fileSystem.create_directories("logs/aux");
+        REQUIRE_FALSE(device);
+        CHECK_MESSAGE(device.get_error().message().find("'aux'") != std::string::npos, device.get_error().message());
+        CHECK_MESSAGE(
+          device.get_error().message().find("Windows device name") != std::string::npos,
+          device.get_error().message()
+        );
+        CHECK_FALSE(fileSystem.exists("saves"));
+        CHECK_FALSE(fileSystem.exists("logs"));
+    }
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "file_system_conformance - names that only resemble a refused one are created, read and removed"
+    ) {
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+
+        const std::array<std::string_view, 24> accepted = {
+            "com0",          "com10",         "lpt0",          "lpt12.txt",    "console",       "nulls.txt",
+            "auxiliary",     "prnt",          "xcon",          "con1",         "a.b.c",         ".hidden",
+            "..data",        "dots...inside", "with space.txt", " leading",    "semi;colon",    "hash#tag",
+            "tilde~1",       "per%cent",      "brace{}[]()",   "plus+equals=", "at@sign!$&',",  "\xC3\xBC" "ber.txt"
+        };
+        for (const std::string_view name : accepted) {
+            CAPTURE(name);
+            const std::string file = "files/" + std::string(name);
+            const std::string directory = "directories/" + std::string(name);
+            REQUIRE(fileSystem.write_file(file, to_bytes(name)));
+            REQUIRE(fileSystem.create_directories(directory));
+            CHECK(fileSystem.read_text_file(file).value() == name);
+            CHECK(fileSystem.stat(directory).value().isDirectory);
+
+            const std::string moved = "moved/" + std::string(name);
+            REQUIRE(fileSystem.write_file_atomic(moved + ".staged", to_bytes("staged")));
+            REQUIRE(fileSystem.rename(moved + ".staged", moved));
+            CHECK(fileSystem.read_text_file(moved).value() == "staged");
+        }
+
+        CHECK(enumerate_all(fileSystem, "files", enumerate_flags::NONE).value().paths.size() == accepted.size());
+        REQUIRE(fileSystem.remove_all("files"));
+        REQUIRE(fileSystem.remove_all("directories"));
+        REQUIRE(fileSystem.remove_all("moved"));
+        CHECK(enumerate_all(fileSystem, "", enumerate_flags::NONE).value().paths.empty());
+    }
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "file_system_conformance - reading, describing, listing and removing judge no name"
+    ) {
+        // Only creation is strict: an entry that carries such a name already (made on another platform,
+        // or by another program) must stay reachable, so these calls look the name up and report what
+        // they find. Nothing of that name exists here, which is NOT_FOUND, never INVALID_ARGUMENT.
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+        REQUIRE(fileSystem.write_file("present.txt", to_bytes("x")));
+
+        const std::array<std::string_view, 6> lenient = {
+            "missing:stream", "dir/in:side.txt", "what?.txt", "star*.txt", "trailing.", "trailing "
+        };
+        for (const std::string_view path : lenient) {
+            CAPTURE(path);
+            CHECK(code_of(fileSystem.read_file(path)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.read_text_file(path)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.open_read(path)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.stat(path)) == error_code::NOT_FOUND);
+            CHECK_FALSE(fileSystem.exists(path));
+            CHECK(code_of(enumerate_all(fileSystem, path, enumerate_flags::NONE)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.remove(path)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.remove_all(path)) == error_code::NOT_FOUND);
+            CHECK(code_of(fileSystem.rename(path, "portable.txt")) == error_code::NOT_FOUND);
+        }
+        CHECK(fileSystem.read_text_file("present.txt").value() == "x");
+        CHECK_FALSE(fileSystem.exists("portable.txt"));
+    }
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "file_system_conformance - a refused name ranks below an escape and a read-only backend, above the lookup"
+    ) {
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+        REQUIRE(fileSystem.write_file("file.txt", to_bytes("x")));
+
+        // A path that leaves the root is an escape whatever its segments are called; "a:b" at the very
+        // start is a drive letter, which is an escape too.
+        CHECK(code_of(fileSystem.write_file("../out:side", to_bytes("y"))) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(fileSystem.write_file("a:b.txt", to_bytes("y"))) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(fileSystem.create_directories("../nul")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(fileSystem.rename("file.txt", "../trailing.")) == error_code::PERMISSION_DENIED);
+
+        // The destination's name is judged before the source is looked up, and the root stays the root.
+        CHECK(code_of(fileSystem.rename("missing.txt", "bad:name")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.rename("bad:name", "")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.write_file("file.txt/bad:name", to_bytes("y"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.create_directories("file.txt/nul")) == error_code::INVALID_ARGUMENT);
+
+        const std::unique_ptr<file_system> readOnly = fixture.read_only_after([](file_system &writable) {
+            REQUIRE(writable.write_file("frozen.txt", to_bytes("frozen")));
+        });
+        CHECK(code_of(readOnly->write_file("bad:name", to_bytes("y"))) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(readOnly->write_file_atomic("nul", to_bytes("y"))) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(readOnly->create_directories("trailing.")) == error_code::PERMISSION_DENIED);
+        CHECK(code_of(readOnly->rename("frozen.txt", "what?")) == error_code::PERMISSION_DENIED);
+    }
+
+    CONJURE_VFS_CONFORMANCE_CASE(
+      "file_system_conformance - other spellings of a portable path are still accepted where an entry is created"
+    ) {
+        // The rule is applied to the normalised path, so separators, "." and ".." are not names.
+        Fixture fixture = {};
+        file_system &fileSystem = fixture.get();
+
+        REQUIRE(fileSystem.write_file(".\\made\\.\\up/../here.txt", to_bytes("x")));
+        REQUIRE(fileSystem.create_directories("/made//deeper/./"));
+        REQUIRE(fileSystem.rename("made/here.txt", "made\\deeper\\..\\there.txt"));
+        REQUIRE(fileSystem.create_directories(""));
+        REQUIRE(fileSystem.create_directories("."));
+
+        CHECK(enumerate_all(fileSystem, "", enumerate_flags::RECURSIVE).value().paths
+              == std::vector<std::string>{"made", "made/deeper", "made/there.txt"});
+    }
+
+    /*-----------------------------------------------------------------------*/
     // Read-only backends
 
     CONJURE_VFS_CONFORMANCE_CASE(

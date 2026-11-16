@@ -158,11 +158,11 @@ UPDATE systems skipped; TRANSFORM/SYNC/EXTRACT still run so edits render) and `s
 | Main | `engine::application` | event pump, phase orchestration, all structural world changes, all managed code (`EXCLUSIVE` scripting systems), ImGui, GPU resource creation and submission | direct calls; executes jobs while waiting |
 | Job workers | `core::jobs::job_system` | `PARALLEL` systems over chunks, Jolt jobs, asset IO/decode/import, renderer culling/sorting/fill, IBL bake | job counters only |
 | Audio callback | miniaudio inside the `audio` backend | mixing | lock-free command and event rings |
-| `dedicated_thread` | `core::jobs` | the editor's blocking `--ai-stdio` stdin reader (R38) | mutex-guarded line queue |
-| plain `std::thread` | `core::system` | the `process` stdout/stderr pipe readers: the documented exception (`10_core.md` C4), because `system` sits below `jobs` in the area graph (C2) and cannot use `dedicated_thread` | mutex-guarded capture buffers |
+| `dedicated_thread` | `core::jobs` | the editor's blocking `--ai-stdio` stdin reader (R38); the `system::process` pipe readers `process-stdout` and `process-stderr` (Windows) and `process-pipes` (POSIX) (`10_core.md` C14) | mutex-guarded line queue; mutex-guarded capture buffers |
 
-Nothing else creates threads: `std::thread` / `std::jthread` appear only in `engine/src/core/jobs/`, in the
-`core/system` process backends and in backend implementation files (CONVENTIONS 3). System thread modes are `PARALLEL` (chunk-parallel, access sets declared), `MAIN_THREAD`
+Nothing else creates threads: `std::thread` / `std::jthread` appear only in `engine/src/core/jobs/` and
+`engine/include/conjure/core/jobs/` (CONVENTIONS 3, `10_core.md` C4; `tools/check_style.py` rule
+`thread-outside-jobs`). System thread modes are `PARALLEL` (chunk-parallel, access sets declared), `MAIN_THREAD`
 (may overlap non-conflicting `PARALLEL` systems) and `EXCLUSIVE` (alone, may mutate the world directly).
 Frame memory may be allocated from any scheduler job and is reset only on the main thread at FRAME_BEGIN. The
 file watcher and the TCP protocol server own no thread: both poll from the main thread (R38). See

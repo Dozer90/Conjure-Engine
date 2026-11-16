@@ -134,7 +134,9 @@ child itself), so a lost status never reads as success. Timeouts above
 > [!NOTE]
 > Threading: `read_output()`, `read_error()`, `is_running()` and `kill()` may be called from any thread,
 > including while another thread blocks in `wait()`. `start()`, `wait()` and destruction belong to one
-> thread at a time.
+> thread at a time. While a child with captured output runs, the engine drains its pipes on threads of its
+> own, which a debugger or profiler lists as `process-stdout` and `process-stderr` on Windows and as
+> `process-pipes` on Linux and macOS. They end with the child and are gone once `wait()` returns.
 
 ## Shared libraries
 

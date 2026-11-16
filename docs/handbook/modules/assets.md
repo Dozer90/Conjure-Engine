@@ -134,7 +134,9 @@ indexes and graphs, writes `import_log.txt` and saves the snapshot. A failing so
 (`read_side_file` records a path even when the read fails, so a missing side file is watched); the importer
 named in the meta is authoritative, so a hand-edited importer id is honoured (unknown name: `NO_IMPORTER`).
 `add_file`, `create_asset` and `move_asset` refuse a path that leaves its mount (`INVALID_ARGUMENT`), and
-`create_asset` removes the source it wrote when its meta cannot be written.
+`create_asset` removes the source it wrote when its meta cannot be written. `create_asset` and `move_asset` also
+check every name of the path with `path_utils::is_portable_name` first (`INVALID_ARGUMENT`, code sweep F753): the
+file system would refuse the source, but only after `move_asset` had moved the `.meta` (`rock..meta` is portable).
 
 ### 3.4 Graphs and snapshot
 
@@ -330,6 +332,7 @@ cases that shape the code:
 | reload failure | old payload stays, `LOADED`, `RELOAD_FAILED` |
 | meta cannot be written | record `META_INVALID` (or `NO_IMPORTER` when only the importer could not be recorded), WARN, scan continues; `create_asset` removes its source |
 | asset path leaving its mount | `INVALID_ARGUMENT` from `add_file` / `create_asset` / `move_asset`, nothing touched |
+| asset path with a name that is not portable | `INVALID_ARGUMENT` from `create_asset` / `move_asset`, nothing touched |
 | watcher pass failing | one WARN per distinct failure, INFO once it recovers |
 | crash mid-write | `*.tmp` ignored by scan and watcher, removed on the next `scan()` |
 | handles alive at manager destruction | assert in Debug / Development, ERROR log in Distribution |

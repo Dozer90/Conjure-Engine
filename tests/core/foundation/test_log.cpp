@@ -6,13 +6,16 @@
 #include "conjure/core/log.h"
 #include "core/foundation/console_output.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -165,8 +168,39 @@ TEST_SUITE("core/log") {
         CHECK(parse_log_level("ERROR") == log_level::ERR);
         CHECK(parse_log_level("Debug") == log_level::DEBUG);
         CHECK(parse_log_level("off") == log_level::OFF);
-        CHECK(parse_log_level("") == log_level::OFF);
-        CHECK(parse_log_level("bogus") == log_level::OFF);
+
+        constexpr std::array<log_level, 7> LEVELS = {
+            log_level::TRACE, log_level::DEBUG, log_level::INFO, log_level::WARN,
+            log_level::ERR,   log_level::FATAL, log_level::OFF,
+        };
+        for (const log_level level : LEVELS) {
+            CAPTURE(to_string(level));
+            CHECK(parse_log_level(to_string(level)) == level);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F209: parse_log_level reports an unknown name instead of OFF") {
+        // An unknown name came back as log_level::OFF, the very value a real "off" parses to, so every caller
+        // had to compare the text again to tell a typo from a request for silence (and one that forgot would
+        // have switched logging off on a typo). The parser now says so itself.
+        CHECK_FALSE(parse_log_level("bogus").has_value());
+        CHECK_FALSE(parse_log_level("").has_value());
+        CHECK(parse_log_level("bogus") != log_level::OFF);
+        CHECK(parse_log_level("") != log_level::OFF);
+
+        // Only the exact names match, whatever their case: no prefix, no padding, no enumerator spelling.
+        constexpr std::array<std::string_view, 9> UNKNOWN = {
+            "of", "offf", " off", "off ", "warning", "err", "inf", "UNKNOWN", "3",
+        };
+        for (const std::string_view name : UNKNOWN) {
+            CAPTURE(name);
+            CHECK(parse_log_level(name) == std::nullopt);
+        }
+
+        // OFF is still a level of its own, in any case.
+        const std::optional<log_level> off = parse_log_level("OfF");
+        REQUIRE(off.has_value());
+        CHECK(*off == log_level::OFF);
     }
 
     TEST_CASE("log - file sink writes formatted lines and can append") {

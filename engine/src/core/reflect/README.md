@@ -116,7 +116,7 @@ Representation (written in field order; `document::to_canonical_string()` sorts 
 | Kind | JSON |
 |---|---|
 | `BOOL`, integers | `true`/`false`, numbers (integers range-checked on read, integral reals like `3.0` accepted) |
-| `F32`, `F64` | numbers; non-finite values are written as `null` and `null` reads as NaN |
+| `F32`, `F64` | numbers; +infinity is the string `"inf"`, -infinity the string `"-inf"` and NaN is `null`, and each reads back as the value written (exactly these spellings: any other string is `INVALID_ARGUMENT`). The components of the math kinds below follow the same rule |
 | `STRING` | string (any bytes, embedded zeros included) |
 | `STRING_ID` | the interned name, or `"#" + 16 hex digits` when the name is unknown; reads also accept an unsigned number as the hash |
 | `UUID` | `"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"` |

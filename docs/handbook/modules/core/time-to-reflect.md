@@ -54,7 +54,7 @@ meanwhile, so steady enqueueing does not reallocate); `random::default_engine()`
 ## 2. jobs
 
 Purpose: the engine's threading primitives, and the only area that creates `std::thread` / `std::jthread`
-(the `system::process` pipe readers are the documented exception, C4).
+(C4). Every other thread is a `dedicated_thread`, the `system::process` pipe readers included.
 
 ### 2.1 Headers
 
@@ -178,10 +178,10 @@ helpers (`namespace conjure::core::vfs`).
 | Header | Contents |
 |---|---|
 | `conjure/core/vfs/file_system.h` | `file_stat`, `enumerate_flags`, `file` (`read_at`, `size`), `file_system`: `read_file`, `read_text_file`, `write_file`, `write_file_atomic`, `write_text_file`, `stat`, `exists`, `enumerate`, `rename`, `remove`, `remove_all`, `create_directories`, `open_read`, `is_read_only` |
-| `conjure/core/vfs/native_file_system.h` | a directory on disk: `root()`, `to_native()`, rejects root escapes |
+| `conjure/core/vfs/native_file_system.h` | a directory on disk: `root()`, `to_native()` (a `result<path>`, checked like the file methods), rejects root escapes |
 | `conjure/core/vfs/memory_file_system.h` | an in-memory tree: `set_read_only`, `write_counter` |
 | `conjure/core/vfs/mount_table.h` | routes `scheme://path`: `mount`, `unmount`, `find_mount`, `schemes`, static `split` |
-| `conjure/core/vfs/path_utils.h` | `normalize`, `join`, `parent`, `filename`, `stem`, `extension` (lower-cased), `has_extension`, `is_absolute`, `relative_to` |
+| `conjure/core/vfs/path_utils.h` | `normalize`, `join`, `parent`, `filename`, `stem`, `extension` (lower-cased), `has_extension`, `is_absolute`, `relative_to`, `is_portable_name` |
 | `conjure/core/vfs/vfs.h` | umbrella |
 
 ### 4.2 Contract and algorithms
@@ -190,11 +190,44 @@ helpers (`namespace conjure::core::vfs`).
   `PERMISSION_DENIED`; every backend returns the same codes (`NOT_FOUND`, `INVALID_ARGUMENT`, `ALREADY_EXISTS`,
   `INVALID_STATE` for a non-empty directory, `OUT_OF_RANGE` for `read_at` past the end, `IO_FAILURE` with the
   OS text) and enumerates in ascending path order.
+- Names of new entries are portable (code sweep F753). `write_file`, `write_file_atomic`, `create_directories`
+  and the destination of `rename` pass their normalised path to the one shared `internal::validate_new_path`
+  (`vfs_internal.h`), in the native and the memory backend alike and on every platform; the mount table's
+  cross-backend `rename` calls it for the destination before it looks up either file. Every segment must pass
+  `internal::portable_name_problem` (public as `path_utils::is_portable_name`): no control character and none
+  of `: * ? " < > |`, no trailing dot or space, no Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`; the part before the first dot, trailing spaces dropped, case ignored). A refusal is
+  `INVALID_ARGUMENT` naming the path and the segment, ranked after the escape and read-only checks and before
+  any lookup, and it is lexical: a segment that exists already is judged too. `read_file`, `open_read`, `stat`,
+  `enumerate`, `remove`, `remove_all` and the source of `rename` never call the validator, so an entry that
+  carries such a name stays readable and removable. On Windows the native backend's `native_path_of` hands a
+  path with such a name to Win32 in the extended-length form whatever its length, because the classic form
+  drops a trailing dot or space (`report.` would address `report`) and, before Windows 11, opens the device
+  for a device name in any directory.
+  Before, a `:` in a later segment wrote an NTFS alternate
+  data stream and left a 0-byte file, and a trailing dot or space was dropped by Win32.
+- `native_file_system::to_native` is checked like every file method (it returns the same `resolve(path)`), so
+  the on-disk path it hands out is the root or below it and an escape is `PERMISSION_DENIED`; the unchecked
+  mapping is the private `native_path_of`, fed only paths that passed `internal::resolve_backend_path`
+  (code sweep F241).
 - The native backend reads through handles opened with delete sharing (`CreateFileW` with `FILE_SHARE_DELETE`,
   `pread` on POSIX) so an open reader never blocks `write_file_atomic`, `rename` or `remove`; atomic writes go
   to `<path>.tmp-<uuid>` and swap in with `FileRenameInfoEx` + `POSIX_SEMANTICS` (fallback `MoveFileExW` for the
   codes `internal::rename_falls_back_to_move` lists, `ERROR_INVALID_FUNCTION` from network redirectors among
-  them) or `std::filesystem::rename`. Recursive `enumerate` and `remove_all` start their walk from the
+  them) or `std::filesystem::rename`.
+- `write_file_atomic` is durable on the native backend (code sweep F243): the temporary is written by
+  `internal::write_file_flushed` (`CreateFileW` + `WriteFile` + `FlushFileBuffers`; `open` + `write` + `fsync`
+  on every POSIX platform; macOS gets `fsync` too, not `F_FULLFSYNC`, decision C11) and only then renamed over
+  the target, so after a power cut the path holds the old contents or the new ones, never a file whose name
+  reached the disk before its data. The directory entry is not flushed: a lost rename leaves the old file,
+  one of the two allowed outcomes, and possibly the temporary (the asset scan never takes a `*.tmp-<uuid>`
+  for a source). The cost is one device flush per call, milliseconds each, so `write_file` stays unflushed
+  for output that can be made again; `benchmark.assets.first_scan_100` measures what a scan that creates one
+  `.meta` per source pays. A flush refused with a code in `internal::flush_is_unsupported` (a driver without
+  a flush routine) keeps the file without the guarantee and logs one WARN per process; any other flush error
+  fails the write and the target is untouched. `internal::flushed_file_count()` counts the flushed files of
+  the process for tests and benchmarks.
+- Recursive `enumerate` and `remove_all` start their walk from the
   extended-length form on Windows, so an entry nested past the classic path limit below a short root is still
   reached; write times convert without reading a clock, so an unchanged file always reports the same value.
 - The memory backend stores immutable `shared_ptr<const vector<byte>>` contents, so open handles keep reading
@@ -202,14 +235,17 @@ helpers (`namespace conjure::core::vfs`).
 - The mount table validates schemes, accepts `assets` and `assets://` interchangeably, refuses to mount itself
   (directly or through other tables) and moves files across backends by copy-and-remove. `rename` first
   follows both URIs through nested tables to the backends that store them, so one backend reached by two
-  routes gets a real rename. The move keeps the rename contract against those backends (a backend root at
-  either end, a read-only source, a directory at the destination and a missing destination parent are refused
-  before anything is copied), writes the copy atomically and removes a new copy again when the source cannot
+  routes gets a real rename. The move keeps the rename contract against those backends and in the order of a
+  backend's own rename (an escape or a read-only backend at either end, a backend root at either end and a
+  destination name that is not portable are refused before either file is looked up; then a missing source, a
+  directory at the destination and a missing destination parent, all before anything is copied), writes the
+  copy atomically and removes a new copy again when the source cannot
   be removed. Engine mounts (R24): `project://`, `assets://`, `engine://`, `cooked://`, `modules://<name>/`.
 
 ### 4.3 Threading
 
-`native_file_system` is stateless apart from its root; `memory_file_system` takes one mutex per operation and
+`native_file_system` is stateless apart from its root (the flush statistics of `native_platform.cpp` are two
+process-wide atomics); `memory_file_system` takes one mutex per operation and
 invokes enumerate callbacks after releasing it; `mount_table` copies the backend `shared_ptr` out before
 forwarding so an operation survives a concurrent `unmount`.
 
@@ -219,8 +255,10 @@ Implement `file_system` (the asset pack reader will).
 
 ### 4.5 Tests
 
-`tests/core/vfs/`, a `TEST_CASE_TEMPLATE` conformance suite run against both backends plus native, memory and
-mount specifics.
+`tests/core/vfs/`, a `TEST_CASE_TEMPLATE` conformance suite run against both backends (the names of new
+entries included) plus native, memory and mount specifics; the native file covers the flush of an atomic
+write through `internal::flushed_file_count()` and reads, moves and removes entries whose names could not
+be created.
 
 ## 5. system
 
@@ -252,9 +290,11 @@ Purpose: operating-system services the rest of the engine must not touch directl
 ### 5.3 Threading
 
 `read_output`, `read_error`, `is_running` and `kill` may be called while another thread blocks in `wait()`. The
-pipe readers are plain `std::thread`s inside the process backends, the documented exception to "no
-`std::thread` outside `jobs`" (C4): the area sits below `jobs` in C2, so `jobs::dedicated_thread` is out of
-reach here.
+pipe readers are `jobs::dedicated_thread`s (C4; `system` links `jobs` privately, C2 as amended by code sweep
+F233), started by both backends through `detail::pipe_reader` in `system_internal.h`. Debuggers and profilers
+show them as `process-stdout` and `process-stderr` on Windows and `process-pipes` on POSIX. A reader ends when
+the last writer of its pipe is gone, not on a stop request (a blocking read cannot be interrupted), so the
+destructor kills the process tree before it joins, and `wait()` does once its timeout has passed.
 
 ### 5.4 Tests
 
@@ -296,6 +336,14 @@ mirror (`namespace conjure::core::reflect`).
   release/acquire publication.
 - JSON reads are lenient (missing members keep their value, unknown members are reported, `3.0` is accepted
   for an integer) and stop at the first failing field with a message naming the path.
+- Floats without a JSON number have their own spelling, in `write_float` / `read_float` of
+  `json_conversion.cpp`, which every float of every kind goes through (scalars, the components of vectors,
+  quaternions, matrices and transforms): +infinity is the string `"inf"`, -infinity is `"-inf"`, NaN is `null`,
+  and each reads back as the value written (decision C15, code sweep F250). Before that an infinity was
+  written as `null` and came back as NaN. Reading takes exactly the two spellings, a number or `null`; any
+  other string is `INVALID_ARGUMENT`. Old data with `null` still loads (as NaN); data holding one of the
+  strings does not load in a build from before the change. `json::writer` itself still asserts on a
+  non-finite real, so code that writes floats without reflection must apply the same encoding itself.
 
 ### 6.3 Threading
 

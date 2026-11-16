@@ -30,7 +30,6 @@ conjure_add_core_area(foundation
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/error.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/hash.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/log.h
-        ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/non_copyable.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/platform_detect.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/result.h
         ${PROJECT_SOURCE_DIR}/engine/include/conjure/core/types.h

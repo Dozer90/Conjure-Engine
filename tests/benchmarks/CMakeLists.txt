@@ -44,6 +44,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${CONJURE_BENCH_HARNESS_HE
 # in step by hand: a scenario without an add_test runs only by hand, an add_test without a scenario fails
 # with exit code 2 ("no scenario matches").
 set(CONJURE_BENCHMARK_SOURCES
+    bench_assets.cpp
     bench_core.cpp
     bench_ecs.cpp
     bench_scene.cpp
@@ -60,6 +61,7 @@ set(CONJURE_BENCHMARK_SCENARIOS
     scene.transform_propagation_10k_sparse
     scene.snapshot_capture_restore_10k
     scene.load_10k
+    assets.first_scan_100
 )
 set(CONJURE_BENCHMARK_DEPS
     conjure::bench_harness

@@ -11,6 +11,7 @@
 #include "conjure/core/reflect/type_registry.h"
 
 #include <cmath>
+#include <format>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -406,20 +407,103 @@ TEST_SUITE("core/json_conversion") {
         CHECK(object.large == -4);
     }
 
-    TEST_CASE("json_conversion - integral reals are accepted for integers and non-finite floats travel as null") {
+    TEST_CASE("json_conversion - integral reals are accepted for integers") {
         reflect_test::everything object = {};
         REQUIRE(from_json(object, parse(R"({"medium": 3.0, "usmall": 12.0})").root()).has_value());
         CHECK(object.medium == 3);
         CHECK(object.usmall == 12);
         CHECK_FALSE(from_json(object, parse(R"({"medium": 3.5})").root()).has_value());
+    }
 
-        object.single = std::numeric_limits<f32>::quiet_NaN();
-        object.real = std::numeric_limits<f64>::infinity();
-        object.v3.y = std::numeric_limits<f32>::infinity();
+    TEST_CASE("regression - code sweep F250: infinite floats round-trip through JSON as inf and -inf strings") {
+        const f32 infinity32 = std::numeric_limits<f32>::infinity();
+        const f64 infinity64 = std::numeric_limits<f64>::infinity();
+
+        reflect_test::everything object = make_populated();
+        object.single = infinity32;
+        object.real = -infinity64;
+        object.v2 = math::vec2(-infinity32, infinity32);
+        object.v3.y = infinity32;
+        object.v4.w = -infinity32;
+        object.rot.z = infinity32;
+        object.matrix[2][1] = -infinity32;
+        object.pose.position.x = infinity32;
+        object.pose.scale.z = -infinity32;
+        object.nested.weight = -infinity32;
+        object.nested.offset.z = infinity32;
+        object.parts[1].weight = infinity32;
+
         const json::document document = parse(serialise(object));
-        CHECK(document.root()["single"].is_null());
-        CHECK(document.root()["real"].is_null());
-        CHECK(document.root()["v3"][1].is_null());
+        const json::value root = document.root();
+        CHECK(root["single"].as_string() == "inf");
+        CHECK(root["real"].as_string() == "-inf");
+        CHECK(root["v2"][0].as_string() == "-inf");
+        CHECK(root["v2"][1].as_string() == "inf");
+        CHECK(root["v3"][0].is_number());
+        CHECK(root["v3"][1].as_string() == "inf");
+        CHECK(root["v4"][3].as_string() == "-inf");
+        CHECK(root["rot"][2].as_string() == "inf");
+        CHECK(root["matrix"][9].as_string() == "-inf");
+        CHECK(root["pose"]["position"][0].as_string() == "inf");
+        CHECK(root["pose"]["scale"][2].as_string() == "-inf");
+        CHECK(root["nested"]["weight"].as_string() == "-inf");
+        CHECK(root["nested"]["offset"][2].as_string() == "inf");
+        CHECK(root["parts"][1]["weight"].as_string() == "inf");
+
+        // Every infinity comes back as the same infinity, and nothing else in the object moved.
+        reflect_test::everything restored = {};
+        REQUIRE(from_json(restored, root).has_value());
+        CHECK(restored.single == infinity32);
+        CHECK(restored.real == -infinity64);
+        CHECK(restored.v2 == math::vec2(-infinity32, infinity32));
+        CHECK(restored.v3.y == infinity32);
+        CHECK(restored.v4.w == -infinity32);
+        CHECK(restored.rot.z == infinity32);
+        CHECK(restored.matrix[2][1] == -infinity32);
+        CHECK(restored.pose.position.x == infinity32);
+        CHECK(restored.pose.scale.z == -infinity32);
+        CHECK(restored.nested.weight == -infinity32);
+        CHECK(restored.nested.offset.z == infinity32);
+        CHECK(restored.parts[1].weight == infinity32);
+        CHECK(restored == object);
+
+        // The text is stable: writing what was read gives the same document again.
+        CHECK(serialise(restored) == serialise(object));
+    }
+
+    TEST_CASE("json_conversion - NaN travels as null and the largest finite floats stay numbers") {
+        reflect_test::everything object = {};
+        object.single = std::numeric_limits<f32>::quiet_NaN();
+        object.real = std::numeric_limits<f64>::quiet_NaN();
+        object.v3 = math::vec3(std::numeric_limits<f32>::max(), std::numeric_limits<f32>::quiet_NaN(), 3.0f);
+        object.v2 = math::vec2(std::numeric_limits<f32>::lowest(), std::numeric_limits<f32>::denorm_min());
+        object.nested.weight = -0.0f;
+
+        const json::document document = parse(serialise(object));
+        const json::value root = document.root();
+        CHECK(root["single"].is_null());
+        CHECK(root["real"].is_null());
+        CHECK(root["v3"][0].is_number());
+        CHECK(root["v3"][1].is_null());
+        CHECK(root["v2"][0].is_number());
+        CHECK(root["v2"][1].is_number());
+        CHECK(root["nested"]["weight"].is_number());
+
+        reflect_test::everything restored = {};
+        REQUIRE(from_json(restored, root).has_value());
+        CHECK(std::isnan(restored.single));
+        CHECK(std::isnan(restored.real));
+        CHECK(std::isnan(restored.v3.y));
+        CHECK(restored.v3.x == std::numeric_limits<f32>::max());
+        CHECK(restored.v3.z == 3.0f);
+        CHECK(restored.v2.x == std::numeric_limits<f32>::lowest());
+        CHECK(restored.v2.y == std::numeric_limits<f32>::denorm_min());
+        CHECK(restored.nested.weight == 0.0f);
+    }
+
+    TEST_CASE("json_conversion - data that stored an infinity as null still loads, as NaN") {
+        // What a build before code sweep F250 wrote for {single: +inf, real: -inf, v3.y: +inf}.
+        const json::document document = parse(R"({"single": null, "real": null, "v3": [1.0, null, 3.0]})");
 
         reflect_test::everything restored = {};
         REQUIRE(from_json(restored, document.root()).has_value());
@@ -427,6 +511,141 @@ TEST_SUITE("core/json_conversion") {
         CHECK(std::isnan(restored.real));
         CHECK(std::isnan(restored.v3.y));
         CHECK(restored.v3.x == 1.0f);
+        CHECK(restored.v3.z == 3.0f);
+        CHECK(restored.medium == -3);
+    }
+
+    TEST_CASE("json_conversion - a float reads no string but the two infinity spellings") {
+        const std::vector<std::string_view> refused = {
+            "",    "Inf",  "INF", "+inf", "-Inf", "infinity", "-infinity", "Infinity", "nan",
+            "NaN", " inf", "inf ", "1.5", "0",    "1e999",    "null",      "--inf",    "in",
+        };
+        for (const std::string_view text : refused) {
+            CAPTURE(text);
+            json::writer source = {};
+            source.begin_object();
+            source.key("single");
+            source.value(text);
+            source.end_object();
+            const json::document document = parse(source.finish());
+
+            reflect_test::everything object = {};
+            const result<void> read = from_json(object, document.root());
+            REQUIRE_FALSE(read.has_value());
+            CHECK(read.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+            CHECK(read.get_error().message().find("field 'single'") != std::string::npos);
+            CHECK(read.get_error().message().find("\"inf\" or \"-inf\"") != std::string::npos);
+            CHECK(read.get_error().message().find(std::format("found string '{}'", text)) != std::string::npos);
+            CHECK(object.single == 1.5f);
+        }
+
+        // The same holds for a double, for a component of a vector and for a member of a transform.
+        reflect_test::everything object = {};
+        const result<void> badReal = from_json(object, parse(R"({"real": "Infinity"})").root());
+        REQUIRE_FALSE(badReal.has_value());
+        CHECK(badReal.get_error().message().find("field 'real'") != std::string::npos);
+        CHECK(object.real == 2.5);
+
+        const result<void> badComponent = from_json(object, parse(R"({"v3": [1, "infinity", 3]})").root());
+        REQUIRE_FALSE(badComponent.has_value());
+        CHECK(badComponent.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+        CHECK(badComponent.get_error().message().find("field 'v3'") != std::string::npos);
+        CHECK(badComponent.get_error().message().find("element 1") != std::string::npos);
+        CHECK(object.v3 == math::vec3(1.0f, 2.0f, 3.0f));
+
+        const result<void> badPose = from_json(object, parse(R"({"pose": {"scale": [1, 1, "INF"]}})").root());
+        REQUIRE_FALSE(badPose.has_value());
+        CHECK(badPose.get_error().message().find("field 'pose'") != std::string::npos);
+        CHECK(object.pose.scale == math::vec3(1.0f));
+
+        // Other JSON types are still plain mismatches.
+        const result<void> boolean = from_json(object, parse(R"({"single": true})").root());
+        REQUIRE_FALSE(boolean.has_value());
+        CHECK(boolean.get_error().message().find("expected number, found bool") != std::string::npos);
+        const result<void> array = from_json(object, parse(R"({"real": ["inf"]})").root());
+        REQUIRE_FALSE(array.has_value());
+        CHECK(array.get_error().message().find("expected number, found array") != std::string::npos);
+    }
+
+    TEST_CASE("json_conversion - the infinity spellings mean nothing to an integer, an enum or a handle") {
+        reflect_test::everything object = {};
+        CHECK_FALSE(from_json(object, parse(R"({"medium": "inf"})").root()).has_value());
+        CHECK_FALSE(from_json(object, parse(R"({"ularge": "-inf"})").root()).has_value());
+        CHECK_FALSE(from_json(object, parse(R"({"counts": [1, "inf", 3]})").root()).has_value());
+        CHECK_FALSE(from_json(object, parse(R"({"weapon": "inf"})").root()).has_value());
+        CHECK_FALSE(from_json(object, parse(R"({"entity": "inf"})").root()).has_value());
+        CHECK(object.medium == -3);
+        CHECK(object.ularge == 4);
+        CHECK(object.weapon == reflect_test::weapon_kind::BOW);
+
+        // A string field keeps the text as text.
+        REQUIRE(from_json(object, parse(R"({"text": "inf"})").root()).has_value());
+        CHECK(object.text == "inf");
+    }
+
+    TEST_CASE("json_conversion - the math converters and writers carry infinities on their own") {
+        const f32 infinity = std::numeric_limits<f32>::infinity();
+
+        const json::document source = parse(
+          R"([["inf", "-inf"], [0, "inf", null], ["-inf", 1, 2, "inf"], [0, 0, "inf", 1],)"
+          R"( {"position": ["inf", 0, "-inf"]}])"
+        );
+        const json::value root = source.root();
+        CHECK(root[0].to<math::vec2>().value() == math::vec2(infinity, -infinity));
+        const math::vec3 mixed = root[1].to<math::vec3>().value();
+        CHECK(mixed.x == 0.0f);
+        CHECK(mixed.y == infinity);
+        CHECK(std::isnan(mixed.z));
+        CHECK(root[2].to<math::vec4>().value() == math::vec4(-infinity, 1.0f, 2.0f, infinity));
+        CHECK(root[3].to<math::quat>().value().z == infinity);
+        const math::transform pose = root[4].to<math::transform>().value();
+        CHECK(pose.position == math::vec3(infinity, 0.0f, -infinity));
+        CHECK(pose.scale == math::vec3(1.0f));
+
+        json::writer vector = {};
+        write_json(math::vec3(infinity, -infinity, 0.5f), vector);
+        CHECK(vector.finish() == R"(["inf","-inf",0.5])");
+
+        math::mat4 matrix(1.0f);
+        matrix[3][0] = infinity;
+        json::writer matrixText = {};
+        write_json(matrix, matrixText);
+        const json::document matrixDocument = parse(matrixText.finish());
+        CHECK(matrixDocument.root()[12].as_string() == "inf");
+        CHECK(matrixDocument.root().to<math::mat4>().value() == matrix);
+
+        math::transform unbounded = {};
+        unbounded.scale = math::vec3(infinity, 1.0f, -infinity);
+        json::writer transformText = {};
+        write_json(unbounded, transformText);
+        const math::transform reread = parse(transformText.finish()).root().to<math::transform>().value();
+        CHECK(reread.scale == unbounded.scale);
+    }
+
+    TEST_CASE("json_conversion - set_from_json and get_as_json carry infinities for a field and an element") {
+        reflect_test::everything object = {};
+        const reflect::type_info *type = type_info_of<reflect_test::everything>();
+        REQUIRE(type != nullptr);
+
+        const field_ref weight = resolve_path(*type, &object, "parts[1].weight").value();
+        REQUIRE(set_from_json(weight, parse("\"-inf\"").root()).has_value());
+        CHECK(object.parts[1].weight == -std::numeric_limits<f32>::infinity());
+        CHECK(get_as_json(weight).value().to_string() == "\"-inf\"");
+
+        const field_ref real = resolve_path(*type, &object, "real").value();
+        REQUIRE(set_from_json(real, parse("\"inf\"").root()).has_value());
+        CHECK(object.real == std::numeric_limits<f64>::infinity());
+        CHECK(get_as_json(real).value().to_string() == "\"inf\"");
+
+        REQUIRE(set_from_json(real, parse("null").root()).has_value());
+        CHECK(std::isnan(object.real));
+        CHECK(get_as_json(real).value().to_string() == "null");
+
+        const result<void> refused = set_from_json(weight, parse("\"infinite\"").root());
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.get_error().generic_code() == error_code::INVALID_ARGUMENT);
+        CHECK(refused.get_error().message().find("field 'parts[1].weight'") != std::string::npos);
+        CHECK(object.parts[1].weight == -std::numeric_limits<f32>::infinity());
     }
 
     TEST_CASE("json_conversion - fixed arrays accept shorter input and reject longer input") {

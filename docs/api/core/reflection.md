@@ -138,10 +138,29 @@ result<game::projectile> load_projectile(std::string_view text) {
 ```
 
 Reading is lenient where that is safe: an integral real (`3.0`) is accepted for an integer, a shorter
-array fills only the leading elements, an enum accepts its name or its number, `null` reads as NaN for
-floats, and unknown members are ignored (and listed when you pass a vector). Anything else fails with
-`INVALID_ARGUMENT` or `OUT_OF_RANGE` and a message that starts with the field path, for example
-`field 'parts[1].weight': expected number, found string`.
+array fills only the leading elements, an enum accepts its name or its number, and unknown members are
+ignored (and listed when you pass a vector). Anything else fails with `INVALID_ARGUMENT` or `OUT_OF_RANGE`
+and a message that starts with the field path, for example
+`field 'parts[1].weight': expected number, found bool`.
+
+JSON has no number for an infinity or for NaN, so floats (`f32`, `f64` and every component of a vector,
+quaternion, matrix or transform) use three other spellings, and each reads back as the value written:
+
+| Value | Written as | Read from |
+|---|---|---|
+| a finite number | a JSON number | a JSON number |
+| +infinity | the string `"inf"` | `"inf"` |
+| -infinity | the string `"-inf"` | `"-inf"` |
+| NaN | `null` | `null` |
+
+A "no limit" sentinel such as `maxDistance = infinity` therefore survives a save and a load. Only these two
+strings are understood, exactly as spelled; `"Infinity"`, `"INF"` or `"nan"` fail with `INVALID_ARGUMENT`.
+
+> [!NOTE]
+> Files saved before this encoding existed stored an infinity as `null`. They still load, and the value
+> reads as NaN, as it did then. A file saved now with an infinity in it does not load in an older build of
+> the engine, which expects a number or `null` there. A tool of your own that reads scene or prefab JSON
+> must accept the two strings wherever it expects a float.
 
 > [!WARNING]
 > `from_json()` stops at the first failing field and **keeps the values it already wrote**. When a load

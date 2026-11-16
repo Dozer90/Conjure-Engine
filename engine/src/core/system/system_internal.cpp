@@ -1,14 +1,30 @@
 #include "core/system/system_internal.h"
 
+#include "conjure/core/assert.h"
+
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 using namespace conjure::core;
 using namespace conjure::core::detail;
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Helpers
+
+namespace {
+    // Process-wide and written by whichever thread starts a child. Nothing is published through it,
+    // so relaxed order is enough.
+    std::atomic<conjure::u64> sStartedPipeReaderCount = 0;
+}
+
 
 /*===========================================================================*/
 /*===========================================================================*/
@@ -215,4 +231,41 @@ bool completion_latch::wait_until(std::chrono::steady_clock::time_point deadline
     return mCondition.wait_until(lock, deadline, [this] {
         return mPending == 0;
     });
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// pipe_reader
+
+void pipe_reader::start(std::string_view name, completion_latch &done, std::function<void()> drain) {
+    CONJURE_ASSERT(drain != nullptr, "pipe_reader '{}': empty drain function", name);
+    CONJURE_ASSERT(!mThread.has_value(), "pipe_reader '{}': started twice", name);
+    if (!drain || mThread.has_value()) {
+        return;
+    }
+
+    // Registered before the thread exists, so an owner that waits on the latch right after start()
+    // never sees it complete while the reader has yet to run.
+    done.expect_one();
+    mThread.emplace(std::string(name), [&done, drainPipe = std::move(drain)](std::stop_token) {
+        drainPipe();
+        done.arrive();
+    });
+    sStartedPipeReaderCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool pipe_reader::joinable() const noexcept {
+    return mThread.has_value() && mThread->joinable();
+}
+
+void pipe_reader::join() {
+    if (!mThread.has_value()) {
+        return;
+    }
+    mThread->join();
+}
+
+conjure::u64 conjure::core::detail::started_pipe_reader_count() noexcept {
+    return sStartedPipeReaderCount.load(std::memory_order_relaxed);
 }

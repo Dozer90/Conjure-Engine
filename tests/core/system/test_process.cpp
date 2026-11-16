@@ -1,21 +1,27 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
+#include "core/jobs/thread_name.h"
 #include "core/system/system_internal.h"
 
+#include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <optional>
+#include <semaphore>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -955,5 +961,244 @@ TEST_SUITE("core/process") {
         CHECK_FALSE(finished->timedOut);
         CHECK(finished->exitCode == 0);
         CHECK(without_carriage_returns(finished->standardOutput) == "spawned\n");
+    }
+
+    TEST_CASE("regression - code sweep F233: a pipe reader runs on a named dedicated thread") {
+        const std::array<std::string_view, 3> names = {
+            detail::STANDARD_OUTPUT_READER_NAME,
+            detail::STANDARD_ERROR_READER_NAME,
+            detail::COMBINED_READER_NAME,
+        };
+        for (const std::string_view name : names) {
+            CAPTURE(name);
+            // Linux keeps 15 bytes of a thread name; a longer one would show up cut short there.
+            CHECK_FALSE(name.empty());
+            CHECK(name.size() <= jobs::detail::MAX_POSIX_THREAD_NAME_LENGTH);
+
+            detail::completion_latch done = {};
+            std::thread::id drainThread = {};
+            std::string osName = {};
+            {
+                detail::pipe_reader reader = {};
+                reader.start(name, done, [&drainThread, &osName] {
+                    drainThread = std::this_thread::get_id();
+                    osName = jobs::detail::current_thread_name();
+                });
+                reader.join();
+            }
+
+            CHECK(done.is_complete());
+            CHECK(drainThread != std::thread::id());
+            CHECK(drainThread != std::this_thread::get_id());
+            // What a debugger or a profiler shows for the thread, as the operating system reports it.
+            CHECK(osName == name);
+        }
+        CHECK(names[0] != names[1]);
+        CHECK(names[0] != names[2]);
+        CHECK(names[1] != names[2]);
+    }
+
+    TEST_CASE("regression - code sweep F233: a child's captured pipes are drained by pipe_reader threads only") {
+        // The case above shows what a pipe_reader is; this one shows that the process backends use it.
+        // A backend that went back to a thread of its own would still capture everything, but it would
+        // start fewer pipe_readers than it has pipes to drain. Windows drains each captured pipe on its
+        // own thread, POSIX drains both on one.
+        constexpr u64 READERS_FOR_TWO_PIPES = CONJURE_PLATFORM_WINDOWS == 1 ? 2 : 1;
+
+        u64 before = detail::started_pipe_reader_count();
+        const result<process_result> both = process::run(child({"both"}));
+        REQUIRE(both.has_value());
+        CHECK(without_carriage_returns(both->standardOutput) == "out\n");
+        CHECK(without_carriage_returns(both->standardError) == "err\n");
+        CHECK(detail::started_pipe_reader_count() == before + READERS_FOR_TWO_PIPES);
+
+        // One pipe, however it is asked for, is one reader on every platform.
+        before = detail::started_pipe_reader_count();
+        process_desc merged = child({"both"});
+        merged.mergeStderr = true;
+        REQUIRE(process::run(merged).has_value());
+        CHECK(detail::started_pipe_reader_count() == before + 1);
+
+        before = detail::started_pipe_reader_count();
+        process_desc outputOnly = child({"echo", "quiet"});
+        outputOnly.captureStderr = false;
+        REQUIRE(process::run(outputOnly).has_value());
+        CHECK(detail::started_pipe_reader_count() == before + 1);
+
+        before = detail::started_pipe_reader_count();
+        process_desc errorOnly = child({"stderr", "only", "this"});
+        errorOnly.captureStdout = false;
+        errorOnly.captureStderr = true;
+        REQUIRE(process::run(errorOnly).has_value());
+        CHECK(detail::started_pipe_reader_count() == before + 1);
+
+        // Nothing captured means no pipe and no thread at all.
+        before = detail::started_pipe_reader_count();
+        process_desc uncaptured = child({"exit", "0"});
+        uncaptured.captureStdout = false;
+        uncaptured.captureStderr = false;
+        REQUIRE(process::run(uncaptured).has_value());
+        CHECK(detail::started_pipe_reader_count() == before);
+
+        // start() creates the readers, wait() only joins them.
+        before = detail::started_pipe_reader_count();
+        result<process> started = process::start(child({"both"}));
+        REQUIRE(started.has_value());
+        CHECK(detail::started_pipe_reader_count() == before + READERS_FOR_TWO_PIPES);
+        REQUIRE(started->wait().has_value());
+        CHECK(detail::started_pipe_reader_count() == before + READERS_FOR_TWO_PIPES);
+    }
+
+    TEST_CASE("pipe_reader - join waits for the drain function and the latch completes when it returns") {
+        detail::completion_latch done = {};
+        detail::pipe_reader reader = {};
+        std::binary_semaphore entered(0);
+        std::binary_semaphore release(0);
+        std::atomic<bool> drained = false;
+
+        CHECK_FALSE(reader.joinable());
+        CHECK(done.is_complete());
+
+        reader.start("test-reader", done, [&entered, &release, &drained] {
+            entered.acquire();
+            release.acquire();
+            drained.store(true);
+        });
+
+        // Registered with the latch before the thread runs its first instruction.
+        CHECK_FALSE(done.is_complete());
+        CHECK(reader.joinable());
+        entered.release();
+        CHECK_FALSE(done.is_complete());
+        CHECK_FALSE(drained.load());
+
+        release.release();
+        done.wait();
+        CHECK(drained.load());
+        CHECK(done.is_complete());
+
+        // The latch arriving does not join: the owner still has to.
+        CHECK(reader.joinable());
+        reader.join();
+        CHECK_FALSE(reader.joinable());
+        reader.join();
+        CHECK_FALSE(reader.joinable());
+    }
+
+    TEST_CASE("pipe_reader - a reader that was never started joins as a no-op and leaves the latch alone") {
+        detail::completion_latch done = {};
+        {
+            detail::pipe_reader reader = {};
+            CHECK_FALSE(reader.joinable());
+            reader.join();
+            CHECK_FALSE(reader.joinable());
+        }
+        CHECK(done.is_complete());
+        CHECK(done.wait_until(steady_clock::now()));
+    }
+
+    TEST_CASE("pipe_reader - destruction joins a reader whose drain function returns") {
+        detail::completion_latch done = {};
+        std::atomic<bool> drained = false;
+        std::binary_semaphore release(0);
+        {
+            detail::pipe_reader reader = {};
+            reader.start("test-reader", done, [&release, &drained] {
+                release.acquire();
+                drained.store(true);
+            });
+            // What an owner does before it lets go of a reader: make the pipe end.
+            release.release();
+        }
+        CHECK(drained.load());
+        CHECK(done.is_complete());
+    }
+
+    TEST_CASE("pipe_reader - two readers share one latch, which completes when both have returned") {
+        detail::completion_latch done = {};
+        detail::pipe_reader first = {};
+        detail::pipe_reader second = {};
+        std::binary_semaphore releaseFirst(0);
+        std::binary_semaphore releaseSecond(0);
+        std::binary_semaphore firstReturning(0);
+        std::thread::id firstThread = {};
+        std::thread::id secondThread = {};
+
+        first.start(detail::STANDARD_OUTPUT_READER_NAME, done, [&releaseFirst, &firstReturning, &firstThread] {
+            releaseFirst.acquire();
+            firstThread = std::this_thread::get_id();
+            firstReturning.release();
+        });
+        second.start(detail::STANDARD_ERROR_READER_NAME, done, [&releaseSecond, &secondThread] {
+            releaseSecond.acquire();
+            secondThread = std::this_thread::get_id();
+        });
+        CHECK_FALSE(done.is_complete());
+
+        releaseFirst.release();
+        firstReturning.acquire();
+        first.join();
+        CHECK_FALSE(first.joinable());
+        // One reader is still draining, so an owner waiting with a deadline is told so.
+        CHECK_FALSE(done.is_complete());
+        CHECK_FALSE(done.wait_until(steady_clock::now()));
+
+        releaseSecond.release();
+        done.wait();
+        second.join();
+        CHECK(done.is_complete());
+        CHECK(firstThread != secondThread);
+        CHECK(firstThread != std::this_thread::get_id());
+        CHECK(secondThread != std::this_thread::get_id());
+    }
+
+    TEST_CASE("pipe_reader - an empty drain function and a second start assert and start nothing") {
+        detail::completion_latch done = {};
+        detail::pipe_reader reader = {};
+
+        CONJURE_CHECK_ASSERTS(reader.start("test-reader", done, std::function<void()>()));
+        CHECK_FALSE(reader.joinable());
+        // Nothing was registered: a latch left waiting for a reader that never runs would hang wait().
+        CHECK(done.is_complete());
+
+        std::atomic<int> runs = 0;
+        reader.start("test-reader", done, [&runs] {
+            runs.fetch_add(1);
+        });
+        CONJURE_CHECK_ASSERTS(reader.start("test-reader", done, [&runs] {
+            runs.fetch_add(100);
+        }));
+        reader.join();
+        CHECK(runs.load() == 1);
+        CHECK(done.is_complete());
+
+        // A reader is started once in its life, also after it was joined.
+        CONJURE_CHECK_ASSERTS(reader.start("test-reader", done, [&runs] {
+            runs.fetch_add(100);
+        }));
+        CHECK(runs.load() == 1);
+        CHECK(done.is_complete());
+        CHECK_FALSE(reader.joinable());
+    }
+
+    TEST_CASE("process - children run one after another each get their own readers and lose no output") {
+        // Every run creates its reader threads and joins them in wait(); a reader left behind or a latch
+        // left waiting would show up as a hang or as output of one child in the result of the next.
+        for (int index = 0; index < 8; ++index) {
+            CAPTURE(index);
+            process_desc desc = child({"both"});
+            desc.mergeStderr = index % 2 == 1;
+            const result<process_result> finished = process::run(desc);
+
+            REQUIRE(finished.has_value());
+            CHECK(finished->exitCode == 0);
+            if (desc.mergeStderr) {
+                CHECK(without_carriage_returns(finished->standardOutput) == "out\nerr\n");
+                CHECK(finished->standardError.empty());
+            } else {
+                CHECK(without_carriage_returns(finished->standardOutput) == "out\n");
+                CHECK(without_carriage_returns(finished->standardError) == "err\n");
+            }
+        }
     }
 }

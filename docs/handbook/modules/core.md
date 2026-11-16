@@ -42,7 +42,7 @@ Other modules link `conjure::core`; a core area links only the areas it needs (`
 | jobs | `conjure::core_jobs` | `jobs/` | - |
 | json | `conjure::core_json` | `json/` | yyjson (private) |
 | vfs | `conjure::core_vfs` | `vfs/` | - |
-| system | `conjure::core_system` | flat | stb (private) |
+| system | `conjure::core_system` | flat | jobs (private), stb (private) |
 | reflect | `conjure::core_reflect` | `reflect/` | json, strings, math, containers, time |
 
 Each area library is registered with `conjure_register_static_library()`, so the whole of core is
@@ -55,7 +55,7 @@ whole-archived into the umbrella shared library `conjure_shared` by `conjure_fin
 |---|---|---|
 | Errors | fallible calls return `result<T>` / `status` with a generic `core::error_code`; core declares no category of its own; programmer errors assert | C3 |
 | Allocation | `new`/`delete`/`malloc` are confined to `memory` | C4 |
-| Threads | `std::thread` / `std::jthread` are confined to `jobs`, plus the `system::process` pipe readers (the documented exception: `system` sits below `jobs`) | C2, C4 |
+| Threads | `std::thread` / `std::jthread` are confined to `jobs`; every other thread is a `jobs::dedicated_thread`, the `system::process` pipe readers included (`system` links `jobs` for them) | C2, C4, C14 |
 | Platform code | per-platform translation units (`*_windows.cpp`, `*_posix.cpp`) selected by CMake; only `conjure/core/platform_detect.h` reads compiler macros | CONVENTIONS 3 |
 | Third-party headers | never in public headers; glm is the single exception, through `conjure/core/math/glm_types.h` | C6 |
 | Determinism | everything is headless and deterministic given the same inputs | C7 |

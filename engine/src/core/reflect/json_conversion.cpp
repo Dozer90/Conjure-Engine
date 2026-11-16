@@ -77,20 +77,31 @@ namespace {
     /*-----------------------------------------------------------------------*/
     // Floats
 
-    void write_f32(f32 number, json::writer &out) {
-        if (!std::isfinite(number)) {
+    // JSON has no number for an infinity or for NaN. The infinities travel as these two strings so
+    // that a "no limit" sentinel survives a save and a load exactly (code sweep F250); NaN travels
+    // as null. Readers take exactly these spellings: any other string is an error, not a guess.
+    constexpr std::string_view POSITIVE_INFINITY_TEXT = "inf";
+    constexpr std::string_view NEGATIVE_INFINITY_TEXT = "-inf";
+
+    template <typename Float>
+    void write_float(Float number, json::writer &out) {
+        if (std::isnan(number)) {
             out.value(nullptr);
+            return;
+        }
+        if (std::isinf(number)) {
+            out.value(number > Float{0} ? POSITIVE_INFINITY_TEXT : NEGATIVE_INFINITY_TEXT);
             return;
         }
         out.value(number);
     }
 
+    void write_f32(f32 number, json::writer &out) {
+        write_float(number, out);
+    }
+
     void write_f64(f64 number, json::writer &out) {
-        if (!std::isfinite(number)) {
-            out.value(nullptr);
-            return;
-        }
-        out.value(number);
+        write_float(number, out);
     }
 
     void write_floats(std::span<const f32> components, json::writer &out) {
@@ -101,24 +112,41 @@ namespace {
         out.end_array();
     }
 
-    result<f32> read_f32(const json::value &in) {
+    template <typename Float>
+    result<Float> read_float(const json::value &in) {
         if (in.is_valid() && in.is_null()) {
-            return std::numeric_limits<f32>::quiet_NaN();
+            return std::numeric_limits<Float>::quiet_NaN();
+        }
+        if (in.is_string()) {
+            const std::string_view text = in.as_string();
+            if (text == POSITIVE_INFINITY_TEXT) {
+                return std::numeric_limits<Float>::infinity();
+            }
+            if (text == NEGATIVE_INFINITY_TEXT) {
+                return -std::numeric_limits<Float>::infinity();
+            }
+            return error(
+              error_code::INVALID_ARGUMENT,
+              std::format(
+                "expected number, null, \"{}\" or \"{}\", found string '{}'",
+                POSITIVE_INFINITY_TEXT,
+                NEGATIVE_INFINITY_TEXT,
+                text
+              )
+            );
         }
         if (!in.is_number()) {
             return mismatch("number", in);
         }
-        return in.to<f32>();
+        return in.to<Float>();
+    }
+
+    result<f32> read_f32(const json::value &in) {
+        return read_float<f32>(in);
     }
 
     result<f64> read_f64(const json::value &in) {
-        if (in.is_valid() && in.is_null()) {
-            return std::numeric_limits<f64>::quiet_NaN();
-        }
-        if (!in.is_number()) {
-            return mismatch("number", in);
-        }
-        return in.to<f64>();
+        return read_float<f64>(in);
     }
 
     result<void> read_floats(const json::value &in, std::span<f32> components) {

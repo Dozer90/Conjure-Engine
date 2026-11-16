@@ -10,13 +10,20 @@ and the code win**; the area documents are corrected by the wave 1 documentation
 | Id | Decision |
 |---|---|
 | C1 | Core is one module (`conjure::core`) made of independently buildable **areas**, each a static library `conjure::core_<area>` with its own test executable. Areas: `foundation`, `math`, `containers`, `strings`, `memory`, `time`, `jobs`, `json`, `vfs`, `system`, `reflect`. Public headers live flat in `engine/include/conjure/core/` except the large areas `jobs`, `json`, `vfs`, `reflect`, `memory`, `containers`, `math`, which use `conjure/core/<area>/<name>.h`. |
-| C2 | Area dependencies (public link): every area -> `foundation`; `memory` -> none else; `strings` -> none else; `containers` -> none else; `math` -> glm; `time` -> none else; `jobs` -> `containers`, `memory`; `json` -> yyjson (private), `containers`; `vfs` -> `containers`, `strings`; `system` -> stb (private); `reflect` -> `json`, `strings`, `math`, `containers`. No cycles. |
+| C2 | Area dependencies (public link): every area -> `foundation`; `memory` -> none else; `strings` -> none else; `containers` -> none else; `math` -> glm; `time` -> none else; `jobs` -> none else; `json` -> yyjson (private), `containers`; `vfs` -> `containers`, `strings`; `system` -> `jobs` (private), stb (private); `reflect` -> `json`, `strings`, `math`, `containers`. No cycles. |
 | C3 | Errors: `core::error {category, code, message}`; each module binds `enum class <module>_error : u16` with `CONJURE_DECLARE_ERROR_CATEGORY(enum, "name", name_fn)`. Core areas that fail at runtime (`json`, `vfs`, `system`, `jobs`) use the generic `core::error_code` and do **not** declare their own category. (Already implemented in `error.h`.) |
-| C4 | No exceptions, no `new`/`delete` outside `memory`, no `std::thread` outside `jobs` (and `system::process`'s pipe reader, which is a `jobs::dedicated_thread`). |
+| C4 | No exceptions, no `new`/`delete` outside `memory`, no `std::thread` outside `jobs`. Code outside `jobs` that needs a thread of its own holds a `jobs::dedicated_thread`; in core that is `system::process`'s pipe readers (C14). |
 | C5 | Hashing is FNV-1a (`hash.h`, implemented). `string_id` is the 64-bit FNV-1a of the name; interning keeps the name as metadata in every configuration (2.4), never freed, so `string_id` is for bounded vocabularies. |
 | C6 | Public headers of core never include a third-party header; glm is the single exception through `conjure/core/math/math.h`. yyjson, stb, OS headers stay in `src/`. |
 | C7 | Every API below is headless and deterministic given the same inputs; `jobs` with 0 workers runs everything inline on the caller. |
 | C8 | Struct fields camelCase, class members `mCamelCase` (R31). Flags are `enum class <x>_flags` + `CONJURE_ENUM_FLAGS(...)`. |
+| C9 | **`parse_log_level` returns `std::optional<log_level>`** (code sweep F209): one of the seven names of `to_string` in any case gives its level, `"off"` gives `log_level::OFF`, and anything else, the empty string included, gives `std::nullopt`. It no longer answers `OFF` for an unknown name, which made a typo indistinguishable from a request for silence and left every caller to compare the text again. No alias is accepted: `"err"` is unknown, the name is `"error"`. Callers decide about `OFF` themselves: `--log-level off` is accepted (`engine/command_line.cpp`), while the editor's `console.read` `minLevel` and `session.subscribe` `minLogLevel` reject `nullopt` and still reject `OFF` on purpose, because `OFF` is no level a line can have and so cannot be the minimum of a filter. |
+| C10 | **`native_file_system::to_native` is checked** (code sweep F241): `[[nodiscard]] result<std::filesystem::path> to_native(std::string_view path) const` returns the same resolution the file methods start with, so a path that would leave the root (`../x`, `/../x`, `C:/x`, `//server/x`, and so a Windows absolute path to the root itself) is `PERMISSION_DENIED` and a successful result is always the root or below it. One leading separator means the backend root on every platform, so a POSIX absolute path is not refused: it maps below the root like any other path. The mapping is lexical (the path need not exist; a read-only instance maps too) and comes back in the extended-length form on Windows when the path needs it (from 248 characters on, or with a name that is not portable, C12). The unchecked mapping is the private `native_path_of`, called only with a path `internal::resolve_backend_path` accepted. This settles the contradiction of 2.9, which declared a plain path and promised a rejection it could not report: the class advertises a sandbox, and its one public way back to disk paths must not be the way out of it. |
+| C11 | **`write_file_atomic` is durable on the native backend** (code sweep F243, option A: always flush before the rename). The temporary is flushed to its storage device (`FlushFileBuffers` on Windows, `fsync` on every POSIX platform) before it replaces the target, so after a crash or a power cut the path holds the old contents or the new ones, never a torn file. The directory entry is not flushed: a lost rename leaves the old file, which is an allowed outcome. Every caller pays one device flush per call, milliseconds each; there is no unflushed variant of the atomic write and no flag, and `write_file` stays unflushed for output that can be made again. A volume whose driver has no flush at all (`internal::flush_is_unsupported`) keeps the file without the guarantee and is reported once per process; any other flush error fails the write and leaves the target untouched. The memory backend has nothing to flush. macOS uses `fsync` like every POSIX platform, as decided: there `fsync` hands the data to the drive without waiting for the drive's own write cache, and `fcntl(F_FULLFSYNC)`, which does wait, is a slower class of request that would need its own decision and a measurement on that platform. The price is measured by `benchmark.assets.first_scan_100` (`tests/benchmarks/README.md`): a first scan that creates one `.meta` per source. |
+| C12 | **Names of new entries are portable, on every platform and backend** (code sweep F753, option C: reject on creation only). `write_file`, `write_file_atomic`, `create_directories` and the destination of `rename` refuse with `INVALID_ARGUMENT` a path one of whose segments holds a control character (U+0000 to U+001F, U+007F) or one of `: * ? " < > \|`, ends with a dot or a space, or is a Windows device name in any case and with any extension (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`). The check is lexical (a segment that exists already is judged too), ranks after the escape and read-only checks and before any lookup, and is one shared validator (`internal::validate_new_path`) for the native and the memory backend and for the mount table's cross-backend move; `path_utils::is_portable_name` is its public form for one name. `read_file`, `open_read`, `stat`, `exists`, `enumerate`, `remove`, `remove_all` and the source of `rename` stay lenient, so an entry that already carries such a name can be read, renamed to a portable name and removed. On Windows the native backend addresses such a path in the extended-length form, whatever its length and whatever form the root was given in: in the classic form Win32 drops a trailing dot or space, so `report.` would address its neighbour `report`, and before Windows 11 it takes a device name in any directory for the device. New content is therefore portable, and Windows can no longer file a write under another name (an alternate data stream, a dropped trailing dot, a device). |
+| C13 | **Core has no copy-control base class** (code sweep F212, option B: delete). `conjure/core/non_copyable.h` with `non_copyable` and `non_movable` is removed: no engine type derived from them, they had no test, and the style exception excusing the missing test described them wrongly. A type that must not be copied deletes its copy constructor and copy assignment itself and defaults (`noexcept`) or deletes its moves, in the class, where a reader of a learning engine sees standard C++ directly; game code does the same. `docs/CODE_STYLE.cpp` carries the example of a non-copyable but movable type and `docs/CONVENTIONS.md` section 3 the rule. No such base is to be added again. |
+| C14 | **`system` depends on `jobs`, and the process pipe readers are `jobs::dedicated_thread`s** (code sweep F233, option B). C2 gains `system` -> `jobs` as a private link (no cycle: the `jobs` library links only `foundation`), which makes C4 true as written: nothing outside `jobs` creates a `std::thread` or `std::jthread`. Both process backends start their readers through `detail::pipe_reader` (`engine/src/core/system/system_internal.h`), which holds the `dedicated_thread`, registers it with the completion latch and joins it through `dedicated_thread::join()`. The threads are named `process-stdout` and `process-stderr` on Windows and `process-pipes` on POSIX (each within the 15 bytes Linux keeps). A reader ignores its stop token, since a blocking read cannot be interrupted; it ends when the last writer of its pipe is gone, so the destructor kills the process tree before joining and `wait()` does once its timeout has passed (without a timeout `wait()` waits for the last writer to go). A refused thread is handled where every `dedicated_thread` handles it: the `std::system_error` is not caught and ends the process (2.7, sweep F225). There is no new toolchain requirement, because `jobs` and its `std::jthread` check are part of every build already. |
+| C15 | **Infinite floats are written as the strings `"inf"` and `"-inf"`** (code sweep F250, option B). The reflection JSON conversion (2.11) writes +infinity as `"inf"`, -infinity as `"-inf"`, NaN as `null` (unchanged) and every finite float as a number, for `F32`, `F64` and each component of `VEC2/3/4`, `QUAT`, `MAT4` and `TRANSFORM`; reading accepts a number, `null` and exactly those two strings, so all three round-trip and a "no limit" sentinel no longer comes back as NaN. Any other string for a float is `INVALID_ARGUMENT` naming the field path. Compatibility: data written before this decision stored an infinity as `null` and still loads, as NaN; data holding one of the strings does not load in an older build. Everything that reads the engine's JSON without going through reflection (tools reading scene files, the script-field paths of the scripting layer) must accept the two strings where it expects a float; the editor's property drawers read and write them (`04_editor.md`), and the script-field paths adopt the same encoding as a scripting follow-up. |
 
 ## 2. Area contracts
 
@@ -27,10 +34,12 @@ one per public header).
 ### 2.1 foundation (implemented; wave 1 only maintains it)
 
 Headers: `platform_detect.h`, `types.h`, `api.h`, `build_info.h` (generated), `hash.h`, `error.h`, `result.h`,
-`assert.h`, `log.h`, `uuid.h`, `enum_flags.h`, `non_copyable.h`. See the headers; they are documented.
+`assert.h`, `log.h`, `uuid.h`, `enum_flags.h`. See the headers; they are documented. There is no copy-control base
+class (C13): a type deletes or defaults its own copy and move operations.
 Known mapping to the area documents: `add_log_sink/remove_log_sink/log_sink_handle` (04, 08) = `log::add_sink(std::shared_ptr<log_sink>)`
 / `log::remove_sink(...)`; `uuid::is_nil()` (05) = `uuid::is_null()`; `error_code::IO_ERROR/PARSE_FAILED` = `IO_FAILURE/PARSE_FAILURE`;
 `CONJURE_DEFINE_LOG_CATEGORY(name)` takes a second display-name argument: `CONJURE_DEFINE_LOG_CATEGORY(LOG_ECS, "ecs")`.
+`std::optional<log_level> parse_log_level(std::string_view name)` reports an unknown name as `std::nullopt` (C9).
 
 ### 2.2 math (`conjure/core/math/`)
 
@@ -330,17 +339,17 @@ namespace conjure::core::vfs {
         public: virtual ~file_system();
         [[nodiscard]] virtual result<std::vector<std::byte>> read_file(std::string_view path) = 0;
         [[nodiscard]] virtual result<std::string> read_text_file(std::string_view path);                 // default via read_file
-        [[nodiscard]] virtual result<void> write_file(std::string_view path, std::span<const std::byte> data) = 0;    // creates parents
-        [[nodiscard]] virtual result<void> write_file_atomic(std::string_view path, std::span<const std::byte> data) = 0;  // tmp + rename
+        [[nodiscard]] virtual result<void> write_file(std::string_view path, std::span<const std::byte> data) = 0;    // creates parents; names of new entries must be portable (C12)
+        [[nodiscard]] virtual result<void> write_file_atomic(std::string_view path, std::span<const std::byte> data) = 0;  // tmp + flush to the device + rename (C11)
         [[nodiscard]] virtual result<file_stat> stat(std::string_view path) = 0;                        // NOT_FOUND when missing
         [[nodiscard]] virtual bool exists(std::string_view path);
         [[nodiscard]] virtual result<void> enumerate(std::string_view directory, enumerate_flags flags, const std::function<void(std::string_view path, const file_stat &)> &callback) = 0;
-        [[nodiscard]] virtual result<void> rename(std::string_view from, std::string_view to) = 0;
+        [[nodiscard]] virtual result<void> rename(std::string_view from, std::string_view to) = 0;   // 'to' is a new name (C12); 'from' may be any name
         [[nodiscard]] virtual result<void> remove(std::string_view path) = 0;                          // files and empty dirs; remove_all(path) recursive
-        [[nodiscard]] virtual result<void> create_directories(std::string_view path) = 0;
+        [[nodiscard]] virtual result<void> create_directories(std::string_view path) = 0;              // names must be portable (C12)
         [[nodiscard]] virtual result<std::unique_ptr<file>> open_read(std::string_view path) = 0;
         [[nodiscard]] virtual bool is_read_only() const noexcept; };
-    class native_file_system final : public file_system { public: explicit native_file_system(std::filesystem::path root, bool readOnly = false); const std::filesystem::path &root() const noexcept; std::filesystem::path to_native(std::string_view path) const; /* rejects ".." escapes with PERMISSION_DENIED */ };
+    class native_file_system final : public file_system { public: explicit native_file_system(std::filesystem::path root, bool readOnly = false); const std::filesystem::path &root() const noexcept; [[nodiscard]] result<std::filesystem::path> to_native(std::string_view path) const; /* checked like the file methods: an escape is PERMISSION_DENIED (C10) */ };
     class memory_file_system final : public file_system { /* in-memory tree; thread-safe via mutex; write times from a counter */ };
     class mount_table final : public file_system {   // "scheme://path" routing: project://, assets://, engine://, cooked://, modules://<name>/
         public: [[nodiscard]] result<void> mount(std::string_view scheme, std::shared_ptr<file_system> backend);   // ALREADY_EXISTS
@@ -349,13 +358,15 @@ namespace conjure::core::vfs {
                 [[nodiscard]] static result<std::pair<std::string_view, std::string_view>> split(std::string_view uri);  // {scheme, path}
                 // every file_system method routes by scheme; a bare path without scheme is INVALID_ARGUMENT
     };
-    // path_utils: normalize (collapse "//", "./", resolve "..", forward slashes), join, parent, filename, stem, extension (lower-case), has_extension, is_absolute, relative_to.
+    // path_utils: normalize (collapse "//", "./", resolve "..", forward slashes), join, parent, filename, stem, extension (lower-case), has_extension, is_absolute, relative_to,
+    //             is_portable_name (the rule for the name of a new entry, C12).
 }
 ```
 Tests: a **conformance suite** template run against `native_file_system` (in a `temp_directory`) and `memory_file_system`
 (`test_file_system_conformance.cpp` with a `TEST_CASE_TEMPLATE` or shared function), plus `test_mount_table.cpp`,
-`test_path_utils.cpp`, `test_native_file_system.cpp` (root escape rejected, atomic write leaves no temp file, write
-time changes), `test_memory_file_system.cpp` (concurrent writers).
+`test_path_utils.cpp`, `test_native_file_system.cpp` (root escape rejected, atomic write leaves no temp file and
+flushes its data, write time changes), `test_memory_file_system.cpp` (concurrent writers). The conformance suite
+covers the names of new entries (C12) for both backends.
 
 ### 2.10 system (`conjure/core/`)
 
@@ -366,7 +377,9 @@ Headers: `process.h`, `dynamic_library.h`, `image.h`.
   async: `[[nodiscard]] static result<process> start(const process_desc &)`, `bool is_running()`, `result<process_result> wait()`,
   `void kill()`, incremental `read_output(std::string &out)` (non-blocking). Implementation per platform in
   `process_windows.cpp` (CreateProcessW, pipes, Job objects for kill tree) and `process_posix.cpp` (posix_spawn/fork+exec,
-  pipes, waitpid). Arguments are passed as an array (no shell); Windows quoting follows the MSVCRT rules.
+  pipes, waitpid). Arguments are passed as an array (no shell); Windows quoting follows the MSVCRT rules. Captured
+  pipes are drained while the child runs by named `jobs::dedicated_thread`s, never by a `std::thread` of the area's
+  own (C4, C14).
 - `class dynamic_library`: `[[nodiscard]] static result<dynamic_library> load(const std::filesystem::path &)` (`LoadLibraryW` /
   `dlopen(RTLD_NOW | RTLD_LOCAL)`; error message includes the OS error text), move-only RAII unload, `void *symbol(const char *name) const noexcept`,
   `template <typename Fn> Fn symbol_as(const char *name) const noexcept`, `is_loaded()`, `path()`, `static std::string decorate_name(std::string_view baseName)`
@@ -418,6 +431,8 @@ namespace conjure::core::reflect {
     [[nodiscard]] result<void> from_json(const type_info &type, void *object, const json::value &in);   // missing fields keep their current value; unknown fields ignored (returned as warnings via optional std::vector<std::string> *unknownFields)
     [[nodiscard]] result<json::document> to_json_document(const type_info &type, const void *object);
     template <typename T> result<void> to_json(const T &, json::writer &); template <typename T> result<void> from_json(T &, const json::value &);
+    // Floats (scalars and every component of the math kinds): a finite value is a number, +infinity the string "inf",
+    // -infinity the string "-inf", NaN null; each reads back as written and any other string is INVALID_ARGUMENT (C15).
     // Field access by path: result<field_ref> resolve_path(const type_info &, void *object, std::string_view path /* "a.b[2].c" */); field_ref { void *data; const field_info *field; }; result<void> set_from_json(field_ref, const json::value &); result<json::document> get_as_json(field_ref);
 }
 // Description macros (in reflect.h), usable in any module:

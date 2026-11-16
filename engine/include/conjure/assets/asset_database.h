@@ -286,7 +286,8 @@ namespace conjure::assets {
             /// <summary>
             /// Writes a new source and its .meta with the given importer, then registers it. The
             /// source is removed again when its .meta cannot be written; INVALID_ARGUMENT when the
-            /// path leaves its mount.
+            /// path leaves its mount or one of its names is not portable
+            /// (core::vfs::path_utils::is_portable_name), before anything is written.
             /// </summary>
             [[nodiscard]] core::result<asset_id> create_asset(
               std::string_view assetPath,
@@ -296,7 +297,8 @@ namespace conjure::assets {
 
             /// <summary>
             /// Renames the source and its .meta; the uuid and every sub-asset uuid are kept.
-            /// INVALID_ARGUMENT when the new path leaves its mount.
+            /// INVALID_ARGUMENT when the new path leaves its mount or one of its names is not
+            /// portable (core::vfs::path_utils::is_portable_name), before anything is moved.
             /// </summary>
             [[nodiscard]] core::result<void> move_asset(const asset_id &id, std::string_view newAssetPath);
 

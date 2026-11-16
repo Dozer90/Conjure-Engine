@@ -10,6 +10,7 @@
 #include <format>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -45,9 +46,10 @@ namespace conjure::core {
     [[nodiscard]] CONJURE_API std::string_view to_string(log_level level) noexcept;
 
     /// <summary>
-    /// Parses a level name case-insensitively. Returns OFF for unknown names.
+    /// Parses a level name case-insensitively ("warn", "ERROR", "Off"). The names are the ones to_string
+    /// returns, so OFF parses to log_level::OFF. An unknown or empty name returns std::nullopt.
     /// </summary>
-    [[nodiscard]] CONJURE_API log_level parse_log_level(std::string_view name) noexcept;
+    [[nodiscard]] CONJURE_API std::optional<log_level> parse_log_level(std::string_view name) noexcept;
 
     /// <summary>
     /// A named channel with its own minimum level. Instances are global and register themselves

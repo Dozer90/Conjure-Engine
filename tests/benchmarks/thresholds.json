@@ -39,6 +39,10 @@
             "desktop": { "p50_ms": 250.0 },
             "ci": { "p50_ms": 750.0 }
         },
+        "assets.first_scan_100": {
+            "desktop": { "p50_ms": 1000.0 },
+            "ci": { "p50_ms": 3000.0 }
+        },
         "physics.step_10k_active": {
             "desktop": { "p50_ms": 8.00 },
             "ci": { "p50_ms": 24.0 },

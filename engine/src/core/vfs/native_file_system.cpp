@@ -99,6 +99,29 @@ namespace {
         return info;
     }
 
+    // Makes sure the directory that will hold 'nativePath' exists, creating every missing level.
+    result<void> ensure_parent_directory(const std::filesystem::path &nativePath, std::string_view displayPath) {
+        std::error_code code = {};
+        const std::filesystem::path parent = nativePath.parent_path();
+        const std::filesystem::file_status parentStatus = std::filesystem::status(parent, code);
+        if (std::filesystem::is_directory(parentStatus)) {
+            return result<void>::success();
+        }
+        if (std::filesystem::exists(parentStatus)) {
+            return make_error(
+              error_code::IO_FAILURE,
+              std::format("write '{}': a parent is not a directory", displayPath)
+            );
+        }
+
+        code.clear();
+        std::filesystem::create_directories(parent, code);
+        if (code) {
+            return internal::io_error("create the parent directories of", displayPath, code);
+        }
+        return result<void>::success();
+    }
+
     bool directory_is_empty(const std::filesystem::path &nativePath) {
         std::error_code code = {};
         const std::filesystem::directory_iterator iterator(nativePath, code);
@@ -163,17 +186,8 @@ native_file_system::~native_file_system() {}
 /*===========================================================================*/
 // Public methods
 
-std::filesystem::path native_file_system::to_native(std::string_view path) const {
-    std::string normalized = path_utils::normalize(path);
-    if (normalized.starts_with('/')) {
-        normalized.erase(0, 1);
-    }
-    if (normalized.empty()) {
-        return internal::extend_native_path(mRoot);
-    }
-    // A project in a deep directory (or a cache under a test's temporary root) can pass the classic
-    // Windows path limit; the extended form keeps every call below working (wave 4 integration).
-    return internal::extend_native_path(mRoot / internal::path_from_utf8(normalized));
+result<std::filesystem::path> native_file_system::to_native(std::string_view path) const {
+    return resolve(path);
 }
 
 result<std::vector<std::byte>> native_file_system::read_file(std::string_view path) {
@@ -227,7 +241,13 @@ result<void> native_file_system::write_file_atomic(std::string_view path, std::s
         return is_a_directory(path);
     }
 
-    const result<void> written = write_bytes(temporary, path, data);
+    CONJURE_TRY(ensure_parent_directory(nativePath, path));
+
+    // The temporary is on its device before it takes the target's place: after a crash or a power cut
+    // the path holds the old contents or the new ones, never a file the rename made visible while its
+    // data was still in a cache (code sweep F243). The directory entry itself is not flushed: losing the
+    // rename leaves the old file, which is one of the two allowed outcomes.
+    const result<void> written = internal::write_file_flushed(temporary, data, path);
     if (!written.has_value()) {
         std::filesystem::remove(temporary, ignored);
         return written.get_error();
@@ -255,7 +275,7 @@ result<void> native_file_system::enumerate(
   const enumerate_callback &callback
 ) {
     CONJURE_TRY_ASSIGN(const std::string relative, internal::resolve_backend_path(directory));
-    const std::filesystem::path nativePath = to_native(relative);
+    const std::filesystem::path nativePath = native_path_of(relative);
     CONJURE_TRY_ASSIGN(const file_stat info, stat_native(nativePath, directory));
     if (!info.isDirectory) {
         return make_error(error_code::INVALID_ARGUMENT, std::format("'{}' is not a directory", directory));
@@ -312,9 +332,11 @@ result<void> native_file_system::rename(std::string_view from, std::string_view 
     if (fromRelative.empty() || toRelative.empty()) {
         return make_error(error_code::INVALID_ARGUMENT, "the root of a file system cannot be renamed");
     }
+    // Only the destination is a name this call creates; the source may be any name that exists.
+    CONJURE_TRY(internal::validate_new_path(toRelative, to));
 
-    const std::filesystem::path source = to_native(fromRelative);
-    const std::filesystem::path destination = to_native(toRelative);
+    const std::filesystem::path source = native_path_of(fromRelative);
+    const std::filesystem::path destination = native_path_of(toRelative);
     CONJURE_TRY_ASSIGN(const file_stat sourceStat, stat_native(source, from));
     if (fromRelative == toRelative) {
         return result<void>::success();
@@ -370,7 +392,7 @@ result<void> native_file_system::remove(std::string_view path) {
         return make_error(error_code::INVALID_ARGUMENT, "the root of a file system cannot be removed");
     }
 
-    const std::filesystem::path nativePath = to_native(relative);
+    const std::filesystem::path nativePath = native_path_of(relative);
     CONJURE_TRY_ASSIGN(const file_stat info, stat_native(nativePath, path));
     if (info.isDirectory && !directory_is_empty(nativePath)) {
         return make_error(error_code::INVALID_STATE, std::format("directory '{}' is not empty", path));
@@ -393,7 +415,7 @@ result<void> native_file_system::remove_all(std::string_view path) {
         return make_error(error_code::INVALID_ARGUMENT, "the root of a file system cannot be removed");
     }
 
-    const std::filesystem::path nativePath = to_native(relative);
+    const std::filesystem::path nativePath = native_path_of(relative);
     CONJURE_TRY(stat_native(nativePath, path));
 
     // remove_all walks the tree like enumerate does, so it starts from the extended form for the same reason.
@@ -410,8 +432,9 @@ result<void> native_file_system::create_directories(std::string_view path) {
     if (mReadOnly) {
         return read_only_error();
     }
+    CONJURE_TRY(internal::validate_new_path(relative, path));
 
-    const std::filesystem::path nativePath = to_native(relative);
+    const std::filesystem::path nativePath = native_path_of(relative);
     std::error_code code = {};
     const std::filesystem::file_status status = std::filesystem::status(nativePath, code);
     if (std::filesystem::is_directory(status)) {
@@ -451,9 +474,31 @@ bool native_file_system::is_read_only() const noexcept {
 /*===========================================================================*/
 // Private methods
 
+std::filesystem::path native_file_system::native_path_of(std::string_view relative) const {
+    if (relative.empty()) {
+        return internal::extend_native_path(mRoot);
+    }
+    if (!internal::validate_new_path(relative, relative).has_value()) {
+        // An entry that carries a name no call here may create (made on another platform or by another
+        // program) is still read, moved and removed (decision C12). In the classic form Win32 drops a
+        // trailing dot or space, so "report." would address its neighbour "report", and before Windows 11
+        // it takes a device name in any directory for the device; only the extended-length form is taken
+        // literally. The root is extended on its own and the relative part appended afterwards, because
+        // making the whole path absolute goes through that same rewriting. Elsewhere both steps return
+        // what they are given.
+        std::filesystem::path literal =
+          internal::always_extended_native_path(mRoot) / internal::path_from_utf8(relative);
+        literal.make_preferred();
+        return literal;
+    }
+    // A project in a deep directory (or a cache under a test's temporary root) can pass the classic
+    // Windows path limit; the extended form keeps every call below working (wave 4 integration).
+    return internal::extend_native_path(mRoot / internal::path_from_utf8(relative));
+}
+
 result<std::filesystem::path> native_file_system::resolve(std::string_view path) const {
     CONJURE_TRY_ASSIGN(const std::string relative, internal::resolve_backend_path(path));
-    return to_native(relative);
+    return native_path_of(relative);
 }
 
 result<std::filesystem::path> native_file_system::resolve_writable(std::string_view path) const {
@@ -464,7 +509,9 @@ result<std::filesystem::path> native_file_system::resolve_writable(std::string_v
     if (relative.empty()) {
         return is_a_directory(path);
     }
-    return to_native(relative);
+    // Both callers are about to create the entry (write_file, write_file_atomic).
+    CONJURE_TRY(internal::validate_new_path(relative, path));
+    return native_path_of(relative);
 }
 
 result<void> native_file_system::write_bytes(
@@ -480,19 +527,7 @@ result<void> native_file_system::write_bytes(
         return is_a_directory(displayPath);
     }
 
-    code.clear();
-    const std::filesystem::path parent = nativePath.parent_path();
-    const std::filesystem::file_status parentStatus = std::filesystem::status(parent, code);
-    if (std::filesystem::exists(parentStatus) && !std::filesystem::is_directory(parentStatus)) {
-        return make_error(error_code::IO_FAILURE, std::format("write '{}': a parent is not a directory", displayPath));
-    }
-    if (!std::filesystem::exists(parentStatus)) {
-        code.clear();
-        std::filesystem::create_directories(parent, code);
-        if (code) {
-            return internal::io_error("create the parent directories of", displayPath, code);
-        }
-    }
+    CONJURE_TRY(ensure_parent_directory(nativePath, displayPath));
 
     std::ofstream stream(nativePath, std::ios::binary | std::ios::trunc);
     if (!stream.is_open()) {

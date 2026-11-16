@@ -1,7 +1,9 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/core/types.h"
 #include "conjure/core/vfs/path_utils.h"
 
+#include <array>
 #include <string>
 #include <string_view>
 
@@ -188,5 +190,89 @@ TEST_SUITE("core/path_utils") {
         CHECK(path_utils::relative_to("a/b", "/a") == "a/b");
         CHECK(path_utils::relative_to("C:/a", "D:/a") == "C:/a");
         CHECK(path_utils::relative_to("a/b", "../x") == "a/b");
+    }
+
+    TEST_CASE("path_utils - is_portable_name accepts ordinary names in any script") {
+        CHECK(path_utils::is_portable_name("file.txt"));
+        CHECK(path_utils::is_portable_name("archive.tar.gz"));
+        CHECK(path_utils::is_portable_name(".gitignore"));
+        CHECK(path_utils::is_portable_name("name with spaces"));
+        CHECK(path_utils::is_portable_name(" leading space"));
+        CHECK(path_utils::is_portable_name("dots...inside"));
+        CHECK(path_utils::is_portable_name("a"));
+        CHECK(path_utils::is_portable_name("#hash;semi,comma'quote&and=(){}[]+-_~!@$%^"));
+        CHECK(path_utils::is_portable_name("\xC3\xBC" "ber \xE6\x97\xA5\xE6\x9C\xAC.png"));
+    }
+
+    TEST_CASE("path_utils - is_portable_name refuses reserved characters, control characters and separators") {
+        using namespace std::string_view_literals;
+        CHECK_FALSE(path_utils::is_portable_name(""));
+        CHECK_FALSE(path_utils::is_portable_name("a:b"));
+        CHECK_FALSE(path_utils::is_portable_name("a*b"));
+        CHECK_FALSE(path_utils::is_portable_name("a?b"));
+        CHECK_FALSE(path_utils::is_portable_name("a\"b"));
+        CHECK_FALSE(path_utils::is_portable_name("a<b"));
+        CHECK_FALSE(path_utils::is_portable_name("a>b"));
+        CHECK_FALSE(path_utils::is_portable_name("a|b"));
+        CHECK_FALSE(path_utils::is_portable_name("a\tb"));
+        CHECK_FALSE(path_utils::is_portable_name("a\nb"));
+        CHECK_FALSE(path_utils::is_portable_name("a\x01" "b"));
+        CHECK_FALSE(path_utils::is_portable_name("a\x1F" "b"));
+        CHECK_FALSE(path_utils::is_portable_name("a\x7F" "b"));
+        CHECK_FALSE(path_utils::is_portable_name("a\0b"sv));
+        CHECK(path_utils::is_portable_name("a\x20" "b"));
+
+        // A name is one segment: a path is not a name, whatever its segments are.
+        CHECK_FALSE(path_utils::is_portable_name("dir/file.txt"));
+        CHECK_FALSE(path_utils::is_portable_name("dir\\file.txt"));
+        CHECK_FALSE(path_utils::is_portable_name("/"));
+    }
+
+    TEST_CASE("path_utils - is_portable_name refuses a trailing dot or space and the directory references") {
+        CHECK_FALSE(path_utils::is_portable_name("name."));
+        CHECK_FALSE(path_utils::is_portable_name("name "));
+        CHECK_FALSE(path_utils::is_portable_name("name.txt."));
+        CHECK_FALSE(path_utils::is_portable_name("name.txt "));
+        CHECK_FALSE(path_utils::is_portable_name("name. ."));
+        CHECK_FALSE(path_utils::is_portable_name("."));
+        CHECK_FALSE(path_utils::is_portable_name(".."));
+        CHECK_FALSE(path_utils::is_portable_name("..."));
+        CHECK_FALSE(path_utils::is_portable_name(" "));
+        CHECK(path_utils::is_portable_name("name.t"));
+        CHECK(path_utils::is_portable_name(". name"));
+    }
+
+    TEST_CASE("path_utils - is_portable_name refuses Windows device names in any case and with any extension") {
+        const std::array<std::string_view, 9> upperCase = {
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM5", "COM9", "LPT1", "LPT9"
+        };
+        const std::array<std::string_view, 9> lowerCase = {
+            "con", "prn", "aux", "nul", "com1", "com5", "com9", "lpt1", "lpt9"
+        };
+        for (usize index = 0; index < upperCase.size(); ++index) {
+            CAPTURE(index);
+            const std::string upper(upperCase[index]);
+            const std::string lower(lowerCase[index]);
+            CHECK_FALSE(path_utils::is_portable_name(upper));
+            CHECK_FALSE(path_utils::is_portable_name(lower));
+            CHECK_FALSE(path_utils::is_portable_name(upper + ".txt"));
+            CHECK_FALSE(path_utils::is_portable_name(lower + ".tar.gz"));
+            CHECK_FALSE(path_utils::is_portable_name(upper + " .log"));
+            CHECK(path_utils::is_portable_name(upper + "x"));
+            CHECK(path_utils::is_portable_name("x" + upper));
+            CHECK(path_utils::is_portable_name("x." + lower));
+            CHECK(path_utils::is_portable_name(lower + "-backup.txt"));
+        }
+        CHECK_FALSE(path_utils::is_portable_name("cOn"));
+        CHECK_FALSE(path_utils::is_portable_name("Lpt3.Dat"));
+
+        // Only COM1 to COM9 and LPT1 to LPT9 are devices; the neighbours are ordinary names.
+        CHECK(path_utils::is_portable_name("COM0"));
+        CHECK(path_utils::is_portable_name("COM10"));
+        CHECK(path_utils::is_portable_name("LPT0"));
+        CHECK(path_utils::is_portable_name("LPT"));
+        CHECK(path_utils::is_portable_name("COM"));
+        CHECK(path_utils::is_portable_name("CONSOLE"));
+        CHECK(path_utils::is_portable_name("NULL"));
     }
 }

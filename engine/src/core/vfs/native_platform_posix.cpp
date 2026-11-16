@@ -30,6 +30,42 @@ namespace {
         const std::error_code code(errorNumber, std::generic_category());
         return make_error(error_code::IO_FAILURE, std::format("{} '{}': {}", operation, displayPath, code.message()));
     }
+
+    // Writes all of 'data' at the descriptor's file position. Returns the errno value, 0 when every
+    // byte was taken.
+    int write_all(int descriptor, std::span<const std::byte> data) noexcept {
+        // write takes a size_t but may legally transfer less than asked; the loop also keeps every
+        // call within the range SSIZE_MAX so the return value stays representable.
+        constexpr usize MAX_CHUNK = static_cast<usize>(std::numeric_limits<ssize_t>::max());
+        usize total = 0;
+        while (total < data.size()) {
+            const usize chunk = std::min(data.size() - total, MAX_CHUNK);
+            const ssize_t written = ::write(descriptor, data.data() + total, chunk);
+            if (written < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return errno;
+            }
+            if (written == 0) {
+                // A regular file takes at least one byte or fails; a call that claims success without
+                // progress would otherwise spin here for ever.
+                return EIO;
+            }
+            total += static_cast<usize>(written);
+        }
+        return 0;
+    }
+
+    // Pushes the file behind the descriptor to its storage device with fsync, on every POSIX platform
+    // (decision C11 of 10_core.md). Returns the errno value, 0 on success.
+    int flush_to_device(int descriptor) noexcept {
+        int outcome = -1;
+        do {
+            outcome = ::fsync(descriptor);
+        } while (outcome != 0 && errno == EINTR);
+        return outcome == 0 ? 0 : errno;
+    }
 }
 
 
@@ -102,6 +138,52 @@ bool internal::is_being_deleted(const std::filesystem::path &, const std::error_
 
 void internal::close_read_handle(std::intptr_t value) noexcept {
     ::close(static_cast<int>(value));
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Writing
+
+result<void> internal::write_file_flushed(
+  const std::filesystem::path &path,
+  std::span<const std::byte> data,
+  std::string_view displayPath
+) {
+    // 0666 less the process umask: the permissions std::ofstream gives a new file.
+    constexpr mode_t NEW_FILE_MODE = 0666;
+    int descriptor = -1;
+    do {
+        descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, NEW_FILE_MODE);
+    } while (descriptor < 0 && errno == EINTR);
+    if (descriptor < 0) {
+        return io_failure("open for writing", displayPath, errno);
+    }
+
+    const int writeError = write_all(descriptor, data);
+    if (writeError != 0) {
+        ::close(descriptor);
+        return io_failure("write", displayPath, writeError);
+    }
+
+    // The write above only reached the page cache; the flush returns once the device holds the file.
+    const int flushError = flush_to_device(descriptor);
+    ::close(descriptor);
+    if (flushError == 0) {
+        note_flushed_file();
+        return result<void>::success();
+    }
+    if (flush_is_unsupported(static_cast<u32>(flushError))) {
+        note_unflushable_volume(displayPath);
+        return result<void>::success();
+    }
+    return io_failure("flush", displayPath, flushError);
+}
+
+bool internal::flush_is_unsupported(u32 platformError) noexcept {
+    // What fsync answers for a file system that has no synchronisation at all. Everything else, EIO
+    // and ENOSPC included, is a flush that was attempted and failed.
+    return platformError == static_cast<u32>(EINVAL) || platformError == static_cast<u32>(ENOTSUP);
 }
 
 

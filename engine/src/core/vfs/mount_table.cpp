@@ -62,18 +62,17 @@ namespace {
         return make_error(error_code::INVALID_ARGUMENT, std::format("'{}' is the root of a file system", uri));
     }
 
-    // A copy between backends must fail where a real rename would. write_file_atomic reports a
-    // directory at the destination as INVALID_ARGUMENT and creates missing parents, so both are
-    // checked before anything is written; the root, which stat reports as a directory, is
-    // INVALID_ARGUMENT as in a real rename. 'path' is relative to 'backend', which must not be a
-    // mount table. Returns whether a file already exists at the destination.
-    result<bool> check_copy_destination(file_system &backend, std::string_view path, std::string_view uri) {
-        CONJURE_TRY_ASSIGN(const std::string normalized, internal::resolve_backend_path(path));
-        if (normalized.empty()) {
-            return root_of_file_system(uri);
-        }
+    error read_only_backend(std::string_view uri) {
+        return make_error(error_code::PERMISSION_DENIED, std::format("the file system behind '{}' is read-only", uri));
+    }
 
-        const result<file_stat> existing = backend.stat(path);
+    // The lookups a copy between backends needs at its destination, so that it fails where a real
+    // rename would: write_file_atomic reports a directory at the destination as INVALID_ARGUMENT and
+    // creates missing parents, so both are checked before anything is written. 'normalized' is the
+    // destination as internal::resolve_backend_path returned it, not the root, relative to 'backend',
+    // which must not be a mount table. Returns whether a file already exists at the destination.
+    result<bool> look_up_copy_destination(file_system &backend, std::string_view normalized, std::string_view uri) {
+        const result<file_stat> existing = backend.stat(normalized);
         if (existing.has_value() && existing->isDirectory) {
             return make_error(error_code::ALREADY_EXISTS, std::format("a directory exists at '{}'", uri));
         }
@@ -251,11 +250,28 @@ result<void> mount_table::rename(std::string_view from, std::string_view to) {
         return origin.backend->rename(origin.path, storage.path);
     }
 
-    // Across backends there is nothing to rename, so a file is copied and the original removed.
+    // Across backends there is nothing to rename, so a file is copied and the original removed. The
+    // checks come in the order of a backend's own rename, so the same call gives the same code on
+    // either route: an escape and a read-only backend at either end, the root at either end, the name
+    // of the destination, and only then the lookups. A read-only source is refused here because the
+    // copy would otherwise land and only the removal fail; the backend's own write would refuse a
+    // read-only destination or a name that is not portable too, but only after the source was read.
     CONJURE_TRY_ASSIGN(const std::string sourcePath, internal::resolve_backend_path(origin.path));
+    CONJURE_TRY_ASSIGN(const std::string destinationPath, internal::resolve_backend_path(storage.path));
+    if (origin.backend->is_read_only()) {
+        return read_only_backend(from);
+    }
+    if (storage.backend->is_read_only()) {
+        return read_only_backend(to);
+    }
     if (sourcePath.empty()) {
         return root_of_file_system(from);
     }
+    if (destinationPath.empty()) {
+        return root_of_file_system(to);
+    }
+    CONJURE_TRY(internal::validate_new_path(destinationPath, to));
+
     CONJURE_TRY_ASSIGN(const file_stat sourceStat, origin.backend->stat(origin.path));
     if (sourceStat.isDirectory) {
         return make_error(
@@ -263,11 +279,8 @@ result<void> mount_table::rename(std::string_view from, std::string_view to) {
           std::format("'{}' is a directory; directories cannot be moved between mounts", from)
         );
     }
-    if (origin.backend->is_read_only()) {
-        return make_error(error_code::PERMISSION_DENIED, std::format("the file system behind '{}' is read-only", from));
-    }
 
-    CONJURE_TRY_ASSIGN(const bool replacesFile, check_copy_destination(*storage.backend, storage.path, to));
+    CONJURE_TRY_ASSIGN(const bool replacesFile, look_up_copy_destination(*storage.backend, destinationPath, to));
     CONJURE_TRY_ASSIGN(const std::vector<std::byte> bytes, origin.backend->read_file(origin.path));
     CONJURE_TRY(storage.backend->write_file_atomic(storage.path, bytes));
 

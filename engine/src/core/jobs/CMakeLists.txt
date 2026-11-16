@@ -1,5 +1,6 @@
 # core/jobs - worker pool, job handles, parallel_for, the main-thread queue and dedicated threads.
-# The only place in the engine that creates std::thread / std::jthread objects.
+# The only place in the engine that creates std::thread / std::jthread objects: every other thread,
+# the pipe readers of core/system's child processes included, is a jobs::dedicated_thread.
 
 # dedicated_thread's public signature takes a std::stop_token (docs/design/10_core.md 2.7), which
 # needs libstdc++ 10+, MSVC 19.28+ or libc++ 18+ (libc++ 16 has no <stop_token>; 17 hides it behind

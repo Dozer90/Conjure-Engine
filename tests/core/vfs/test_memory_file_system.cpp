@@ -80,6 +80,23 @@ TEST_SUITE("core/memory_file_system") {
         CHECK(fileSystem.write_counter() == before);
     }
 
+    TEST_CASE("memory_file_system - a name that is not portable is refused without advancing the counter") {
+        // The in-memory tree could hold any name, but it stands in for a project folder in tests and for
+        // staged output that is copied to disk later, so it refuses what a disk on any platform would.
+        memory_file_system fileSystem = {};
+        REQUIRE(fileSystem.write_file("kept.txt", to_bytes("kept")));
+        const u64 before = fileSystem.write_counter();
+
+        CHECK(code_of(fileSystem.write_file("kept.txt:stream", to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.write_file_atomic("new/nul", to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.create_directories("new/trailing ")) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(fileSystem.rename("kept.txt", "kept.txt.")) == error_code::INVALID_ARGUMENT);
+
+        CHECK(fileSystem.write_counter() == before);
+        CHECK_FALSE(fileSystem.exists("new"));
+        CHECK(fileSystem.read_text_file("kept.txt").value() == "kept");
+    }
+
     TEST_CASE("memory_file_system - set_read_only freezes and thaws the tree") {
         memory_file_system fileSystem = {};
         REQUIRE(fileSystem.write_file("a.txt", to_bytes("a")));

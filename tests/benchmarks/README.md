@@ -17,7 +17,7 @@ hand.
 | `src/benchmark.cpp`, `src/bench_runner.cpp` | the harness library `conjure::bench_harness` (depends on `conjure::core` and `conjure::test_support`) |
 | `src/bench_main.cpp` | the executable's entry point: command line, main thread, WARN console, seed, run, JSON output |
 | `bench_support.{h,cpp}` | build-time paths (shader index, managed SDK, test scripts), the .NET probe, `scratch_directory`, `random_transform`, `spawn_hierarchy` |
-| `bench_core.cpp`, `bench_ecs.cpp`, `bench_scene.cpp`, `bench_physics.cpp`, `bench_render_null_frame.cpp`, `bench_scripts_update_phase.cpp`, `bench_full_frame_10k.cpp` | the scenarios, one file per module (the renderer file holds both renderer rows) |
+| `bench_core.cpp`, `bench_ecs.cpp`, `bench_scene.cpp`, `bench_assets.cpp`, `bench_physics.cpp`, `bench_render_null_frame.cpp`, `bench_scripts_update_phase.cpp`, `bench_full_frame_10k.cpp` | the scenarios, one file per module (the renderer file holds both renderer rows) |
 | `thresholds.json` | `{"version": 1, "scenarios": {"<module>.<scenario>": {"desktop": {"p50_ms", "p95_ms", "p99_ms"}, "ci": {...}, "allocs": n}}}`; a missing `allocs` means "not checked", a time of 0 means "not checked"; a class that sets no limit (no time above 0, absent or all 0, and the entry has no `allocs`) leaves the scenario `UNTHRESHOLDED` for that class; any other member (a misspelled `p50ms` or `dekstop`) is rejected when the file loads |
 | `tests/` | `conjure_benchmarks_tests` (label `unit;benchmarks`): `test_benchmark.cpp`, `test_bench_runner.cpp`, the self-tests of 08 section 11 |
 
@@ -93,8 +93,8 @@ directory `build/perf_integration_dev`), default options (200 iterations, 20 war
 the integrator's job-system change, a 50 us spin window before a thread sleeps and a test-and-test-and-set
 queue lock that parks after a bounded spin, the form the review of the integration settled on, `core/jobs`
 README). Figures are the `median_ms` / `p99_ms` / `allocs` the run printed; the budgets are the `desktop`
-column of 08 7.1 for the 17 scenarios the design lists. The three scenarios the design table does not list
-take their budgets from elsewhere: `scene.snapshot_capture_restore_10k` from 13_scene.md 3.14 (play/stop
+column of 08 7.1 for the 17 scenarios of the run that the design lists. The three scenarios the design table
+does not list take their budgets from elsewhere: `scene.snapshot_capture_restore_10k` from 13_scene.md 3.14 (play/stop
 round trip < 50 ms), `renderer.null_frame_10k` from ARCHITECTURE.md 11 (`bench_render_null_frame < 3 ms`,
 allocation-free like every renderer row) and `physics.step_2k_settling` as described under deviations
 (not a design budget).
@@ -136,6 +136,10 @@ used (`build/perf_integration_dev_run.json`) sat between the two: `core.job_para
 and backoff path costs the dispatch-bound rows about 0.01 ms against a FIFO ticket, the price of a waiter that
 lost its core no longer stalling the whole pool (`core/jobs` README).
 
+`assets.first_scan_100` is not in the table: it was added after that run (code sweep F243) and is a disk
+benchmark, whose figures say more about the drive than about the code. Its measurements are under
+"Deviations and open points".
+
 ## What each scenario does
 
 - `core.job_parallel_for_1m`: one `job_system::parallel_for` over 1,000,000 `u32` items (an increment each)
@@ -156,6 +160,15 @@ lost its core no longer stalling the whole pool (`core/jobs` README).
 - `scene.snapshot_capture_restore_10k`: `scene::capture` followed by `scene::restore` of the same 10,000.
 - `scene.load_10k`: the hierarchy saved once into a `memory_file_system`; every iteration is
   `scene_manager::load_file(REPLACE)` plus `unload`.
+- `assets.first_scan_100`: the first `asset_database::scan()` of a project folder on disk (a
+  `native_file_system` over a scratch directory) holding 100 sources without a `.meta`: one `.meta` per source
+  through `write_file_atomic`, which flushes each to the storage device before the rename (code sweep F243),
+  plus the walk, the hashing and the `db.bin` snapshot. Every iteration scans a project of its own, built
+  before the measured loop, because a scan is a first scan only once; the row fails when a scan did not create
+  one `.meta` per source. The source count is one per 100 of `--entities` (100 by default; `--entities 100000
+  --iterations 5 --warmup 1` measures a 1,000-source project). Two phases put the flush on its own, each over
+  20 folders of 100 `.meta`-sized files: `META_WRITES_ATOMIC` (`write_file_atomic`: temporary, flush, rename)
+  and `META_WRITES_PLAIN` (`write_file`: no temporary, no flush).
 - `physics.step_10k_active`: 10,000 dynamic unit boxes resting awake (sleeping disabled) on a static slab,
   one fixed step (push, step, pull, collect) per iteration.
 - `physics.step_10k_sleeping`: the same grid created `START_ASLEEP` after 600 settle steps.
@@ -206,12 +219,31 @@ is the record).
   unknown members of an entry and of a class object, and a class that sets no limit is `UNTHRESHOLDED` rather
   than a threshold that passes every figure; a misspelled key or class used to read as "not checked" and pass.
   An `allocs` gate alone still counts as a limit for both classes.
-- **Scenario set.** All 17 rows of 08_testing.md 7.1 have a scenario and a `thresholds.json` entry with the
-  design's figures. `core.job_parallel_for_1m`, `renderer.extract_10k` and `scripting.native_call_100k` were
+- **Scenario set.** All 18 rows of 08_testing.md 7.1 have a scenario and a `thresholds.json` entry with the
+  design's figures (17 rows until `assets.first_scan_100` joined the table, code sweep F243).
+  `core.job_parallel_for_1m`, `renderer.extract_10k` and `scripting.native_call_100k` were
   missing until the fix-4 round (the first integration run's "8 of 17" counted the three unlisted scenarios below
   in their place). Three scenarios the design table does not list exist as well: `scene.snapshot_capture_restore_10k`
   (13_scene.md 3.14 budget), `renderer.null_frame_10k` (ARCHITECTURE.md 11 budget) and
   `physics.step_2k_settling`.
+- **`assets.first_scan_100` budget (1,000 ms desktop, 3,000 ms ci, allocations not checked) and what it
+  measured.** The owner's decision on F243 makes `write_file_atomic` flush before the rename and asks for an
+  import benchmark that measures the price; no design document gave the scan a measured budget (08_testing.md
+  7.1 lists the row with this note), so the limit is a
+  harness regression guard, not a design number: one device flush per source, 10 ms allowed for each (the
+  order of a flush on a slow consumer drive, not a measured figure; the reference machine's drive answered in
+  under 1 ms), times 100 sources. It
+  catches a scan that starts flushing several times per source on a slow drive, not a small regression on a
+  fast one; the phases are the figures to read. Measured on the reference machine in the **Debug** tree of the
+  change (`build/lane_1`, `windows-msvc-debug`, default options, other builds running on the machine, so the
+  spread between runs is wide): with the flush the scan took a median of 158 to 212 ms for 100 sources (1.6 to
+  2.1 ms per source) and `META_WRITES_ATOMIC` 104 to 131 ms; the same tree with the flush taken out (the
+  temporary written through the stream and renamed, the state before F243) took 104 ms for the scan and 56 ms
+  for `META_WRITES_ATOMIC`; `META_WRITES_PLAIN` was 27 to 33 ms in every run. The flush therefore costs about
+  0.5 to 0.8 ms per `.meta` on that drive, half again to twice the time of a first scan: roughly 2.5 to 4 s
+  more for a project of 5,000 new sources there, and proportionally more on a drive with a slower flush. A rescan
+  writes no `.meta` and pays nothing. No Development figures exist yet; the row has not been part of an
+  enforced run.
 - **`physics.step_2k_settling` budget (3.00 ms desktop, 9.00 ms ci, 0 allocations).** The scenario is the
   benchmark counterpart of the 14_physics.md `test_physics_stack.cpp` check ("2,000 settled boxes, one
   `step()` under `CONJURE_CHECK_NO_ALLOCATIONS`"), which fixes the allocation gate at 0; 14_physics.md

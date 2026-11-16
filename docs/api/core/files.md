@@ -15,7 +15,8 @@ the whole area (`conjure::core::vfs`); it pulls in `conjure/core/vfs/file_system
 |---|---|
 | Read a whole text or binary file | `files.read_text_file(path)`, `files.read_file(path)` |
 | Write a file (and its parent directories) | `files.write_text_file(path, text)`, `files.write_file(path, bytes)` |
-| Save without ever leaving a half-written file | `files.write_file_atomic(path, bytes)` |
+| Save so that a crash or a power cut cannot ruin the file | `files.write_file_atomic(path, bytes)` |
+| Check a name the user typed before creating it | `vfs::path_utils::is_portable_name(name)` |
 | Check or describe an entry | `files.exists(path)`, `files.stat(path)` |
 | List a directory | `files.enumerate(dir, flags, callback)` |
 | Move, delete, create folders | `rename()`, `remove()`, `remove_all()`, `create_directories()` |
@@ -63,7 +64,7 @@ error codes, so one error-handling path works everywhere:
 | Code | Meaning |
 |---|---|
 | `NOT_FOUND` | the path (or the source of a rename, or an unmounted scheme) does not exist |
-| `INVALID_ARGUMENT` | a directory where a file is required or vice versa; the root where an entry is required; a bare path given to a mount table |
+| `INVALID_ARGUMENT` | a directory where a file is required or vice versa; the root where an entry is required; a bare path given to a mount table; a [name that is not portable](#names-of-new-files-and-folders) where an entry is created |
 | `ALREADY_EXISTS` | a file sits where `create_directories()` wants a directory; a directory sits where `rename()` wants to put a file |
 | `INVALID_STATE` | `remove()` on a non-empty directory (use `remove_all()`) |
 | `PERMISSION_DENIED` | the backend is read-only, or the path tries to escape the root |
@@ -74,6 +75,54 @@ error codes, so one error-handling path works everywhere:
 > Anything that would leave the backend root (`../x`, `/../x`, `C:/x`, `//server/x`) is
 > `PERMISSION_DENIED`, even when the target exists on disk. A `native_file_system` is a sandbox: pass the
 > directory you want reachable as its root instead of walking out of it.
+
+When code outside the file system needs the real location of a file (to start a process on it or to load it as
+a library), `native_file_system::to_native(path)` maps a backend path to its `std::filesystem::path` on disk. It
+is checked like every other call, so it returns a `result`: the path of the root or of something below it, or
+`PERMISSION_DENIED` for a path that would leave the root. The mapping is lexical, so the path does not have to
+exist and a read-only instance maps paths too.
+
+```cpp
+vfs::native_file_system project(projectRoot);
+CONJURE_TRY_ASSIGN(const std::filesystem::path onDisk, project.to_native("tools/bake.exe"));
+// project.to_native("../elsewhere/bake.exe") is PERMISSION_DENIED
+```
+
+## Names of new files and folders
+
+A project made on one platform must open on the others, so every backend applies one rule wherever a call
+creates an entry: `write_file()`, `write_file_atomic()`, `write_text_file()`, `create_directories()` and the
+destination of `rename()`. Each segment of the path must be a portable name, on every platform and whether
+or not the segment exists already. Anything else is `INVALID_ARGUMENT`, and nothing is written.
+
+| Not allowed in a name | Examples | Why |
+|---|---|---|
+| one of `: * ? " < > \|` | `notes.txt:draft`, `what?.txt` | Windows reserves them; a `:` would write a hidden stream of `notes.txt` |
+| a control character (U+0000 to U+001F, U+007F) | a tab or a line break | invisible, and refused by Windows |
+| a dot or a space at the end | `report.`, `slot 1 ` | Windows drops both: the entry would land as `report` |
+| a Windows device name, in any case, with any extension | `nul`, `Aux.txt`, `com1.tar.gz` | `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` are devices, not files |
+
+Everything else is fine: spaces inside a name, a leading dot, several dots, any non-ASCII text
+(`über.png`), names that only resemble a device (`com10`, `console`, `nulls.txt`).
+
+```cpp
+result<void> create_save_slot(vfs::file_system &files, std::string_view slotName) {
+    // The same verdict the file system would give, before anything is attempted.
+    if (!vfs::path_utils::is_portable_name(slotName)) {
+        return make_error(error_code::INVALID_ARGUMENT, "'{}' cannot be the name of a save", slotName);
+    }
+    return files.create_directories(vfs::path_utils::join("project://saves", slotName));
+}
+```
+
+> [!NOTE]
+> Only creation is strict. `read_file()`, `open_read()`, `stat()`, `exists()`, `enumerate()`, `remove()`,
+> `remove_all()` and the source of `rename()` judge no name, so an entry that already carries such a name
+> (made on Linux, or by another program) can still be read, renamed to a portable name and removed.
+
+> [!WARNING]
+> `is_portable_name()` takes one name, not a path: `"saves/slot1"` is not a name. A path that starts with a
+> drive letter (`a:b.txt`) is an escape and stays `PERMISSION_DENIED`.
 
 ## Reading and writing
 
@@ -94,8 +143,19 @@ result<std::vector<std::byte>> load_slot(vfs::file_system &files, u32 slot) {
 
 > [!TIP]
 > Use `write_file_atomic()` for anything a player would miss: save games, project files, settings. It
-> writes to a temporary sibling and swaps it into place, so a crash or a concurrent reader never sees a
-> partial file. `write_file()` is fine for scratch output and logs.
+> writes to a temporary sibling (`<path>.tmp-<uuid>`) and swaps it into place, so a concurrent reader never
+> sees a partial file. On disk it is also durable: the new contents are flushed to the storage device
+> before the swap, so after a crash or a power cut the path holds either the old contents or the new ones,
+> never a torn file. Two limits: a volume whose driver has no flush at all still takes the write, without
+> this guarantee, and logs one warning per process; on macOS the flush is `fsync`, which hands the data to
+> the drive without waiting for the drive's own write cache, so the guarantee there is only as strong as
+> that cache.
+
+> [!WARNING]
+> That flush makes `write_file_atomic()` wait for the drive, typically a few milliseconds per call and far
+> more on a slow one. Use it for what cannot be made again and `write_file()` for scratch output, logs and
+> caches. Do not call it once per frame, and expect a loop that writes thousands of files with it to take
+> seconds.
 
 > [!NOTE]
 > To turn text into bytes for `write_file()`, use `std::as_bytes(std::span<const char>(text))`; or call
@@ -183,10 +243,12 @@ result<void> stage_scene(vfs::mount_table &mounts) {
 > schemes or reached through a nested mount table, it is a real rename and moves directories too.
 
 Across backends `rename()` keeps the error contract of a real rename and checks it before copying
-anything, against the backends that actually store the two files: the root of a backend at either end
-is `INVALID_ARGUMENT`, a directory at the destination is `ALREADY_EXISTS`, a missing destination folder
-is `NOT_FOUND` and a read-only source is `PERMISSION_DENIED`. The copy is written with
-`write_file_atomic()`, so readers never see half of it.
+anything, against the backends that actually store the two files and in the same order as one backend
+does: an escape or a read-only backend at either end is `PERMISSION_DENIED`, then the root of a backend
+at either end and a destination [name that is not portable](#names-of-new-files-and-folders) are
+`INVALID_ARGUMENT`, and only then are the files looked for: a missing source is `NOT_FOUND`, a
+directory at the destination is `ALREADY_EXISTS` and a missing destination folder is `NOT_FOUND`. The
+copy is written with `write_file_atomic()`, so readers never see half of it.
 
 > [!CAUTION]
 > A move between backends is two steps, not one atomic rename. If the source cannot be removed after the
@@ -239,6 +301,7 @@ forward slashes.
 | `extension(path)` | `"texture.PNG"` -> `".png"` (lower-cased, with the dot) |
 | `has_extension(path, ext)` | `has_extension("a.PNG", "png")` is true; the dot is optional |
 | `is_absolute(path)` | true for `/a`, `C:/a`, `//server/share` |
+| `is_portable_name(name)` | true for `"notes.txt"`; false for `"a:b"`, `"report."`, `"nul.txt"`, `""`, `"a/b"` (see [names](#names-of-new-files-and-folders)) |
 | `relative_to(path, base)` | `relative_to("a/b/c", "a/x")` -> `"../b/c"` |
 
 > [!NOTE]
@@ -258,7 +321,7 @@ file system. `file::read_at()` is safe from several threads on one handle.
 | `result<std::vector<std::byte>> file_system::read_file(string_view path)` | whole file as bytes |
 | `result<std::string> file_system::read_text_file(string_view path)` | whole file as text, BOM dropped |
 | `result<void> file_system::write_file(string_view path, span<const std::byte>)` | create or truncate |
-| `result<void> file_system::write_file_atomic(string_view path, span<const std::byte>)` | write via a temporary and swap |
+| `result<void> file_system::write_file_atomic(string_view path, span<const std::byte>)` | write via a temporary, flush it to the device, swap |
 | `result<void> file_system::write_text_file(string_view path, string_view text)` | `write_file` for UTF-8 text |
 | `result<file_stat> file_system::stat(string_view path)` / `bool exists(path)` | describe or test an entry |
 | `result<void> file_system::enumerate(string_view dir, enumerate_flags, const enumerate_callback &)` | list entries in path order |
@@ -268,7 +331,7 @@ file system. `file::read_at()` is safe from several threads on one handle.
 | `bool file_system::is_read_only() const` | every mutation would be `PERMISSION_DENIED` |
 | `result<usize> file::read_at(u64 offset, span<std::byte> out)` / `u64 file::size() const` | positional read |
 | `native_file_system(std::filesystem::path root, bool readOnly = false)` | a directory on disk |
-| `const path &native_file_system::root() const` / `path to_native(string_view) const` | map back to disk paths |
+| `const path &native_file_system::root() const` / `result<path> to_native(string_view) const` | map back to disk paths; an escape is `PERMISSION_DENIED` |
 | `memory_file_system()` / `void set_read_only(bool)` / `u64 write_counter() const` | in-memory tree |
 | `result<void> mount_table::mount(string_view scheme, shared_ptr<file_system>)` / `unmount(scheme)` | bind or unbind a scheme |
 | `file_system *mount_table::find_mount(string_view scheme) const` / `vector<string> schemes() const` | inspect mounts |
@@ -276,10 +339,11 @@ file system. `file::read_at()` is safe from several threads on one handle.
 | `std::string path_utils::normalize(string_view)` / `join(left, right)` / `extension(path)` | lexical helpers |
 | `string_view path_utils::parent(path)` / `filename(path)` / `stem(path)` | lexical helpers (views) |
 | `bool path_utils::has_extension(path, ext)` / `is_absolute(path)` / `std::string relative_to(path, base)` | lexical helpers |
+| `bool path_utils::is_portable_name(string_view name)` | the rule for names of new entries |
 
 ## See also
 
 - 📘 API: [Errors and results](errors-and-results.md) for `result<T>`, `CONJURE_TRY` and the error codes above
 - 📘 API: [JSON](json.md) to parse what you read and serialise what you write
 - 📘 API: [Processes, libraries and images](system.md) for the other operating-system services in core
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for the backend internals, atomic replace and sharing semantics
+- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for the backend internals, atomic replace, the flush and sharing semantics

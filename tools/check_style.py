@@ -32,6 +32,13 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
                         sleep_for, never reads the wall clock (steady_clock::now, system_clock::now) and
                         never reads environment variables (getenv); files allowed to, with their reason,
                         are listed under "forbidden_in_tests" in tools/style_exceptions.json
+  thread-outside-jobs   code that is not test code (engine/, editor/, runtime/, samples/) creates no std::thread
+                        / std::jthread outside engine/src/core/jobs/ and engine/include/conjure/core/jobs/
+                        (docs/CONVENTIONS.md 3, docs/design/10_core.md C4); it holds a jobs::dedicated_thread
+                        instead. std::thread::id, std::thread::hardware_concurrency() and std::this_thread create
+                        no thread and are not reported. std::async and the raw OS thread calls (pthread_create,
+                        CreateThread, _beginthread, _beginthreadex) are reported in every folder, the two jobs
+                        folders included
   file-name             file names are snake_case
 
 With --tests-mirror-headers it also verifies that every engine/include/conjure/<module>/**/<name>.h
@@ -115,9 +122,24 @@ GROUP_NAMES = {
     GROUP_SYSTEM: "standard library / system",
 }
 
+# A std::thread / std::jthread object or type use. A nested name (std::thread::id,
+# std::thread::hardware_concurrency) creates no thread, and std::this_thread is another name.
+THREAD_PATTERN = re.compile(r"\bstd::(?:j)?thread\b(?!::)")
+# The only directories whose code may create a thread (docs/CONVENTIONS.md 3, docs/design/10_core.md C4):
+# the jobs area of core, which owns job_system and dedicated_thread.
+THREAD_ALLOWED_DIRECTORIES = (
+    pathlib.PurePosixPath("engine/src/core/jobs"),
+    pathlib.PurePosixPath("engine/include/conjure/core/jobs"),
+)
+# Thread creation that does not spell the type: std::async (std::launch::async starts a thread and the default
+# policy may) and the operating-system calls. No folder may use them: core::jobs itself creates its threads as
+# std::thread / std::jthread objects.
+UNOWNED_THREAD_PATTERN = re.compile(
+    r"\b(std::async)\b|\b(pthread_create|CreateThread|_beginthread(?:ex)?)\s*\(")
+
 # Constructs 08_testing.md 5.1 forbids in test code, with the reason shown to the author.
 FORBIDDEN_IN_TESTS = (
-    (re.compile(r"\bstd::(?:j)?thread\b(?!::)"), "std::thread: use core::jobs (job_system, dedicated_thread)"),
+    (THREAD_PATTERN, "std::thread: use core::jobs (job_system, dedicated_thread)"),
     (re.compile(r"\bsleep_for\s*\("), "sleep_for: wait on a condition or a bounded spin instead"),
     (re.compile(r"\b(?:steady|system|high_resolution)_clock::now\s*\("), "wall-clock read: inject a clock"),
     (re.compile(r"(?<![A-Za-z0-9_])(?:std::)?getenv\s*\("), "environment variable read: only test_main reads them"),
@@ -365,6 +387,9 @@ def check_file(
             used_forbidden_exceptions.add(key)
         else:
             check_forbidden_in_tests(path, code, findings)
+    else:
+        in_jobs_area = any(relative.is_relative_to(directory) for directory in THREAD_ALLOWED_DIRECTORIES)
+        check_thread_outside_jobs(path, code, in_jobs_area, findings)
     return findings
 
 
@@ -388,6 +413,26 @@ def check_forbidden_in_tests(path: pathlib.Path, code: str, findings: list[findi
                 path, line_of(code, match.start()), "forbidden-in-tests",
                 f"{message} (08_testing.md 5.1; list the file in tools/style_exceptions.json with a reason "
                 f"when the design allows it)"))
+
+
+def check_thread_outside_jobs(path: pathlib.Path, code: str, in_jobs_area: bool, findings: list[finding]) -> None:
+    """Test code has its own rule (forbidden-in-tests) with an exception table; this one has no exceptions.
+
+    The two jobs folders of core may name std::thread / std::jthread (in_jobs_area); std::async and the raw
+    operating-system thread calls are reported there as well.
+    """
+    if not in_jobs_area:
+        for match in THREAD_PATTERN.finditer(code):
+            findings.append(finding(
+                path, line_of(code, match.start()), "thread-outside-jobs",
+                f"{match.group(0)} outside core::jobs: hold a core::jobs::dedicated_thread or use the job_system "
+                f"(docs/CONVENTIONS.md 3, 10_core.md C4)"))
+    for match in UNOWNED_THREAD_PATTERN.finditer(code):
+        name = match.group(1) or match.group(2)
+        findings.append(finding(
+            path, line_of(code, match.start()), "thread-outside-jobs",
+            f"{name} creates a thread that core::jobs does not own: hold a core::jobs::dedicated_thread or use "
+            f"the job_system (docs/CONVENTIONS.md 3, 10_core.md C4)"))
 
 
 def check_pragma_once(path: pathlib.Path, code_lines: list[str], findings: list[finding]) -> None:

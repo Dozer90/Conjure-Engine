@@ -174,11 +174,11 @@ core::result<command_line_options> conjure::engine::parse_command_line(std::span
             }
         } else if (token == "--log-level") {
             CONJURE_TRY_ASSIGN(const std::string_view value, take_value(arguments, index, token));
-            const core::log_level level = core::parse_log_level(value);
-            if (level == core::log_level::OFF && !core::str::iequals(value, "off")) {
+            const std::optional<core::log_level> level = core::parse_log_level(value);
+            if (!level.has_value()) {
                 return bad_argument(token, std::format("unknown log level '{}'", value));
             }
-            options.logLevel = level;
+            options.logLevel = *level;
         } else if (token == "--log-file") {
             CONJURE_TRY_ASSIGN(const std::string_view value, take_value(arguments, index, token));
             options.logFile = std::filesystem::path(value);

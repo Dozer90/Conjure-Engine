@@ -32,10 +32,9 @@ Purpose: the part of core every other area and module builds on.
 | `conjure/core/error.h` | `error_code` (`NONE`, `UNKNOWN`, `INVALID_ARGUMENT` ... `CANCELLED`, `COUNT`), `class error` (`category()`, `code()`, `code_name()`, `generic_code()`, `message()`, `is(code)`, `is_category<Enum>()`, `to_string()`), `make_error(code[, detail])` / `make_error(code, fmt, args...)`, `CONJURE_DECLARE_ERROR_CATEGORY(enum, "name", name_fn)`, `std::formatter` |
 | `conjure/core/result.h` | `result<T>` (value or `error`; `value()`, `get_error()`, `value_or()`, `operator->`, `operator*`), `result<void>` with `success()`, alias `status`, `CONJURE_TRY`, `CONJURE_TRY_ASSIGN` |
 | `conjure/core/assert.h` | `CONJURE_ASSERT`, `CONJURE_VERIFY`, `CONJURE_UNREACHABLE`, `CONJURE_FATAL_ASSERT`, `assert_info`, `assert_action {BREAK, CONTINUE, ABORT}`, `set_assert_handler` / `current_assert_handler` / `default_assert_handler` |
-| `conjure/core/log.h` | `log_level` (`ERR`, not `ERROR`), `log_category`, `log_message`, `log_sink` with `console_log_sink` / `file_log_sink` / `callback_log_sink`, `log::add_sink` / `remove_sink` / `clear_sinks` / `set_console_enabled` / `set_global_level` / `categories` / `find_category` / `set_category_level` / `flush`, `format_log_line`, `LOG_CORE`, the `CONJURE_DECLARE/DEFINE_LOG_CATEGORY` and `CONJURE_LOG_*` macros |
+| `conjure/core/log.h` | `log_level` (`ERR`, not `ERROR`) with `to_string` / `parse_log_level` (a `std::optional`: `nullopt` for an unknown name), `log_category`, `log_message`, `log_sink` with `console_log_sink` / `file_log_sink` / `callback_log_sink`, `log::add_sink` / `remove_sink` / `clear_sinks` / `set_console_enabled` / `set_global_level` / `categories` / `find_category` / `set_category_level` / `flush`, `format_log_line`, `LOG_CORE`, the `CONJURE_DECLARE/DEFINE_LOG_CATEGORY` and `CONJURE_LOG_*` macros |
 | `conjure/core/uuid.h` | `uuid` (two `u64` halves): `generate()` (RFC 4122 v4), `parse`, `to_string`, `is_null`, `hash`, `<=>`, `std::hash`, `std::formatter` |
 | `conjure/core/enum_flags.h` | `CONJURE_ENUM_FLAGS(type);` plus `has_flag`, `has_any_flag`, `with_flag`, `without_flag`, `to_underlying` |
-| `conjure/core/non_copyable.h` | `non_copyable`, `non_movable` base classes |
 
 ### 1.2 Algorithms
 
@@ -45,7 +44,13 @@ Purpose: the part of core every other area and module builds on.
   `std::format_string` overload needs at least one argument).
 - Log messages are formatted only when the category and global levels allow them and are delivered to sinks
   *outside* the logger lock, so a sink may log or add/remove sinks.
+- `parse_log_level` matches the seven names of `to_string` case-insensitively and returns `std::nullopt` for
+  anything else. It never answers `OFF` for a name it does not know (code sweep F209): a caller tests
+  `has_value()` and, where `OFF` is no sensible answer (a filter's minimum level), rejects `OFF` itself.
 - `wrong_result_alternative` asserts, breaks and aborts: a mis-accessed `result` is never continued.
+- There is no copy-control base class (decision C13 of `docs/design/10_core.md`, code sweep F212). A type that
+  must not be copied or moved deletes the operations itself and defaults the ones it keeps; `docs/CODE_STYLE.cpp`
+  has the example. Do not add such a base: it hides in a base-class list what the class body can say directly.
 
 ### 1.3 Threading
 

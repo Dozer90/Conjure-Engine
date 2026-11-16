@@ -13,7 +13,7 @@ documents its purpose, types, threading model and how to test it.
 
 | Area | Directory | Public headers | Depends on |
 |---|---|---|---|
-| foundation | `foundation/` | `platform_detect.h`, `types.h`, `api.h`, generated `build_info.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h`, `non_copyable.h` | - |
+| foundation | `foundation/` | `platform_detect.h`, `types.h`, `api.h`, generated `build_info.h`, `hash.h`, `error.h`, `result.h`, `assert.h`, `log.h`, `uuid.h`, `enum_flags.h` | - |
 | math | `math/` | `math.h` (umbrella, also `conjure/core/math.h`), `glm_types.h`, `math_utils.h`, `transform.h`, `aabb.h`, `plane.h`, `frustum.h`, `ray.h`, `rect.h` | glm |
 | containers | `containers/` | `containers.h` (umbrella), `slot_map.h`, `slot_key_format.h`, `small_vector.h`, `stable_vector.h`, `flat_hash_map.h`, `flat_map.h`, `detail.h` | - |
 | strings | `strings/` | `string_id.h`, `string_utils.h`, `bit_vector.h`, `radix_sort.h` | - |
@@ -22,7 +22,7 @@ documents its purpose, types, threading model and how to test it.
 | jobs | `jobs/` | `jobs.h` (umbrella), `job_system.h`, `job_handle.h`, `parallel_for.h`, `main_thread.h`, `dedicated_thread.h` | - |
 | json | `json/` | `json.h` (umbrella with `parse` / `to_string`), `value.h`, `document.h`, `writer.h` | yyjson (private) |
 | vfs | `vfs/` | `vfs.h` (umbrella), `file_system.h`, `native_file_system.h`, `memory_file_system.h`, `mount_table.h`, `path_utils.h` | - |
-| system | `system/` | `process.h`, `dynamic_library.h`, `image.h` | stb (private) |
+| system | `system/` | `process.h`, `dynamic_library.h`, `image.h` | jobs (private), stb (private) |
 | reflect | `reflect/` | `reflect.h` (umbrella + `CONJURE_REFLECT_*` macros), `type_id.h`, `field_info.h`, `type_info.h`, `type_registry.h`, `json_conversion.h` | json, strings, math, containers, time |
 
 Every area depends on `foundation`; the last column lists the additional public dependencies
@@ -38,7 +38,8 @@ included only through `conjure/core/math/glm_types.h`.
 - Logging goes through a `log_category` per module (`CONJURE_DECLARE_LOG_CATEGORY` / `CONJURE_DEFINE_LOG_CATEGORY(name,
   "display")`); sinks are `std::shared_ptr<log_sink>` added with `log::add_sink`.
 - `new`/`delete` and `malloc` are confined to `memory` (`tracked_allocate` / `tracked_free` bump the process-wide
-  `memory::counters()`); `std::thread` is confined to `jobs` (`job_system`, `dedicated_thread`).
+  `memory::counters()`); `std::thread` is confined to `jobs` (`job_system`, `dedicated_thread`); a thread
+  anywhere else, the pipe readers of `system::process` included, is a `jobs::dedicated_thread`.
 - Platform code lives in per-platform translation units (`*_windows.cpp`, `*_posix.cpp`) selected by CMake, never
   behind `#ifdef` in shared code; `platform_detect.h` is the only header that reads compiler macros.
 - With `using namespace conjure::core;` at global scope the unqualified name `clock` is ambiguous with the C

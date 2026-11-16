@@ -23,7 +23,9 @@
 //
 // Representation of every kind (the writer emits object members in field order; use
 // document::to_canonical_string() for sorted keys):
-//   BOOL -> true/false            integers -> numbers           F32/F64 -> numbers (non-finite -> null)
+//   BOOL -> true/false            integers -> numbers           F32/F64 -> numbers
+//   F32/F64 without a JSON number: +infinity -> "inf", -infinity -> "-inf", NaN -> null. The same
+//   holds for every component of a vector, quaternion, matrix or transform.
 //   STRING -> string              STRING_ID -> the interned name, or "#" + 16 hex digits when unknown
 //   UUID -> "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"              VEC2/3/4 -> [x, y(, z(, w))]
 //   QUAT -> [x, y, z, w] (storage order)                        MAT4 -> 16 numbers, column-major
@@ -37,9 +39,12 @@
 //   loading.
 //
 // Reading is lenient where it is safe: a missing member keeps the field's current value, unknown
-// members are ignored (and reported when a list is supplied), a null for a float reads as NaN, an
-// integral real (3.0) is accepted for an integer, a shorter array fills only the leading elements,
-// and an enum accepts its name or its number. Everything else (wrong JSON type, out-of-range number,
+// members are ignored (and reported when a list is supplied), an integral real (3.0) is accepted for
+// an integer, a shorter array fills only the leading elements, and an enum accepts its name or its
+// number. A float reads a number, the strings "inf" and "-inf" (exactly these spellings) as the
+// infinities and null as NaN, so the three values JSON has no number for come back as they were
+// written; data written before the infinities had a spelling stored them as null and still loads,
+// as NaN. Everything else (wrong JSON type, any other string for a float, out-of-range number,
 // unknown enumerator, array longer than the field) fails with INVALID_ARGUMENT / OUT_OF_RANGE and a
 // message naming the field path; fields read before the failure keep their new values.
 

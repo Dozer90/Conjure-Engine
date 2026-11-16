@@ -92,7 +92,9 @@ during `scan()`); then `add_mount()` the roots (`"assets"`, `"engine"`), `open()
 | `result<vector<asset_id>> dependency_closure(roots)` / `void collect_dependents(roots, outOrdered)` | transitive closure (uuid order); transitive dependents (depth order, roots first) |
 
 `add_file`, `create_asset` and `move_asset` refuse a path that leaves its mount (`"assets://../x"`,
-`"assets:///abs"`, `"assets://C:/abs"`) with `INVALID_ARGUMENT`, before touching any file.
+`"assets:///abs"`, `"assets://C:/abs"`) with `INVALID_ARGUMENT`, before touching any file. `create_asset` and
+`move_asset` refuse the same way a path one of whose names is not portable (`"assets://rock."`,
+`"assets://what?.png"`; `core::vfs::path_utils::is_portable_name`, see [Files](../core/files.md)).
 
 Lookups take a shared lock and are safe from any thread; every mutating call is main-thread only.
 

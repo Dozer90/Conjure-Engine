@@ -1,6 +1,7 @@
 #include "conjure/core/vfs/path_utils.h"
 
 #include "conjure/core/types.h"
+#include "core/vfs/vfs_internal.h"
 
 #include <algorithm>
 #include <string>
@@ -266,4 +267,8 @@ std::string path_utils::relative_to(std::string_view path, std::string_view base
         relative.push_back(pathSegments[index]);
     }
     return join_segments({}, relative);
+}
+
+bool path_utils::is_portable_name(std::string_view name) noexcept {
+    return internal::portable_name_problem(name).empty();
 }

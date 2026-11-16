@@ -1,7 +1,6 @@
 {
     "tests_mirror_headers": {
         "conjure/core/api.h": "macro-only visibility header; exercised by every translation unit that includes it",
-        "conjure/core/non_copyable.h": "one trivial base class; every non-copyable type's test covers the deleted operations",
         "conjure/core/platform_detect.h": "compile-time macros only; the static_asserts in types.h and the build itself check them",
         "conjure/core/types.h": "type aliases and static_asserts only; there is no runtime behaviour to test",
         "conjure/core/containers/detail.h": "private implementation detail of the containers; covered through the container tests",

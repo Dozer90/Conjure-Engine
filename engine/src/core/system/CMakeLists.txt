@@ -1,5 +1,8 @@
 # core/system - child processes, shared libraries and RGBA8 images (PNG through stb).
 #
+# Links core/jobs privately: the pipe readers of a child process are jobs::dedicated_threads, so this
+# area creates no std::thread of its own (docs/design/10_core.md C2 and C4).
+#
 # The platform backends are selected here rather than with preprocessor guards so each file is a
 # plain translation unit of one operating system.
 
@@ -35,5 +38,6 @@ conjure_add_core_area(system
     PUBLIC_DEPS
         conjure::core_foundation
     PRIVATE_DEPS
+        conjure::core_jobs
         conjure::thirdparty::stb
 )

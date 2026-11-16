@@ -90,8 +90,26 @@ cost nothing.
 > [!NOTE]
 > The enumerator is `log_level::ERR`, not `ERROR`: `ERROR` is a Windows macro. The macro is still spelled
 > `CONJURE_LOG_ERROR`. `to_string(level)` and `parse_log_level("warn")` convert levels to and from text.
-> `parse_log_level` is case-insensitive and returns `log_level::OFF` for an unknown name, so validate configuration
-> input before passing the result to `set_level`.
+
+`parse_log_level` is case-insensitive and returns a `std::optional<log_level>`: the level for one of the seven
+names `to_string` produces (`"error"` gives `log_level::ERR`, `"off"` gives `log_level::OFF`), and `std::nullopt`
+for anything else, the empty string included. An unknown name is therefore never mistaken for a request for
+silence:
+
+```cpp
+core::result<void> set_game_log_level(std::string_view text) {
+    const std::optional<core::log_level> level = core::parse_log_level(text);
+    if (!level.has_value()) {
+        return core::make_error(core::error_code::INVALID_ARGUMENT, "unknown log level '{}'", text);
+    }
+    LOG_GAME.set_level(*level);
+    return {};
+}
+```
+
+> [!TIP]
+> `OFF` parses like any other level. Where it makes no sense (the minimum level of a filter over existing lines,
+> for instance), reject it yourself after the parse: `!level.has_value() || *level == core::log_level::OFF`.
 
 ## Sinks
 
@@ -224,7 +242,7 @@ void run_without_breaking() {
 | `CONJURE_LOG_TRACE/DEBUG/INFO/WARN/ERROR/FATAL(category, fmt, ...)` | log at a level |
 | `CONJURE_LOG(category, level, fmt, ...)` | log at a runtime level |
 | `enum class log_level : u8 { TRACE, DEBUG, INFO, WARN, ERR, FATAL, OFF }` | levels |
-| `std::string_view to_string(log_level)` / `log_level parse_log_level(std::string_view)` | level names |
+| `std::string_view to_string(log_level)` / `std::optional<log_level> parse_log_level(std::string_view)` | level names; `nullopt` for an unknown name |
 | `log_category::level()` / `set_level(log_level)` / `is_enabled(log_level)` / `name()` | per-category filter |
 | `log::set_global_level(log_level)` / `log::global_level()` | global filter |
 | `log::is_enabled(const log_category &, log_level)` | would a message be delivered |

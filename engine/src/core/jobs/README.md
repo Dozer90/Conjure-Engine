@@ -2,7 +2,9 @@
 
 The engine's threading primitives: a worker pool with a priority-laned job queue, `parallel_for`,
 the main-thread task queue and named dedicated threads. This is the only area of the engine that
-creates `std::thread` / `std::jthread` objects (`docs/design/10_core.md` 2.7, C4).
+creates `std::thread` / `std::jthread` objects (`docs/design/10_core.md` 2.7, C4). Code elsewhere
+that needs a thread of its own holds a `dedicated_thread`; inside core that is `system`, whose
+process backends drain a child's pipes on one (`core/system/system_internal.h`, `pipe_reader`).
 
 Public headers: `conjure/core/jobs/job_system.h`, `job_handle.h`, `parallel_for.h`,
 `main_thread.h`, `dedicated_thread.h` and the umbrella `jobs.h`. Library `conjure::core_jobs`,

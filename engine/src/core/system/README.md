@@ -3,7 +3,7 @@
 Operating-system services that the rest of the engine must not touch directly: child processes,
 shared libraries and a small RGBA8 image type with PNG support. Design: `docs/design/10_core.md`
 section 2.10. Target `conjure::core_system`; depends on `conjure::core_foundation` publicly and on
-`conjure::thirdparty::stb` privately.
+`conjure::core_jobs` (the pipe reader threads) and `conjure::thirdparty::stb` privately.
 
 | Header | Types | Purpose |
 |---|---|---|
@@ -15,14 +15,14 @@ section 2.10. Target `conjure::core_system`; depends on `conjure::core_foundatio
 
 ```
 process.cpp                  run(): start + wait
-process_windows.cpp          CreateProcessW, anonymous pipes, job object, two std::thread readers
+process_windows.cpp          CreateProcessW, anonymous pipes, job object, one reader thread per pipe
 process_posix.cpp            posix_spawnp, pipes, own process group, one poll() reader thread
 dynamic_library.cpp          construction, moves, decorate_name
 dynamic_library_windows.cpp  LoadLibraryExW / LoadLibraryW / GetProcAddress / FreeLibrary
 dynamic_library_posix.cpp    dlopen / dlsym / dlclose
 image.cpp                    pixel access and the PNG codec
 system_internal.{h,cpp}      description validation, timeout clamping, thread-safe output buffers,
-                             reader completion latch, path -> UTF-8
+                             reader completion latch, pipe_reader (the reader thread), path -> UTF-8
 win32_utils.{h,cpp}          UTF-8 <-> UTF-16, FormatMessageW, Win32 -> error_code mapping
 ```
 
@@ -132,11 +132,20 @@ needs the operating system directly for a few of its modes.
 - `process`: `read_output()`, `read_error()`, `is_running()` and `kill()` may be called from any
   thread while another thread blocks in `wait()`; the output buffers are mutex-guarded
   (`detail::process_output`), the readers signal completion through `detail::completion_latch`.
-  `start()`, `wait()` and destruction belong to one thread at a time. The pipe readers are
-  `std::thread`s inside the backends, the documented exception to "no `std::thread` outside
-  `core::jobs`" (10_core.md C4): C2 limits `system`'s dependencies to `foundation` and stb, so
-  `jobs::dedicated_thread` (which does exist) cannot be used here; C4 names it anyway, a conflict
-  for the architect to settle (`jobs` does not depend on `system`, so a dependency would not cycle).
+  `start()`, `wait()` and destruction belong to one thread at a time.
+- The pipe readers are `jobs::dedicated_thread`s, as 10_core.md C4 requires: the area links
+  `conjure::core_jobs` privately for them (C2 as amended by code sweep F233, decision C14; `jobs`
+  links only `foundation`, so there is no cycle) and creates no `std::thread` of its own. Both
+  backends start them through `detail::pipe_reader` (`system_internal.h`), which registers the
+  reader with the completion latch, runs the backend's drain function on the new thread and arrives
+  at the latch when it returns. The threads are named for debuggers and profilers:
+  `process-stdout` and `process-stderr` on Windows (one blocking `ReadFile` loop per pipe),
+  `process-pipes` on POSIX (one `poll()` loop for both); each name fits the 15 bytes Linux keeps.
+  A reader ignores its stop token, because a blocking read cannot be interrupted: it ends when
+  the last writer of its pipe is gone. The destructor therefore kills the tree before it joins,
+  and `wait()` does so once its timeout has passed; without a timeout `wait()` waits for the last
+  writer to go. When the operating system refuses the thread the process ends, like every
+  `dedicated_thread` (`docs/CONVENTIONS.md` section 3).
 - `dynamic_library`: no shared state; the OS loader serialises loading. One instance is not meant
   to be used from several threads at once.
 - `image`: a value type; `stb_image`'s failure reason is a process-wide string, so a decode error
@@ -152,6 +161,14 @@ sleep, and `fds` counts inherited descriptors) in the bin directory, and in `bin
 (outside every loader's default search) `conjure_test_shared_library` (exports `conjure_test_add`
 and `conjure_test_constant`) and `conjure_test_dependent_library` (imports the former, exports
 `conjure_test_add_twice`). The tests receive the helper paths as compile definitions.
+`test_process.cpp` also tests `detail::pipe_reader` on its own (through `core/system/system_internal.h`):
+the reader thread carries its name as the operating system reports it (read with
+`jobs::detail::current_thread_name()`), registers with the latch before it runs, joins once, and
+refuses an empty drain function and a second start. That the backends themselves use it is pinned
+through `detail::started_pipe_reader_count()`, a process-wide count of the readers `pipe_reader`
+has started: a child with both pipes captured raises it by two on Windows and by one on POSIX, one
+captured pipe by one, an uncaptured child not at all, so a backend that drained a pipe on a thread
+of its own would come up short.
 
 ```
 python tools/build.py --build-dir build/core_system --target conjure_core_system_tests --test -R core_system
