@@ -2,6 +2,7 @@
 
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_error.h"
+#include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/log_category.h"
 
 #include "conjure/core/clock.h"
@@ -12,7 +13,9 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 namespace conjure::editor {
@@ -80,21 +83,11 @@ namespace conjure::editor {
     headless_runner::headless_runner() = default;
     headless_runner::~headless_runner() = default;
 
-    core::result<exec_summary> headless_runner::run(editor_application &application, const editor_options &options) {
-        if (options.execFile.empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "--exec needs a command file");
-        }
-        std::ifstream input(options.execFile, std::ios::binary);
-        if (!input.is_open()) {
-            return make_editor_error(
-              protocol_error_code::INVALID_ARGS,
-              std::format("--exec: cannot read '{}'", options.execFile.generic_string())
-            );
-        }
-        std::stringstream buffer = {};
-        buffer << input.rdbuf();
-        CONJURE_TRY_ASSIGN(std::vector<protocol_request> requests, parse_command_file(buffer.str()));
-
+    core::result<exec_summary> headless_runner::run(
+      editor_application &application,
+      const editor_options &options,
+      std::span<const protocol_request> requests
+    ) {
         std::ofstream file = {};
         std::ostream *out = &std::cout;
         if (!options.outputFile.empty()) {
@@ -133,6 +126,12 @@ namespace conjure::editor {
         context.register_response_sink(clientId, [&captured](const protocol_response &response) {
             captured = response;
         });
+
+        // Decision D22: an editor engine starts over an empty world when the startup scene does not load, which
+        // only its log says. The run's reader learns it from the first line, before any request has run.
+        if (std::optional<core::json::document> warning = application.startup_scene_warning(); warning.has_value()) {
+            (void) context.events().emit_to(clientId, editor_event::WARNING, std::move(*warning));
+        }
 
         bool outputFailed = false;
         for (usize index = 0; index < requests.size(); ++index) {
@@ -243,6 +242,35 @@ namespace conjure::editor {
             summary.exitCode = application.exit_code();
         }
         return summary;
+    }
+
+    core::result<std::vector<protocol_request>> headless_runner::load_command_file(const std::filesystem::path &file) {
+        if (file.empty()) {
+            return make_editor_error(protocol_error_code::INVALID_ARGS, "--exec needs a command file");
+        }
+        // A directory opens as a stream on some platforms and then reads as an empty file. Only a directory is
+        // turned away here: a pipe or a device is as good a source as a regular file.
+        std::error_code ignored = {};
+        std::ifstream input = {};
+        if (!std::filesystem::is_directory(file, ignored)) {
+            input.open(file, std::ios::binary);
+        }
+        if (!input.is_open()) {
+            return make_editor_error(
+              protocol_error_code::INVALID_ARGS,
+              std::format("--exec: cannot read '{}'", file.generic_string())
+            );
+        }
+        std::stringstream buffer = {};
+        buffer << input.rdbuf();
+        core::result<std::vector<protocol_request>> requests = parse_command_file(buffer.str());
+        if (!requests.has_value()) {
+            return make_editor_error(
+              protocol_error_code::INVALID_ARGS,
+              std::format("--exec: cannot parse '{}': {}", file.generic_string(), requests.get_error().message())
+            );
+        }
+        return requests;
     }
 
     core::result<std::vector<protocol_request>> headless_runner::parse_command_file(std::string_view text) {

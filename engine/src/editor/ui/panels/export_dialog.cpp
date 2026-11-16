@@ -80,7 +80,6 @@ namespace conjure::editor::ui {
         }
         ImGui::BeginDisabled(mRunning);
         ImGui::InputText("Output directory", &mDirectory);
-        ImGui::InputText("Configuration", &mConfiguration);
         if (ImGui::Button("Export")) {
             start_export(context);
         }
@@ -117,7 +116,7 @@ namespace conjure::editor::ui {
         protocol_request request = {};
         request.id = make_id("export");
         request.command = "project.export";
-        request.args = core::json::object({{"directory", mDirectory}, {"config", mConfiguration}});
+        request.args = core::json::object({{"directory", mDirectory}});
         request.clientId = state->clientId;
         mRunning = true;
         mProgress = 0.0f;

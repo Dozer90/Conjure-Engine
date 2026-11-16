@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 // The real executable (docs/design/08_testing.md 6.3 item 8, label process): conjure_editor --headless --exec runs
@@ -267,6 +268,100 @@ TEST_SUITE("editor/editor_process") {
         const std::string stray = non_protocol_lines(result.standardOutput);
         CHECK_MESSAGE(stray.empty(), stray);
         CHECK(result.standardError.find("standard input closed") != std::string::npos);
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 editor_process an unusable --exec file exits 3 before the engine starts [process]"
+    ) {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        constexpr int BAD_ARGUMENTS_EXIT = static_cast<int>(engine::exit_code::BAD_ARGUMENTS);
+        // No --log-level: a started engine would announce itself on standard error, and it leaves its asset cache
+        // under .conjure/ in the project.
+        constexpr std::string_view ENGINE_RUNNING = " running (";
+        SUBCASE("a file that does not exist") {
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(project), "--ai-port", "0", "--exec",
+              path_argument(directory.path() / "nope.json"),
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("--exec: cannot read") != std::string::npos);
+            CHECK(result.standardError.find("nope.json") != std::string::npos);
+            CHECK(result.standardError.find("'conjure_editor --help'") != std::string::npos);
+            CHECK(result.standardError.find(ENGINE_RUNNING) == std::string::npos);
+            CHECK(result.standardOutput.empty());
+            CHECK_FALSE(std::filesystem::exists(project / ".conjure"));
+        }
+        SUBCASE("a file that does not parse") {
+            const std::filesystem::path commands = directory.path() / "broken.json";
+            write_text(commands, "[{\"cmd\":\"editor.state\"},");
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(project), "--ai-port", "0", "--exec", path_argument(commands),
+            });
+            CHECK_MESSAGE(result.exitCode == BAD_ARGUMENTS_EXIT, result.standardError);
+            CHECK(result.standardError.find("--exec: cannot parse") != std::string::npos);
+            CHECK(result.standardError.find("broken.json") != std::string::npos);
+            CHECK(result.standardError.find(ENGINE_RUNNING) == std::string::npos);
+            CHECK(result.standardOutput.empty());
+            CHECK_FALSE(std::filesystem::exists(project / ".conjure"));
+        }
+        SUBCASE("a file that parses starts the engine, which is what the two checks above look for") {
+            const std::filesystem::path commands = directory.path() / "state.json";
+            write_text(commands, R"([{"cmd":"editor.state"}])");
+            const core::process_result result = run_editor({
+              "--headless", "--project", path_argument(project), "--ai-port", "0", "--exec", path_argument(commands),
+            });
+            CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+            CHECK(result.standardError.find(ENGINE_RUNNING) != std::string::npos);
+            CHECK(std::filesystem::is_directory(project / ".conjure"));
+        }
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 editor_process a broken startup scene is the first output line and the run "
+      "still exits 0 [process]"
+    ) {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        write_text(
+          project / "project.json",
+          "{\n  \"schema_version\": 1,\n  \"name\": \"process_test\",\n  \"assets_root\": \"assets\",\n"
+          "  \"startup_scene\": \"scenes/main.scene.json\"\n}\n"
+        );
+        std::error_code ignored = {};
+        std::filesystem::create_directories(project / "assets" / "scenes", ignored);
+        // A scene file that does not parse: the import fails and the editor starts over an empty world.
+        write_text(project / "assets" / "scenes" / "main.scene.json", "{\"version\": 1, \"entities\": [");
+        const std::filesystem::path commands = directory.path() / "state.json";
+        write_text(commands, R"([{"cmd":"editor.state"},{"cmd":"scene.new","args":{"name":"fresh"}}])");
+        const core::process_result result = run_editor({
+          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
+          "--log-level", "warn",
+        });
+        CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+        const std::vector<std::string> lines = editor_test::non_empty_lines(result.standardOutput);
+        REQUIRE(lines.size() >= 3);
+        const core::result<protocol_event> warning = parse_event(lines.front());
+        REQUIRE_MESSAGE(warning.has_value(), lines.front());
+        CHECK(warning.value().name == "warning");
+        CHECK(warning.value().data.root()["code"].as_string() == "STARTUP_SCENE_FAILED");
+        CHECK(warning.value().data.root()["message"].as_string().find("scenes/main.scene.json") != std::string::npos);
+        usize okResponses = 0;
+        for (const std::string &line : lines) {
+            const core::result<protocol_response> response = parse_response(line);
+            if (response.has_value() && response.value().ok) {
+                ++okResponses;
+            }
+        }
+        CHECK(okResponses == 2);
+        const std::string stray = non_protocol_lines(result.standardOutput);
+        CHECK_MESSAGE(stray.empty(), stray);
     }
 
     TEST_CASE("editor_process - a failing command file exits 1 and names the failing index [process]") {

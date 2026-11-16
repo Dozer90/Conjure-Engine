@@ -57,9 +57,10 @@ line still parses.
 |---|---|
 | `PARSE_ERROR`, `INVALID_REQUEST`, `MESSAGE_TOO_LARGE` | the line is not JSON, not a request, or too long (then disconnect); `id` is null, except that `INVALID_REQUEST` echoes an integer or string `id` the object carried |
 | `UNKNOWN_COMMAND` (`details.didYouMean`, empty for a name over 128 bytes; the message quotes at most 128 bytes of it), `INVALID_ARGS` (names `args.<path>`) | the request |
-| `ENTITY_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `TYPE_NOT_FOUND`, `PATH_NOT_FOUND`, `ASSET_NOT_FOUND` | a reference did not resolve |
+| `ENTITY_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `TYPE_NOT_FOUND`, `ASSET_NOT_FOUND` | a reference did not resolve; `ASSET_NOT_FOUND` is an asset reference (uuid or asset path) that names no asset in the database |
+| `PATH_NOT_FOUND` | a reflection path does not resolve, or a file or folder a command needs does not exist: the `asset.import` source, the `scene.open` file, the `project.open` directory or its `project.json`, the `editor.exec_file` file, a script, the `module.discover` directory, the `distributionDirectory` of a `project.export` that copies the runtime, the source file of a registered asset (`asset.set`, `asset.delete`, `asset.reimport`, `prefab.apply`) |
 | `PROJECT_NOT_OPEN`, `SCENE_NOT_OPEN`, `WRONG_PLAY_STATE` (`details.state`) | a precondition |
-| `NOT_AVAILABLE`, `IO_ERROR`, `COMPILE_FAILED` (`details.diagnostics`) | the environment: a null backend, a file, a build (`script.reload` answers `PATH_NOT_FOUND` when no assembly was built yet and `IO_ERROR` when the runtime cannot load the one that exists) |
+| `NOT_AVAILABLE`, `IO_ERROR`, `COMPILE_FAILED` (`details.diagnostics`) | the environment: a null backend, a file, a build. `IO_ERROR` is a file or folder that exists but cannot be read (a directory where a file is expected or a file where a folder is, a denied access, a scene file that does not load) or a write that failed, never a missing one (`script.reload` answers `PATH_NOT_FOUND` when no assembly was built yet and `IO_ERROR` when the runtime cannot load the one that exists) |
 | `BUSY`, `TIMEOUT`, `CANCELLED` | the asynchronous queue (also `BUSY`: a second `script.compile` while one runs, and `play.start` while a `project.open` waits for its restart) |
 | `UNAUTHORISED`, `INTERNAL` | the handshake, an invariant |
 
@@ -74,7 +75,8 @@ arguments and result): `session.*`, `editor.*` (`schema`, `state`, `batch`, `beg
 `reload`, `gc`, `attach`), `play.*` (`start`, `stop`, `pause`, `resume`, `step`, `state`), `input.*`, `view.*`
 (`screenshot`, `set_camera`, `get_camera`, `focus`, `pick`, `mode`, `set_mode`, `debug_draw`), `physics.*`,
 `reflection.*`, `module.*`, `profiler.frame_stats`, `console.*`. Flags: `mutates`, `no_undo`, `async`,
-`requires_project`, `requires_scene`, `editing_only`, `playing_only`, `not_in_batch`.
+`requires_project`, `requires_scene`, `editing_only`, `playing_only`, `not_in_batch`, `on_disk` (an undoable
+change to the project's files, see the warning below).
 
 Events: `log`, `selection.changed`, `play.state`, `scene.changed`, `scene.loaded`, `progress`, `script.compiled`,
 `script.reloaded`, `asset.imported`, `module.state`, `command.executed`, `client.connected`,
@@ -85,6 +87,7 @@ simulationTime, fixedStepIndex}`. `frame` is the engine frame; the other three a
 `play.start` sets them to 0. `simulationTime` (seconds) and `fixedStepIndex` advance with fixed steps only, so they
 stand still while paused except for a `play.step`, and `simulationFrame` counts the frames simulated. `play.stop`
 answers with the ended session's values, and `play.state` keeps reporting them until the next `play.start`.
+`play.stop` alone adds `fileChanges`: how many file edits the ended session made (0 when none).
 `profiler.frame_stats` has two fields of the same names that are instead the engine's clocks (`engine_time.time` and
 `fixedStepIndex`, the clocks game code reads) since the engine started: they run on across play sessions, and
 `project.open` restarts them.
@@ -100,12 +103,80 @@ answers with the ended session's values, and `play.state` keeps reporting them u
 > byte-identical run after run.
 
 > [!WARNING]
-> Undo is frozen while playing (`WRONG_PLAY_STATE`) and `play.stop` discards every edit made during play by
-> restoring the snapshot `play.start` took; a `warning` event says so.
+> Undo is frozen while playing (`history.undo` and `history.redo` answer `WRONG_PLAY_STATE`), and `play.stop`
+> restores the snapshot `play.start` took. That discards every **scene** edit made during play. It does not
+> touch the project's **files**: what an `on_disk` command wrote or deleted during play is still there after
+> `play.stop`.
+
+### Edits while playing
+
+| Edit made while playing or paused | After `play.stop` |
+|---|---|
+| Scene edits: `entity.*`, `component.*`, `prefab.instantiate`, `prefab.unpack`, `script.attach`, `scene.set_settings` | gone with the snapshot restore, and never recorded for undo |
+| File edits, the commands flagged `on_disk`: `asset.import`, `asset.create_folder`, `asset.delete`, `asset.create_material`, `asset.set`, `asset.restore`, `prefab.apply`, `project.set_settings`, `script.create`, `script.write`, `script.delete` | still on disk; all of them together are one undo entry, `File changes during play` |
+| `prefab.create`, `scene.save`, `scene.save_as` | refused with `WRONG_PLAY_STATE`: they would tie a file to scene state that the restore removes |
+
+`play.stop` answers `fileChanges`, the number of file edits in that entry, and pushes no entry when it is 0.
+One `history.undo` afterwards takes all of them back, newest first, and `history.redo` applies them again. A
+batch run while playing keeps its file edits the same way and drops its scene edits; a batch that rolls back
+keeps nothing. `editor.quit {saveChanges: true}` stops a play session before it saves; if the save then fails,
+the answer is the save's error and the editor stays running in the editing state. Writing a script against the
+running game and undoing it after the session is the intended use:
+
+```
+-> {"id":50,"cmd":"play.start"}
+-> {"id":51,"cmd":"script.write","args":{"path":"Player.cs","source":"..."}}
+-> {"id":52,"cmd":"play.stop"}
+<- {"id":52,"ok":true,"result":{"state":"editing","frame":1310,"simulationFrame":240,"simulationTime":4.0,"fixedStepIndex":240,"fileChanges":1}}
+-> {"id":53,"cmd":"history.undo"}
+<- {"id":53,"ok":true,"result":{"applied":1,"labels":["File changes during play"],"canUndo":false,"canRedo":true,"revision":19}}
+```
+
+`warning` events carry `{code, message}`. Two belong to play mode and are sent once per play session each:
+`UNRECORDED_PLAY_EDIT` after the first scene edit (it will be discarded; the message names the `on_disk`
+commands, whose changes are kept) and `PLAY_FILE_EDIT` (with `cmd`) after the first file edit (it will stay, and becomes undoable at
+`play.stop`). `STARTUP_SCENE_DELETED` (with `path`) follows an `asset.delete` of the project's startup scene.
+`STARTUP_SCENE_FAILED` says the engine started without the project's startup scene: it is the first line of an
+`--exec` output (see [the headless runner](#the-headless-runner)) and follows a `project.open` into such a project.
+
+### Deleting scenes and exporting
+
+`asset.delete {asset}` answers `{uuid, path, closedScene, startupScene}` and is undone by `history.undo`, which
+restores the file with the same uuid.
+
+- The file behind the open scene is refused with `INVALID_ARGS` until the request says `closeOpenScene: true`.
+  The command then deletes the file and closes the scene (unsaved changes are dropped). Closing clears the undo
+  history, so the delete is its first entry, and undoing it restores the file without reopening the scene. A
+  delete the file system refuses answers its error and leaves the scene open, unsaved changes and history
+  included.
+- The open scene is recognised by its file, not by how its path was spelled: a scene opened as `Scenes/Main` on
+  a volume that ignores case is still the asset `assets://scenes/main.scene.json`.
+- `closeOpenScene` is refused inside `editor.batch`, an open transaction and an undo or redo step
+  (`INVALID_ARGS`) and while playing (`WRONG_PLAY_STATE`). For an asset that is not the open scene it changes
+  nothing.
+- Deleting the project's startup scene succeeds; `project.json` keeps naming it, and the `warning` event above is
+  the reminder to name another with `project.set_settings` or to restore the file.
+
+```
+-> {"id":7,"cmd":"asset.delete","args":{"asset":"scenes/main.scene.json"}}
+<- {"id":7,"ok":false,"error":{"code":"INVALID_ARGS","message":"'assets://scenes/main.scene.json' is the open scene: pass closeOpenScene: true ...","details":{}}}
+-> {"id":8,"cmd":"asset.delete","args":{"asset":"scenes/main.scene.json","closeOpenScene":true}}
+<- {"id":8,"ok":true,"result":{"uuid":"5d0c...","path":"assets://scenes/main.scene.json","closedScene":true,"startupScene":false,"revision":19}}
+```
+
+`project.export {directory, distributionDirectory?, copyRuntime?, buildNativeModule?, publishManaged?}` always
+produces a Distribution export; `distributionDirectory` names the Distribution build whose runtime is copied.
+When the runtime is copied from it (`copyRuntime` is not `false`), a `distributionDirectory` that does not exist
+answers `PATH_NOT_FOUND` (`IO_ERROR` when it is not a folder) before anything is cooked.
+
+> [!NOTE]
+> `project.export` no longer takes `config` and `project.create` no longer takes `template`: neither ever selected
+> anything. A request that still sends one is refused with `INVALID_ARGS`, like any unknown argument.
 
 ## The headless runner
 
-`headless_runner::run(application, options)` executes `--exec`: the file is a JSON array of request objects or
+`headless_runner` executes `--exec`. `load_command_file(path)` reads and parses the file, and
+`run(application, options, requests)` runs it: the file is a JSON array of request objects or
 NDJSON (a leading UTF-8 byte order mark, as Windows PowerShell 5.1 writes, is skipped), a missing `id` becomes the
 zero-based index, `${project}` in string arguments expands to the root of the project that is open when that
 request runs (so it follows a `project.open` earlier in the file), frames are pumped until each asynchronous reply
@@ -119,11 +190,31 @@ project or engine failed to start (project.json missing or invalid, a device or 
 busy explicit `--ai-port`, or a `project.open` in the file whose restart failed for the new and the previous
 project) or the responses could not be written (the run stops after the request whose answer was lost), 3 bad
 arguments (an option neither the editor nor the engine knows, a bad flag value, a flag that makes
-the configuration invalid) or an unreadable file, 4 the graphics device was lost (windowed only).
+the configuration invalid) or a command file that is missing or does not parse, 4 the graphics device was lost
+(windowed only).
 `exec_summary { executed, succeeded, failed, firstFailedIndex, exitCode }` summarises (`record(ok, index)` counts
 one answer, the runner and `editor.exec_file` both use it);
 `parse_command_file(text)` and `run_requests(application, requests, out, keepGoing)` are the in-process halves
 tests use.
+
+The command file is checked before the engine starts. `editor_application::initialise` looks at the arguments
+and the project first, then reads and parses the file, and only then starts the engine, so a mistyped file name
+or a syntax error costs no engine start: the process prints `--exec: cannot read '<file>'` or `--exec: cannot
+parse '<file>': command file: line 3: ...` on standard error and exits with 3. When a flag or the project is
+wrong as well, that is what is reported (exit 3 or 2).
+
+A startup scene that does not load does not fail the run. The editor starts over an empty world, as it does with
+a window, and the output opens with one `warning` event, before the first response:
+
+```
+<- {"event":"warning","seq":1,"frame":0,"data":{"code":"STARTUP_SCENE_FAILED","message":"startup scene 'assets://scenes/main.scene.json' failed to load: ..."}}
+<- {"id":0,"ok":true,"result":{...}}
+```
+
+The exit code is the requests' alone, so a command file written to repair the scene (`scene.new` with the same
+path, then `scene.save`) runs and exits 0. A script that needs the scene checks whether the first line is this
+event. After a `project.open` in the file the same event follows that response when the new project's startup
+scene fails.
 
 > [!NOTE]
 > Whenever standard output carries protocol data (`--ai-stdio`, `--exec` without `--out`, `--export`), every log
@@ -140,7 +231,7 @@ options.headless = true;
 options.projectPath = "C:/games/grid_sweeper";
 options.execFile = "C:/games/grid_sweeper/commands/build_grid_sweeper.json";
 editor::editor_application app = {};
-CONJURE_TRY(app.initialise(options, {}));     // no UI layer headless
+CONJURE_TRY(app.initialise(options, {}));     // no UI layer headless; BAD_ARGUMENTS for an unusable execFile
 const int exitCode = app.run();               // the runner's exit code
 app.shutdown();
 ```
@@ -172,7 +263,9 @@ frames bytes into lines with the size limit and reports an oversized line as a m
 | `void poll(vector<protocol_request> &, usize)` / `send(const protocol_response &)` / `flush()` / `take_closed(vector<u32> &)` | one frame of the server |
 | `void protocol_server::set_project_root(const path &)` / `bool stdio_closed()` | the port file on a project switch, the end of a stdio session |
 | `loopback_client loopback_transport::connect()` | an in-process client |
-| `result<exec_summary> headless_runner::run(editor_application &, const editor_options &)` / `exec_summary run_requests(...)` / `static result<vector<protocol_request>> parse_command_file(string_view)` | `--exec` |
+| `static result<vector<protocol_request>> headless_runner::load_command_file(const path &)` / `parse_command_file(string_view)` | reading and parsing a command file, without an engine |
+| `result<exec_summary> headless_runner::run(editor_application &, const editor_options &, span<const protocol_request>)` / `exec_summary run_requests(...)` | `--exec` |
+| `optional<json::document> editor_application::startup_scene_warning()` | the `STARTUP_SCENE_FAILED` warning data, when the startup scene did not load |
 | `std::string_view to_string(protocol_error_code)` | the wire spelling of a code |
 
 ## See also

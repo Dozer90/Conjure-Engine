@@ -7,9 +7,11 @@
 #include "conjure/core/vfs/file_system.h"
 #include "conjure/core/vfs/path_utils.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/engine_error.h"
 #include "conjure/engine/export.h"
 #include "conjure/engine/project.h"
 
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <system_error>
@@ -88,6 +90,19 @@ namespace conjure::editor::support {
             const std::filesystem::path root = std::filesystem::path(std::string(pathText));
             core::result<engine::project> project = engine::project::load(root);
             if (!project.has_value()) {
+                // The engine answers PROJECT_NOT_FOUND for a missing project.json (PATH_NOT_FOUND here), for one
+                // that exists but cannot be opened and for a 'path' that is a file, not a folder: the last two are
+                // IO_ERROR like every other path that exists and cannot be used.
+                const bool notFound = project.get_error().is(engine::engine_error::PROJECT_NOT_FOUND);
+                const std::filesystem::path file = root / std::filesystem::path(engine::PROJECT_FILE_NAME);
+                std::error_code ignored = {};
+                if (notFound && std::filesystem::exists(file, ignored)) {
+                    return unusable_path(file, "not a readable project file");
+                }
+                const bool isFolder = std::filesystem::is_directory(root, ignored);
+                if (notFound && !isFolder && std::filesystem::exists(root, ignored)) {
+                    return unusable_path(root, "not a directory");
+                }
                 return wrap(project.get_error());
             }
             if (context.host() == nullptr) {
@@ -192,6 +207,15 @@ namespace conjure::editor::support {
             settings.distributionDirectory = std::filesystem::path(std::string(distribution));
             settings.copyRuntime = bool_or(invocation.args, "copyRuntime", !distribution.empty());
             settings.copyShaders = settings.copyRuntime;
+            if (settings.copyRuntime && !distribution.empty()) {
+                // The folder the runtime is copied from must be there before anything is cooked: checked here, a
+                // missing one answers PATH_NOT_FOUND like every other missing path (code sweep F656) instead of
+                // the pipeline's IO_ERROR for the first file it cannot copy.
+                std::error_code ignored = {};
+                if (!std::filesystem::is_directory(settings.distributionDirectory, ignored)) {
+                    return unusable_path(settings.distributionDirectory, "not a directory");
+                }
+            }
             settings.buildNativeModule = bool_or(invocation.args, "buildNativeModule", false);
             const engine::engine_config *config = context.engine_context().config;
             settings.publishManaged = bool_or(
@@ -200,8 +224,6 @@ namespace conjure::editor::support {
               config != nullptr && config->scripting.enabled && !config->scripting.useNullHost
             );
             settings.dotnetExecutable = context.dotnet_executable();
-            const std::string_view configuration = string_or(invocation.args, "config", "distribution");
-            (void) configuration;
 
             const async_reply reply = invocation.reply;
             const u32 clientId = invocation.clientId;
@@ -270,8 +292,7 @@ namespace conjure::editor::support {
           make_command(
             "project.create",
             "Creates a project directory with project.json, assets/ and scripts/.",
-            R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},)"
-            R"("template":{"type":"string"}},)"
+            R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},)"
             R"("required":["path","name"]})",
             ANY_OBJECT_SCHEMA.data(),
             command_flags::MUTATES | command_flags::NO_UNDO | command_flags::NOT_IN_BATCH,
@@ -330,7 +351,7 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"settings":{"type":"object","additionalProperties":true},)"
             R"("replace":{"type":"boolean"}},"required":["settings"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &project_set_settings
           )
         );
@@ -339,8 +360,9 @@ namespace conjure::editor::support {
           make_command(
             "project.export",
             "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied "
-            "runtime executable, null when the runtime was not copied.",
-            R"({"type":"object","properties":{"directory":{"type":"string"},"config":{"type":"string"},)"
+            "runtime executable, null when the runtime was not copied. An export is always a Distribution export: "
+            "distributionDirectory names the Distribution build whose runtime is copied.",
+            R"({"type":"object","properties":{"directory":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",
             R"({"type":"object","properties":{"directory":{"type":"string"},"runtimePath":{"type":["string","null"]},)"

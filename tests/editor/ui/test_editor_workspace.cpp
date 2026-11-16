@@ -158,6 +158,40 @@ TEST_SUITE("editor/ui/editor_workspace") {
         CHECK(workspace.drawers().drawer(core::reflect::field_kind::F32));
     }
 
+    TEST_CASE("regression - code sweep F089 Save Scene and Save Scene As do nothing while playing") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path file = editor.project_directory() / "assets" / "scenes" / "test.scene.json";
+        const std::string saved = editor_test::read_text_file(file);
+        editor_workspace workspace = {};
+        workspace.create_default_panels(editor.context());
+
+        (void) editor.ok("play.start");
+        (void) editor.create_entity("Transient");
+        // Ctrl+S and the menu items: no scene.save that would answer WRONG_PLAY_STATE, no dialog.
+        workspace.request_save_scene(editor.context());
+        workspace.request_save_scene_as(editor.context());
+        CHECK_FALSE(workspace.save_as_pending());
+        CHECK(editor_test::read_text_file(file) == saved);
+        (void) editor.ok("play.pause");
+        workspace.request_save_scene(editor.context());
+        workspace.request_save_scene_as(editor.context());
+        CHECK_FALSE(workspace.save_as_pending());
+        CHECK(editor_test::read_text_file(file) == saved);
+        // The scene.save a still-open dialog would send is refused by the command itself.
+        CHECK_FALSE(workspace.save_scene_as(editor.context(), "scenes/played"));
+        CHECK(workspace.save_as_error().find("WRONG_PLAY_STATE") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(file.parent_path() / "played.scene.json"));
+
+        (void) editor.ok("play.stop");
+        workspace.request_save_scene_as(editor.context());
+        CHECK(workspace.save_as_pending());
+        (void) editor.ok("entity.rename", core::json::object({{"entity", "Kept"}, {"name", "Renamed"}}));
+        workspace.request_save_scene(editor.context());
+        CHECK(editor_test::read_text_file(file) != saved);
+    }
+
     TEST_CASE("regression - a scene made with New Scene is saved through Save Scene As") {
         editor_test::headless_editor editor = {};
         (void) editor.ok("scene.new", core::json::object({{"name", "Untitled"}}));

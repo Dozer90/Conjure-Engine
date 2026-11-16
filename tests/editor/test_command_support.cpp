@@ -1,6 +1,7 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/approx.h"
+#include "conjure/testing/temp_directory.h"
 
 #include "editor_test_support.h"
 
@@ -12,6 +13,7 @@
 
 #include <array>
 #include <cstddef>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -135,6 +137,44 @@ TEST_SUITE("editor/command_support") {
         CONJURE_CHECK_ERROR(u32_or(root, "wide", 0), protocol_error_code::INVALID_ARGS);
         CONJURE_CHECK_ERROR(u32_or(root, "huge", 0), protocol_error_code::INVALID_ARGS);
         CONJURE_CHECK_ERROR(u32_or(root, "text", 0), protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("unusable_path - a missing path is PATH_NOT_FOUND and one that exists IO_ERROR with the reason") {
+        const testing::temp_directory directory = {};
+        const core::error missing = unusable_path(directory.path() / "absent.txt", "not a regular file");
+        CHECK(missing.is(protocol_error_code::PATH_NOT_FOUND));
+        CHECK(missing.message().find("absent.txt") != std::string::npos);
+        CHECK(missing.message().find("no such file or folder") != std::string::npos);
+        // The reason belongs to a path that exists; a missing one never carries it.
+        CHECK(missing.message().find("not a regular file") == std::string::npos);
+        // A missing parent is a missing path too.
+        CHECK(unusable_path(directory.path() / "no" / "such" / "file.txt").is(protocol_error_code::PATH_NOT_FOUND));
+
+        const core::error present = unusable_path(directory.path(), "not a regular file");
+        CHECK(present.is(protocol_error_code::IO_ERROR));
+        CHECK(present.message().find("not a regular file") != std::string::npos);
+        const core::error bare = unusable_path(directory.path());
+        CHECK(bare.is(protocol_error_code::IO_ERROR));
+        CHECK(bare.message() == std::format("cannot read '{}'", directory.path().generic_string()));
+    }
+
+    TEST_CASE("read_failure - core NOT_FOUND is PATH_NOT_FOUND and every other failure IO_ERROR") {
+        const core::error missing = read_failure(
+          "assets/a.cmat",
+          core::error(core::error_code::NOT_FOUND, "'assets/a.cmat' does not exist")
+        );
+        CHECK(missing.is(protocol_error_code::PATH_NOT_FOUND));
+        CHECK(missing.message().find("cannot read 'assets/a.cmat'") != std::string::npos);
+        CHECK(missing.message().find("does not exist") != std::string::npos);
+        const core::error denied = read_failure(
+          "assets/a.cmat",
+          core::error(core::error_code::PERMISSION_DENIED, "access denied")
+        );
+        CHECK(denied.is(protocol_error_code::IO_ERROR));
+        CHECK(denied.message().find("access denied") != std::string::npos);
+        CHECK(read_failure("x", core::error(core::error_code::IO_FAILURE)).is(protocol_error_code::IO_ERROR));
+        CHECK(path_not_found("gone").is(protocol_error_code::PATH_NOT_FOUND));
+        CHECK(path_not_found("gone").message() == "gone");
     }
 
     TEST_CASE("outermost - keeps the first occurrence of each outermost subtree in input order and drops duplicates "

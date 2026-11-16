@@ -128,14 +128,15 @@ namespace conjure::editor::ui {
 
             /// <summary>
             /// What File > Save Scene and Ctrl+S do: scene.save when the scene has a path, otherwise the Save
-            /// Scene As dialog (a scene made with New Scene has no path yet). No-op without a scene.
+            /// Scene As dialog (a scene made with New Scene has no path yet). No-op without a scene and while
+            /// playing or paused: saving is an editing-state command, the playing scene is not the one to keep.
             /// </summary>
             void request_save_scene(editor_context &context);
 
             /// <summary>
             /// Opens the Save Scene As dialog on the next draw, its path field set to the scene's path, or to
             /// "scenes/<scene name>" ("scenes/untitled" for an unnamed scene) when it has none. No-op without a
-            /// scene or while the dialog is already pending.
+            /// scene, while playing or paused, or while the dialog is already pending.
             /// </summary>
             void request_save_scene_as(editor_context &context);
 

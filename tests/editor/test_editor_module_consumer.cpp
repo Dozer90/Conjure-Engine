@@ -204,6 +204,49 @@ TEST_SUITE("editor/editor_module_consumer") {
         CHECK(editor.context().registry().find("plugin.mutate") == nullptr);
     }
 
+    TEST_CASE("editor_module_consumer - a module command flagged ON_DISK is registered without the flag") {
+        editor_test::headless_editor editor = {};
+        editor_module_consumer consumer(editor.context().registry(), &editor.context().play());
+        const modules::module_id id = any_module(editor);
+        const modules::module_registry &moduleRegistry = editor.context().modules()->registry();
+        modules::module_context context(
+          id,
+          modules::module_host_kind::EDITOR,
+          modules::host_engine_version(),
+          moduleRegistry.manifest(id),
+          moduleRegistry.root_directory(id),
+          editor.context().modules()->services()
+        );
+        modules::module_registration_set set = {};
+        command_desc file = make_command("plugin.write_file");
+        file.flags = command_flags::MUTATES | command_flags::ON_DISK;
+        add_extension(set, file);
+        // Without MUTATES the flag alone would be refused by the registry; the consumer drops it there too.
+        command_desc reader = make_command("plugin.read_file");
+        reader.flags = command_flags::ON_DISK;
+        add_extension(set, reader);
+        CONJURE_REQUIRE_OK(consumer.validate(id, set, moduleRegistry));
+        consumer.attach(id, context, set);
+        const command_descriptor *descriptor = editor.context().registry().find("plugin.write_file");
+        REQUIRE(descriptor != nullptr);
+        // A module command has no inverse the play controller could keep: it stays MUTATES | NO_UNDO.
+        CHECK(has_command_flag(*descriptor, command_flags::MUTATES));
+        CHECK(has_command_flag(*descriptor, command_flags::NO_UNDO));
+        CHECK_FALSE(has_command_flag(*descriptor, command_flags::ON_DISK));
+        const command_descriptor *readDescriptor = editor.context().registry().find("plugin.read_file");
+        REQUIRE(readDescriptor != nullptr);
+        CHECK(readDescriptor->flags == command_flags::NONE);
+
+        (void) editor.ok("play.start");
+        (void) editor.ok("plugin.write_file", core::json::object({{"x", 1}}));
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 0);
+        consumer.detach(id, nullptr);
+        CHECK(editor.context().registry().find("plugin.write_file") == nullptr);
+        CHECK(editor.context().registry().find("plugin.read_file") == nullptr);
+    }
+
     TEST_CASE("editor_module_consumer - can_detach is UNLOAD_BLOCKED while playing") {
         editor_test::headless_editor editor = {};
         editor_module_consumer &consumer = editor.context().module_consumer();
@@ -282,5 +325,24 @@ TEST_SUITE("editor/editor_module_consumer") {
           core::json::object({{"directory", "nowhere_at_all"}})
         ) == protocol_error_code::PATH_NOT_FOUND);
         CHECK(editor.fail("module.build") == protocol_error_code::NOT_AVAILABLE);
+    }
+
+    TEST_CASE("regression - code sweep F656 module.discover answers IO_ERROR for a file where a directory is "
+      "expected") {
+        editor_test::headless_editor editor = {};
+        // project.json exists but is not a directory: something is there, so the answer is not PATH_NOT_FOUND.
+        const protocol_response file = editor.send(
+          "module.discover",
+          core::json::object({{"directory", "project.json"}})
+        );
+        REQUIRE_FALSE(file.ok);
+        CHECK(file.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(file.errorMessage.find("not a directory") != std::string::npos);
+        const protocol_response missing = editor.send(
+          "module.discover",
+          core::json::object({{"directory", "nowhere_at_all"}})
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
     }
 }

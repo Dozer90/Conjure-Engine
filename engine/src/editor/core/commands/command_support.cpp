@@ -16,6 +16,7 @@
 #include <format>
 #include <initializer_list>
 #include <limits>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
@@ -37,8 +38,37 @@ namespace conjure::editor::support {
         return make_editor_error(protocol_error_code::IO_ERROR, std::move(message));
     }
 
+    core::error path_not_found(std::string message) {
+        return make_editor_error(protocol_error_code::PATH_NOT_FOUND, std::move(message));
+    }
+
     core::error internal(std::string message) {
         return make_editor_error(protocol_error_code::INTERNAL, std::move(message));
+    }
+
+    core::error unusable_path(const std::filesystem::path &path, std::string_view reason) {
+        std::error_code error = {};
+        const std::filesystem::file_status status = std::filesystem::status(path, error);
+        if (status.type() == std::filesystem::file_type::not_found) {
+            return path_not_found(std::format("cannot read '{}': no such file or folder", path.generic_string()));
+        }
+        // file_type::none: status() itself failed for a reason other than "not found", and that reason says more
+        // than the caller's.
+        if (status.type() == std::filesystem::file_type::none && error) {
+            return io_error(std::format("cannot read '{}': {}", path.generic_string(), error.message()));
+        }
+        if (reason.empty()) {
+            return io_error(std::format("cannot read '{}'", path.generic_string()));
+        }
+        return io_error(std::format("cannot read '{}': {}", path.generic_string(), reason));
+    }
+
+    core::error read_failure(std::string_view path, const core::error &failure) {
+        std::string message = std::format("cannot read '{}': {}", path, failure.message());
+        if (failure.generic_code() == core::error_code::NOT_FOUND) {
+            return path_not_found(std::move(message));
+        }
+        return io_error(std::move(message));
     }
 
     core::error wrap(const core::error &failure) {

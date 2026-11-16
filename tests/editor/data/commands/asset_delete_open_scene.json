@@ -1,0 +1,21 @@
+{
+  "_comment": "The file behind the open scene is refused without closeOpenScene (code sweep F656).",
+  "setup": [
+    {
+      "cmd": "scene.save",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "asset.delete",
+    "args": {
+      "asset": "scenes/test.scene.json"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

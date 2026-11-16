@@ -10,9 +10,10 @@
 #include <string>
 #include <utility>
 
-// The export dialog: output directory and configuration, the project.export command and the progress events
-// it emits. Each dialog owns its export's state; the event client and response sink it registers are released
-// when the export completes or the dialog is destroyed, whichever comes first.
+// The export dialog: the output directory, the project.export command and the progress events it emits. An
+// export is always a Distribution export, so there is no configuration to choose (code sweep F650). Each dialog
+// owns its export's state; the event client and response sink it registers are released when the export completes
+// or the dialog is destroyed, whichever comes first.
 
 namespace conjure::editor::ui {
 
@@ -24,7 +25,6 @@ namespace conjure::editor::ui {
             std::shared_ptr<export_state> mState = nullptr;
             editor_context *mContext = nullptr;         // the context the running export registered with
             std::string mDirectory = "";
-            std::string mConfiguration = "development";
             std::string mStatus = "";
             f32 mProgress = 0.0f;
             bool mRunning = false;

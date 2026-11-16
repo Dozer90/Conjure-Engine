@@ -89,6 +89,19 @@ namespace conjure::editor {
               std::format("command '{}': result {}", descriptor.name, resultSchema.get_error().message())
             );
         }
+        if (has_flag(descriptor.flags, command_flags::ON_DISK)) {
+            const bool undoable = has_flag(descriptor.flags, command_flags::MUTATES) &&
+              !has_flag(descriptor.flags, command_flags::NO_UNDO);
+            if (!undoable) {
+                return make_editor_error(
+                  protocol_error_code::INVALID_ARGS,
+                  std::format(
+                    "command '{}': the on_disk flag needs mutates and excludes no_undo (it promises an inverse)",
+                    descriptor.name
+                  )
+                );
+            }
+        }
         if (has_flag(descriptor.flags, command_flags::ASYNC)) {
             descriptor.flags |= command_flags::NOT_IN_BATCH;
         }

@@ -127,6 +127,11 @@ startup scene that is not a known asset, fails to load or whose source no longer
 `STARTUP_SCENE_FAILED` for the runtime, which never runs a stale cached copy. The editor goes on: it warns about a
 scene it cannot load and opens the last cached copy of a scene that no longer imports, so the scene can be fixed.
 
+The failure is kept. `startup_scene_failure()` returns the `STARTUP_SCENE_FAILED` error of the last
+`initialise()`. It is empty when the scene loaded, when no startup scene was named and when startup failed
+before the scene step. A runtime whose `initialise()` failed on the scene holds the error that call returned.
+The value survives `shutdown()`, and the next `initialise()` clears it.
+
 - `step_frame()` runs one frame; `step_frame(deltaSeconds)` forces this frame's delta (tests); the first frame
   always runs exactly `fixedDeltaSeconds`.
 - `set_time_scale(scale)` takes effect from the next frame; a negative or non-finite scale (NaN, infinity) is
@@ -186,6 +191,7 @@ project errors (`PROJECT_NOT_FOUND`, `PROJECT_PARSE_FAILED`, `PROJECT_INVALID`, 
 | `void project::apply_to(engine_config &) const` | copy the project's settings into a configuration |
 | `explicit application(application_desc)` | takes the descriptor; nothing starts yet |
 | `result<void> application::initialise()` / `step_frame()` / `step_frame(f64)` / `int run()` / `void shutdown()` | the lifecycle |
+| `const optional<core::error> &application::startup_scene_failure() const` | the `STARTUP_SCENE_FAILED` error of the last `initialise()`, empty when the startup scene loaded or none was named |
 | `void request_quit(exit_code = OK)` / `bool is_quit_requested()` / `exit_code current_exit_code()` | stopping |
 | `void set_simulation_mode(simulation_mode)` / `step_fixed(u32)` / `cancel_fixed_steps()` / `set_time_scale(f32)` | editor play, pause and step (`cancel_fixed_steps` drops a step the next frame has not run yet) |
 | `engine_context &context()` / `const engine_time &time()` / `const frame_stats &stats()` / `layer_stack &layers()` | what the application exposes |

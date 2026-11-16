@@ -1,6 +1,7 @@
 #pragma once
 
 #include "conjure/editor/editor_command.h"
+#include "conjure/editor/undo_stack.h"
 
 #include "conjure/core/api.h"
 #include "conjure/core/result.h"
@@ -14,7 +15,9 @@
 
 // Play mode in the editing world (docs/design/04_editor.md D9, 3.7). EDITING keeps the engine PAUSED and the
 // script runtime in EDIT mode; play.start captures a scene snapshot, freezes the undo stack and runs the engine;
-// play.stop restores the snapshot (guids preserved), remaps the selection and thaws the undo stack. play.step
+// play.stop restores the snapshot (guids preserved), remaps the selection and thaws the undo stack. A scene edit
+// made while playing is not recorded and goes with the restore; a file edit (an ON_DISK command, D21) stays on
+// disk, so the controller keeps its inverse and play.stop pushes all of them as one undo entry. play.step
 // runs exactly n fixed steps through application::step_fixed and answers once they ran. The clocks play.* report
 // belong to the play session: play.start records the engine's fixedTime and fixedStepIndex, the session's time
 // and fixed steps count from there (they stop while paused), and the ended session's values stay until the next
@@ -36,6 +39,12 @@ namespace conjure::editor {
     [[nodiscard]] CONJURE_API std::string_view to_string(play_state state) noexcept;
 
     class CONJURE_API play_controller {
+        public:
+            /// <summary>
+            /// The label of the undo entry stop() pushes for the file edits of a play session.
+            /// </summary>
+            static constexpr std::string_view FILE_EDITS_LABEL = "File changes during play";
+
         private:
             struct pending_step {
                 async_reply reply = {};
@@ -47,6 +56,7 @@ namespace conjure::editor {
             std::optional<scene::scene_snapshot> mSnapshot = std::nullopt;
             std::vector<core::uuid> mSelectionBackup = {};
             std::optional<pending_step> mPendingStep = std::nullopt;
+            undo_entry mFileEdits = {};                 // the ON_DISK commands of this session, pushed by stop()
             play_state mState = play_state::EDITING;
             u64 mSessionStartFrame = 0;
             u64 mSimulationFrames = 0;
@@ -55,6 +65,7 @@ namespace conjure::editor {
             u64 mEndedFixedSteps = 0;
             f64 mEndedSimulationTime = 0.0;
             bool mWarnedUnrecordedEdit = false;
+            bool mWarnedFileEdit = false;
 
         public:
             explicit play_controller(editor_context &context);
@@ -72,8 +83,10 @@ namespace conjure::editor {
 
             /// <summary>
             /// PLAYING or PAUSED -> EDITING: PAUSED engine, EDIT scripts, snapshot restored (a failed restore
-            /// logs an ERROR and leaves the scene empty), selection remapped, undo thawed, play.state emitted with
-            /// the ended session's clocks, which stay until the next start().
+            /// logs an ERROR and leaves the scene empty), selection remapped, undo thawed, the file edits kept by
+            /// keep_file_edit() pushed as one undo entry labelled FILE_EDITS_LABEL (also after a failed restore:
+            /// the files do not depend on the scene), play.state emitted with the ended session's clocks, which
+            /// stay until the next start().
             /// </summary>
             [[nodiscard]] core::result<void> stop();
 
@@ -106,9 +119,28 @@ namespace conjure::editor {
             void apply_engine_mode();
 
             /// <summary>
-            /// A mutating command ran while not EDITING: emits warning UNRECORDED_PLAY_EDIT once per session.
+            /// A scene edit ran while not EDITING: it is not recorded for undo and stop() discards it with the
+            /// snapshot restore. Emits warning UNRECORDED_PLAY_EDIT once per session; its message names the
+            /// ON_DISK commands, whose file changes are kept instead.
             /// </summary>
             void note_unrecorded_edit();
+
+            /// <summary>
+            /// Keeps the replay and the inverse of an ON_DISK command that ran while not EDITING (code sweep
+            /// F089): its effect lives in the project's files, which the snapshot restore does not touch, so
+            /// stop() pushes everything kept, in the order it ran, as one undo entry. Emits warning PLAY_FILE_EDIT
+            /// once per session with the command's name as cmd. Ignored while EDITING, when the undo stack
+            /// records the command itself.
+            /// </summary>
+            void keep_file_edit(std::string_view command, command_request replay, command_inverse inverse);
+
+            /// <summary>
+            /// The file edits kept in this play session so far (what the entry stop() pushes will hold); 0 while
+            /// EDITING.
+            /// </summary>
+            [[nodiscard]] usize kept_file_edits() const noexcept {
+                return mFileEdits.undo.size();
+            }
 
             [[nodiscard]] play_state state() const noexcept {
                 return mState;

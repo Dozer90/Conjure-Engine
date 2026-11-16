@@ -1,0 +1,17 @@
+{
+  "_comment": "A distribution directory that is not there is a missing path (code sweep F656).",
+  "setup": [],
+  "request": {
+    "cmd": "project.export",
+    "args": {
+      "directory": "${project}/exported",
+      "distributionDirectory": "${project}/no_such_build"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

@@ -18,9 +18,13 @@ namespace conjure::editor::support {
         }
 
         core::result<command_outcome> play_stop(command_invocation &invocation) {
-            CONJURE_TRY(invocation.context.play().stop());
+            play_controller &play = invocation.context.play();
+            // Read before the stop: it moves the kept file edits into the undo stack.
+            const usize fileChanges = play.kept_file_edits();
+            CONJURE_TRY(play.stop());
             command_outcome outcome = {};
-            outcome.result = invocation.context.play().describe();
+            outcome.result = play.describe();
+            outcome.result.set("fileChanges", fileChanges);
             return outcome;
         }
 
@@ -57,21 +61,36 @@ namespace conjure::editor::support {
     void register_play_commands(command_registry &registry) {
         // The simulation clocks belong to the play session (play_controller.h); profiler.frame_stats reports the
         // engine's clocks under two of the same names.
-        const std::string stateSchema =
-          R"({"type":"object","properties":{"state":{"type":"string","enum":["editing","playing","paused"]},)"
+        const std::string stateProperties =
+          R"("state":{"type":"string","enum":["editing","playing","paused"]},)"
           R"("frame":{"type":"integer","description":"the engine frame, engine_time.frameIndex"},)"
           R"("simulationFrame":{"type":"integer","description":"frames simulated in this play session"},)"
           R"("simulationTime":{"type":"number","description":"simulated seconds of this play session: fixed )"
           R"(steps only, so it stops while paused"},)"
-          R"("fixedStepIndex":{"type":"integer","description":"fixed steps run in this play session"}},)"
+          R"("fixedStepIndex":{"type":"integer","description":"fixed steps run in this play session"})";
+        const std::string stateDescription =
           R"("description":"play.start sets the session clocks to 0; while editing they keep the values of the )"
-          R"(session that ended last"})";
+          R"(session that ended last")";
+        const std::string stateSchema = std::format(
+          R"({{"type":"object","properties":{{{}}},{}}})",
+          stateProperties,
+          stateDescription
+        );
+        // play.stop adds the file changes of the session it ended (D21).
+        const std::string stopSchema = std::format(
+          R"({{"type":"object","properties":{{{},"fileChanges":{{"type":"integer","description":"on_disk )"
+          R"(commands that ran in the ended play session; when not 0 they are now the undo entry '{}'"}}}},{}}})",
+          stateProperties,
+          play_controller::FILE_EDITS_LABEL,
+          stateDescription
+        );
         add_command(
           registry,
           make_command(
             "play.start",
             "Snapshots the scene and runs the simulation (EDITING -> PLAYING); the undo stack is frozen until "
-            "play.stop.",
+            "play.stop: a scene edit is executed without being recorded, an on_disk command (a file change) is kept "
+            "for play.stop.",
             std::string(EMPTY_SCHEMA),
             stateSchema,
             command_flags::REQUIRES_SCENE | command_flags::EDITING_ONLY | command_flags::NOT_IN_BATCH,
@@ -82,9 +101,11 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "play.stop",
-            "Stops the simulation and restores the scene snapshot taken by play.start (guids preserved).",
+            "Stops the simulation and restores the scene snapshot taken by play.start (guids preserved), which "
+            "discards the scene edits made while playing. The file changes made while playing (on_disk commands) "
+            "stay on disk and become one undo entry, 'File changes during play'; fileChanges counts them.",
             std::string(EMPTY_SCHEMA),
-            stateSchema,
+            stopSchema,
             command_flags::REQUIRES_SCENE | command_flags::PLAYING_ONLY | command_flags::NOT_IN_BATCH,
             &play_stop
           )

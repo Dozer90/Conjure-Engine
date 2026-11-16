@@ -41,7 +41,9 @@ File > Save Scene and Ctrl+S call `request_save_scene(context)`: `scene.save` wh
 the Save Scene As dialog, because a scene made with New Scene has none yet. File > Save Scene As... opens that dialog
 directly (`request_save_scene_as`); its path is relative to `assets://` and `.scene.json` is added, and its Save
 button calls `save_scene_as(context, path)`, which sends `scene.save_as` and keeps the error text on failure
-(`save_as_pending()`, `save_as_path()`, `save_as_error()`).
+(`save_as_pending()`, `save_as_path()`, `save_as_error()`). While playing or paused both menu items are disabled
+and both requests do nothing: `scene.save` and `scene.save_as` are editing-state commands, because the scene then
+holds the play session's state, which Stop discards.
 
 ## Panels
 
@@ -53,13 +55,13 @@ subclass. The built-in panels:
 | `hierarchy_panel` (`conjure/editor/ui/panels/hierarchy_panel.h`) | the scene tree as flat rows from `hierarchy_cache` with a list clipper (10,000 entities cost the visible rows); click, Ctrl-click and Shift-click (range) selection; inline rename with F2 or the menu (`begin_rename`, `is_renaming`), committed by Enter or clicking away and cancelled by Escape; reparent by drag, or drop below the rows to move to the root; filter. A selection made elsewhere expands its ancestors and scrolls to its row |
 | `inspector_panel` (`conjure/editor/ui/panels/inspector_panel.h`) | one `component.get` document per component of the primary selection; edits go back through `component.set` with the drag session as coalesce key |
 | `viewport_panel` (`conjure/editor/ui/panels/viewport_panel.h`) | the scene through the editor camera, drawn every frame into an off-screen target the size of the panel and shown as an image, with an input surface over it for camera orbit, pan, zoom, picking (`view.pick`) and the gizmo, under a toolbar for the gizmo operation, space and snapping. The picture, the pick ray and the gizmo use the same camera and rectangle, so what is clicked is what is seen. The 2D view mode keeps authored colours (no post-processing). `pictures_drawn()` counts the frames with a picture; headless there is no ImGui renderer and the panel is the input surface alone |
-| `asset_browser_panel` (`conjure/editor/ui/panels/asset_browser_panel.h`) | the database's records as a filterable table (path, type, status), import by path, reimport, delete |
+| `asset_browser_panel` (`conjure/editor/ui/panels/asset_browser_panel.h`) | the database's records as a filterable table (path, type, status), import by path, reimport, delete. Deleting the file behind the open scene asks first: a "Delete Open Scene" dialog whose "Close and Delete" closes the scene and deletes the file (`request_delete`, `has_pending_delete`, `confirm_pending_delete`, `cancel_pending_delete`). While playing or paused the button is disabled and the dialog asks to stop playing first, because `asset.delete` refuses to close the scene then; any other asset is deleted at once and comes back with undo |
 | `console_panel` (`conjure/editor/ui/panels/console_panel.h`) | the `console_buffer` ring with level and category filters, auto-scroll and clear |
 | `history_panel` (`conjure/editor/ui/panels/history_panel.h`) | the undo entries with label and client, the cursor, undo / redo / clear |
 | `toolbar_panel` (`conjure/editor/ui/panels/toolbar_panel.h`) | play / pause / resume / step / stop (`play.*`), the play state and frame, undo and redo (the keyboard shortcuts belong to the workspace) |
 | `profiler_panel` (`conjure/editor/ui/panels/profiler_panel.h`) | frame-time history from `engine::frame_stats` as a plot, the phase breakdown of the latest frame |
 | `ai_session_panel` (`conjure/editor/ui/panels/ai_session_panel.h`) | the server's port and clients, a request line sent through an in-process loopback client, the responses and events |
-| `export_dialog` (`conjure/editor/ui/panels/export_dialog.h`) | output directory and configuration, the `project.export` command and its `progress` events |
+| `export_dialog` (`conjure/editor/ui/panels/export_dialog.h`) | the output directory, the `project.export` command and its `progress` events (an export is always a Distribution export, so there is no configuration to pick) |
 
 ```cpp
 #include "conjure/editor/ui/editor_panel.h"
@@ -95,6 +97,15 @@ whichever of the field's `min` and `max` attributes are set: f32 and integer fie
 and fit ImGui's slider range, and a clamped drag otherwise; f64 fields are an input box clamped when the edit is
 committed. Integers are edited in their own type's range, and a rotation keeps the Euler angles it shows until the
 quaternion changes elsewhere, so an angle can be dragged past 90 degrees.
+
+A float that is infinite or NaN (`"inf"`, `"-inf"` and `null` in the component's JSON, see
+[Reflection](../core/reflection.md)) is shown as `inf`, `-inf` or `nan`, in a number field and in each component of
+a vector, a matrix or a transform. It stays as it is while you edit the fields and components next to it, and a
+number typed over it replaces it. The inspector never adds one: typing `inf` or `nan` into a field changes nothing
+(an f32 field that is a drag clamps a typed `inf` to the largest value its range allows instead; a slider ignores
+it), so set an infinity with `component.set` and the string `"inf"`. A colour with such a channel is drawn as plain
+numbers instead of a colour picker until every channel is a number again, and a rotation with such a component
+shows `nan` for its three angles; typing one angle repairs it, with the other two taken as 0.
 
 `gizmo_controller` drives ImGuizmo: the first manipulated frame opens an undo transaction and caches the selected
 entities' world matrices, every frame with a delta dispatches `component.set_many` on the local transforms

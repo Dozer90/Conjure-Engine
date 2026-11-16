@@ -3,8 +3,14 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/result.h"
 #include "conjure/core/uuid.h"
+#include "conjure/editor/command_registry.h"
+#include "conjure/editor/editor_command.h"
+#include "conjure/editor/editor_error.h"
+#include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/editor/undo_stack.h"
 
 #include <algorithm>
 #include <array>
@@ -13,12 +19,15 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 // asset.* and prefab.* (docs/design/04_editor.md 4.4, R35).
 
 using namespace conjure;
 using namespace conjure::editor;
+using editor_test::TEST_SCENE;
+using editor_test::test_scene_file;
 
 namespace {
     // One triangle with an embedded buffer: three u16 indices, then three POSITION vectors.
@@ -105,7 +114,7 @@ TEST_SUITE("editor/commands_asset_prefab") {
         CHECK(editor.fail(
           "asset.import",
           core::json::object({{"source", (editor.project_directory() / "nope.png").generic_string()}})
-        ) == protocol_error_code::ASSET_NOT_FOUND);
+        ) == protocol_error_code::PATH_NOT_FOUND);
         CHECK(imported.root()["copied"].as_bool());
     }
 
@@ -617,7 +626,9 @@ TEST_SUITE("editor/commands_asset_prefab") {
           core::json::object({{"source", directory.generic_string()}})
         );
         REQUIRE_FALSE(response.ok);
-        CHECK(response.errorCode == protocol_error_code::ASSET_NOT_FOUND);
+        // The directory exists and cannot be read as a file: IO_ERROR, not a "not found" code (code sweep F656).
+        CHECK(response.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(response.errorMessage.find("not a regular file") != std::string::npos);
         CHECK_FALSE(std::filesystem::exists(editor.project_directory() / "assets" / "folder"));
         CHECK(editor.ok("asset.list").root()["count"].as_u64() == records);
         // A source that does not exist at all says so rather than calling it "not a regular file".
@@ -626,7 +637,7 @@ TEST_SUITE("editor/commands_asset_prefab") {
           core::json::object({{"source", (directory / "absent.png").generic_string()}})
         );
         REQUIRE_FALSE(missing.ok);
-        CHECK(missing.errorCode == protocol_error_code::ASSET_NOT_FOUND);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
         CHECK(missing.errorMessage.find("no such file") != std::string::npos);
     }
 
@@ -661,5 +672,651 @@ TEST_SUITE("editor/commands_asset_prefab") {
         CHECK(copied.root()["path"].as_string() == "assets://copies/notes.png");
         CHECK(copied.root()["copied"].as_bool(false));
         CHECK(std::filesystem::is_regular_file(editor.project_directory() / "assets" / "copies" / "notes.png"));
+    }
+
+    TEST_CASE("regression - code sweep F656 asset.delete refuses the open scene unless closeOpenScene is passed") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        REQUIRE(editor.context().scene_path() == TEST_SCENE);
+        REQUIRE(std::filesystem::is_regular_file(test_scene_file(editor)));
+        const std::string uuid = std::string(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", TEST_SCENE}})
+        ).root()["uuid"].as_string());
+
+        // By path, by uuid and with an explicit false: each one names the open scene and is refused.
+        const protocol_response refused = editor.send("asset.delete", core::json::object({{"asset", TEST_SCENE}}));
+        REQUIRE_FALSE(refused.ok);
+        CHECK(refused.errorCode == protocol_error_code::INVALID_ARGS);
+        CHECK(refused.errorMessage.find("closeOpenScene") != std::string::npos);
+        CHECK(refused.errorMessage.find(TEST_SCENE) != std::string::npos);
+        CHECK(editor.fail("asset.delete", core::json::object({{"asset", uuid}})) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "asset.delete",
+          core::json::object({{"asset", "scenes/test.scene.json"}, {"closeOpenScene", false}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(editor.fail(
+          "asset.delete",
+          core::json::object({{"asset", uuid}, {"closeOpenScene", "yes"}})
+        ) == protocol_error_code::INVALID_ARGS);
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == TEST_SCENE);
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+
+        // With the flag the file goes and the scene is closed, unsaved changes included.
+        (void) editor.create_entity("Unsaved");
+        REQUIRE(editor.context().scene_dirty());
+        const core::json::document deleted = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", uuid}, {"closeOpenScene", true}})
+        );
+        CHECK(deleted.root()["uuid"].as_string() == uuid);
+        CHECK(deleted.root()["path"].as_string() == TEST_SCENE);
+        CHECK(deleted.root()["closedScene"].as_bool());
+        CHECK_FALSE(deleted.root()["startupScene"].as_bool(true));
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+        CHECK_FALSE(editor.context().has_scene());
+        CHECK(editor.context().scene_path().empty());
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(editor.fail("scene.info") == protocol_error_code::SCENE_NOT_OPEN);
+        CHECK(editor.fail("asset.info", core::json::object({{"asset", uuid}})) == protocol_error_code::ASSET_NOT_FOUND);
+
+        // Closing cleared the history, so the delete is its only entry: undo restores the file with its uuid and
+        // leaves the scene closed; the restored file opens again.
+        REQUIRE(editor.context().undo().size() == 1);
+        (void) editor.ok("history.undo");
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+        CHECK(editor.ok("asset.info", core::json::object({{"asset", TEST_SCENE}})).root()["uuid"].as_string() == uuid);
+        CHECK_FALSE(editor.context().has_scene());
+        const core::json::document reopened = editor.ok("scene.open", core::json::object({{"path", "scenes/test"}}));
+        CHECK(reopened.root()["entityCount"].as_i64() == 1);
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+    }
+
+    TEST_CASE("asset.delete - closeOpenScene changes nothing for an asset that is not the open scene") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        // The open scene moves to another file, so scenes/test is a scene file like any other asset.
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/other"}}));
+        (void) editor_test::write_tiny_png(editor.project_directory() / "assets" / "plain.png");
+        (void) editor.ok("asset.import", core::json::object({{"source", "plain.png"}}));
+        const usize entries = editor.context().undo().size();
+
+        const core::json::document scene = editor.ok("asset.delete", core::json::object({{"asset", TEST_SCENE}}));
+        CHECK_FALSE(scene.root()["closedScene"].as_bool(true));
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+        const core::json::document png = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", "plain.png"}, {"closeOpenScene", true}})
+        );
+        CHECK_FALSE(png.root()["closedScene"].as_bool(true));
+        CHECK_FALSE(png.root()["startupScene"].as_bool(true));
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == "assets://scenes/other.scene.json");
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+        // Nothing was closed, so nothing cleared the history: both deletes sit on top of what was there.
+        CHECK(editor.context().undo().size() == entries + 2);
+        (void) editor.ok("history.undo");
+        (void) editor.ok("history.undo");
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+
+        // An unsaved scene has no file behind it, so no asset is "the open scene".
+        (void) editor.ok("scene.new", core::json::object({{"name", "fresh"}}));
+        REQUIRE(editor.context().scene_path().empty());
+        const core::json::document other = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", "scenes/other.scene.json"}})
+        );
+        CHECK_FALSE(other.root()["closedScene"].as_bool(true));
+        CHECK(editor.context().has_scene());
+    }
+
+    TEST_CASE("regression - code sweep F656 asset.delete with closeOpenScene is refused in a batch, a transaction "
+      "and during play") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const core::json::document request = core::json::object({{"asset", TEST_SCENE}, {"closeOpenScene", true}});
+
+        // Closing clears the undo history a batch is collecting into.
+        const protocol_response batched = editor.send(
+          "editor.batch",
+          core::json::object({
+            {"commands", core::json::array({core::json::object({{"cmd", "asset.delete"}, {"args", request}})})},
+          })
+        );
+        REQUIRE_FALSE(batched.ok);
+        CHECK(batched.errorCode == protocol_error_code::INVALID_ARGS);
+        CHECK(batched.errorDetails.root()["failedIndex"].as_i64() == 0);
+        CHECK(batched.errorMessage.find("batch") != std::string::npos);
+
+        // And the one an open transaction is recording into.
+        (void) editor.ok("editor.begin_transaction", core::json::object({{"label", "Open"}}));
+        (void) editor.create_entity("In transaction");
+        CHECK(editor.fail("asset.delete", core::json::document::from_value(request.root())) ==
+          protocol_error_code::INVALID_ARGS);
+        REQUIRE(editor.context().undo().has_open_transaction());
+        (void) editor.ok("editor.end_transaction");
+        CHECK(editor.context().undo().size() == 2);
+
+        // scene.close is an editing-state command, and so is the delete that needs it.
+        (void) editor.ok("play.start");
+        CHECK(editor.fail("asset.delete", core::json::object({{"asset", TEST_SCENE}})) ==
+          protocol_error_code::INVALID_ARGS);
+        const protocol_response playing = editor.send("asset.delete", core::json::document::from_value(request.root()));
+        REQUIRE_FALSE(playing.ok);
+        CHECK(playing.errorCode == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(playing.errorDetails.root()["state"].as_string() == "playing");
+        (void) editor.ok("play.stop");
+
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == TEST_SCENE);
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+        // Outside all three the same request goes through.
+        CHECK(editor.ok(
+          "asset.delete",
+          core::json::document::from_value(request.root())
+        ).root()["closedScene"].as_bool());
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+    }
+
+    TEST_CASE("regression - code sweep F656 an undo that would delete the open scene fails and keeps the file") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        // A scene file copied in from outside: the import's undo is an asset.delete of it.
+        (void) editor.ok("scene.save");
+        const std::filesystem::path incoming = editor.project_directory() / "incoming" / "copied.scene.json";
+        write_file(incoming, editor_test::read_text_file(test_scene_file(editor)));
+        (void) editor.ok(
+          "asset.import",
+          core::json::object({{"source", incoming.generic_string()}, {"destination", "scenes/copied.scene.json"}})
+        );
+        // scene.save_as keeps the history, so the open scene now sits on the file that import's undo deletes.
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/copied"}}));
+        REQUIRE(editor.context().scene_path() == "assets://scenes/copied.scene.json");
+        const std::filesystem::path copied = editor.project_directory() / "assets" / "scenes" / "copied.scene.json";
+        editor.log().allow_errors();
+        const protocol_response undone = editor.send("history.undo");
+        REQUIRE_FALSE(undone.ok);
+        // The refusal of the delete itself, not some other failure of the step.
+        CHECK(undone.errorMessage.find("closeOpenScene") != std::string::npos);
+        CHECK(std::filesystem::is_regular_file(copied));
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == "assets://scenes/copied.scene.json");
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+    }
+
+    TEST_CASE("regression - code sweep F656 a redo of asset.delete with closeOpenScene is refused when its file "
+      "became the open scene") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path incoming = editor.project_directory() / "incoming" / "copied.scene.json";
+        write_file(incoming, editor_test::read_text_file(test_scene_file(editor)));
+        const core::json::document imported = editor.ok(
+          "asset.import",
+          core::json::object({{"source", incoming.generic_string()}, {"destination", "scenes/copied.scene.json"}})
+        );
+        const std::string uuid = std::string(imported.root()["uuid"].as_string());
+        const std::filesystem::path copied = editor.project_directory() / "assets" / "scenes" / "copied.scene.json";
+
+        // Not the open scene yet, so the flag changes nothing: a plain delete whose redo carries the flag along.
+        const core::json::document deleted = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", uuid}, {"closeOpenScene", true}})
+        );
+        CHECK_FALSE(deleted.root()["closedScene"].as_bool(true));
+        (void) editor.ok("history.undo");
+        REQUIRE(std::filesystem::is_regular_file(copied));
+        REQUIRE(editor.context().undo().can_redo());
+        // scene.save_as records nothing, so the redo tail survives while the open scene moves onto that file.
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/copied"}}));
+        REQUIRE(editor.context().scene_path() == "assets://scenes/copied.scene.json");
+        REQUIRE(editor.context().undo().can_redo());
+
+        // The redo is the delete with closeOpenScene: closing would clear the history that is being replayed.
+        editor.log().allow_errors();
+        const protocol_response redone = editor.send("history.redo");
+        REQUIRE_FALSE(redone.ok);
+        CHECK(redone.errorMessage.find("undo or redo step") != std::string::npos);
+        CHECK(std::filesystem::is_regular_file(copied));
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == "assets://scenes/copied.scene.json");
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+        // The failed step is dropped; what lies below it is still there to undo.
+        CHECK(editor.context().undo().can_undo());
+        CHECK_FALSE(editor.context().undo().can_redo());
+        CHECK(editor.context().undo().size() == 2);
+    }
+
+    TEST_CASE("regression - code sweep F656 asset.delete that cannot remove the file leaves the open scene as it "
+      "was") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        (void) editor.create_entity("Unsaved");
+        (void) editor.ok("selection.set", core::json::object({{"entities", core::json::array({"Unsaved"})}}));
+        REQUIRE(editor.context().scene_dirty());
+        const usize entries = editor.context().undo().size();
+        REQUIRE(entries == 2);
+
+        // A remove the file system refuses, on every platform: the asset's .meta is a folder that is not empty.
+        // (The database removes the source before it reaches the .meta, so the file itself is gone afterwards;
+        // what this case pins is that the editor's own state survives a delete that reports failure.)
+        std::filesystem::path meta = test_scene_file(editor);
+        meta += ".meta";
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::remove(meta, ignored));
+        write_file(meta / "blocker.txt", "keeps the folder from being removed");
+
+        const protocol_response refused = editor.send(
+          "asset.delete",
+          core::json::object({{"asset", TEST_SCENE}, {"closeOpenScene", true}})
+        );
+        REQUIRE_FALSE(refused.ok);
+        CHECK(refused.errorCode == protocol_error_code::IO_ERROR);
+        // The delete failed before the scene was closed: nothing of the session is lost.
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == TEST_SCENE);
+        CHECK(editor.context().scene_dirty());
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.ok("selection.get").root()["count"].as_u64() == 1);
+        CHECK(editor.scene().world().entity_count() == 2);
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Unsaved"}}));
+        // The unsaved work is still there and can be undone step by step.
+        (void) editor.ok("history.undo");
+        CHECK(editor.scene().world().entity_count() == 1);
+    }
+
+    TEST_CASE("asset.delete - a scene.close that fails after the delete puts the file back and leaves the scene "
+      "open") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const std::string uuid = std::string(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", TEST_SCENE}})
+        ).root()["uuid"].as_string());
+        const std::string content = editor_test::read_text_file(test_scene_file(editor));
+        const usize entries = editor.context().undo().size();
+        REQUIRE_FALSE(editor.context().scene_dirty());
+
+        // The guard of asset.delete makes sure scene.close is allowed, so only a stand-in can make it fail.
+        command_registry &registry = editor.context().registry();
+        REQUIRE(registry.remove("scene.close"));
+        command_descriptor refusing = {};
+        refusing.name = "scene.close";
+        refusing.summary = "A stand-in that never closes the scene.";
+        refusing.argsSchema = R"({"type":"object","additionalProperties":true})";
+        refusing.resultSchema = R"({"type":"object"})";
+        refusing.owner = "test";
+        refusing.handler = [](command_invocation &) -> core::result<command_outcome> {
+            return make_editor_error(protocol_error_code::BUSY, "the stand-in never closes the scene");
+        };
+        CONJURE_REQUIRE_OK(registry.add(std::move(refusing)));
+
+        editor.clear_events();
+        const protocol_response failed = editor.send(
+          "asset.delete",
+          core::json::object({{"asset", uuid}, {"closeOpenScene", true}})
+        );
+        REQUIRE_FALSE(failed.ok);
+        CHECK(failed.errorCode == protocol_error_code::BUSY);
+        // The file is back byte for byte under its uuid, and the session is as it was.
+        REQUIRE(std::filesystem::is_regular_file(test_scene_file(editor)));
+        CHECK(editor_test::read_text_file(test_scene_file(editor)) == content);
+        CHECK(editor.ok("asset.info", core::json::object({{"asset", TEST_SCENE}})).root()["uuid"].as_string() == uuid);
+        CHECK(editor.context().has_scene());
+        CHECK(editor.context().scene_path() == TEST_SCENE);
+        CHECK_FALSE(editor.context().scene_dirty());
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").empty());
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+    }
+
+    TEST_CASE("regression - code sweep F656 asset.delete knows the open scene under another spelling of its file") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const std::string uuid = std::string(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", TEST_SCENE}})
+        ).root()["uuid"].as_string());
+
+        const protocol_response opened = editor.send("scene.open", core::json::object({{"path", "Scenes/TEST"}}));
+        if (!opened.ok) {
+            // A volume that tells the two spellings apart: the other one names no file, so the scene cannot be
+            // open under it and there is nothing to guard.
+            CHECK(opened.errorCode == protocol_error_code::PATH_NOT_FOUND);
+            CHECK(editor.context().scene_path() == TEST_SCENE);
+            MESSAGE(
+              "the volume tells the two spellings apart: the spelling guard is not exercised here (the hard-link "
+              "cases cover it)"
+            );
+            return;
+        }
+        // The volume ignores case: the scene is open under a spelling the database does not register.
+        REQUIRE(editor.context().scene_path() == "assets://Scenes/TEST.scene.json");
+        (void) editor.ok(
+          "project.set_settings",
+          core::json::object({{"settings", core::json::object({{"startup_scene", "SCENES/test.scene.json"}})}})
+        );
+
+        // The guard decides by file, not by spelling: by path and by uuid the delete is refused.
+        const protocol_response refused = editor.send("asset.delete", core::json::object({{"asset", TEST_SCENE}}));
+        REQUIRE_FALSE(refused.ok);
+        CHECK(refused.errorCode == protocol_error_code::INVALID_ARGS);
+        CHECK(refused.errorMessage.find("closeOpenScene") != std::string::npos);
+        CHECK(editor.fail("asset.delete", core::json::object({{"asset", uuid}})) == protocol_error_code::INVALID_ARGS);
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+        CHECK(editor.context().has_scene());
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+
+        // With the flag it is the open scene and the startup scene, whatever either was spelled like.
+        editor.clear_events();
+        const core::json::document deleted = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", uuid}, {"closeOpenScene", true}})
+        );
+        CHECK(deleted.root()["closedScene"].as_bool());
+        CHECK(deleted.root()["startupScene"].as_bool());
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").size() == 1);
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+        CHECK_FALSE(editor.context().has_scene());
+    }
+
+    TEST_CASE("regression - code sweep F656 asset.delete of the startup scene succeeds with a warning event") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/other"}}));
+        (void) editor.ok(
+          "project.set_settings",
+          core::json::object({{"settings", core::json::object({{"startup_scene", "scenes/test.scene.json"}})}})
+        );
+        (void) editor_test::write_tiny_png(editor.project_directory() / "assets" / "plain.png");
+        (void) editor.ok("asset.import", core::json::object({{"source", "plain.png"}}));
+
+        // An ordinary asset raises no warning.
+        editor.clear_events();
+        const core::json::document png = editor.ok("asset.delete", core::json::object({{"asset", "plain.png"}}));
+        CHECK_FALSE(png.root()["startupScene"].as_bool(true));
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").empty());
+
+        // The startup scene is not the open one here: no flag is needed, the delete succeeds and says so.
+        editor.clear_events();
+        const core::json::document deleted = editor.ok("asset.delete", core::json::object({{"asset", TEST_SCENE}}));
+        CHECK(deleted.root()["startupScene"].as_bool());
+        CHECK_FALSE(deleted.root()["closedScene"].as_bool(true));
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+        const std::vector<protocol_event> warnings = editor.warnings("STARTUP_SCENE_DELETED");
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings.front().data.root()["path"].as_string() == TEST_SCENE);
+        CHECK(warnings.front().data.root()["message"].as_string().find("startup scene") != std::string::npos);
+        // project.json still names it: the warning is the only trace, by decision.
+        CHECK(editor.ok("project.info").root()["startupScene"].as_string() == "scenes/test.scene.json");
+
+        // Undo brings the file back; deleting it again (the redo) warns again.
+        (void) editor.ok("history.undo");
+        CHECK(std::filesystem::is_regular_file(test_scene_file(editor)));
+        editor.clear_events();
+        (void) editor.ok("history.redo");
+        CHECK_FALSE(std::filesystem::exists(test_scene_file(editor)));
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").size() == 1);
+    }
+
+    TEST_CASE("asset.delete - a startup scene that is also the open scene needs closeOpenScene and still warns") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("scene.save");
+        // A scheme-qualified startup scene names the same asset as one relative to the assets root.
+        (void) editor.ok(
+          "project.set_settings",
+          core::json::object({{"settings", core::json::object({{"startup_scene", TEST_SCENE}})}})
+        );
+        editor.clear_events();
+        CHECK(editor.fail("asset.delete", core::json::object({{"asset", TEST_SCENE}})) ==
+          protocol_error_code::INVALID_ARGS);
+        // A refused delete deleted nothing, so it warns about nothing.
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").empty());
+        const core::json::document deleted = editor.ok(
+          "asset.delete",
+          core::json::object({{"asset", TEST_SCENE}, {"closeOpenScene", true}})
+        );
+        CHECK(deleted.root()["closedScene"].as_bool());
+        CHECK(deleted.root()["startupScene"].as_bool());
+        CHECK(editor.warnings("STARTUP_SCENE_DELETED").size() == 1);
+        CHECK_FALSE(editor.context().has_scene());
+    }
+
+    TEST_CASE("regression - code sweep F656 an asset whose source file vanished answers PATH_NOT_FOUND, an unknown "
+      "reference ASSET_NOT_FOUND") {
+        editor_test::headless_editor editor = {};
+        const core::json::document created = editor.ok(
+          "asset.create_material",
+          core::json::object({{"path", "materials/gone"}})
+        );
+        const std::string uuid = std::string(created.root()["uuid"].as_string());
+        // Removed behind the database's back: the record still resolves, the file it names does not exist.
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::remove(editor.project_directory() / "assets" / "materials" / "gone.cmat", ignored));
+        const protocol_response set = editor.send(
+          "asset.set",
+          core::json::object({{"asset", uuid}, {"path", "anything"}, {"value", 1}})
+        );
+        REQUIRE_FALSE(set.ok);
+        CHECK(set.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(set.errorMessage.find("gone.cmat") != std::string::npos);
+        CHECK(editor.fail(
+          "asset.delete",
+          core::json::object({{"asset", uuid}})
+        ) == protocol_error_code::PATH_NOT_FOUND);
+        // asset.reimport hands the asset to the importer, whose report of the failed read carries no code: the
+        // command looks first, and a reimport that cannot read its source does not switch the importer either.
+        const protocol_response reimported = editor.send(
+          "asset.reimport",
+          core::json::object({{"asset", uuid}, {"importer", "conjure.renderer.gltf"}})
+        );
+        REQUIRE_FALSE(reimported.ok);
+        CHECK(reimported.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(reimported.errorMessage.find("gone.cmat") != std::string::npos);
+        CHECK(editor.ok("asset.info", core::json::object({{"asset", uuid}})).root()["importer"].as_string() !=
+          "conjure.renderer.gltf");
+        // Something is there, but it is not a file that can be read: IO_ERROR.
+        REQUIRE(std::filesystem::create_directory(
+          editor.project_directory() / "assets" / "materials" / "gone.cmat",
+          ignored
+        ));
+        CHECK(editor.fail(
+          "asset.reimport",
+          core::json::object({{"asset", uuid}})
+        ) == protocol_error_code::IO_ERROR);
+
+        // prefab.apply rewrites the prefab's source file, which has to be there to be kept for the undo.
+        const std::string root = editor.create_entity("Cell");
+        (void) editor.ok("prefab.create", core::json::object({{"entity", root}, {"path", "prefabs/cell"}}));
+        const std::filesystem::path prefab = editor.project_directory() / "assets" / "prefabs" / "cell.prefab.json";
+        REQUIRE(std::filesystem::remove(prefab, ignored));
+        const protocol_response applied = editor.send("prefab.apply", core::json::object({{"entity", root}}));
+        REQUIRE_FALSE(applied.ok);
+        CHECK(applied.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(applied.errorMessage.find("cell.prefab.json") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(prefab));
+
+        // A reference that names no asset at all keeps its own code, also where a folder would be accepted.
+        CHECK(editor.fail(
+          "asset.set",
+          core::json::object({{"asset", "materials/never.cmat"}, {"path", "anything"}, {"value", 1}})
+        ) == protocol_error_code::ASSET_NOT_FOUND);
+        CHECK(editor.fail(
+          "asset.delete",
+          core::json::object({{"asset", "materials/never.cmat"}})
+        ) == protocol_error_code::ASSET_NOT_FOUND);
+        CHECK(editor.fail(
+          "asset.info",
+          core::json::object({{"asset", "00000000-0000-4000-8000-000000000001"}})
+        ) == protocol_error_code::ASSET_NOT_FOUND);
+    }
+
+    TEST_CASE("regression - code sweep F089 asset commands run while playing are undone after play.stop") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path incoming = editor.project_directory() / "incoming";
+        const std::filesystem::path textures = editor.project_directory() / "assets" / "textures";
+        // An asset of before the session, deleted while playing.
+        const core::json::document old = editor.ok(
+          "asset.import",
+          core::json::object({
+            {"source", editor_test::write_tiny_png(incoming / "old.png").generic_string()},
+            {"destination", "textures/old.png"},
+          })
+        );
+        const std::string oldUuid = std::string(old.root()["uuid"].as_string());
+        const usize historyBefore = editor.context().undo().size();
+
+        (void) editor.ok("play.start");
+        const core::json::document live = editor.ok(
+          "asset.import",
+          core::json::object({
+            {"source", editor_test::write_tiny_png(incoming / "live.png").generic_string()},
+            {"destination", "textures/live.png"},
+          })
+        );
+        const std::string liveUuid = std::string(live.root()["uuid"].as_string());
+        (void) editor.ok("asset.create_folder", core::json::object({{"path", "live_folder"}}));
+        (void) editor.ok("asset.delete", core::json::object({{"asset", oldUuid}}));
+        CHECK(editor.context().undo().size() == historyBefore);
+        CHECK(editor.context().play().kept_file_edits() == 3);
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 3);
+        // The files are as the session left them.
+        CHECK(std::filesystem::is_regular_file(textures / "live.png"));
+        CHECK(std::filesystem::is_directory(editor.project_directory() / "assets" / "live_folder"));
+        CHECK_FALSE(std::filesystem::exists(textures / "old.png"));
+        REQUIRE(editor.context().undo().size() == historyBefore + 1);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
+
+        (void) editor.ok("history.undo");
+        CHECK_FALSE(std::filesystem::exists(textures / "live.png"));
+        CHECK_FALSE(std::filesystem::exists(textures / "live.png.meta"));
+        CHECK_FALSE(std::filesystem::exists(editor.project_directory() / "assets" / "live_folder"));
+        CHECK(std::filesystem::is_regular_file(textures / "old.png"));
+        CHECK(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", "textures/old.png"}})
+        ).root()["uuid"].as_string() == oldUuid);
+        CHECK(editor.fail("asset.info", core::json::object({{"asset", liveUuid}})) ==
+          protocol_error_code::ASSET_NOT_FOUND);
+
+        (void) editor.ok("history.redo");
+        CHECK_FALSE(std::filesystem::exists(textures / "old.png"));
+        CHECK(std::filesystem::is_directory(editor.project_directory() / "assets" / "live_folder"));
+        // The redo restores the import with the uuid it had while playing.
+        CHECK(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", "textures/live.png"}})
+        ).root()["uuid"].as_string() == liveUuid);
+    }
+
+    TEST_CASE("regression - code sweep F089 prefab.apply while playing is kept and its redo writes the applied bytes") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", root},
+            {"type", "sprite"},
+            {"value", core::json::object({{"size", core::json::array({0.9f, 0.9f})}})},
+          })
+        );
+        (void) editor.ok("prefab.create", core::json::object({{"entity", root}, {"path", "prefabs/live"}}));
+        const std::filesystem::path file = editor.project_directory() / "assets" / "prefabs" / "live.prefab.json";
+        const std::string before = editor_test::read_text_file(file);
+        const usize historyBefore = editor.context().undo().size();
+
+        (void) editor.ok("play.start");
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", root}, {"path", "sprite.size"}, {"value", core::json::array({2.0f, 2.0f})}})
+        );
+        (void) editor.ok("prefab.apply", core::json::object({{"entity", root}}));
+        const std::string applied = editor_test::read_text_file(file);
+        REQUIRE(applied != before);
+        CHECK(applied.find("2.0") != std::string::npos);
+        CHECK(editor.context().undo().size() == historyBefore);
+        CHECK(editor.context().play().kept_file_edits() == 1);
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        // The scene is back at the snapshot, the prefab file is not.
+        CHECK(editor.ok(
+          "component.get",
+          core::json::object({{"entity", root}, {"path", "sprite.size"}})
+        ).root()["value"][0].as_f32() == doctest::Approx(0.9f));
+        CHECK(editor_test::read_text_file(file) == applied);
+        REQUIRE(editor.context().undo().size() == historyBefore + 1);
+
+        (void) editor.ok("history.undo");
+        CHECK(editor_test::read_text_file(file) == before);
+        // The redo cannot apply again: the instance holds the snapshot's 0.9 now. It writes the applied bytes.
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(file) == applied);
+        (void) editor.ok("history.undo");
+        CHECK(editor_test::read_text_file(file) == before);
+    }
+
+    TEST_CASE("prefab.apply - while editing the redo applies the instance again") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        (void) editor.ok("component.add", core::json::object({{"entity", root}, {"type", "sprite"}}));
+        (void) editor.ok("prefab.create", core::json::object({{"entity", root}, {"path", "prefabs/edited"}}));
+        (void) editor.ok(
+          "component.set",
+          core::json::object({{"entity", root}, {"path", "sprite.size"}, {"value", core::json::array({3.0f, 3.0f})}})
+        );
+        (void) editor.ok("prefab.apply", core::json::object({{"entity", root}}));
+        const undo_entry *entry = editor.context().undo().entries().back();
+        REQUIRE(entry->redo.size() == 1);
+        CHECK(entry->redo[0].name == "prefab.apply");
+        const std::filesystem::path file = editor.project_directory() / "assets" / "prefabs" / "edited.prefab.json";
+        const std::string applied = editor_test::read_text_file(file);
+        (void) editor.ok("history.undo");
+        CHECK(editor_test::read_text_file(file) != applied);
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(file) == applied);
+    }
+
+    TEST_CASE("regression - code sweep F089 prefab.create answers WRONG_PLAY_STATE while playing and writes nothing") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        const core::json::document request = core::json::object({{"entity", root}, {"path", "prefabs/played"}});
+        const std::filesystem::path file = editor.project_directory() / "assets" / "prefabs" / "played.prefab.json";
+        (void) editor.ok("play.start");
+        const protocol_response playing = editor.send(
+          "prefab.create",
+          core::json::document::from_value(request.root())
+        );
+        REQUIRE_FALSE(playing.ok);
+        CHECK(playing.errorCode == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(playing.errorDetails.root()["state"].as_string() == "playing");
+        (void) editor.ok("play.pause");
+        const protocol_response paused = editor.send(
+          "prefab.create",
+          core::json::document::from_value(request.root())
+        );
+        REQUIRE_FALSE(paused.ok);
+        CHECK(paused.errorCode == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(paused.errorDetails.root()["state"].as_string() == "paused");
+        CHECK_FALSE(std::filesystem::exists(file));
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        // The entity carries no prefab marker that play.stop would have to throw away.
+        CHECK_FALSE(editor.ok(
+          "entity.get",
+          core::json::object({{"entity", root}})
+        ).root()["components"].contains("conjure.scene.prefab_instance"));
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        (void) editor.ok("prefab.create", core::json::document::from_value(request.root()));
+        CHECK(std::filesystem::is_regular_file(file));
     }
 }

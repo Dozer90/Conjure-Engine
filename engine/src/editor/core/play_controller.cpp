@@ -1,5 +1,6 @@
 #include "conjure/editor/play_controller.h"
 
+#include "conjure/editor/command_registry.h"
 #include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/log_category.h"
@@ -11,6 +12,7 @@
 #endif
 
 #include <format>
+#include <string>
 #include <utility>
 
 namespace conjure::editor {
@@ -73,6 +75,8 @@ namespace conjure::editor {
         mSessionStartFixedStep = mContext->engine().time().fixedStepIndex;
         mSessionStartFixedTime = mContext->engine().time().fixedTime;
         mWarnedUnrecordedEdit = false;
+        mWarnedFileEdit = false;
+        mFileEdits = {};
         emit_state();
         return core::result<void>::success();
     }
@@ -109,6 +113,12 @@ namespace conjure::editor {
         mContext->selection().rebuild(mContext->scene());
         mSelectionBackup.clear();
         mContext->undo().set_frozen(false);
+        if (!mFileEdits.undo.empty()) {
+            // The restore above took back the scene, not the files: what the session wrote to disk becomes one
+            // undoable step now that the stack records again (D21).
+            mFileEdits.label = std::string(FILE_EDITS_LABEL);
+            mContext->undo().push(std::exchange(mFileEdits, {}));
+        }
         mState = play_state::EDITING;
         emit_state();
         mContext->emit_selection_changed();
@@ -202,11 +212,58 @@ namespace conjure::editor {
             return;
         }
         mWarnedUnrecordedEdit = true;
+        // Named from the registry, so the warning cannot drift from the flags it describes.
+        std::string kept = "";
+        for (const command_descriptor *descriptor : mContext->registry().descriptors()) {
+            if (!has_flag(descriptor->flags, command_flags::ON_DISK)) {
+                continue;
+            }
+            if (!kept.empty()) {
+                kept += ", ";
+            }
+            kept += descriptor->name;
+        }
         mContext->events().emit(
           editor_event::WARNING,
           core::json::object({
             {"code", "UNRECORDED_PLAY_EDIT"},
-            {"message", "a mutating command ran during play; it is not recorded for undo and play.stop discards it"},
+            {"message", std::format(
+               "a scene edit ran during play: it is not recorded for undo and play.stop discards it with the rest "
+               "of the play session. Changes to the project's files are kept instead and become the undo entry "
+               "'{}' at play.stop: the commands flagged on_disk ({})",
+               FILE_EDITS_LABEL,
+               kept
+             )},
+          })
+        );
+    }
+
+    void play_controller::keep_file_edit(std::string_view command, command_request replay, command_inverse inverse) {
+        if (mState == play_state::EDITING) {
+            return;
+        }
+        if (mFileEdits.undo.empty()) {
+            mFileEdits.clientId = replay.clientId;
+        }
+        // Drag-style merging belongs to the stack's own entries: inside this one every command is its own step.
+        replay.coalesceKey = 0;
+        mFileEdits.undo.push_back(std::move(inverse));
+        mFileEdits.redo.push_back(std::move(replay));
+        if (mWarnedFileEdit) {
+            return;
+        }
+        mWarnedFileEdit = true;
+        mContext->events().emit(
+          editor_event::WARNING,
+          core::json::object({
+            {"code", "PLAY_FILE_EDIT"},
+            {"message", std::format(
+               "'{}' changed the project's files during play: play.stop does not take such a change back; it "
+               "records every one of this play session as the undo entry '{}'",
+               command,
+               FILE_EDITS_LABEL
+             )},
+            {"cmd", command},
           })
         );
     }

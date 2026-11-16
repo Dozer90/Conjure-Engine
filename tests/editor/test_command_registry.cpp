@@ -66,6 +66,28 @@ TEST_SUITE("editor/command_registry") {
         CHECK(registry.size() == 0);
     }
 
+    TEST_CASE("command_registry - on_disk is accepted on an undoable command only") {
+        command_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.add(make("file.edit", command_flags::MUTATES | command_flags::ON_DISK)));
+        REQUIRE(registry.find("file.edit") != nullptr);
+        CHECK(has_command_flag(*registry.find("file.edit"), command_flags::ON_DISK));
+        // The flag promises an inverse to keep while playing: a command that never mutates has none ...
+        const core::result<void> readOnly = registry.add(make("file.read", command_flags::ON_DISK));
+        CONJURE_CHECK_ERROR(readOnly, protocol_error_code::INVALID_ARGS);
+        if (!readOnly.has_value()) {
+            CHECK(readOnly.get_error().message().find("on_disk") != std::string::npos);
+            CHECK(readOnly.get_error().message().find("file.read") != std::string::npos);
+        }
+        // ... and neither has one that says it cannot be undone.
+        CONJURE_CHECK_ERROR(
+          registry.add(
+            make("file.save", command_flags::MUTATES | command_flags::NO_UNDO | command_flags::ON_DISK)
+          ),
+          protocol_error_code::INVALID_ARGS
+        );
+        CHECK(registry.size() == 1);
+    }
+
     TEST_CASE("command_registry - remove_owned_by drops a module's commands only") {
         command_registry registry = {};
         CONJURE_REQUIRE_OK(registry.add(make("core.keep")));

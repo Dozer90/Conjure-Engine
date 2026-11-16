@@ -1,12 +1,15 @@
 #include "editor/core/commands/command_support.h"
 
 #include "conjure/editor/headless_runner.h"
+#include "conjure/editor/play_controller.h"
 
 #include "conjure/core/string_utils.h"
 
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 // editor.* (docs/design/04_editor.md 3.4, 4.4): the catalogue, the state, batches and transactions, frame
@@ -246,9 +249,14 @@ namespace conjure::editor::support {
         core::result<command_outcome> editor_exec_file(command_invocation &invocation) {
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const bool keepGoing = bool_or(invocation.args, "keepGoing", false);
-            std::ifstream input(std::filesystem::path(std::string(pathText)), std::ios::binary);
+            const std::filesystem::path file = std::filesystem::path(std::string(pathText));
+            std::error_code probe = {};
+            if (!std::filesystem::is_regular_file(file, probe)) {
+                return unusable_path(file, "not a regular file");
+            }
+            std::ifstream input(file, std::ios::binary);
             if (!input.is_open()) {
-                return make_editor_error(protocol_error_code::IO_ERROR, std::format("cannot read '{}'", pathText));
+                return unusable_path(file, "the file cannot be opened");
             }
             std::stringstream buffer = {};
             buffer << input.rdbuf();
@@ -270,6 +278,11 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const u32 exitCode, u32_or(invocation.args, "exitCode", 0));
             const bool save = bool_or(invocation.args, "saveChanges", false);
             if (save && context.has_scene() && context.scene_dirty() && !context.scene_path().empty()) {
+                if (!context.play().is_editing()) {
+                    // scene.save is an editing-state command (D21): the scene to keep is the edited one, which
+                    // the stop restores. Quitting ends the play session anyway.
+                    CONJURE_TRY(context.play().stop());
+                }
                 command_request request = {};
                 request.name = "scene.save";
                 request.clientId = invocation.clientId;
@@ -369,7 +382,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "editor.quit",
-            "Stops the editor process after the current frame, saving the scene first when asked.",
+            "Stops the editor process after the current frame, saving the scene first when asked (a play session is "
+            "stopped before the save, so the edited scene is written, not the playing one).",
             R"({"type":"object","properties":{"exitCode":{"type":"integer","minimum":0},)"
             R"("saveChanges":{"type":"boolean"}}})",
             R"({"type":"object","properties":{"exitCode":{"type":"integer"}}})",

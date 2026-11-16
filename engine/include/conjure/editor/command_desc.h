@@ -21,6 +21,11 @@ namespace conjure::editor {
     /// NO_UNDO marks the mutating commands whose effect cannot be inverted (file and project operations): they
     /// bump the revision but record nothing. A module command (command_desc) answers with a result document
     /// only and cannot supply an inverse, so the editor treats its MUTATES as MUTATES | NO_UNDO.
+    /// ON_DISK marks the undoable commands whose effect lives in the project's files and not in the scene (asset,
+    /// script and project file edits): the snapshot play.stop restores does not take such a change back, so while
+    /// playing the dispatcher keeps its inverse and play.stop records every kept one as a single undo entry
+    /// (docs/design/04_editor.md D21). It needs MUTATES, excludes NO_UNDO, and promises that neither the inverse
+    /// nor the replay refers to scene state; the editor drops it from a module command, which has no inverse.
     /// </summary>
     enum class command_flags : u16 {
         NONE = 0,
@@ -32,7 +37,8 @@ namespace conjure::editor {
         ASYNC = 1 << 5,
         UI_ONLY = 1 << 6,
         NOT_IN_BATCH = 1 << 7,
-        NO_UNDO = 1 << 8
+        NO_UNDO = 1 << 8,
+        ON_DISK = 1 << 9
     };
     CONJURE_ENUM_FLAGS(command_flags);
 

@@ -38,6 +38,16 @@ TEST_SUITE("editor/command_desc") {
         CHECK(static_cast<u16>(command_flags::NOT_IN_BATCH) == 128);
     }
 
+    TEST_CASE("command_flags - ON_DISK is its own bit and can be taken out of a set") {
+        CHECK(static_cast<u16>(command_flags::ON_DISK) == 512);
+        const command_flags file = command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK;
+        CHECK(has_flag(file, command_flags::ON_DISK));
+        CHECK_FALSE(has_flag(file, command_flags::NO_UNDO));
+        const command_flags stripped = file & ~command_flags::ON_DISK;
+        CHECK_FALSE(has_flag(stripped, command_flags::ON_DISK));
+        CHECK(stripped == (command_flags::MUTATES | command_flags::REQUIRES_PROJECT));
+    }
+
     TEST_CASE("command_desc - the C handler receives the arguments and the user data") {
         int calls = 0;
         command_desc desc = {};

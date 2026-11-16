@@ -2,9 +2,11 @@
 
 #include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_options.h"
+#include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/protocol/protocol_server.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/json/document.h"
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/engine/application.h"
@@ -16,11 +18,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 // The editor process object (docs/design/04_editor.md 3.1, 3.2, 5): owns the engine::application, the
 // editor_context and the protocol_server, drives the frame integration headless (through a core layer) or
 // with the UI layer the executable injects, restarts the engine when project.open names another project and
-// runs --export / --exec / the interactive loop.
+// runs --export / --exec / the interactive loop. The command file of --exec is read and parsed before the engine
+// starts, so a missing or malformed file fails at once (decision D22).
 
 namespace conjure::editor {
 
@@ -35,6 +39,7 @@ namespace conjure::editor {
             std::unique_ptr<editor_context> mContext = nullptr;
             std::unique_ptr<protocol_server> mServer = nullptr;
             std::optional<std::filesystem::path> mPendingProject = std::nullopt;
+            std::vector<protocol_request> mExecRequests = {};       // the parsed --exec file, read by initialise()
             int mExitCode = 0;
             u32 mTicks = 0;
             bool mQuitRequested = false;
@@ -50,15 +55,20 @@ namespace conjure::editor {
             /// runtime on the null host so script.* commands work without .NET), initialises it, creates the
             /// context, pushes the frame layer (and the UI layer from the factory when not headless) and
             /// starts the protocol server. Fails with the engine's error or, headless, IO_ERROR when an explicit
-            /// port is busy (a windowed editor logs that and runs without the server). conjure_editor's main
-            /// exits 3 for BAD_ARGUMENTS or an INVALID_CONFIG that a flag caused, otherwise 2.
+            /// port is busy (a windowed editor logs that and runs without the server). Nothing heavy starts
+            /// before the cheap checks are through, in this order: the arguments, project.json and the merged
+            /// configuration (make_engine_desc), then the command file of --exec when run() will execute it
+            /// (headless_runner::load_command_file; a missing or malformed file is the engine's BAD_ARGUMENTS
+            /// with the runner's message), and only then the engine. conjure_editor's main exits 3 for
+            /// BAD_ARGUMENTS or an INVALID_CONFIG that a flag caused, otherwise 2.
             /// </summary>
             [[nodiscard]] core::result<void> initialise(const editor_options &options, layer_factory uiFactory);
 
             /// <summary>
-            /// --export: runs project.export and returns 0 or 1. --exec: the headless runner's exit code.
-            /// Otherwise frames until quit; returns the exit code. A headless --ai-stdio session without a TCP
-            /// server quits by itself and returns 0 once standard input ends.
+            /// --export: runs project.export and returns 0 or 1. --exec: runs the requests initialise() parsed
+            /// and returns the headless runner's exit code (2 when --out cannot be written). --export wins when
+            /// both are given. Otherwise frames until quit; returns the exit code. A headless --ai-stdio session
+            /// without a TCP server quits by itself and returns 0 once standard input ends.
             /// </summary>
             [[nodiscard]] int run();
 
@@ -111,6 +121,15 @@ namespace conjure::editor {
             }
 
             /// <summary>
+            /// The data of the `warning` event that reports a startup scene the running engine could not load:
+            /// {code: "STARTUP_SCENE_FAILED", message}, the message being the engine's
+            /// (engine::application::startup_scene_failure). nullopt when the scene loaded, when the project
+            /// names none, or without an engine. The headless runner writes it as the first line of its output;
+            /// after a project.open restart the application emits it to every client by itself.
+            /// </summary>
+            [[nodiscard]] std::optional<core::json::document> startup_scene_warning() const;
+
+            /// <summary>
             /// Frames pumped since initialise().
             /// </summary>
             [[nodiscard]] u32 ticks() const noexcept {
@@ -130,6 +149,7 @@ namespace conjure::editor {
 
         private:
             [[nodiscard]] core::result<void> start_engine(const std::filesystem::path &projectPath);
+            [[nodiscard]] core::result<void> boot_engine(engine::application_desc desc);
             [[nodiscard]] core::result<void> apply_pending_project_open();
             [[nodiscard]] int run_export();
             [[nodiscard]] int run_exec();

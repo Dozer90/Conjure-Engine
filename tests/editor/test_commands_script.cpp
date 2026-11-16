@@ -5,7 +5,9 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/process.h"
 #include "conjure/editor/command_dispatcher.h"
+#include "conjure/editor/play_controller.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/editor/undo_stack.h"
 #include "conjure/engine/application.h"
 
 #include <cctype>
@@ -191,6 +193,49 @@ TEST_SUITE("editor/commands_script") {
           core::json::object({{"path", "Missing.cs"}})
         ) == protocol_error_code::PATH_NOT_FOUND);
         CHECK(editor.fail("script.read", core::json::object({{"path", ""}})) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - code sweep F656 script.read, script.write, script.delete and script.reload answer "
+      "IO_ERROR for a path that exists but is not a file") {
+        editor_test::headless_editor editor = {};
+        // A directory named like a script: it exists, so it is not PATH_NOT_FOUND, and it cannot be read.
+        const std::filesystem::path folder = editor.project_directory() / "scripts" / "Folder.cs";
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::create_directories(folder, ignored));
+        const protocol_response read = editor.send("script.read", core::json::object({{"path", "Folder.cs"}}));
+        REQUIRE_FALSE(read.ok);
+        CHECK(read.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(read.errorMessage.find("not a regular file") != std::string::npos);
+        CHECK(editor.fail(
+          "script.delete",
+          core::json::object({{"path", "Folder.cs"}})
+        ) == protocol_error_code::IO_ERROR);
+        // script.write reads what it replaces before it writes.
+        CHECK(editor.fail(
+          "script.write",
+          editor_test::script_write_args("Folder.cs", "// x")
+        ) == protocol_error_code::IO_ERROR);
+        CHECK(std::filesystem::is_directory(folder));
+        const protocol_response missing = editor.send("script.read", core::json::object({{"path", "Absent.cs"}}));
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(missing.errorMessage.find("no such file") != std::string::npos);
+
+        // script.reload: a directory where the assembly is expected exists, so it is not "run script.compile first".
+        const protocol_response reload = editor.send(
+          "script.reload",
+          core::json::object({{"assembly", folder.generic_string()}})
+        );
+        REQUIRE_FALSE(reload.ok);
+        CHECK(reload.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(reload.errorMessage.find("not a regular file") != std::string::npos);
+        const protocol_response unbuilt = editor.send(
+          "script.reload",
+          core::json::object({{"assembly", (folder / "Game.dll").generic_string()}})
+        );
+        REQUIRE_FALSE(unbuilt.ok);
+        CHECK(unbuilt.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(unbuilt.errorMessage.find("script.compile") != std::string::npos);
     }
 
     TEST_CASE("script.write - an absolute path differing only in drive-letter case is inside scripts/ and a symlink "
@@ -493,5 +538,35 @@ TEST_SUITE("editor/commands_script") {
         CONJURE_REQUIRE_OK(parsed);
         CHECK(parsed.value().result.root()["source"].as_string() == "// Jos\xEF\xBF\xBD\n");
         CHECK(parsed.value().result.root()["path"].as_string() == "Latin.cs");
+    }
+
+    TEST_CASE("regression - code sweep F089 script.create and script.delete while playing are undone after play.stop") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path scripts = editor.project_directory() / "scripts";
+        (void) editor.ok("script.create", core::json::object({{"name", "Old"}}));
+        const std::string oldSource = editor_test::read_text_file(scripts / "Old.cs");
+        const usize historyBefore = editor.context().undo().size();
+
+        (void) editor.ok("play.start");
+        (void) editor.ok("script.create", core::json::object({{"name", "Live"}, {"template", "Empty"}}));
+        (void) editor.ok("script.delete", core::json::object({{"path", "Old.cs"}}));
+        CHECK(editor.context().undo().size() == historyBefore);
+        CHECK(editor.context().play().kept_file_edits() == 2);
+        CHECK(editor.fail("history.undo") == protocol_error_code::WRONG_PLAY_STATE);
+        const std::string liveSource = editor_test::read_text_file(scripts / "Live.cs");
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 2);
+        CHECK(std::filesystem::is_regular_file(scripts / "Live.cs"));
+        CHECK_FALSE(std::filesystem::exists(scripts / "Old.cs"));
+        REQUIRE(editor.context().undo().size() == historyBefore + 1);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
+
+        (void) editor.ok("history.undo");
+        CHECK_FALSE(std::filesystem::exists(scripts / "Live.cs"));
+        CHECK(editor_test::read_text_file(scripts / "Old.cs") == oldSource);
+        CHECK(std::filesystem::is_regular_file(scripts / "Game.csproj"));
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(scripts / "Live.cs") == liveSource);
+        CHECK_FALSE(std::filesystem::exists(scripts / "Old.cs"));
     }
 }

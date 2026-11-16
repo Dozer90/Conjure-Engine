@@ -208,6 +208,16 @@ namespace editor_test {
         });
     }
 
+    std::vector<editor::protocol_event> headless_editor::warnings(std::string_view code) const {
+        std::vector<editor::protocol_event> found = {};
+        for (const editor::protocol_event &event : mEvents) {
+            if (event.name == "warning" && event.data.root()["code"].as_string("") == code) {
+                found.push_back(event);
+            }
+        }
+        return found;
+    }
+
     void headless_editor::clear_events() {
         mEvents.clear();
     }
@@ -399,6 +409,24 @@ namespace editor_test {
             return std::abs(expected.as_f64() - actual.as_f64()) <= 1.0e-5 * std::max(1.0, std::abs(expected.as_f64()));
         }
         return actual == expected;
+    }
+
+    std::filesystem::path test_scene_file(const headless_editor &editor) {
+        return editor.project_directory() / "assets" / "scenes" / "test.scene.json";
+    }
+
+    std::vector<std::string> non_empty_lines(std::string_view text) {
+        std::vector<std::string> lines = {};
+        for (const std::string_view line : core::str::split_lines(text)) {
+            if (!line.empty()) {
+                lines.emplace_back(line);
+            }
+        }
+        return lines;
+    }
+
+    core::json::document script_write_args(std::string_view path, std::string_view source) {
+        return core::json::object({{"path", path}, {"source", source}});
     }
 
     std::string read_text_file(const std::filesystem::path &path) {

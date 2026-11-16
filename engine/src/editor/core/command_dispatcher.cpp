@@ -282,7 +282,7 @@ namespace conjure::editor {
         // being applied.
         if (!batch.entry.undo.empty() && mSuppressRecording == 0) {
             if (mUndo->frozen()) {
-                mContext->play().note_unrecorded_edit();
+                keep_play_edits(batch);
             } else if (mUndo->has_transaction(clientId)) {
                 for (usize entryIndex = 0; entryIndex < batch.entry.undo.size(); ++entryIndex) {
                     mUndo->record(
@@ -552,12 +552,14 @@ namespace conjure::editor {
         }
         replay.clientId = request.clientId;
         replay.coalesceKey = request.coalesceKey;
+        const bool onDisk = has_flag(descriptor.flags, command_flags::ON_DISK);
         // A running batch always collects its children's inverses, even while playing or while the batch itself
         // runs as an undo or redo step: its atomic rollback needs them. run_batch decides afterwards whether the
         // collected entry reaches the stack.
         if (mBatch != nullptr) {
             mBatch->entry.undo.push_back(std::move(*outcome.inverse));
             mBatch->entry.redo.push_back(std::move(replay));
+            mBatch->fileCommands.push_back(onDisk ? descriptor.name : std::string());
             if (mBatch->entry.label.empty()) {
                 mBatch->entry.label = outcome.label;
             }
@@ -567,6 +569,12 @@ namespace conjure::editor {
             return;
         }
         if (mUndo->frozen()) {
+            // Playing: play.stop restores the scene, so a scene edit has nothing to undo, but it does not restore
+            // the project's files, so a file edit keeps its inverse until then (D9, D21).
+            if (onDisk) {
+                mContext->play().keep_file_edit(descriptor.name, std::move(replay), std::move(*outcome.inverse));
+                return;
+            }
             mContext->play().note_unrecorded_edit();
             return;
         }
@@ -577,6 +585,25 @@ namespace conjure::editor {
           request.clientId,
           request.coalesceKey
         );
+    }
+
+    void command_dispatcher::keep_play_edits(batch_state &batch) {
+        bool sceneEdit = false;
+        for (usize index = 0; index < batch.entry.undo.size(); ++index) {
+            const std::string &fileCommand = batch.fileCommands[index];
+            if (fileCommand.empty()) {
+                sceneEdit = true;
+                continue;
+            }
+            mContext->play().keep_file_edit(
+              fileCommand,
+              std::move(batch.entry.redo[index]),
+              std::move(batch.entry.undo[index])
+            );
+        }
+        if (sceneEdit) {
+            mContext->play().note_unrecorded_edit();
+        }
     }
 
     f64 command_dispatcher::now_seconds() const noexcept {

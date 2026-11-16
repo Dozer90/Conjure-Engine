@@ -4,6 +4,7 @@
 #include "conjure/core/error.h"
 #include "conjure/ecs/ecs_error.h"
 #include "conjure/editor/editor_error.h"
+#include "conjure/engine/engine_error.h"
 #include "conjure/scene/scene_error.h"
 
 // editor_error.h: the protocol error codes, their wire names and the mapping of engine errors onto them.
@@ -61,6 +62,25 @@ TEST_SUITE("editor/editor_error") {
         CHECK(
           classify_error(core::error::from(assets::asset_error_code::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
         );
+    }
+
+    TEST_CASE("regression - code sweep F656 classify_error answers PATH_NOT_FOUND for a project that is not there") {
+        // A missing project directory is a missing path; ASSET_NOT_FOUND stays for asset references.
+        CHECK(
+          classify_error(
+            core::error::from(engine::engine_error::PROJECT_NOT_FOUND)
+          ) == protocol_error_code::PATH_NOT_FOUND
+        );
+        CHECK(
+          classify_error(core::error::from(assets::asset_error_code::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
+        );
+        CHECK(
+          classify_error(
+            core::error::from(scene::scene_error::PREFAB_NOT_LOADED)
+          ) == protocol_error_code::ASSET_NOT_FOUND
+        );
+        CHECK(classify_error(core::error(core::error_code::IO_FAILURE)) == protocol_error_code::IO_ERROR);
+        CHECK(classify_error(core::error(core::error_code::PERMISSION_DENIED)) == protocol_error_code::IO_ERROR);
     }
 
     TEST_CASE("classify_error - anything unknown is INTERNAL") {

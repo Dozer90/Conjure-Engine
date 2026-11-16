@@ -27,7 +27,7 @@ build/<preset>/bin/conjure_editor --project <dir> --headless --exec cmds.json --
 | `--ai-port <n>` | TCP port; default 47820 and nine more are tried when busy; `0` disables the server |
 | `--ai-stdio` | requests on stdin, responses and events on stdout, logs on stderr (not with `--exec`) |
 | `--ai-token <t>` | every client must present the token in `session.hello` |
-| `--exec <file>` | run a JSON array or NDJSON of requests, then exit: 0 all ok, 1 a request failed, 2 the project or engine failed to start, 3 bad arguments or an unreadable file |
+| `--exec <file>` | run a JSON array or NDJSON of requests, then exit: 0 all ok, 1 a request failed, 2 the project or engine failed to start, 3 bad arguments or a file that is missing or does not parse (checked before the engine starts, so it fails at once) |
 | `--out <file>` | write the `--exec` responses and events to a file (default stdout) |
 | `--keep-going` | continue `--exec` after a failed request |
 | `--timeout-seconds <s>` | asynchronous replies time out after `s` seconds (default 120) |
@@ -65,6 +65,12 @@ disconnects the client (`MESSAGE_TOO_LARGE`).
   SCENE_NOT_OPEN WRONG_PLAY_STATE NOT_AVAILABLE IO_ERROR COMPILE_FAILED BUSY TIMEOUT CANCELLED
   UNAUTHORISED INTERNAL`. `UNKNOWN_COMMAND` details carry `didYouMean`; `INVALID_ARGS` names the
   offending `args.<path>`; `COMPILE_FAILED` details carry `diagnostics`.
+- Three codes that are easy to confuse: `PATH_NOT_FOUND` is a file or folder that does not exist (an
+  `asset.import` source, a `scene.open` file, a `project.open` directory, an `editor.exec_file` file, a
+  script, the `distributionDirectory` a `project.export` copies the runtime from, the vanished source file of a
+  registered asset)
+  or a reflection path that does not resolve; `IO_ERROR` is one that exists but cannot be read,
+  or a failed write; `ASSET_NOT_FOUND` is an asset reference (uuid or asset path) that names no asset.
 
 ## 3. Discover before you guess
 
@@ -78,7 +84,8 @@ disconnects the client (`MESSAGE_TOO_LARGE`).
 | `scene.get_hierarchy {"depth":2}` / `scene.query` | the live scene |
 
 Flags in a descriptor: `mutates` (recorded for undo and marks the scene dirty), `no_undo`, `async`,
-`requires_project`, `requires_scene`, `editing_only` (refused while playing), `not_in_batch`.
+`requires_project`, `requires_scene`, `editing_only` (refused while playing), `not_in_batch`, `on_disk`
+(an undoable change to the project's files: it survives `play.stop`, see Play mode below).
 
 ## 4. Conventions
 
@@ -93,15 +100,33 @@ Flags in a descriptor: `mutates` (recorded for undo and marks the scene dirty), 
   makes one entry of many, `editor.begin_transaction` / `editor.end_transaction` group a client's
   commands, `history.undo {"count":n}` / `history.redo` / `history.list` drive it. Undo is frozen while
   playing (`WRONG_PLAY_STATE`).
-- **Play mode**: `play.start` snapshots the scene; edits during play are discarded by `play.stop`, which
-  restores the scene byte for byte (a `warning` event says so). `play.pause`, `play.resume`,
-  `play.step {"fixedSteps":n}` for deterministic stepping; `input.inject` feeds keys, buttons and taps.
+- **Play mode**: `play.start` snapshots the scene; `play.stop` restores it byte for byte. `play.pause`,
+  `play.resume`, `play.step {"fixedSteps":n}` for deterministic stepping; `input.inject` feeds keys, buttons
+  and taps. What an edit made while playing leaves behind depends on the command:
+  - scene edits (`entity.*`, `component.*`, `prefab.instantiate`, `prefab.unpack`, `script.attach`,
+    `scene.set_settings`) are discarded by `play.stop` and never recorded for undo (`warning`
+    `UNRECORDED_PLAY_EDIT`, once per session);
+  - file edits, the commands flagged `on_disk` (`asset.import`, `asset.create_folder`, `asset.delete`,
+    `asset.create_material`, `asset.set`, `asset.restore`, `prefab.apply`, `project.set_settings`,
+    `script.create`, `script.write`, `script.delete`), stay on disk (`warning` `PLAY_FILE_EDIT`, once per
+    session). `play.stop` answers `fileChanges` (their count) and records them as one undo entry, `File
+    changes during play`: one `history.undo` after the stop takes them all back;
+  - `prefab.create`, `scene.save` and `scene.save_as` answer `WRONG_PLAY_STATE`: stop first.
 - **Determinism for files**: pass `guid` / `guids` / `uuid` to `entity.create`, `entity.create_many`,
   `prefab.instantiate` and `prefab.create` so a command file replays identically.
 - **Units and encodings**: angles cross the protocol in degrees (`view.set_camera {"fov":60}`, euler
   rotations), `input.inject {"text":...}` is UTF-8 and injects one text event per code point, and a line
   that is not valid UTF-8 answers `PARSE_ERROR` like any other unparseable line (the client stays
   connected; only an oversized line disconnects).
+- **Deleting scenes**: `asset.delete` refuses the file behind the open scene (`INVALID_ARGS`) unless you
+  pass `"closeOpenScene":true`, which deletes the file and closes the scene (unsaved changes are
+  dropped, the undo history is cleared; undoing the delete restores the file but does not reopen it; a
+  delete that fails leaves the scene open). The flag is refused inside `editor.batch`, an open
+  transaction, an undo or redo step and during play. Deleting the project's startup scene works
+  and emits `warning {code:"STARTUP_SCENE_DELETED"}`: name another with `project.set_settings`.
+- **Export** is always a Distribution export: `project.export {"directory":...}` plus
+  `distributionDirectory` to copy the runtime. There is no `config` argument (and `project.create` has
+  no `template`); sending one is `INVALID_ARGS`, like any unknown argument.
 - **Side effects you cannot undo**: `asset.import` of a file already inside `assets://` records no undo
   entry (nothing was created, so undo never deletes a user file); a module's `mutates` command is
   recorded as `no_undo`; `module.build` always runs the `cmake` on the PATH with `config` / `target`
@@ -142,7 +167,15 @@ Flags in a descriptor: `mutates` (recorded for undo and marks the scene dirty), 
 
 Events: `log`, `selection.changed`, `play.state`, `scene.changed`, `scene.loaded`, `progress`,
 `script.compiled`, `script.reloaded`, `asset.imported`, `module.state`, `command.executed`,
-`client.connected`, `client.disconnected`, `events.dropped`, `warning`.
+`client.connected`, `client.disconnected`, `events.dropped`, `warning` (`{code, message}`; codes
+`UNRECORDED_PLAY_EDIT`, `PLAY_FILE_EDIT` with `cmd`, `STARTUP_SCENE_DELETED` with `path`,
+`STARTUP_SCENE_FAILED`).
+
+When the project's startup scene does not load (missing, corrupt), the editor still starts, over an empty
+world, and an `--exec` run still exits by its requests alone. The first line of the output is then
+`{"event":"warning",...,"data":{"code":"STARTUP_SCENE_FAILED","message":"..."}}`: check for it before relying
+on the scene, or repair the scene in the same file (`scene.new` with its path, then `scene.save`). The same
+event follows a `project.open` into such a project.
 
 ## 6. Walkthrough: build Grid Sweeper headless
 
@@ -186,5 +219,8 @@ Afterwards `script.compile` builds the C# project when a .NET SDK is installed; 
 - Group related edits in `editor.batch` (atomic) so a failure leaves nothing half done and the user has
   one undo step.
 - Wait for asynchronous ids before depending on their results; never resend a pending request.
-- Stop play (`play.stop`) before saving: edits made while playing are not kept.
-- `scene.save` before `editor.quit`, or pass `{"saveChanges":true}` to `editor.quit`.
+- Stop play (`play.stop`) before saving: `scene.save` is refused while playing, and scene edits made while
+  playing are not kept. File edits made while playing are kept; check `fileChanges` in the `play.stop` result
+  and `history.undo` once if they were not meant to stay.
+- `scene.save` before `editor.quit`, or pass `{"saveChanges":true}` to `editor.quit` (it stops a play session
+  before it saves; if the save fails the editor does not quit and stays in the editing state).

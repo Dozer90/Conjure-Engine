@@ -3,6 +3,7 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/uuid.h"
 #include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/editor/builtin_commands.h"
 #include "conjure/editor/command_dispatcher.h"
@@ -23,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -178,6 +180,74 @@ TEST_SUITE("editor/editor_context") {
         CHECK(editor_context::normalise_scene_path("C:/elsewhere/x").empty());
         CHECK(editor_context::normalise_scene_path("assets://C:/elsewhere/x").empty());
         CHECK(editor_context::normalise_scene_path("/../x") == "assets://x.scene.json");
+    }
+
+    TEST_CASE("editor_context - names_asset and is_open_scene tell the asset a path names") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        (void) editor.ok("scene.save");
+        (void) editor_test::write_tiny_png(editor.project_directory() / "assets" / "plain.png");
+        const core::json::document png = editor.ok("asset.import", core::json::object({{"source", "plain.png"}}));
+        const std::optional<core::uuid> pngId = core::uuid::parse(png.root()["uuid"].as_string());
+        const std::optional<core::uuid> sceneId = core::uuid::parse(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", editor_test::TEST_SCENE}})
+        ).root()["uuid"].as_string());
+        REQUIRE(pngId.has_value());
+        REQUIRE(sceneId.has_value());
+
+        CHECK(context.names_asset("assets://plain.png", *pngId));
+        CHECK(context.names_asset(editor_test::TEST_SCENE, *sceneId));
+        // Another asset's path, no path, a file that is not there, another mount and an unknown asset name none.
+        CHECK_FALSE(context.names_asset(editor_test::TEST_SCENE, *pngId));
+        CHECK_FALSE(context.names_asset("", *pngId));
+        CHECK_FALSE(context.names_asset("assets://absent.png", *pngId));
+        CHECK_FALSE(context.names_asset("project://assets/plain.png", *pngId));
+        CHECK_FALSE(context.names_asset("plain.png", *pngId));
+        CHECK_FALSE(context.names_asset("assets://plain.png", core::uuid::generate()));
+
+        CHECK(context.is_open_scene(*sceneId));
+        CHECK_FALSE(context.is_open_scene(*pngId));
+        // A scene that was never saved has no file, and a closed one is not open.
+        (void) editor.ok("scene.new", core::json::object({{"name", "fresh"}}));
+        CHECK_FALSE(context.is_open_scene(*sceneId));
+        (void) editor.ok("scene.open", core::json::object({{"path", "scenes/test"}}));
+        CHECK(context.is_open_scene(*sceneId));
+        (void) editor.ok("scene.close");
+        CHECK_FALSE(context.is_open_scene(*sceneId));
+    }
+
+    TEST_CASE("regression - code sweep F656 names_asset compares files, not spellings") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        (void) editor.ok("scene.save");
+        const std::optional<core::uuid> sceneId = core::uuid::parse(editor.ok(
+          "asset.info",
+          core::json::object({{"asset", editor_test::TEST_SCENE}})
+        ).root()["uuid"].as_string());
+        REQUIRE(sceneId.has_value());
+        // A second name of the same file that the database has not registered: a hard link stands in, on every
+        // volume that has hard links, for the other spelling a volume that ignores case accepts.
+        const std::filesystem::path alias = editor.project_directory() / "assets" / "scenes" / "alias.scene.json";
+        std::error_code linkError = {};
+        std::filesystem::create_hard_link(editor_test::test_scene_file(editor), alias, linkError);
+        if (linkError) {
+            MESSAGE("the volume refused a hard link (" << linkError.message() << "): the alias half is skipped");
+            return;
+        }
+        CHECK(context.names_asset("assets://scenes/alias.scene.json", *sceneId));
+        (void) editor.ok("scene.open", core::json::object({{"path", "scenes/alias"}}));
+        REQUIRE(context.scene_path() == "assets://scenes/alias.scene.json");
+        CHECK(context.is_open_scene(*sceneId));
+        // A file of its own is another asset however alike the names are.
+        std::error_code copyError = {};
+        std::filesystem::copy_file(
+          editor_test::test_scene_file(editor),
+          editor.project_directory() / "assets" / "scenes" / "copy.scene.json",
+          copyError
+        );
+        REQUIRE_FALSE(copyError);
+        CHECK_FALSE(context.names_asset("assets://scenes/copy.scene.json", *sceneId));
     }
 
     TEST_CASE("editor_context - the viewport aspect starts at 16:9 and ignores values that are not positive") {

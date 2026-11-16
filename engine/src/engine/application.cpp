@@ -146,6 +146,7 @@ core::result<void> application::initialise() {
     mState = application_state::STARTING;
     mExitCode = exit_code::OK;
     mQuitRequested = false;
+    mStartupSceneFailure.reset();
     mTime = {};
     mTime.fixedDeltaTime = mDesc.config.time.fixedDeltaSeconds;
     mTime.timeScale = std::max(mDesc.config.time.timeScale, 0.0f);
@@ -606,6 +607,8 @@ core::result<void> application::load_startup_scene() {
         CONJURE_LOG_INFO(LOG_ENGINE, "startup scene '{}' loaded", assetPath);
         return core::result<void>::success();
     }
+    // Kept for startup_scene_failure(): the editor carries on, so the log line below is otherwise all there is.
+    mStartupSceneFailure = failure;
     if (config.editor) {
         CONJURE_LOG_WARN(LOG_ENGINE, "{} (editor continues with an empty world)", failure->message());
         return core::result<void>::success();

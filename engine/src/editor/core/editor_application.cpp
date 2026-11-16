@@ -20,7 +20,10 @@
 
 #include <format>
 #include <iostream>
+#include <optional>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace conjure::editor {
 
@@ -131,7 +134,20 @@ namespace conjure::editor {
         }
         mOptions = options;
         mUiFactory = std::move(uiFactory);
-        CONJURE_TRY(start_engine(options.projectPath));
+        mExecRequests.clear();
+        // Fail fast (decision D22): everything that can be wrong without an engine is checked before one starts.
+        // The arguments and the project come first, so a bad flag or a missing project is still what is reported
+        // when the command file is unusable as well.
+        CONJURE_TRY_ASSIGN(engine::application_desc desc, make_engine_desc(options, options.projectPath));
+        if (!options.execFile.empty() && options.exportDirectory.empty()) {
+            core::result<std::vector<protocol_request>> requests = headless_runner::load_command_file(options.execFile);
+            if (!requests.has_value()) {
+                // The file is an argument: BAD_ARGUMENTS is what conjure_editor's main turns into exit code 3.
+                return engine::make_error(engine::engine_error::BAD_ARGUMENTS, requests.get_error().message());
+            }
+            mExecRequests = std::move(requests).value();
+        }
+        CONJURE_TRY(boot_engine(std::move(desc)));
         mServer = std::make_unique<protocol_server>(mContext->events());
         mContext->set_server(mServer.get());
         mContext->set_token(options.aiToken);
@@ -244,8 +260,26 @@ namespace conjure::editor {
         return mPendingProject.has_value();
     }
 
+    std::optional<core::json::document> editor_application::startup_scene_warning() const {
+        if (mEngine == nullptr) {
+            return std::nullopt;
+        }
+        const std::optional<core::error> &failure = mEngine->startup_scene_failure();
+        if (!failure.has_value()) {
+            return std::nullopt;
+        }
+        return core::json::object({
+          {"code", "STARTUP_SCENE_FAILED"},
+          {"message", std::string_view(failure->message())},
+        });
+    }
+
     core::result<void> editor_application::start_engine(const std::filesystem::path &projectPath) {
         CONJURE_TRY_ASSIGN(engine::application_desc desc, make_engine_desc(mOptions, projectPath));
+        return boot_engine(std::move(desc));
+    }
+
+    core::result<void> editor_application::boot_engine(engine::application_desc desc) {
         std::unique_ptr<engine::application> engine = std::make_unique<engine::application>(std::move(desc));
 #if defined(CONJURE_BUILD_EDITOR) && CONJURE_BUILD_EDITOR
         if (!mOptions.headless) {
@@ -319,6 +353,11 @@ namespace conjure::editor {
                 {"project", mOptions.projectPath.generic_string()},
               })
             );
+            // The clients of the session outlive the restart: they hear at once that the project they now work
+            // in started without its startup scene (the runner's first line covers the first start only).
+            if (std::optional<core::json::document> warning = startup_scene_warning(); warning.has_value()) {
+                (void) mContext->events().emit(editor_event::WARNING, std::move(*warning));
+            }
         }
         return core::result<void>::success();
     }
@@ -360,13 +399,11 @@ namespace conjure::editor {
     }
 
     int editor_application::run_exec() {
+        // initialise() read and parsed the file before the engine started; all that can still fail is the output.
         headless_runner runner = {};
-        const core::result<exec_summary> summary = runner.run(*this, mOptions);
+        const core::result<exec_summary> summary = runner.run(*this, mOptions, mExecRequests);
         if (!summary.has_value()) {
             std::cerr << summary.get_error().message() << '\n';
-            if (summary.get_error().is(protocol_error_code::INVALID_ARGS)) {
-                return static_cast<int>(engine::exit_code::BAD_ARGUMENTS);
-            }
             return static_cast<int>(engine::exit_code::RUNTIME_FAILURE);
         }
         return summary.value().exitCode;

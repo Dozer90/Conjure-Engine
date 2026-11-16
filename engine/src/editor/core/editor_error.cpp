@@ -155,8 +155,10 @@ namespace conjure::editor {
             return protocol_error_code::INTERNAL;
         }
         if (failure.is_category<engine::engine_error>()) {
+            // A project directory or its project.json that does not exist is a missing path, not an asset
+            // reference that failed to resolve.
             if (failure.is(engine::engine_error::PROJECT_NOT_FOUND)) {
-                return protocol_error_code::ASSET_NOT_FOUND;
+                return protocol_error_code::PATH_NOT_FOUND;
             }
             if (failure.is(engine::engine_error::PROJECT_PARSE_FAILED) ||
               failure.is(engine::engine_error::PROJECT_INVALID) ||

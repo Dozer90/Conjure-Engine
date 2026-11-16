@@ -9,7 +9,7 @@
   "expect": {
     "ok": false,
     "error": {
-      "code": "IO_ERROR"
+      "code": "PATH_NOT_FOUND"
     }
   }
 }

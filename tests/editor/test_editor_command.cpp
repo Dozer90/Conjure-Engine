@@ -42,6 +42,19 @@ TEST_SUITE("editor/editor_command") {
         CHECK(command_flag_name(command_flags::NONE).empty());
     }
 
+    TEST_CASE("command_flag_names - on_disk is the wire name of ON_DISK and comes last") {
+        CHECK(command_flag_name(command_flags::ON_DISK) == "on_disk");
+        const core::json::document names = command_flag_names(
+          command_flags::ON_DISK | command_flags::MUTATES | command_flags::REQUIRES_PROJECT
+        );
+        REQUIRE(names.root().size() == 3);
+        CHECK(names.root()[0].as_string() == "mutates");
+        CHECK(names.root()[1].as_string() == "requires_project");
+        CHECK(names.root()[2].as_string() == "on_disk");
+        // Two flags are not a single flag.
+        CHECK(command_flag_name(command_flags::ON_DISK | command_flags::MUTATES).empty());
+    }
+
     TEST_CASE("has_command_flag - reads a descriptor's flags") {
         command_descriptor descriptor = {};
         descriptor.flags = command_flags::ASYNC | command_flags::REQUIRES_PROJECT;

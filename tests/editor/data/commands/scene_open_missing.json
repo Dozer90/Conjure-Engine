@@ -9,7 +9,7 @@
   "expect": {
     "ok": false,
     "error": {
-      "code": "ASSET_NOT_FOUND"
+      "code": "PATH_NOT_FOUND"
     }
   }
 }

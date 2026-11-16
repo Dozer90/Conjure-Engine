@@ -16,6 +16,7 @@
 #include "conjure/ecs/entity.h"
 #include "conjure/scene/scene.h"
 
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -35,12 +36,28 @@ namespace conjure::editor::support {
     [[nodiscard]] core::error invalid_args(std::string message);
     [[nodiscard]] core::error not_available(std::string message);
     [[nodiscard]] core::error io_error(std::string message);
+    [[nodiscard]] core::error path_not_found(std::string message);
     [[nodiscard]] core::error internal(std::string message);
 
     /// <summary>
     /// Wraps a foreign error: classify_error for the code, the message kept.
     /// </summary>
     [[nodiscard]] core::error wrap(const core::error &failure);
+
+    /// <summary>
+    /// The error for a file or folder on disk that a command needs and cannot use, the one place that tells a
+    /// missing path from an unreadable one (code sweep F656): PATH_NOT_FOUND when nothing exists at 'path',
+    /// IO_ERROR when something does. 'reason' ends the IO_ERROR message ("not a regular file"); when the path
+    /// cannot even be examined (a denied access) the system's own text is used instead.
+    /// </summary>
+    [[nodiscard]] core::error unusable_path(const std::filesystem::path &path, std::string_view reason = {});
+
+    /// <summary>
+    /// The error for a failed read through the virtual file system: PATH_NOT_FOUND when the failure is core
+    /// NOT_FOUND (the file or its mount is missing), IO_ERROR for anything else. The message names 'path' and
+    /// keeps the failure's text.
+    /// </summary>
+    [[nodiscard]] core::error read_failure(std::string_view path, const core::error &failure);
 
     /*-----------------------------------------------------------------------*/
     // Arguments

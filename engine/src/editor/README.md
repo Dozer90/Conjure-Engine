@@ -40,6 +40,10 @@ ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_c
 2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean`; the compiled JSON Schema
    of the arguments -> `INVALID_ARGS` naming the path; `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`,
    `PLAYING_ONLY` -> the matching code before the handler runs.
+   A file or folder that is not there is `PATH_NOT_FOUND` in every command and one that exists but cannot be
+   read is `IO_ERROR` (`support::unusable_path` for a path on disk, `support::read_failure` for a read through
+   the virtual file system; engine `PROJECT_NOT_FOUND` classifies as `PATH_NOT_FOUND`). `ASSET_NOT_FOUND` is an
+   asset reference that names no asset (code sweep F656, 04_editor.md D20).
 3. The handler returns a `command_outcome`: result, inverse (mandatory for `MUTATES` without `NO_UNDO`;
    `skipRecording` for a run that changed nothing undoable, such as `asset.import` of a file already inside
    the project), an optional normalised replay and a label. The dispatcher records undo, bumps the revision,
@@ -48,6 +52,16 @@ ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_c
    (labelled `Undo X` / `Redo X`, or `... (failed)` after a step that broke off half-way). A mutating handler
    that returns no inverse is a logged `INTERNAL` error, never an abort. Module commands (`command_desc`)
    cannot return an inverse, so their `MUTATES` is registered as `MUTATES | NO_UNDO`.
+   `asset.delete` dispatches a second command: for the file behind the open scene, and only with
+   `closeOpenScene: true`, it deletes the file and then runs `scene.close {discard: true}` (D20). The delete comes
+   first because it is the step that can fail: a file the file system will not remove leaves the scene open
+   with its unsaved changes and its history (and should the close fail, the file is put back through the
+   delete's own inverse). Closing clears the undo history, so that path is refused inside a batch, an open
+   transaction, an undo or redo step and during play; the asset browser's confirmation dialog is the UI's way
+   to send the flag, and it disables its "Close and Delete" while playing or paused instead of sending a request
+   that would be refused. Both ask `editor_context::is_open_scene`, which compares files rather than spellings
+   (`names_asset`: a scene opened as `Scenes/Main` on a volume that ignores case is the asset registered as
+   `scenes/main`). Deleting the project's startup scene emits `warning {code: "STARTUP_SCENE_DELETED"}`.
 4. `ASYNC` handlers park an `async_reply`; `editor_context::tick` resolves completions once per frame and
    delivers them to the client's sink or transport. At most 8 pending per client (`BUSY`), with the
    `--timeout-seconds` deadline (`TIMEOUT`). A reply completed inside its own handler is matched by ticket
@@ -70,6 +84,25 @@ gizmo's drag session is one step however many frames it lasted). Inverses that r
 (`entity.destroy_many`) are one `editor.batch` whose children run forwards in ascending sibling order, so
 surviving siblings keep their places. Play mode freezes the stack (`D9`): `play.start` captures a
 `scene_snapshot`, `play.stop` restores it byte for byte and remaps the selection by guid.
+
+Edits while playing (`D21`, code sweep F089). The restore takes back the scene and nothing on disk, so the
+dispatcher sorts what a handler returned by the command's flags while the stack is frozen:
+
+- no `ON_DISK`: a scene edit. Not recorded; `play_controller::note_unrecorded_edit` warns once per session
+  (`UNRECORDED_PLAY_EDIT`).
+- `ON_DISK` (`asset.import`, `asset.create_folder`, `asset.delete`, `asset.create_material`, `asset.set`,
+  `asset.restore`, `prefab.apply`, `project.set_settings`, `script.create`, `script.write`, `script.delete`): a
+  file edit. `play_controller::keep_file_edit` collects the inverse and replay (warning `PLAY_FILE_EDIT` once per
+  session), and `play_controller::stop` pushes them as one undo entry, `File changes during play`; `play.stop`
+  answers the count as `fileChanges`. A batch marks its `ON_DISK` children in `batch_state::fileCommands` and
+  hands them over only when it did not roll back.
+- `prefab.create`, `scene.save` and `scene.save_as` are `EDITING_ONLY`: they tie a file to scene state the
+  restore removes.
+
+`ON_DISK` promises that the inverse and the replay touch no scene state (they run after the restore); the registry
+refuses it without `MUTATES` or with `NO_UNDO`, and `editor_module_consumer` drops it from module commands.
+`prefab.apply` keeps the promise by replaying as an `asset.restore` of the bytes it wrote when it ran while
+playing.
 
 ## Frame integration
 
@@ -94,7 +127,13 @@ through its camera into a render target (`core/scene_view.h`: `scene_view`, `mak
 `resolve_camera_view`; the viewport panel shows the editor camera the same way), is captured on the main thread
 once a frame has been rendered into the target, and is encoded and written on a `core::jobs` job that posts the
 completion back; screenshots asked for together are taken one at a time, in request order. `--exec file.json`
-runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3). `--ai-stdio` reads stdin
+runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3). The file is read and
+parsed in `editor_application::initialise` (`headless_runner::load_command_file`), after the arguments and the
+project were checked and before `boot_engine` starts the engine, so a missing or malformed file exits 3 without an
+engine start. When the engine could not load the startup scene (`engine::application::startup_scene_failure()`),
+`run_requests` writes `warning {code: "STARTUP_SCENE_FAILED", message}` as the first output line and the exit code
+stays the requests' own; after a `project.open` restart `apply_pending_project_open` emits the same event to every
+client (04_editor.md D22). `--ai-stdio` reads stdin
 in 64 KiB chunks through a `line_splitter` on a reader thread whose state is shared through a `shared_ptr`: the
 thread is left blocked at exit (documented) and never touches the destroyed transport. Once standard input
 ends, `protocol_server::stdio_closed()` turns true and a headless `--ai-stdio` editor without a TCP server quits

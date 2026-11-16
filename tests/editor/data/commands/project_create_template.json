@@ -1,0 +1,18 @@
+{
+  "_comment": "template was removed (code sweep F650): it never selected anything.",
+  "setup": [],
+  "request": {
+    "cmd": "project.create",
+    "args": {
+      "path": "${project}/created",
+      "name": "Created",
+      "template": "empty"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

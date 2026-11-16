@@ -42,7 +42,8 @@
   "expect": {
     "ok": true,
     "result": {
-      "state": "editing"
+      "state": "editing",
+      "fileChanges": 0
     }
   }
 }

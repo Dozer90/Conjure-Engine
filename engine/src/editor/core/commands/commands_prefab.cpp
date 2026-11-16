@@ -3,6 +3,7 @@
 
 #include "conjure/editor/entity_ref.h"
 #include "conjure/editor/log_category.h"
+#include "conjure/editor/play_controller.h"
 
 #include "conjure/assets/asset_database.h"
 #include "conjure/assets/asset_manager.h"
@@ -349,13 +350,11 @@ namespace conjure::editor::support {
             }
             core::result<std::vector<std::byte>> previous = database->vfs().read_file(*filePath);
             if (!previous.has_value()) {
-                return io_error(std::format("cannot read '{}': {}", *filePath, previous.get_error().message()));
+                return read_failure(*filePath, previous.get_error());
             }
             CONJURE_TRY_ASSIGN(const std::string text, prefab_text(document.value()));
-            const core::result<void> written = database->vfs().write_file_atomic(
-              *filePath,
-              std::span<const std::byte>(reinterpret_cast<const std::byte *>(text.data()), text.size())
-            );
+            const std::span<const std::byte> bytes(reinterpret_cast<const std::byte *>(text.data()), text.size());
+            const core::result<void> written = database->vfs().write_file_atomic(*filePath, bytes);
             if (!written.has_value()) {
                 return io_error(std::format("cannot write '{}': {}", *filePath, written.get_error().message()));
             }
@@ -371,6 +370,17 @@ namespace conjure::editor::support {
               {"path", *assetPath},
               {"contentBase64", encoded},
             })};
+            if (!context.play().is_editing()) {
+                // The redo runs after play.stop restored the scene (D21): the instance may be gone or hold other
+                // values by then, so it writes the bytes applied here back instead of applying again.
+                command_request replay = {};
+                replay.name = "asset.restore";
+                replay.args = core::json::object({
+                  {"path", *assetPath},
+                  {"contentBase64", base64_encode(bytes)},
+                });
+                outcome.replay = std::move(replay);
+            }
             return outcome;
         }
 
@@ -436,7 +446,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "prefab.create",
-            "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance.",
+            "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance. Editing "
+            "state only: play.stop would discard the marked instance and keep the file.",
             std::format(
               R"({{"type":"object","properties":{{"entity":{},"path":{{"type":"string"}},"uuid":{{"type":"string"}}}},)"
               R"("required":["entity","path"]}})",
@@ -444,7 +455,8 @@ namespace conjure::editor::support {
             ),
             R"({"type":"object","properties":{"uuid":{"type":"string"},"path":{"type":"string"},)"
             R"("guid":{"type":"string"},"revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::REQUIRES_SCENE,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::REQUIRES_SCENE |
+              command_flags::EDITING_ONLY,
             &prefab_create
           )
         );
@@ -471,11 +483,13 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "prefab.apply",
-            "Writes an instance's current state back into its prefab asset.",
+            "Writes an instance's current state back into its prefab asset. While playing the file change is kept: "
+            "play.stop records it for undo with the session's other file changes.",
             std::format(R"({{"type":"object","properties":{{"entity":{}}},"required":["entity"]}})", entityRef),
             R"({"type":"object","properties":{"uuid":{"type":"string"},"path":{"type":"string"},)"
             R"("guid":{"type":"string"},"revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::REQUIRES_SCENE,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::REQUIRES_SCENE |
+              command_flags::ON_DISK,
             &prefab_apply
           )
         );

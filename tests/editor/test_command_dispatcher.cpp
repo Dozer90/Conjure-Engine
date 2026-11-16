@@ -11,7 +11,10 @@
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 
+#include <array>
+#include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // command_dispatcher.h: the request pipeline of docs/design/04_editor.md 3.3.
@@ -37,6 +40,14 @@ namespace {
             }
         }
         return count;
+    }
+
+    std::filesystem::path script_file(const editor_test::headless_editor &editor, std::string_view name) {
+        return editor.project_directory() / "scripts" / std::filesystem::path(std::string(name));
+    }
+
+    core::json::document child(std::string_view command, core::json::document args) {
+        return core::json::object({{"cmd", command}, {"args", args}});
     }
 }
 
@@ -397,5 +408,203 @@ TEST_SUITE("editor/command_dispatcher") {
         CHECK(warnings == 1);
         (void) editor.ok("play.stop");
         CHECK(editor.scene().world().entity_count() == 1);
+    }
+
+    TEST_CASE("regression - code sweep F089 a file command run while playing is kept and undoable after play.stop") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("keep");
+        const usize historyBefore = editor.context().undo().size();
+        const std::filesystem::path file = script_file(editor, "Live.cs");
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.ok("script.write", editor_test::script_write_args("Live.cs", "// written while playing"));
+
+        // Neither on the frozen stack nor dropped: the play controller holds it until play.stop.
+        CHECK(editor.context().undo().frozen());
+        CHECK(editor.context().undo().size() == historyBefore);
+        CHECK(editor.context().play().kept_file_edits() == 1);
+        CHECK(editor.fail("history.undo") == protocol_error_code::WRONG_PLAY_STATE);
+        REQUIRE(std::filesystem::is_regular_file(file));
+        // The warning names the edit that persists, and nothing claims that play.stop discards it.
+        const std::vector<protocol_event> kept = editor.warnings("PLAY_FILE_EDIT");
+        REQUIRE(kept.size() == 1);
+        CHECK(kept[0].data.root()["cmd"].as_string() == "script.write");
+        CHECK(kept[0].data.root()["message"].as_string().find("File changes during play") != std::string_view::npos);
+        CHECK(editor.warnings("UNRECORDED_PLAY_EDIT").empty());
+
+        const core::json::document stopped = editor.ok("play.stop");
+        CHECK(stopped.root()["fileChanges"].as_u64() == 1);
+        CHECK(stopped.root()["state"].as_string() == "editing");
+        // play.stop restores the scene, not the file.
+        CHECK(std::filesystem::is_regular_file(file));
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        REQUIRE(editor.context().undo().size() == historyBefore + 1);
+        const undo_entry *entry = editor.context().undo().entries().back();
+        CHECK(entry->label == "File changes during play");
+        CHECK(entry->label == play_controller::FILE_EDITS_LABEL);
+        CHECK(entry->undo.size() == 1);
+        CHECK(entry->redo.size() == 1);
+        CHECK(entry->clientId == editor.client_id());
+
+        const core::json::document undone = editor.ok("history.undo");
+        CHECK(undone.root()["labels"][0].as_string() == "File changes during play");
+        CHECK_FALSE(std::filesystem::exists(file));
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(file) == "// written while playing");
+        CHECK(editor.scene().world().entity_count() == 1);
+    }
+
+    TEST_CASE("regression - code sweep F089 a batch run while playing keeps its file commands, not its scene edits") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path first = script_file(editor, "First.cs");
+        const std::filesystem::path second = script_file(editor, "Second.cs");
+        const std::filesystem::path folder = editor.project_directory() / "assets" / "from_batch";
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.ok(
+          "editor.batch",
+          core::json::object({
+            {"commands",
+             core::json::array({
+               child("entity.create", core::json::object({{"name", "InBatch"}})),
+               child("script.write", editor_test::script_write_args("First.cs", "// first")),
+               child("asset.create_folder", core::json::object({{"path", "from_batch"}})),
+             })},
+          })
+        );
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(editor.context().play().kept_file_edits() == 2);
+        // One warning for the file edits, naming the first, and one for the scene edit that will be discarded.
+        const std::vector<protocol_event> kept = editor.warnings("PLAY_FILE_EDIT");
+        REQUIRE(kept.size() == 1);
+        CHECK(kept[0].data.root()["cmd"].as_string() == "script.write");
+        CHECK(editor.warnings("UNRECORDED_PLAY_EDIT").size() == 1);
+        // A command outside the batch joins the same entry, and the session warns only once.
+        (void) editor.ok("script.write", editor_test::script_write_args("Second.cs", "// second"));
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == 1);
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 3);
+        CHECK(editor.scene().world().entity_count() == 0);
+        REQUIRE(editor.context().undo().size() == 1);
+        const undo_entry *entry = editor.context().undo().entries().back();
+        CHECK(entry->label == play_controller::FILE_EDITS_LABEL);
+        REQUIRE(entry->redo.size() == 3);
+        CHECK(entry->redo[0].name == "script.write");
+        CHECK(entry->redo[1].name == "asset.create_folder");
+        CHECK(entry->redo[2].name == "script.write");
+        CHECK(std::filesystem::is_regular_file(first));
+        CHECK(std::filesystem::is_regular_file(second));
+        CHECK(std::filesystem::is_directory(folder));
+
+        // One step takes all three back, newest first, and one step brings them back.
+        CHECK(editor.ok("history.undo").root()["applied"].as_u64() == 1);
+        CHECK_FALSE(std::filesystem::exists(first));
+        CHECK_FALSE(std::filesystem::exists(second));
+        CHECK_FALSE(std::filesystem::exists(folder));
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(first) == "// first");
+        CHECK(editor_test::read_text_file(second) == "// second");
+        CHECK(std::filesystem::is_directory(folder));
+    }
+
+    TEST_CASE("regression - code sweep F089 a batch that rolls back while playing keeps no file edit") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path rolledBack = script_file(editor, "RolledBack.cs");
+        const std::filesystem::path survivor = script_file(editor, "Survivor.cs");
+        const core::json::document missing = child(
+          "entity.rename",
+          core::json::object({{"entity", "Missing/Path"}, {"name", "x"}})
+        );
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        const protocol_response atomic = editor.send(
+          "editor.batch",
+          core::json::object({
+            {"commands",
+             core::json::array({
+               child("script.write", editor_test::script_write_args("RolledBack.cs", "// gone again")),
+               missing,
+             })},
+          })
+        );
+        REQUIRE_FALSE(atomic.ok);
+        CHECK(atomic.errorDetails.root()["failedIndex"].as_i64() == 1);
+        // The rollback undid the write through its inverse, so there is nothing left to undo later.
+        CHECK_FALSE(std::filesystem::exists(rolledBack));
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.warnings("PLAY_FILE_EDIT").empty());
+
+        // Without atomic the child that succeeded stands, and so does its inverse.
+        (void) editor.ok(
+          "editor.batch",
+          core::json::object({
+            {"atomic", false},
+            {"commands",
+             core::json::array({
+               child("script.write", editor_test::script_write_args("Survivor.cs", "// stays")),
+               missing,
+             })},
+          })
+        );
+        CHECK(std::filesystem::is_regular_file(survivor));
+        CHECK(editor.context().play().kept_file_edits() == 1);
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        REQUIRE(editor.context().undo().size() == 1);
+        (void) editor.ok("history.undo");
+        CHECK_FALSE(std::filesystem::exists(survivor));
+    }
+
+    TEST_CASE("regression - code sweep F089 the warning of a scene edit while playing says which edits persist") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.create_entity("transient");
+        const std::vector<protocol_event> warnings = editor.warnings("UNRECORDED_PLAY_EDIT");
+        REQUIRE(warnings.size() == 1);
+        const std::string_view message = warnings[0].data.root()["message"].as_string();
+        CHECK(message.find("scene edit") != std::string_view::npos);
+        CHECK(message.find("on_disk") != std::string_view::npos);
+        CHECK(message.find("File changes during play") != std::string_view::npos);
+        // It names the commands whose edits persist, read from the registry, and only those.
+        const std::array<std::string_view, 4> keptCommands = {
+            "asset.delete", "prefab.apply", "project.set_settings", "script.write",
+        };
+        for (const std::string_view kept : keptCommands) {
+            CHECK_MESSAGE(message.find(kept) != std::string_view::npos, kept);
+        }
+        const std::array<std::string_view, 4> otherCommands = {
+            "entity.create", "prefab.create", "scene.save", "asset.list",
+        };
+        for (const std::string_view other : otherCommands) {
+            CHECK_MESSAGE(message.find(other) == std::string_view::npos, other);
+        }
+        // A scene edit is not a file edit: nothing is kept for play.stop, and nothing is pushed there.
+        CHECK(editor.warnings("PLAY_FILE_EDIT").empty());
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(editor.scene().world().entity_count() == 0);
+    }
+
+    TEST_CASE("command_dispatcher - a file command that records nothing is not kept while playing") {
+        editor_test::headless_editor editor = {};
+        // Registering a file that already lives under assets:// has nothing to undo (skipRecording).
+        const std::filesystem::path inPlace = editor_test::write_tiny_png(
+          editor.project_directory() / "assets" / "textures" / "in_place.png"
+        );
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        const core::json::document imported = editor.ok(
+          "asset.import",
+          core::json::object({{"source", "textures/in_place.png"}})
+        );
+        CHECK_FALSE(imported.root()["copied"].as_bool());
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.warnings("PLAY_FILE_EDIT").empty());
+        CHECK(editor.warnings("UNRECORDED_PLAY_EDIT").empty());
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(std::filesystem::is_regular_file(inPlace));
     }
 }

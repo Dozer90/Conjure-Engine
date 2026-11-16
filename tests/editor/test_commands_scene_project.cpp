@@ -53,7 +53,7 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(editor.fail(
           "scene.open",
           core::json::object({{"path", "scenes/missing"}})
-        ) == protocol_error_code::ASSET_NOT_FOUND);
+        ) == protocol_error_code::PATH_NOT_FOUND);
         const core::json::document scenes = editor.ok("project.list_scenes");
         CHECK(scenes.root()["count"].as_i64() == 1);
         CHECK(scenes.root()["scenes"][0].as_string() == "assets://scenes/test.scene.json");
@@ -265,7 +265,7 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(editor.fail(
           "project.open",
           core::json::object({{"path", (other / "nowhere").generic_string()}})
-        ) == protocol_error_code::ASSET_NOT_FOUND);
+        ) == protocol_error_code::PATH_NOT_FOUND);
     }
 
     TEST_CASE("regression - N2 a play session never crosses a project restart") {
@@ -511,5 +511,256 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(edited.at("project.json") != before.at("project.json"));
         (void) editor.ok("history.undo");
         CHECK(editor_test::project_file_snapshot(root) == before);
+    }
+
+    TEST_CASE("regression - code sweep F650 project.export refuses the removed config argument and project.create "
+      "the removed template") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Exported");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = editor.project_directory() / "export_with_config";
+        // Every spelling the argument used to accept is now an unknown argument, whatever its value.
+        for (const std::string_view value : std::array<std::string_view, 3>{"development", "distribution", "Bogus"}) {
+            CAPTURE(value);
+            const protocol_response refused = editor.send(
+              "project.export",
+              core::json::object({
+                {"directory", output.generic_string()},
+                {"config", value},
+                {"copyRuntime", false},
+                {"publishManaged", false},
+              })
+            );
+            REQUIRE_FALSE(refused.ok);
+            CHECK(refused.errorCode == protocol_error_code::INVALID_ARGS);
+            CHECK(refused.errorMessage.find("config") != std::string::npos);
+        }
+        CHECK_FALSE(std::filesystem::exists(output));
+        // The same request without it exports.
+        (void) editor.ok(
+          "project.export",
+          core::json::object({
+            {"directory", output.generic_string()},
+            {"copyRuntime", false},
+            {"publishManaged", false},
+          })
+        );
+        CHECK(std::filesystem::is_regular_file(output / "project.json"));
+
+        const std::filesystem::path created = editor.project_directory() / "from_template";
+        const protocol_response templated = editor.send(
+          "project.create",
+          core::json::object({{"path", created.generic_string()}, {"name", "Templated"}, {"template", "empty"}})
+        );
+        REQUIRE_FALSE(templated.ok);
+        CHECK(templated.errorCode == protocol_error_code::INVALID_ARGS);
+        CHECK(templated.errorMessage.find("template") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(created));
+        (void) editor.ok(
+          "project.create",
+          core::json::object({{"path", created.generic_string()}, {"name", "Templated"}})
+        );
+        CHECK(std::filesystem::is_regular_file(created / "project.json"));
+
+        // The catalogue no longer advertises either argument.
+        const core::json::document exportSchema = editor.ok(
+          "editor.schema",
+          core::json::object({{"command", "project.export"}})
+        );
+        const std::string exportText = exportSchema.to_string();
+        CHECK(exportText.find("\"config\"") == std::string::npos);
+        CHECK(exportText.find("\"directory\"") != std::string::npos);
+        const core::json::document createSchema = editor.ok(
+          "editor.schema",
+          core::json::object({{"command", "project.create"}})
+        );
+        CHECK(createSchema.to_string().find("\"template\"") == std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F656 scene.open and project.open answer PATH_NOT_FOUND for a missing file "
+      "and IO_ERROR for one that cannot be read") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+
+        const protocol_response scene = editor.send("scene.open", core::json::object({{"path", "scenes/absent"}}));
+        REQUIRE_FALSE(scene.ok);
+        CHECK(scene.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(scene.errorMessage.find("assets://scenes/absent.scene.json") != std::string::npos);
+        // The open scene is untouched by the refusal.
+        CHECK(editor.context().scene_path() == "assets://scenes/test.scene.json");
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+        // A folder named like a scene exists and cannot be read as one.
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::create_directories(
+          editor.project_directory() / "assets" / "scenes" / "folder.scene.json",
+          ignored
+        ));
+        CHECK(editor.fail(
+          "scene.open",
+          core::json::object({{"path", "scenes/folder"}})
+        ) == protocol_error_code::IO_ERROR);
+        CHECK(editor.context().scene_path() == "assets://scenes/test.scene.json");
+        (void) editor.ok("entity.get", core::json::object({{"entity", "Kept"}}));
+
+        // No directory, and a directory without a project.json: both are a missing path.
+        const std::filesystem::path nowhere = editor.project_directory() / "nowhere";
+        CHECK(editor.fail(
+          "project.open",
+          core::json::object({{"path", nowhere.generic_string()}})
+        ) == protocol_error_code::PATH_NOT_FOUND);
+        const std::filesystem::path empty = editor.project_directory() / "empty_directory";
+        REQUIRE(std::filesystem::create_directories(empty, ignored));
+        CHECK(editor.fail(
+          "project.open",
+          core::json::object({{"path", empty.generic_string()}})
+        ) == protocol_error_code::PATH_NOT_FOUND);
+
+        // A project.json that exists but is not a file the engine can read is IO_ERROR.
+        const std::filesystem::path unreadable = editor.project_directory() / "unreadable";
+        REQUIRE(std::filesystem::create_directories(unreadable / "project.json", ignored));
+        const protocol_response project = editor.send(
+          "project.open",
+          core::json::object({{"path", unreadable.generic_string()}})
+        );
+        REQUIRE_FALSE(project.ok);
+        CHECK(project.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(project.errorMessage.find("project.json") != std::string::npos);
+        CHECK_FALSE(editor.application().has_pending_project_open());
+        // So is a path that names a file where the project's folder is expected.
+        const protocol_response notFolder = editor.send(
+          "project.open",
+          core::json::object({{"path", (editor.project_directory() / "project.json").generic_string()}})
+        );
+        REQUIRE_FALSE(notFolder.ok);
+        CHECK(notFolder.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(notFolder.errorMessage.find("not a directory") != std::string::npos);
+        CHECK_FALSE(editor.application().has_pending_project_open());
+
+        // One whose content is wrong is still the request's fault.
+        const std::filesystem::path malformed = editor.project_directory() / "malformed";
+        REQUIRE(std::filesystem::create_directories(malformed, ignored));
+        {
+            std::ofstream output(malformed / "project.json", std::ios::binary | std::ios::trunc);
+            REQUIRE(output.is_open());
+            output << "{ not a project";
+        }
+        CHECK(editor.fail(
+          "project.open",
+          core::json::object({{"path", malformed.generic_string()}})
+        ) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - code sweep F656 project.export answers PATH_NOT_FOUND for a distribution directory that "
+      "is not there") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Exported");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path root = editor.project_directory();
+        const std::filesystem::path output = root / "export_refused";
+
+        const protocol_response missing = editor.send(
+          "project.export",
+          core::json::object({
+            {"directory", output.generic_string()},
+            {"distributionDirectory", (root / "no_such_build").generic_string()},
+            {"publishManaged", false},
+          })
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        CHECK(missing.errorMessage.find("no_such_build") != std::string::npos);
+        // Refused before the pipeline ran: nothing was cooked or written.
+        CHECK_FALSE(std::filesystem::exists(output));
+
+        // A file where the folder is expected exists and cannot be used as one: IO_ERROR.
+        const std::filesystem::path file = root / "build.txt";
+        {
+            std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+            stream << "not a folder";
+        }
+        const protocol_response wrongKind = editor.send(
+          "project.export",
+          core::json::object({
+            {"directory", output.generic_string()},
+            {"distributionDirectory", file.generic_string()},
+            {"publishManaged", false},
+          })
+        );
+        REQUIRE_FALSE(wrongKind.ok);
+        CHECK(wrongKind.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(wrongKind.errorMessage.find("not a directory") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output));
+
+        // The folder is only needed when the runtime is copied from it.
+        (void) editor.ok(
+          "project.export",
+          core::json::object({
+            {"directory", output.generic_string()},
+            {"distributionDirectory", (root / "no_such_build").generic_string()},
+            {"copyRuntime", false},
+            {"publishManaged", false},
+          })
+        );
+        CHECK(std::filesystem::is_regular_file(output / "project.json"));
+    }
+
+    TEST_CASE("regression - code sweep F089 scene.save and scene.save_as answer WRONG_PLAY_STATE while playing") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Kept");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path scenes = editor.project_directory() / "assets" / "scenes";
+        const std::string saved = editor_test::read_text_file(scenes / "test.scene.json");
+
+        (void) editor.ok("play.start");
+        // The scene now holds play-session state that play.stop discards: it must not reach the file.
+        (void) editor.create_entity("Transient");
+        const protocol_response save = editor.send("scene.save");
+        REQUIRE_FALSE(save.ok);
+        CHECK(save.errorCode == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(save.errorDetails.root()["state"].as_string() == "playing");
+        (void) editor.ok("play.pause");
+        const protocol_response saveAs = editor.send("scene.save_as", core::json::object({{"path", "scenes/played"}}));
+        REQUIRE_FALSE(saveAs.ok);
+        CHECK(saveAs.errorCode == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(saveAs.errorDetails.root()["state"].as_string() == "paused");
+        CHECK(editor_test::read_text_file(scenes / "test.scene.json") == saved);
+        CHECK_FALSE(std::filesystem::exists(scenes / "played.scene.json"));
+        CHECK(editor.context().scene_path() == "assets://scenes/test.scene.json");
+
+        (void) editor.ok("play.stop");
+        (void) editor.ok("scene.save");
+        CHECK(editor_test::read_text_file(scenes / "test.scene.json") == saved);
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/played"}}));
+        CHECK(std::filesystem::is_regular_file(scenes / "played.scene.json"));
+    }
+
+    TEST_CASE("regression - code sweep F089 project.set_settings while playing is kept and undone after play.stop") {
+        editor_test::headless_editor editor = {};
+        const std::map<std::string, std::string> before = editor_test::project_file_snapshot(
+          editor.project_directory()
+        );
+        (void) editor.ok("play.start");
+        (void) editor.ok(
+          "project.set_settings",
+          core::json::object({{"settings", core::json::object({{"startup_scene", "scenes/live.scene.json"}})}})
+        );
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(editor.context().play().kept_file_edits() == 1);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        // play.stop leaves the project file as the session wrote it.
+        CHECK(editor.ok("project.info").root()["startupScene"].as_string() == "scenes/live.scene.json");
+        const core::result<engine::project> onDisk = engine::project::load(editor.project_directory());
+        CONJURE_REQUIRE_OK(onDisk);
+        CHECK(onDisk.value().description().startupScene.generic_string() == "scenes/live.scene.json");
+        REQUIRE(editor.context().undo().size() == 1);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
+
+        (void) editor.ok("history.undo");
+        CHECK(editor.ok("project.info").root()["startupScene"].as_string().empty());
+        CHECK(editor_test::project_file_snapshot(editor.project_directory()) == before);
+        (void) editor.ok("history.redo");
+        CHECK(editor.ok("project.info").root()["startupScene"].as_string() == "scenes/live.scene.json");
     }
 }

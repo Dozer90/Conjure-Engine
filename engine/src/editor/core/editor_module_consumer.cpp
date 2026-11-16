@@ -31,7 +31,8 @@ namespace conjure::editor {
             descriptor.summary = std::string(text_or(desc.summary, ""));
             descriptor.argsSchema = std::string(text_or(desc.argsSchema, "{}"));
             descriptor.resultSchema = std::string(text_or(desc.resultSchema, "{}"));
-            descriptor.flags = desc.flags;
+            // ON_DISK promises an inverse to keep while playing; a module command has none (below).
+            descriptor.flags = desc.flags & ~command_flags::ON_DISK;
             if (has_flag(desc.flags, command_flags::MUTATES)) {
                 // The record's handler returns a result document only: it can never supply an inverse, so a
                 // module mutation bumps the revision but is not undoable.

@@ -92,6 +92,7 @@ namespace conjure::engine {
             std::unique_ptr<frame_pacer> mPacer = nullptr;
             std::unique_ptr<core::clock> mOwnedClock = nullptr;
             core::clock *mClock = nullptr;
+            std::optional<core::error> mStartupSceneFailure = std::nullopt;         // step 20 of the last start
             application_state mState = application_state::CREATED;
             simulation_mode mSimulationMode = simulation_mode::RUNNING;
             exit_code mExitCode = exit_code::OK;
@@ -237,6 +238,18 @@ namespace conjure::engine {
             /// </summary>
             [[nodiscard]] exit_code current_exit_code() const noexcept {
                 return mExitCode;
+            }
+
+            /// <summary>
+            /// Why the startup scene of the last initialise() did not load: STARTUP_SCENE_FAILED with the reason
+            /// (not a known asset, a source that no longer imports, a load failure). nullopt when it loaded, when
+            /// none was named, or when startup failed before step 20. A runtime fails initialise() with this
+            /// error. An editor (engine_config::editor) starts with an empty world instead, so the failure is
+            /// kept here for whoever reports it: the editor's --exec output opens with it. It survives shutdown()
+            /// and is cleared by the next initialise().
+            /// </summary>
+            [[nodiscard]] const std::optional<core::error> &startup_scene_failure() const noexcept {
+                return mStartupSceneFailure;
             }
 
             /// <summary>

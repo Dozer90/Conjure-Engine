@@ -1,0 +1,17 @@
+{
+  "_comment": "config was removed (code sweep F650): an export is always a Distribution export.",
+  "setup": [],
+  "request": {
+    "cmd": "project.export",
+    "args": {
+      "directory": "${project}/exported",
+      "config": "development"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

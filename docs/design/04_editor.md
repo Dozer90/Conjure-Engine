@@ -46,7 +46,7 @@ forces it OFF for Distribution). Targets: `conjure_editor_core`, `conjure_editor
 | D6 | **Main-thread execution at one frame point.** TCP sockets are non-blocking and polled from the main thread. The only extra thread is a blocking stdin reader (`core::jobs::dedicated_thread`). Long operations are **async commands** that park the request id and answer when a job completes (main-thread callback). | No shared editor state across threads; no lock-free queue dependency on `core`; deterministic ordering between UI actions and agent requests. |
 | D7 | Protocol is **newline-delimited JSON** (`\n`, UTF-8, max 16 MiB/line). Requests carry a caller `id` (int or string, echoed; `null` when absent - a response is always sent). Events carry a monotonic `seq` and the `frame`. Error codes are stable strings. | Trivial to speak from any agent runtime; resumable logs; typed failures the agent can branch on. |
 | D8 | **Bulk commands exist from day one**: `entity.create_many`, `component.set_many`, `editor.batch` (one undo entry, atomic by default). | A grid game is ~400 cell entities; one round trip, one undo entry, one archetype insertion pass. |
-| D9 | **Play mode runs in the editing world** with an opaque `scene::scene_snapshot` captured on `play.start` and restored on `play.stop`. While not `EDITING` the undo stack is frozen (mutations execute, are not recorded, and raise one `warning` event per play session). Selection is remapped by guid after restore. | Simplest consistent rule; snapshot format is the scene module's business (binary chunk copy recommended, see 8). |
+| D9 | **Play mode runs in the editing world** with an opaque `scene::scene_snapshot` captured on `play.start` and restored on `play.stop`. While not `EDITING` the undo stack is frozen: a scene edit executes, is not recorded and goes with the restore (one `warning` event per play session says so); `history.undo` and `history.redo` answer `WRONG_PLAY_STATE`. An edit to the project's files is not part of the snapshot and is kept for `play.stop` instead (D21). Selection is remapped by guid after restore. | Simplest consistent rule; snapshot format is the scene module's business (binary chunk copy recommended, see 8). |
 | D10 | **Picking is CPU-side**: AABB broad phase over per-entity world bounds (always), triangle narrow phase when the mesh asset keeps CPU geometry (editor builds keep it), `mode:"physics"` delegates to Jolt. No GPU id buffer. | Works with the `null` RHI, unit-testable, no readback latency. |
 | D11 | **Hierarchy and inspector are cache-driven**: flat `hierarchy_row` array rebuilt only when `scene::structure_version()` changes, drawn with `ImGuiListClipper`; inspector reads one JSON document per selected component per frame via `reflection_path`. | 10,000 entities cost O(visible rows) per frame. |
 | D12 | **Selection is UI state** (not undoable); every change emits `selection.changed`. Editor-only state lives in sidecars: `<scene>.editor.json`, `<project>/.conjure/editor_layout.ini`, `<project>/.conjure/ai_port`. Per-user preferences (active theme, user themes, recent projects) live in the user configuration folder (3.15), never in a project. | Scene/prefab/project files never learn the editor exists. |
@@ -56,6 +56,10 @@ forces it OFF for Distribution). Targets: `conjure_editor_core`, `conjure_editor
 | D17 | **A default docked layout is built on first run** (no saved layout for the project) with ImGui's DockBuilder, and every later arrangement is saved to `<project>/.conjure/editor_layout.ini` (D12). Window > Reset layout rebuilds the default. | An editor whose panels open as loose floating windows is unusable (code sweep of 2026-11-12, editor UI blockers). |
 | D18 | **Themes are data.** A theme is a JSON document of semantic colour roles, chrome gradients, fonts and metrics. Built-in themes ship inside the editor; users duplicate, edit and save their own in a per-user folder; the active theme is a per-user setting, not a project setting. | Taste is personal and must not churn project files or version control. Data, not code, lets users and agents create themes without rebuilding the editor. |
 | D15 | Discoverability: `session.hello` returns protocol/engine versions and `schemaHash`; `editor.schema` returns the whole catalogue with schemas; `reflection.components` returns every component type with fields, defaults and attributes. A test dumps `editor.schema` to `docs/generated/editor_protocol.json`. | The agent never depends on documentation that can drift. |
+| D19 | **`project.export` has no `config` argument and `project.create` no `template`** (code sweep F650). Both were read and discarded; a client that still sends either gets `INVALID_ARGS`, because unknown top-level arguments are refused. An export is always a Distribution export (06_engine_loop.md 3.6), and the export dialog has no Configuration field. A validated `config` enum that selects a real export configuration is wanted later and comes back with the distribution-layout work. | A silently ignored input, with a dialog default of "development", told users they had chosen something. Refusing it is the only honest answer until it selects something. |
+| D20 | **Deleting the open scene asks first, deleting the startup scene warns, and "not found" has one meaning per code** (code sweep F656). `asset.delete` refuses the file behind the open scene with `INVALID_ARGS` unless the client passes `closeOpenScene: true`; it then deletes the file and runs `scene.close {discard: true}`, in that order, so a delete the file system refuses leaves the scene open with its unsaved changes and its history (should the close fail after the delete, the file is put back). "The open scene" and "the startup scene" are decided by file, not by spelling (`editor_context::is_open_scene` / `names_asset`): on a volume that ignores case a scene opened as `Scenes/Main` is still the file registered as `scenes/main`. In the UI the asset browser raises a confirmation dialog whose "Close and Delete" sends exactly that request (while playing or paused, when the command would refuse it, the button is disabled and the dialog says to stop playing). Because closing clears the undo history, `closeOpenScene` is refused inside a batch, an open transaction and an undo or redo step (`INVALID_ARGS`) and while playing (`WRONG_PLAY_STATE`); the delete becomes the history's first entry, and undoing it restores the file without reopening the scene. Deleting the project's startup scene succeeds and emits `warning {code: "STARTUP_SCENE_DELETED", message, path}`; `project.json` keeps naming it. Error codes: a file or folder that does not exist is `PATH_NOT_FOUND` in every command (`asset.import` source, `scene.open`, `project.open`, `editor.exec_file`, `script.read` / `script.delete`, `module.discover`, the `distributionDirectory` of `project.export` when the runtime is copied from it, the source file of a registered asset in `asset.set`, `asset.delete`, `asset.reimport` and `prefab.apply`); one that exists but cannot be read (a directory where a file is expected, a denied access) is `IO_ERROR`; `ASSET_NOT_FOUND` is only an asset reference (uuid or asset path) that names no asset in the database. | An open scene whose file is gone cannot be saved back the way the user expects, so losing it must be a decision; the startup scene is often replaced on purpose, so it only needs to be said. One code per meaning lets a client branch: fix the path, fix the permissions, or import the asset. |
+| D21 | **File edits made while playing become one undo entry at `play.stop`** (code sweep F089). The command flag `ON_DISK` marks the undoable commands whose effect lives in the project's files and not in the scene: `asset.import`, `asset.create_folder`, `asset.delete`, `asset.create_material`, `asset.set`, `asset.restore`, `prefab.apply`, `project.set_settings`, `script.create`, `script.write`, `script.delete`. `play.stop` restores the scene snapshot and nothing on disk, so while the undo stack is frozen the dispatcher hands the inverse and replay of each such command to the `play_controller`, also for the children of an `editor.batch` (a batch that rolls back keeps none), and `play.stop` pushes them, in the order they ran, as one undo entry labelled `File changes during play`, the way D16 turns pinned values into one entry. Its result carries `fileChanges`, the number of commands in that entry. Undo itself stays frozen during play. The flag needs `MUTATES` and excludes `NO_UNDO` (the registry refuses anything else, and a module command loses it), and it promises that neither the inverse nor the replay refers to scene state: `prefab.apply` run while playing replays as an `asset.restore` of the bytes it wrote. `prefab.create`, `scene.save` and `scene.save_as` are editing-state commands instead (`WRONG_PLAY_STATE`): the inverse of `prefab.create` unpacks an entity the restore throws away, and a save would write the play session's scene over the edited one. Warnings, once per play session each: `UNRECORDED_PLAY_EDIT` for the first scene edit, whose message names the `ON_DISK` commands as the edits that are kept, and `PLAY_FILE_EDIT {cmd}` for the first file edit. `history.clear` while playing clears the stack only: what the session kept is not history until `play.stop`. | The old rule recorded nothing while frozen and its warning said `play.stop` discards the edit, which was false for everything on disk: a script written or an asset deleted during play stayed, with no way to undo it. Refusing those commands would block editing scripts against the running game, a real workflow; keeping the inverses costs one vector and makes every file change one Ctrl+Z away. |
+| D22 | **`--exec` checks its command file before the engine starts, and a startup scene that did not load is the first line of its output** (code sweep F659). `editor_application::initialise` checks what needs no engine, in this order: the arguments, `project.json` and the merged configuration (`make_engine_desc`), then the command file (`headless_runner::load_command_file` reads and parses it); only then does the engine start. A missing or malformed file is still `BAD_ARGUMENTS` and exit code 3, but no window, device or asset scan comes first, and a bad flag or a missing project is still what is reported when the file is unusable as well. A startup scene the engine cannot load remains what 06_engine_loop.md makes it for an editor, a start over an empty world, and it does not change the exit code. The engine keeps the failure (`engine::application::startup_scene_failure()`), and the runner writes `warning {code: "STARTUP_SCENE_FAILED", message}` as the first line of the NDJSON output, before any request runs. After a `project.open` restart the application emits the same event to every client of the session. | A mistyped file name cost a whole engine start before it was reported, and a run over a broken startup scene looked like a clean run over an empty world: only the log said otherwise, and a script does not read the log. Failing the run instead would lock out the command files written to repair that scene. |
 
 ### 1.3 What was rejected and why
 
@@ -89,7 +93,9 @@ namespace conjure::editor {
                                              // end_transaction/quit, history.undo/redo, module.load/unload/reload,
                                              // play.start/stop, project.create/open, scene.new/open/close
                                              // (play.pause/resume are batchable).
-        NO_UNDO = 1 << 8                     // MUTATES without an inverse (module commands, command_desc); not recorded.
+        NO_UNDO = 1 << 8,                    // MUTATES without an inverse (module commands, command_desc); not recorded.
+        ON_DISK = 1 << 9                     // Undoable, and the effect lives in the project's files, not in the
+                                             // scene: kept while playing, one undo entry at play.stop (D21).
     };
     CONJURE_ENUM_FLAGS(command_flags);
 
@@ -199,7 +205,9 @@ Wire form:
 INVALID_ARGS, ENTITY_NOT_FOUND, COMPONENT_NOT_FOUND, TYPE_NOT_FOUND, PATH_NOT_FOUND, ASSET_NOT_FOUND,
 PROJECT_NOT_OPEN, SCENE_NOT_OPEN, WRONG_PLAY_STATE, NOT_AVAILABLE, IO_ERROR, COMPILE_FAILED, BUSY,
 TIMEOUT, CANCELLED, UNAUTHORISED, INTERNAL`. `UNKNOWN_COMMAND` details carry `didYouMean` (closest
-names by edit distance). Codes travel as strings; the enum is internal.
+names by edit distance). Codes travel as strings; the enum is internal. `PATH_NOT_FOUND` is a reflection path
+that does not resolve or a file or folder that does not exist, `IO_ERROR` a file or folder that exists and cannot
+be read (or a failed write), `ASSET_NOT_FOUND` an asset reference that names no asset (D20).
 
 ### 2.4 Client and server state
 
@@ -246,6 +254,8 @@ editor_application::initialise(options):
     backends = headless ? (null, offscreen ? rhi:real-no-swapchain : rhi:null, audio:null)
                         : (glfw, rhi:default, audio:miniaudio)
     desc = engine::application_desc::from_command_line(args, config{editor = true, backends})   (R13)
+    if options.execFile and no exportDir:                        (D22: before anything heavy starts)
+        mExecRequests = headless_runner::load_command_file(options.execFile)   missing / malformed -> exit 3
     mEngine = make_unique<engine::application>(desc); mEngine->add_subsystem(bindings subsystem)
     mEngine->initialise()                                        failure -> exit 2
     mContext = editor_context (owns the services of section 5; binds non-owning refs from mEngine->context())
@@ -257,7 +267,7 @@ editor_application::initialise(options):
     protocol_server::start(options)  (tcp unless --ai-port 0; stdio when --ai-stdio)
 editor_application::run():
     if options.exportDir  -> dispatch project.export, pump until done, exit 0/1
-    if options.execFile   -> headless_runner::run(), exit with its code
+    if options.execFile   -> headless_runner::run(mExecRequests), exit with its code
     else                  -> mEngine->run()  (editor_layer or headless_tick drives 3.2 each frame)
 ```
 
@@ -289,6 +299,8 @@ dispatch(request) -> optional<protocol_response>:
     if ASYNC: client.pendingAsync >= 8 -> BUSY; park {clientId, id, deadline}; handler(invocation) ; return nullopt
     outcome = handler(invocation)                          error -> response(code, message, details)
     if MUTATES and not undo.frozen: undo.record(replay-or-request, inverse, transaction, coalesceKey)
+    if MUTATES and undo.frozen:     ON_DISK -> play.keep_file_edit(cmd, replay-or-request, inverse)   (D21)
+                                    otherwise play.note_unrecorded_edit()   (the restore discards the edit)
     if MUTATES: ++revision; result["revision"] = revision; emit scene.changed {revision, label}
     emit command.executed {clientId, cmd, ok}
     return response(ok, result)
@@ -305,7 +317,9 @@ its inverses (or replays) with undo recording suppressed; they bump `revision` t
   recording redirected into one entry. On a child failure with `atomic`, the recorded inverses are
   dispatched in reverse, the entry is discarded, and the batch fails with the child's error and
   `details.failedIndex`. Children flagged `COMMAND_NOT_IN_BATCH` are rejected up front (`INVALID_ARGS`).
-  Nested `editor.batch` is rejected.
+  Nested `editor.batch` is rejected. While playing nothing reaches the frozen stack: the batch's `ON_DISK`
+  children are kept for `play.stop` one by one (D21), its scene edits are dropped, and a rolled-back batch keeps
+  nothing.
 
 ### 3.5 Entity and property resolution
 
@@ -338,7 +352,8 @@ insertion pass), assign names and guids in a batch, then apply per-entity overri
              script_mode::EDIT (no managed instances)                                            (R13)
 play.start   require EDITING, and no pending project.open (BUSY: its restart would carry the session over)
              persist_list.clear(); mSnapshot = scene_serializer::capture(scene); mSelection = selection.guids()
-             undo.set_frozen(true); script_runtime.set_mode(PLAY); engine.set_simulation_mode(RUNNING)
+             mFileEdits.clear(); undo.set_frozen(true); script_runtime.set_mode(PLAY)
+             engine.set_simulation_mode(RUNNING)
              state = PLAYING; emit play.state
 play.pause   PLAYING -> PAUSED; engine.set_simulation_mode(PAUSED)
 play.resume  PAUSED -> PLAYING; engine.set_simulation_mode(RUNNING)
@@ -350,12 +365,30 @@ play.stop    engine.set_simulation_mode(PAUSED); a pending play.step: engine.can
              script_runtime.set_mode(EDIT); scene_serializer::restore(scene, mSnapshot)
              (failure -> ERROR log, empty scene, state EDITING; never a crash; captured values are dropped)
              selection.set(existing guids of mSelection); undo.set_frozen(false)
+             undo.push(mFileEdits labelled "File changes during play") when not empty (D21; also after a
+             failed restore: the files do not depend on the scene)
              persist_list.apply(captured) as one recorded edit (3.13); persist_list.clear(); emit play.state
 ```
 
-Any mutating command while not `EDITING` executes but is not recorded; the first one per play session
-emits `warning {code:"UNRECORDED_PLAY_EDIT"}`. Budget for the scene module: 10k entities capture +
-restore < 50 ms combined.
+What an edit made while not `EDITING` leaves behind depends on where its effect lives (D9, D21):
+
+- A **scene edit** (`entity.*`, `component.*`, `prefab.instantiate`, `prefab.unpack`, `script.attach`,
+  `scene.set_settings`) executes but is not recorded, and the restore at `play.stop` discards it. The first one per
+  play session emits `warning {code:"UNRECORDED_PLAY_EDIT"}`; the message also names the `ON_DISK` commands
+  (read from the registry), whose changes are kept.
+- A **file edit** (a command flagged `ON_DISK`) executes and stays on disk: the restore does not touch files. The
+  dispatcher gives its inverse and replay to `play_controller::keep_file_edit`, which collects them in the order
+  they ran; the first one per play session emits `warning {code:"PLAY_FILE_EDIT", cmd}`. `play.stop` pushes the
+  collection as one undo entry, `File changes during play`, and answers `fileChanges` (the count, 0 when nothing
+  was kept and nothing was pushed). `history.undo` then runs the inverses newest first, `history.redo` the replays
+  in order. The stop paths that do not go through the command (`module.unload`, the restart of `project.open`,
+  shutdown) push the entry the same way, since `play_controller::stop()` does it.
+- `prefab.create`, `scene.save` and `scene.save_as` are refused with `WRONG_PLAY_STATE`: they would tie a file to
+  scene state that the restore removes. In the UI, File > Save Scene, Save Scene As and Ctrl+S do nothing while
+  playing.
+- `history.undo` / `history.redo` stay refused (`WRONG_PLAY_STATE`) until `play.stop`.
+
+Budget for the scene module: 10k entities capture + restore < 50 ms combined.
 
 Every `play.*` result and the `play.state` event are `{state, frame, simulationFrame, simulationTime,
 fixedStepIndex}`. `frame` is the engine frame (`engine_time.frameIndex`); the other three are the clocks of the
@@ -418,10 +451,20 @@ D18), and a real device without a window (`--offscreen`) is still refused by the
 
 `conjure_editor --headless --exec commands.json --project <dir> [--out responses.ndjson] [--keep-going]
 [--offscreen] [--timeout-seconds 120]`. Input is a JSON array of requests or NDJSON; a missing `id`
-becomes the zero-based line index. For each request: dispatch, pump `engine::application::run_frame()`
+becomes the zero-based line index. The file is read and parsed before the engine starts (D22): a missing or
+malformed file ends the process with exit code 3 after the arguments and the project were checked and before a
+window, a device or the asset scan exists. For each request: dispatch, pump `engine::application::run_frame()`
 until the response exists (async), write the response as one NDJSON line to `--out` or stdout; events
 are written to the same stream (they carry `event`, not `id`). Stop at the first `ok:false` unless
 `--keep-going`. Exit codes: 0 all ok, 1 a command failed, 2 startup/project failure, 3 bad arguments.
+
+When the engine could not load the project's startup scene (the file is gone, does not import or does not load),
+the editor starts over an empty world as in every other mode, and the runner writes `warning {code:
+"STARTUP_SCENE_FAILED", message}` as the first line of the output, before any request runs. The message is the
+engine's (`engine::application::startup_scene_failure()`). The warning is counted nowhere: the exit code is the
+requests' alone, so a command file that exists to repair the scene runs and exits 0. A `project.open` in the file
+restarts the engine; when the new project's startup scene fails, the application emits the same event to every
+client, so it appears after the `project.open` response.
 `--ai-port`/`--ai-stdio` with `--headless` and no `--exec` keeps the process alive as a server.
 
 ### 3.12 Transports
@@ -646,7 +689,7 @@ console,reflection,modules,profiler}.cpp`, `snapshot_guard.{h,cpp}`, `README.md`
 | `editor_panel.h` | `class editor_panel` (title, draw, open flag), `struct panel_descriptor`, `class panel_registry` |
 | `editor_workspace.h` | `class editor_workspace` (dockspace, `build_default_layout()`, layout load/save, menu bar, status bar, start screen) |
 | `theme_applier.h` | `apply_theme(const theme &)` onto ImGui style and the editor's own draw colours; `draw_gradient(...)` |
-| `property_drawer.h` | `class property_drawer_registry`, `using draw_fn` (reflection field -> ImGui widget) |
+| `property_drawer.h` | `class property_drawer_registry`, `using draw_fn` (reflection field -> ImGui widget; the float widgets read and write the `"inf"` / `"-inf"` / `null` spellings of 10_core.md C15, so an infinite or NaN value is shown as `inf`, `-inf` or `nan` and survives an edit of a neighbouring component) |
 | `hierarchy_cache.h` | `struct hierarchy_row`, `class hierarchy_cache` |
 | `gizmo_controller.h` | `enum class gizmo_operation`, `class gizmo_controller` |
 | `panels/hierarchy_panel.h`, `inspector_panel.h`, `asset_browser_panel.h`, `viewport_panel.h`, `console_panel.h`, `profiler_panel.h`, `toolbar_panel.h`, `history_panel.h`, `ai_session_panel.h`, `persist_panel.h`, `theme_editor_panel.h`, `export_dialog.h` | one `editor_panel` subclass each |
@@ -788,6 +831,9 @@ namespace conjure::editor {
             [[nodiscard]] core::result<void> resume();
             [[nodiscard]] core::result<void> step(std::uint32_t fixedSteps, async_reply reply);
             void tick(const engine::frame_time &frameTime);
+            void note_unrecorded_edit();                 // a scene edit while playing: one warning per session
+            void keep_file_edit(std::string_view command, command_request replay, command_inverse inverse);   // D21
+            [[nodiscard]] std::size_t kept_file_edits() const noexcept;
             [[nodiscard]] play_state state() const noexcept;
             [[nodiscard]] std::uint64_t simulation_frame() const noexcept;
     };
@@ -797,9 +843,13 @@ namespace conjure::editor {
 
     class headless_runner {
         public:
+            [[nodiscard]] static core::result<std::vector<protocol_request>> load_command_file(
+              const std::filesystem::path &file
+            );
             [[nodiscard]] core::result<exec_summary> run(
               editor_application &application,
-              const editor_options &options
+              const editor_options &options,
+              std::span<const protocol_request> requests
             );
     };
 
@@ -812,6 +862,7 @@ namespace conjure::editor {
             [[nodiscard]] int run();
             void headless_tick();
             void request_quit(int exitCode);
+            [[nodiscard]] std::optional<core::json::document> startup_scene_warning() const;   // D22
             [[nodiscard]] editor_context &context() noexcept;
     };
 
@@ -846,8 +897,9 @@ static core::result<command_outcome> entity_rename(command_invocation &invocatio
 
 ### 4.4 Command catalogue
 
-Flags: M mutates, A async, P requires project, S requires scene, E editing only. Required args in
-**bold**. Every mutating result includes `revision`. `entity` args accept a guid or a hierarchy path.
+Flags: M mutates, A async, P requires project, S requires scene, E editing only, D on disk (D21: kept while
+playing, undoable after `play.stop`). Required args in **bold**. Every mutating result includes `revision`.
+`entity` args accept a guid or a hierarchy path.
 
 | Command | Flags | Args -> result |
 |---|---|---|
@@ -860,17 +912,17 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `editor.begin_transaction` / `editor.end_transaction` | | `{label}` / `{}` |
 | `editor.wait_frames` | A | `{frames?=1}` (at least 1) -> `{frame}` |
 | `editor.exec_file` | A | `{path, keepGoing?}` -> `exec_summary` |
-| `editor.quit` | | `{exitCode?, saveChanges?}` |
+| `editor.quit` | | `{exitCode?, saveChanges?}` (`saveChanges` while playing stops the play session first: `scene.save` is editing-only, D21; when that save then fails the answer is the save's error and the editor does not quit: it stays in the editing state, the stop is not taken back) |
 | `history.undo` / `history.redo` | | `{count?}` -> `{applied, labels}` |
 | `history.list` / `history.clear` | | `{limit?}` -> `{entries:[{label, clientId}], cursor}` |
 | `console.read` / `console.clear` | | `{sinceSeq?, minLevel?, category?, limit?}` -> `{entries:[{seq, frame, level, category, message}]}` |
-| `project.create` | M | `{path, name, template?}` -> `{path}` |
-| `project.open` | | `{path}` -> `project.info` (`WRONG_PLAY_STATE` while playing; the engine restarts at the end of the frame, `play.start` answers `BUSY` until then, and the restart stops any play session first) |
+| `project.create` | M | `{path, name}` -> `{path}` (D19: no `template`) |
+| `project.open` | | `{path}` -> `project.info` (`PATH_NOT_FOUND` for a missing directory or `project.json`, `IO_ERROR` for one that cannot be read and for a `path` that is a file, not a directory; `WRONG_PLAY_STATE` while playing; the engine restarts at the end of the frame, `play.start` answers `BUSY` until then, and the restart stops any play session first) |
 | `project.save` / `project.info` / `project.list_scenes` | M P / P / P | |
-| `project.set_settings` | M P | `{settings}` (startupScene, window title/size, ...) |
-| `project.export` | A P | `{directory, config?}` -> `{directory, runtimePath, bytes, durationMs}` |
+| `project.set_settings` | M P D | `{settings}` (startupScene, window title/size, ...) |
+| `project.export` | A P | `{directory, distributionDirectory?, copyRuntime?, buildNativeModule?, publishManaged?}` -> `{directory, runtimePath, bytes, durationMs, assetCount, steps, warnings}` (always a Distribution export, D19: no `config`; a `distributionDirectory` the runtime is to be copied from answers `PATH_NOT_FOUND` when it is not there and `IO_ERROR` when it is not a folder, before anything is cooked, D20) |
 | `scene.new` | M P E | `{name, path?}` -> `{path}` |
-| `scene.open` / `scene.save` / `scene.save_as` / `scene.close` | E / M / M / E | `{path}` / `{}` / `{path}` / `{discard?}` |
+| `scene.open` / `scene.save` / `scene.save_as` / `scene.close` | E / M E / M E / E | `{path}` / `{}` / `{path}` / `{discard?}` (`scene.open`: `PATH_NOT_FOUND` when no file is at the path, `IO_ERROR` when the file cannot be loaded; the saves are editing-only since D21: the playing scene is not the one to keep) |
 | `scene.info` | S | -> `{path, entityCount, structureVersion, dirty}` |
 | `scene.query` | S | `{with?:[types], without?:[types], fields?:[paths], limit?, offset?}` -> `{rows:[{guid, name, fields}], total}` |
 | `scene.get_hierarchy` | S | `{root?, depth?}` -> nested `{guid, name, children}` |
@@ -889,21 +941,22 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 | `component.set` | M S | `{entity, path, value}` -> `{previous}` (`path` = type name replaces whole component; a qualified path `<type>.<field>.<subfield>` or `<type>.<array>[i]` sets one field; `<type>` is the registered name `conjure.scene.local_transform`, one of the aliases `editor.schema` lists (`transform`, `name`, `script`, `sprite_renderer`, `camera`, ...) or a unique registered-name suffix) |
 | `component.set_many` | M S | `{sets:[{entity, path, value}]}` |
 | `component.get` / `component.list` | S | `{entity, path}` -> `{value}` / `{entity}` -> `{types}` |
-| `asset.import` | M P | `{source, destination?, options?}` -> `{uuid, path, type, subAssets:[{uuid, name, type}]}` (synchronous in v1: `asset_database::add_file` + `import`; database mutations are main-thread only, R35) |
-| `asset.list` / `asset.info` / `asset.create_folder` / `asset.delete` / `asset.reimport` | P (M where it writes) | uuid-or-path based |
-| `asset.restore` | M P | `{path, contentBase64, metaBase64?}` -> `{uuid, path}`: the inverse of `asset.delete`, writes the source (and its `.meta`) back from base64 and imports it (undo payload) |
-| `asset.create_material` | M P | `{path, baseColor?, metallic?, roughness?, emissive?, textures?:{albedo, normal, metallicRoughness, occlusion, emissive}}` -> `{uuid}` |
-| `asset.set` | M P | `{asset, path, value}` (reflection path on any asset type) |
-| `prefab.create` | M P S | `{entity, path}` -> `{uuid}` |
+| `asset.import` | M P D | `{source, destination?, options?}` -> `{uuid, path, type, subAssets:[{uuid, name, type}]}` (synchronous in v1: `asset_database::add_file` + `import`; database mutations are main-thread only, R35) |
+| `asset.list` / `asset.info` / `asset.create_folder` / `asset.reimport` | P (`asset.create_folder`: M P D) | uuid-or-path based (`asset.reimport`: `PATH_NOT_FOUND` when the asset's source file vanished, `IO_ERROR` when it cannot be read, checked before the importer is switched, D20) |
+| `asset.delete` | M P D | `{asset, closeOpenScene?}` -> `{uuid, path, closedScene, startupScene}` (an empty folder: `{path, folder}`). The file behind the open scene needs `closeOpenScene: true`; the startup scene raises `warning {code:"STARTUP_SCENE_DELETED"}` (D20) |
+| `asset.restore` | M P D | `{path, contentBase64, metaBase64?}` -> `{uuid, path}`: the inverse of `asset.delete`, writes the source (and its `.meta`) back from base64 and imports it (undo payload) |
+| `asset.create_material` | M P D | `{path, baseColor?, metallic?, roughness?, emissive?, textures?:{albedo, normal, metallicRoughness, occlusion, emissive}}` -> `{uuid}` |
+| `asset.set` | M P D | `{asset, path, value}` (reflection path on any asset type) |
+| `prefab.create` | M P S E | `{entity, path}` -> `{uuid}` (editing-only since D21: its inverse unpacks the entity, which `play.stop` would have thrown away) |
 | `prefab.instantiate` | M S | `{prefab, parent?, name?, transform?, count?}` -> `{guids}` |
-| `prefab.apply` / `prefab.unpack` | M S | `{entity}` |
-| `script.create` | M P | `{name, template?:"Behaviour"\|"Empty", namespace?}` -> `{path}` |
-| `script.delete` | M P | `{path, project?}` -> `{path, projectRemoved}`: deletes a script source under `<project>/scripts/` (undo writes it back); `project: true` also removes the project file when no source is left |
-| `script.read` / `script.write` / `script.list` | P (write M) | `{path}` / `{path, source}` (inside `<project>/scripts/`) / -> `{scripts:[{className, path, fields}]}` |
+| `prefab.apply` / `prefab.unpack` | M P S D / M S | `{entity}` (`prefab.apply` while playing replays as an `asset.restore` of the bytes it wrote, D21) |
+| `script.create` | M P D | `{name, template?:"Behaviour"\|"Empty", namespace?}` -> `{path}` |
+| `script.delete` | M P D | `{path, project?}` -> `{path, projectRemoved}`: deletes a script source under `<project>/scripts/` (undo writes it back); `project: true` also removes the project file when no source is left |
+| `script.read` / `script.write` / `script.list` | P (write M P D) | `{path}` / `{path, source}` (inside `<project>/scripts/`) / -> `{scripts:[{className, path, fields}]}` |
 | `script.compile` | P A | `{}` -> `{succeeded, diagnostics:[{file, line, column, severity, code, message}], durationMs}` (`scripting::managed_build_runner`; `ConjureManagedDir` is `application::managed_directory()`, the absolute SDK directory the script host uses) |
 | `script.reload` / `script.gc` | P / P | `{}` (`hot_reload_controller::request(immediate = true)`, applied before the next frame's first script phase) / `{}` -> `{zombies}` (`collect_garbage`); names per R15 |
 | `script.attach` | M S | `{entity, className, fields?}` (sugar for `component.add script`) |
-| `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7) |
+| `play.start` / `play.stop` / `play.pause` / `play.resume` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7); `play.stop` adds `fileChanges`, the `ON_DISK` commands of the ended session, now one undo entry (D21) |
 | `play.step` | A | `{fixedSteps?}` -> same as `play.state` |
 | `play.state` | | -> `{state, frame, simulationFrame, simulationTime, fixedStepIndex}` (the play session's clocks, 3.7) |
 | `play.persist` | S | `{**entity**, component?, path?, children?}` (no component = ENTITY scope; component without path = COMPONENT) -> `{entries, promoted}`; PLAYING or PAUSED only |
@@ -930,7 +983,9 @@ Flags: M mutates, A async, P requires project, S requires scene, E editing only.
 Events: `log`, `selection.changed`, `play.state`, `scene.changed {revision, label}`, `scene.loaded {path}`,
 `progress {operation, fraction, message}` (export, imports, module builds), `script.compiled`, `script.reloaded`,
 `asset.imported`, `module.state {name, state, error?}`, `command.executed {clientId, cmd, ok}`,
-`client.connected`, `client.disconnected`, `events.dropped {count}`, `warning {code, message}` (R15),
+`client.connected`, `client.disconnected`, `events.dropped {count}`, `warning {code, message}` (R15; codes
+`UNRECORDED_PLAY_EDIT`, `PLAY_FILE_EDIT` with `cmd` (D21), `STARTUP_SCENE_DELETED` with `path` and
+`STARTUP_SCENE_FAILED`, the first line of an `--exec` output whose engine could not load the startup scene (D22)),
 `persist.changed {entries}`, `persist.applied {applied, skipped, undoLabel}`, `theme.changed {active}`.
 
 Grid-game walk-through (proves completeness; the generic minesweeper-style Grid Sweeper of 17_demo_games.md 2.1): `session.hello` -> `project.create` -> `asset.import`
@@ -977,15 +1032,21 @@ camera] -> `prefab.create` cell/mine -> `prefab.instantiate {count}` ->
 | Schema violation | `INVALID_ARGS`; message names the offending path |
 | Precondition | `PROJECT_NOT_OPEN`, `SCENE_NOT_OPEN`, `WRONG_PLAY_STATE` (details: current state) |
 | Handler failure | response with its code; scene unchanged (D4) |
+| `editor.quit {saveChanges: true}` while playing whose `scene.save` fails | the save's error; the editor does not quit and is left in the editing state (the play session is over, its file edits are the undo entry) |
+| A file or folder a command needs is missing / exists but cannot be read | `PATH_NOT_FOUND` / `IO_ERROR` (D20); `ASSET_NOT_FOUND` only for an asset reference |
+| `asset.delete` of the open scene without `closeOpenScene` | `INVALID_ARGS`; nothing closed, nothing deleted (D20) |
+| `asset.delete {closeOpenScene: true}` whose file cannot be removed | the delete's own error (`IO_ERROR`); the scene stays open with its unsaved changes and its undo history, because the file is deleted before the scene is closed (D20) |
 | Child of atomic batch fails | inverses rolled back, `details.failedIndex`, undo entry discarded |
+| `prefab.create`, `scene.save` or `scene.save_as` while playing or paused | `WRONG_PLAY_STATE` (details: current state); nothing written (D21) |
 | Async never completes | `TIMEOUT` after 120 s (`--timeout-seconds`), slot freed |
 | Client disconnects | open transaction committed; pending async replies dropped (`CANCELLED` logged) |
 | 9th pending async for a client | `BUSY` |
 | Undo of an inverse fails | `INTERNAL`, `CONJURE_ASSERT` in Debug, entry removed, revision bumped |
-| Snapshot restore fails | ERROR log, empty scene, state `EDITING`, never a crash |
+| Snapshot restore fails | ERROR log, empty scene, state `EDITING`, never a crash; the session's file edits still become their undo entry (D21) |
 | Port busy | fallback ports (3.12); explicit port busy: UI continues without server, headless exits 2 |
 | Write backlog | `log` events dropped above 8 MiB (reported), disconnect above 64 MiB |
-| `--exec` file missing / invalid | exit 3; project missing: exit 2 |
+| `--exec` file missing / invalid | exit 3, before the engine starts (D22); a bad flag is reported first (exit 3), a missing or invalid project too (exit 2) |
+| The startup scene does not load | the editor starts over an empty world; an `--exec` output opens with `warning {code:"STARTUP_SCENE_FAILED"}` and the exit code is unchanged (D22) |
 | `dotnet` SDK or scripting off | `script.*` -> `NOT_AVAILABLE` with an actionable message |
 
 ## 7. Headless and null behaviour
@@ -1102,7 +1163,8 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
   `prefab_create_instantiate_apply_unpack_undo`.
 - `test_commands_script.cpp`: `create_from_template_writes_file`, `write_outside_scripts_rejected`,
   `compile_failed_payload_shape` (fake host), `attach_is_component_add`.
-- `test_play_controller.cpp`: `start_snapshots_and_freezes`, `edits_during_play_discarded_with_warning`,
+- `test_play_controller.cpp`: `file_edits_during_play_one_undo_entry_at_stop` (D21),
+  `start_snapshots_and_freezes`, `edits_during_play_discarded_with_warning`,
   `stop_restores_10k_entities_exactly`, `selection_remapped_by_guid`, `step_runs_exactly_n_fixed_updates`,
   `illegal_transitions_wrong_play_state`, `restore_failure_leaves_editing_state`.
 - `test_persist_list.cpp`: `pin_requires_play`, `field_component_entity_scopes`, `narrow_pins_subsumed_by_wider`,
@@ -1127,7 +1189,9 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
   `oversized_line_disconnects`, `ephemeral_port_reported`, `token_required`, `backlog_disconnect`.
 - `test_protocol_server.cpp`: `events_dropped_counting`, `per_frame_request_cap`, `port_fallback_file`.
 - `test_headless_runner.cpp`: `array_and_ndjson_inputs`, `stop_on_first_error_exit_1`, `keep_going`,
-  `output_file_contains_events`, `missing_project_exit_2`, `bad_args_exit_3`, `async_pumped_to_completion`.
+  `output_file_contains_events`, `missing_project_exit_2`, `bad_args_exit_3`, `async_pumped_to_completion`,
+  `load_command_file_needs_no_engine`, `startup_scene_failure_is_first_line` (D22; `test_editor_application.cpp`
+  holds `unusable_exec_file_before_engine_start` and the repair run, `test_editor_process.cpp` the exit codes).
 - `test_editor_options.cpp`, `test_hierarchy_cache.cpp` (`rebuild_only_on_version_change`,
   `filter_keeps_ancestors`, `10k_rows_flat`), `test_reflection_commands.cpp`
   (`every_component_listed_with_fields`, `every_command_has_schema`, `schema_dump_matches_generated_file`).

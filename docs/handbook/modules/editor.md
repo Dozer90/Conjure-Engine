@@ -67,6 +67,14 @@ file pair.
    (`schema_validator`: `type`, `properties`, `required`, `additionalProperties`, `enum`, `items`, bounds) ->
    `INVALID_ARGS` naming the path; `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`, `PLAYING_ONLY` -> the
    matching code before the handler runs.
+   Missing files answer one way everywhere (04_editor.md D20): handlers build the error with
+   `support::unusable_path(path, reason)` for a path on disk (`PATH_NOT_FOUND` when nothing is there, `IO_ERROR`
+   when something is but cannot be read) and `support::read_failure(path, error)` for a failed read through the
+   virtual file system; `classify_error` maps core `NOT_FOUND` and engine `PROJECT_NOT_FOUND` to `PATH_NOT_FOUND`.
+   `ASSET_NOT_FOUND` is kept for an asset reference that names no asset. A new command that reads a file uses the
+   two helpers instead of choosing a code itself; one that hands a registered asset to the importer looks at the
+   source first (`asset.reimport`), because an import failure carries no code and would come out as
+   `INVALID_ARGS`.
 3. The handler returns a `command_outcome`: result, inverse (mandatory for `MUTATES` without `NO_UNDO`;
    `skipRecording` for a run that changed nothing undoable), an optional normalised replay and a label. The
    dispatcher records undo, bumps the revision, appends `revision` to the result and emits `scene.changed` and
@@ -93,9 +101,16 @@ transaction, consecutive records of equal key and command (one gizmo drag is one
 several subtrees (`entity.destroy_many`) are one `editor.batch` whose children run in ascending sibling order.
 Play mode (D9): `play.start` captures a `scene_snapshot`, freezes the stack and runs the engine; `play.stop`
 restores the snapshot byte for byte (guids preserved) and remaps the selection, its primary included (the backup
-names the primary last); `play.step` runs exactly `n` fixed steps through `application::step_fixed` and answers
-once they ran (R13), and a `play.stop` before then calls `application::cancel_fixed_steps`, because a forced step
-runs even while PAUSED. No play session crosses an engine restart: `play.start` answers `BUSY` while a
+names the primary last). While the stack is frozen `command_dispatcher::record_outcome` does not drop what a
+handler returned: a scene edit goes to `play_controller::note_unrecorded_edit` (the restore discards it), an
+`ON_DISK` command's inverse and replay go to `keep_file_edit`, and `play_controller::stop` pushes the kept ones as
+one undo entry, `File changes during play` (D21, code sweep F089). A batch run while playing records which child
+was an `ON_DISK` command (`batch_state::fileCommands`) and hands those over once it has succeeded. A new command
+that writes project files gets the flag only when its inverse and replay touch no scene state (`prefab.apply`
+replays as an `asset.restore` while playing for that reason); otherwise it is `EDITING_ONLY`, as `prefab.create`,
+`scene.save` and `scene.save_as` are.
+`play.step` runs exactly `n` fixed steps through `application::step_fixed` and answers once they ran (R13), and a
+`play.stop` before then calls `application::cancel_fixed_steps`, because a forced step runs even while PAUSED. No play session crosses an engine restart: `play.start` answers `BUSY` while a
 `project.open` is pending, and `apply_pending_project_open` stops play before it shuts the old engine down.
 `editor_context::selection_payload` is the one builder of `{guids, primary}` (`primary` null for an empty
 selection): every `selection.changed` carries it through `emit_selection_changed`, the selection's `on_changed`
@@ -131,12 +146,19 @@ swapchain; the engine configuration refuses it today and the editor falls back t
 `--exec` runs a JSON array or NDJSON of requests through `headless_runner` (a leading UTF-8 byte order mark
 skipped, `${project}` expanded per request to the project open at the time, `--keep-going`); an asynchronous
 request is bounded by the dispatcher's `--timeout-seconds` in wall time, not by a frame count, and `editor.quit`
-ends the run with its non-zero exit code. `editor/src/main.cpp` maps the outcome to the exit code: 0 ok, 1 a
+ends the run with its non-zero exit code. The command file is read and parsed by `editor_application::initialise`
+(`headless_runner::load_command_file`) after `make_engine_desc` checked the arguments and the project and before
+`boot_engine` starts the engine, so an unusable file is `BAD_ARGUMENTS` without an engine start; `run_exec` hands
+the parsed requests to `headless_runner::run` (04_editor.md D22). A startup scene the engine could not load is
+kept by `engine::application::startup_scene_failure()`; `run_requests` writes it as the first output line,
+`warning {code: "STARTUP_SCENE_FAILED", message}`, through `editor_application::startup_scene_warning()`, and
+`apply_pending_project_open` emits the same event to every client after a restart. Neither changes the exit code.
+`editor/src/main.cpp` maps the outcome to the exit code: 0 ok, 1 a
 command (or `--export`) failed, 2 a startup or project failure (a failed `initialise()`, unless the arguments are
 at fault, or a `project.open` whose restart failed for both projects), 3 bad arguments (a bad editor flag, an
 option neither the editor nor the engine knows, which `make_engine_desc` refuses as `BAD_ARGUMENTS` before the
-merge loads the project, or a flag that makes the merged configuration `INVALID_CONFIG` while the project alone
-validates), 4 a lost graphics device; a response stream that fails mid-run (`--out` on a full disk) also ends
+merge loads the project, a flag that makes the merged configuration `INVALID_CONFIG` while the project alone
+validates, or an `--exec` file that is missing or does not parse), 4 a lost graphics device; a response stream that fails mid-run (`--out` on a full disk) also ends
 `--exec` with 2. When `editor_options::stdout_carries_protocol()` (`--ai-stdio`, `--exec`
 without `--out`, `--export`), main replaces the console log sink with one that writes every line to standard
 error, so standard output holds protocol lines only. `--export <dir>` sends `project.export {directory}`, plus
@@ -151,9 +173,16 @@ the menu bar, the panel instances and `<project>/.conjure/editor_layout.ini`. Pa
 in `ui/panels/`) own only UI state and submit commands through the dispatcher: hierarchy (flat rows from
 `hierarchy_cache`, one pre-order walk per structural change, a list clipper so 10,000 entities cost the visible
 rows, D11), inspector (`component.get` per component, `property_drawer_registry` per field kind, `component.set`
-with the drag session as coalesce key), viewport (the scene through the editor camera as an image, orbit camera,
+with the drag session as coalesce key; the float drawers read and write the `"inf"` / `"-inf"` / `null` encoding of
+10_core.md C15, so a non-finite value is shown as such, survives an edit next to it and is never added by a typed
+`inf`), viewport (the scene through the editor camera as an image, orbit camera,
 `view.pick`, `gizmo_controller` over ImGuizmo dispatching `component.set_many` inside a transaction), asset
-browser, console, history, toolbar, profiler, AI session, export dialog. The viewport's picture comes from a
+browser (its Delete goes through `request_delete`: the file behind the open scene, which
+`editor_context::is_open_scene` tells by file and not by spelling, raises a modal confirmation and only "Close
+and Delete" sends `asset.delete {closeOpenScene: true}`, disabled while playing or paused, when the command would
+answer `WRONG_PLAY_STATE`, 04_editor.md D20), console, history, toolbar,
+profiler, AI session, export dialog (output directory only; an export is always Distribution, D19). The viewport's
+picture comes from a
 `scene_view` (`core/scene_view.h`, private): a render target the size of the panel in framebuffer pixels and the
 editor camera's view, submitted every frame with `renderer::submit_view`; the target's colour texture is
 registered once with `imgui_renderer::register_texture` (its id survives a resize) and drawn under the input

@@ -1,0 +1,28 @@
+{
+  "_comment": "code sweep F089: as scene_save_playing.json; nothing is written at the new path",
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Root",
+        "guid": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "play.start",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "scene.save_as",
+    "args": {
+      "path": "scenes/played"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "WRONG_PLAY_STATE"
+    }
+  }
+}

@@ -167,13 +167,18 @@ namespace conjure::editor::support {
             return file.lexically_relative(root.lexically_normal()).generic_string();
         }
 
+        /// <summary>
+        /// The whole text of a script. PATH_NOT_FOUND when no file is there, IO_ERROR when something is but cannot
+        /// be read as a file (a directory named like a script, a denied access).
+        /// </summary>
         core::result<std::string> read_text(const std::filesystem::path &file) {
+            std::error_code probe = {};
+            if (!std::filesystem::is_regular_file(file, probe)) {
+                return unusable_path(file, "not a regular file");
+            }
             std::ifstream input(file, std::ios::binary);
             if (!input.is_open()) {
-                return make_editor_error(
-                  protocol_error_code::PATH_NOT_FOUND,
-                  std::format("cannot read '{}'", file.generic_string())
-                );
+                return unusable_path(file, "the file cannot be opened");
             }
             std::stringstream buffer = {};
             buffer << input.rdbuf();
@@ -687,10 +692,16 @@ namespace conjure::editor::support {
             }
             std::error_code probe = {};
             if (!std::filesystem::is_regular_file(assembly, probe)) {
-                return make_editor_error(
-                  protocol_error_code::PATH_NOT_FOUND,
-                  std::format("no game assembly at '{}': run script.compile first", assembly.generic_string())
-                );
+                // Nothing there is a build that never ran; something there that is not a file (a directory named
+                // like the assembly) is IO_ERROR as in every other command (D20).
+                core::error unusable = unusable_path(assembly, "not a regular file");
+                if (unusable.is(protocol_error_code::PATH_NOT_FOUND)) {
+                    return make_editor_error(
+                      protocol_error_code::PATH_NOT_FOUND,
+                      std::format("no game assembly at '{}': run script.compile first", assembly.generic_string())
+                    );
+                }
+                return unusable;
             }
             const core::result<void> reloaded = runtime->is_assembly_loaded()
               ? runtime->reload_game_assembly(assembly)
@@ -814,7 +825,7 @@ namespace conjure::editor::support {
             R"("namespace":{"type":"string"}},"required":["name"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"className":{"type":"string"},)"
             R"("revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &script_create
           )
         );
@@ -838,7 +849,7 @@ namespace conjure::editor::support {
             R"("source"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"bytes":{"type":"integer"},)"
             R"("created":{"type":"boolean"},"revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &script_write
           )
         );
@@ -852,7 +863,7 @@ namespace conjure::editor::support {
             R"("required":["path"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"projectRemoved":{"type":"boolean"},)"
             R"("revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &script_delete
           )
         );

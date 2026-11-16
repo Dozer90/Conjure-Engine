@@ -340,6 +340,22 @@ namespace conjure::editor {
 
             void set_scene_state(bool open, std::string path);
 
+            /// <summary>
+            /// True when 'assetPath' names the source file of the registered asset 'id'. Decided by file, not by
+            /// spelling (code sweep F656): the database looks a path up exactly, while a case-insensitive volume
+            /// opens "Scenes/Main" as the file registered as scenes/main, so a path the lookup does not resolve to
+            /// the asset is compared with the asset's file on disk (assets:// only, the mount whose directory the
+            /// project names). False for "", for an unknown asset and without an asset database.
+            /// </summary>
+            [[nodiscard]] bool names_asset(std::string_view assetPath, const assets::asset_id &id);
+
+            /// <summary>
+            /// True when the asset is the file behind the open scene (names_asset() of scene_path()): the one test
+            /// asset.delete applies before it asks for closeOpenScene and the asset browser before it asks the user
+            /// (04_editor.md D20). False without an open scene and for a scene that has no path yet.
+            /// </summary>
+            [[nodiscard]] bool is_open_scene(const assets::asset_id &id);
+
             [[nodiscard]] bool scene_dirty() const noexcept {
                 return mSceneDirty;
             }

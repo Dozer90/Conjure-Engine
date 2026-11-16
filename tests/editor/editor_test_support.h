@@ -131,6 +131,12 @@ namespace editor_test {
             }
 
             [[nodiscard]] bool saw_event(std::string_view name) const;
+
+            /// <summary>
+            /// The `warning` events carrying the given code among events(), in the order they arrived.
+            /// </summary>
+            [[nodiscard]] std::vector<conjure::editor::protocol_event> warnings(std::string_view code) const;
+
             void clear_events();
 
             /// <summary>
@@ -149,6 +155,27 @@ namespace editor_test {
             /// </summary>
             [[nodiscard]] std::string create_entity(std::string_view name, std::string_view parentGuid = {});
     };
+
+    /// <summary>
+    /// The asset path of the scene a headless_editor starts with (withScene). The scene has no file until it is
+    /// saved.
+    /// </summary>
+    inline constexpr std::string_view TEST_SCENE = "assets://scenes/test.scene.json";
+
+    /// <summary>
+    /// The file TEST_SCENE names in the editor's project.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path test_scene_file(const headless_editor &editor);
+
+    /// <summary>
+    /// The lines of 'text' that are not empty, in order (one NDJSON record each in a runner's output).
+    /// </summary>
+    [[nodiscard]] std::vector<std::string> non_empty_lines(std::string_view text);
+
+    /// <summary>
+    /// The arguments of script.write for a file under scripts/: {path, source}.
+    /// </summary>
+    [[nodiscard]] conjure::core::json::document script_write_args(std::string_view path, std::string_view source);
 
     /// <summary>
     /// Every file under the project root except .conjure/ as path -> bytes, with project.json normalised through

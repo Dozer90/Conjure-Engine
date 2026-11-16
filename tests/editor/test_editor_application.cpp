@@ -9,6 +9,8 @@
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/editor_options.h"
+#include "conjure/editor/play_controller.h"
+#include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
@@ -31,8 +33,11 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 // editor_application.h (docs/design/04_editor.md 3.1): the process object behind conjure_editor.
@@ -41,12 +46,40 @@ using namespace conjure;
 using namespace conjure::editor;
 
 namespace {
-    void write_project(const std::filesystem::path &directory, std::string_view name) {
+    /// <summary>
+    /// Writes a minimal project.json and its assets folder; 'extraMembers' are further members of the root object
+    /// (R"("startup_scene": "scenes/main.scene.json")").
+    /// </summary>
+    void write_project(
+      const std::filesystem::path &directory,
+      std::string_view name,
+      std::string_view extraMembers = {}
+    ) {
         std::error_code ignored = {};
         std::filesystem::create_directories(directory / "assets", ignored);
         std::ofstream stream(directory / "project.json", std::ios::binary | std::ios::trunc);
         REQUIRE(stream.is_open());
-        stream << "{\n  \"schema_version\": 1,\n  \"name\": \"" << name << "\",\n  \"assets_root\": \"assets\"\n}\n";
+        stream << "{\n  \"schema_version\": 1,\n  \"name\": \"" << name << "\",\n  \"assets_root\": \"assets\"";
+        if (!extraMembers.empty()) {
+            stream << ",\n  " << extraMembers;
+        }
+        stream << "\n}\n";
+    }
+
+    /// <summary>
+    /// The options of a headless `--project <project> --exec <commands>` run without a protocol server.
+    /// </summary>
+    [[nodiscard]] editor_options exec_options(
+      const std::filesystem::path &project,
+      const std::filesystem::path &commands
+    ) {
+        editor_options options = {};
+        options.headless = true;
+        options.aiPort = u16{0};
+        options.projectPath = project;
+        options.execFile = commands;
+        options.engineArguments = {"--log-level", "warn"};
+        return options;
     }
 
 #if defined(CONJURE_EDITOR_TEST_HAS_BINDINGS) && CONJURE_EDITOR_TEST_HAS_BINDINGS
@@ -211,6 +244,56 @@ TEST_SUITE("editor/editor_application") {
         CHECK_FALSE(editor.context().scene_dirty());
     }
 
+    TEST_CASE("regression - code sweep F089 editor.quit with saveChanges while playing saves the edited scene") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("EditedBeforePlay");
+        REQUIRE(editor.context().scene_dirty());
+        (void) editor.ok("play.start");
+        (void) editor.create_entity("OnlyWhilePlaying");
+        // scene.save is refused while playing, so the quit leaves play first: what it writes is the scene of
+        // before the session, and the request does not fail on the refused save.
+        (void) editor.ok("editor.quit", core::json::object({{"saveChanges", true}}));
+        CHECK(editor.application().quit_requested());
+        CHECK(editor.context().play().is_editing());
+        const std::string saved = editor_test::read_text_file(
+          editor.project_directory() / "assets" / "scenes" / "test.scene.json"
+        );
+        CHECK(saved.find("EditedBeforePlay") != std::string::npos);
+        CHECK(saved.find("OnlyWhilePlaying") == std::string::npos);
+        CHECK_FALSE(editor.context().scene_dirty());
+    }
+
+    TEST_CASE("regression - code sweep F089 editor.quit whose save fails after the play session was stopped answers "
+      "the save's error and does not quit") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("EditedBeforePlay");
+        REQUIRE(editor.context().scene_dirty());
+        (void) editor.ok("play.start");
+        (void) editor.create_entity("OnlyWhilePlaying");
+        // A folder where the scene file belongs: the save cannot write it.
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::create_directories(editor_test::test_scene_file(editor), ignored));
+        editor.log().allow_errors();
+        const protocol_response refused = editor.send("editor.quit", core::json::object({{"saveChanges", true}}));
+        REQUIRE_FALSE(refused.ok);
+        CHECK(refused.errorCode == protocol_error_code::IO_ERROR);
+        CHECK_FALSE(editor.application().quit_requested());
+        // The stop is not taken back: the editor is left in the editing state over the scene of before the
+        // session, still unsaved.
+        CHECK(editor.context().play().is_editing());
+        CHECK(editor.context().scene_dirty());
+        (void) editor.ok("entity.get", core::json::object({{"entity", "EditedBeforePlay"}}));
+        CHECK(editor.fail(
+          "entity.get",
+          core::json::object({{"entity", "OnlyWhilePlaying"}})
+        ) == protocol_error_code::ENTITY_NOT_FOUND);
+        // Once the file can be written again the same request saves and quits.
+        REQUIRE(std::filesystem::remove(editor_test::test_scene_file(editor), ignored));
+        (void) editor.ok("editor.quit", core::json::object({{"saveChanges", true}}));
+        CHECK(editor.application().quit_requested());
+        CHECK(std::filesystem::is_regular_file(editor_test::test_scene_file(editor)));
+    }
+
     TEST_CASE("editor_application - request_open_project validates the directory before scheduling the restart") {
         editor_test::headless_editor editor = {};
         CHECK_FALSE(editor.application().request_open_project(editor.project_directory() / "missing").has_value());
@@ -250,13 +333,273 @@ TEST_SUITE("editor/editor_application") {
         application.shutdown();
         const std::string output = editor_test::read_text_file(options.outputFile);
         CHECK(output.find("\"id\":2,\"ok\":true") != std::string::npos);
+        // The project has no startup scene, so nothing is reported about one.
+        CHECK(output.find("STARTUP_SCENE_FAILED") == std::string::npos);
+    }
 
-        editor_options bad = options;
-        bad.execFile = directory.file("missing.json");
-        editor_application failing = {};
-        CONJURE_REQUIRE_OK(failing.initialise(bad, {}));
-        CHECK(failing.run() == static_cast<int>(engine::exit_code::BAD_ARGUMENTS));
-        failing.shutdown();
+    TEST_CASE("editor_application - an --out that cannot be written ends an --exec run with exit code 2") {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "exec_out");
+        const std::filesystem::path commands = directory.write_file(
+          "commands.json",
+          R"([{"cmd":"scene.new","args":{"name":"s","path":"scenes/never"}},{"cmd":"scene.save"}])"
+        );
+        editor_options options = exec_options(directory.path(), commands);
+        // A directory where the output file should be.
+        options.outputFile = directory.path() / "assets";
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        CHECK(application.run() == static_cast<int>(engine::exit_code::RUNTIME_FAILURE));
+        application.shutdown();
+        // No request ran.
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "assets" / "scenes" / "never.scene.json"));
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 editor_application refuses an unusable --exec file before the engine starts"
+    ) {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "exec_fail_fast");
+        // The asset cache under .conjure/ is the trace an engine start leaves in a project.
+        const std::filesystem::path engineTrace = directory.path() / ".conjure";
+
+        SUBCASE("a file that does not exist") {
+            const std::filesystem::path missing = directory.file("missing.json");
+            editor_application application = {};
+            const core::result<void> initialised = application.initialise(exec_options(directory.path(), missing), {});
+            // BAD_ARGUMENTS is what conjure_editor's main turns into exit code 3.
+            CONJURE_CHECK_ERROR(initialised, engine::engine_error::BAD_ARGUMENTS);
+            REQUIRE_FALSE(initialised.has_value());
+            CHECK(initialised.get_error().message().find("--exec: cannot read") != std::string::npos);
+            CHECK(initialised.get_error().message().find("missing.json") != std::string::npos);
+            CHECK_FALSE(application.is_initialised());
+            CHECK_FALSE(std::filesystem::exists(engineTrace));
+            CHECK(application.run() == static_cast<int>(engine::exit_code::INIT_FAILURE));
+        }
+        SUBCASE("a file that does not parse") {
+            const std::filesystem::path malformed = directory.write_file(
+              "malformed.json",
+              "{\"cmd\":\"editor.state\"}\n{\"cmd\":\n"
+            );
+            editor_application application = {};
+            const core::result<void> initialised = application.initialise(
+              exec_options(directory.path(), malformed),
+              {}
+            );
+            CONJURE_CHECK_ERROR(initialised, engine::engine_error::BAD_ARGUMENTS);
+            REQUIRE_FALSE(initialised.has_value());
+            CHECK(initialised.get_error().message().find("malformed.json") != std::string::npos);
+            CHECK(initialised.get_error().message().find("line 2") != std::string::npos);
+            CHECK_FALSE(application.is_initialised());
+            CHECK_FALSE(std::filesystem::exists(engineTrace));
+        }
+        SUBCASE("a directory") {
+            editor_application application = {};
+            const core::result<void> initialised = application.initialise(
+              exec_options(directory.path(), directory.path() / "assets"),
+              {}
+            );
+            CONJURE_CHECK_ERROR(initialised, engine::engine_error::BAD_ARGUMENTS);
+            CHECK_FALSE(std::filesystem::exists(engineTrace));
+        }
+        SUBCASE("a usable file starts the engine, which leaves its trace") {
+            const std::filesystem::path commands = directory.write_file(
+              "commands.json",
+              R"([{"cmd":"editor.state"}])"
+            );
+            editor_options options = exec_options(directory.path(), commands);
+            options.outputFile = directory.file("out.ndjson");
+            editor_application application = {};
+            CONJURE_REQUIRE_OK(application.initialise(options, {}));
+            CHECK(std::filesystem::is_directory(engineTrace));
+            // The file was read by initialise(): removing it now changes nothing for the run.
+            std::error_code ignored = {};
+            REQUIRE(std::filesystem::remove(commands, ignored));
+            CHECK(application.run() == 0);
+            application.shutdown();
+            CHECK(editor_test::read_text_file(options.outputFile).find("\"ok\":true") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("editor_application - a bad flag or a missing project is reported before an unusable --exec file") {
+        testing::log_capture logs = {};
+        logs.allow_errors();
+        testing::temp_directory directory = {};
+        const std::filesystem::path missing = directory.file("missing.json");
+
+        // An unknown option and an unusable command file: the option is what is reported.
+        write_project(directory.path() / "good", "good");
+        editor_options badFlag = exec_options(directory.path() / "good", missing);
+        badFlag.engineArguments.emplace_back("--bogus-flag");
+        editor_application first = {};
+        const core::result<void> flagged = first.initialise(badFlag, {});
+        CONJURE_CHECK_ERROR(flagged, engine::engine_error::BAD_ARGUMENTS);
+        REQUIRE_FALSE(flagged.has_value());
+        CHECK(flagged.get_error().message().find("--bogus-flag") != std::string::npos);
+        CHECK(flagged.get_error().message().find("--exec") == std::string::npos);
+
+        // A missing project and an unusable command file: a project failure (exit 2), not a bad argument.
+        editor_application second = {};
+        const core::result<void> noProject = second.initialise(exec_options(directory.path() / "nowhere", missing), {});
+        CONJURE_CHECK_ERROR(noProject, engine::engine_error::PROJECT_NOT_FOUND);
+    }
+
+    TEST_CASE("editor_application - --export wins over --exec, whose file is then not read") {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        write_project(directory.path() / "project", "export_wins");
+        editor_options options = exec_options(directory.path() / "project", directory.file("missing.json"));
+        options.exportDirectory = directory.path() / "exported";
+        editor_application application = {};
+        // run() would export and never look at the command file, so the missing file is not an error here.
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        application.shutdown();
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 editor_application an --exec run over a missing startup scene warns first, "
+      "repairs it and exits 0"
+    ) {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "repair", R"("startup_scene": "scenes/main.scene.json")");
+        const std::filesystem::path repair = directory.write_file(
+          "repair.json",
+          R"([{"id":"new","cmd":"scene.new","args":{"name":"main","path":"scenes/main"}},)"
+          R"({"id":"entity","cmd":"entity.create","args":{"name":"Repaired"}},{"id":"save","cmd":"scene.save"}])"
+        );
+        editor_options options = exec_options(directory.path(), repair);
+        options.outputFile = directory.file("repair.ndjson");
+        {
+            editor_application application = {};
+            CONJURE_REQUIRE_OK(application.initialise(options, {}));
+            REQUIRE(application.startup_scene_warning().has_value());
+            // The exit code is the commands' alone: the failed startup scene does not change it.
+            CHECK(application.run() == 0);
+            application.shutdown();
+        }
+        const std::vector<std::string> lines = editor_test::non_empty_lines(
+          editor_test::read_text_file(options.outputFile)
+        );
+        REQUIRE(lines.size() >= 4);
+        const core::result<protocol_event> warning = parse_event(lines.front());
+        CONJURE_REQUIRE_OK(warning);
+        CHECK(warning.value().name == "warning");
+        CHECK(warning.value().data.root()["code"].as_string() == "STARTUP_SCENE_FAILED");
+        CHECK(warning.value().data.root()["message"].as_string().find("scenes/main.scene.json") != std::string::npos);
+        usize responses = 0;
+        for (const std::string &line : lines) {
+            const core::result<protocol_response> response = parse_response(line);
+            if (response.has_value()) {
+                ++responses;
+                CHECK_MESSAGE(response.value().ok, line);
+            }
+        }
+        CHECK(responses == 3);
+        REQUIRE(std::filesystem::is_regular_file(directory.path() / "assets" / "scenes" / "main.scene.json"));
+
+        // The repaired project starts with its scene: the next run reports nothing.
+        const std::filesystem::path check = directory.write_file(
+          "check.json",
+          R"([{"id":"find","cmd":"entity.find","args":{"name":"Repaired"}}])"
+        );
+        editor_options again = exec_options(directory.path(), check);
+        again.outputFile = directory.file("check.ndjson");
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(again, {}));
+        CHECK_FALSE(application.startup_scene_warning().has_value());
+        CHECK(application.run() == 0);
+        application.shutdown();
+        const std::string output = editor_test::read_text_file(again.outputFile);
+        CHECK(output.find("STARTUP_SCENE_FAILED") == std::string::npos);
+        CHECK(output.find("\"ok\":true") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F659 editor_application an --exec run over a corrupt startup scene still runs") {
+        testing::log_capture logs = {};
+        // The importer reports the corrupt file as an error.
+        logs.allow_errors();
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "corrupt", R"("startup_scene": "scenes/main.scene.json")");
+        (void) directory.write_file("assets/scenes/main.scene.json", "{\"version\": 1, \"entities\": [");
+        // No scene is open over the empty world, so the file opens one before it edits.
+        const std::filesystem::path commands = directory.write_file(
+          "commands.json",
+          R"([{"cmd":"editor.state"},{"cmd":"scene.new","args":{"name":"fresh"}},)"
+          R"({"cmd":"entity.create","args":{"name":"a"}}])"
+        );
+        editor_options options = exec_options(directory.path(), commands);
+        options.outputFile = directory.file("out.ndjson");
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        CHECK(application.run() == 0);
+        application.shutdown();
+        const std::vector<std::string> lines = editor_test::non_empty_lines(
+          editor_test::read_text_file(options.outputFile)
+        );
+        REQUIRE_FALSE(lines.empty());
+        const core::result<protocol_event> warning = parse_event(lines.front());
+        CONJURE_REQUIRE_OK(warning);
+        CHECK(warning.value().name == "warning");
+        CHECK(warning.value().data.root()["code"].as_string() == "STARTUP_SCENE_FAILED");
+        CHECK(warning.value().data.root()["message"].as_string().find("scenes/main.scene.json") != std::string::npos);
+        usize warnings = 0;
+        for (const std::string &line : lines) {
+            if (line.find("STARTUP_SCENE_FAILED") != std::string::npos) {
+                ++warnings;
+            }
+        }
+        CHECK(warnings == 1);
+    }
+
+    TEST_CASE("editor_application - startup_scene_warning is empty without an engine and for a scene-less project") {
+        editor_application idle = {};
+        CHECK_FALSE(idle.startup_scene_warning().has_value());
+        editor_test::headless_editor editor = {};
+        CHECK_FALSE(editor.application().startup_scene_warning().has_value());
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 editor_application a project.open restart reports the new project's failed "
+      "startup scene to its clients"
+    ) {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path broken = editor.project_directory() / "broken";
+        write_project(broken, "broken", R"("startup_scene": "scenes/gone.scene.json")");
+        const std::filesystem::path sound = editor.project_directory() / "sound";
+        write_project(sound, "sound");
+
+        editor.clear_events();
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(broken));
+        editor.pump(1);
+        REQUIRE(editor.context().project()->description().name == "broken");
+        const std::optional<core::json::document> kept = editor.application().startup_scene_warning();
+        REQUIRE(kept.has_value());
+        CHECK(kept->root()["code"].as_string() == "STARTUP_SCENE_FAILED");
+        usize warnings = 0;
+        bool loadedFirst = false;
+        for (const protocol_event &event : editor.events()) {
+            if (event.name == "scene.loaded" && warnings == 0) {
+                loadedFirst = true;
+            }
+            CAPTURE(event.name);
+            if (event.name == "warning" && event.data.root()["code"].as_string() == "STARTUP_SCENE_FAILED") {
+                ++warnings;
+                CHECK(event.data.root()["message"].as_string().find("scenes/gone.scene.json") != std::string::npos);
+            }
+        }
+        CHECK(warnings == 1);
+        CHECK(loadedFirst);
+
+        // A restart into a project that starts cleanly says nothing, and the kept failure is gone with the engine.
+        editor.clear_events();
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(sound));
+        editor.pump(1);
+        REQUIRE(editor.context().project()->description().name == "sound");
+        CHECK_FALSE(editor.application().startup_scene_warning().has_value());
+        CHECK_FALSE(editor.saw_event("warning"));
     }
 
     TEST_CASE("editor_application - run without initialise reports INIT_FAILURE") {

@@ -20,13 +20,38 @@
 #endif
 
 #include <cmath>
+#include <filesystem>
 #include <format>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace conjure::editor {
 
     namespace {
         constexpr usize LOG_EVENTS_PER_FRAME = 256;
+
+        // The mount the project's assets directory backs (engine::application mounts it under this name).
+        constexpr std::string_view ASSETS_MOUNT = "assets";
+
+        /// <summary>
+        /// The file an assets:// path names on disk, nullopt for a path of another mount or one that is no asset
+        /// path. The file need not exist.
+        /// </summary>
+        [[nodiscard]] std::optional<std::filesystem::path> assets_file_of(
+          const engine::project &project,
+          std::string_view assetPath
+        ) {
+            const std::optional<assets::asset_path_parts> parts = assets::split_asset_path(assetPath);
+            if (!parts.has_value() || parts->mount != ASSETS_MOUNT) {
+                return std::nullopt;
+            }
+            // Through char8_t: a narrow string would be read in the ANSI code page on Windows.
+            const std::u8string relative(parts->relativePath.begin(), parts->relativePath.end());
+            return project.assets_directory() / std::filesystem::path(relative);
+        }
     }
 
     /*===========================================================================*/
@@ -205,6 +230,36 @@ namespace conjure::editor {
         mSceneOpen = open;
         mScenePath = std::move(path);
         mSceneDirty = false;
+    }
+
+    bool editor_context::names_asset(std::string_view assetPath, const assets::asset_id &id) {
+        const assets::asset_database *database = asset_database();
+        if (database == nullptr || assetPath.empty()) {
+            return false;
+        }
+        const std::optional<assets::asset_id> exact = database->find_by_path(assetPath);
+        if (exact.has_value() && *exact == id) {
+            return true;
+        }
+        // Another spelling of the same file: the lookup above is exact, the volume may not be. A path that
+        // resolves to another record is compared too, because a file reached under two spellings can end up
+        // registered under both.
+        const std::optional<std::string> registered = database->asset_path_of(id);
+        if (!registered.has_value() || !mProject.has_value()) {
+            return false;
+        }
+        const std::optional<std::filesystem::path> named = assets_file_of(*mProject, assetPath);
+        const std::optional<std::filesystem::path> owned = assets_file_of(*mProject, *registered);
+        if (!named.has_value() || !owned.has_value()) {
+            return false;
+        }
+        // equivalent() fails when either file is missing: a path that names nothing names no asset.
+        std::error_code error = {};
+        return std::filesystem::equivalent(*named, *owned, error) && !error;
+    }
+
+    bool editor_context::is_open_scene(const assets::asset_id &id) {
+        return mSceneOpen && names_asset(mScenePath, id);
     }
 
     std::string editor_context::normalise_scene_path(std::string_view path) {

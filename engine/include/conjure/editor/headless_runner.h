@@ -9,17 +9,22 @@
 
 #include <filesystem>
 #include <iosfwd>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 // `conjure_editor --headless --exec commands.json` (docs/design/04_editor.md 3.11): a JSON array of requests
-// or NDJSON, one request per line; a missing id becomes the zero-based index. Every request is dispatched,
-// frames are pumped until an asynchronous response exists, responses and events are written as NDJSON to the
-// output; the run stops at the first failure unless --keep-going. editor.quit ends the run after its reply, and
-// its non-zero exitCode becomes the run's exit code. Exit codes: 0 all ok, 1 a command failed, 2 startup or
-// project failure (also a project.open in the file whose restart failed for both projects) or responses that
-// could not be written, 3 bad arguments (a missing or unparseable file).
+// or NDJSON, one request per line; a missing id becomes the zero-based index. The file is read and parsed before
+// the engine starts (editor_application::initialise calls load_command_file), so a missing or malformed file
+// costs no engine boot. Every request is dispatched, frames are pumped until an asynchronous response exists,
+// responses and events are written as NDJSON to the output; the run stops at the first failure unless
+// --keep-going. When the engine could not load the project's startup scene, the output opens with
+// `warning {code: "STARTUP_SCENE_FAILED", message}` and the run carries on over the empty world: the exit code
+// does not change, so a command file that repairs the scene still runs. editor.quit ends the run after its
+// reply, and its non-zero exitCode becomes the run's exit code. Exit codes: 0 all ok, 1 a command failed,
+// 2 startup or project failure (also a project.open in the file whose restart failed for both projects) or
+// responses that could not be written, 3 bad arguments (a missing or unparseable file).
 
 namespace conjure::editor {
 
@@ -63,18 +68,22 @@ namespace conjure::editor {
 
         public:
             /// <summary>
-            /// Runs options.execFile against the application, writing to options.outputFile or std::cout.
-            /// INVALID_ARGS (exit 3) when the file is missing or malformed; IO_ERROR when the output cannot
-            /// be opened.
+            /// Runs the requests of a command file (load_command_file) against the application, writing to
+            /// options.outputFile, whose missing folders are created, or to std::cout; options.keepGoing is
+            /// run_requests' keepGoing. IO_ERROR when the output file cannot be opened; nothing has run then.
             /// </summary>
             [[nodiscard]] core::result<exec_summary> run(
               editor_application &application,
-              const editor_options &options
+              const editor_options &options,
+              std::span<const protocol_request> requests
             );
 
             /// <summary>
-            /// Runs already parsed requests, writing NDJSON lines to 'out'. ${project} expands to the root of the
-            /// project open when each request runs. An asynchronous request is waited for until it answers; the
+            /// Runs already parsed requests, writing NDJSON lines to 'out'. When the running engine kept a
+            /// startup-scene failure (engine::application::startup_scene_failure), the first line is the event
+            /// `warning {code: "STARTUP_SCENE_FAILED", message}`, written before any request runs; it changes
+            /// neither the counts nor the exit code. ${project} expands to the root of the project open when
+            /// each request runs. An asynchronous request is waited for until it answers; the
             /// dispatcher's --timeout-seconds answers it with TIMEOUT, and should it never answer, the runner gives
             /// up after twice that plus five seconds and ends the run. editor.quit ends the run after its reply. A
             /// response that cannot be written (the stream failed) ends the run after that request, which is still
@@ -86,6 +95,16 @@ namespace conjure::editor {
               std::span<const protocol_request> requests,
               std::ostream &out,
               bool keepGoing
+            );
+
+            /// <summary>
+            /// Reads and parses the command file of --exec (parse_command_file). Needs no engine: the editor calls
+            /// it before it starts one. INVALID_ARGS when the path is empty, when the file cannot be read (a
+            /// missing file, a directory) or when its text is malformed; the message starts with "--exec" and
+            /// names the file, and for malformed text the line or entry as well.
+            /// </summary>
+            [[nodiscard]] static core::result<std::vector<protocol_request>> load_command_file(
+              const std::filesystem::path &file
             );
 
             /// <summary>

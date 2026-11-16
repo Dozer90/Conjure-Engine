@@ -6,7 +6,8 @@
             "summary": "Creates a directory under assets://.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -37,7 +38,8 @@
             "summary": "Writes a .cmat material with the given factors and texture references and imports it.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -114,10 +116,11 @@
         },
         {
             "name": "asset.delete",
-            "summary": "Deletes an asset (source, .meta and cooked blobs) or an empty folder; undo restores it with the same uuid.",
+            "summary": "Deletes an asset (source, .meta and cooked blobs) or an empty folder; undo restores it with the same uuid. The file behind the open scene is refused unless closeOpenScene is true, which also closes the scene (unsaved changes are dropped and the undo history cleared; undoing the delete restores the file without reopening it). Deleting the project's startup scene succeeds and emits warning {code: \"STARTUP_SCENE_DELETED\"}.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -125,6 +128,9 @@
                 "properties": {
                     "asset": {
                         "type": "string"
+                    },
+                    "closeOpenScene": {
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -141,7 +147,8 @@
             "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. importer names the importer to use instead of the one chosen by extension (a .glb as \"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -257,7 +264,8 @@
             "summary": "Writes a source (and its .meta) back from base64 and imports it; the inverse of asset.delete.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -298,7 +306,8 @@
             "summary": "Sets a member of a JSON asset (.cmat, .scene.json, .prefab.json) by dotted path and reimports it.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -775,7 +784,7 @@
         },
         {
             "name": "editor.quit",
-            "summary": "Stops the editor process after the current frame, saving the scene first when asked.",
+            "summary": "Stops the editor process after the current frame, saving the scene first when asked (a play session is stopped before the save, so the edited scene is written, not the playing one).",
             "flags": [
                 "not_in_batch"
             ],
@@ -2007,7 +2016,7 @@
         },
         {
             "name": "play.start",
-            "summary": "Snapshots the scene and runs the simulation (EDITING -> PLAYING); the undo stack is frozen until play.stop.",
+            "summary": "Snapshots the scene and runs the simulation (EDITING -> PLAYING); the undo stack is frozen until play.stop: a scene edit is executed without being recorded, an on_disk command (a file change) is kept for play.stop.",
             "flags": [
                 "requires_scene",
                 "editing_only",
@@ -2139,7 +2148,7 @@
         },
         {
             "name": "play.stop",
-            "summary": "Stops the simulation and restores the scene snapshot taken by play.start (guids preserved).",
+            "summary": "Stops the simulation and restores the scene snapshot taken by play.start (guids preserved), which discards the scene edits made while playing. The file changes made while playing (on_disk commands) stay on disk and become one undo entry, 'File changes during play'; fileChanges counts them.",
             "flags": [
                 "requires_scene",
                 "playing_only",
@@ -2175,6 +2184,10 @@
                     "fixedStepIndex": {
                         "type": "integer",
                         "description": "fixed steps run in this play session"
+                    },
+                    "fileChanges": {
+                        "type": "integer",
+                        "description": "on_disk commands that ran in the ended play session; when not 0 they are now the undo entry 'File changes during play'"
                     }
                 },
                 "description": "play.start sets the session clocks to 0; while editing they keep the values of the session that ended last"
@@ -2182,11 +2195,12 @@
         },
         {
             "name": "prefab.apply",
-            "summary": "Writes an instance's current state back into its prefab asset.",
+            "summary": "Writes an instance's current state back into its prefab asset. While playing the file change is kept: play.stop records it for undo with the session's other file changes.",
             "flags": [
                 "mutates",
                 "requires_project",
-                "requires_scene"
+                "requires_scene",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -2221,11 +2235,12 @@
         },
         {
             "name": "prefab.create",
-            "summary": "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance.",
+            "summary": "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance. Editing state only: play.stop would discard the marked instance and keep the file.",
             "flags": [
                 "mutates",
                 "requires_project",
-                "requires_scene"
+                "requires_scene",
+                "editing_only"
             ],
             "owner": "editor",
             "args": {
@@ -2427,9 +2442,6 @@
                     },
                     "name": {
                         "type": "string"
-                    },
-                    "template": {
-                        "type": "string"
                     }
                 },
                 "required": [
@@ -2444,7 +2456,7 @@
         },
         {
             "name": "project.export",
-            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied.",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied.",
             "flags": [
                 "requires_project",
                 "async",
@@ -2455,9 +2467,6 @@
                 "type": "object",
                 "properties": {
                     "directory": {
-                        "type": "string"
-                    },
-                    "config": {
                         "type": "string"
                     },
                     "distributionDirectory": {
@@ -2594,7 +2603,8 @@
             "summary": "Merges members into project.json (startup_scene, window, time, ...) and saves it.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -2883,10 +2893,11 @@
         },
         {
             "name": "scene.save",
-            "summary": "Writes the open scene to its path.",
+            "summary": "Writes the open scene to its path. Editing state only: while playing, the scene holds the play session's state, which play.stop discards.",
             "flags": [
                 "mutates",
                 "requires_scene",
+                "editing_only",
                 "no_undo"
             ],
             "owner": "editor",
@@ -2904,10 +2915,11 @@
         },
         {
             "name": "scene.save_as",
-            "summary": "Writes the open scene to a new path, which becomes its path.",
+            "summary": "Writes the open scene to a new path, which becomes its path. Editing state only, like scene.save.",
             "flags": [
                 "mutates",
                 "requires_scene",
+                "editing_only",
                 "no_undo"
             ],
             "owner": "editor",
@@ -3037,7 +3049,8 @@
             "summary": "Creates <project>/scripts/<Name>.cs from a template (Behaviour or Empty) and the Game.csproj when missing.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -3081,7 +3094,8 @@
             "summary": "Deletes a script source (undo writes it back); project=true also removes the project file when no source is left.",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -3225,7 +3239,8 @@
             "summary": "Writes a script source inside <project>/scripts (creating it when new).",
             "flags": [
                 "mutates",
-                "requires_project"
+                "requires_project",
+                "on_disk"
             ],
             "owner": "editor",
             "args": {
@@ -3876,5 +3891,5 @@
         "UNAUTHORISED",
         "INTERNAL"
     ],
-    "schemaHash": "8993c28697f4287e"
+    "schemaHash": "cd288d52a53a2651"
 }

@@ -1,0 +1,16 @@
+{
+  "_comment": "A path that exists but is not a readable file is IO_ERROR; only a missing one is PATH_NOT_FOUND.",
+  "setup": [],
+  "request": {
+    "cmd": "editor.exec_file",
+    "args": {
+      "path": "${project}/assets"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "IO_ERROR"
+    }
+  }
+}

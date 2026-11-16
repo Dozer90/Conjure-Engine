@@ -8,6 +8,7 @@
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/core/vfs/file_system.h"
 #include "conjure/core/vfs/path_utils.h"
 
 #if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
@@ -22,6 +23,8 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -150,7 +153,7 @@ namespace conjure::editor::support {
             }
             core::result<std::vector<std::byte>> bytes = database.vfs().read_file(*filePath);
             if (!bytes.has_value()) {
-                return io_error(std::format("cannot read '{}': {}", *filePath, bytes.get_error().message()));
+                return read_failure(*filePath, bytes.get_error());
             }
             command_inverse inverse = {};
             inverse.name = "asset.restore";
@@ -233,38 +236,22 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
-        /// The whole content of a source file outside the project. ASSET_NOT_FOUND when it is missing or not a
-        /// readable regular file (a directory opens on POSIX), IO_ERROR when the read comes up short.
+        /// The whole content of a source file outside the project. PATH_NOT_FOUND when nothing exists at the path,
+        /// IO_ERROR when something does but is not a readable regular file (a directory opens on POSIX) or the
+        /// read comes up short.
         /// </summary>
         core::result<std::string> read_source_file(const std::filesystem::path &source) {
             std::error_code error = {};
-            if (!std::filesystem::exists(source, error)) {
-                // exists() sets the error only for a failure other than "not found", such as a denied access.
-                return make_editor_error(
-                  protocol_error_code::ASSET_NOT_FOUND,
-                  std::format(
-                    "cannot read '{}': {}",
-                    source.generic_string(),
-                    error ? error.message() : std::string("no such file")
-                  )
-                );
-            }
             if (!std::filesystem::is_regular_file(source, error)) {
-                return make_editor_error(
-                  protocol_error_code::ASSET_NOT_FOUND,
-                  std::format("cannot read '{}': not a regular file", source.generic_string())
-                );
+                return unusable_path(source, "not a regular file");
             }
             const std::uintmax_t size = std::filesystem::file_size(source, error);
             if (error) {
-                return io_error(std::format("cannot read '{}': {}", source.generic_string(), error.message()));
+                return unusable_path(source, error.message());
             }
             std::ifstream input(source, std::ios::binary);
             if (!input.is_open()) {
-                return make_editor_error(
-                  protocol_error_code::ASSET_NOT_FOUND,
-                  std::format("cannot read '{}'", source.generic_string())
-                );
+                return unusable_path(source, "the file cannot be opened");
             }
             // A sized, checked read: streaming rdbuf() into a stringstream reports a read error as end of file.
             std::string content(static_cast<usize>(size), '\0');
@@ -273,6 +260,110 @@ namespace conjure::editor::support {
                 return io_error(std::format("cannot read '{}': the read stopped early", source.generic_string()));
             }
             return content;
+        }
+
+        /// <summary>
+        /// The asset path of the project's startup scene ("assets://scenes/main.scene.json"), "" when the project
+        /// names none. Spelled the way the engine resolves it at startup: a scheme-qualified path as given,
+        /// anything else relative to the assets root.
+        /// </summary>
+        std::string startup_scene_asset_path(editor_context &context) {
+            const engine::project *project = context.project();
+            if (project == nullptr || project->description().startupScene.empty()) {
+                return "";
+            }
+            const std::filesystem::path &scene = project->description().startupScene;
+            const std::string given = scene.generic_string();
+            if (given.find("://") != std::string::npos) {
+                return given;
+            }
+            return normalise_asset_path(scene.lexically_normal().generic_string());
+        }
+
+        /// <summary>
+        /// Fails unless the source file of a registered asset is there and opens for reading: PATH_NOT_FOUND when
+        /// it vanished behind the database's back, IO_ERROR when something is there that cannot be read (code
+        /// sweep F656). For a command that hands the asset to the importer, whose own report of a failed read
+        /// carries no code and would come out as INVALID_ARGS.
+        /// </summary>
+        core::result<void> require_source_file(assets::asset_database &database, const assets::asset_id &id) {
+            const std::optional<std::string> filePath = database.file_path_of(id);
+            if (!filePath.has_value()) {
+                return make_editor_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
+            }
+            const core::result<std::unique_ptr<core::vfs::file>> opened = database.vfs().open_read(*filePath);
+            if (!opened.has_value()) {
+                return read_failure(*filePath, opened.get_error());
+            }
+            return core::result<void>::success();
+        }
+
+        /// <summary>
+        /// The guard of asset.delete for the file behind the open scene (code sweep F656): refused unless the
+        /// client passes closeOpenScene: true, and then only where closing a scene is possible. Closing clears the
+        /// undo history, which a batch, an open transaction and an undo or redo step are in the middle of using,
+        /// and scene.close is an editing-state command.
+        /// </summary>
+        core::result<void> check_open_scene_delete(command_invocation &invocation, std::string_view path) {
+            editor_context &context = invocation.context;
+            if (!bool_or(invocation.args, "closeOpenScene", false)) {
+                return invalid_args(std::format(
+                  "'{}' is the open scene: pass closeOpenScene: true to close it (unsaved changes are dropped) and "
+                  "delete it, or run scene.close first",
+                  path
+                ));
+            }
+            const bool historyInUse = context.dispatcher().in_batch() || context.dispatcher().replaying() ||
+              context.undo().has_open_transaction();
+            if (historyInUse) {
+                return invalid_args(std::format(
+                  "'{}' is the open scene: closing it clears the undo history, so closeOpenScene is refused inside "
+                  "a batch, an open transaction and an undo or redo step",
+                  path
+                ));
+            }
+            if (!context.play().is_editing()) {
+                invocation.errorDetails.set("state", to_string(context.play().state()));
+                return make_editor_error(
+                  protocol_error_code::WRONG_PLAY_STATE,
+                  std::format("'{}' is the open scene: stop playing before deleting it", path)
+                );
+            }
+            return core::result<void>::success();
+        }
+
+        /// <summary>
+        /// Closes the open scene after asset.delete removed its file. Through the dispatcher, so the close is the
+        /// same scene.close {discard: true} a client would send: it clears the undo history and the selection, and
+        /// the delete becomes the history's first entry when its handler returns. check_open_scene_delete() has
+        /// made sure the close is allowed; should it fail all the same, the file is put back from 'restore', so the
+        /// failed command leaves the scene open over the file it was opened from (D4).
+        /// </summary>
+        core::result<void> close_deleted_scene(command_invocation &invocation, const command_inverse &restore) {
+            command_dispatcher &dispatcher = invocation.context.dispatcher();
+            command_request close = {};
+            close.name = "scene.close";
+            close.args = core::json::object({{"discard", true}});
+            close.clientId = invocation.clientId;
+            const bool wasDirty = invocation.context.scene_dirty();
+            const core::result<core::json::document> closed = dispatcher.execute(close);
+            if (closed.has_value()) {
+                return core::result<void>::success();
+            }
+            // As an undo step would: nothing is recorded and no revision announced for a command that failed.
+            const core::result<void> restored = dispatcher.dispatch_inverses(
+              std::span<const command_inverse>(&restore, 1),
+              invocation.clientId
+            );
+            invocation.context.set_scene_dirty(wasDirty);
+            if (!restored.has_value()) {
+                return internal(std::format(
+                  "{}; the deleted file could not be put back: {}",
+                  closed.get_error().message(),
+                  restored.get_error().message()
+                ));
+            }
+            return core::error(closed.get_error());
         }
 
         /*-------------------------------------------------------------------*/
@@ -474,15 +565,48 @@ namespace conjure::editor::support {
             if (!record.has_value() || record->is_sub_asset()) {
                 return invalid_args("only primary assets can be deleted");
             }
-            CONJURE_TRY_ASSIGN(command_inverse restore, restore_inverse_for(*database, id));
             const std::optional<std::string> assetPath = database->asset_path_of(id);
+            const std::string shownPath = assetPath.value_or(id.to_string());
+            const bool openScene = context.is_open_scene(id);
+            if (openScene) {
+                CONJURE_TRY(check_open_scene_delete(invocation, shownPath));
+            }
+            const bool startupScene = context.names_asset(startup_scene_asset_path(context), id);
+            CONJURE_TRY_ASSIGN(command_inverse restore, restore_inverse_for(*database, id));
+            // The delete comes before the close: removing a file can fail (a locked or read-only file, a denied
+            // access), and a scene closed for a delete that then failed would have lost its unsaved changes and
+            // its history for nothing (D4).
             const core::result<void> deleted = database->delete_asset(id);
             if (!deleted.has_value()) {
                 return wrap(deleted.get_error());
             }
+            if (openScene) {
+                CONJURE_TRY(close_deleted_scene(invocation, restore));
+            }
+            if (startupScene) {
+                // Allowed, because the project may be about to get another startup scene, but never silent: the
+                // next start of the project finds no scene to load.
+                context.events().emit(
+                  editor_event::WARNING,
+                  core::json::object({
+                    {"code", "STARTUP_SCENE_DELETED"},
+                    {"message", std::format(
+                       "'{}' was the project's startup scene: project.json still names it, so the project starts "
+                       "without a scene until project.set_settings names another or the file is restored",
+                       shownPath
+                     )},
+                    {"path", shownPath},
+                  })
+                );
+            }
             command_outcome outcome = {};
-            outcome.label = std::format("Delete '{}'", assetPath.value_or(id.to_string()));
-            outcome.result = core::json::object({{"uuid", id.to_string()}, {"path", assetPath.value_or("")}});
+            outcome.label = std::format("Delete '{}'", shownPath);
+            outcome.result = core::json::object({
+              {"uuid", id.to_string()},
+              {"path", assetPath.value_or("")},
+              {"closedScene", openScene},
+              {"startupScene", startupScene},
+            });
             outcome.inverse = std::move(restore);
             return outcome;
         }
@@ -492,6 +616,8 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(assets::asset_database *database, require_database(context));
             CONJURE_TRY_ASSIGN(const std::string_view reference, require_string(invocation.args, "asset"));
             CONJURE_TRY_ASSIGN(const assets::asset_id id, resolve_asset(*database, reference));
+            // Before the importer is switched: a reimport that cannot read its source changes nothing.
+            CONJURE_TRY(require_source_file(*database, id));
             CONJURE_TRY(apply_importer_argument(*database, id, invocation.args));
             CONJURE_TRY(import_now(context, *database, id));
             if (context.assets() != nullptr) {
@@ -606,7 +732,7 @@ namespace conjure::editor::support {
             }
             core::result<std::string> text = database->vfs().read_text_file(*filePath);
             if (!text.has_value()) {
-                return io_error(std::format("cannot read '{}': {}", *filePath, text.get_error().message()));
+                return read_failure(*filePath, text.get_error());
             }
             core::result<core::json::document> parsed = core::json::document::parse(text.value());
             if (!parsed.has_value()) {
@@ -714,7 +840,7 @@ namespace conjure::editor::support {
             R"("importer":{"type":"string"},)"
             R"("options":{"type":"object","additionalProperties":true}},"required":["source"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_import
           )
         );
@@ -748,7 +874,7 @@ namespace conjure::editor::support {
             "Creates a directory under assets://.",
             R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_create_folder
           )
         );
@@ -757,10 +883,14 @@ namespace conjure::editor::support {
           make_command(
             "asset.delete",
             "Deletes an asset (source, .meta and cooked blobs) or an empty folder; undo restores it with the same "
-            "uuid.",
-            R"({"type":"object","properties":{"asset":{"type":"string"}},"required":["asset"]})",
+            "uuid. The file behind the open scene is refused unless closeOpenScene is true, which also closes the "
+            "scene (unsaved changes are dropped and the undo history cleared; undoing the delete restores the file "
+            "without reopening it). Deleting the project's startup scene succeeds and emits warning "
+            "{code: \"STARTUP_SCENE_DELETED\"}.",
+            R"({"type":"object","properties":{"asset":{"type":"string"},"closeOpenScene":{"type":"boolean"}},)"
+            R"("required":["asset"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_delete
           )
         );
@@ -792,7 +922,7 @@ namespace conjure::editor::support {
             R"("required":["path"]})",
             R"({"type":"object","properties":{"uuid":{"type":"string"},"path":{"type":"string"},)"
             R"("revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_create_material
           )
         );
@@ -804,7 +934,7 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"asset":{"type":"string"},"path":{"type":"string"},"value":{}},)"
             R"("required":["asset","path","value"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_set
           )
         );
@@ -817,7 +947,7 @@ namespace conjure::editor::support {
             R"("metaBase64":{"type":"string"}},"required":["path","contentBase64"]})",
             R"({"type":"object","properties":{"uuid":{"type":"string"},"path":{"type":"string"},)"
             R"("revision":{"type":"integer"}}})",
-            command_flags::MUTATES | command_flags::REQUIRES_PROJECT,
+            command_flags::MUTATES | command_flags::REQUIRES_PROJECT | command_flags::ON_DISK,
             &asset_restore
           )
         );

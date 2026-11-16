@@ -1,0 +1,29 @@
+{
+  "_comment": "code sweep F089: play.stop would discard the marked instance and keep the file, so prefab.create is an editing-state command",
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Root",
+        "guid": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "play.start",
+      "args": {}
+    }
+  ],
+  "request": {
+    "cmd": "prefab.create",
+    "args": {
+      "entity": "09474d6c-1194-5bfd-8b59-6973cf69e781",
+      "path": "prefabs/played"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "WRONG_PLAY_STATE"
+    }
+  }
+}

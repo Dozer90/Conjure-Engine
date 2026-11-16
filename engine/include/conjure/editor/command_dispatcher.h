@@ -19,7 +19,9 @@
 #include <vector>
 
 // The one execution path (docs/design/04_editor.md D4, D6, 3.3, 3.4): schema validation, preconditions, the
-// handler, undo recording, revision bump and events, for every source of commands. Asynchronous handlers park
+// handler, undo recording, revision bump and events, for every source of commands. While playing the undo stack is
+// frozen: a scene edit is executed and not recorded, an ON_DISK command's inverse goes to the play controller,
+// which makes one undo entry of them at play.stop (D9, D21). Asynchronous handlers park
 // their request and answer through async_reply; resolve_completed() hands the finished responses back once per
 // frame and times the stale ones out. Main thread only.
 
@@ -33,10 +35,13 @@ namespace conjure::editor {
             static constexpr f64 DEFAULT_ASYNC_TIMEOUT_SECONDS = 120.0;
 
             /// <summary>
-            /// What a running editor.batch collects instead of the undo stack.
+            /// What a running editor.batch collects instead of the undo stack. fileCommands runs parallel to
+            /// entry.undo: the name of the ON_DISK child that recorded the pair, "" for a scene edit, so a batch
+            /// that ran while playing can hand its file edits to the play controller (D21).
             /// </summary>
             struct batch_state {
                 undo_entry entry = {};
+                std::vector<std::string> fileCommands = {};
                 u32 depth = 0;
             };
 
@@ -191,6 +196,7 @@ namespace conjure::editor {
               const protocol_request &request,
               command_outcome &outcome
             );
+            void keep_play_edits(batch_state &batch);
             [[nodiscard]] f64 now_seconds() const noexcept;
     };
 }

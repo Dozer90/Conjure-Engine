@@ -30,13 +30,13 @@ namespace conjure::editor {
         ENTITY_NOT_FOUND,       // an entity reference resolved to no live entity
         COMPONENT_NOT_FOUND,    // the entity does not carry the component
         TYPE_NOT_FOUND,         // no component, asset or script class type with that name
-        PATH_NOT_FOUND,         // a reflection path does not resolve inside the component
-        ASSET_NOT_FOUND,        // no asset with that uuid or path
+        PATH_NOT_FOUND,         // a reflection path does not resolve, or a file or folder does not exist
+        ASSET_NOT_FOUND,        // an asset reference (uuid or asset path) names no asset in the database
         PROJECT_NOT_OPEN,       // the command needs a project
         SCENE_NOT_OPEN,         // the command needs a scene
         WRONG_PLAY_STATE,       // the command is refused in the current play state (details.state)
         NOT_AVAILABLE,          // the feature is compiled out, the backend is null or a tool is missing
-        IO_ERROR,               // a file could not be read or written
+        IO_ERROR,               // a file or folder that exists could not be read, or a write failed
         COMPILE_FAILED,         // the managed build or a module build reported errors
         BUSY,                   // too many pending asynchronous requests for the client
         TIMEOUT,                // an asynchronous command did not complete in time
@@ -87,8 +87,9 @@ namespace conjure::editor {
     /// ecs ENTITY_NOT_ALIVE to ENTITY_NOT_FOUND; ecs COMPONENT_NOT_PRESENT to COMPONENT_NOT_FOUND;
     /// UNKNOWN_COMPONENT to TYPE_NOT_FOUND; assets NOT_FOUND to ASSET_NOT_FOUND; core IO_FAILURE and
     /// assets IO_ERROR to IO_ERROR; core INVALID_ARGUMENT, OUT_OF_RANGE, PARSE_FAILURE and ecs
-    /// SERIALIZATION_FAILED to INVALID_ARGS; core NOT_FOUND to PATH_NOT_FOUND; core UNSUPPORTED and
-    /// NOT_IMPLEMENTED to NOT_AVAILABLE; core TIMEOUT to TIMEOUT; everything else to INTERNAL.
+    /// SERIALIZATION_FAILED to INVALID_ARGS; core NOT_FOUND and engine PROJECT_NOT_FOUND (a missing file or
+    /// folder, code sweep F656) to PATH_NOT_FOUND; core UNSUPPORTED and NOT_IMPLEMENTED to NOT_AVAILABLE; core
+    /// TIMEOUT to TIMEOUT; everything else to INTERNAL.
     /// </summary>
     [[nodiscard]] CONJURE_API protocol_error_code classify_error(const core::error &failure) noexcept;
 }

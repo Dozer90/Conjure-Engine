@@ -99,10 +99,9 @@ namespace conjure::editor::support {
                 return not_a_scene_path(pathText);
             }
             if (!context.filesystem().exists(path)) {
-                return make_editor_error(
-                  protocol_error_code::ASSET_NOT_FOUND,
-                  std::format("no scene file at '{}'", path)
-                );
+                // A file that is not there, not an asset reference that failed to resolve: scene.open reads the
+                // file system, so a scene the database has not registered yet opens too.
+                return path_not_found(std::format("no scene file at '{}'", path));
             }
             const core::result<scene::scene_id> loaded =
               context.scene_manager().load_file(context.filesystem(), path, scene::load_mode::REPLACE);
@@ -407,10 +406,12 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "scene.save",
-            "Writes the open scene to its path.",
+            "Writes the open scene to its path. Editing state only: while playing, the scene holds the play "
+            "session's state, which play.stop discards.",
             R"({"type":"object"})",
             R"({"type":"object","properties":{"path":{"type":"string"}}})",
-            command_flags::MUTATES | command_flags::NO_UNDO | command_flags::REQUIRES_SCENE,
+            command_flags::MUTATES | command_flags::NO_UNDO | command_flags::REQUIRES_SCENE |
+              command_flags::EDITING_ONLY,
             &scene_save
           )
         );
@@ -418,10 +419,11 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "scene.save_as",
-            "Writes the open scene to a new path, which becomes its path.",
+            "Writes the open scene to a new path, which becomes its path. Editing state only, like scene.save.",
             R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
             R"({"type":"object","properties":{"path":{"type":"string"}}})",
-            command_flags::MUTATES | command_flags::NO_UNDO | command_flags::REQUIRES_SCENE,
+            command_flags::MUTATES | command_flags::NO_UNDO | command_flags::REQUIRES_SCENE |
+              command_flags::EDITING_ONLY,
             &scene_save_as
           )
         );

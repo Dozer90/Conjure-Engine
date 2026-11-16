@@ -1,13 +1,13 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 
 #include "editor_test_support.h"
 
 #include "conjure/core/clock.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/log.h"
-#include "conjure/core/string_utils.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/headless_runner.h"
@@ -18,24 +18,14 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 // headless_runner.h (docs/design/04_editor.md 3.11, 08_testing.md 6.3 item 5).
 
 using namespace conjure;
 using namespace conjure::editor;
-
-namespace {
-    std::vector<std::string> lines_of(const std::string &text) {
-        std::vector<std::string> lines = {};
-        for (const std::string_view line : core::str::split_lines(text)) {
-            if (!line.empty()) {
-                lines.emplace_back(line);
-            }
-        }
-        return lines;
-    }
-}
 
 TEST_SUITE("editor/headless_runner") {
 
@@ -131,7 +121,7 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(summary.firstFailedIndex == 1);
         CHECK(summary.exitCode == 1);
         CHECK(editor.scene().world().entity_count() == 1);
-        const std::vector<std::string> lines = lines_of(out.str());
+        const std::vector<std::string> lines = editor_test::non_empty_lines(out.str());
         bool sawFailure = false;
         for (const std::string &line : lines) {
             const core::result<protocol_response> response = parse_response(line);
@@ -214,7 +204,7 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(runner.frames_pumped() >= 3);
         bool sawEvent = false;
         bool sawWait = false;
-        for (const std::string &line : lines_of(out.str())) {
+        for (const std::string &line : editor_test::non_empty_lines(out.str())) {
             if (parse_event(line).has_value()) {
                 sawEvent = true;
             }
@@ -281,7 +271,7 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(summary.firstFailedIndex == 0);
         CHECK(editor.scene().world().entity_count() == 1);
         bool sawTimeout = false;
-        for (const std::string &line : lines_of(out.str())) {
+        for (const std::string &line : editor_test::non_empty_lines(out.str())) {
             const core::result<protocol_response> response = parse_response(line);
             if (response.has_value() && response.value().id.root().as_string() == "w") {
                 sawTimeout = true;
@@ -320,7 +310,7 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(editor.scene().world().entity_count() == 0);
         CHECK(runner.frames_pumped() < 2000000);
         bool sawTimeout = false;
-        for (const std::string &line : lines_of(out.str())) {
+        for (const std::string &line : editor_test::non_empty_lines(out.str())) {
             const core::result<protocol_response> response = parse_response(line);
             if (response.has_value() && response.value().id.root().as_string() == "w") {
                 sawTimeout = true;
@@ -367,41 +357,220 @@ TEST_SUITE("editor/headless_runner") {
         CHECK(logs.contains(core::log_level::WARN, "exec: request #2 (id 12) 'entity.destroy' failed"));
     }
 
-    TEST_CASE(
-      "headless_runner::run - a missing or malformed file is INVALID_ARGS (exit 3) and output goes to the file"
-    ) {
+    TEST_CASE("headless_runner::load_command_file - reads a file without an engine and parses it") {
+        // No editor exists here: the editor calls this before it starts an engine.
+        testing::temp_directory directory = {};
+        const std::filesystem::path array = directory.write_file("array.json", R"([{"cmd":"a"},{"id":"x","cmd":"b"}])");
+        const core::result<std::vector<protocol_request>> fromArray = headless_runner::load_command_file(array);
+        CONJURE_REQUIRE_OK(fromArray);
+        REQUIRE(fromArray.value().size() == 2);
+        CHECK(fromArray.value()[0].id.root().as_i64() == 0);
+        CHECK(fromArray.value()[1].id.root().as_string() == "x");
+
+        // What Windows PowerShell 5.1 writes: a byte order mark and CRLF line ends.
+        const std::filesystem::path ndjson = directory.write_file(
+          "lines.ndjson",
+          "\xEF\xBB\xBF{\"cmd\":\"a\"}\r\n{\"id\":7,\"cmd\":\"b\"}\r\n"
+        );
+        const core::result<std::vector<protocol_request>> fromLines = headless_runner::load_command_file(ndjson);
+        CONJURE_REQUIRE_OK(fromLines);
+        REQUIRE(fromLines.value().size() == 2);
+        CHECK(fromLines.value()[1].id.root().as_i64() == 7);
+
+        // An empty file is a run of no requests, not an error.
+        const core::result<std::vector<protocol_request>> fromEmpty = headless_runner::load_command_file(
+          directory.write_file("empty.json", "")
+        );
+        CONJURE_REQUIRE_OK(fromEmpty);
+        CHECK(fromEmpty.value().empty());
+    }
+
+    TEST_CASE("headless_runner::load_command_file - a file it cannot use is INVALID_ARGS naming --exec and the file") {
+        testing::temp_directory directory = {};
+        const core::result<std::vector<protocol_request>> none = headless_runner::load_command_file({});
+        CONJURE_CHECK_ERROR(none, protocol_error_code::INVALID_ARGS);
+        REQUIRE_FALSE(none.has_value());
+        CHECK(none.get_error().message().find("--exec") != std::string::npos);
+
+        const core::result<std::vector<protocol_request>> missing = headless_runner::load_command_file(
+          directory.file("missing.json")
+        );
+        CONJURE_CHECK_ERROR(missing, protocol_error_code::INVALID_ARGS);
+        REQUIRE_FALSE(missing.has_value());
+        CHECK(missing.get_error().message().find("--exec: cannot read") != std::string::npos);
+        CHECK(missing.get_error().message().find("missing.json") != std::string::npos);
+
+        // A directory is not a command file on any platform.
+        const core::result<std::vector<protocol_request>> folder = headless_runner::load_command_file(directory.path());
+        CONJURE_CHECK_ERROR(folder, protocol_error_code::INVALID_ARGS);
+        REQUIRE_FALSE(folder.has_value());
+        CHECK(folder.get_error().message().find("--exec: cannot read") != std::string::npos);
+
+        const core::result<std::vector<protocol_request>> truncated = headless_runner::load_command_file(
+          directory.write_file("truncated.json", "[{\"cmd\":")
+        );
+        CONJURE_CHECK_ERROR(truncated, protocol_error_code::INVALID_ARGS);
+        REQUIRE_FALSE(truncated.has_value());
+        CHECK(truncated.get_error().message().find("--exec: cannot parse") != std::string::npos);
+        CHECK(truncated.get_error().message().find("truncated.json") != std::string::npos);
+
+        const core::result<std::vector<protocol_request>> badLine = headless_runner::load_command_file(
+          directory.write_file("bad_line.ndjson", "{\"cmd\":\"a\"}\n\n{\"nope\":1}\n")
+        );
+        CONJURE_CHECK_ERROR(badLine, protocol_error_code::INVALID_ARGS);
+        REQUIRE_FALSE(badLine.has_value());
+        CHECK(badLine.get_error().message().find("bad_line.ndjson") != std::string::npos);
+        CHECK(badLine.get_error().message().find("line 3") != std::string::npos);
+    }
+
+    TEST_CASE("headless_runner::run - the output goes to the file of --out, whose folder is created") {
         editor_test::headless_editor editor = {};
         headless_runner runner = {};
-        editor_options missing = editor.application().options();
-        missing.execFile = editor.project_directory() / "missing.json";
-        CONJURE_CHECK_ERROR(runner.run(editor.application(), missing), protocol_error_code::INVALID_ARGS);
-        editor_options none = editor.application().options();
-        none.execFile.clear();
-        CONJURE_CHECK_ERROR(runner.run(editor.application(), none), protocol_error_code::INVALID_ARGS);
-
-        const std::filesystem::path malformed = editor.project_directory() / "bad.json";
-        {
-            std::ofstream stream(malformed, std::ios::binary | std::ios::trunc);
-            stream << "[{\"cmd\":";
-        }
-        editor_options badFile = editor.application().options();
-        badFile.execFile = malformed;
-        CONJURE_CHECK_ERROR(runner.run(editor.application(), badFile), protocol_error_code::INVALID_ARGS);
-
-        const std::filesystem::path good = editor.project_directory() / "good.json";
-        {
-            std::ofstream stream(good, std::ios::binary | std::ios::trunc);
-            stream << R"({"cmd":"scene.set_settings","args":{"settings":{"origin":"from ${project}"}}})";
-        }
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"({"cmd":"scene.set_settings","args":{"settings":{"origin":"from ${project}"}}})"
+        );
+        CONJURE_REQUIRE_OK(requests);
         editor_options withOutput = editor.application().options();
-        withOutput.execFile = good;
         withOutput.outputFile = editor.project_directory() / "out" / "responses.ndjson";
-        const core::result<exec_summary> summary = runner.run(editor.application(), withOutput);
+        const core::result<exec_summary> summary = runner.run(editor.application(), withOutput, requests.value());
         CONJURE_REQUIRE_OK(summary);
         CHECK(summary.value().exitCode == 0);
+        CHECK(summary.value().executed == 1);
         const std::string output = editor_test::read_text_file(withOutput.outputFile);
         CHECK(output.find("\"ok\":true") != std::string::npos);
         const core::json::document info = editor.ok("scene.info");
         CHECK(info.root()["settings"]["origin"].as_string() == "from " + editor.project_directory().generic_string());
+    }
+
+    TEST_CASE("headless_runner::run - an output file that cannot be opened is IO_ERROR and nothing runs") {
+        editor_test::headless_editor editor = {};
+        headless_runner runner = {};
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"entity.create","args":{"name":"never"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        editor_options blocked = editor.application().options();
+        // A directory where the file should be.
+        blocked.outputFile = editor.project_directory() / "assets";
+        const core::result<exec_summary> summary = runner.run(editor.application(), blocked, requests.value());
+        CONJURE_CHECK_ERROR(summary, protocol_error_code::IO_ERROR);
+        REQUIRE_FALSE(summary.has_value());
+        CHECK(summary.get_error().message().find("--out: cannot write") != std::string::npos);
+        CHECK(editor.scene().world().entity_count() == 0);
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 run_requests opens the output with the startup scene the engine could not load"
+    ) {
+        editor_test::headless_editor_options options = {};
+        options.withScene = false;
+        options.extraProjectJson = R"("startup_scene": "scenes/missing.scene.json")";
+        editor_test::headless_editor editor(options);
+        REQUIRE(editor.application().engine().startup_scene_failure().has_value());
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"id":"new","cmd":"scene.new","args":{"name":"s"}},{"id":"a","cmd":"entity.create","args":{"name":"a"}}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+        // The warning is information: neither the counts nor the exit code know about it.
+        CHECK(summary.executed == 2);
+        CHECK(summary.failed == 0);
+        CHECK(summary.exitCode == 0);
+
+        const std::vector<std::string> lines = editor_test::non_empty_lines(out.str());
+        REQUIRE(lines.size() >= 3);
+        const core::result<protocol_event> first = parse_event(lines.front());
+        CONJURE_REQUIRE_OK(first);
+        CHECK(first.value().name == "warning");
+        CHECK(first.value().data.root()["code"].as_string() == "STARTUP_SCENE_FAILED");
+        const std::string_view message = first.value().data.root()["message"].as_string();
+        CHECK(message.find("scenes/missing.scene.json") != std::string_view::npos);
+        CHECK(message == editor.application().engine().startup_scene_failure()->message());
+        // Exactly once, and before the first response.
+        usize warnings = 0;
+        for (usize index = 1; index < lines.size(); ++index) {
+            if (lines[index].find("STARTUP_SCENE_FAILED") != std::string::npos) {
+                ++warnings;
+            }
+        }
+        CHECK(warnings == 0);
+
+        // A run of no requests still says it: the reader of an empty run learns why the world is empty.
+        std::ostringstream empty = {};
+        const exec_summary nothing = runner.run_requests(editor.application(), {}, empty, false);
+        CHECK(nothing.executed == 0);
+        CHECK(nothing.exitCode == 0);
+        const std::vector<std::string> onlyLine = editor_test::non_empty_lines(empty.str());
+        REQUIRE(onlyLine.size() == 1);
+        CHECK(onlyLine.front().find("STARTUP_SCENE_FAILED") != std::string::npos);
+    }
+
+    TEST_CASE("headless_runner::run_requests - a project without a startup scene gets no startup warning") {
+        editor_test::headless_editor editor = {};
+        REQUIRE_FALSE(editor.application().engine().startup_scene_failure().has_value());
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"cmd":"editor.state"}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+        CHECK(summary.failed == 0);
+        const std::vector<std::string> lines = editor_test::non_empty_lines(out.str());
+        REQUIRE_FALSE(lines.empty());
+        CHECK(parse_response(lines.front()).has_value());
+        CHECK(out.str().find("STARTUP_SCENE_FAILED") == std::string::npos);
+    }
+
+    TEST_CASE(
+      "regression - code sweep F659 run_requests carries the warning of a project.open into a broken startup scene"
+    ) {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path broken = editor.project_directory() / "broken";
+        std::error_code ignored = {};
+        std::filesystem::create_directories(broken / "assets", ignored);
+        {
+            std::ofstream stream(broken / "project.json", std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+            stream << "{\n  \"schema_version\": 1,\n  \"name\": \"broken\",\n  \"assets_root\": \"assets\",\n"
+              "  \"startup_scene\": \"scenes/gone.scene.json\"\n}\n";
+        }
+        const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
+          R"([{"id":"open","cmd":"project.open","args":{"path":"${project}/broken"}},)"
+          R"({"id":"info","cmd":"project.info"}])"
+        );
+        CONJURE_REQUIRE_OK(requests);
+        std::ostringstream out = {};
+        headless_runner runner = {};
+        const exec_summary summary = runner.run_requests(editor.application(), requests.value(), out, false);
+        CHECK_MESSAGE(summary.failed == 0, out.str());
+        CHECK(summary.exitCode == 0);
+
+        // The first start was clean, so nothing is said before the first response; the warning of the restarted
+        // engine lies between the two responses.
+        const std::vector<std::string> lines = editor_test::non_empty_lines(out.str());
+        isize openLine = -1;
+        isize warningLine = -1;
+        isize infoLine = -1;
+        for (usize index = 0; index < lines.size(); ++index) {
+            CAPTURE(index);
+            const core::result<protocol_response> response = parse_response(lines[index]);
+            if (response.has_value() && response.value().id.root().as_string() == "open") {
+                openLine = static_cast<isize>(index);
+            }
+            if (response.has_value() && response.value().id.root().as_string() == "info") {
+                infoLine = static_cast<isize>(index);
+            }
+            if (lines[index].find("STARTUP_SCENE_FAILED") != std::string::npos) {
+                CHECK(warningLine < 0);
+                warningLine = static_cast<isize>(index);
+                CHECK(lines[index].find("scenes/gone.scene.json") != std::string::npos);
+            }
+        }
+        CHECK(openLine >= 0);
+        CHECK(warningLine > openLine);
+        CHECK(infoLine > warningLine);
     }
 }

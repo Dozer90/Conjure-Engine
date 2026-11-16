@@ -11,8 +11,11 @@
 #include "conjure/engine/project.h"
 
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 // play_controller.h (docs/design/04_editor.md D9, 3.7).
 
@@ -295,5 +298,166 @@ TEST_SUITE("editor/play_controller") {
         (void) editor.ok("scene.new", core::json::object({{"name", "Played"}}));
         (void) editor.ok("play.start");
         (void) editor.ok("play.stop");
+    }
+
+    TEST_CASE("regression - code sweep F089 play.stop makes one undo step of the session's file edits, newest first") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path file = editor.project_directory() / "scripts" / "Tuned.cs";
+        (void) editor.ok("script.write", editor_test::script_write_args("Tuned.cs", "// v1"));
+        REQUIRE(editor.context().undo().size() == 1);
+        (void) editor.ok("play.start");
+        (void) editor.ok("script.write", editor_test::script_write_args("Tuned.cs", "// v2"));
+        (void) editor.ok("script.write", editor_test::script_write_args("Tuned.cs", "// v3"));
+        // Paused is still not EDITING: the edit is kept the same way.
+        (void) editor.ok("play.pause");
+        (void) editor.ok("script.write", editor_test::script_write_args("Tuned.cs", "// v4"));
+        CHECK(editor.context().play().kept_file_edits() == 3);
+        CHECK(editor.context().undo().size() == 1);
+
+        const core::json::document stopped = editor.ok("play.stop");
+        CHECK(stopped.root()["fileChanges"].as_u64() == 3);
+        CHECK(editor_test::read_text_file(file) == "// v4");
+        REQUIRE(editor.context().undo().size() == 2);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
+        CHECK(editor.context().undo().entries().back()->undo.size() == 3);
+
+        // The inverses run newest first, so one step lands on the content of before the session, not on v2 or v3.
+        (void) editor.ok("history.undo");
+        CHECK(editor_test::read_text_file(file) == "// v1");
+        (void) editor.ok("history.redo");
+        CHECK(editor_test::read_text_file(file) == "// v4");
+        // The entry of before the session is still below it.
+        (void) editor.ok("history.undo", core::json::object({{"count", 2}}));
+        CHECK_FALSE(std::filesystem::exists(file));
+    }
+
+    TEST_CASE("play.stop - answers fileChanges 0 and pushes no undo entry when no file changed") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Thing");
+        const core::json::document started = editor.ok("play.start");
+        // Only play.stop reports the count: the other play.* results and the play.state event keep their shape.
+        CHECK_FALSE(started.root().contains("fileChanges"));
+        CHECK_FALSE(editor.ok("play.state").root().contains("fileChanges"));
+        const core::json::document stopped = editor.ok("play.stop");
+        REQUIRE(stopped.root().contains("fileChanges"));
+        CHECK(stopped.root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 1);
+        CHECK(editor.context().undo().entries().back()->label == "Create 'Thing'");
+    }
+
+    TEST_CASE("play_controller - keep_file_edit is ignored while editing") {
+        editor_test::headless_editor editor = {};
+        editor.clear_events();
+        command_request replay = {};
+        replay.name = "script.write";
+        replay.args = editor_test::script_write_args("Never.cs", "// never");
+        command_inverse inverse = {};
+        inverse.name = "script.delete";
+        inverse.args = core::json::object({{"path", "Never.cs"}});
+        editor.context().play().keep_file_edit("script.write", replay, inverse);
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == 0);
+        // Nothing waits for the next session either.
+        (void) editor.ok("play.start");
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 0);
+    }
+
+    TEST_CASE("play_controller - keep_file_edit collects in order, warns once and clears the coalesce key") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        play_controller &play = editor.context().play();
+        for (int index = 0; index < 3; ++index) {
+            command_request replay = {};
+            replay.name = "asset.create_folder";
+            replay.args = core::json::object({{"path", std::format("kept_{}", index)}});
+            replay.clientId = 7;
+            replay.coalesceKey = 99;
+            command_inverse inverse = {};
+            inverse.name = "asset.delete";
+            inverse.args = core::json::object({{"asset", std::format("kept_{}", index)}});
+            play.keep_file_edit("asset.create_folder", std::move(replay), std::move(inverse));
+        }
+        CHECK(play.kept_file_edits() == 3);
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == 1);
+        // Straight through the controller, as the shutdown and project-restart paths stop a session.
+        CONJURE_REQUIRE_OK(play.stop());
+        CHECK(play.kept_file_edits() == 0);
+        REQUIRE(editor.context().undo().size() == 1);
+        const undo_entry *entry = editor.context().undo().entries().back();
+        CHECK(entry->label == "File changes during play");
+        CHECK(entry->clientId == 7);
+        CHECK(entry->coalesceKey == 0);
+        REQUIRE(entry->redo.size() == 3);
+        REQUIRE(entry->undo.size() == 3);
+        for (usize index = 0; index < 3; ++index) {
+            CAPTURE(index);
+            CHECK(entry->redo[index].args.root()["path"].as_string() == std::format("kept_{}", index));
+            CHECK(entry->undo[index].args.root()["asset"].as_string() == std::format("kept_{}", index));
+            CHECK(entry->redo[index].coalesceKey == 0);
+        }
+    }
+
+    TEST_CASE("play_controller - every play session collects its own file edits and warns again") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.ok("script.write", editor_test::script_write_args("One.cs", "// one"));
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == 1);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        REQUIRE(editor.context().undo().size() == 1);
+
+        // A session without file edits adds nothing.
+        (void) editor.ok("play.start");
+        CHECK(editor.context().play().kept_file_edits() == 0);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
+        CHECK(editor.context().undo().size() == 1);
+
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        (void) editor.ok("script.write", editor_test::script_write_args("Two.cs", "// two"));
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == 1);
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        REQUIRE(editor.context().undo().size() == 2);
+        CHECK(editor.context().undo().entries().back()->undo.size() == 1);
+        // Each session is its own step.
+        (void) editor.ok("history.undo");
+        CHECK_FALSE(std::filesystem::exists(editor.project_directory() / "scripts" / "Two.cs"));
+        CHECK(std::filesystem::is_regular_file(editor.project_directory() / "scripts" / "One.cs"));
+    }
+
+    TEST_CASE("play_controller - history.clear while playing keeps the session's file edits for play.stop") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Before play");
+        REQUIRE(editor.context().undo().size() == 1);
+        (void) editor.ok("play.start");
+        (void) editor.ok("script.write", editor_test::script_write_args("Kept.cs", "// kept"));
+        const std::filesystem::path script = editor.project_directory() / "scripts" / "Kept.cs";
+        REQUIRE(std::filesystem::is_regular_file(script));
+
+        // The stack is cleared; what the session kept is not history yet, so it is not cleared with it.
+        (void) editor.ok("history.clear");
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(editor.context().play().kept_file_edits() == 1);
+
+        CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 1);
+        REQUIRE(editor.context().undo().size() == 1);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
+        (void) editor.ok("history.undo");
+        CHECK_FALSE(std::filesystem::exists(script));
+    }
+
+    TEST_CASE("play_controller - a file edit kept at play.stop drops the redo tail like any new edit") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Undone");
+        (void) editor.ok("history.undo");
+        REQUIRE(editor.context().undo().can_redo());
+        (void) editor.ok("play.start");
+        (void) editor.ok("script.write", editor_test::script_write_args("AfterUndo.cs", "// new"));
+        (void) editor.ok("play.stop");
+        CHECK_FALSE(editor.context().undo().can_redo());
+        REQUIRE(editor.context().undo().size() == 1);
+        CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
     }
 }

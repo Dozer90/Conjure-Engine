@@ -255,13 +255,17 @@ namespace conjure::editor::ui {
         }
         if (ImGui::BeginMenu("File")) {
             const bool hasProject = context.has_project();
-            if (ImGui::MenuItem("New Scene", nullptr, false, hasProject && context.play().is_editing())) {
+            const bool editing = context.play().is_editing();
+            // scene.new, scene.save and scene.save_as are editing-state commands: while playing the scene holds
+            // the play session's state.
+            const bool canSaveScene = context.has_scene() && editing;
+            if (ImGui::MenuItem("New Scene", nullptr, false, hasProject && editing)) {
                 fire_menu_item(context, NEW_SCENE_ITEM);
             }
-            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, context.has_scene())) {
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, canSaveScene)) {
                 request_save_scene(context);
             }
-            if (ImGui::MenuItem("Save Scene As...", nullptr, false, context.has_scene())) {
+            if (ImGui::MenuItem("Save Scene As...", nullptr, false, canSaveScene)) {
                 request_save_scene_as(context);
             }
             if (ImGui::MenuItem("Save Project", nullptr, false, hasProject)) {
@@ -350,7 +354,7 @@ namespace conjure::editor::ui {
     }
 
     void editor_workspace::request_save_scene(editor_context &context) {
-        if (!context.has_scene()) {
+        if (!context.has_scene() || !context.play().is_editing()) {
             return;
         }
         if (context.scene_path().empty()) {
@@ -362,7 +366,7 @@ namespace conjure::editor::ui {
 
     void editor_workspace::request_save_scene_as(editor_context &context) {
         // A second request while the dialog is up (Ctrl+S in the dialog) must not reset what the user typed.
-        if (!context.has_scene() || mSaveAsPending) {
+        if (!context.has_scene() || !context.play().is_editing() || mSaveAsPending) {
             return;
         }
         const std::string_view name = context.scene().name();

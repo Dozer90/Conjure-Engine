@@ -47,6 +47,12 @@ engine (headless: null platform, rhi and audio, the script runtime on the null h
 `bindings::scripting_bindings_subsystem` before `initialise()` so every native API slot the C# facades call is
 filled (📘 [The native table](../bindings/native-table.md)),
 creates the context, pushes the frame layer and, with a factory, the UI layer, and starts the protocol server.
+Before the engine starts it checks what needs none: the arguments, `project.json` and the merged configuration,
+then the command file of `--exec`, which it reads and parses (`headless_runner::load_command_file`). A missing
+or malformed file fails `initialise` with `engine_error::BAD_ARGUMENTS` (exit code 3) without a window, a device
+or an asset scan. `startup_scene_warning()` is the `{code: "STARTUP_SCENE_FAILED", message}` of a startup scene
+the engine could not load (`engine::application::startup_scene_failure()`), which an `--exec` output opens with
+(📘 [The AI control protocol](ai-protocol.md#the-headless-runner)).
 `run()` exports (`--export`), executes (`--exec`) or loops frames; `pump_frame()` runs one engine frame and
 applies a pending `project.open`; `request_open_project(dir)` restarts the engine on another project at the next
 frame boundary (the AI port file moves with it), stopping a play session first, and `play.start` answers `BUSY`
@@ -87,6 +93,9 @@ module) and owns the editor's own services: `registry()`, `dispatcher()`, `undo(
 project restart. `normalise_scene_path(text)` turns a scene argument into the canonical asset path the database
 registers (forward slashes, no `.` or `..` segments, `.scene.json` matched without case) and answers `""` for a
 path that leaves its mount, which `scene.new`, `scene.open` and `scene.save_as` refuse with `INVALID_ARGS`.
+`is_open_scene(id)` says whether an asset is the file behind the open scene and `names_asset(path, id)` whether
+an asset path names an asset's source file; both compare files, not spellings, so a scene opened as
+`Scenes/Main` on a volume that ignores case is the asset registered as `scenes/main`.
 `viewport_aspect()` is the width / height the viewport panel last reported (16:9 until then, and headless):
 `view.pick` builds its ray with it when the request names no `aspect`. `script_compile_pending()` is true while a
 `script.compile` runs (a second one answers `BUSY`), and `last_script_configuration()` names the configuration of
@@ -98,7 +107,7 @@ thread only.
 A `command_descriptor` is `name`, `summary`, `argsSchema` and `resultSchema` (a hand-validated JSON Schema
 subset: `type`, `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`, `maximum`),
 `flags` (`MUTATES`, `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`, `PLAYING_ONLY`, `ASYNC`, `UI_ONLY`,
-`NOT_IN_BATCH`, `NO_UNDO`), `owner` and the `command_handler`. The handler receives a `command_invocation`
+`NOT_IN_BATCH`, `NO_UNDO`, `ON_DISK`), `owner` and the `command_handler`. The handler receives a `command_invocation`
 (context, args, clientId, an `async_reply` for `ASYNC` commands) and returns a `command_outcome`: `result`,
 the `inverse` (mandatory for `MUTATES` without `NO_UNDO`; `skipRecording` when nothing undoable happened), an
 optional normalised `replay` and an undo `label`. `builtin_command_count()` says how many the editor registers
@@ -137,6 +146,14 @@ inspector always sends the registered name.
 > the command ran, but it cannot be undone. Module commands cannot return inverses, so their `MUTATES` is
 > registered as `MUTATES | NO_UNDO`.
 
+Flag a command `ON_DISK` when it is undoable and its effect lives in the project's files, not in the scene.
+`play.stop` restores the scene and nothing on disk, so while playing the dispatcher hands the inverse and replay
+of such a command to the play controller instead of dropping them, and `play.stop` makes one undo entry of them.
+The flag is a promise about both requests: neither the inverse nor the replay may refer to scene state, because
+they run after the restore. `command_registry::add` answers `INVALID_ARGS` for `ON_DISK` without `MUTATES` or
+together with `NO_UNDO`, and a module command loses the flag (it has no inverse to keep). A command that writes
+a file *and* changes the scene so that its inverse touches both is `EDITING_ONLY` instead, as `prefab.create` is.
+
 ## Undo, selection, play
 
 `undo_stack` keeps `undo_entry { label, undo[], redo[], coalesceKey, clientId }` up to 1024 entries and 256 MiB
@@ -162,6 +179,11 @@ the selection's `on_changed` and for `play.stop`), and `selection.get` / `set` /
 script runtime in `EDIT` mode; `start()` snapshots the scene, freezes undo and runs; `pause()` / `resume()`;
 `step(fixedSteps, reply)` runs exactly `n` fixed steps and answers when they ran; `stop()` restores the snapshot
 (guids preserved), remaps the selection and thaws undo. `state()`, `describe()`, `to_string(play_state)`.
+While the stack is frozen the dispatcher reports each recorded edit to the controller: `note_unrecorded_edit()`
+for a scene edit (not recorded, discarded by the restore, warning `UNRECORDED_PLAY_EDIT` once per session) and
+`keep_file_edit(command, replay, inverse)` for an `ON_DISK` command (warning `PLAY_FILE_EDIT` once per session).
+`kept_file_edits()` counts what the session holds, and `stop()` pushes it as one undo entry labelled
+`play_controller::FILE_EDITS_LABEL` ("File changes during play"), whichever way the session ends.
 The clocks of the play session are `simulation_frame()`, `simulation_time()` and `simulation_fixed_steps()`:
 `start()` sets them to 0 by recording the engine's `fixedTime` and `fixedStepIndex`, the time and the fixed steps
 advance with fixed steps only (so they stand still while paused), and after `stop()` they keep the ended
@@ -226,14 +248,17 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 | `result<editor_options> parse_editor_options(span<const string_view>)` / `std::string editor_options_help()` / `bool editor_options::stdout_carries_protocol()` | the editor command line |
 | `result<void> editor_application::initialise(const editor_options &, layer_factory)` / `int run()` / `result<void> pump_frame()` / `void shutdown()` | the process object |
 | `editor_context &editor_application::context()` / `engine::application &engine()` / `protocol_server &server()` | its parts |
+| `optional<json::document> editor_application::startup_scene_warning()` | `{code: "STARTUP_SCENE_FAILED", message}` when the engine started without the startup scene |
 | `optional<protocol_response> command_dispatcher::dispatch(const protocol_request &)` / `result<json::document> execute(const command_request &)` | running a command |
 | `result<void> command_registry::add(command_descriptor)` / `json::document describe_all(bool)` / `vector<string> closest_names(string_view, usize)` | the catalogue |
 | `result<compiled_schema> compile_schema(string_view)` / `result<void> validate_args(const compiled_schema &, const json::value &)` | argument validation |
 | `optional<undo_entry> undo_stack::pop_for_undo()` / `pop_for_redo()` / `result<void> begin_transaction(string_view, u32)` / `end_transaction(u32)` / `bool has_open_transaction()` | undo |
 | `bool command_dispatcher::replaying()` | an undo or redo step (or a batch rollback) is being applied |
 | `f32 editor_camera::world_units_per_pixel(f32)` / `f32 editor_context::viewport_aspect()` | viewport scale and shape |
+| `bool editor_context::is_open_scene(const assets::asset_id &)` / `names_asset(string_view, const assets::asset_id &)` | whether an asset is the open scene's file, or the file an asset path names |
 | `result<void> play_controller::start()` / `stop()` / `pause()` / `resume()` / `step(u32, async_reply)` | play mode |
 | `u64 play_controller::simulation_frame()` / `f64 simulation_time()` / `u64 simulation_fixed_steps()` | the play session's clocks |
+| `void play_controller::keep_file_edit(string_view, command_request, command_inverse)` / `usize kept_file_edits()` / `void note_unrecorded_edit()` | edits made while playing |
 | `pick_result pick(const math::ray &, span<const pick_candidate>, const pick_context &, pick_mode)` | picking |
 | `void screenshot_service::request(const screenshot_request &, async_reply)` / `bool available()` | screenshots |
 | `static result<ecs::entity> entity_ref::resolve(const json::value &, scene::scene &)` | guid or path to entity |

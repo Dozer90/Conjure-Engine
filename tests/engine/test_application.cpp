@@ -2,17 +2,26 @@
 
 #include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
 
 #include "conjure/core/clock.h"
+#include "conjure/core/log.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
+#include "conjure/core/vfs/native_file_system.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
+#include "conjure/ecs/world.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/exit_code.h"
+#include "conjure/engine/project.h"
+#include "conjure/scene/scene.h"
+#include "conjure/scene/scene_manager.h"
+#include "conjure/scene/scene_serializer.h"
 #include "engine/executable_path.h"
 
 #include <cmath>
@@ -20,10 +29,11 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 // application.h (docs/design/06_engine_loop.md 4.2, R13): the state machine, the simulation modes, the
-// step variants, quit codes, the main-thread queue and the injected clock.
+// step variants, quit codes, the main-thread queue, the injected clock and the kept startup-scene failure.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -49,6 +59,20 @@ namespace {
                 context.app->request_quit(mCode);
             }
     };
+
+    /// <summary>
+    /// The descriptor of a project boot: the project's settings (its startup scene among them) applied over the
+    /// inline configuration, as an editor or as a runtime.
+    /// </summary>
+    [[nodiscard]] application_desc project_desc(project loaded, bool editor) {
+        engine_config config = engine_test::inline_config();
+        config.projectPath = loaded.root_directory();
+        config.editor = editor;
+        loaded.apply_to(config);
+        application_desc desc = engine_test::make_desc(config);
+        desc.project = std::move(loaded);
+        return desc;
+    }
 }
 
 TEST_SUITE("engine/application") {
@@ -356,6 +380,76 @@ TEST_SUITE("engine/application") {
         application relative(engine_test::make_desc(config));
         CHECK(relative.managed_directory().is_absolute());
         CHECK(relative.managed_directory() == std::filesystem::current_path() / "sdk" / "managed");
+    }
+
+    TEST_CASE("application - startup_scene_failure is empty when no startup scene is named") {
+        application app(engine_test::make_desc(engine_test::inline_config()));
+        CHECK_FALSE(app.startup_scene_failure().has_value());
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK_FALSE(app.startup_scene_failure().has_value());
+        app.shutdown();
+        CHECK_FALSE(app.startup_scene_failure().has_value());
+    }
+
+    TEST_CASE("regression - code sweep F659 an editor application keeps the startup scene failure it carried on from") {
+        log_capture logs = {};
+        temp_directory directory("engine_startup_scene_failure");
+        project loaded = engine_test::write_project(directory.path(), "kept", "scenes/start.scene.json");
+        const std::filesystem::path assetsDirectory = loaded.assets_directory();
+
+        application app(project_desc(std::move(loaded), true));
+        CHECK_FALSE(app.startup_scene_failure().has_value());
+        // The editor starts over an empty world; until now only the log said why.
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.startup_scene_failure().has_value());
+        CHECK(app.startup_scene_failure()->is(engine_error::STARTUP_SCENE_FAILED));
+        CHECK(app.startup_scene_failure()->message().find("assets://scenes/start.scene.json") != std::string::npos);
+        CHECK(logs.contains(core::log_level::WARN, app.startup_scene_failure()->message()));
+        CHECK(app.context().world->entity_count() == 0);
+
+        // Author the missing scene with this application, then stop: the failure outlives the shutdown.
+        scene::scene &draft = app.context().scenes->active();
+        draft.set_name("start");
+        CONJURE_REQUIRE_OK(draft.create_entity(core::string_id("root")));
+        core::vfs::native_file_system files(assetsDirectory, false);
+        CONJURE_REQUIRE_OK(scene::scene_serializer::save_scene_file(draft, files, "scenes/start.scene.json"));
+        app.shutdown();
+        CHECK(app.startup_scene_failure().has_value());
+
+        // The next start finds the scene: the failure of the start before is gone.
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK_FALSE(app.startup_scene_failure().has_value());
+        CHECK(app.context().world->entity_count() == 1);
+        app.shutdown();
+    }
+
+    TEST_CASE("application - a runtime keeps the startup scene failure its initialise returned") {
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_startup_scene_fatal");
+        project loaded = engine_test::write_project(directory.path(), "fatal", "scenes/missing.scene.json");
+
+        application app(project_desc(std::move(loaded), false));
+        const core::result<void> initialised = app.initialise();
+        CONJURE_CHECK_ERROR(initialised, engine_error::STARTUP_SCENE_FAILED);
+        REQUIRE_FALSE(initialised.has_value());
+        CHECK(app.state() == application_state::CREATED);
+        REQUIRE(app.startup_scene_failure().has_value());
+        CHECK(app.startup_scene_failure()->is(engine_error::STARTUP_SCENE_FAILED));
+        CHECK(app.startup_scene_failure()->message() == initialised.get_error().message());
+    }
+
+    TEST_CASE("application - a startup that fails before the scene step keeps no startup scene failure") {
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_startup_scene_unreached");
+        project loaded = engine_test::write_project(directory.path(), "unreached", "scenes/missing.scene.json");
+        std::vector<std::string> log = {};
+
+        application app(project_desc(std::move(loaded), true));
+        app.add_subsystem(std::make_unique<engine_test::probe_subsystem>("failing", log, true));
+        CHECK_FALSE(app.initialise().has_value());
+        CHECK_FALSE(app.startup_scene_failure().has_value());
     }
 
     TEST_CASE("application - add_subsystem rejects null and late additions") {

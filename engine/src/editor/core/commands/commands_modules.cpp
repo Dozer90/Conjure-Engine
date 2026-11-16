@@ -213,10 +213,7 @@ namespace conjure::editor::support {
             }
             std::error_code ignored = {};
             if (!std::filesystem::is_directory(directory, ignored)) {
-                return make_editor_error(
-                  protocol_error_code::PATH_NOT_FOUND,
-                  std::format("'{}' is not a directory", directory.generic_string())
-                );
+                return unusable_path(directory, "not a directory");
             }
             const core::result<u32> added = manager->discover(directory);
             core::json::document result = core::json::object({{"directory", directory.generic_string()}});
