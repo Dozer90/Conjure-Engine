@@ -128,7 +128,9 @@ Presets live in `CMakePresets.json`; `tools/build.py` wraps them and sets up MSV
 - [ ] Code style and conventions followed (run the checklist); `python tools/check_style.py
       --tests-mirror-headers` is clean (tabs, 120 columns, LF, `#pragma once`, no `using namespace`
       in headers, no Windows-macro enumerator names, no third-party includes in public headers,
-      test naming, tests mirror headers).
+      test naming, tests mirror headers). A change under `managed/` also passes
+      `dotnet format --verify-no-changes managed/<project>/<project>.csproj` for `Conjure.Managed`,
+      `Conjure.Bootstrap` and `Conjure.TestScripts` (a blocking CI step).
 - [ ] Public headers compile on their own (`conjure_header_check`, part of the default build) and
       are documented with `<summary>` blocks; module README updated.
 - [ ] No third-party header leaks into public headers (glm excepted).

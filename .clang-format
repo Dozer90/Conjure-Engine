@@ -1,6 +1,7 @@
 # Approximation of docs/CODE_STYLE.cpp. The style guide wins where the two disagree
 # (notably the two-space continuation indent for wrapped argument lists, which
-# clang-format cannot express exactly). Run as a checker, not an auto-formatter.
+# clang-format cannot express exactly). An optional local aid: no CI step runs it,
+# and tools/check_style.py is the only C++ style gate (docs/design/08_testing.md D17).
 BasedOnStyle: LLVM
 Language: Cpp
 Standard: c++20

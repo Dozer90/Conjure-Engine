@@ -166,7 +166,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # The id gives the "dotnet format" step the SDK version this step installs (its dotnet-version output).
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        id: dotnet
         with:
           dotnet-version: "8.0.x"
 
@@ -178,7 +180,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev clang-format-18
+            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
 
       - name: Style
         run: python tools/check_style.py --tests-mirror-headers
@@ -200,18 +202,6 @@ jobs:
           python -m pip install -r tools/docs_requirements.txt
           python -m mkdocs build --strict
 
-      # .clang-format approximates docs/CODE_STYLE.cpp (the two-space continuation indent cannot be expressed), so
-      # the formatter is advisory until the tree has been reconciled with it; the step reports, the job stays green.
-      - name: clang-format (advisory)
-        continue-on-error: true
-        run: |
-          git ls-files 'engine/*.cpp' 'engine/*.h' 'editor/*.cpp' 'runtime/*.cpp' 'tests/*.cpp' 'tests/*.h' \
-            | xargs clang-format-18 --dry-run -Werror
-
-      - name: dotnet format (advisory)
-        continue-on-error: true
-        run: dotnet format --verify-no-changes managed/Conjure.Managed/Conjure.Managed.csproj
-
       - name: Cache dependency sources
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -222,3 +212,37 @@ jobs:
         run: |
           cmake --preset linux-gcc-debug
           cmake --build --preset linux-gcc-debug --parallel --target conjure_header_check
+
+      # The C# layout gate (08_testing.md D17, code sweep F784): the formatter reads the rules from .editorconfig
+      # and a difference in any of the three managed projects fails the job. C++ has no formatter step:
+      # tools/check_style.py above is its only style gate, because .clang-format cannot express
+      # docs/CODE_STYLE.cpp (the two-space continuation indent) and stays an optional local aid.
+      #
+      # Which formatter judges: with no global.json, dotnet runs the newest SDK on the runner, and the image
+      # carries newer ones than the SDK setup-dotnet adds. So the step writes a global.json that names exactly
+      # the version setup-dotnet installed (roll-forward disabled: that SDK or an error) and prints the version
+      # in use. A global.json that is already there is left alone and decides instead: once the repository
+      # tracks one (decided in code sweep F778), this step needs no change, provided the setup-dotnet step
+      # installs an SDK that file accepts; dotnet fails here when none is installed.
+      #
+      # The step is the last of the job and runs after a failed step too, so a C# difference cannot hide the
+      # header check or the other way round; the loop lets all three projects report before the step fails.
+      - name: dotnet format
+        if: ${{ !cancelled() }}
+        env:
+          SETUP_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        run: |
+          if [ ! -f global.json ]; then
+            if ! printf '%s' "$SETUP_DOTNET_SDK" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$'; then
+              echo "::error::setup-dotnet reported no SDK version ('$SETUP_DOTNET_SDK'): the formatter is unknown"
+              exit 1
+            fi
+            printf '{ "sdk": { "version": "%s", "rollForward": "disable" } }\n' "$SETUP_DOTNET_SDK" > global.json
+          fi
+          cat global.json
+          dotnet --version
+          status=0
+          for project in Conjure.Managed Conjure.Bootstrap Conjure.TestScripts; do
+            dotnet format --verify-no-changes "managed/$project/$project.csproj" || status=1
+          done
+          exit $status

@@ -1,7 +1,7 @@
-# Nightly matrix (docs/design/08_testing.md 7.3, D11, D13, D15; docs/handbook/ci.md): the five build legs with
-# the slow and scripting-hot-reload cases, TSan over the job-system users, the Distribution export round trip,
-# the golden images on software rasterisers and the benchmarks at the ci machine class. Nothing here gates a
-# pull request; a red nightly is a ticket for the module owner.
+# Nightly matrix (docs/design/08_testing.md 7.3, D11, D13, D15, D16; docs/handbook/ci.md): the five build legs
+# with the slow and scripting-hot-reload cases, TSan over the job-system users, the Distribution unit suite and
+# export round trip, the golden images on software rasterisers and the benchmarks at the ci machine class.
+# Nothing here gates a pull request; a red nightly is a ticket for the module owner.
 
 name: Nightly
 
@@ -17,7 +17,8 @@ permissions:
 env:
   # Nightly allows no label-based skips: the golden jobs enable the images, the others never register them.
   # Skips by case-name tag follow the same per-leg policy as ci.yml (skip-tags): [window] and [audio_device]
-  # everywhere, [gpu] where no D3D12 WARP adapter exists; the downloaded cases must run here.
+  # everywhere, [gpu] where no D3D12 WARP adapter exists; the downloaded cases must run in full-matrix-nightly.
+  # distribution-export fetches no downloaded assets, so its unit suite may skip [downloaded] as well.
   CONJURE_TEST_ALLOWED_SKIPS: ""
 
 jobs:
@@ -162,11 +163,13 @@ jobs:
             dist-preset: windows-msvc-dist
             dev-preset: windows-msvc-dev
             exe: .exe
+            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag downloaded
           - name: linux
             os: ubuntu-24.04
             dist-preset: linux-gcc-dist
             dev-preset: linux-gcc-dev
             exe: ""
+            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag downloaded --allow-tag gpu
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -189,6 +192,7 @@ jobs:
       # The Distribution runtime and the Development editor that exports with it (the editor is never part of
       # a Distribution build, 04_editor.md 8).
       - name: Configure and build Distribution
+        id: build-dist
         run: |
           cmake --preset ${{ matrix.dist-preset }}
           cmake --build --preset ${{ matrix.dist-preset }} --parallel
@@ -216,6 +220,32 @@ jobs:
           fi
           build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
           python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
+      # The whole unit suite in the shipping configuration (08_testing.md D16, code sweep F332): asserts and
+      # TRACE/DEBUG logging are compiled out here and in no other job, so code that leans on an assert's side
+      # effect fails only in this run. The test executables are part of the Distribution build above; the preset
+      # applies the pull-request label filter (benchmark, golden, downloaded, slow and process excluded, the
+      # process cases ran in the step before the export). The step comes last and depends on the Distribution
+      # build alone, so a red unit suite never hides the export round trip and a red export never hides the suite.
+      - name: Distribution unit tests
+        id: dist-tests
+        if: ${{ !cancelled() && steps.build-dist.outcome == 'success' }}
+        run: ctest --preset ${{ matrix.dist-preset }} --output-junit junit_dist.xml
+      # Runs whenever the suite step ran, green or red: ctest writes junit_dist.xml also when cases fail, so a
+      # red night reports its unexpected skips in the same run instead of hiding them until the failures are fixed.
+      - name: Check skips
+        if: ${{ !cancelled() && (steps.dist-tests.outcome == 'success' || steps.dist-tests.outcome == 'failure') }}
+        run: >
+          python tools/ctest_check_skips.py --build-dir build/${{ matrix.dist-preset }}
+          --junit build/${{ matrix.dist-preset }}/junit_dist.xml ${{ matrix.skip-tags }}
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: distribution-reports-${{ matrix.name }}
+          path: |
+            build/${{ matrix.dist-preset }}/junit_dist.xml
+            build/${{ matrix.dist-preset }}/test_output
+          if-no-files-found: ignore
 
   golden-d3d12-warp:
     name: golden-d3d12-warp

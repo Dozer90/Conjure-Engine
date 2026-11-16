@@ -40,12 +40,25 @@ matrices, what each job proves, the sanitizer settings, and how to reproduce a r
 | `linux-gcc-debug` | `ubuntu-24.04` | `linux-gcc-debug` | yes | GCC 13 with `-Wall -Wextra -Wpedantic ... -Werror`, libstdc++, POSIX backends (`*_posix.cpp`) |
 | `linux-clang-sanitize` | `ubuntu-24.04` | `linux-clang-sanitize` with `-DCONJURE_WITH_SCRIPTING=OFF` | yes | Clang with AddressSanitizer and UndefinedBehaviorSanitizer; leak detection on; any report fails the test; scripting is off because CoreCLR is not sanitizer-clean (D13) |
 | `macos-debug` | `macos-14` | `macos-debug` | yes | AppleClang, libc++, Darwin-specific paths (`@loader_path` in the dynamic-library tests) |
-| `style-and-headers` | `ubuntu-24.04` | `linux-gcc-debug` (header check only) | no | `check_style.py --tests-mirror-headers`, `check_exports.py` and its self-test, the `check_distribution_symbols.py` and `ctest_check_skips.py` self-tests, `check_docs.py`, `tools/tests/test_check_docs.py`, `mkdocs build --strict`, the `conjure_header_check` target; `clang-format-18 --dry-run` and `dotnet format --verify-no-changes` run advisory (`continue-on-error`) until the tree has been reconciled with `.clang-format` |
+| `style-and-headers` | `ubuntu-24.04` | `linux-gcc-debug` (header check only) | no | `check_style.py --tests-mirror-headers`, `check_exports.py` and its self-test, the `check_distribution_symbols.py` and `ctest_check_skips.py` self-tests, `check_docs.py`, `tools/tests/test_check_docs.py`, `mkdocs build --strict`, the `conjure_header_check` target, `dotnet format --verify-no-changes` on the three managed projects (blocking; the last step, run after a failed step too) |
+
+Formatting has two gates and no advisory step (`docs/design/08_testing.md` D17). C++ layout is checked by
+`tools/check_style.py` alone: no workflow runs clang-format, because `.clang-format` cannot express the two-space
+continuation indent of `docs/CODE_STYLE.cpp`; the file stays in the repository as an optional local aid. C# layout
+is checked by `dotnet format --verify-no-changes` on `Conjure.Managed`, `Conjure.Bootstrap` and
+`Conjure.TestScripts`, with the rules of the `[*.cs]` section of `.editorconfig`; a difference fails the job.
+The step is the last of `style-and-headers` and runs unless the run was cancelled, so it and the header check
+cannot hide each other, and all three projects report before it fails. Its formatter is the one of the SDK that
+`actions/setup-dotnet` installed, not the newest SDK of the runner image, which `dotnet` would pick by itself: when
+the checkout has no `global.json`, the step writes one that names the version the setup step reports
+(`dotnet-version` output, `rollForward` `disable`: that SDK or an error) and prints the file and `dotnet --version`.
+A `global.json` already in the checkout is left alone and selects the SDK instead.
 
 Together the five test legs cover the fixed matrix of `docs/design/08_testing.md` D15: MSVC, GCC, Clang,
-macOS and sanitizers; the Distribution configuration is built nightly (section 6). The style and documentation
-checks also run inside every test leg because `tests/CMakeLists.txt` registers `style.check`, `docs.check` and
-`docs.check_tool` as CTest entries, and the header check runs inside every build because
+macOS and sanitizers; the Distribution configuration is built and unit-tested nightly (section 6). The style
+and documentation checks also run inside every test leg because `tests/CMakeLists.txt` registers
+`style.check`, `docs.check` and `docs.check_tool` as CTest entries, and the header check runs inside every
+build because
 `conjure_header_check` is part of `ALL`. Every leg stays headless: the `rhi` and `renderer` `[gpu]` cases, the
 `audio` `[audio_device]` cases and the `platform` `[window]` cases guard themselves with `CONJURE_TEST_REQUIRE`
 and report *Not Run* where the runner lacks the software GPU adapter, a playback endpoint or a display, and the
@@ -58,7 +71,7 @@ WARP adapter, so the `[gpu]` cases run there); the `[dotnet]` cases run because 
 | Step | Action | Notes |
 |---|---|---|
 | Checkout | `actions/checkout@v4` with `lfs: true` | the LFS fixtures under `tests/assets` |
-| .NET | `actions/setup-dotnet@v4` with `8.0.x` | `cmake/FindNetHost.cmake`, the managed build and the `[dotnet]` cases |
+| .NET | `actions/setup-dotnet@v4` with `8.0.x` | `cmake/FindNetHost.cmake`, the managed build and the `[dotnet]` cases; in `style-and-headers` the step has the id `dotnet` and its `dotnet-version` output names the SDK of the `dotnet format` step |
 | Python | `actions/setup-python@v5` with `3.12` | the `tools/*.py` checks and `download_test_assets.py` |
 | Linux packages | `sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev` | GLFW (X11 + Wayland), miniaudio and the Vulkan loader |
 | macOS packages | `brew install ninja` | |
@@ -112,8 +125,8 @@ nightly `linux-clang-tsan` job runs with `TSAN_OPTIONS=halt_on_error=1:second_de
    | `linux-gcc-debug` | `python tools/build.py --preset linux-gcc-debug --clean --test` |
    | `linux-clang-sanitize` | `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 python tools/build.py --preset linux-clang-sanitize --clean --test -- -DCONJURE_WITH_SCRIPTING=OFF` |
    | `macos-debug` | `python tools/build.py --preset macos-debug --clean --test` |
-   | `style-and-headers` | `python tools/check_style.py --tests-mirror-headers && python tools/check_exports.py && python tools/check_docs.py && python tools/docs.py build` |
-   | nightly `distribution-export` | `python tools/build.py --preset windows-msvc-dist --clean` then `python tools/check_distribution_symbols.py --build-dir build/windows-msvc-dist` |
+   | `style-and-headers` | `python tools/check_style.py --tests-mirror-headers && python tools/check_exports.py && python tools/check_docs.py && python tools/docs.py build`, then `dotnet format --verify-no-changes managed/<project>/<project>.csproj` for `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts` |
+   | nightly `distribution-export` | `python tools/build.py --preset windows-msvc-dist --clean --test` (the unit suite without asserts), then `python tools/check_distribution_symbols.py --build-dir build/windows-msvc-dist` |
 
    Compilers on the runners: MSVC from `windows-latest`, GCC 13 on `ubuntu-24.04` (`g++`), the distribution
    Clang on `ubuntu-24.04` (`clang++`), AppleClang on `macos-14`. A warning that only one compiler emits is
@@ -132,7 +145,14 @@ nightly `linux-clang-tsan` job runs with `TSAN_OPTIONS=halt_on_error=1:second_de
 
 3. **Style and header failures.** `style.check` output is `path:line: rule: message`; run
    `python tools/check_style.py --tests-mirror-headers` locally. A `<target>_header_check` compile error means
-   a public header does not compile alone: add the include it is missing.
+   a public header does not compile alone: add the include it is missing. A `dotnet format` failure names the
+   file, line and column of every difference (`error WHITESPACE: Fix whitespace formatting`); the same command
+   without `--verify-no-changes` rewrites the files, and the diff it leaves is the fix to review and commit.
+   CI runs the formatter of the 8.0 SDK that `actions/setup-dotnet` installed (section 2); the step's log shows the
+   `global.json` it used and the output of `dotnet --version`. The repository pins no SDK yet (code sweep F778), so
+   a local `dotnet` is the newest SDK installed and may format differently: reproduce a CI-only difference with
+   the version the step printed, selected through a `global.json` in a copy of `managed/` and `.editorconfig`
+   outside the repository.
 
 4. **Sanitizer reports.** The report names the allocation and the access with stack traces; symbolisation
    works out of the box on the runners. Locally, `-fno-omit-frame-pointer` is already set; install `llvm-symbolizer`
@@ -159,10 +179,23 @@ red nightly is a ticket for the module owner ([08_testing.md 7.3](../design/08_t
 |---|---|---|
 | `full-matrix-nightly` | the five PR legs | the `*-nightly` test presets where one exists (`windows-msvc-debug-nightly`, `linux-gcc-debug-nightly`), otherwise `ctest -LE benchmark`: the `slow`, `process` and `downloaded` cases included; skips checked with `--allow-tag window --allow-tag audio_device`, plus `--allow-tag gpu` on Linux and macOS (the downloaded cases must run) |
 | `linux-clang-tsan` | `ubuntu-24.04` | the `linux-clang-tsan` preset (ThreadSanitizer, scripting off, labels `core|ecs|scene|engine|integration`) |
-| `distribution-export` | `windows-latest`, `ubuntu-24.04` | builds `windows-msvc-dist` / `linux-gcc-dist` and the Development editor and runtime, runs the Distribution `process|runtime` tests with `--no-tests=error` (`runtime.distribution_symbols` among them), exports `tests/assets/projects/minimal` with the Development editor, copies the Distribution runtime, `conjure_shared` and (Windows) `nethost.dll` into the folder, boots it for 300 frames and runs `check_distribution_symbols.py --binary` on it |
+| `distribution-export` | `windows-latest`, `ubuntu-24.04` | builds `windows-msvc-dist` / `linux-gcc-dist` and the Development editor and runtime, runs the Distribution `process|runtime` tests with `--no-tests=error` (`runtime.distribution_symbols` among them), exports `tests/assets/projects/minimal` with the Development editor, copies the Distribution runtime, `conjure_shared` and (Windows) `nethost.dll` into the folder, boots it for 300 frames and runs `check_distribution_symbols.py --binary` on it; then the whole unit suite in Distribution, `ctest --preset <dist-preset> --output-junit junit_dist.xml`, with its own skip check (below) |
 | `golden-d3d12-warp` | `windows-latest` | `windows-msvc-dev` with `-DCONJURE_TEST_GOLDEN_IMAGES=ON`, `ctest -L golden --no-tests=error` on WARP; diffs uploaded on failure |
 | `golden-vulkan-lavapipe` | `ubuntu-24.04` | `linux-gcc-dev` with golden images on lavapipe (`VK_DRIVER_FILES`), the same `ctest -L golden --no-tests=error`; `continue-on-error` until the references are stable for two weeks (D11) |
 | `benchmarks-ci-class` | `windows-latest`, `ubuntu-24.04` | `conjure_benchmarks --class ci --enforce --out bench.json` on the Development presets; the table goes to the step summary and the JSON to an artefact (D10), uploaded on failure too; a `status=SKIPPED` row fails the job after the summary is written (D12); nothing is pushed anywhere (`permissions: contents: read`) |
+
+The Distribution unit suite (`docs/design/08_testing.md` D16) is the only run of the unit tests with asserts
+and TRACE/DEBUG logging compiled out, so it is where code that leans on an assert's side effect fails. The test
+executables are part of the Distribution build the job does anyway. The step runs last and depends on that build
+alone (`steps.build-dist.outcome == 'success'`): a red suite does not hide the export round trip, and a red
+export does not hide the suite. Its skip check runs whether the suite passed or failed (ctest writes
+`junit_dist.xml` in both cases), so a red night also reports its unexpected skips. The check allows no label and
+the tags `window`, `audio_device` and `downloaded` (the job fetches no downloaded assets, and the preset excludes
+the `downloaded` label), plus `gpu` on Linux; `junit_dist.xml` and `test_output` are uploaded as
+`distribution-reports-<os>` when the job fails.
+
+The configure presets no workflow uses are for local work only: `windows-msvc-asan`, `windows-vs`,
+`linux-clang-debug`, `macos-dev` and `macos-dist`.
 
 > [!NOTE]
 > No CTest entry carries the `golden` label yet: `tests/golden` does not exist and off-screen rendering is not
@@ -173,7 +206,8 @@ red nightly is a ticket for the module owner ([08_testing.md 7.3](../design/08_t
 
 ## Related
 
-- design record: `docs/design/08_testing.md` sections 7.3 (CI), 3.2 (skip discipline), D13 (sanitizers and scripting)
+- design record: `docs/design/08_testing.md` sections 7.3 (CI), 3.2 (skip discipline), D13 (sanitizers and scripting),
+  D16 (Distribution unit suite), D17 (formatting gates)
 - `docs/ARCHITECTURE.md` section 9 (CI row of the build matrix)
 - `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`, `CMakePresets.json`, `cmake/ConjureSanitizers.cmake`,
   `tools/ctest_check_skips.py`, `tools/check_distribution_symbols.py`

@@ -39,6 +39,9 @@ touching. Every item must hold. Fix, do not waive.
       `NONE = 0` member and get their operators from `CONJURE_ENUM_FLAGS(type);`.
 - [ ] Public methods have `/// <summary>` blocks; comments explain *why*; proper grammar.
 - [ ] Heading comment blocks separate sections in long files.
+- [ ] C#: a change under `managed/` passes `dotnet format --verify-no-changes
+      managed/<project>/<project>.csproj` for `Conjure.Managed`, `Conjure.Bootstrap` and
+      `Conjure.TestScripts` (rules in the `[*.cs]` section of `.editorconfig`; a blocking CI step).
 
 ## Conventions (docs/CONVENTIONS.md)
 

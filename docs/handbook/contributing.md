@@ -139,6 +139,9 @@ A task is done when every item holds (`AGENTS.md` 6, `docs/design/08_testing.md`
       has its `tests/<module>/test_<header>.cpp`; every `result` error code has a test; `memory_guard` clean
       and no unallowed `ERROR` logged.
 - [ ] `python tools/check_style.py --tests-mirror-headers` reports zero findings; the review checklist was walked.
+- [ ] A change under `managed/` passes `dotnet format --verify-no-changes managed/<project>/<project>.csproj`
+      for `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts` (the blocking C# gate of the
+      `style-and-headers` job, [CI](ci.md)).
 - [ ] Public headers compile alone (`conjure_header_check`, part of the default build), carry `<summary>`
       blocks and include no third-party header (glm excepted); no platform ifdefs outside the allowed files.
 - [ ] `engine/src/<module>/README.md` updated: purpose, main types, threading model, how to test.

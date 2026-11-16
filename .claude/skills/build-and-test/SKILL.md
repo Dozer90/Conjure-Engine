@@ -98,15 +98,21 @@ only when no one else is building.
   --tests-mirror-headers` locally. A new public header needs `tests/<module>/test_<name>.cpp`.
 - `<target>_header_check` compile errors mean a public header does not compile on its own: add the
   include it is missing.
+- `error WHITESPACE: Fix whitespace formatting` in the CI step `dotnet format` is a C# layout
+  difference under `managed/`. Run `dotnet format managed/<project>/<project>.csproj` (without
+  `--verify-no-changes`) for the project it names, review the diff and commit it; the rules are the
+  `[*.cs]` section of `.editorconfig`.
 
 ## CI
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request: `windows-msvc-debug` and
 `windows-msvc-dev` (tests; the Development leg also runs the export smoke), `linux-gcc-debug` (tests),
 `linux-clang-sanitize` (Clang Debug with ASan + UBSan, scripting off; sanitizer failures are fatal),
-`macos-debug` (tests) and `style-and-headers` (check_style, check_exports, check_docs, mkdocs, header
-check). Every build leg runs its test preset and then a second `ctest -L "downloaded|process"` pass, and
-the skip check covers both. The Distribution build, the `slow` cases (the `*-nightly` test presets exclude
-only `benchmark`), TSan, golden images and benchmarks run only in `.github/workflows/nightly.yml`
+`macos-debug` (tests) and `style-and-headers` (check_style, check_exports, check_docs, mkdocs, header check,
+then `dotnet format --verify-no-changes` on `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts`
+with the SDK the job installs). Every build leg runs its test preset and then a second `ctest -L "downloaded|process"` pass,
+and the skip check covers both. The Distribution build with the unit suite run in Distribution, the `slow`
+cases (the `*-nightly` test presets exclude only `benchmark`), TSan, golden images and benchmarks run only
+in `.github/workflows/nightly.yml`
 (`distribution-export`, `full-matrix-nightly`, `linux-clang-tsan`, `golden-d3d12-warp` /
 `golden-vulkan-lavapipe`, `benchmarks-ci-class`); see `docs/handbook/ci.md`. Keep every leg green.

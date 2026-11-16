@@ -235,9 +235,15 @@ Options are declared in the root `CMakeLists.txt` (`CONJURE_ENABLE_TSAN` in `cma
 - **Multi-config caveat.** doctest 2.4.11 discovers tests in a post-build step and writes one
   configuration-independent list per target, so after building `Development` on top of `Debug` in
   `build/windows-vs`, `ctest -C Debug` runs the Development binaries. Single-config presets are unaffected.
-- **Formatting.** `.clang-format` approximates `docs/CODE_STYLE.cpp` and is a checker, not an
-  auto-formatter: the style guide wins where they disagree (notably the two-space continuation indent).
-  `.editorconfig` sets UTF-8, LF, four spaces and 120 columns; `tools/check_style.py` enforces the rest.
+- **Formatting.** `tools/check_style.py` is the only C++ style gate. `.clang-format` approximates
+  `docs/CODE_STYLE.cpp` and is an optional local aid that no CI step runs: the style guide wins where they
+  disagree (notably the two-space continuation indent), so do not reformat whole files with it.
+  `.editorconfig` sets UTF-8, LF, four spaces and 120 columns, and its `[*.cs]` section holds the C# layout
+  rules that CI enforces: `dotnet format --verify-no-changes managed/<project>/<project>.csproj` must pass for
+  `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts`. CI judges with the formatter of the 8.0 SDK
+  its `actions/setup-dotnet` step installs, which the step selects through a `global.json` it writes into the
+  checkout; a local `dotnet` runs the newest SDK installed, which may format differently
+  ([Continuous integration](ci.md#2-the-matrix)).
 
 ## 9. Documentation toolchain
 

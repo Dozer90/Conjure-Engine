@@ -23,6 +23,9 @@ trim_trailing_whitespace = false
 
 [*.cs]
 indent_size = 4
+# A case section whose body is a block keeps the block's braces under the label and its statements one level in
+# (the layout of the managed sources); `dotnet format --verify-no-changes` is a blocking CI step (code sweep F784).
+csharp_indent_case_contents_when_block = false
 
 [*.{hlsl,hlsli}]
 indent_size = 4

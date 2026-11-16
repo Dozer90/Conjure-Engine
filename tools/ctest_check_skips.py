@@ -269,6 +269,11 @@ add_test(probe.two "cmake" "-E" "true")
 PR_TAGS_WINDOWS = {"window", "downloaded", "audio_device"}
 PR_TAGS_POSIX = PR_TAGS_WINDOWS | {"gpu"}
 
+# The tag policies of the Distribution unit suite (distribution-export in .github/workflows/nightly.yml,
+# docs/design/08_testing.md D16): no label is allowed, and [downloaded] may skip because the job fetches no assets.
+DISTRIBUTION_TAGS_WINDOWS = {"window", "audio_device", "downloaded"}
+DISTRIBUTION_TAGS_LINUX = DISTRIBUTION_TAGS_WINDOWS | {"gpu"}
+
 
 def self_test_ctest_schema(expect) -> None:
     """Runs `ctest --show-only=json-v1` on a generated test file and checks the schema parse_labels expects."""
@@ -324,8 +329,24 @@ def run_self_test() -> int:
            str([skip.name for skip in pull_request_windows]))
 
     nightly = unexpected_skips(skips, set(), {"window", "audio_device", "gpu"})
-    expect("the nightly policy flags downloaded, dotnet, golden and disabled cases", len(nightly) == 4,
+    expect("the full-matrix-nightly policy flags downloaded, dotnet, golden and disabled cases", len(nightly) == 4,
            str(len(nightly)))
+
+    dotnet_name = "scripting.host - starts [dotnet]"
+    golden_name = "golden.pbr_spheres - matches the reference"
+    gpu_name = "rhi.device - creates on the software adapter [gpu]"
+    distribution_windows = unexpected_skips(skips, set(), DISTRIBUTION_TAGS_WINDOWS)
+    expect("the Windows Distribution policy allows the downloaded skip and flags the dotnet, golden, gpu and "
+           "disabled cases",
+           sorted(skip.name for skip in distribution_windows)
+           == sorted([disabled_name, dotnet_name, golden_name, gpu_name]),
+           str([skip.name for skip in distribution_windows]))
+
+    distribution_linux = unexpected_skips(skips, set(), DISTRIBUTION_TAGS_LINUX)
+    expect("the Linux Distribution policy allows the gpu skip too and flags the dotnet, golden and disabled cases",
+           sorted(skip.name for skip in distribution_linux)
+           == sorted([disabled_name, dotnet_name, golden_name]),
+           str([skip.name for skip in distribution_linux]))
 
     disabled = [skip for skip in unexpected_skips(skips, {"golden"}, {"window"}) if skip.name == disabled_name]
     expect("ctest_check_skips - a DISABLED test is unexpected even with an allowed label and tag",
