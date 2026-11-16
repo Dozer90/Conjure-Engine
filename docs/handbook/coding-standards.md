@@ -257,12 +257,16 @@ Before every commit, run the checklist in `.claude/skills/code-review-checklist/
 ```
 python tools/build.py --test                                 # Debug, warnings as errors, every test
 python tools/check_style.py --tests-mirror-headers           # also the CTest entry style.check
+dotnet format --verify-no-changes managed/<project>/<project>.csproj   # only for a change under managed/
 ```
 
 `check_style.py` checks tabs, line length, CRLF, trailing whitespace, `#pragma once`, `using namespace` in
 headers, Windows macro names, `enum class`, include order and grouping, third-party includes in public headers,
-the doctest include, test case names, forbidden calls in tests and snake_case file names. Commit subjects are
-`module: imperative summary`; every commit builds and passes tests on its own.
+the doctest include, test case names, forbidden calls in tests, `std::thread` / `std::jthread` outside
+`core/jobs` and snake_case file names. Commit subjects are `module: imperative summary`; every commit builds and
+passes tests on its own. The `dotnet format` line is the C# layout gate of CI: run it for `Conjure.Managed`,
+`Conjure.Bootstrap` and `Conjure.TestScripts` (rules in the `[*.cs]` section of `.editorconfig`,
+`docs/design/08_testing.md` D17).
 
 ## Related
 - `docs/CODE_STYLE.cpp` (authoritative style, customer supplied; apply R31 for struct fields, not its example),

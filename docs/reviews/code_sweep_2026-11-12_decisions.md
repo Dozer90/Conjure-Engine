@@ -27,7 +27,21 @@ tested and reviewed:
 | `ca92309` editor | F730 (also F655) |
 | `b5b8a55` support | F706 |
 
-The 45 decisions of effort M and the 20 of effort L are still to do.
+Seventeen decisions of effort M were implemented on 2026-11-16. Each was implemented with its tests, reviewed by
+two independent reviewers, corrected and confirmed; the combined change was then reviewed again area by area
+before the commits:
+
+| Commit | Decisions |
+|---|---|
+| `60895bc` core | F209, F212, F233, F241, F243, F250, F753 |
+| `e85ee51` ecs | F077, F259, F606 |
+| `9cc9a52` audio | F319 |
+| `cc5cecb` editor | F089, F650, F656, F659 |
+| `9e87864` ci | F332, F784 |
+
+What that work left open is on the [status page](code_sweep_2026-11-12_status.md), under the follow-ups.
+
+The other 28 decisions of effort M and the 20 of effort L are still to do.
 
 ## Tests and CI
 

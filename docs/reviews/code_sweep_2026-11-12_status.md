@@ -4,14 +4,15 @@ Where each finding of [the sweep report](code_sweep_2026-11-12.md) stands. Every
 code by one engineer and checked by a second, then classified: **SMALL** fixes (local, about 60 lines or fewer,
 no open design question) were fixed and reviewed area by area; **CHALLENGING** ones are listed below with the
 shape of a fix for whoever takes them on next; **NEEDS_DECISION** items were decided by the owner on 2026-11-13
-([decisions](code_sweep_2026-11-12_decisions.md)), and the small ones are implemented. Ids are `F000` to
-`F791`, the order of `build/sweep_saved/confirmed.json`, which holds each finding's full evidence.
+([decisions](code_sweep_2026-11-12_decisions.md)); the small ones and the first of the medium ones are
+implemented. Ids are `F000` to `F791`, the order of `build/sweep_saved/confirmed.json`, which holds each
+finding's full evidence.
 
 | Status | All findings | Distinct defects |
 |---|---|---|
 | FIXED | 446 | 422 |
 | CHALLENGING | 239 | 213 |
-| NEEDS_DECISION (decided; 32 implemented, the rest to do) | 99 | 96 |
+| NEEDS_DECISION (decided; 49 implemented, the rest to do) | 99 | 96 |
 | NOT_A_BUG | 8 | 8 |
 
 A finding that repeats another one points at it with *same as*; only the primary carries the plan.
@@ -27,6 +28,21 @@ A finding that repeats another one points at it with *same as*; only the primary
   - `--offscreen` is refused by the engine configuration (a real device needs a window), so the editor falls back to the null device and `view.screenshot` needs a windowed editor.
   - A sprite without a texture logs one `texture id 0 is stale or unknown; drawing the fallback` WARN on its first frame, in the editor and the runtime.
   - F137: a `.meta` that already pins `conjure.physics.collision_mesh_importer` for a render model is not migrated; `asset.reimport` with `importer` corrects it by hand.
+- Seen while implementing the medium decisions (2026-11-16, core, ecs, audio, editor and CI), not in the sweep report and not fixed:
+  - Open decisions for the owner:
+    - Engine: startup goes on when a subsystem's system registration returns `NAME_CONFLICT` because a startup module took an engine system's name (`engine/src/engine/application.cpp`, startup step 18; `engine_subsystem::register_systems` returns nothing). Scene, physics and scripting then run partly registered behind one `ERROR`. Whether startup should fail is undecided; the limit is written down in `01_ecs.md` D13.
+    - Core: on macOS `write_file_atomic` flushes with `fsync`, not `F_FULLFSYNC`, so a power cut can lose the newest write (`10_core.md` C11). Neither was measured on a Mac.
+    - Audio: a subtree pause reaches the mixer as one command per group, so groups of one subtree can freeze a block apart (`12_audio.md` A17). A block-atomic pause needs a mixer change.
+    - Benchmarks: the `assets.first_scan_100` budget (1,000 ms desktop, 3,000 ms CI) is a regression guard chosen by the implementer, not a measured design figure (`tests/benchmarks/thresholds.json`).
+    - Editor: the inspector cannot set a float to infinity by typing `inf` (use `component.set` with `"inf"`).
+  - Not verified on the Windows build host: `engine/src/core/system/process_posix.cpp`, `engine/src/core/vfs/native_platform_posix.cpp` and the non-Windows branches of `tests/core/vfs/test_native_file_system.cpp` were read, not compiled; the Distribution unit suite of the nightly (F332) has never run, and its first run is expected to need triage; the `dotnet format` step of `style-and-headers` (F784) was run locally with SDK 8.0.301 but not on a runner.
+  - Assets: `asset_database::delete_asset` removes the source before it knows the `.meta` can be removed, so a failed delete can leave the source gone. A source whose own name is not portable (`a:b.png` from Linux) never gets a `.meta` on Windows, and nothing tells the user to rename it (`register_source`). The import log and the `db.bin` snapshot now wait for a device flush like every `write_file_atomic` caller, although both can be regenerated.
+  - Core: a project root that itself has a non-portable segment (a folder named `proj.`) is still handed to Win32 in the classic form; only names below the root are protected (`native_file_system::native_path_of`). The device-name half of F753 (`aux`, `nul.txt`) could not be reproduced on Windows 11, which reaches such files in the classic form too.
+  - ECS: the scheduler's DEBUG line "runs before unknown system ...; ignored" is also written for a forward reference that the next resolve binds (`engine/src/ecs/scheduler_stages.cpp`). No ecs-level case round-trips an infinite or NaN component float through the archive; the encoding of F250 is pinned in the core reflect tests only.
+  - Scripting: the script-field JSON paths still accept numbers only, so script fields do not use the `"inf"` / `"-inf"` encoding of F250 (`engine/src/scripting/script_fields.cpp`), and the inspector draws such an unreflected value as text.
+  - Editor, error codes for a path of the wrong kind (`04_editor.md` D20) still differ in corners: `script.compile` with `Game.csproj` a directory (`COMPILE_FAILED`), `asset.import` with a folder as source (`ASSET_NOT_FOUND`), `project.create` over a `project.json` that is a directory (`INVALID_ARGS`), `script.list` with `scripts` a file (empty list), `asset.delete` of an unregistered file (`ASSET_NOT_FOUND`), and `asset.create_folder` with a name that is not portable (`IO_ERROR`, where `asset.create_material` answers `INVALID_ARGS`).
+  - Editor: `scene.open` keeps the client's spelling of the path, so on a case-insensitive volume a later `scene.save` can register the same file a second time (`commands_scene.cpp`). `asset.restore` imports without reloading a loaded asset, unlike `asset.set` and `prefab.apply`. The `STARTUP_SCENE_FAILED` warning reaches only the `--exec` output and a `project.open` restart; other sessions learn it from the log. `property_drawer_registry::set` with an empty function answers the fallback drawer, not the built-in one its summary promises.
+  - Documents and tools: `docs/handbook/modules/audio.md` is at the 400-line limit and `docs/handbook/testing.md` at 399; `08_testing.md` 6.1 says `test_ai_protocol_e2e.cpp` drives the command file through `headless_runner::run`, but the test calls `parse_command_file` and `run_requests`; `tools/check_style.py` reports `std::async` and the raw OS thread calls outside `tests/` only.
 
 ## Found while reviewing the decision fixes
 

@@ -39,6 +39,8 @@ fixture, recorder-style null backends, `check_registry`, per-command protocol fi
 | D13 | **ASan/UBSan job builds with `CONJURE_WITH_SCRIPTING=OFF`**. Scripting is covered by the other PR jobs and the nightly hot-reload job. TSan is nightly, scripting off, on `core`, `ecs`, `scene`, `engine` and integration. | CoreCLR's own signal handling and heap are not sanitizer-clean; chasing its false positives costs more than it finds. Documented trade-off. |
 | D14 | **Editor is split** into `conjure_editor_core` (commands, undo stack, protocol codec, command server, headless session; no ImGui) + `conjure_editor_ui` (panels, viewport) + the thin `conjure_editor` executable. Protocol tests run in-process against `editor_core`; one process-level test runs the real `conjure_editor --headless --exec`. | In-process tests are fast and debuggable; the process-level test proves the real entry point. |
 | D15 | **CI**: PR jobs `windows-msvc-debug`, `windows-msvc-dev` (+ export smoke), `linux-gcc-debug`, `linux-clang-sanitize` (ASan+UBSan), `macos-debug`, `style-and-headers`. Nightly: `linux-clang-tsan`, `golden-d3d12-warp`, `golden-vulkan-lavapipe`, `benchmarks-ci-class`, `distribution-export`, `full-matrix-nightly`. Preset names are the ones already in `CMakePresets.json`. | Covers the fixed CI matrix (MSVC, GCC + Clang, macOS, sanitizers) in under 40 minutes per PR; expensive or noisy checks run nightly. |
+| D16 | **The Distribution configuration runs the whole unit suite nightly** (code sweep F332): after its export round trip, `distribution-export` runs `ctest --preset <dist-preset> --output-junit junit_dist.xml` on the Distribution tree it has already built (the preset keeps the pull-request label filter; the `process` and `runtime` labels run in their own step before the export), then `tools/ctest_check_skips.py` with no label allowed and the tags `[window]`, `[audio_device]` and `[downloaded]` (the job fetches no downloaded assets), plus `[gpu]` on Linux. The step depends on the Distribution build alone, so the suite and the export round trip report independently, and the skip check runs whether the suite passed or failed (ctest writes the report in both cases), so a red night reports its unexpected skips in the same run. No pull-request leg builds Distribution. | Asserts and TRACE/DEBUG logging are compiled out in this configuration only, so code that leans on an assert's side effect, and a test that passes only with asserts, is caught nowhere else. The test executables are part of the build the job already does, so the cost is run time, and a red nightly gates no pull request. |
+| D17 | **Formatting gates** (code sweep F784): C++ layout is enforced by `tools/check_style.py` alone. No workflow runs clang-format; `.clang-format` is an optional local aid that approximates `docs/CODE_STYLE.cpp`, and the style guide wins where the two differ. C# layout is enforced by `dotnet format --verify-no-changes` over `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts`, a blocking step of `style-and-headers`; its rules are the `[*.cs]` section of `.editorconfig` (`csharp_indent_case_contents_when_block = false`: the braces of a case body sit under the label, its statements one level in). The step is the last of the job, runs unless the run was cancelled, and lets all three projects report before it fails. Its formatter is the one of the SDK the job's `actions/setup-dotnet` step installed: when the checkout has no `global.json`, the step writes one naming that version (the step's `dotnet-version` output) with `rollForward` `disable`, and it prints `dotnet --version`; a `global.json` already in the checkout is left alone and selects the SDK (the repository tracks none yet; code sweep F778 decided one). | clang-format cannot express the two-space continuation indent of wrapped argument lists, so a clang-format gate would fight the style guide, and an advisory step that is always red is noise. The C# formatter and the managed sources agree, so that step can block; three projects because the formatter only reads the files of the project it is given. Without a `global.json`, `dotnet` runs the newest SDK on the runner, and the image carries newer ones than the job installs, so the gate would be judged by a formatter nobody chose; last and run after a failed step so that it and the header check cannot hide each other. |
 
 ---
 
@@ -555,7 +557,7 @@ maxAllocations, threshold)`) implements 3.6. Command line:
 | scripting | `test_host` `[scripting]`, `test_assembly_load`, `test_function_tables`, `test_script_component`, `test_serialised_fields`, `test_hot_reload`, `test_batched_update`, `test_managed_exceptions` | host starts/stops cleanly, missing runtime -> error; `Conjure.TestScripts` loads in a collectible ALC and unloads; every function table slot non-null; hot reload preserves a `[Serialized] int`; a throwing `OnUpdate` logs ERROR per fault, the third consecutive fault disables that callback (`allow_errors()` then assert the count), and the engine continues (`03_scripting.md` D11; R28); 10,000 scripts updated in one managed call. |
 | engine | `test_application`, `test_layer_stack`, `test_engine_loop`, `test_project`, `test_export`, `test_headless_mode`, `test_component_sync`, `test_check_registry` | 600 frames at 1/60 -> 600 fixed updates; one frame at 0.1 s -> 6; time scale and pause; `project.json` round-trip; `engine::export_pipeline` into `temp_directory` produces a folder that an `application` built from `--project <dir> --headless --frames 60` boots with exit 0 (R21). |
 | bindings | `test_binding_tables`, `test_entity_bindings`, `test_transform_bindings`, `test_input_bindings`, `test_physics_bindings`, `test_audio_bindings`, `test_prefab_scene_bindings`, `test_logging_bindings`, `test_diagnostics_bindings`, `test_dod_span_bindings`, `test_call_counters` | generated C# manifest equals native table (names, arity, hashes); a span over 1,000 transforms stays valid for the whole query scope because structural requests made inside the scope are deferred to `query_end` (R5), and a span escaping the scope is a compile error; every counter increments when its thunk runs. |
-| editor | `test_command_protocol`, `test_command_catalogue`, `test_undo_redo`, `test_tcp_transport`, `test_stdin_transport`, `test_event_stream`, `test_headless_exec`, `test_protocol_robustness`, `test_query_schemas`, `test_selection`, `test_inspector_model`, `test_panels_headless`, `test_editor_process` | section 6.3; panels build an ImGui frame on the null device without asserting. |
+| editor | `test_command_protocol`, `test_command_catalogue`, `test_undo_redo`, `test_tcp_transport`, `test_stdin_transport`, `test_event_stream`, `test_headless_runner`, `test_protocol_robustness`, `test_query_schemas`, `test_selection`, `test_inspector_model`, `test_panels_headless`, `test_editor_process` | section 6.3; panels build an ImGui frame on the null device without asserting. |
 | runtime | `test_runtime_boot`, `test_missing_project` | boots an exported folder headless for 60 frames, exit 0; missing `project.json` -> exit 2. |
 
 ---
@@ -620,10 +622,13 @@ absolute error limit of 1.0 binds first.
    `std::ostringstream`, same framing cases.
 4. `test_event_stream.cpp`: subscribe -> `entity.create` emits `scene.changed {revision, label}` and the
    response carries the guid; `scene.loaded` and `progress` events; unsubscribe stops delivery.
-5. `test_headless_exec.cpp`: `editor::headless_runner::run(application, options)` (`--exec`); exit codes
-   0 all ok, 1 a command failed (NDJSON responses identify the failing index), 2 startup/project failure,
-   3 bad arguments; `--keep-going` runs all; `view.screenshot` on the null device answers `NOT_AVAILABLE`
-   (R15).
+5. `test_headless_runner.cpp`: `editor::headless_runner::load_command_file(file)`, then
+   `run(application, options, requests)` (`--exec`); exit codes 0 all ok, 1 a command failed (NDJSON
+   responses identify the failing index), 2 startup/project failure, 3 bad arguments (for a command file that
+   cannot be read or parsed, `editor_application::initialise` fails with `BAD_ARGUMENTS` before the engine
+   starts, `04_editor.md` D22); a startup scene that did not load is the first output line (the event
+   `warning {code: "STARTUP_SCENE_FAILED", message}`); `--keep-going` runs all; `view.screenshot` on the null
+   device answers `NOT_AVAILABLE` (R15).
 6. `test_protocol_robustness.cpp`: fixed 60-entry corpus in `tests/assets/protocol_corpus/`
    (truncated JSON, 10,000-deep nesting, `1e400`, invalid UTF-8, null bytes, duplicate keys, 1 MiB
    string, empty line): every entry yields an error response or is ignored, never a crash or assert.
@@ -649,6 +654,7 @@ absolute error limit of 1.0 binds first.
 | `scene.transform_propagation_10k` | 10,000, depth 3, all roots dirty | transform system | 0.40 ms | 1.20 ms | 0 |
 | `scene.transform_propagation_10k_sparse` | same, 10 % dirty | same | 0.10 ms | 0.30 ms | 0 |
 | `scene.load_10k` | json scene with 10,000 entities | load + unload | 250 ms | 750 ms | n/a |
+| `assets.first_scan_100` | project folder on disk (`native_file_system`) with 100 sources that have no `.meta` | first `asset_database::scan()` | 1,000 ms | 3,000 ms | n/a |
 | `physics.step_10k_active` | 10,000 dynamic boxes falling onto a plane | one fixed step | 8.00 ms | 24.0 ms | 0 |
 | `physics.step_10k_sleeping` | same after 600 settle steps | one fixed step | 0.80 ms | 2.40 ms | 0 |
 | `physics.sync_10k` | 10,000 bodies | Jolt -> transform sync | 0.30 ms | 0.90 ms | 0 |
@@ -663,6 +669,10 @@ absolute error limit of 1.0 binds first.
 Budget rationale: 60 Hz is 16.67 ms. Each customer scenario (transform, physics body, script update
 on 10,000 entities) fits with headroom on `desktop`; `engine.full_frame_10k_physics` is the tightest
 and its p99 gate is the "no frame loss" claim. Allocation gates are steady-state (after warm-up).
+`assets.first_scan_100` (code sweep F243) is a disk benchmark: the scan writes one `.meta` per source
+through `write_file_atomic`, which flushes each file to the storage device (`10_core.md` C11), so its
+time follows the drive, not the processor. Its budget is a regression guard of 10 ms per source, not a
+measured design figure (`tests/benchmarks/README.md`).
 `samples/stress_test` is the visual counterpart with the profiler overlay and is not in ctest.
 
 ### 7.2 The `feature_test` sample (`samples/feature_test/`)
@@ -709,7 +719,7 @@ reachable only on error paths, each with a one-line reason.
 | `linux-gcc-debug` | ubuntu-24.04 | `linux-gcc-debug` | apt: `ninja-build xorg-dev libwayland-dev libxkbcommon-dev libasound2-dev libvulkan-dev` |
 | `linux-clang-sanitize` | ubuntu-24.04 | `linux-clang-sanitize` + `-DCONJURE_WITH_SCRIPTING=OFF` (D13) | `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`, `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`; no suppression files (none are needed) |
 | `macos-debug` | macos-14 | `macos-debug` | Vulkan backend compiles against Vulkan-Headers; MoltenVK not needed for null tests |
-| `style-and-headers` | ubuntu-24.04 | - | `python tools/check_style.py` (tabs, > 120 cols, missing `#pragma once`, file naming, `enum` without `class` outside `_flags`, third-party includes in public headers, test-mirrors-header), `clang-format-18 --dry-run -Werror` on engine/editor/runtime/tests, `cmake --build --target conjure_header_check`, `dotnet format --verify-no-changes managed/` |
+| `style-and-headers` | ubuntu-24.04 | - | `python tools/check_style.py` (tabs, > 120 cols, missing `#pragma once`, file naming, `enum` without `class` outside `_flags`, third-party includes in public headers, test-mirrors-header), `cmake --build --target conjure_header_check`, then as the last step, run after a failed step too, `dotnet format --verify-no-changes` on `Conjure.Managed`, `Conjure.Bootstrap` and `Conjure.TestScripts` with the SDK `actions/setup-dotnet` installed, selected through a `global.json` (blocking; C++ has no formatter step, D17) |
 
 Common steps: `actions/checkout@v4` (`lfs: true`), `actions/setup-dotnet@v4` (8.0.x), `actions/cache`
 on `build/<preset>/_deps` keyed by the hash of `third_party/CMakeLists.txt`, cache on
@@ -729,7 +739,7 @@ nothing fails the step), `python tools/ctest_check_skips.py` over both reports w
 |---|---|
 | `full-matrix-nightly` | all five build jobs with `*-nightly` test presets (adds `slow`, scripting hot reload on all three OSes) |
 | `linux-clang-tsan` | `CONJURE_ENABLE_TSAN=ON`, scripting off; labels `core`, `ecs`, `scene`, `engine`, `integration`; `TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1`, no suppression files |
-| `distribution-export` | `windows-msvc-dist` and `linux-gcc-dist`: `ctest -L "process|runtime" --no-tests=error` on the Distribution tree, export `feature_test`, run the exported runtime 300 frames headless, assert exit 0 and no editor symbols in the binary |
+| `distribution-export` | `windows-msvc-dist` and `linux-gcc-dist`: `ctest -L "process|runtime" --no-tests=error` on the Distribution tree, export `feature_test`, run the exported runtime 300 frames headless, assert exit 0 and no editor symbols in the binary; then the whole unit suite in Distribution (D16): `ctest --preset <dist-preset> --output-junit junit_dist.xml` and `ctest_check_skips.py` with `--allow-tag window`, `audio_device` and `downloaded` (plus `gpu` on Linux), `junit_dist.xml` and `test_output` uploaded on failure |
 | `golden-d3d12-warp` | windows-latest, `CONJURE_TEST_GOLDEN_IMAGES=ON`, `ctest --test-dir build/windows-msvc-dev -L golden --no-tests=error` (red with "No tests were found" until `tests/golden` registers its cases, never green with zero comparisons), upload `test_output` on failure (the gate) |
 | `golden-vulkan-lavapipe` | ubuntu-24.04, apt `mesa-vulkan-drivers`, `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`, the same `ctest -L golden --no-tests=error`; `continue-on-error: true` until two weeks stable |
 | `benchmarks-ci-class` | windows-latest + ubuntu-24.04, Development, `conjure_benchmarks --class ci --enforce --out bench.json`; the job fails on a breach; results appended to the job summary and uploaded as the `bench-<os>` artefact (the workflow has read permissions only, no history branch is written) |
@@ -753,8 +763,9 @@ nothing fails the step), `python tools/ctest_check_skips.py` over both reports w
    (`16_documentation.md` section 5).
 8. If the module adds a system, `test_determinism` still passes with 0, 2 and 8 threads; if it
    participates in the frame loop, at least one `tests/integration` case exercises it.
-9. Zero warnings under the project warning set, `check_style.py` and clang-format clean, nightly TSan
-   clean for anything touching the job system, no unexpected skips.
+9. Zero warnings under the project warning set, `check_style.py` clean, `dotnet format --verify-no-changes`
+   clean for managed sources (D17), nightly TSan clean for anything touching the job system, no unexpected
+   skips.
 10. Code review completed, conventional commit subject, commit builds and passes `ctest` locally.
 
 ---

@@ -63,13 +63,20 @@ No Hungarian notation beyond the `m`/`s` prefixes.
   `= delete` and `constexpr` constructors of value types and small helper classes, which stay in
   the header. Members without a default initialiser are allowed only when the type has no
   sensible default (e.g. a `std::variant` set by every constructor) and carry a comment saying why.
+- Copy control is written in the type: a type that must not be copied deletes its copy constructor and
+  copy assignment itself and defaults (`noexcept`) or deletes its moves, as the example at the end of
+  `docs/CODE_STYLE.cpp` shows. There is no copy-control base class and none is added (`10_core.md` C13).
 - The style guide's `#region` / `#endregion` markers are not standard C++; use the comment-only
   heading blocks shown in the guide (as the engine does) and never `#pragma region`.
 - `[[nodiscard]]` on functions returning results or handles.
 - `const` and `constexpr` everywhere they apply. `noexcept` on move operations and trivial getters.
 - No `using namespace` in headers. `using namespace conjure::<module>;` is allowed in the `.cpp`
   of a class belonging to that module (per the style guide).
-- Threading: no raw `std::thread` outside `core::jobs`. Shared state is documented and guarded.
+- Threading: no raw `std::thread` / `std::jthread` outside `core::jobs`, and no `std::async` or raw
+  OS thread call (`pthread_create`, `CreateThread`, `_beginthread`, `_beginthreadex`) in any folder,
+  `core::jobs` included; code that needs a thread of its own holds a `core::jobs::dedicated_thread`
+  (`tools/check_style.py` rule `thread-outside-jobs`, which reads the code outside `tests/`). Shared
+  state is documented and guarded.
 - Platform-specific code lives behind backend interfaces; no `#ifdef _WIN32` outside
   `core/platform_detect.h` and backend implementation files.
 - Never name an enumerator or constant after a Windows macro. Known offenders: `ERROR`, `DELETE`,
@@ -140,6 +147,13 @@ is its summary.
   exclude the labels `benchmark|golden|downloaded|slow|process`).
 - `tools/check_style.py` runs as the CTest entry `style.check` (label `style`) and in CI; every
   public header also compiles alone through `conjure_header_check` (part of the default build).
+- Formatting (`docs/design/08_testing.md` D17): `tools/check_style.py` is the only C++ style gate;
+  `.clang-format` is an optional local aid that approximates `docs/CODE_STYLE.cpp` and that no CI step
+  runs. C# layout is a gate: `dotnet format --verify-no-changes` must pass for `Conjure.Managed`,
+  `Conjure.Bootstrap` and `Conjure.TestScripts` (rules in the `[*.cs]` section of `.editorconfig`). The
+  CI step is the last of `style-and-headers`, reports all three projects, and runs the formatter of the
+  SDK its `actions/setup-dotnet` step installed (8.0.x), selected by a `global.json` the step writes when
+  the checkout has none.
 - Run everything with: `cmake --preset windows-msvc-debug && cmake --build --preset windows-msvc-debug && ctest --preset windows-msvc-debug`.
 
 ## 7. CMake

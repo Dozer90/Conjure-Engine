@@ -598,7 +598,7 @@ the present inside `render_frame` is the back-pressure.
 | 17 | every subsystem `post_startup` in order: `assets_subsystem` runs `scan()` + `import_stale()` (R33); `scripting_subsystem` calls `script_runtime::initialize` (handshake; missing runtime is an error when `scripting.required`, else `WARN` + null context pointer) then `load_game_assembly` | `SCRIPT_RUNTIME_NOT_FOUND`, `SCRIPT_ASSEMBLY_LOAD_FAILED` |
 | 18 | every subsystem `register_systems(scheduler)` in order; `scheduler.finalise()` validates access sets and labels (R2) | `SCHEDULER_CONFLICT` |
 | 19 | layers `on_attach` in stack order | `LAYER_ATTACH_FAILED` |
-| 20 | startup scene (`startupSceneOverride` or project `startupScene`) via synchronous `scene_manager::load`; fatal in runtime builds, `WARN` when `config.editor` | `STARTUP_SCENE_FAILED` |
+| 20 | startup scene (`startupSceneOverride` or project `startupScene`) via synchronous `scene_manager::load`; fatal in runtime builds, `WARN` when `config.editor`; either way the failure is kept in `application::startup_scene_failure()` until the next `initialise()` (`04_editor.md` D22) | `STARTUP_SCENE_FAILED` |
 
 State becomes `RUNNING`. Steps 11-14 compile only under their `CONJURE_WITH_*` option; the context pointer stays
 null otherwise.
@@ -777,7 +777,8 @@ bindings::scripting_bindings_subsystem)`, `layers().push_layer(game_layer)`, `in
 | (no thread) AI command server | `editor` | non-blocking sockets polled on main in `protocol_server::poll`; only `--ai-stdio` owns a `core::jobs::dedicated_thread` reader (R38) | mutex-guarded line queue |
 
 Rules enforced or documented by the engine:
-- No `std::thread` outside `core::jobs` and backend implementation files (CONVENTIONS 3).
+- No `std::thread` / `std::jthread` outside `core::jobs` (CONVENTIONS 3, `10_core.md` C4; `tools/check_style.py`
+  rule `thread-outside-jobs`).
 - System thread modes: `PARALLEL` (chunk-parallel, access sets declared), `MAIN_THREAD` (main thread, may overlap
   with non-conflicting `PARALLEL` systems), `EXCLUSIVE` (alone; may mutate the world directly). Scripting systems
   are `EXCLUSIVE`; this makes direct `world` mutation and the `Span<T>` escape hatch safe for C#.

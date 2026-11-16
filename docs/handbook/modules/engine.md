@@ -63,12 +63,15 @@ the vfs mounts (`project://`, `assets://`, `engine://` next to the executable, `
 physics, renderer, scripting, modules (a module entry may add subsystems through the `application` service while
 step 15 runs; they start right behind it), the user subsystems added before `initialise()` (step 16), every
 `post_startup` (the asset scan and import happen here, R33; the scripting handshake and game assembly load), every
-`register_systems` followed by `scheduler::finalise()`, the layers' `on_attach`, the startup scene. The first
-failure shuts the started adapters down in reverse (detaching the layers first when the scene failed) and the
-application returns to `CREATED`. `shutdown()` is idempotent: `jobs.wait_idle()`, `device.wait_idle()`,
-`scene_manager::unload_all()`, `asset_manager::collect()`, layers, adapters in reverse, core. The assets adapter
-is stopped before the ecs adapter because `ecs::entity_archive` dereferences its registry in its destructor
-(section 12).
+`register_systems` followed by `scheduler::finalise()`, the layers' `on_attach`, the startup scene. A startup scene
+that does not load fails a runtime's `initialise()` with `STARTUP_SCENE_FAILED`; an editor engine
+(`engine_config::editor`) logs a warning and starts over an empty world. Either way the error is kept in
+`application::startup_scene_failure()` until the next `initialise()` (the editor's `--exec` output opens with it,
+`04_editor.md` D22). The first failure shuts the started adapters down in reverse (detaching the layers first when
+the scene failed) and the application returns to `CREATED`. `shutdown()` is idempotent: `jobs.wait_idle()`,
+`device.wait_idle()`, `scene_manager::unload_all()`, `asset_manager::collect()`, layers, adapters in reverse, core.
+The assets adapter is stopped before the ecs adapter because `ecs::entity_archive` dereferences its registry in its
+destructor (section 12).
 
 ## 3. The frame loop
 
@@ -106,12 +109,26 @@ or audio disabled, so a headless server still loads scenes that carry them.
 
 `ecs_module_consumer` turns `ecs::component_type_desc` / `system_extension_desc` records into `register_described` and
 `scheduler::add_system` calls, counts live uses and strips instances on unload (ids stay stable per name, a layout
-change is refused at `validate()`); `assets_module_consumer` validates importer and asset-type records and mounts module
-content as `modules://<name>/` (`module_content_file_system`); `scripting_module_consumer` records a module's managed
-assemblies (appending them to the game load context is section 12); the scripting subsystem clears its runtime pointer
-(`set_runtime(nullptr)`) before it destroys the runtime, so a later managed reload is a no-op instead of a
-use-after-free. Services a module entry may require: `engine::engine_context`, `engine::application` (during step 15
-only); `ecs::world`, `assets::asset_database` and `scene::scene_manager` are reached through the context.
+change is refused at `validate()`). `validate()` also returns `REGISTRATION_CONFLICT` for a system whose name its
+phase already holds in the scheduler (`scheduler::find_system`) or that the module registers twice in one phase
+(`01_ecs.md` D13, code sweep F259). The check sees only the systems added before the module loads: the engine adds
+its own at startup step 18, after the startup modules (step 15), so a startup module can still take an engine
+system's name, and the engine's later `add_system` is then the one refused with `NAME_CONFLICT` (an `ERROR` in the
+log; the scene, physics and scripting registrations stop at their first refused system, so the systems after it
+are missing too; startup continues). A system record's `reads` / `writes` name lists become the system's
+`resolveAccess` hook, which the scheduler calls when the system is added and again whenever the registry has
+gained component types (`01_ecs.md` D15, code sweep F077), so a system may name a component of an optional
+dependency: `attach()` logs one `WARN` per name that is still unknown once the module's own components are
+registered (`... module 'm': system 's' names component 'c' (reads[0]), which is not registered ...`, the name
+printed as `#<hash>` when the module never interned it), the module loads, and the access is added when a
+component of that name is registered. A misspelt name stays a warning and the system keeps running without that
+access, so treat the warning as a defect unless the name belongs to a module that is not loaded.
+`assets_module_consumer` validates importer and asset-type records and mounts module content as
+`modules://<name>/` (`module_content_file_system`); `scripting_module_consumer` records a module's managed
+assemblies (appending them to the game load context is section 12); the scripting subsystem clears its runtime
+pointer (`set_runtime(nullptr)`) before it destroys the runtime, so a later managed reload is a no-op instead of a
+use-after-free. Services a module entry may require: `engine::engine_context`, `engine::application` (during step
+15 only); `ecs::world`, `assets::asset_database` and `scene::scene_manager` are reached through the context.
 
 ## 6. Configuration, project and command line
 

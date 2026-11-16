@@ -56,8 +56,11 @@ PAUSED runs UPDATE / LATE_UPDATE through `run_phase_filtered(RUNS_WHILE_PAUSED)`
 a renderer exists.
 
 A startup scene whose source no longer imports (`asset_record_status::IMPORT_FAILED`, the cache keeps the old
-blob) is `STARTUP_SCENE_FAILED` for the runtime; the editor loads the cached copy. `physics_subsystem` marks the
-shape cache on `scene_manager::on_before_unload` and calls `physics_world::collect_shapes()` at the next
+blob) is `STARTUP_SCENE_FAILED` for the runtime; the editor loads the cached copy. When the startup scene does not
+load, the `STARTUP_SCENE_FAILED` error is kept in `application::startup_scene_failure()` until the next
+`initialise()` (an editor engine starts over an empty world instead of failing; the editor's `--exec` output opens
+with it as the event `warning {code: "STARTUP_SCENE_FAILED", message}`, `04_editor.md` D22). `physics_subsystem`
+marks the shape cache on `scene_manager::on_before_unload` and calls `physics_world::collect_shapes()` at the next
 `end_frame`, after the unload destroyed the bodies (14_physics.md). `modules_subsystem` gives an `EDITOR` host
 with a project shadow copies in `<project>/.conjure/module_cache` (07 D9); the runtime loads in place. The
 folder is shared per project and numbered from 1, so on Windows only one editor per project can load a native
@@ -142,7 +145,14 @@ renderer runs, its `render_frame` verdict is replaced for the next `frames` fram
   `handle` names a voice its entity does not own is a copy (duplicate, prefab, restored snapshot) and is reset
   to a fresh component instead of being allowed to act on the original's voice (code sweep F144).
 - `ecs_module_consumer` keeps trivially copyable columns in place across a reload instead of snapshotting
-  them: component ids are stable per name and a layout change is refused at `validate()`.
+  them: component ids are stable per name and a layout change is refused at `validate()`. `validate()` also
+  refuses (`REGISTRATION_CONFLICT`) a system whose name its phase already holds in the scheduler or that the
+  module registers twice in one phase (`01_ecs.md` D13). That check sees only the systems added before the
+  module loads: the engine adds its own at startup step 18, after the startup modules (step 15), so a startup
+  module can still take an engine system's name and the engine's `add_system` is then the one refused. A
+  `reads` / `writes` name the registry does not know is not refused: the lists become the system's
+  `resolveAccess` hook, `attach()` logs one `WARN` per unknown name, and the scheduler adds the access when a
+  component of that name is registered (`01_ecs.md` D15).
 - Extraction is serial on the main thread (R8 v1: job-parallel preparation lives inside the renderer).
 - `frame_memory` warns about overflow once per `OVERFLOW_WARNING_INTERVAL` (60) resets rather than once per
   wall-clock second, so the rule holds under a manual clock.
