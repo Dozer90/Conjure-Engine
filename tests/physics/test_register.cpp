@@ -4,6 +4,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_type_registry.h"
 #include "conjure/assets/assets_error.h"
+#include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
 #include "conjure/ecs/system_phase.h"
@@ -88,6 +89,10 @@ TEST_SUITE("physics/register") {
         REQUIRE(endStages.size() == 2);
         CHECK(scheduler.system(endStages[0].systems[0])->name == physics::SYSTEM_PULL_TRANSFORMS);
         CHECK(scheduler.system(endStages[1].systems[0])->name == physics::SYSTEM_CONTACT_EVENTS);
+
+        // Once per scheduler: a second call is refused by its first system and adds nothing.
+        CONJURE_CHECK_ERROR(physics::register_systems(scheduler, fixture.physics), ecs::ecs_error::NAME_CONFLICT);
+        CHECK(scheduler.system_count() == 4);
     }
 
     TEST_CASE("register_systems - before attach is NOT_ATTACHED") {

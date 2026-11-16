@@ -59,7 +59,13 @@ namespace conjure::ecs {
     }
 
     /// <summary>
-    /// A system exported by a module. Component and system names are resolved by the consumer.
+    /// A system exported by a module. The name must be unique within its phase (prefix it with the
+    /// module name): the engine's consumer refuses the load with REGISTRATION_CONFLICT when the phase
+    /// already holds a system of that name or the module registers it twice (01_ecs.md D13). reads and
+    /// writes are component names, resolved when the system is added and again whenever the registry
+    /// gains component types; a name nothing has registered yet is one WARN at attach, not an error,
+    /// and joins the access set once a component of that name is registered (01_ecs.md D15). after and
+    /// before are system names of the same phase; an unknown one is ignored.
     /// </summary>
     struct system_extension_desc {
         static constexpr core::string_id EXTENSION_POINT{"ecs.system"};

@@ -170,6 +170,14 @@ Descriptor types belong to the subsystem that consumes them (the ECS defines `co
 EXTENSION_POINT`. Both properties are `static_assert`ed. Strings inside a descriptor may point at literals in your
 module because every subsystem copies what it keeps.
 
+A system's `name` must be unique within its phase, so prefix it with your module's name. A name its phase already
+holds, or one your module registers twice in one phase, fails the load with `REGISTRATION_CONFLICT`. Never use an
+engine prefix (`scene.`, `physics.`, `scripting.`, `engine.`): a module loaded at startup that takes an engine
+system's name still loads, and the engine's own system is then the one refused, with an error in the log. A name
+in `reads` or `writes` that nothing has registered does not fail the load. The engine logs one warning when your
+module attaches, and the access is added when a component of that name is registered
+(📘 API: [Queries, views and systems](../ecs/queries-views-and-systems.md)).
+
 `module_lifecycle::onActivated` runs after the last subsystem attached; `onDeactivating` runs before the first one
 detaches. Both receive your `module_context`.
 

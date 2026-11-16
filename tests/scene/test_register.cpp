@@ -111,10 +111,12 @@ TEST_SUITE("scene/register") {
         CHECK(scheduler.stages(ecs::system_phase::TRANSFORM).size() == 2);
         CHECK(scheduler.stages(ecs::system_phase::FRAME_END).size() == 1);
         CHECK(scheduler.stages(ecs::system_phase::UPDATE).empty());
-        // Registering twice conflicts on nothing structural: the systems are simply added again.
-        CONJURE_REQUIRE_OK(scene::register_systems(scheduler, manager));
-        CHECK(scheduler.system_count() == 8);
+        // A system name is unique within its phase (code sweep F259): a second registration is refused at
+        // its first system and adds nothing, instead of running every scene system twice per frame.
+        CONJURE_CHECK_ERROR(scene::register_systems(scheduler, manager), ecs::ecs_error::NAME_CONFLICT);
+        CHECK(scheduler.system_count() == 4);
         CONJURE_REQUIRE_OK(scheduler.finalise());
+        CHECK(scheduler.stages(ecs::system_phase::TRANSFORM).size() == 2);
     }
 
     TEST_CASE("register_systems - destroy_pending runs after scripting.frame_end when present") {

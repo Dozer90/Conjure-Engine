@@ -12,6 +12,7 @@
 #include "conjure/core/string_utils.h"
 #include "conjure/core/uuid.h"
 
+#include <algorithm>
 #include <cstring>
 #include <format>
 #include <string>
@@ -392,6 +393,82 @@ namespace {
     std::string display_name(const component_info &info) {
         return info.name.to_string();
     }
+
+    /// <summary>
+    /// One key of an entity's "components" object: a live component, written through its serialiser, or a
+    /// preserved unknown one, written back verbatim.
+    /// </summary>
+    struct archive_key {
+        std::string liveName = {};                              // the registered name of 'live'
+        const archive_component *live = nullptr;
+        const unresolved_component *preserved = nullptr;
+        u32 order = 0;                                          // position in the archive entry
+
+        [[nodiscard]] std::string_view name() const noexcept {
+            if (preserved != nullptr) {
+                return preserved->name;
+            }
+            return liveName;
+        }
+    };
+
+    /// <summary>
+    /// Gathers the keys write_archive_json emits for one entry and sorts them by name, in the byte order
+    /// of the UTF-8 text (the order of core::json's canonical form), so the output does not depend on
+    /// the ids the registry happened to assign. TRANSIENT components are left out. A preserved unknown
+    /// component is left out as well when its name now resolves to a component the entity holds: that
+    /// one is written under the same key, and a second key would make the file fail to load ("component
+    /// listed twice"). Keys of the same name (an unknown component a file listed twice) keep the order of
+    /// the entry. ARCHIVE_CORRUPT for an unregistered component id.
+    /// </summary>
+    core::result<void> collect_sorted_keys(
+      const component_registry &registry,
+      const archive_entry &entry,
+      std::vector<archive_key> &keys
+    ) {
+        keys.clear();
+        for (const archive_component &component : entry.components) {
+            if (!registry.is_registered(component.id)) {
+                return make_error(ecs_error::ARCHIVE_CORRUPT, "archive names an unregistered component id");
+            }
+            const component_info &info = registry.info(component.id);
+            if (info.is_transient()) {
+                continue;
+            }
+            if (component.id.value != 0) {
+                archive_key key = {};
+                key.liveName = display_name(info);
+                key.live = &component;
+                key.order = static_cast<u32>(keys.size());
+                keys.push_back(std::move(key));
+                continue;
+            }
+
+            const unresolved_components &unresolved =
+              *reinterpret_cast<const unresolved_components *>(component.bytes.data());
+            for (const unresolved_component &preserved : unresolved.entries) {
+                const component_id resolved = registry.find(core::string_id(preserved.name));
+                if (resolved.is_valid() && resolved.value != 0 && entry.mask.test(resolved) &&
+                  !registry.info(resolved).is_transient()) {
+                    continue;
+                }
+                archive_key key = {};
+                key.preserved = &preserved;
+                key.order = static_cast<u32>(keys.size());
+                keys.push_back(std::move(key));
+            }
+        }
+
+        std::sort(keys.begin(), keys.end(), [](const archive_key &left, const archive_key &right) {
+            const std::string_view leftName = left.name();
+            const std::string_view rightName = right.name();
+            if (leftName != rightName) {
+                return leftName < rightName;
+            }
+            return left.order < right.order;
+        });
+        return core::result<void>::success();
+    }
 }
 
 /*===========================================================================*/
@@ -493,6 +570,8 @@ core::result<void> conjure::ecs::read_component_json(
 
 core::result<void> conjure::ecs::write_archive_json(const entity_archive &archive, core::json::writer &out) {
     const component_registry &registry = archive.registry();
+    // One key buffer serves every entry, so a large archive does not allocate one per entity.
+    std::vector<archive_key> keys = {};
     out.begin_object();
     out.key("entities");
     out.begin_array();
@@ -500,35 +579,19 @@ core::result<void> conjure::ecs::write_archive_json(const entity_archive &archiv
         out.begin_object();
         out.key("components");
         out.begin_object();
-        for (const archive_component &component : entry.components) {
-            if (!registry.is_registered(component.id)) {
-                // Like a failed component write: the writer keeps the partial output (see the summary).
-                return make_error(ecs_error::ARCHIVE_CORRUPT, "archive names an unregistered component id");
-            }
-            const component_info &info = registry.info(component.id);
-            if (info.is_transient()) {
+        // Like a failed component write below, a failure here returns with the scopes still open: the
+        // writer keeps the partial output (see the summary).
+        CONJURE_TRY(collect_sorted_keys(registry, entry, keys));
+        for (const archive_key &key : keys) {
+            out.key(key.name());
+            if (key.preserved != nullptr) {
+                // Unresolved data goes back under its original name, exactly as it was read.
+                out.write_raw_json(key.preserved->json);
                 continue;
             }
-            if (component.id.value == 0) {
-                // Unresolved data goes back under its original names, exactly as it was read, unless the
-                // name now resolves to a component the entity holds: that one is written under the same
-                // key, and a second key would make the file fail to load ("component listed twice").
-                const unresolved_components &unresolved =
-                  *reinterpret_cast<const unresolved_components *>(component.bytes.data());
-                for (const unresolved_component &preserved : unresolved.entries) {
-                    const component_id resolved = registry.find(core::string_id(preserved.name));
-                    if (resolved.is_valid() && resolved.value != 0 && entry.mask.test(resolved) &&
-                      !registry.info(resolved).is_transient()) {
-                        continue;
-                    }
-                    out.key(preserved.name);
-                    out.write_raw_json(preserved.json);
-                }
-                continue;
-            }
-            out.key(display_name(info));
+            const archive_component &component = *key.live;
             const void *data = component.bytes.empty() ? nullptr : static_cast<const void *>(component.bytes.data());
-            CONJURE_TRY(write_component_json(info, data, out));
+            CONJURE_TRY(write_component_json(registry.info(component.id), data, out));
         }
         out.end_object();
         out.end_object();

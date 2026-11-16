@@ -19,6 +19,13 @@
 // component_registry::register_described and scheduler::add_system calls, records ownership for the
 // inspector, counts live instances and strips them on unload.
 //
+// Access sets: a system record names the components it reads and writes. The names become the system's
+// resolveAccess hook, which the scheduler calls when the system is added and again whenever the registry
+// has gained component types (docs/design/01_ecs.md D15). A name the registry does not know at attach is
+// therefore no load failure (it is what a component of an absent optional dependency looks like): attach()
+// logs one WARN per such name and the system gains the access when a component of that name is registered.
+// A misspelt name stays a warning for good.
+//
 // Reload snapshot: component ids are assigned per name and never reused, and a module whose layout changed
 // is refused with NAME_CONFLICT at validate(), so the columns of a trivially copyable component can stay in
 // their chunks across a reload (the id, size and alignment are the same afterwards). Only the names are
@@ -56,7 +63,14 @@ namespace conjure::engine {
             /// REGISTRATION_CONFLICT for a component record without a name or with a size beyond
             /// MAX_COMPONENT_SIZE, for a component already registered with another size or alignment, and for
             /// a system record without a name or run function or without a declared access set when it is not
-            /// EXCLUSIVE.
+            /// EXCLUSIVE. Also for a system whose name its phase already holds, in the scheduler
+            /// (scheduler::find_system) or earlier in the same set: scheduler::add_system would answer
+            /// NAME_CONFLICT, so the module fails to load instead of losing the system at attach(). The
+            /// lookup sees only the systems the scheduler holds when the module loads: the engine adds its
+            /// own systems at startup step 18, after the modules loaded at startup (step 15), so a startup
+            /// module that takes the name of an engine system passes here and keeps the name, and the
+            /// engine's later add_system is the one refused with NAME_CONFLICT (01_ecs.md D13). A read
+            /// or write name the registry does not know is not refused here (see attach()).
             /// </summary>
             [[nodiscard]] core::result<void> validate(
               modules::module_id id,
@@ -66,7 +80,11 @@ namespace conjure::engine {
 
             /// <summary>
             /// Registers the components (noting ownership under "ecs.component") and adds the systems, then
-            /// finalises the scheduler.
+            /// finalises the scheduler, which also completes the access set of every earlier system that
+            /// named one of the components registered here. Each system's read and write names are
+            /// resolved by the scheduler through its resolveAccess hook; one WARN is logged per name that
+            /// is still not registered once the module's own components are (the system keeps running
+            /// without that access and gains it when a component of the name is registered).
             /// </summary>
             void attach(
               modules::module_id id,

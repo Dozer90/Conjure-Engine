@@ -31,7 +31,8 @@ namespace conjure::physics {
     /// Adds physics.push_transforms and physics.step (PHYSICS_STEP, MAIN_THREAD) and
     /// physics.pull_transforms (FIXED_END, PARALLEL) and physics.contact_events (FIXED_END, MAIN_THREAD).
     /// None runs while paused (R13). NOT_ATTACHED before physics_world::attach. The world must outlive
-    /// the scheduler.
+    /// the scheduler. Call once per scheduler: a second call returns NAME_CONFLICT from its first system
+    /// and adds nothing (01_ecs.md D13).
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> register_systems(ecs::scheduler &scheduler, physics_world &world);
 

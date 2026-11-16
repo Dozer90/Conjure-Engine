@@ -247,6 +247,122 @@ TEST_SUITE("ecs/serialization") {
         CHECK_FALSE(world.has_raw(copy.value(), component_id{0}));
     }
 
+    TEST_CASE("regression - code sweep F606 component keys are written in name order whatever the registration order") {
+        // Component ids follow registration order, which differs between builds (a feature compiled out,
+        // another module load order). write_archive_json used to write an entity's keys in id order, so
+        // two builds saved the same scene as different text. The keys are sorted by name now.
+        const auto capture_text = [](const component_registry &registry) -> std::string {
+            world source(registry);
+            component_mask mask = {};
+            mask.set(registry.id_of<position>());
+            mask.set(registry.id_of<health>());
+            mask.set(registry.id_of<velocity>());
+            mask.set(registry.id_of<player_tag>());
+            const core::result<entity> created = source.create_entity(mask);
+            CONJURE_REQUIRE_OK(created);
+            CONJURE_REQUIRE_OK(source.set(created.value(), position{1.0f, 2.0f, 3.0f}));
+            CONJURE_REQUIRE_OK(source.set(created.value(), health{7, 9}));
+            CONJURE_REQUIRE_OK(source.set(created.value(), velocity{0.5f, 0.0f, -0.5f}));
+            const core::result<entity_archive> captured =
+              entity_archive::capture(source, std::span<const entity>(&created.value(), 1));
+            CONJURE_REQUIRE_OK(captured);
+            return archive_text(captured.value());
+        };
+
+        component_registry forward = {};
+        CONJURE_REQUIRE_OK(forward.register_component<position>());
+        CONJURE_REQUIRE_OK(forward.register_component<health>());
+        CONJURE_REQUIRE_OK(forward.register_component<velocity>());
+        CONJURE_REQUIRE_OK(forward.register_component<player_tag>());
+        component_registry backward = {};
+        CONJURE_REQUIRE_OK(backward.register_component<player_tag>());
+        CONJURE_REQUIRE_OK(backward.register_component<velocity>());
+        CONJURE_REQUIRE_OK(backward.register_component<health>());
+        CONJURE_REQUIRE_OK(backward.register_component<position>());
+        CHECK(forward.id_of<position>().value < forward.id_of<health>().value);
+        CHECK(backward.id_of<position>().value > backward.id_of<health>().value);
+
+        const std::string forwardText = capture_text(forward);
+        const std::string backwardText = capture_text(backward);
+        CHECK(forwardText == backwardText);
+        const std::string expected =
+          R"({"entities":[{"components":{"test.health":{"value":7,"maximum":9},"test.player_tag":{},)"
+          R"("test.position":{"x":1.0,"y":2.0,"z":3.0},"test.velocity":{"x":0.5,"y":0.0,"z":-0.5}}}]})";
+        CHECK(forwardText == expected);
+
+        // The text one registry wrote loads into the other and is written back unchanged.
+        const core::json::document document = parse(forwardText);
+        const core::result<entity_archive> reloaded = read_archive_json(document.root(), backward);
+        CONJURE_REQUIRE_OK(reloaded);
+        CHECK(archive_text(reloaded.value()) == forwardText);
+    }
+
+    TEST_CASE("serialization - preserved unknown components are written in the same name order") {
+        // Keys compare as UTF-8 bytes, the order of core::json's canonical form: upper case before lower
+        // case, a name before the longer names it prefixes, and bytes above 0x7F last (not first, as a
+        // signed comparison would have it).
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const std::string accented = "\xC3\xA9.accent";
+        const std::string input =
+          R"({"entities":[{"components":{"zeta.unknown":{"b":1,"a":2},"test.position":{"x":1.0,"y":2.0,"z":3.0},)"
+          R"("test.health.extra":true,")" + accented + R"(":[1,2],"com.plugin.spinner":{"speed":2.5},)"
+          R"("test.health":{"value":3,"maximum":4},"Zed.upper":null}},{"components":{}},)"
+          R"({"components":{"test.player_tag":{},"only.unknown":7}}]})";
+        const std::string expected =
+          R"({"entities":[{"components":{"Zed.upper":null,"com.plugin.spinner":{"speed":2.5},)"
+          R"("test.health":{"value":3,"maximum":4},"test.health.extra":true,)"
+          R"("test.position":{"x":1.0,"y":2.0,"z":3.0},"zeta.unknown":{"b":1,"a":2},")" + accented + R"(":[1,2]}},)"
+          R"({"components":{}},{"components":{"only.unknown":7,"test.player_tag":{}}}]})";
+
+        testing::log_capture logs = {};
+        const core::json::document document = parse(input);
+        core::result<entity_archive> loaded = read_archive_json(document.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(loaded);
+        CHECK(logs.count(core::log_level::INFO) == 6);
+        const std::string written = archive_text(loaded.value());
+        CHECK(written == expected);
+
+        // The sorted text is a fixed point of read and write.
+        const core::json::document sorted = parse(written);
+        const core::result<entity_archive> again = read_archive_json(sorted.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(again);
+        CHECK(archive_text(again.value()) == expected);
+
+        // A capture lists the hidden unresolved_components component (id 0) first; its entries are still
+        // merged into the name order.
+        const std::shared_ptr<const entity_archive> shared =
+          std::make_shared<const entity_archive>(std::move(loaded).value());
+        std::vector<entity> roots(1);
+        std::vector<entity> created = {};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(shared, roots, nullptr, &created));
+        REQUIRE(created.size() == 3);
+        const core::result<entity_archive> recaptured = entity_archive::capture(world, created);
+        CONJURE_REQUIRE_OK(recaptured);
+        CHECK(archive_text(recaptured.value()) == expected);
+    }
+
+    TEST_CASE("serialization - an unknown component listed twice keeps its file order") {
+        // A name no type resolves is not checked for duplicates on load, so both values are preserved.
+        // They sort to the same place and keep the order of the file, which makes the rewrite stable.
+        ecs_fixture fixture = {};
+        const std::string input =
+          R"({"entities":[{"components":{"dup.unknown":2,"test.position":{"x":0.0,"y":0.0,"z":0.0},)"
+          R"("dup.unknown":1,"a.first":{}}}]})";
+        const std::string expected =
+          R"({"entities":[{"components":{"a.first":{},"dup.unknown":2,"dup.unknown":1,)"
+          R"("test.position":{"x":0.0,"y":0.0,"z":0.0}}}]})";
+        const core::json::document document = parse(input);
+        const core::result<entity_archive> loaded = read_archive_json(document.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(loaded);
+        const std::string written = archive_text(loaded.value());
+        CHECK(written == expected);
+        const core::json::document rewritten = parse(written);
+        const core::result<entity_archive> again = read_archive_json(rewritten.root(), fixture.registry);
+        CONJURE_REQUIRE_OK(again);
+        CHECK(archive_text(again.value()) == expected);
+    }
+
     TEST_CASE("serialization - a failed archive write leaves partial output until reset") {
         // Neither failure path closes the scopes it opened (a caller nesting the archive in its own object
         // could not be balanced anyway): the writer holds partial output until it is reset.

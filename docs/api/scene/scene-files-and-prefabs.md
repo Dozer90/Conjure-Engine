@@ -61,8 +61,11 @@ A `.scene.json` file is a small header plus the ECS archive of every entity in h
 `parse_document(value, registry)` reads it into a `scene_document {name, settings, roots, archive}`, and
 `load_scene(scene, document, owner, guids)` instantiates it: every entity in its final archetype, children and
 depth tags linked, the roots ordered as the header lists them, and every `asset_ref` field bound through the
-asset manager (the bind pass). `load_scene_file` does all three. Save, load, save again is byte-identical;
-components the registry does not know survive untouched in `unresolved_components`. A save refuses a scene whose
+asset manager (the bind pass). `load_scene_file` does all three. An entity's component keys are written in name
+order (the byte order of the names), not in the order the components were registered, so a file does not depend
+on the build that saved it; loading accepts any order. Save, load, save again is byte-identical; components the
+registry does not know survive untouched in `unresolved_components` and are written in the same name order. A
+save refuses a scene whose
 entity carries a `layer` index of 32 or more (`BAD_FORMAT` naming the entity, nothing written), because loading
 would refuse the file.
 

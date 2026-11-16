@@ -43,7 +43,8 @@ namespace conjure::scene {
     /// <summary>
     /// Adds scene.apply_pending_loads (FRAME_BEGIN), scene.apply_hierarchy_changes and
     /// scene.propagate_transforms (TRANSFORM) and scene.destroy_pending (FRAME_END, after
-    /// scripting.frame_end), all RUNS_WHILE_PAUSED. The manager must outlive the scheduler.
+    /// scripting.frame_end), all RUNS_WHILE_PAUSED. The manager must outlive the scheduler. Call once per
+    /// scheduler: a second call returns NAME_CONFLICT from its first system and adds nothing (01_ecs.md D13).
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> register_systems(ecs::scheduler &scheduler, scene_manager &scenes);
 }

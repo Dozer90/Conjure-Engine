@@ -8,6 +8,7 @@
 #include "conjure/core/log.h"
 
 #include <chrono>
+#include <format>
 #include <functional>
 #include <thread>
 #include <utility>
@@ -26,6 +27,8 @@ scheduler::scheduler(ecs::world &target, core::jobs::job_system *jobs, scheduler
     mWorld(&target),
     mJobs(jobs),
     mDesc(desc),
+    // No system exists yet, so every access set is resolved against the registry as it stands.
+    mResolvedComponentCount(target.registry().count()),
     mPhases(std::make_unique<std::array<phase_state, SYSTEM_PHASE_COUNT>>()) {}
 
 scheduler::~scheduler() {
@@ -52,6 +55,15 @@ core::result<system_id> scheduler::add_system(system_desc desc) {
     }
     if (desc.phase >= system_phase::COUNT) {
         return core::error(core::error_code::INVALID_ARGUMENT, "system_desc has an invalid phase");
+    }
+    // The name is the system's identity for after/before edges, timings and the profiler, so a phase
+    // holds each name once (01_ecs.md D13): an edge to a name two systems shared would bind to whichever
+    // was registered first.
+    if (find_system(desc.phase, desc.name).is_valid()) {
+        return make_error(
+          ecs_error::NAME_CONFLICT,
+          std::format("system '{}' already exists in phase {}", desc.name, to_string(desc.phase))
+        );
     }
     if (desc.resolveAccess) {
         desc.resolveAccess(mWorld->registry(), desc.reads, desc.writes);
@@ -132,6 +144,7 @@ core::result<void> scheduler::set_enabled(system_id id, bool enabled) {
 }
 
 core::result<void> scheduler::finalise() {
+    refresh_access();
     for (u32 phase = 0; phase < SYSTEM_PHASE_COUNT; ++phase) {
         CONJURE_TRY(build_stages(static_cast<system_phase>(phase)));
     }
@@ -156,6 +169,7 @@ void scheduler::run_phase_filtered(system_phase target, const frame_info &frame,
         return;
     }
 
+    refresh_access();
     phase_state &state = (*mPhases)[static_cast<usize>(target)];
     if (state.dirty) {
         const core::result<void> built = build_stages(target);
@@ -237,6 +251,7 @@ std::span<const stage_info> scheduler::stages(system_phase target) {
     if (target >= system_phase::COUNT) {
         return {};
     }
+    refresh_access();
     phase_state &state = (*mPhases)[static_cast<usize>(target)];
     if (state.dirty) {
         const core::result<void> built = build_stages(target);
@@ -257,6 +272,19 @@ std::span<const system_timing> scheduler::last_timings(system_phase target) cons
 const system_desc *scheduler::system(system_id id) const noexcept {
     const system_record *record = find_record(id);
     return record == nullptr ? nullptr : &record->desc;
+}
+
+system_id scheduler::find_system(system_phase target, core::string_id name) const noexcept {
+    if (name.is_null() || target >= system_phase::COUNT) {
+        return {};
+    }
+    for (u32 index = 0; index < mSystems.size(); ++index) {
+        const system_record *record = mSystems[index].get();
+        if (record != nullptr && record->alive && record->desc.phase == target && record->desc.name == name) {
+            return system_id{index, record->generation};
+        }
+    }
+    return {};
 }
 
 u32 scheduler::system_count() const noexcept {
@@ -294,6 +322,47 @@ const scheduler::system_record *scheduler::find_record(system_id id) const noexc
         return nullptr;
     }
     return record;
+}
+
+void scheduler::refresh_access() {
+    // Component ids are append-only and never reused (01_ecs.md D3), so the count alone says whether a
+    // type some system named could have appeared since the last pass. It is read before the hooks run: a
+    // type another thread registers during the pass leaves the registry ahead of the stored count, and
+    // the next call resolves again.
+    const component_registry &registry = mWorld->registry();
+    const u32 registered = registry.count();
+    if (registered == mResolvedComponentCount) {
+        return;
+    }
+    // A locked world may be a stage in progress, whose systems read their masks on other threads (the
+    // Debug access checks), so finalise() or stages() called from inside a system leaves the pass to the
+    // next call that finds the world unlocked. run_phase never gets here locked.
+    if (mWorld->is_locked()) {
+        return;
+    }
+    for (const std::unique_ptr<system_record> &record : mSystems) {
+        if (record == nullptr || !record->alive || !record->desc.resolveAccess) {
+            continue;
+        }
+        system_desc &desc = record->desc;
+        const component_mask reads = desc.reads;
+        const component_mask writes = desc.writes;
+        desc.resolveAccess(registry, desc.reads, desc.writes);
+        if (desc.reads == reads && desc.writes == writes) {
+            continue;
+        }
+        // The stages of the phase were packed from the smaller set, which let this system share a stage
+        // with one that touches the component it has just gained (01_ecs.md D15). Only the flag is set:
+        // a nested run_phase may be here while an outer one walks the stages of that phase.
+        CONJURE_LOG_DEBUG(
+          LOG_ECS,
+          "system '{}' gained access to newly registered components; phase {} is rebuilt",
+          desc.name,
+          to_string(desc.phase)
+        );
+        mark_dirty(desc.phase);
+    }
+    mResolvedComponentCount = registered;
 }
 
 void scheduler::run_system(system_record &record, const frame_info &frame) {

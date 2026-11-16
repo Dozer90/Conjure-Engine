@@ -2,17 +2,21 @@
 
 #include "conjure/engine/log_category.h"
 
+#include "conjure/core/containers/small_vector.h"
 #include "conjure/core/log.h"
 #include "conjure/ecs/component_type_desc.h"
 #include "conjure/ecs/system.h"
+#include "conjure/ecs/system_phase.h"
 #include "conjure/modules/module_context.h"
 #include "conjure/modules/module_error.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <format>
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -38,29 +42,81 @@ namespace {
     }
 
     /// <summary>
-    /// Turns a trivially copyable system record into the scheduler's system_desc.
+    /// The component names a module system declared, copied out of the module's record so the system's
+    /// resolveAccess hook owns them.
     /// </summary>
-    [[nodiscard]] ecs::system_desc to_system_desc(
-      const ecs::system_extension_desc &record,
-      const ecs::component_registry &registry
+    struct access_names {
+        std::vector<core::string_id> reads = {};
+        std::vector<core::string_id> writes = {};
+    };
+
+    /// <summary>
+    /// Sets the bit of every name the registry knows; a name it does not know yet is left out.
+    /// </summary>
+    void set_registered(
+      const ecs::component_registry &registry,
+      std::span<const core::string_id> names,
+      ecs::component_mask &mask
     ) {
+        for (const core::string_id name : names) {
+            const ecs::component_id id = registry.find(name);
+            if (id.is_valid()) {
+                mask.set(id);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One WARN per name of the list the registry does not know.
+    /// </summary>
+    void warn_unregistered(
+      const ecs::component_registry &registry,
+      std::string_view module,
+      const char *system,
+      std::string_view list,
+      std::span<const core::string_id> names
+    ) {
+        for (usize index = 0; index < names.size(); ++index) {
+            if (registry.find(names[index]).is_valid()) {
+                continue;
+            }
+            CONJURE_LOG_WARN(
+              LOG_ENGINE,
+              "ecs module consumer: module '{}': system '{}' names component '{}' ({}[{}]), which is not "
+              "registered; the system runs without that access until a component of the name is registered",
+              module,
+              system,
+              names[index],
+              list,
+              index
+            );
+        }
+    }
+
+    /// <summary>
+    /// Turns a trivially copyable system record into the scheduler's system_desc. The read and write
+    /// names become the resolveAccess hook instead of fixed masks (01_ecs.md D15): the scheduler calls it
+    /// when the system is added and again whenever the registry has gained component types, so a name
+    /// that is unknown at attach (a component of an optional dependency that is not loaded) joins the
+    /// access set once it is registered.
+    /// </summary>
+    [[nodiscard]] ecs::system_desc to_system_desc(const ecs::system_extension_desc &record) {
         ecs::system_desc desc = {};
         // Interned so scheduler diagnostics and the profiler can print the module system's name.
         desc.name = core::string_id::intern(std::string_view(record.name));
         desc.phase = record.phase;
         desc.flags = record.flags;
-        for (u32 index = 0; index < record.readCount; ++index) {
-            const ecs::component_id id = registry.find(record.reads[index]);
-            if (id.is_valid()) {
-                desc.reads.set(id);
-            }
-        }
-        for (u32 index = 0; index < record.writeCount; ++index) {
-            const ecs::component_id id = registry.find(record.writes[index]);
-            if (id.is_valid()) {
-                desc.writes.set(id);
-            }
-        }
+        access_names names = {};
+        names.reads.assign(record.reads, record.reads + record.readCount);
+        names.writes.assign(record.writes, record.writes + record.writeCount);
+        desc.resolveAccess = [names = std::move(names)](
+          const ecs::component_registry &registry,
+          ecs::component_mask &reads,
+          ecs::component_mask &writes
+        ) {
+            set_registered(registry, names.reads, reads);
+            set_registered(registry, names.writes, writes);
+        };
         for (u32 index = 0; index < record.afterCount; ++index) {
             desc.after.push_back(record.after[index]);
         }
@@ -127,7 +183,10 @@ core::result<void> ecs_module_consumer::validate(
         }
     }
 
-    for (const ecs::system_extension_desc *record : modules::extensions_of<ecs::system_extension_desc>(set)) {
+    const core::small_vector<const ecs::system_extension_desc *, 8> systems =
+      modules::extensions_of<ecs::system_extension_desc>(set);
+    for (usize index = 0; index < systems.size(); ++index) {
+        const ecs::system_extension_desc *record = systems[index];
         if (record->name == nullptr || std::string_view(record->name).empty()) {
             return conflict(module, "a system record has no name");
         }
@@ -141,6 +200,27 @@ core::result<void> ecs_module_consumer::validate(
         if (!exclusive && record->readCount == 0 && record->writeCount == 0) {
             return conflict(module, std::format("system '{}' declares no access set", record->name));
         }
+
+        // scheduler::add_system refuses a name its phase already holds (01_ecs.md D13). Checked here,
+        // against the scheduler and against the module's own earlier records, so the clash fails the load
+        // instead of leaving attach() to drop the system. Only the systems added so far can clash: the
+        // engine adds its own at startup step 18, after the startup modules, and is then the one refused.
+        const std::string_view systemName(record->name);
+        const std::string_view phaseName = ecs::to_string(record->phase);
+        if (mScheduler->find_system(record->phase, core::string_id(systemName)).is_valid()) {
+            return conflict(
+              module,
+              std::format("system '{}' is already registered in phase {}", systemName, phaseName)
+            );
+        }
+        for (usize earlier = 0; earlier < index; ++earlier) {
+            if (systems[earlier]->phase == record->phase && std::string_view(systems[earlier]->name) == systemName) {
+                return conflict(
+                  module,
+                  std::format("system '{}' is registered twice in phase {}", systemName, phaseName)
+                );
+            }
+        }
     }
     return core::result<void>::success();
 }
@@ -150,7 +230,7 @@ void ecs_module_consumer::attach(
   modules::module_context &context,
   const modules::module_registration_set &set
 ) {
-    CONJURE_UNUSED(context);
+    const std::string_view module = context.manifest().name;
     module_record record = {};
     record.id = id;
 
@@ -170,7 +250,7 @@ void ecs_module_consumer::attach(
     }
 
     for (const ecs::system_extension_desc *desc : modules::extensions_of<ecs::system_extension_desc>(set)) {
-        core::result<ecs::system_id> added = mScheduler->add_system(to_system_desc(*desc, *mRegistry));
+        core::result<ecs::system_id> added = mScheduler->add_system(to_system_desc(*desc));
         if (!added.has_value()) {
             CONJURE_LOG_ERROR(
               LOG_ENGINE,
@@ -181,6 +261,14 @@ void ecs_module_consumer::attach(
             continue;
         }
         record.systems.push_back(added.value());
+        // The module's own components are registered above, so a name unknown here belongs to a module
+        // that is not loaded, or is misspelt. Neither fails the load (the first is what an optional
+        // dependency looks like); both are said once, and the scheduler completes the access set when
+        // the component appears.
+        const std::span<const core::string_id> reads(desc->reads, desc->readCount);
+        const std::span<const core::string_id> writes(desc->writes, desc->writeCount);
+        warn_unregistered(*mRegistry, module, desc->name, "reads", reads);
+        warn_unregistered(*mRegistry, module, desc->name, "writes", writes);
     }
 
     const core::result<void> finalised = mScheduler->finalise();

@@ -222,7 +222,10 @@ lifecycle hooks, reflection pointer) for a type named with `CONJURE_COMPONENT`; 
 through `registry.register_described(desc)`, deep-copying the reflection description so the module may unload.
 The record's `EXTENSION_POINT` is `"ecs.component"`. `system_extension_desc` (`"ecs.system"`) is the matching
 record for a system: name, phase, flags, `reads`/`writes` as arrays of component **names**, `after`/`before`
-as arrays of system names, and a plain function pointer `run(system_context &)`. Both records are described in
+as arrays of system names, and a plain function pointer `run(system_context &)`. A name in `reads` or `writes`
+that nothing has registered does not fail the load, so a system may name a component of an optional dependency:
+the engine logs one warning per such name and the system gains the access when a component of that name is
+registered ([Queries, views and systems](queries-views-and-systems.md#systems)). Both records are described in
 🛠 Handbook: [Module system](../../handbook/module-system/index.md).
 
 Scripts register components without a C++ type through `register_dynamic(dynamic_component_desc)` (name, size,

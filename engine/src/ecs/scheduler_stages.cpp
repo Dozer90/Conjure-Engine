@@ -49,8 +49,13 @@ void scheduler::resolve_edges(
         return mSystems[left]->registrationOrder < mSystems[right]->registrationOrder;
     });
 
+    // The null name stands for no system: unnamed systems may repeat in a phase (01_ecs.md D13), so an
+    // edge to it would bind to whichever was registered first. It is resolved like an unknown name.
     predecessors.assign(members.size(), {});
     const auto position_of = [&](core::string_id name) -> usize {
+        if (name.is_null()) {
+            return members.size();
+        }
         for (usize position = 0; position < members.size(); ++position) {
             if (mSystems[members[position]]->desc.name == name) {
                 return position;

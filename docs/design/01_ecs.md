@@ -29,6 +29,9 @@ below; implementers decide nothing architectural.
 | D10 | **Prefab base = `entity_archive`:** an in-memory, typed copy of N entities (component bytes produced by `ops.copy`), entity references inside the set stored as local indices. JSON (de)serialisation operates on archives. `instantiate_batch` places entities directly in their final archetype. | One pipeline: world <-> archive <-> JSON serves prefab assets, scene files, copy/paste, undo and C# `Spawn()`. |
 | D11 | **Error model:** operations on dead/stale entities return `core::result` errors; contract violations (structural call while locked, wrong thread, observer mutating directly) `CONJURE_ASSERT` *and* return an error so Distribution stays defined. Unknown component names on load are preserved verbatim in `unresolved_components`. | Scripts hit stale handles routinely; a crash there is unacceptable. Data authored with an unloaded module must survive a round trip. |
 | D12 | **Accessors that refresh or rebuild lazily are non-const, with no `mutable` caches.** `query::chunk_count`, `entity_count` and `matches` (and `view::entity_count`, which forwards) call `refresh()` first, which appends to the cached matches; `scheduler::stages` rebuilds a dirty phase first, which allocates and can fail. The query.h and scheduler.h summaries and the API page say so. | `const` keeps meaning "no state changes, safe to call from several threads at once"; `mutable` caches would make two threads reading one const query race on its match list. No caller needs a const variant (code sweep 2026-11-12, F636). |
+| D13 | **A system name is unique within its phase.** `scheduler::add_system` returns `NAME_CONFLICT` and adds nothing when a live system of the same phase already carries the same non-null name. Unnamed systems (the null `string_id`), the same name in another phase and a name freed by `remove_system` never conflict; a disabled system keeps its name. `scheduler::find_system(phase, name)` is the lookup, and the engine's `ecs_module_consumer::validate` uses it (and compares the records of one module with each other) so a clashing module fails to load with `REGISTRATION_CONFLICT` instead of losing the system at attach. That check covers the systems the scheduler holds when the module loads: the engine adds its own systems at startup step 18, after the modules loaded at startup (step 15), so a startup module that takes an engine system's name is not refused and the engine's later `add_system` is the one that fails with `NAME_CONFLICT` (an `ERROR` from the subsystem; the scene, physics and scripting registrations stop at the first refused system, and startup continues). Module authors prefix system names with the module name, as engine systems do (`scene.propagate_transforms`), and never use an engine prefix. | The name is the system's identity for `after`/`before` edges, timings and the profiler. With duplicates an edge bound to whichever system was registered first, and a duplicate is almost always an accidental second registration that runs every system twice; `NAME_CONFLICT` is already the answer to the same mistake on component names (code sweep 2026-11-12, F259). |
+| D14 | **`write_archive_json` writes each entity's component keys sorted by name**, in the byte order of the UTF-8 text (the order of `core::json`'s canonical form), with the preserved unknown components of `unresolved_components` merged into the same order; an unknown name a file listed twice keeps its file order. Entities stay in archive order and the fields inside a component in declaration order. `read_archive_json` accepts any key order. | Component ids follow registration order (D3), which changes with the features compiled in and the order modules load, so id order made the same scene saved by two builds differ. Name order makes scene and prefab files stable and diffable (`13_scene.md` S8) and matches the cooked form. Every file written before reorders once on its next save (code sweep 2026-11-12, F606). |
+| D15 | **A system's access set follows the component registry.** A system that resolves its `reads` / `writes` by type or by name does so through `system_desc::resolveAccess`: `make_system` fills it from the pack, and the engine's `ecs_module_consumer` fills it from the read and write name lists of a module's `system_extension_desc`. `add_system` calls the hook, and `finalise()`, `run_phase` and `stages()` call every live system's hook again once the registry holds more component types than at the last pass (`component_registry::count()` against a stored count, one atomic load when nothing changed); a phase is marked for a rebuild only when one of its systems gained a bit. The hook only ever sets bits. A name that is unknown when a module attaches does not fail the load: the consumer logs one `WARN` per such name and the system runs without that access until a component of the name is registered. A misspelt name stays a warning; the Debug view and chunk-view asserts still catch the access itself. | A module may name a component of an optional dependency that is not loaded (`07_modules.md`), so refusing the load is wrong, and dropping the name silently and for good left the system with a smaller access set once that dependency did load: it shared a stage with a writer of the component, a data race no check reported. Ids are append-only (D3), so the count is a complete change signal and resolving again can only add bits. `make_system` systems added before their component types were registered had the same gap and get the same fix (code sweep 2026-11-12, F077). |
 
 Rejected: sparse sets (violates the brief, multi-component iteration not contiguous); 32-bit packed ids (8-bit
 generations wrap in seconds); per-row dirty bits (state to keep consistent across swap-removes); a singleton
@@ -301,7 +304,26 @@ tiebreak (a cycle is detected incrementally in `add_system`, which fails with `S
 the system); then greedy append-only packing: a system joins the *current* stage if every predecessor is in an
 earlier stage, it is not `EXCLUSIVE`, the stage is not exclusive, and for every member `s`:
 `(writes & (s.reads | s.writes)).none() && (reads & s.writes).none()`. Otherwise a new stage opens. Stages are
-rebuilt lazily after `add_system`/`remove_system`/`set_enabled`.
+rebuilt lazily after `add_system`/`remove_system`/`set_enabled`, and after an access set grew (below).
+
+Access sets follow the registry (D15). `run_phase`, `finalise()` and `stages()` start with `refresh_access()`:
+it compares `registry.count()` with the count stored at the last pass and returns when they are equal. Otherwise
+it calls `resolveAccess(registry, reads, writes)` of every live system that has one (disabled systems included,
+they can be enabled again), marks the phase of each system whose masks changed as dirty with one `DEBUG` log,
+and stores the count it read before the pass, so a type another thread registers during the pass triggers the
+next one. Only the dirty flag is set: an `EXCLUSIVE` system may register a component and run another phase while
+its own phase is walking its stages, and that phase is then rebuilt before its next run. A component registered
+while a phase runs therefore takes effect from the next `run_phase` of each phase. The pass also waits while
+the world is locked for iteration (`finalise()` or `stages()` called from inside a system): the systems of a
+running stage read their masks on other threads. Systems with hand-filled masks and no hook are never touched.
+
+A name stands for exactly one system of a phase (D13): `add_system` looks the name up among the live systems of
+the phase (`find_system`, disabled systems included, the null name never) and fails with `NAME_CONFLICT` before
+it takes a record, so edge resolution never has to choose between two systems of one name. Unnamed systems may
+repeat, so a null entry in `after` / `before` binds to none of them: it is resolved as an unknown name. Whoever
+adds the name first keeps it: the module consumer's `validate` refuses a module whose system clashes with one
+already added, and a system added later (the engine's own, at startup step 18, when a startup module holds its
+name) is refused by `add_system` itself.
 
 `run_system`: `bump_version()`; `system_context ctx{world, dt, sinceVersion, system buffer, jobs, desc}`;
 `run(ctx)`; record `sinceVersion = version at start` and the elapsed time. `ctx.parallel_for_chunks(query,
@@ -334,7 +356,10 @@ With a command buffer the call records `INSTANTIATE` (ids reserved now, roots re
 `{"entities":[{"components":{"<name>":{...}}}]}` with entity fields as integer local index, `null`, or
 `{"external":"<index>:<generation>"}` when kept. `read_archive_json(value, registry)` resolves names; unknown
 names go into an `unresolved_components` component (`std::vector<unresolved_component{std::string name;
-std::string json;}>`) and are re-emitted verbatim by `write_archive_json`. The default serializer walks
+std::string json;}>`) and are re-emitted verbatim by `write_archive_json`. The keys of one entity's `components`
+object are written sorted by name, in the byte order of the UTF-8 text, preserved unknown names included (D14):
+the writer gathers the keys of an entry into a buffer it reuses across the archive, sorts it and writes in that
+order, so the text is independent of component ids. The default serializer walks
 `core::reflect::type_info` fields: bool, integers, floats, `std::string`, `string_id`, `uuid`, math types
 (arrays), `entity`, `assets::asset_ref<T>` (reflection kind `ASSET_REF`, written as the uuid string; the slot
 pointer is left null on read and bound afterwards by the scene module's bind pass over
@@ -647,6 +672,13 @@ struct system_desc {
     core::small_vector<core::string_id, 4> after = {};
     core::small_vector<core::string_id, 4> before = {};
     std::function<void(system_context &context)> run = {};
+
+    /// <summary>
+    /// Optional: sets the bits of the component types the registry knows. Called by add_system and again
+    /// whenever the registry has gained types (D15); only ever sets bits.
+    /// </summary>
+    std::function<void(const component_registry &registry, component_mask &reads, component_mask &writes)>
+      resolveAccess = {};
 };
 
 class system_context {
@@ -682,14 +714,18 @@ class scheduler {                  // world *, job_system *, unique_ptr<system_r
         ~scheduler();
 
     public:
-        [[nodiscard]] core::result<system_id> add_system(system_desc desc);
+        [[nodiscard]] core::result<system_id> add_system(system_desc desc);    // NAME_CONFLICT, SYSTEM_CYCLE
         [[nodiscard]] core::result<void> remove_system(system_id id);
         [[nodiscard]] core::result<void> set_enabled(system_id id, bool enabled);
 
+        /// <summary>The live system of a phase named 'name'; an invalid id when there is none (D13).</summary>
+        [[nodiscard]] system_id find_system(system_phase target, core::string_id name) const noexcept;
+
         /// <summary>
-        /// Builds every phase's stages now and reports SYSTEM_CYCLE and Debug access conflicts (R2). Optional:
-        /// run_phase builds lazily; the engine calls it at startup step 18 and after every module load so
-        /// configuration errors surface before the first frame instead of inside it.
+        /// Builds every phase's stages now and reports SYSTEM_CYCLE and Debug access conflicts (R2). Resolves
+        /// the access sets again first when the registry has grown (D15). Optional: run_phase builds lazily;
+        /// the engine calls it at startup step 18 and after every module load so configuration errors
+        /// surface before the first frame instead of inside it.
         /// </summary>
         [[nodiscard]] core::result<void> finalise();
         void run_phase(system_phase target, const frame_info &frame);
@@ -702,7 +738,8 @@ class scheduler {                  // world *, job_system *, unique_ptr<system_r
 ```
 
 `make_system<Ts...>` derives `reads`/`writes` from the pack (`const T` read, `T` write, `maybe<T>` by
-constness) so the common one-view system declares nothing by hand.
+constness) so the common one-view system declares nothing by hand. It does so through `resolveAccess`, so a
+pack type that is registered after the system was added joins the access set then (D15).
 
 Module extension records (`component_type_desc.h`, R2/R19). Plugins cannot hand the module system a `system_desc`
 (it holds `std::function` and `small_vector`), so two trivially copyable mirrors exist for
@@ -734,8 +771,12 @@ struct system_extension_desc {
 };
 ```
 
-The engine's `ecs_module_consumer` turns them into `register_described` / `add_system` calls on attach (ids
-resolved by name, masks built from the name lists) and into `remove_system` / `remove_from_all` on detach.
+The engine's `ecs_module_consumer` turns them into `register_described` / `add_system` calls on attach and into
+`remove_system` / `remove_from_all` on detach. The read and write name lists are copied into the system's
+`resolveAccess` hook, so the scheduler resolves them by name when the system is added and again when the
+registry has grown (D15). A name that is not registered once the module's own components are is logged with one
+`WARN` (module, system, name, list and position) and does not fail the load: it is a component of an optional
+dependency that is not loaded, or a typo, and only the first ever resolves.
 `describe_component<T>` leaves `serializer` null for a reflected type so that no function pointer into the
 module reaches the registry: the registry serialises the type through its own deep copy of the reflection
 description, which is what lets data authored with the module survive its unload (D11). A record without
@@ -831,7 +872,9 @@ template <typename ComponentType> [[nodiscard]] component_serializer make_defaul
 | Pool exhaustion | `OUT_OF_MEMORY` from the structural call; nothing changes |
 | Command on an entity dead at flush | skipped, `DEBUG` log, counted in `flush_report::skipped` |
 | System cycle via `after`/`before` | `SYSTEM_CYCLE` from `add_system`; system not added |
+| System name its phase already holds | `NAME_CONFLICT` from `add_system`; system not added (D13) |
 | Unknown system name in `after`/`before` | ignored, one `DEBUG` log (module may be compiled out) |
+| Unknown component name in a module system's read or write list | one `WARN` per name at attach; the system is added without that access and gains it when a component of the name is registered (D15) |
 | Undeclared write inside a system (Debug) | `CONJURE_ASSERT` naming the system and component |
 | Archive local index out of range | `ARCHIVE_CORRUPT` from `validate`/`read_archive_json`; no entities created |
 | Unknown component name on load | preserved in `unresolved_components`, `INFO` log |
@@ -969,10 +1012,10 @@ Every test body ends with `REQUIRE(world.validate())` via the fixture; files tha
 - `test_change_detection.cpp`: `non const span stamps chunk`, `const span does not stamp`, `changed filter sees chunk once`, `moved row counts as changed`, `handle write stamps`, `system does not see own previous writes`, `version is monotonic across flushes`.
 - `test_command_buffer.cpp`: `deferred create alive after flush not before`, `create add set on same id`, `multiple add remove cause one move`, `add then remove cancels`, `remove then add keeps new payload`, `destroy wins over later add`, `stale generation skipped and counted`, `payload destructors run on clear`, `append preserves order`, `reservation across 200 creates`, `unused reserved ids returned on destruction`.
 - `test_parallel_iteration.cpp`: `sum of written column equals inline result`, `each chunk visited once`, `grain buffers apply in grain order`, `create_entity from jobs yields unique ids`, `grain size follows minEntitiesPerJob`.
-- `test_scheduler.cpp`: `after before ordering`, `cycle is SYSTEM_CYCLE and not added`, `unknown name ignored`, `two readers share a stage`, `reader and writer split stages`, `exclusive system alone with unlocked world`, `main thread flag runs on caller thread`, `disabled system skipped`, `commands visible from next stage`, `serial and parallel modes give same result`, `since_version excludes own writes`, `undeclared write asserts`, `timings recorded`.
+- `test_scheduler.cpp`: `after before ordering`, `cycle is SYSTEM_CYCLE and not added`, `unknown name ignored`, `two readers share a stage`, `reader and writer split stages`, `exclusive system alone with unlocked world`, `main thread flag runs on caller thread`, `disabled system skipped`, `commands visible from next stage`, `serial and parallel modes give same result`, `since_version excludes own writes`, `undeclared write asserts`, `timings recorded`, `a system name may repeat across phases, after removal and when it is null`, `find_system returns the live system of a phase by name`, `regression - code sweep F259 a duplicate system name in one phase is NAME_CONFLICT`, `regression - code sweep F077 a system gains the access of a component registered after it`, `resolveAccess runs again only when the registry has grown`, `a registry growth that changes no access set rebuilds and logs nothing`, `an exclusive system may register a component and run another phase`.
 - `test_entity_handle.cpp`: `handle mirrors world`, `dead handle safe for get has is_alive`, `component_ref re-resolves after move`, `component_ref write stamps`.
 - `test_entity_archive.cpp`: `capture three linked entities`, `instantiate remaps internal references`, `external reference becomes null`, `keepExternalReferences preserves`, `instantiate_batch 1000 lands in expected chunk count`, `instantiate via command buffer resolves at flush`, `corrupt local index is ARCHIVE_CORRUPT`, `non trivial components copied not aliased`.
-- `test_serialization.cpp`: `round trip trivial nested entity and math fields`, `TRANSIENT skipped`, `unknown name preserved and rewritten verbatim`, `malformed json fails with field path`, `dynamic component fields serialised`.
+- `test_serialization.cpp`: `round trip trivial nested entity and math fields`, `TRANSIENT skipped`, `unknown name preserved and rewritten verbatim`, `malformed json fails with field path`, `dynamic component fields serialised`, `preserved unknown components are written in the same name order`, `an unknown component listed twice keeps its file order`, `regression - code sweep F606 component keys are written in name order whatever the registration order`.
 - `test_dynamic_components.cpp`: `register add by id bytes visible via column_data`, `default value applied`, `reflection fields enumerable`, `hot reload sequence keeps id and data`, `entity field remap for dynamic type`.
 - `tests/benchmarks/bench_ecs.cpp` (not ctest): `iterate 10k transform velocity inline vs 4 workers`, `10k creates via command buffer`, `1k archetype moves`, `instantiate_batch 1k`, `1M random get`. Target: 10k transform integrations under 0.1 ms on 4 workers.
 

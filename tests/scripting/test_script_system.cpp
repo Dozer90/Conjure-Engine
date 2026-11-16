@@ -3,6 +3,7 @@
 #include "scripting_test_support.h"
 
 #include "conjure/core/string_id.h"
+#include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
 #include "conjure/ecs/system_phase.h"
@@ -69,6 +70,10 @@ TEST_SUITE("scripting/script_system") {
         CHECK(fixedStages[0].exclusive);
         CHECK(scheduler.system(fixedStages[0].systems[0])->name == core::string_id(SYSTEM_COLLISION_DISPATCH));
         CHECK(scheduler.system(fixedStages[1].systems[0])->name == core::string_id(SYSTEM_FIXED_UPDATE));
+
+        // Once per scheduler: a second call is refused by its first system and adds nothing.
+        CONJURE_CHECK_ERROR(register_script_systems(scheduler, fixture.runtime), ecs::ecs_error::NAME_CONFLICT);
+        CHECK(scheduler.system_count() == 6);
     }
 
     TEST_CASE("script systems - running the phases drives the runtime in frame order") {

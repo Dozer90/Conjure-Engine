@@ -11,6 +11,7 @@
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/component_type_desc.h"
+#include "conjure/ecs/ecs_error.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
 #include "conjure/ecs/world.h"
@@ -35,6 +36,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -65,6 +67,44 @@ namespace {
     }
 
     constexpr core::string_id SPINNER_NAME{"test.module.spinner"};
+
+    /// <summary>
+    /// The record of a trivially copyable, transient component with spinner's layout.
+    /// </summary>
+    [[nodiscard]] ecs::component_type_desc trivial_component(const char *name) {
+        ecs::component_type_desc component = {};
+        component.name = name;
+        component.size = sizeof(spinner);
+        component.alignment = alignof(spinner);
+        component.flags = ecs::component_flags::TRIVIAL | ecs::component_flags::TRANSIENT;
+        return component;
+    }
+
+    /// <summary>
+    /// The record of an UPDATE system that runs spin() and names the given components. The lists must
+    /// outlive the registration set, as a module's static tables do.
+    /// </summary>
+    [[nodiscard]] ecs::system_extension_desc system_naming(
+      const char *name,
+      std::span<const core::string_id> reads,
+      std::span<const core::string_id> writes
+    ) {
+        ecs::system_extension_desc system = {};
+        system.name = name;
+        system.phase = ecs::system_phase::UPDATE;
+        system.reads = reads.data();
+        system.readCount = static_cast<u32>(reads.size());
+        system.writes = writes.data();
+        system.writeCount = static_cast<u32>(writes.size());
+        system.run = &spin;
+        return system;
+    }
+
+    [[nodiscard]] ecs::component_mask mask_of(ecs::component_id id) {
+        ecs::component_mask mask = {};
+        mask.set(id);
+        return mask;
+    }
 
     [[nodiscard]] modules::module_manifest manifest_named(std::string name) {
         modules::module_manifest manifest = {};
@@ -196,6 +236,323 @@ TEST_SUITE("engine/module_consumers") {
         }
         noAccess.set.extensions.erase(noAccess.set.extensions.begin());
         CONJURE_CHECK_OK(strict.validate(noAccess.id, noAccess.set, noAccess.moduleRegistry));
+    }
+
+    TEST_CASE("regression - code sweep F259 ecs_module_consumer validate refuses a system name its phase holds") {
+        // scheduler::add_system answers NAME_CONFLICT for a name its phase already holds. validate() used
+        // to accept such a record, and attach() then logged an ERROR and dropped the system; the clash
+        // fails the module load now.
+        consumer_fixture fixture = {};
+        fixture.register_spinner();
+        ecs_module_consumer consumer(fixture.registry, fixture.world, fixture.scheduler);
+
+        // The name in another phase is no clash.
+        ecs::system_desc elsewhere = {};
+        elsewhere.name = core::string_id("test.module.spin");
+        elsewhere.phase = ecs::system_phase::LATE_UPDATE;
+        elsewhere.run = [](ecs::system_context &) {};
+        CONJURE_REQUIRE_OK(fixture.scheduler.add_system(std::move(elsewhere)));
+        CONJURE_CHECK_OK(consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry));
+
+        // The name in the record's own phase is: nothing of the module is applied.
+        ecs::system_desc taken = {};
+        taken.name = core::string_id("test.module.spin");
+        taken.phase = ecs::system_phase::UPDATE;
+        taken.run = [](ecs::system_context &) {};
+        const core::result<ecs::system_id> holder = fixture.scheduler.add_system(std::move(taken));
+        CONJURE_REQUIRE_OK(holder);
+        const core::result<void> refused = consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry);
+        REQUIRE_FALSE(refused.has_value());
+        CONJURE_CHECK_ERROR(refused, modules::module_error::REGISTRATION_CONFLICT);
+        CHECK(refused.get_error().message().find("'test.module.spin'") != std::string::npos);
+        CHECK(refused.get_error().message().find("UPDATE") != std::string::npos);
+        CHECK(fixture.scheduler.system_count() == 2);
+        CHECK_FALSE(fixture.registry.find(SPINNER_NAME).is_valid());
+
+        // Once the holder is gone the same set validates and attaches without an ERROR.
+        CONJURE_REQUIRE_OK(fixture.scheduler.remove_system(holder.value()));
+        CONJURE_REQUIRE_OK(consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry));
+        {
+            const log_capture logs = {};
+            consumer.attach(fixture.id, *fixture.context, fixture.set);
+            CHECK(logs.count(core::log_level::ERR) == 0);
+        }
+        CHECK(consumer.systems_of(fixture.id).size() == 1);
+        CHECK(fixture.scheduler.system_count() == 2);
+
+        // A second module bringing the same system clashes with the first one's.
+        consumer_fixture second = {};
+        second.register_spinner();
+        modules::module_id secondId = {};
+        secondId.index = 4;
+        secondId.generation = 1;
+        CONJURE_CHECK_ERROR(
+          consumer.validate(secondId, second.set, fixture.moduleRegistry),
+          modules::module_error::REGISTRATION_CONFLICT
+        );
+        CHECK(consumer.systems_of(secondId).empty());
+
+        // After the first module is detached (an unload, or the first half of a reload) the name is free.
+        consumer.detach(fixture.id, nullptr);
+        CONJURE_CHECK_OK(consumer.validate(secondId, second.set, fixture.moduleRegistry));
+    }
+
+    TEST_CASE("ecs_module_consumer - validate refuses a system a module registers twice in one phase") {
+        static const core::string_id WRITES[] = {SPINNER_NAME};
+        const auto system_record = [](const char *name, ecs::system_phase phase) {
+            ecs::system_extension_desc system = {};
+            system.name = name;
+            system.phase = phase;
+            system.writes = WRITES;
+            system.writeCount = 1;
+            system.run = &spin;
+            return system;
+        };
+
+        // The same name in two phases is two systems.
+        consumer_fixture twoPhases = {};
+        {
+            modules::module_registrar registrar(twoPhases.set);
+            registrar.register_extension(system_record("test.module.tick", ecs::system_phase::UPDATE));
+            registrar.register_extension(system_record("test.module.tick", ecs::system_phase::FIXED_UPDATE));
+        }
+        ecs_module_consumer lenient(twoPhases.registry, twoPhases.world, twoPhases.scheduler);
+        CONJURE_REQUIRE_OK(lenient.validate(twoPhases.id, twoPhases.set, twoPhases.moduleRegistry));
+        {
+            const log_capture logs = {};
+            lenient.attach(twoPhases.id, *twoPhases.context, twoPhases.set);
+            CHECK(logs.count(core::log_level::ERR) == 0);
+        }
+        CHECK(lenient.systems_of(twoPhases.id).size() == 2);
+        lenient.detach(twoPhases.id, nullptr);
+
+        // Twice in one phase is refused before anything reaches the scheduler.
+        consumer_fixture twice = {};
+        {
+            modules::module_registrar registrar(twice.set);
+            registrar.register_extension(system_record("test.module.tick", ecs::system_phase::UPDATE));
+            registrar.register_extension(system_record("test.module.other", ecs::system_phase::UPDATE));
+            registrar.register_extension(system_record("test.module.tick", ecs::system_phase::UPDATE));
+        }
+        ecs_module_consumer strict(twice.registry, twice.world, twice.scheduler);
+        const core::result<void> refused = strict.validate(twice.id, twice.set, twice.moduleRegistry);
+        REQUIRE_FALSE(refused.has_value());
+        CONJURE_CHECK_ERROR(refused, modules::module_error::REGISTRATION_CONFLICT);
+        CHECK(refused.get_error().message().find("'test.module.tick' is registered twice") != std::string::npos);
+        CHECK(twice.scheduler.system_count() == 0);
+    }
+
+    TEST_CASE("ecs_module_consumer - a system added after a module attached cannot take a name the module holds") {
+        // validate() compares a module's systems with the ones the scheduler holds when the module loads.
+        // The engine adds its own systems at startup step 18, after the modules loaded at startup, so a
+        // startup module that uses the name of an engine system is not refused: it keeps the name, and
+        // the later add_system is the one that answers NAME_CONFLICT (01_ecs.md D13).
+        consumer_fixture fixture = {};
+        fixture.register_spinner();
+        ecs_module_consumer consumer(fixture.registry, fixture.world, fixture.scheduler);
+        CONJURE_REQUIRE_OK(consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry));
+        consumer.attach(fixture.id, *fixture.context, fixture.set);
+        const std::vector<ecs::system_id> moduleSystems = consumer.systems_of(fixture.id);
+        REQUIRE(moduleSystems.size() == 1);
+
+        const core::string_id name("test.module.spin");
+        u32 lateRuns = 0;
+        const auto late_system = [&lateRuns, name](ecs::system_phase phase) {
+            ecs::system_desc late = {};
+            late.name = name;
+            late.phase = phase;
+            late.flags = ecs::system_flags::EXCLUSIVE;
+            late.run = [&lateRuns](ecs::system_context &) {
+                ++lateRuns;
+            };
+            return late;
+        };
+
+        const core::result<ecs::system_id> refused =
+          fixture.scheduler.add_system(late_system(ecs::system_phase::UPDATE));
+        REQUIRE_FALSE(refused.has_value());
+        CONJURE_CHECK_ERROR(refused, ecs::ecs_error::NAME_CONFLICT);
+        CHECK(fixture.scheduler.system_count() == 1);
+        CHECK(fixture.scheduler.find_system(ecs::system_phase::UPDATE, name) == moduleSystems[0]);
+
+        // The module's system is the one that runs under the name.
+        sSpinnerRuns = 0;
+        const ecs::frame_info frame = {};
+        fixture.scheduler.run_phase(ecs::system_phase::UPDATE, frame);
+        CHECK(sSpinnerRuns == 1);
+        CHECK(lateRuns == 0);
+
+        // Another phase is free, and so is the module's phase once the module is detached.
+        CONJURE_CHECK_OK(fixture.scheduler.add_system(late_system(ecs::system_phase::LATE_UPDATE)));
+        consumer.detach(fixture.id, nullptr);
+        CONJURE_CHECK_OK(fixture.scheduler.add_system(late_system(ecs::system_phase::UPDATE)));
+        fixture.scheduler.run_phase(ecs::system_phase::UPDATE, frame);
+        CHECK(sSpinnerRuns == 1);
+        CHECK(lateRuns == 1);
+    }
+
+    TEST_CASE("regression - code sweep F077 a module system gains a component registered after its attach") {
+        // The consumer used to drop a read or write name the registry did not know, silently and for good:
+        // the system kept a smaller access set and shared a stage with a writer of the component once the
+        // module that owns it had loaded. The name is warned about at attach and the scheduler resolves it
+        // when the component is registered.
+        static const core::string_id GEAR_NAME = core::string_id::intern("test.optional.gear");
+        static const core::string_id WATCH_READS[] = {GEAR_NAME};
+        static const core::string_id WATCH_WRITES[] = {SPINNER_NAME};
+        static const core::string_id TURN_WRITES[] = {GEAR_NAME};
+
+        consumer_fixture fixture = {};
+        {
+            modules::module_registrar registrar(fixture.set);
+            registrar.register_extension(trivial_component("test.module.spinner"));
+            registrar.register_extension(system_naming("test.module.watch", WATCH_READS, WATCH_WRITES));
+        }
+        ecs_module_consumer consumer(fixture.registry, fixture.world, fixture.scheduler);
+        CONJURE_REQUIRE_OK(consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry));
+        {
+            const log_capture logs = {};
+            consumer.attach(fixture.id, *fixture.context, fixture.set);
+            CHECK(logs.count(core::log_level::WARN) == 1);
+            CHECK(logs.contains(core::log_level::WARN, "module 'test.module'"));
+            CHECK(logs.contains(core::log_level::WARN, "system 'test.module.watch'"));
+            CHECK(logs.contains(core::log_level::WARN, "component 'test.optional.gear' (reads[0])"));
+        }
+        const std::vector<ecs::system_id> watchSystems = consumer.systems_of(fixture.id);
+        REQUIRE(watchSystems.size() == 1);
+        const ecs::system_desc *watch = fixture.scheduler.system(watchSystems[0]);
+        REQUIRE(watch != nullptr);
+        const ecs::component_mask spinnerMask = mask_of(fixture.registry.find(SPINNER_NAME));
+        CHECK(watch->reads.none());
+        CHECK(watch->writes == spinnerMask);
+        CHECK(fixture.scheduler.stages(ecs::system_phase::UPDATE).size() == 1);
+
+        // The optional module loads afterwards: it owns the component and a system that writes it.
+        consumer_fixture optional = {};
+        modules::module_id optionalId = {};
+        optionalId.index = 4;
+        optionalId.generation = 1;
+        {
+            modules::module_registrar registrar(optional.set);
+            registrar.register_extension(trivial_component("test.optional.gear"));
+            registrar.register_extension(system_naming("test.optional.turn", {}, TURN_WRITES));
+        }
+        CONJURE_REQUIRE_OK(consumer.validate(optionalId, optional.set, fixture.moduleRegistry));
+        {
+            const log_capture logs = {};
+            consumer.attach(optionalId, *optional.context, optional.set);
+            CHECK(logs.count(core::log_level::WARN) == 0);
+        }
+        const ecs::component_id gear = fixture.registry.find(GEAR_NAME);
+        REQUIRE(gear.is_valid());
+        const ecs::component_mask gearMask = mask_of(gear);
+
+        // Its attach finalised the scheduler, which resolved the first module's system again: the reader
+        // and the writer of the component are in two stages.
+        CHECK(watch->reads == gearMask);
+        CHECK(watch->writes == spinnerMask);
+        const std::vector<ecs::system_id> turnSystems = consumer.systems_of(optionalId);
+        REQUIRE(turnSystems.size() == 1);
+        const std::span<const ecs::stage_info> stages = fixture.scheduler.stages(ecs::system_phase::UPDATE);
+        REQUIRE(stages.size() == 2);
+        CHECK(stages[0].systems == std::vector<ecs::system_id>{watchSystems[0]});
+        CHECK(stages[1].systems == std::vector<ecs::system_id>{turnSystems[0]});
+        sSpinnerRuns = 0;
+        const ecs::frame_info frame = {};
+        fixture.scheduler.run_phase(ecs::system_phase::UPDATE, frame);
+        CHECK(sSpinnerRuns == 2);
+
+        // The component stays registered when its module unloads (ids are never reused), so the access
+        // stays as well.
+        consumer.detach(optionalId, nullptr);
+        CHECK(watch->reads == gearMask);
+        CHECK(fixture.scheduler.stages(ecs::system_phase::UPDATE).size() == 1);
+        consumer.detach(fixture.id, nullptr);
+        CHECK(fixture.scheduler.system_count() == 0);
+    }
+
+    TEST_CASE("ecs_module_consumer - attach warns once for each component name that is not registered") {
+        static const core::string_id MISSING_READ = core::string_id::intern("test.missing.read");
+        // Constant-initialised and never interned, as a module's table usually is: the name prints as its hash.
+        static constexpr core::string_id MISSING_WRITE{"test.missing.write.never_interned"};
+        static const core::string_id TYPO_READS[] = {SPINNER_NAME, MISSING_READ};
+        static const core::string_id TYPO_WRITES[] = {MISSING_WRITE};
+        static const core::string_id BLIND_READS[] = {MISSING_READ};
+
+        consumer_fixture fixture = {};
+        {
+            modules::module_registrar registrar(fixture.set);
+            registrar.register_extension(trivial_component("test.module.spinner"));
+            registrar.register_extension(system_naming("test.module.typo", TYPO_READS, TYPO_WRITES));
+            registrar.register_extension(system_naming("test.module.blind", BLIND_READS, {}));
+        }
+        ecs_module_consumer consumer(fixture.registry, fixture.world, fixture.scheduler);
+
+        // An unknown name is no reason to refuse the module, even when a system knows none of its names.
+        CONJURE_REQUIRE_OK(consumer.validate(fixture.id, fixture.set, fixture.moduleRegistry));
+        {
+            const log_capture logs = {};
+            consumer.attach(fixture.id, *fixture.context, fixture.set);
+            CHECK(logs.count(core::log_level::WARN) == 3);
+            CHECK(logs.contains(
+              core::log_level::WARN,
+              "system 'test.module.typo' names component 'test.missing.read' (reads[1])"
+            ));
+            CHECK(logs.contains(core::log_level::WARN, "system 'test.module.typo' names component '#"));
+            CHECK(logs.contains(core::log_level::WARN, "(writes[0]), which is not registered"));
+            CHECK(logs.contains(
+              core::log_level::WARN,
+              "system 'test.module.blind' names component 'test.missing.read' (reads[0])"
+            ));
+            CHECK_FALSE(logs.contains(core::log_level::WARN, "'test.module.spinner'"));
+        }
+
+        // Both systems are registered and run; each holds the access of the names that resolved.
+        const std::vector<ecs::system_id> systems = consumer.systems_of(fixture.id);
+        REQUIRE(systems.size() == 2);
+        const ecs::system_desc *typo = fixture.scheduler.system(systems[0]);
+        const ecs::system_desc *blind = fixture.scheduler.system(systems[1]);
+        REQUIRE(typo != nullptr);
+        REQUIRE(blind != nullptr);
+        const ecs::component_mask spinnerMask = mask_of(fixture.registry.find(SPINNER_NAME));
+        CHECK(typo->reads == spinnerMask);
+        CHECK(typo->writes.none());
+        CHECK(blind->reads.none());
+        CHECK(blind->writes.none());
+        sSpinnerRuns = 0;
+        const ecs::frame_info frame = {};
+        fixture.scheduler.run_phase(ecs::system_phase::UPDATE, frame);
+        CHECK(sSpinnerRuns == 2);
+
+        // A name nothing ever registers stays out, and the warning is not repeated when the registry grows.
+        {
+            const log_capture logs = {};
+            CONJURE_REQUIRE_OK(fixture.registry.register_described(trivial_component("test.module.unrelated")));
+            CONJURE_REQUIRE_OK(fixture.scheduler.finalise());
+            fixture.scheduler.run_phase(ecs::system_phase::UPDATE, frame);
+            CHECK(logs.count(core::log_level::WARN) == 0);
+        }
+        CHECK(typo->reads == spinnerMask);
+        CHECK(typo->writes.none());
+        CHECK(blind->reads.none());
+
+        // A reload adds the systems again and says it again; a set whose names all resolve is quiet.
+        consumer.detach(fixture.id, nullptr);
+        {
+            const log_capture logs = {};
+            consumer.attach(fixture.id, *fixture.context, fixture.set);
+            CHECK(logs.count(core::log_level::WARN) == 3);
+        }
+        consumer.detach(fixture.id, nullptr);
+        consumer_fixture clean = {};
+        clean.register_spinner();
+        ecs_module_consumer quiet(clean.registry, clean.world, clean.scheduler);
+        CONJURE_REQUIRE_OK(quiet.validate(clean.id, clean.set, clean.moduleRegistry));
+        {
+            const log_capture logs = {};
+            quiet.attach(clean.id, *clean.context, clean.set);
+            CHECK(logs.count(core::log_level::WARN) == 0);
+        }
+        quiet.detach(clean.id, nullptr);
     }
 
     TEST_CASE("ecs_module_consumer - a reload keeps trivial columns in place and stores the snapshot") {

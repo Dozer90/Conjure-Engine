@@ -28,7 +28,7 @@ the asset pipeline. It owns exactly one per-frame hot path, `scene.propagate_tra
 | S5 | **Transform companions are a unit.** Every entity with `local_transform` also has `world_transform`, `render_world_transform` and `transform_state`; `scene` adds them together, and an observer repairs raw adds. An ancestor without `local_transform` contributes identity (its children are positioned in world space). | One rule, no "optional world transform" branches in the hot pass. |
 | S6 | **Cascaded destroy is observer-driven through the ECS deferred buffer; the scene never recurses.** `observe_destroyed` enqueues `destroy_entity(child)` per child; the ECS drains until empty. `scene::destroy()` queues for `scene.destroy_pending` (FRAME_END); `scene::destroy_now()` is the editor/test path. | Binding per `ARCHITECTURE.md` 4.4 and `01_ecs.md` D9; depth is bounded by the drain loop, not the C++ stack. |
 | S7 | **All hierarchy mutation goes through `scene` (`set_parent`, `create_entity`, instantiate, destroy).** Raw `world.add/remove<parent>` is tolerated: observers queue a repair that `scene.apply_hierarchy_changes` (TRANSFORM, EXCLUSIVE, before propagation) applies in the same frame with one WARN per frame. | Scripts can reach the raw ECS (`03_scripting.md`); a stale tree may never be the result. |
-| S8 | **Scene and prefab files are JSON: a small header plus `ecs::write_archive_json` output.** Entities are written in hierarchy order (roots by root order, children by sibling order); unknown components round-trip verbatim (`unresolved_components`). Save -> load -> save is byte-identical. | One archive pipeline (`01_ecs.md` D10); diffable files; plugin data survives. |
+| S8 | **Scene and prefab files are JSON: a small header plus `ecs::write_archive_json` output.** Entities are written in hierarchy order (roots by root order, children by sibling order) and each entity's component keys in name order (`01_ecs.md` D14; code sweep 2026-11-12, F606); unknown components round-trip verbatim (`unresolved_components`) in the same order. Save -> load -> save is byte-identical. | One archive pipeline (`01_ecs.md` D10); diffable files that do not depend on the registration order of the build that saved them; plugin data survives. |
 | S9 | **Prefab instances are fully materialised.** The instance root carries `prefab_instance { asset_ref<prefab_asset> }`, every entity of the instance carries `prefab_link { uuid assetGuid }`. Nested prefabs are baked into the outer prefab's archive with their markers. Overrides are computed by `prefab::diff`, not stored. | Scenes load without resolving prefabs; no override-record format in v1; `apply`/`revert`/`unpack` are simple archive operations. |
 | S10 | **`scene_snapshot` is an in-memory `entity_archive` plus roots order, settings and structure version.** No file form. | Play/stop needs 10k entities captured and restored under 50 ms; `ops.copy` on typed bytes is a memcpy per column. |
 | S11 | **Asset residency belongs to `scene_manager`.** A scene asset's slot holds its dependency handles (`05_assets.md` D9); the manager holds the scene handle in an `asset_load_batch`, gates deferred loads on `is_complete()`, binds slots after instantiation (R25) and calls `collect()` after unload. | Nothing in a component owns an asset (`asset_ref` is non-owning, `05_assets.md` D2). |
@@ -131,25 +131,25 @@ bookkeeping while the scene itself mutates), events `on_structure_changed`, `on_
   "archive": {
     "entities": [
       {"components": {
+        "com.studio.spinner": {"speed": 2.5},
+        "conjure.renderer.mesh_renderer": {"mesh": "9a77...-...-...e01", "materials": ["c3d4...-...", "", "", ""]},
         "conjure.scene.guid": {"value": "6d2a9f0e-3b7c-4d1e-9a2f-0c5b7e8d1a21"},
-        "conjure.scene.name": {"value": "Player"},
-        "conjure.scene.tag": {"value": "Player"},
         "conjure.scene.layer": {"index": 3},
         "conjure.scene.local_transform": {"position": [0, 1, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
-        "conjure.renderer.mesh_renderer": {"mesh": "9a77...-...-...e01", "materials": ["c3d4...-...", "", "", ""]},
-        "com.studio.spinner": {"speed": 2.5}
+        "conjure.scene.name": {"value": "Player"},
+        "conjure.scene.tag": {"value": "Player"}
       }},
       {"components": {
         "conjure.scene.guid": {"value": "0e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a"},
+        "conjure.scene.local_transform": {"position": [0, 2, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
         "conjure.scene.name": {"value": "Lamp"},
-        "conjure.scene.parent": {"value": 0, "siblingIndex": 0},
-        "conjure.scene.local_transform": {"position": [0, 2, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+        "conjure.scene.parent": {"value": 0, "siblingIndex": 0}
       }},
       {"components": {
+        "conjure.scene.disabled": {},
         "conjure.scene.guid": {"value": "b1f0c3d2-aa10-4e22-8c71-2fd3e4a5b6c7"},
-        "conjure.scene.name": {"value": "Ground"},
         "conjure.scene.local_transform": {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [50, 1, 50]},
-        "conjure.scene.disabled": {}
+        "conjure.scene.name": {"value": "Ground"}
       }}
     ]
   }
@@ -159,11 +159,14 @@ bookkeeping while the scene itself mutates), events `on_structure_changed`, `on_
 Rules: header keys in exactly this order (`format`, `version`, `name`, `settings`, `roots`, `archive`);
 `settings` is `document::to_canonical_string()` spliced with `write_raw_json`; `archive` is the verbatim
 output of `ecs::write_archive_json` with entities in hierarchy order (roots in root order, each subtree
-depth-first in sibling order) and component keys in component id order; `parent.value` is an archive-local
+depth-first in sibling order) and each entity's component keys in name order (the byte order of the UTF-8 text,
+as in the canonical cooked form; `01_ecs.md` D14), so the text does not depend on component ids and therefore
+not on which modules the saving build registered, or in which order; `parent.value` is an archive-local
 index; `asset_ref` fields are uuid strings (empty = none); `com.studio.spinner` is an unknown component kept
-through `unresolved_components`. `version` is `SCENE_FORMAT_VERSION = 1` (greater -> `UNSUPPORTED_VERSION`;
-wrong `format` -> `BAD_FORMAT`). A guid in `roots` absent from the archive is skipped with WARN; a root entry
-missing from `roots` is appended in archive order with WARN.
+through `unresolved_components` and written in the same name order. A file saved before this rule (keys in component
+id order) loads unchanged and is reordered once, by its next save. `version` is `SCENE_FORMAT_VERSION = 1` (greater
+-> `UNSUPPORTED_VERSION`; wrong `format` -> `BAD_FORMAT`). A guid in `roots` absent from the archive is skipped with
+WARN; a root entry missing from `roots` is appended in archive order with WARN.
 
 ### 2.4 Prefab file format (`.prefab.json`, asset type `conjure.scene.prefab`)
 
@@ -936,7 +939,7 @@ One file per public header plus the topic files required by `08_testing.md` 5.2 
 - `test_transform_system.cpp`: `describe declares reads and writes`, `stats count visited and skipped`, `interpolation disabled uses current pose`.
 - `test_transform_propagation.cpp`: `depth 8 chain matches glm product` (random TRS per level, compare `world_transform` with `glm` matrix products, epsilon 1e-4), `moving root updates leaf only through stamps`, `unchanged chunks are skipped`, `dirty propagation touches only the subtree` (10k entities in two trees; move one root; `worldRecomputed == subtree size`), `10k entities allocation-free after frame 2` (`CONJURE_CHECK_NO_ALLOCATIONS` around frames 3..10, both job modes), `whole TRANSFORM phase through the scheduler allocation-free after frame 2` (the same gate around `scheduler::run_phase(TRANSFORM)`, so the scheduler's per-stage bookkeeping and the command buffer flushes are inside it; the ECS-level gate with job closures is `test_scheduler.cpp`'s `a warmed-up phase allocates nothing of its own`), `interpolated entity renders lerp at alpha half`, `child of interpolated parent follows render parent`, `root without pose render equals world`, `pose removed restores render equals world`, `reparent same depth sets dirty and recomputes`, `inline and parallel give identical matrices`.
 - `test_scene_serializer.cpp`: `header keys in order`, `bad format and newer version rejected before creating entities`, `roots order from header`, `missing root listed appended with WARN`, `parent local index remapped`, `asset_ref written as uuid and bound after load`, `bind_entity rebinds edited uuid`, `save_subtree instantiate_subtree duplicate regenerates guids`, `keepGuids true collision is DUPLICATE_GUID`, `unknown component preserved verbatim with one WARN`, `script-like custom serializer component round trips` (test component with custom hooks).
-- `test_scene_serialisation.cpp`: `save load save byte identical` (programmatic 500-entity scene with every scene component, nested hierarchy, asset refs, an unknown component), `roundtrip.scene.json fixture byte identical`, `load into additive scene keeps existing entities`, `empty scene round trip`.
+- `test_scene_serialisation.cpp`: `save load save byte identical` (programmatic 500-entity scene with every scene component, nested hierarchy, asset refs, an unknown component), `roundtrip.scene.json fixture byte identical`, `regression - code sweep F606 a scene file in component id order saves in name order`, `load into additive scene keeps existing entities`, `empty scene round trip`.
 - `test_scene_snapshot.cpp`: `capture restore preserves guids names hierarchy transforms`, `restore after mutation reverts`, `10k capture plus restore under 50 ms` (Development only; `[perf]` label, skipped in Debug), `restore failure leaves empty scene`, `roots owners preserved`.
 - `test_prefab.cpp`: `build_document single root`, `multiple roots rejected`, `mark_instance adds links`, `instantiate regenerates guids keeps links`, `instantiate_many 100 lands under parent in order`, `root transform and name overrides`, `nested prefab baked and inner marker preserved`, `diff reports modified added removed`, `revert restores asset state keeps root guid`, `revert to an asset with a layer of 32 or more keeps the instance`, `apply writes links as guids`, `refresh_instances reverts only unmodified`, `unpack removes markers stops at nested`, `prefab_builder builds hierarchy and components by name`, `importer extracts asset_ref dependencies and canonicalises`, `loader parses on worker`.
 - `test_scene_manager.cpp`: `load replace sets settings and roots`, `additive load keeps existing entities`, `additive guid conflict regenerates with one WARN`, `request_load applies at apply_pending_loads when complete`, `requests apply in order`, `failed asset drops request and fires on_load_failed`, `unload destroys only that scene`, `on_before_unload fires before entities die with roots span` (handler asserts every root alive and records order: before_unload, then destroyed observer, then collect), `unload_all reverse order then clear`, `load_file from memory vfs`, `collect called after unload` (memory source stats), `reparented root changes owner`.

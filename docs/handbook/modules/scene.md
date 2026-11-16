@@ -131,8 +131,11 @@ the subtree back, and a saved file would fail to load.
 ## 6. Files, prefabs and snapshots
 
 Header keys `format`, `version`, `name`, `settings` (canonical), `roots` (guid strings), `archive`
-(`ecs::write_archive_json` of every entity in hierarchy order, component keys in id order). Unknown components
-survive through `unresolved_components`; save, load, save is byte-identical. `capture_subtree` drops the root's
+(`ecs::write_archive_json` of every entity in hierarchy order, each entity's component keys in name order: UTF-8
+byte order, as in the canonical cooked form, so a file does not depend on the component ids of the build that
+saved it). Unknown components survive through `unresolved_components` and are written in the same order; save,
+load, save is byte-identical. A file from before code sweep F606 (keys in id order) is reordered once, by its next
+save. `capture_subtree` drops the root's
 `parent` (unless external references are kept) so entry 0 of a prefab is a true root; `parse_prefab` enforces a
 single root at entry 0 (`BAD_FORMAT` for an empty archive, `PREFAB_MULTIPLE_ROOTS` otherwise, one helper shared
 with `build_document`, `instantiate_many` and `revert` that formats its message only on failure) and unique entry

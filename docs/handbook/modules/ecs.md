@@ -183,6 +183,32 @@ when that fails), which allocates, so it is non-const like the query counters (3
 `system_desc::resolveAccess` (filled by `make_system`) is called at `add_system` to merge pack-derived masks into
 `reads` / `writes`, so a `system_desc` needs no registry at construction.
 
+Access sets follow the registry (01_ecs.md D15). `refresh_access()` (`scheduler.cpp`) opens `run_phase`,
+`finalise()` and `stages()`: it compares `component_registry::count()` with `mResolvedComponentCount` and
+returns on equality (one atomic load per call, no allocation). After a growth it calls the hook of every live
+system that has one, disabled ones included, marks the phase of each system whose masks changed as dirty (one
+`DEBUG` log naming the system) and stores the count read before the pass. Ids are append-only, so the count is
+a complete change signal and a hook can only add bits; it must give the same answer for the same registry and
+own what it captures. Only the dirty flag is set, never the stages: a nested `run_phase` (an `EXCLUSIVE`
+system that registered a component) may be in here while the outer phase walks its stages, and that phase is
+rebuilt before its next run. The pass is skipped while the world is locked for iteration, because the systems
+of a running stage read their masks on other threads; the next unlocked call runs it. `add_system` resolves the new
+system only and leaves the stored count alone. The engine's `ecs_module_consumer` builds the hook from a module
+record's read and write names, so a component of an optional dependency joins the access set when that module loads;
+a name unknown at attach is one `WARN` there, never a failed load.
+
+A system name is unique within its phase (01_ecs.md D13). `add_system` asks `find_system(phase, name)` before it
+takes a record and returns `NAME_CONFLICT` when a live system of the phase carries the name, so `resolve_edges`
+never finds two systems for an `after` / `before` name. The lookup is a linear walk over the records: live ones
+only, disabled ones included, never the null name, so unnamed systems are not compared, and `resolve_edges`
+treats a null entry as an unknown name instead of binding it to the first unnamed system. The engine's
+`ecs_module_consumer::validate` uses the same lookup (and compares the records of the set with each other), which
+turns a clash into a failed module load instead of a system dropped at attach. That lookup sees the systems the
+scheduler holds when the module loads, and the engine adds its own at startup step 18, after the startup modules
+(step 15): a startup module that takes an engine system's name keeps it, and the engine's `add_system` is the
+one refused (an `ERROR` from the subsystem; scene, physics and scripting stop at the first refused system, so
+the ones they add after it are missing too, and startup continues).
+
 `scheduler.cpp`: `run_phase` walks the stages; an exclusive stage bumps the version and runs on the caller
 with the world unlocked, then flushes; every other stage takes an `iteration_scope`, schedules its systems as
 jobs (main-thread systems last, on the caller; everything inline when `jobs == nullptr` or
@@ -226,8 +252,12 @@ the roots returned at record time; the copy runs first in the flush.
 fields (uuid in the first 16 bytes of the handle, rest zeroed on read; the scene bind pass resolves them, R25)
 here. Unknown names on load go into `unresolved_components` verbatim and are re-emitted, except a preserved entry
 whose name now resolves to a non-transient component the entity holds: the live component is written in its place
-(the read side stays strict and refuses a name listed twice). Malformed JSON fails the whole load with
-`SERIALIZATION_FAILED` and an `<entity index>/<component>/<field path>: detail` message. A failed
+(the read side stays strict and refuses a name listed twice). `write_archive_json` gathers the keys of one entity
+(live components and preserved entries alike) into a buffer it reuses for the whole archive, sorts them by name in
+the byte order of the UTF-8 text and writes them in that order (01_ecs.md D14): component ids follow registration
+order, which changes with the features and modules a build loads, and a file must not. It is the order of
+`core::json`'s canonical form; an unknown name a file listed twice keeps its file order. Malformed JSON fails the
+whole load with `SERIALIZATION_FAILED` and an `<entity index>/<component>/<field path>: detail` message. A failed
 `write_archive_json` returns with the writer as it was at the failure (partial, unbalanced): a caller such as the
 scene serialiser nests the archive in its own object, so balancing the archive's scopes alone could not make the
 output whole. Dynamic types serialise through their runtime description with the same walker.
@@ -288,7 +318,7 @@ non-owning values that re-validate on use. `std::shared_ptr` appears only for ar
 |---|---|
 | C++ component types | `CONJURE_COMPONENT` + `CONJURE_REFLECT_STRUCT`, `register_component<T>(flags)`; non-trivial types get ops from their special members |
 | Custom lifecycle or serialisation | `component_ops` / `component_serializer` function pointers in `component_info` (today filled by the registry; a custom-hook registration path is additive) |
-| Module extension records | `component_type_desc` (`"ecs.component"`, `describe_component<T>()`, applied by `register_described`, reflection deep-copied so the module may unload) and `system_extension_desc` (`"ecs.system"`, name lists resolved by the engine's `ecs_module_consumer` into `add_system`); detach uses `remove_system` / `remove_from_all` ([Module system](../module-system/index.md)) |
+| Module extension records | `component_type_desc` (`"ecs.component"`, `describe_component<T>()`, applied by `register_described`, reflection deep-copied so the module may unload) and `system_extension_desc` (`"ecs.system"`, read and write name lists copied by the engine's `ecs_module_consumer` into the system's `resolveAccess` hook, which the scheduler resolves at `add_system` and after every registry growth (3.4)); detach uses `remove_system` / `remove_from_all` ([Module system](../module-system/index.md)) |
 | Script-defined types | `register_dynamic` (always `DYNAMIC \| TRIVIAL`, alignment 1..16, fields of primitive, math or `entity` kinds, the registry owns the `type_info`); `redefine_dynamic` keeps the id, refuses while `has_instances` (`COMPONENT_IN_USE`) or on a name change, and re-lays out the now empty archetypes containing the type (an archetype whose rows no longer fit gets capacity 0). Hot reload: serialise (`component_to_json`) -> `remove_from_all` -> `redefine_dynamic` -> `add_raw` -> `component_from_json` |
 | Bindings | `add_raw` / `set_raw` / `get_raw` / `remove_raw` / `has_raw`, `query::chunk(i)` + `chunk_view::column_data` under `lock_iteration()`, `version()` to invalidate cached spans, `entity::to_u64` / `from_u64` |
 | Frame integration | `system_phase` (list owned by the engine loop design, header by this module, R1), `frame_info` (R2), `run_phase_filtered` with `RUNS_WHILE_PAUSED`, `scheduler::finalise()` at startup and after module loads |
@@ -315,6 +345,8 @@ and the pool's live block count, naming the first violation.
 | archetype capacity 0 / pool cap reached | `ARCHETYPE_TOO_LARGE` / `OUT_OF_MEMORY` from the structural call; nothing changes |
 | command on an entity dead at flush | skipped, `DEBUG` log, `flush_report::skipped` |
 | system cycle / unknown name in `after` or `before` | `SYSTEM_CYCLE`, not added / ignored with one `DEBUG` log when the system is added |
+| a system name its phase already holds | `NAME_CONFLICT`, not added (unnamed systems and other phases never conflict) |
+| a system names a component type that is not registered yet (`make_system` pack, `resolveAccess`, a module record's name lists) | the bit is left out and set by the next `finalise()` / `run_phase` / `stages()` after the type is registered; a module record additionally logs one `WARN` per such name at attach |
 | undeclared write inside a system (Debug) | assert naming system and component |
 | archive local index out of range / foreign registry | `ARCHIVE_CORRUPT`, nothing created |
 | unknown component name on load / malformed JSON | preserved in `unresolved_components` with an `INFO` log / `SERIALIZATION_FAILED` with the field path, whole load fails |

@@ -112,8 +112,11 @@ headers), `scene_observers.cpp`, `scene_link_pass.cpp` (`instantiate_archive`, h
   destroy undo and a saved file would carry a value that instantiation refuses. `refresh_instances` skips
   an instance whose `diff` fails, so it never reverts one.
 - **Files.** Header keys `format`, `version`, `name`, `settings` (canonical), `roots` (guid strings),
-  `archive` (`ecs::write_archive_json` of every entity in hierarchy order, component keys in id order).
-  Unknown components survive through `unresolved_components`; save -> load -> save is byte-identical.
+  `archive` (`ecs::write_archive_json` of every entity in hierarchy order, each entity's component keys
+  in name order: UTF-8 byte order, as in the canonical cooked form, so a file does not depend on the
+  component ids of the build that saved it). Unknown components survive through `unresolved_components`
+  and are written in the same order; save -> load -> save is byte-identical. A file from before code
+  sweep F606 (keys in id order) is reordered once, by its next save.
   `capture_subtree` drops the root's `parent` (unless external references are kept) so entry 0 of a
   prefab is a true root; `parse_prefab` enforces a single root at entry 0 (`detail::check_prefab_roots`,
   shared with `build_document`, `instantiate_many` and `revert`: `BAD_FORMAT` for an empty archive,

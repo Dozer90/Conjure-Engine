@@ -76,7 +76,11 @@ namespace conjure::ecs {
         /// <summary>
         /// Optional: resolves component types into reads/writes once the registry is known
         /// (make_system fills this so a system_desc needs no registry at construction). Called by
-        /// scheduler::add_system and merged into reads/writes.
+        /// scheduler::add_system and merged into reads/writes, and called again, on the owner thread,
+        /// whenever the registry has gained component types since (01_ecs.md D15): a type or name the
+        /// registry did not know yet is left out and joins the access set once it is registered. The
+        /// hook therefore only ever sets bits, gives the same answer for the same registry, and owns
+        /// whatever it captures for as long as the system is registered.
         /// </summary>
         std::function<void(const component_registry &registry, component_mask &reads, component_mask &writes)>
           resolveAccess = {};
@@ -279,7 +283,9 @@ namespace conjure::ecs {
     /// <summary>
     /// A system_desc whose reads/writes derive from the pack (const T read, T write, maybe&lt;T&gt; by
     /// constness) so the common one-view system declares nothing by hand. The pack is resolved against
-    /// the world's registry when the system is added.
+    /// the world's registry when the system is added; a type that is not registered yet is left out
+    /// and joins the access set once it is (the scheduler resolves again when the registry has grown,
+    /// 01_ecs.md D15).
     /// </summary>
     template <typename... ComponentTypes>
     [[nodiscard]] system_desc make_system(

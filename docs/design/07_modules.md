@@ -796,7 +796,12 @@ EXTENSION_POINT{ "ecs.component" }`; name, size, alignment, flags, ops, `const c
 `std::function`-based `ecs::system_desc` stays the scheduler's own type, R2); `component_registry::register_component`
 / `register_dynamic` returning ids resolved by name and `remove_from_all`; `scheduler::add/remove_system`;
 archetype enumeration for `live_use_count`, stripping owned components, and the column snapshot/restore of 3.6.
-The ECS consumer rejects a system without a declared access set in `validate`.
+The ECS consumer rejects a system without a declared access set in `validate`. It also rejects a system whose
+name its phase already holds in the scheduler, or that the module registers twice in one phase (`01_ecs.md` D13,
+code sweep F259); the check sees only the systems added before the module loads, so a startup module can still
+take an engine system's name. A read or write name the registry does not know is not rejected: attach logs one
+`WARN` and the scheduler adds the access when a component of the name is registered (`01_ecs.md` D15, code sweep
+F077).
 
 **Needs from `assets` (E).** `importer_extension_desc { EXTENSION_POINT{ "assets.importer" }; const char *id;
 std::unique_ptr<asset_importer> (*create)(); }` and `asset_type_extension_desc` (`"assets.type"`; name, version,

@@ -31,6 +31,13 @@
 // on the calling thread, exclusive systems alone with an unlocked world; every system's command buffer
 // is flushed in stage order when the stage ends. A null job system (or parallelSystems = false) runs
 // the same stages inline, so headless tests and the engine share one code path.
+//
+// A system's access set follows the component registry (01_ecs.md D15): a system that resolves its
+// reads/writes by type or by name (system_desc::resolveAccess, which make_system and the engine's module
+// consumer fill) is resolved again once the registry has gained component types, and the phases whose
+// systems gained access are rebuilt, so a system added before a component it names is packed correctly
+// from the next run_phase of its phase after that component is registered (a phase that is running when
+// the component is registered finishes with its current stages).
 
 namespace conjure::ecs {
 
@@ -88,6 +95,7 @@ namespace conjure::ecs {
             std::vector<u32> mFreeRecords = {};
             u32 mNextGeneration = 1;
             u32 mRegistrationCounter = 0;
+            u32 mResolvedComponentCount = 0;               // registry count every access set was last resolved at
             std::unique_ptr<std::array<phase_state, SYSTEM_PHASE_COUNT>> mPhases = {};
             const frame_info *mRunningFrame = nullptr;     // the frame of the run_phase in progress
 
@@ -102,10 +110,17 @@ namespace conjure::ecs {
 
         public:
             /// <summary>
-            /// Adds a system; its phase's stages are rebuilt lazily. SYSTEM_CYCLE (and the system is not
-            /// added) when its after/before edges close a cycle; unknown names in those lists are
-            /// ignored with one DEBUG log each, written here and never again by later additions,
-            /// finalise() or the lazy rebuilds. Owner thread.
+            /// Adds a system; its phase's stages are rebuilt lazily. A name is unique within its phase:
+            /// NAME_CONFLICT (and the system is not added) when a live system of the same phase already
+            /// carries the same name. Unnamed systems (the null string_id) never conflict, and the same
+            /// name may be used again in another phase or after remove_system. SYSTEM_CYCLE (and the
+            /// system is not added) when its after/before edges close a cycle; unknown names in those
+            /// lists, the null name always among them, are ignored with one DEBUG log each, written
+            /// here and never again by later additions, finalise() or the lazy rebuilds. A resolveAccess
+            /// hook is called here against the world's registry, and again by finalise(), run_phase and
+            /// stages() once the registry has gained component types (01_ecs.md D15), so the access set
+            /// of a system added before a component it names is completed when that component is
+            /// registered (the pass waits while the world is locked for iteration). Owner thread.
             /// </summary>
             [[nodiscard]] core::result<system_id> add_system(system_desc desc);
 
@@ -121,14 +136,19 @@ namespace conjure::ecs {
 
             /// <summary>
             /// Builds every phase's stages now and reports SYSTEM_CYCLE and Debug access conflicts (R2).
-            /// Optional: run_phase builds lazily; the engine calls it at startup step 18 and after every
-            /// module load so configuration errors surface before the first frame instead of inside it.
+            /// Resolves every system's access again first when the registry has gained component types
+            /// (01_ecs.md D15). Optional: run_phase builds lazily; the engine calls it at startup step 18
+            /// and after every module load so configuration errors surface before the first frame
+            /// instead of inside it. Owner thread, outside a running phase.
             /// </summary>
             [[nodiscard]] core::result<void> finalise();
 
             /// <summary>
             /// Runs every enabled system of the phase, stage by stage, flushing command buffers at each
-            /// stage boundary. Owner thread, world unlocked. The per-stage bookkeeping lives in the phase
+            /// stage boundary. Owner thread, world unlocked. When the registry has gained component
+            /// types since the access sets were last resolved, every resolveAccess hook runs again first
+            /// and the phases whose systems gained access are rebuilt before their next run (01_ecs.md
+            /// D15); otherwise that check is one atomic load. The per-stage bookkeeping lives in the phase
             /// (kept at capacity) and stage jobs complete on a stack-held core::jobs::job_fence, so a
             /// phase that has run once allocates nothing of its own afterwards, with parallelSystems and
             /// a job system included (tests/ecs/test_scheduler.cpp gates it at zero in both modes).
@@ -141,9 +161,10 @@ namespace conjure::ecs {
             void run_phase_filtered(system_phase target, const frame_info &frame, system_flags required);
 
             /// <summary>
-            /// The stages of a phase. A phase left dirty by add_system, remove_system or set_enabled is
-            /// rebuilt here first, which allocates and can fail, so the method is non-const by design
-            /// (01_ecs.md D12). Empty for an out-of-range phase or a failed rebuild.
+            /// The stages of a phase. A phase left dirty by add_system, remove_system or set_enabled, or
+            /// by an access set that grew with the registry (01_ecs.md D15), is rebuilt here first, which
+            /// allocates and can fail, so the method is non-const by design (01_ecs.md D12). Empty for an
+            /// out-of-range phase or a failed rebuild. Owner thread, outside a running phase.
             /// </summary>
             [[nodiscard]] std::span<const stage_info> stages(system_phase target);
 
@@ -153,9 +174,19 @@ namespace conjure::ecs {
             [[nodiscard]] std::span<const system_timing> last_timings(system_phase target) const noexcept;
 
             /// <summary>
-            /// The description of a system; nullptr for a stale id.
+            /// The description of a system; nullptr for a stale id. Its reads and writes are the access
+            /// set as last resolved: they grow when finalise(), run_phase or stages() resolves it again
+            /// (01_ecs.md D15).
             /// </summary>
             [[nodiscard]] const system_desc *system(system_id id) const noexcept;
+
+            /// <summary>
+            /// The live system of a phase registered under 'name' (disabled ones included), which is the
+            /// one an after/before edge to that name binds to. An invalid id when the phase holds no
+            /// such system, for the null name (unnamed systems cannot be looked up) and for an
+            /// out-of-range phase.
+            /// </summary>
+            [[nodiscard]] system_id find_system(system_phase target, core::string_id name) const noexcept;
 
             /// <summary>
             /// Registered systems.
@@ -182,6 +213,7 @@ namespace conjure::ecs {
               system_phase target,
               const std::vector<std::vector<u32>> &predecessors
             );
+            void refresh_access();
             void run_system(system_record &record, const frame_info &frame);
             void mark_dirty(system_phase target);
     };

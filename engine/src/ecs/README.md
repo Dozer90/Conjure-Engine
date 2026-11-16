@@ -165,7 +165,17 @@ reused, so a stale id can never alias another type and every world on the same r
   runs its systems as jobs over a locked world (main-thread systems last on the caller, everything
   inline without a job system or with `parallelSystems = false`), then flushes each system's buffer in
   stage order. `EXCLUSIVE` systems run alone with an unlocked world. `finalise()` builds every phase
-  now; `run_phase_filtered` runs only systems whose flags contain the required bits. The per-stage job
+  now; `run_phase_filtered` runs only systems whose flags contain the required bits. A system name is
+  unique within its phase: `add_system` returns `NAME_CONFLICT` and adds nothing when a live system of
+  the phase already carries it (unnamed systems, other phases and removed systems never conflict), so an
+  edge never has two systems to choose from, and a null name in `after`/`before` is an unknown name, bound
+  to no unnamed system; `find_system(phase, name)` is the lookup. Access sets follow the
+  registry (01_ecs.md D15): `add_system` calls `system_desc::resolveAccess` (which `make_system` and the
+  engine's module consumer fill), and `finalise()`, `run_phase` and `stages()` call every live system's
+  hook again once `component_registry::count()` has grown, then rebuild the phases whose systems gained
+  access. A system added before a component it names is therefore packed correctly from the first
+  `run_phase` after that component is registered; with an unchanged registry the check is one atomic
+  load. The per-stage job
   and main-thread lists live in the phase state (kept at capacity) and the stage jobs complete on a
   `core::jobs::job_fence` held on `run_phase`'s stack (`job_system::schedule(jobs, fence)`, no shared
   counter), so a phase that has run once allocates nothing of its own afterwards, `parallelSystems`
@@ -207,10 +217,12 @@ reused, so a stale id can never alias another type and every world on the same r
   (`ASSET_REF`: the uuid in the first 16 bytes of the handle, rest zeroed on read) are handled here.
   Unknown component names on load are kept verbatim in the built-in `unresolved_components` (id 0,
   `EDITOR_HIDDEN`) and re-emitted under their original names, except one whose name now resolves to a
-  component the entity holds (the live component is written instead, so no key appears twice);
-  malformed component JSON fails the whole load with `SERIALIZATION_FAILED` and an
-  `<entity index>/<component>/<field path>: detail` message. A failed `write_archive_json` leaves the
-  writer with partial, unbalanced output.
+  component the entity holds (the live component is written instead, so no key appears twice).
+  The keys of one entity are written sorted by name (byte order of the UTF-8 text, the order of
+  `core::json`'s canonical form), preserved names included, so the text does not depend on component ids
+  and therefore not on registration order; reading accepts any order. Malformed component JSON fails the
+  whole load with `SERIALIZATION_FAILED` and an `<entity index>/<component>/<field path>: detail`
+  message. A failed `write_archive_json` leaves the writer with partial, unbalanced output.
   Types without custom hooks serialise through their reflection description (dynamic types included);
   `make_default_serializer<T>` wraps the same walker for C++ types.
 - **Reflection constraint.** `core::reflect` demands of an `entity` field the alignment the owning

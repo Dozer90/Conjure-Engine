@@ -29,7 +29,8 @@ namespace conjure::scripting {
     /// scripting.fixed_update (FIXED_UPDATE, dispatch before update), scripting.update (UPDATE),
     /// scripting.late_update (LATE_UPDATE) and scripting.frame_end (FRAME_END: flush). 'reload' may be
     /// null; when set, frame_begin ticks it with the frame time. The runtime and controller must outlive
-    /// the scheduler.
+    /// the scheduler. Call once per scheduler: a second call returns NAME_CONFLICT from its first system
+    /// and adds nothing (01_ecs.md D13).
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> register_script_systems(
       ecs::scheduler &scheduler,

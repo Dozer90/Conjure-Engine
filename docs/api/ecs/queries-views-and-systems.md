@@ -138,6 +138,18 @@ component masks, `after` / `before` lists of system names and the `run` function
 phase, run)` builds one whose `reads` and `writes` derive from the pack exactly as a view's do, so the common
 one-view system declares nothing by hand.
 
+A system may be added before the component types it names are registered. `make_system` resolves its pack
+against the registry when the system is added and leaves out a type the registry does not know yet; the
+scheduler resolves again once the registry has gained types, so the access is complete from the next
+`run_phase` after the registration. The same holds for a module's system, whose read and write lists are
+component names. To get this for a hand-built description, fill `resolveAccess` (a function that sets the bits
+of the types it finds in the registry) instead of the `reads` and `writes` masks; it is called when the system
+is added and again after every growth of the registry, so it only ever sets bits.
+
+The name is the system's identity: `after` / `before` lists, the timings and the profiler all refer to it. It is
+unique within its phase, so prefix it with your module or game name (`game.integrate`), as the engine's own
+systems do (`scene.propagate_transforms`, `scripting.frame_end`).
+
 ```cpp
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system.h"
@@ -178,6 +190,13 @@ so it may make structural changes directly; `DISABLED` skips it; `RUNS_WHILE_PAU
 > hand-built `system_desc`, fill `reads` and `writes` yourself. Debug builds assert on an undeclared write; in
 > every build an undeclared access is a data race waiting for another system to share the stage.
 
+> [!WARNING]
+> A module system that names a component nothing has registered is still loaded: the engine logs one warning
+> per name (`... names component 'x' (reads[0]), which is not registered ...`) and the system runs without that
+> access. That is correct for a component of an optional dependency that is not loaded, and the access appears
+> when that module loads. For a misspelt name it never does, so read the warning: the system then shares a
+> stage with writers of the component it meant.
+
 ## Phases and the scheduler
 
 `system_phase` lists the slots of one frame in order: `FRAME_BEGIN`, `FIXED_UPDATE`, `PHYSICS_STEP`,
@@ -187,13 +206,27 @@ so it may make structural changes directly; `DISABLED` skips it; `RUNS_WHILE_PAU
 `UPDATE` and `LATE_UPDATE`; fixed-rate simulation in `FIXED_UPDATE`.
 
 `scheduler(world, jobs, scheduler_desc = {})` owns the systems. `add_system(desc)` returns a `system_id`
-(`SYSTEM_CYCLE` when `after`/`before` would loop; unknown names in those lists are ignored because the module may
-be compiled out, with one `DEBUG` log each when the system is added), `remove_system(id)` and
-`set_enabled(id, bool)` take it back, `finalise()` builds every
+(`NAME_CONFLICT` when the phase already holds a system of that name; `SYSTEM_CYCLE` when `after`/`before` would
+loop; unknown names in those lists are ignored because the module may be compiled out, with one `DEBUG` log each
+when the system is added), `remove_system(id)` and `set_enabled(id, bool)` take it back, `finalise()` builds every
 phase's stages now, and `run_phase(phase, frame)` runs the phase. `stages(phase)` shows the `stage_info` groups,
-`last_timings(phase)` the microseconds per system, `system(id)` and `system_count()` the registrations. Like the
-query counters, `stages(phase)` is not `const`: it first rebuilds a phase whose systems changed since the last
-build, and returns an empty span when that rebuild fails.
+`last_timings(phase)` the microseconds per system, `system(id)` and `system_count()` the registrations, and
+`find_system(phase, name)` the id of the system a name stands for in a phase (an invalid id when there is none).
+Like the query counters, `stages(phase)` is not `const`: it first rebuilds a phase whose systems changed since the
+last build, and returns an empty span when that rebuild fails. `finalise()`, `run_phase` and `stages` also notice
+when component types were registered since the access sets were last resolved: every `resolveAccess` runs again
+and a phase whose systems gained access is rebuilt. When nothing was registered that check costs one atomic
+load.
+
+> [!WARNING]
+> Adding a system twice is an error, not a second copy: the second `add_system` returns `NAME_CONFLICT` and adds
+> nothing. The same name in another phase is another system, a removed system gives its name back (a disabled one
+> does not), and systems left unnamed (the default `string_id`) are never compared, though nothing can order
+> itself against them either: a default `string_id` in `after` / `before` is an unknown name. A module whose
+> system clashes with one already registered fails to load with `REGISTRATION_CONFLICT`. Never give a system the
+> name of an engine system (the `scene.`, `physics.`, `scripting.` and `engine.` names): the engine adds its own
+> systems after the modules it loads at startup, so such a module loads, and the engine system is then the one
+> refused, with an error in the log.
 
 ```cpp
 scheduler systems(game, &jobs);                        // jobs: a started core::jobs::job_system
@@ -272,13 +305,13 @@ moved on meanwhile; write through the context's views to stay invisible to yours
 | `query::for_each_chunk(fn)` / `chunk_count()` / `entity_count()` / `chunk(u32)` / `matches()` / `refresh()` | untyped iteration |
 | `chunk_view::count()` / `entities()` / `span<T> get<T>()` / `get_optional<T>()` / `column_data(id, bool forWrite)` / `column_stride(id)` / `column_version(id)` | one chunk |
 | `enum class system_phase { FRAME_BEGIN, ..., FRAME_END, COUNT }`; `to_string(phase)`; `struct frame_info` | the frame |
-| `struct system_desc { name, phase, flags, reads, writes, after, before, run }` | a system |
+| `struct system_desc { name, phase, flags, reads, writes, after, before, run, resolveAccess }` | a system |
 | `system_desc make_system<Pack...>(string_id name, system_phase, std::function<void(system_context &)>)` | access derived from the pack |
 | `system_context::world()` / `delta_time()` / `frame()` / `since_version()` / `commands()` / `view<Pack...>()` / `parallel_for_chunks(query &, fn)` | inside a system |
 | `scheduler(world &, job_system *, scheduler_desc = {})`; `struct scheduler_desc { parallelSystems, parallelChunks, minEntitiesPerJob }` | the scheduler |
 | `result<system_id> add_system(system_desc)` / `result<void> remove_system(id)` / `set_enabled(id, bool)` / `result<void> finalise()` | registration |
 | `void run_phase(system_phase, const frame_info &)` / `run_phase_filtered(phase, frame, system_flags required)` | running |
-| `span<const stage_info> stages(phase)` / `span<const system_timing> last_timings(phase)` / `const system_desc *system(id)` / `u32 system_count()` | inspection |
+| `span<const stage_info> stages(phase)` / `span<const system_timing> last_timings(phase)` / `const system_desc *system(id)` / `system_id find_system(phase, string_id name)` / `u32 system_count()` | inspection |
 
 ## See also
 

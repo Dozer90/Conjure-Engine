@@ -111,7 +111,10 @@ core::result<void> spawn_wave(world &game, const std::shared_ptr<const entity_ar
 ## JSON
 
 Archives serialise as `{"entities":[{"components":{"<name>":{...}}}]}`, one object per entry keyed by the
-registered component name. Inside a component the default serialiser walks the reflection description:
+registered component name. The entries keep the archive's order; inside one entry the component keys are written
+**sorted by name** (the byte order of the UTF-8 text, the order `core::json`'s canonical form uses), so
+`conjure.scene.guid` comes before `conjure.scene.name` whatever ids the two types have. Reading accepts the keys in
+any order. Inside a component the default serialiser walks the reflection description:
 
 | Field kind | JSON |
 |---|---|
@@ -122,6 +125,10 @@ registered component name. Inside a component the default serialiser walks the r
 | asset reference (`ASSET_REF` kind) | the asset uuid as text |
 | a tag | `{}` |
 
+A float that JSON has no number for is written as the string `"inf"` or `"-inf"` (the infinities) or as `null` (NaN),
+also as a component of a math type, and each reads back as the value written (📘 API:
+[Reflection](../core/reflection.md#json-in-and-out)).
+
 Any other field kind fails registration with `UNSUPPORTED_FIELD` unless the type is `TRANSIENT` or registers its
 own hooks. A type can replace the default by filling a `component_serializer` (`writeJson`, `readJson`,
 `remapEntities` function pointers); `make_default_serializer<T>()` returns the reflection-driven one for a C++
@@ -129,7 +136,7 @@ type.
 
 | Function | Purpose |
 |---|---|
-| `write_archive_json(archive, writer)` | emits the document above; on failure (`ARCHIVE_CORRUPT`, or a component serialiser's error) the writer holds partial, unbalanced output: `reset()` or discard it before reuse |
+| `write_archive_json(archive, writer)` | emits the document above, each entity's component keys sorted by name; on failure (`ARCHIVE_CORRUPT`, or a component serialiser's error) the writer holds partial, unbalanced output: `reset()` or discard it before reuse |
 | `read_archive_json(value, registry)` | parses it into an `entity_archive`; `SERIALIZATION_FAILED` with an `<entity index>/<component>/<field>` path on malformed input, `ARCHIVE_CORRUPT` on a bad reference |
 | `write_component_json(info, component, writer)` / `read_component_json(info, component, value)` | one component instance through its serialiser (tools working on raw bytes) |
 | `component_to_json(world, entity, componentId, writer)` | one live component; outside references as `{"external": ...}` |
@@ -142,6 +149,12 @@ type.
 > it happened. The one exception: once that name is registered and the entity holds the live component, the live
 > value is written and the preserved copy is dropped, so the name never appears twice in one entity. `TRANSIENT`
 > components are skipped on save and ignored on load.
+
+> [!TIP]
+> The text of a saved archive does not depend on the order your components were registered in, so the same scene
+> saved by two builds (physics compiled out in one, another module load order in the other) is the same file and
+> diffs stay small. Preserved unknown components take their place in the same name order. A file written before
+> this rule, with its keys in component-id order, loads as before and is reordered once, by its next save.
 
 ## Archetypes and chunks
 

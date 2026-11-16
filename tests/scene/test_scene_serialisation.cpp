@@ -128,6 +128,33 @@ namespace {
           + "\"settings\":{\"ambient\":[0.1,0.1,0.12],\"gravity\":[0,-9.81,0]},"
           + "\"roots\":[\"6d2a9f0e-3b7c-4d1e-9a2f-0c5b7e8d1a21\",\"b1f0c3d2-aa10-4e22-8c71-2fd3e4a5b6c7\"],"
           + "\"archive\":{\"entities\":["
+          + "{\"components\":{\"conjure.scene.guid\":{\"value\":\"6d2a9f0e-3b7c-4d1e-9a2f-0c5b7e8d1a21\"},"
+          + "\"conjure.scene.layer\":{\"index\":3},"
+          + "\"conjure.scene.local_transform\":"
+          + "{\"position\":[0.0,1.0,0.0],\"rotation\":[0.0,0.0,0.0,1.0],\"scale\":[1.0,1.0,1.0]},"
+          + "\"conjure.scene.name\":{\"value\":\"Player\"},\"conjure.scene.tag\":{\"value\":\"Player\"},"
+          + "\"test.speed\":{\"value\":2.5}}},"
+          + "{\"components\":{\"conjure.scene.guid\":{\"value\":\"0e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a\"},"
+          + "\"conjure.scene.local_transform\":"
+          + "{\"position\":[0.0,2.0,0.0],\"rotation\":[0.0,0.0,0.0,1.0],\"scale\":[1.0,1.0,1.0]},"
+          + "\"conjure.scene.name\":{\"value\":\"Lamp\"},"
+          + "\"conjure.scene.parent\":{\"value\":0,\"siblingIndex\":0}}},"
+          + "{\"components\":{\"conjure.scene.disabled\":{},"
+          + "\"conjure.scene.guid\":{\"value\":\"b1f0c3d2-aa10-4e22-8c71-2fd3e4a5b6c7\"},"
+          + "\"conjure.scene.local_transform\":"
+          + "{\"position\":[0.0,0.0,0.0],\"rotation\":[0.0,0.0,0.0,1.0],\"scale\":[50.0,1.0,50.0]},"
+          + "\"conjure.scene.name\":{\"value\":\"Ground\"}}}]}}";
+    }
+
+    /// <summary>
+    /// fixture_text() as a file written before code sweep F606, when an entity's component keys followed
+    /// component ids: the same scene, keys in the scene module's registration order.
+    /// </summary>
+    [[nodiscard]] std::string id_ordered_fixture_text() {
+        return std::string("{\"format\":\"conjure.scene\",\"version\":1,\"name\":\"roundtrip\",")
+          + "\"settings\":{\"ambient\":[0.1,0.1,0.12],\"gravity\":[0,-9.81,0]},"
+          + "\"roots\":[\"6d2a9f0e-3b7c-4d1e-9a2f-0c5b7e8d1a21\",\"b1f0c3d2-aa10-4e22-8c71-2fd3e4a5b6c7\"],"
+          + "\"archive\":{\"entities\":["
           + "{\"components\":{\"conjure.scene.local_transform\":"
           + "{\"position\":[0.0,1.0,0.0],\"rotation\":[0.0,0.0,0.0,1.0],\"scale\":[1.0,1.0,1.0]},"
           + "\"conjure.scene.name\":{\"value\":\"Player\"},\"conjure.scene.tag\":{\"value\":\"Player\"},"
@@ -204,6 +231,28 @@ TEST_SUITE("scene/scene_serialisation") {
         CHECK(target.settings().root()["gravity"][1].as_f64() == doctest::Approx(-9.81));
         CHECK(save_text(target) == text);
         fixture.step();
+    }
+
+    TEST_CASE("regression - code sweep F606 a scene file in component id order saves in name order") {
+        // Files used to list an entity's components in component id order, which follows the registration
+        // order of the build that saved them. Such a file still loads, and its next save lists the keys by
+        // name; from then on save, load, save is byte-identical.
+        scene_fixture fixture = {};
+        CONJURE_REQUIRE_OK(load_text(fixture, id_ordered_fixture_text()));
+        scene::scene &target = fixture.active();
+        REQUIRE(target.roots().size() == 2);
+        CHECK(target.layer_of(target.find_path("Player")) == 3);
+        CHECK(target.tree().depth_of(target.find_path("Player/Lamp")) == 1);
+        CHECK_FALSE(target.is_enabled(target.find_path("Ground")));
+        const std::string saved = save_text(target);
+        CHECK(saved != id_ordered_fixture_text());
+        CHECK(saved == fixture_text());
+
+        scene_fixture reloaded = {};
+        CONJURE_REQUIRE_OK(load_text(reloaded, saved));
+        CHECK(save_text(reloaded.active()) == saved);
+        fixture.step();
+        reloaded.step();
     }
 
     TEST_CASE("serialisation - load into additive scene keeps existing entities") {

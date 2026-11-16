@@ -22,6 +22,11 @@
 // registry resolves are preserved verbatim in the built-in unresolved_components component (id 0) and
 // re-emitted by write_archive_json, so data authored with an unloaded module survives a round trip.
 //
+// The keys of one entity's "components" object are written sorted by component name, in the byte order of
+// the UTF-8 text (the order core::json's canonical form uses), preserved unknown names included. The text
+// therefore does not depend on component ids, which follow registration order and so the set of modules
+// and features a build happens to load (01_ecs.md D14). Reading accepts the keys in any order.
+//
 // The default serializer walks core::reflect::type_info fields: scalars, strings, string_id, uuid, the
 // math types, enums, nested reflected structs and std::array of any of those through core::reflect;
 // entity fields with the archive encoding above; asset_ref fields (reflection kind ASSET_REF) as the uuid
@@ -165,12 +170,14 @@ namespace conjure::ecs {
     );
 
     /// <summary>
-    /// Emits {"entities":[{"components":{"<name>":{...}}}]} for the archive. Unresolved components are
-    /// re-emitted verbatim under their original names, except a preserved entry whose name now resolves
-    /// to a (non-transient) component the entity holds: it is dropped in favour of that component, so
-    /// the name is written once. ARCHIVE_CORRUPT for an unregistered component id, or the component
-    /// serializer's error. On failure the writer holds partial, unbalanced output; reset() or discard it
-    /// before reuse.
+    /// Emits {"entities":[{"components":{"<name>":{...}}}]} for the archive, entities in archive order
+    /// and each entity's component keys sorted by name (byte order of the UTF-8 text), so two registries
+    /// that assigned the ids in different orders write the same text. Unresolved components are
+    /// re-emitted verbatim under their original names, in the same sorted order, except a preserved entry
+    /// whose name now resolves to a (non-transient) component the entity holds: it is dropped in favour of
+    /// that component, so the name is written once. ARCHIVE_CORRUPT for an unregistered component id, or
+    /// the component serializer's error. On failure the writer holds partial, unbalanced output; reset()
+    /// or discard it before reuse.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> write_archive_json(
       const entity_archive &archive,
