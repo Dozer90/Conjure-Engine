@@ -189,11 +189,34 @@ void physics_world::state::step_characters(f32 fixedDeltaTime) {
         // writes the component, which the push system declares as a read).
         JPH::Vec3 velocity = jolt::to_jolt(row.hasDesiredVelocity ? row.desiredVelocity : controller->velocity);
         row.hasDesiredVelocity = false;
+
+        // The ground state is the one the last update left: where the character stands as this step starts.
+        const JPH::CharacterBase::EGroundState groundState = character.GetGroundState();
+        const bool grounded = groundState == JPH::CharacterBase::EGroundState::OnGround;
+        const JPH::Vec3 up = character.GetUp();
+        if (row.skipGroundCarry) {
+            // Moved to a new position since its last step: that ground state describes the place it left, so
+            // this step carries nothing (the teleport cleared carriedVelocity) and the next one looks again.
+            row.skipGroundCarry = false;
+        } else if (grounded) {
+            // The ground may have changed its velocity since the last update (a platform the push just
+            // moved): ask its body again, as Jolt's own character sample does, and carry the character with
+            // the horizontal part (code sweep F421).
+            character.UpdateGroundVelocity();
+            const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
+            row.carriedVelocity = jolt::from_jolt(groundVelocity - groundVelocity.Dot(up) * up);
+        } else if (groundState != JPH::CharacterBase::EGroundState::InAir) {
+            // It touches ground that does not carry it (too steep, or under its edge only): what the last
+            // ground gave it ends here. Kept, it would push the character along a slope it slides down, and
+            // where CancelVelocityTowardsSteepSlopes below takes that push out again, the pull would still
+            // subtract it and report a velocity the character does not have. In the air it stays: a jump
+            // keeps the speed of the platform it left.
+            row.carriedVelocity = math::vec3(0.0f);
+        }
         if (has_flag(controller->flags, character_flags::APPLY_GRAVITY)) {
-            if (character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround) {
+            if (grounded) {
                 // Grounded: the vertical component follows the ground (what Jolt's own character sample
                 // does) unless the script set an upward velocity this step, which is a jump.
-                const JPH::Vec3 up = character.GetUp();
                 const f32 vertical = velocity.Dot(up);
                 const f32 groundVertical = character.GetGroundVelocity().Dot(up);
                 if (vertical - groundVertical < 0.1f) {
@@ -203,6 +226,8 @@ void physics_world::state::step_characters(f32 fixedDeltaTime) {
                 velocity += joltGravity * fixedDeltaTime;
             }
         }
+        // The pull subtracts the same vector again, so nothing compounds from step to step.
+        velocity += jolt::to_jolt(row.carriedVelocity);
         velocity = character.CancelVelocityTowardsSteepSlopes(velocity);
         character.SetLinearVelocity(velocity);
 
@@ -230,22 +255,26 @@ void physics_world::state::pull_characters() {
             continue;
         }
         const JPH::CharacterVirtual &character = *row.character;
-        math::transform current = row.lastPulled;
+        // The capsule is never scaled; lastScale is the entity's world scale as the last push that looked at
+        // its transform saw it, and the render pose carries it.
+        math::transform current = {};
         current.position = jolt::from_jolt(character.GetPosition());
         current.rotation = jolt::from_jolt(character.GetRotation());
+        current.scale = row.lastScale;
 
         scene::interpolated_transform *interpolated = write<scene::interpolated_transform>(row.entity);
         if (interpolated != nullptr) {
             interpolated->previous = row.firstPull ? current : interpolated->current;
             interpolated->current = current;
-            interpolated->current.scale = row.lastScale;
             interpolated->previous.scale = row.lastScale;
         }
         row.firstPull = false;
         row.awaitingPull = false;
         row.lastPulled = current;
 
-        controller->velocity = jolt::from_jolt(character.GetLinearVelocity());
+        // Jolt keeps the velocity the step gave it; without the ground's share it is the character's own
+        // again: relative to the ground it stands on, or to the ground it last stood on while it is in the air.
+        controller->velocity = jolt::from_jolt(character.GetLinearVelocity()) - row.carriedVelocity;
         controller->ground = to_ground_state(character.GetGroundState());
         controller->groundNormal = controller->ground == ground_state::IN_AIR
           ? math::vec3(0.0f, 1.0f, 0.0f)

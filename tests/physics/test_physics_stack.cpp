@@ -58,4 +58,38 @@ TEST_SUITE("physics/physics_stack") {
             CHECK(fixture.physics.active_body_count() == 0);
         });
     }
+
+    TEST_CASE("physics_stack - a step over static triggers that hold sleeping boxes allocates nothing") {
+        // Jolt steps every static trigger as an active body (code sweep F408): the steady state of a level
+        // full of trigger volumes must stay as allocation-free as one without them (P15).
+        for_each_job_mode([](core::jobs::job_system &jobs) {
+            physics::physics_settings settings = test_settings();
+            settings.timeBeforeSleepSeconds = 0.1f;
+            physics_fixture fixture(jobs, settings);
+            (void)fixture.spawn_ground();
+            // 400 boxes two metres apart and 100 trigger volumes of 4 x 2 x 4 m, each over four of them.
+            for (u32 index = 0; index < 400; ++index) {
+                const f32 x = static_cast<f32>(index % 20) * 2.0f - 19.0f;
+                const f32 z = static_cast<f32>(index / 20) * 2.0f - 19.0f;
+                (void)fixture.spawn_box(math::vec3(x, 0.5f, z));
+            }
+            for (u32 index = 0; index < 100; ++index) {
+                const f32 x = static_cast<f32>(index % 10) * 4.0f - 18.0f;
+                const f32 z = static_cast<f32>(index / 10) * 4.0f - 18.0f;
+                (void)fixture.spawn_static_trigger(math::vec3(x, 1.0f, z), math::vec3(1.9f, 1.0f, 1.9f));
+            }
+            // Both entities left null: the trigger events of every pair.
+            trigger_tally tally = {};
+            tally.run(fixture, 120);
+            REQUIRE(fixture.physics.body_count() == 501);
+            // Every box entered its volume once and is still inside it, asleep.
+            CHECK(tally.enters == 400);
+            CHECK(tally.exits == 0);
+            CHECK(fixture.physics.active_body_count() == 0);
+            CONJURE_CHECK_NO_ALLOCATIONS(fixture.physics.step(STEP));
+            CONJURE_CHECK_NO_ALLOCATIONS(fixture.run_step());
+            CHECK(fixture.physics.contact_events().empty());
+            CHECK(fixture.physics.active_body_count() == 0);
+        });
+    }
 }

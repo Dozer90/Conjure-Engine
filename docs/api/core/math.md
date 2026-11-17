@@ -75,7 +75,8 @@ Every module and the C# side agree on these; the types below assume them.
 
 > [!TIP]
 > `nearly_equal(q1, q2)` compares the four components, so `q` and `-q` compare different although they rotate
-> identically. Use `same_rotation(q1, q2)` when you mean "the same orientation".
+> identically. Use `same_rotation(q1, q2)` when you mean "the same orientation": it flips the sign of `q2` when
+> the two point opposite ways and then compares the components like `nearly_equal`, with the same `epsilon`.
 
 ## Vectors, matrices and formatting
 
@@ -84,8 +85,13 @@ Every module and the C# side agree on these; the types below assume them.
 unpadded (`vec3` is 12 bytes, `mat4` is 64), and adds:
 
 - `nearly_equal(a, b, epsilon = EPSILON)` for the float aliases (`vec2`, `vec3`, `vec4`, `quat`, `mat3`, `mat4`;
-  component-wise), `nearly_zero(v)` for `vec2`/`vec3`, and `same_rotation(a, b)` for unit quaternions. Integer
-  vectors compare with `==`.
+  component-wise), `nearly_zero(v)` for `vec2`/`vec3`, and `same_rotation(a, b, epsilon = EPSILON)` for unit
+  quaternions. Integer vectors compare with `==`.
+- `same_rotation` treats `q` and `-q` as equal and otherwise uses `epsilon` exactly as `nearly_equal` does, per
+  component. In angles, for a small epsilon: two rotations up to `2 * epsilon` radians apart compare equal, two
+  more than about `4 * epsilon` radians apart do not, and in between it depends on the axis. The default
+  `EPSILON` (1e-6) is therefore about 2e-6 rad (0.0001 degrees), close to float rounding: pass a larger epsilon
+  for results of longer computations (1e-4 accepts about 0.01 to 0.02 degrees).
 - `safe_normalize(value, fallback)`: like `glm::normalize` but returns `fallback` instead of NaN for a zero
   vector. The default fallback is `-Z` for `vec3` and `+X` for `vec2`.
 - `std::formatter` specialisations for every alias, so `std::format("{:.2f}", position)` prints `(1.00, 2.00, 3.00)`

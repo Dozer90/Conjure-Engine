@@ -114,6 +114,13 @@ void contact_collector::OnContactPersisted(
   JPH::ContactSettings &settings
 ) {
     CONJURE_UNUSED(settings);
+    if (body1.IsSensor() || body2.IsSensor()) {
+        // A trigger pair has no STAY, so nothing reads this record (collect_events). Recorded, every body
+        // inside a static trigger would take one record of the step's budget in every step for as long as it
+        // is there, asleep too (code sweep F408), and a full budget drops the ADDED and REMOVED records that
+        // other pairs' ENTER and EXIT are made of.
+        return;
+    }
     raw_contact contact = {};
     contact.bodyA = body1.GetID().GetIndexAndSequenceNumber();
     contact.bodyB = body2.GetID().GetIndexAndSequenceNumber();

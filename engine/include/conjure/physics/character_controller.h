@@ -14,6 +14,28 @@
 // an inner kinematic body, updated before the body step. Scripts write `velocity` in FIXED_UPDATE (or
 // call physics_world::character_move); the pull writes the achieved velocity and the ground state back.
 // A character_controller excludes rigid_body (CONFLICTING_BODY_COMPONENTS, the character wins).
+//
+// `velocity` is the character's own velocity (P20, code sweep F421). A step that starts with the character
+// ON_GROUND adds the horizontal velocity of that ground, so a moving platform carries the character, and the
+// pull takes the same amount out again: on a platform a character that stands still reads zero, and what a
+// script writes is relative to the platform. IN_AIR the step keeps adding what the last ground gave, so a
+// jump keeps the platform's speed until the character touches ground again; there `velocity` is relative to
+// that motion, not to the world. Ground that does not carry it (ON_STEEP_GROUND, NOT_SUPPORTED) ends the
+// carrying, and so does a teleport to a new position (the command, or a position written into
+// local_transform, which is also how a character parented to a moving entity follows it): the step after a
+// teleport adds no horizontal ground velocity. A rotation written into local_transform turns the character
+// and leaves the carrying alone. The character is moved, never turned, by ground that rotates.
+//
+// Only the horizontal part is carried and taken out again. With APPLY_GRAVITY the vertical part of a grounded
+// character is set to the ground's unless it is a jump (at least 0.1 m/s faster upwards than the ground), and
+// reads so after the pull: on a lift that rises, or sinks slower than 0.1 m/s, `velocity.y` is the lift's. On
+// a lift that sinks faster a character standing still is itself that much faster upwards than its ground, so
+// the rule leaves it alone: STICK_TO_FLOOR steps it down after the lift, one step of the lift's motion behind
+// and with `velocity.y` unchanged; without the flag it falls after the lift. A teleport does not end the
+// vertical part: the step after it still takes the character for standing on the ground it left, so a
+// character teleported off a rising lift keeps the lift's vertical velocity and falls from there, and a
+// character parented to a rising platform it stands on gets that velocity on top of its parent's motion and
+// hops (a parent that moves sideways or sinks moves it once). Let a lift carry the character; do not parent it.
 
 namespace conjure::physics {
 
@@ -53,7 +75,9 @@ namespace conjure::physics {
         u8 layer = 0;
         character_flags flags = character_flags::STICK_TO_FLOOR | character_flags::WALK_STAIRS
           | character_flags::APPLY_GRAVITY;
-        math::vec3 velocity = math::vec3(0.0f);           // input: desired velocity; output: achieved velocity
+        // input: desired velocity; output: achieved velocity. The character's own: without the horizontal
+        // velocity of the ground that carries it (see the file comment)
+        math::vec3 velocity = math::vec3(0.0f);
         ground_state ground = ground_state::IN_AIR;       // [runtime]
         math::vec3 groundNormal = math::vec3(0.0f, 1.0f, 0.0f);   // [runtime]
         ecs::entity groundEntity = ecs::NULL_ENTITY;      // [runtime]

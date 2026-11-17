@@ -2,8 +2,9 @@
 
 // Shared fixture of the physics tests (docs/design/14_physics.md 7, 10): a registry with the scene and
 // physics components, an ecs::world, a physics_world built from test_settings() (small limits so overflow
-// paths are testable), spawn helpers for boxes, spheres, ground and characters, run_steps() running
-// push / step / pull / collect in order, for_each_job_mode() running a body with 0 and 4 workers,
+// paths are testable), spawn helpers for boxes, spheres, ground, plates that follow their transform, static
+// triggers and characters, run_steps() running push / step / pull / collect in order, for_each_job_mode()
+// running a body with 0 and 4 workers, trigger_tally counting TRIGGER_ENTER / TRIGGER_EXIT over steps,
 // scheduled_physics, the engine's view of the four systems (an ecs::scheduler with
 // physics::register_systems, the PARALLEL pull fanned out over chunks), and check_pull_allocation_free(),
 // the allocation gate of the scheduled pull at a given body count.
@@ -26,6 +27,7 @@
 #include "conjure/ecs/world.h"
 #include "conjure/physics/character_controller.h"
 #include "conjure/physics/components.h"
+#include "conjure/physics/contact_events.h"
 #include "conjure/physics/physics_settings.h"
 #include "conjure/physics/physics_world.h"
 #include "conjure/physics/register.h"
@@ -206,6 +208,47 @@ namespace physics_test {
             }
 
             /// <summary>
+            /// A kinematic box that follows its local_transform (KINEMATIC_MOVES_WITH_TRANSFORM): a test moves
+            /// it by writing the transform. spawn_box with motion_type::KINEMATIC is the plain kinematic one.
+            /// </summary>
+            [[nodiscard]] conjure::ecs::entity spawn_following_plate(
+              const conjure::math::vec3 &position,
+              const conjure::math::vec3 &halfExtents = conjure::math::vec3(0.5f)
+            ) {
+                const conjure::ecs::entity entity = create_at(position);
+                conjure::physics::rigid_body body = {};
+                body.motionType = conjure::physics::motion_type::KINEMATIC;
+                body.flags = conjure::physics::rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM;
+                CONJURE_REQUIRE_OK(world.add<conjure::physics::rigid_body>(entity, body));
+                conjure::physics::box_collider collider = {};
+                collider.halfExtents = halfExtents;
+                CONJURE_REQUIRE_OK(world.add<conjure::physics::box_collider>(entity, collider));
+                return entity;
+            }
+
+            /// <summary>
+            /// A static trigger volume: a box_collider with isTrigger next to a STATIC rigid_body, or on its
+            /// own (an implicit static body) when 'withRigidBody' is false.
+            /// </summary>
+            [[nodiscard]] conjure::ecs::entity spawn_static_trigger(
+              const conjure::math::vec3 &position,
+              const conjure::math::vec3 &halfExtents,
+              bool withRigidBody = true
+            ) {
+                const conjure::ecs::entity entity = create_at(position);
+                if (withRigidBody) {
+                    conjure::physics::rigid_body body = {};
+                    body.motionType = conjure::physics::motion_type::STATIC;
+                    CONJURE_REQUIRE_OK(world.add<conjure::physics::rigid_body>(entity, body));
+                }
+                conjure::physics::box_collider volume = {};
+                volume.halfExtents = halfExtents;
+                volume.isTrigger = true;
+                CONJURE_REQUIRE_OK(world.add<conjure::physics::box_collider>(entity, volume));
+                return entity;
+            }
+
+            /// <summary>
             /// A character with its feet at 'position'.
             /// </summary>
             [[nodiscard]] conjure::ecs::entity spawn_character(
@@ -260,6 +303,54 @@ namespace physics_test {
                 REQUIRE(local != nullptr);
                 return local->position;
             }
+    };
+
+    /// <summary>
+    /// True when the event is between the two entities, in either order.
+    /// </summary>
+    [[nodiscard]] inline bool involves(
+      const conjure::physics::contact_event &event,
+      conjure::ecs::entity a,
+      conjure::ecs::entity b
+    ) noexcept {
+        return (event.a == a && event.b == b) || (event.a == b && event.b == a);
+    }
+
+    /// <summary>
+    /// TRIGGER_ENTER and TRIGGER_EXIT events summed over steps: those between one trigger and one other body,
+    /// or those of every pair while both entities are left null.
+    /// </summary>
+    struct trigger_tally {
+        conjure::ecs::entity trigger = {};
+        conjure::ecs::entity other = {};
+        conjure::u32 enters = 0;
+        conjure::u32 exits = 0;
+
+        /// <summary>
+        /// True when the tally counts the event's pair.
+        /// </summary>
+        [[nodiscard]] bool counts(const conjure::physics::contact_event &event) const noexcept {
+            return (trigger.is_null() && other.is_null()) || involves(event, trigger, other);
+        }
+
+        /// <summary>
+        /// Runs 'steps' fixed steps and adds the counted trigger events of each.
+        /// </summary>
+        void run(physics_fixture &fixture, conjure::u32 steps) {
+            for (conjure::u32 step = 0; step < steps; ++step) {
+                fixture.run_step();
+                for (const conjure::physics::contact_event &event : fixture.physics.contact_events()) {
+                    if (!counts(event)) {
+                        continue;
+                    }
+                    if (event.kind == conjure::physics::contact_kind::TRIGGER_ENTER) {
+                        ++enters;
+                    } else if (event.kind == conjure::physics::contact_kind::TRIGGER_EXIT) {
+                        ++exits;
+                    }
+                }
+            }
+        }
     };
 
     /// <summary>

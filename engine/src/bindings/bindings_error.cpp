@@ -136,6 +136,11 @@ bindings_error conjure::bindings::map_error(const core::error &failure) noexcept
     if (failure.is(physics::physics_error::NO_BODY) || failure.is(physics::physics_error::NOT_A_CHARACTER)) {
         return bindings_error::COMPONENT_MISSING;
     }
+    // A body command the entity's kind of body cannot take (a force on a static body, move_kinematic on a
+    // dynamic one) is refused for what the caller passed: ArgumentException in C#, like the hierarchy requests.
+    if (failure.is(physics::physics_error::WRONG_BODY_KIND)) {
+        return bindings_error::INVALID_ARGUMENT;
+    }
     if (failure.is(physics::physics_error::WRONG_THREAD)) {
         return bindings_error::WRONG_THREAD;
     }

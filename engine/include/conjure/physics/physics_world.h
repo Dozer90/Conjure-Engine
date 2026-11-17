@@ -47,12 +47,13 @@ namespace conjure::physics {
     /// </summary>
     struct physics_stats {
         u32 bodies = 0;
-        u32 activeBodies = 0;
+        u32 activeBodies = 0;                 // active_body_count(): awake moving bodies, no static trigger
         u32 characters = 0;
         u32 bodiesWithoutShape = 0;           // pending entities waiting for colliders or assets
         u32 contactEvents = 0;                // events of the last collect_contact_events
         u32 droppedContactEvents = 0;         // cumulative
-        u32 droppedCommands = 0;              // cumulative
+        // cumulative: queue full, no body by the second push after the call, or a body that could not take it
+        u32 droppedCommands = 0;
         u32 shapeCacheEntries = 0;
         u32 updateErrors = 0;                 // cumulative EPhysicsUpdateError != None
         u64 stepMicroseconds = 0;
@@ -142,37 +143,98 @@ namespace conjure::physics {
             [[nodiscard]] std::span<const contact_event> contact_events() const noexcept;
 
             /*---------------------------------------------------------------*/
-            // Bodies (queued, applied at the next push_transforms). Owner thread. NO_BODY when the entity
-            // has no body and is not pending; WRONG_THREAD off the owner thread; COMMAND_QUEUE_FULL;
-            // INVALID_ARGUMENT (core) for a non-finite vector or rotation, which is never queued.
+            // Bodies (queued, applied at the next push_transforms). Owner thread. Every call below that takes
+            // an entity checks, in this order: WRONG_THREAD (and an assert) off the owner thread;
+            // INVALID_ARGUMENT (core) for a non-finite vector or rotation; NO_BODY when the entity has no body
+            // and is not pending; WRONG_BODY_KIND when it has a body the command cannot act on (each summary
+            // names the kinds it takes); COMMAND_QUEUE_FULL. A refused command is never queued.
+            //
+            // The kind of body is read from the entity's components at the call (character_controller, else
+            // rigid_body::motionType and KINEMATIC_MOVES_WITH_TRANSFORM, else colliders alone, which make a
+            // static body), not from the body the last push left: the next push applies those components before
+            // the commands, so a force sent in the frame that makes a body DYNAMIC is accepted. Because the call
+            // reads the target's rigid_body and character_controller, a system that sends body commands
+            // declares both as reads (or is EXCLUSIVE), so the scheduler keeps it apart from a system that
+            // writes them.
+            //
+            // An entity that is still pending has no kind to refuse by: its command is queued, and the push
+            // that creates the body applies it, or drops it (counted in physics_stats::droppedCommands) when
+            // the new body cannot take it. A command whose entity still has no body at the second push after
+            // the call (no collider yet, an asset not loaded, the body limit) is dropped and counted too. The
+            // same late, counted drop meets a command whose target changed kind between the call and the push.
 
+            /// <summary>
+            /// True when the entity has a body or a character now; false while it is still pending.
+            /// </summary>
             [[nodiscard]] bool has_body(ecs::entity target) const noexcept;
+
+            /// <summary>
+            /// A force at the centre of mass for the next fixed step. DYNAMIC bodies only: WRONG_BODY_KIND for
+            /// a static or kinematic body and for a character.
+            /// </summary>
             [[nodiscard]] core::result<void> add_force(ecs::entity target, const math::vec3 &force);
+
+            /// <summary>
+            /// A force at a world point for the next fixed step. DYNAMIC bodies only, as add_force.
+            /// </summary>
             [[nodiscard]] core::result<void> add_force_at(
               ecs::entity target,
               const math::vec3 &force,
               const math::vec3 &point
             );
+
+            /// <summary>
+            /// An impulse at the centre of mass. DYNAMIC bodies only, as add_force.
+            /// </summary>
             [[nodiscard]] core::result<void> add_impulse(ecs::entity target, const math::vec3 &impulse);
+
+            /// <summary>
+            /// An impulse at a world point. DYNAMIC bodies only, as add_force.
+            /// </summary>
             [[nodiscard]] core::result<void> add_impulse_at(
               ecs::entity target,
               const math::vec3 &impulse,
               const math::vec3 &point
             );
+
+            /// <summary>
+            /// A torque for the next fixed step. DYNAMIC bodies only, as add_force.
+            /// </summary>
             [[nodiscard]] core::result<void> add_torque(ecs::entity target, const math::vec3 &torque);
+
+            /// <summary>
+            /// An angular impulse. DYNAMIC bodies only, as add_force.
+            /// </summary>
             [[nodiscard]] core::result<void> add_angular_impulse(ecs::entity target, const math::vec3 &impulse);
+
+            /// <summary>
+            /// Sets the linear velocity. DYNAMIC and KINEMATIC bodies: WRONG_BODY_KIND for a static body and
+            /// for a character (character_move sets a character's velocity). A kinematic body that follows
+            /// its transform takes it for one step: the next push moves it back to its local_transform.
+            /// </summary>
             [[nodiscard]] core::result<void> set_linear_velocity(ecs::entity target, const math::vec3 &velocity);
+
+            /// <summary>
+            /// Sets the angular velocity. DYNAMIC and KINEMATIC bodies, as set_linear_velocity.
+            /// </summary>
             [[nodiscard]] core::result<void> set_angular_velocity(ecs::entity target, const math::vec3 &velocity);
 
             /// <summary>
             /// Moves the body instantly; scale is ignored, velocities and the interpolated pose are reset.
             /// The entity's local_transform follows: at the next pull for bodies the pull writes, at the
-            /// push that applies the command for static and KINEMATIC_MOVES_WITH_TRANSFORM bodies.
+            /// push that applies the command for static and KINEMATIC_MOVES_WITH_TRANSFORM bodies. Every kind
+            /// of body takes it, characters included. A character keeps its own velocity (its component's)
+            /// and loses what moving ground carried it with; the step after the teleport adds no horizontal
+            /// ground velocity. The vertical part of that velocity is the ground's while it stands
+            /// (character_controller.h), so a character teleported off ground that moves vertically takes that
+            /// vertical velocity along.
             /// </summary>
             [[nodiscard]] core::result<void> teleport(ecs::entity target, const math::transform &pose);
 
             /// <summary>
-            /// KINEMATIC bodies: MoveKinematic towards the pose over the next fixed step (R49).
+            /// MoveKinematic towards the pose over the next fixed step (R49). KINEMATIC bodies without
+            /// KINEMATIC_MOVES_WITH_TRANSFORM only: WRONG_BODY_KIND for a static or dynamic body, for a
+            /// character, and for a kinematic body that follows its transform (write its local_transform).
             /// </summary>
             [[nodiscard]] core::result<void> move_kinematic(ecs::entity target, const math::transform &pose);
 
@@ -186,17 +248,32 @@ namespace conjure::physics {
             /// </summary>
             [[nodiscard]] math::vec3 gravity() const noexcept;
 
+            /// <summary>
+            /// Wakes a sleeping body at the next push. Every kind of body takes it; it does nothing on a
+            /// static body, which is never awake (is_sleeping is true for it), and on a character, which
+            /// never sleeps.
+            /// </summary>
             [[nodiscard]] core::result<void> wake(ecs::entity target);
+
+            /// <summary>
+            /// Puts a body to sleep at the next push. Every kind of body takes it; it does nothing on a
+            /// static body, which is never awake, and on a character, which never sleeps.
+            /// </summary>
             [[nodiscard]] core::result<void> sleep(ecs::entity target);
 
             /// <summary>
-            /// True when the body is inactive; false when the entity has no body.
+            /// True when the body is inactive, which a static body always is (a static trigger too); false
+            /// when the entity has no body.
             /// </summary>
             [[nodiscard]] bool is_sleeping(ecs::entity target) const noexcept;
 
             /// <summary>
             /// Sets the desired velocity of a character for the next step (it replaces the component's
-            /// velocity for that step; the pull then writes the achieved velocity back). NOT_A_CHARACTER.
+            /// velocity for that step; the pull then writes the achieved velocity back). Like the component's
+            /// velocity it is the character's own: the step adds the horizontal velocity of the ground that
+            /// carries the character (character_controller.h). NOT_A_CHARACTER, in
+            /// place of NO_BODY and WRONG_BODY_KIND, when the entity has no body and is not pending or has a
+            /// body that is no character; the other refusals are those of the body commands, in their order.
             /// </summary>
             [[nodiscard]] core::result<void> character_move(ecs::entity target, const math::vec3 &velocity);
 
@@ -284,6 +361,12 @@ namespace conjure::physics {
             [[nodiscard]] const physics_layer_table &layers() const noexcept;
             [[nodiscard]] physics_stats stats() const noexcept;
             [[nodiscard]] u32 body_count() const noexcept;
+
+            /// <summary>
+            /// The dynamic and kinematic bodies that are awake, the inner bodies of characters among them.
+            /// Static bodies never count, although every static trigger costs the step what an awake body
+            /// costs: Jolt keeps it active so that it sees sleeping bodies (contact_events.h).
+            /// </summary>
             [[nodiscard]] u32 active_body_count() const noexcept;
 
             /// <summary>

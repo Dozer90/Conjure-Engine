@@ -2,12 +2,15 @@
 #include "conjure/testing/log_capture.h"
 #include "physics_test_fixture.h"
 
+#include "conjure/core/math/math_utils.h"
+#include "conjure/core/math/ray.h"
 #include "conjure/physics/components.h"
 #include "conjure/physics/queries.h"
 #include "conjure/scene/components.h"
 
 #include <array>
 #include <cmath>
+#include <optional>
 
 using namespace conjure;
 using namespace physics_test;
@@ -131,6 +134,55 @@ TEST_SUITE("physics/colliders") {
         fixture.run_steps(30);
         CHECK(fixture.position_of(compound).x == doctest::Approx(0.0f).epsilon(0.05));
         CHECK(fixture.physics.stats().shapeCacheEntries == 2);
+    }
+
+    TEST_CASE("regression - code sweep F213 a single collider turned by a tenth of a degree keeps its rotation") {
+        // A lone collider without offset or rotation is used as the body's shape directly; any other
+        // placement needs a compound. The identity test was a cosine tolerance of 1e-6, which took every
+        // rotation below 0.16 degrees for none and dropped it. Over the 10 m half length of this beam a tenth
+        // of a degree is 1.7 cm.
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const f32 tilt = math::radians(0.1f);
+        const ecs::entity beam = fixture.create_at(math::vec3(0.0f));
+        physics::box_collider collider = {};
+        collider.halfExtents = math::vec3(10.0f, 0.5f, 0.5f);
+        collider.rotation = glm::angleAxis(tilt, math::vec3(0.0f, 0.0f, 1.0f));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(beam, collider));
+        fixture.run_step();
+        REQUIRE(fixture.physics.has_body(beam));
+
+        // The top face rises along +x: at x it is 0.5 / cos(tilt) + x * tan(tilt) high.
+        const std::array<f32, 2> stations = {9.0f, -9.0f};
+        for (const f32 station : stations) {
+            CAPTURE(station);
+            math::ray ray = {};
+            ray.origin = math::vec3(station, 5.0f, 0.0f);
+            ray.direction = math::vec3(0.0f, -1.0f, 0.0f);
+            const std::optional<physics::raycast_hit> hit = fixture.physics.raycast(ray, 20.0f);
+            REQUIRE(hit.has_value());
+            CHECK(hit->entity == beam);
+            const f32 expected = 0.5f / std::cos(tilt) + station * std::tan(tilt);
+            CHECK(std::abs(hit->point.y - expected) < 1.0e-3f);
+            CHECK(std::abs(hit->point.y - 0.5f) > 1.0e-2f);
+        }
+        // A collider whose rotation is the identity (stored as -q here, the same rotation) lies level, and
+        // both beams share the one cached box.
+        const ecs::entity level = fixture.create_at(math::vec3(0.0f, 0.0f, 10.0f));
+        physics::box_collider plain = {};
+        plain.halfExtents = math::vec3(10.0f, 0.5f, 0.5f);
+        plain.rotation = math::quat(-1.0f, 0.0f, 0.0f, 0.0f);   // the identity rotation, stored as -q
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(level, plain));
+        fixture.run_step();
+        math::ray ray = {};
+        ray.origin = math::vec3(9.0f, 5.0f, 10.0f);
+        ray.direction = math::vec3(0.0f, -1.0f, 0.0f);
+        const std::optional<physics::raycast_hit> hit = fixture.physics.raycast(ray, 20.0f);
+        REQUIRE(hit.has_value());
+        CHECK(hit->entity == level);
+        CHECK(std::abs(hit->point.y - 0.5f) < 1.0e-3f);
+        CHECK(fixture.physics.stats().shapeCacheEntries == 1);
+        CONJURE_CHECK_OK(fixture.physics.validate());
     }
 
     TEST_CASE("colliders - mixed trigger flags warn and build a non-trigger body") {

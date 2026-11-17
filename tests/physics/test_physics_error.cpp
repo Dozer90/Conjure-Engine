@@ -23,6 +23,12 @@ TEST_SUITE("physics/physics_error") {
         CHECK(physics::physics_error_name(static_cast<physics_error>(4242)).empty());
         CHECK(physics::physics_error_name(physics_error::NO_BODY) == "NO_BODY");
         CHECK(physics::physics_error_name(physics_error::COMMAND_QUEUE_FULL) == "COMMAND_QUEUE_FULL");
+        CHECK(physics::physics_error_name(physics_error::WRONG_BODY_KIND) == "WRONG_BODY_KIND");
+        // Appended after the last code that existed, so no earlier code changed its value.
+        CHECK(
+          static_cast<u32>(physics_error::WRONG_BODY_KIND) == static_cast<u32>(physics_error::COMMAND_QUEUE_FULL) + 1
+        );
+        CHECK(static_cast<u32>(physics_error::COUNT) == 22);
     }
 
     TEST_CASE("physics_error - category name is physics and is() matches the code") {
@@ -34,6 +40,13 @@ TEST_SUITE("physics/physics_error") {
         CHECK(failure.is_category<physics_error>());
         CHECK_FALSE(failure.is(core::error_code::NOT_FOUND));
         CHECK(failure.to_string() == "physics.NO_BODY");
+
+        // A body of the wrong kind is its own code: the entity has a body, so it is not NO_BODY.
+        const core::error wrongKind = core::make_error(physics_error::WRONG_BODY_KIND);
+        CHECK(wrongKind.is(physics_error::WRONG_BODY_KIND));
+        CHECK_FALSE(wrongKind.is(physics_error::NO_BODY));
+        CHECK_FALSE(wrongKind.is(physics_error::NOT_A_CHARACTER));
+        CHECK(wrongKind.to_string() == "physics.WRONG_BODY_KIND");
     }
 
     TEST_CASE("physics_error - make_error formats the detail") {

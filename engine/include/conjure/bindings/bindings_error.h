@@ -78,8 +78,8 @@ namespace conjure::bindings {
     /// <summary>
     /// Maps a core::error of another module (2.2: ecs ENTITY_NOT_ALIVE / STRUCTURE_LOCKED / WRONG_THREAD /
     /// COMPONENT_NOT_PRESENT, assets NOT_FOUND / TYPE_MISMATCH, physics NO_BODY / NOT_A_CHARACTER,
-    /// scene INVALID_ENTITY / SCENE_NOT_LOADED / PREFAB_NOT_LOADED, everything else INTERNAL) and records
-    /// its to_string() as the detail.
+    /// physics WRONG_BODY_KIND (to INVALID_ARGUMENT), scene INVALID_ENTITY / SCENE_NOT_LOADED /
+    /// PREFAB_NOT_LOADED, everything else INTERNAL) and records its to_string() as the detail.
     /// </summary>
     [[nodiscard]] CONJURE_API int32_t fail(const core::error &failure, std::string_view entry) noexcept;
 

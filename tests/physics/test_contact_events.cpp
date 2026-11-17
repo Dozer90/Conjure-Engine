@@ -1,8 +1,10 @@
+#include "conjure/testing/approx.h"
 #include "conjure/testing/assert_capture.h"
 #include "conjure/testing/doctest.h"
 #include "conjure/testing/log_capture.h"
 #include "physics_test_fixture.h"
 
+#include "conjure/core/math/transform.h"
 #include "conjure/physics/components.h"
 #include "conjure/physics/contact_events.h"
 #include "conjure/scene/components.h"
@@ -10,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -38,8 +41,28 @@ namespace {
         return count;
     }
 
-    [[nodiscard]] bool involves(const physics::contact_event &event, ecs::entity a, ecs::entity b) {
-        return (event.a == a && event.b == b) || (event.a == b && event.b == a);
+    /// <summary>
+    /// Settings under which a resting body falls asleep within a quarter of a second.
+    /// </summary>
+    [[nodiscard]] physics::physics_settings drowsy_settings() {
+        physics::physics_settings settings = test_settings();
+        settings.timeBeforeSleepSeconds = 0.2f;
+        return settings;
+    }
+
+    /// <summary>
+    /// A unit box created asleep, by default resting on the ground at the origin.
+    /// </summary>
+    [[nodiscard]] ecs::entity spawn_sleeping_box(
+      physics_fixture &fixture,
+      const math::vec3 &position = math::vec3(0.0f, 0.5f, 0.0f)
+    ) {
+        const ecs::entity box = fixture.create_at(position);
+        physics::rigid_body body = {};
+        body.flags = physics::rigid_body_flags::ALLOW_SLEEPING | physics::rigid_body_flags::START_ASLEEP;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(box, body));
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(box));
+        return box;
     }
 }
 
@@ -266,8 +289,8 @@ TEST_SUITE("physics/contact_events") {
     TEST_CASE("contact_events - a kinematic trigger plate swept through a static box reports one enter and one exit") {
         core::jobs::job_system jobs = {};
         physics_fixture fixture(jobs, awake_settings());
-        // A static sensor only sees active bodies; a kinematic one also sees static geometry
-        // (mCollideKinematicVsNonDynamic), so the sweeping plate reports the wall it passes through.
+        // A static trigger never reports static geometry; a kinematic one does (mCollideKinematicVsNonDynamic),
+        // so the sweeping plate reports the wall it passes through.
         const ecs::entity wall = fixture.spawn_box(math::vec3(0.0f, 0.0f, 0.0f), physics::motion_type::STATIC);
         const ecs::entity plate = fixture.create_at(math::vec3(-5.0f, 0.0f, 0.0f));
         physics::rigid_body plateBody = {};
@@ -403,9 +426,7 @@ TEST_SUITE("physics/contact_events") {
 
     TEST_CASE("contact_events - a sleeping stack reports EXIT once at sleep and ENTER once at wake") {
         core::jobs::job_system jobs = {};
-        physics::physics_settings settings = test_settings();
-        settings.timeBeforeSleepSeconds = 0.2f;
-        physics_fixture fixture(jobs, settings);
+        physics_fixture fixture(jobs, drowsy_settings());
         (void)fixture.spawn_ground();
         const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 0.5f, 0.0f));
         u32 enters = 0;
@@ -469,5 +490,406 @@ TEST_SUITE("physics/contact_events") {
             }
         }
         CHECK(stays > 0);
+    }
+
+    TEST_CASE("regression - code sweep F408 a body that falls asleep inside a static trigger stays inside") {
+        // The trigger was a static sensor, which loses a body the moment it falls asleep: TRIGGER_EXIT for a
+        // crate still standing on the pressure plate.
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, drowsy_settings());
+        (void)fixture.spawn_ground();
+        bool withRigidBody = true;
+        bool startAsleep = false;
+        SUBCASE("a trigger with a static rigid_body") {}
+        SUBCASE("a trigger with a static rigid_body that carries START_ASLEEP") {
+            // The flag means nothing on a static body: the trigger is added active all the same, and only an
+            // active sensor keeps a body that falls asleep.
+            startAsleep = true;
+        }
+        SUBCASE("a trigger made of a collider alone") {
+            withRigidBody = false;
+        }
+        // The volume stands on the ground, which it must not report, and holds the resting box.
+        trigger_tally tally = {};
+        tally.trigger = fixture.spawn_static_trigger(
+          math::vec3(0.0f, 1.0f, 0.0f),
+          math::vec3(2.0f, 1.0f, 2.0f),
+          withRigidBody
+        );
+        if (startAsleep) {
+            physics::rigid_body *body = fixture.world.get<physics::rigid_body>(tally.trigger);
+            REQUIRE(body != nullptr);
+            body->flags = physics::rigid_body_flags::ALLOW_SLEEPING | physics::rigid_body_flags::START_ASLEEP;
+        }
+        tally.other = fixture.spawn_box(math::vec3(0.0f, 0.5f, 0.0f));
+        tally.run(fixture, 120);
+        CHECK(fixture.settled(tally.other));
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 0);
+
+        // Awake again it is still the same visit, and the sensor did not wake it by itself before.
+        CONJURE_REQUIRE_OK(fixture.physics.wake(tally.other));
+        tally.run(fixture, 5);
+        CHECK_FALSE(fixture.settled(tally.other));
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 0);
+
+        // It leaves once, when it really leaves.
+        math::transform outside = {};
+        outside.position = math::vec3(30.0f, 0.5f, 0.0f);
+        CONJURE_REQUIRE_OK(fixture.physics.teleport(tally.other, outside));
+        tally.run(fixture, 5);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 1);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("regression - code sweep F408 a static trigger reports a sleeping body it meets") {
+        // A static sensor saw awake bodies only: a volume moved over a sleeping body, or a body created asleep
+        // inside one, was never reported.
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, drowsy_settings());
+        (void)fixture.spawn_ground();
+        const math::vec3 overTheBox = math::vec3(0.0f, 1.0f, 0.0f);
+        const math::vec3 away = math::vec3(30.0f, 1.0f, 0.0f);
+        const math::vec3 halfExtents = math::vec3(2.0f, 1.0f, 2.0f);
+        trigger_tally tally = {};
+        SUBCASE("the body is created asleep inside the trigger") {
+            tally.trigger = fixture.spawn_static_trigger(overTheBox, halfExtents);
+            tally.other = spawn_sleeping_box(fixture);
+        }
+        SUBCASE("the trigger is moved over the body through its local_transform") {
+            tally.trigger = fixture.spawn_static_trigger(away, halfExtents);
+            tally.other = spawn_sleeping_box(fixture);
+            tally.run(fixture, 5);
+            REQUIRE(tally.enters == 0);
+            scene::local_transform *local = fixture.world.get<scene::local_transform>(tally.trigger);
+            REQUIRE(local != nullptr);
+            local->position = overTheBox;
+        }
+        SUBCASE("the trigger is teleported over the body") {
+            tally.trigger = fixture.spawn_static_trigger(away, halfExtents);
+            tally.other = spawn_sleeping_box(fixture);
+            tally.run(fixture, 5);
+            REQUIRE(tally.enters == 0);
+            math::transform pose = {};
+            pose.position = overTheBox;
+            CONJURE_REQUIRE_OK(fixture.physics.teleport(tally.trigger, pose));
+        }
+        tally.run(fixture, 30);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 0);
+        // Seeing it did not wake it.
+        CHECK(fixture.settled(tally.other));
+        CHECK(fixture.physics.active_body_count() == 0);
+
+        // The volume goes away again: the body left it, asleep as it is.
+        math::transform pose = {};
+        pose.position = away;
+        CONJURE_REQUIRE_OK(fixture.physics.teleport(tally.trigger, pose));
+        tally.run(fixture, 5);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 1);
+        CHECK(fixture.settled(tally.other));
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("contact_events - a static trigger reports neither static geometry nor another static trigger") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        (void)fixture.spawn_ground();
+        // Three static triggers through one another, through the ground and through a static wall.
+        const math::vec3 halfExtents = math::vec3(2.0f, 1.0f, 2.0f);
+        const ecs::entity first = fixture.spawn_static_trigger(math::vec3(0.0f, 0.5f, 0.0f), halfExtents);
+        const ecs::entity second = fixture.spawn_static_trigger(math::vec3(1.0f, 0.5f, 0.0f), halfExtents);
+        const ecs::entity third = fixture.spawn_static_trigger(math::vec3(0.0f, 0.5f, 1.0f), halfExtents, false);
+        (void)fixture.spawn_box(math::vec3(0.0f, 1.0f, 0.0f), physics::motion_type::STATIC);
+        for (u32 step = 0; step < 10; ++step) {
+            fixture.run_step();
+            CAPTURE(step);
+            CHECK(fixture.physics.contact_events().empty());
+        }
+        CHECK(fixture.physics.body_count() == 5);
+        // Jolt keeps the three active; to the engine they are static bodies: never awake, never counted.
+        CHECK(fixture.physics.active_body_count() == 0);
+        CHECK(fixture.physics.stats().activeBodies == 0);
+        for (const ecs::entity trigger : {first, second, third}) {
+            CAPTURE(trigger.index);
+            CHECK(fixture.physics.is_sleeping(trigger));
+            // wake and sleep stay the no-ops they are on every static body.
+            CONJURE_CHECK_OK(fixture.physics.sleep(trigger));
+            CONJURE_CHECK_OK(fixture.physics.wake(trigger));
+        }
+        fixture.run_step();
+        CHECK(fixture.physics.stats().droppedCommands == 0);
+        CHECK(fixture.physics.active_body_count() == 0);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("regression - code sweep F408 bodies inside a static trigger leave the contact budget to other pairs") {
+        // Jolt reports a pair with a static trigger as persisted in every step, asleep or not. Recorded, those
+        // reports filled maxContactEventsPerStep for as long as the bodies stayed inside, and the records that
+        // make another pair's ENTER or EXIT were dropped.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = drowsy_settings();
+        settings.maxContactEventsPerStep = 12;
+        physics_fixture fixture(jobs, settings);
+        const ecs::entity ground = fixture.spawn_ground();
+        // Two trigger colliders over the same six boxes: two sub-shape contacts per box, twelve records in the
+        // step they enter, which is the whole budget.
+        const ecs::entity zone =
+          fixture.spawn_static_trigger(math::vec3(0.0f, 1.0f, 0.0f), math::vec3(20.0f, 1.0f, 2.0f));
+        physics::sphere_collider second = {};
+        second.radius = 20.0f;
+        second.isTrigger = true;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::sphere_collider>(zone, second));
+        std::array<ecs::entity, 6> boxes = {};
+        for (u32 index = 0; index < boxes.size(); ++index) {
+            const f32 x = static_cast<f32>(index) * 2.0f - 5.0f;
+            boxes[index] = spawn_sleeping_box(fixture, math::vec3(x, 0.5f, 0.0f));
+        }
+        testing::log_capture logs = {};
+        trigger_tally inside = {};
+        inside.run(fixture, 1);
+        CHECK(inside.enters == boxes.size());
+        inside.run(fixture, 10);
+        CHECK(inside.enters == boxes.size());
+        CHECK(inside.exits == 0);
+        CHECK(fixture.physics.stats().droppedContactEvents == 0);
+
+        // A solid pair far from the trigger still gets its ENTER, and nothing is dropped to make room for it.
+        const ecs::entity crate = fixture.spawn_box(math::vec3(40.0f, 0.55f, 0.0f));
+        u32 enters = 0;
+        for (u32 step = 0; step < 20; ++step) {
+            fixture.run_step();
+            for (const physics::contact_event &event : fixture.physics.contact_events()) {
+                CAPTURE(step);
+                CHECK(involves(event, ground, crate));
+                enters += event.kind == physics::contact_kind::ENTER ? 1u : 0u;
+            }
+        }
+        CHECK(enters == 1);
+        CHECK(fixture.physics.stats().droppedContactEvents == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        for (u32 index = 0; index < boxes.size(); ++index) {
+            CAPTURE(index);
+            CHECK(fixture.settled(boxes[index]));
+        }
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("regression - code sweep F408 a trigger that becomes kinematic reports static geometry it overlaps") {
+        // Whether a kinematic sensor meets bodies that do not move is a flag of the Jolt body. It was set where
+        // the body is created and where its shape is rebuilt, so a trigger that became kinematic by a motion
+        // type written into its rigid_body went on without it.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = awake_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        trigger_tally tally = {};
+        tally.other = fixture.spawn_box(math::vec3(0.0f), physics::motion_type::STATIC);
+        tally.trigger = fixture.create_at(math::vec3(0.0f));
+        physics::rigid_body body = {};
+        physics::box_collider volume = {};
+        volume.halfExtents = math::vec3(2.0f);
+        volume.isTrigger = true;
+        const auto become = [&](physics::motion_type motion) {
+            physics::rigid_body *authored = fixture.world.get<physics::rigid_body>(tally.trigger);
+            REQUIRE(authored != nullptr);
+            authored->motionType = motion;
+            tally.run(fixture, 5);
+        };
+
+        SUBCASE("a dynamic trigger that becomes kinematic keeps the wall it is in") {
+            body.motionType = physics::motion_type::DYNAMIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(tally.trigger, body));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(tally.trigger, volume));
+            tally.run(fixture, 5);
+            REQUIRE(tally.enters == 1);
+            become(physics::motion_type::KINEMATIC);
+            CHECK(tally.enters == 1);
+            CHECK(tally.exits == 0);
+            become(physics::motion_type::DYNAMIC);
+            CHECK(tally.enters == 1);
+            CHECK(tally.exits == 0);
+        }
+        SUBCASE("a static trigger that becomes kinematic enters the wall it is in and leaves it as a static one") {
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(tally.trigger, body));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(tally.trigger, volume));
+            tally.run(fixture, 5);
+            REQUIRE(tally.enters == 0);
+            become(physics::motion_type::KINEMATIC);
+            CHECK(tally.enters == 1);
+            CHECK(tally.exits == 0);
+            become(physics::motion_type::STATIC);
+            CHECK(tally.enters == 1);
+            CHECK(tally.exits == 1);
+            become(physics::motion_type::KINEMATIC);
+            CHECK(tally.enters == 2);
+            CHECK(tally.exits == 1);
+        }
+        CHECK(fixture.position_of(tally.trigger) == math::vec3(0.0f));
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("contact_events - a static body that turns into a trigger sees the sleeping body inside it") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, drowsy_settings());
+        (void)fixture.spawn_ground();
+        // A static body with one solid sphere, 20 m to the side of a box that sleeps at the origin.
+        const ecs::entity zone = fixture.create_at(math::vec3(0.0f, 1.0f, 0.0f));
+        SUBCASE("a body with a static rigid_body is converted in place") {
+            physics::rigid_body body = {};
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(zone, body));
+        }
+        SUBCASE("a body made of colliders alone is replaced") {}
+        physics::sphere_collider solid = {};
+        solid.offset = math::vec3(20.0f, 0.0f, 0.0f);
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::sphere_collider>(zone, solid));
+        trigger_tally tally = {};
+        tally.trigger = zone;
+        tally.other = spawn_sleeping_box(fixture);
+        tally.run(fixture, 5);
+        REQUIRE(fixture.physics.has_body(zone));
+        REQUIRE(tally.enters == 0);
+
+        // Both changes reach the same push, so the body goes from solid to trigger in one rebuild.
+        physics::box_collider volume = {};
+        volume.halfExtents = math::vec3(2.0f, 1.0f, 2.0f);
+        volume.isTrigger = true;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(zone, volume));
+        CONJURE_REQUIRE_OK(fixture.world.remove<physics::sphere_collider>(zone));
+        tally.run(fixture, 30);
+        CHECK(fixture.physics.has_body(zone));
+        CHECK(fixture.physics.body_count() == 3);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 0);
+        CHECK(fixture.settled(tally.other));
+        CHECK(fixture.physics.active_body_count() == 0);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+
+        // And back to solid, away from the box: the trigger is gone, so the box left it.
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::sphere_collider>(zone, solid));
+        CONJURE_REQUIRE_OK(fixture.world.remove<physics::box_collider>(zone));
+        tally.run(fixture, 5);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 1);
+        CHECK(fixture.settled(tally.other));
+        CHECK(fixture.physics.active_body_count() == 0);
+        std::array<ecs::entity, 2> out = {};
+        CHECK(fixture.physics.overlap_sphere(math::vec3(20.0f, 1.0f, 0.0f), 0.1f, out) == 1);
+        CHECK(out[0] == zone);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("contact_events - a static trigger changes its motion type without losing the body inside it") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = drowsy_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        trigger_tally tally = {};
+        tally.trigger = fixture.spawn_static_trigger(math::vec3(0.0f), math::vec3(2.0f));
+        // No gravity and no ground: the box hangs inside the volume and falls asleep there.
+        tally.other = fixture.spawn_box(math::vec3(0.0f));
+        tally.run(fixture, 60);
+        REQUIRE(fixture.settled(tally.other));
+        REQUIRE(tally.enters == 1);
+
+        // Static to kinematic and back: an awake sensor either way, so the sleeping box stays inside.
+        for (const physics::motion_type motion : {physics::motion_type::KINEMATIC, physics::motion_type::STATIC}) {
+            CAPTURE(static_cast<u32>(motion));
+            physics::rigid_body *body = fixture.world.get<physics::rigid_body>(tally.trigger);
+            REQUIRE(body != nullptr);
+            body->motionType = motion;
+            tally.run(fixture, 30);
+            CHECK(tally.enters == 1);
+            CHECK(tally.exits == 0);
+            CHECK(fixture.settled(tally.other));
+            CHECK(fixture.position_of(tally.trigger) == math::vec3(0.0f));
+            CONJURE_CHECK_OK(fixture.physics.validate());
+        }
+        // Only the static one is left out of the count of active bodies.
+        CHECK(fixture.physics.active_body_count() == 0);
+    }
+
+    TEST_CASE("contact_events - a static trigger does not move by a velocity") {
+        // To Jolt the static trigger is a kinematic body, which a velocity would move.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = awake_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        const math::vec3 linear = math::vec3(5.0f, 0.0f, 0.0f);
+        const math::vec3 angular = math::vec3(0.0f, 3.0f, 0.0f);
+        const ecs::entity trigger = fixture.create_at(math::vec3(0.0f));
+        physics::rigid_body body = {};
+        body.linearVelocity = linear;
+        body.angularVelocity = angular;
+        physics::box_collider volume = {};
+        volume.isTrigger = true;
+        SUBCASE("authored in the rigid_body it is created with") {
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(trigger, body));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(trigger, volume));
+            fixture.run_step();
+        }
+        SUBCASE("left over from the dynamic trigger it was") {
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(trigger, body));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(trigger, volume));
+            fixture.run_steps(10);
+            REQUIRE(fixture.position_of(trigger).x > 0.5f);
+            physics::rigid_body *moving = fixture.world.get<physics::rigid_body>(trigger);
+            REQUIRE(moving != nullptr);
+            moving->motionType = physics::motion_type::STATIC;
+            fixture.run_step();
+        }
+        SUBCASE("left over from the static solid it was") {
+            // A static body keeps the velocities it was created with; they must not come to life when a
+            // collider change makes it a trigger.
+            body.motionType = physics::motion_type::STATIC;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(trigger, body));
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::sphere_collider>(trigger));
+            fixture.run_step();
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(trigger, volume));
+            CONJURE_REQUIRE_OK(fixture.world.remove<physics::sphere_collider>(trigger));
+            fixture.run_step();
+        }
+        const std::optional<math::transform> before = fixture.physics.body_pose(trigger);
+        REQUIRE(before.has_value());
+        fixture.run_steps(30);
+        const std::optional<math::transform> after = fixture.physics.body_pose(trigger);
+        REQUIRE(after.has_value());
+        CHECK(after->position == before->position);
+        CHECK(testing::approx_equal(after->rotation, before->rotation, 1.0e-6f));
+        CHECK(fixture.physics.is_sleeping(trigger));
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("contact_events - a character walking through a static trigger enters it once and leaves it once") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        (void)fixture.spawn_ground();
+        trigger_tally tally = {};
+        tally.trigger = fixture.spawn_static_trigger(math::vec3(3.0f, 1.0f, 0.0f), math::vec3(1.0f, 1.0f, 2.0f));
+        tally.other = fixture.spawn_character(math::vec3(0.0f));
+        // A second and a half before it sets off, three metres in a second and a half, then it stands inside.
+        tally.run(fixture, 90);
+        CHECK(tally.enters == 0);
+        const auto walk = [&](f32 speed, u32 steps) {
+            for (u32 step = 0; step < steps; ++step) {
+                CAPTURE(step);
+                CONJURE_REQUIRE_OK(fixture.physics.character_move(tally.other, math::vec3(speed, 0.0f, 0.0f)));
+                tally.run(fixture, 1);
+            }
+        };
+        walk(2.0f, 90);
+        walk(0.0f, 120);
+        CHECK(fixture.position_of(tally.other).x == doctest::Approx(3.0f).epsilon(0.05));
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 0);
+        walk(2.0f, 90);
+        CHECK(tally.enters == 1);
+        CHECK(tally.exits == 1);
     }
 }

@@ -144,6 +144,61 @@ TEST_SUITE("physics/component_sync") {
         CHECK(interpolated->previous.position.x == doctest::Approx(-20.0f).epsilon(0.01));
     }
 
+    TEST_CASE("regression - code sweep F213 a half degree turn written into local_transform reaches the body") {
+        // The push compared rotations with a cosine tolerance of 1e-4, which is 1.6 degrees: a smaller turn
+        // written into local_transform never reached Jolt, and the next pull wrote the old rotation back over
+        // it. The tolerance is now 1e-4 per quaternion component, some 0.01 to 0.02 degrees.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        const math::quat halfDegree = glm::angleAxis(math::radians(0.5f), math::vec3(0.0f, 1.0f, 0.0f));
+        ecs::entity edited = {};
+        ecs::entity body = {};
+        SUBCASE("a root body") {
+            body = fixture.spawn_box(math::vec3(0.0f, 5.0f, 0.0f));
+            edited = body;
+        }
+        SUBCASE("a static body") {
+            body = fixture.spawn_box(math::vec3(0.0f, 5.0f, 0.0f), physics::motion_type::STATIC);
+            edited = body;
+        }
+        SUBCASE("a body under a parent") {
+            const ecs::entity parent = fixture.create_at(math::vec3(3.0f, 0.0f, 0.0f));
+            body = fixture.spawn_box(math::vec3(0.0f, 5.0f, 0.0f));
+            scene::parent link = {};
+            link.value = parent;
+            CONJURE_REQUIRE_OK(fixture.world.add<scene::parent>(body, link));
+            edited = body;
+        }
+        SUBCASE("the parent of a body at its origin") {
+            // The body sits on the parent's origin, so the parent's turn changes its rotation and nothing else.
+            const ecs::entity parent = fixture.create_at(math::vec3(3.0f, 5.0f, 0.0f));
+            body = fixture.spawn_box(math::vec3(0.0f));
+            scene::parent link = {};
+            link.value = parent;
+            CONJURE_REQUIRE_OK(fixture.world.add<scene::parent>(body, link));
+            edited = parent;
+        }
+        SUBCASE("a character") {
+            body = fixture.spawn_character(math::vec3(0.0f, 5.0f, 0.0f));
+            edited = body;
+        }
+        fixture.run_steps(2);
+        const std::optional<math::transform> before = fixture.physics.body_pose(body);
+        REQUIRE(before.has_value());
+        REQUIRE(testing::approx_equal(before->rotation, math::quat(1.0f, 0.0f, 0.0f, 0.0f), 1.0e-6f));
+
+        scene::local_transform *local = fixture.world.get<scene::local_transform>(edited);
+        REQUIRE(local != nullptr);
+        local->rotation = halfDegree;
+        fixture.physics.push_transforms(STEP);
+        const std::optional<math::transform> after = fixture.physics.body_pose(body);
+        REQUIRE(after.has_value());
+        CHECK(testing::approx_equal(after->rotation, halfDegree, 1.0e-5f));
+        CHECK(testing::approx_equal(after->position, before->position, 1.0e-5f));
+    }
+
     TEST_CASE("component_sync - a scale change rebuilds the shape") {
         core::jobs::job_system jobs = {};
         physics::physics_settings settings = test_settings();

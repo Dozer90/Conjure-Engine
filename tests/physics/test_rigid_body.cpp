@@ -4,11 +4,13 @@
 #include "physics_test_fixture.h"
 
 #include "conjure/physics/components.h"
+#include "conjure/physics/physics_error.h"
 #include "conjure/scene/components.h"
 
 #include <array>
 #include <cmath>
 #include <optional>
+#include <string>
 
 using namespace conjure;
 using namespace physics_test;
@@ -488,17 +490,50 @@ TEST_SUITE("physics/rigid_body") {
 
     TEST_CASE("rigid_body - move_kinematic reaches the pose over one step and is refused for dynamic bodies") {
         core::jobs::job_system jobs = {};
-        physics_fixture fixture(jobs);
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
         const ecs::entity plate = fixture.spawn_box(math::vec3(0.0f, 0.0f, 0.0f), physics::motion_type::KINEMATIC);
         const ecs::entity box = fixture.spawn_box(math::vec3(10.0f, 0.0f, 0.0f));
         fixture.run_step();
         math::transform target = {};
         target.position = math::vec3(0.0f, 2.0f, 0.0f);
         CONJURE_REQUIRE_OK(fixture.physics.move_kinematic(plate, target));
-        CONJURE_REQUIRE_OK(fixture.physics.move_kinematic(box, target));
+        // The dynamic box is refused at the call, so nothing is queued for it and nothing is dropped later.
+        CONJURE_CHECK_ERROR(fixture.physics.move_kinematic(box, target), physics::physics_error::WRONG_BODY_KIND);
         fixture.run_step();
         CHECK(fixture.position_of(plate).y == doctest::Approx(2.0f).epsilon(0.01));
         CHECK(fixture.transform_position(plate).y == doctest::Approx(2.0f).epsilon(0.01));
-        CHECK(fixture.physics.stats().droppedCommands == 1);
+        CHECK(fixture.position_of(box) == math::vec3(10.0f, 0.0f, 0.0f));
+        CHECK(fixture.physics.stats().droppedCommands == 0);
+    }
+
+    TEST_CASE("regression - code sweep F413 move_kinematic on a body that follows its transform is refused") {
+        // It used to be applied: the body jumped to the pose for one step and the next push, which re-poses a
+        // KINEMATIC_MOVES_WITH_TRANSFORM body from its local_transform, pulled it back.
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity plate = fixture.spawn_following_plate(math::vec3(0.0f, 5.0f, 0.0f));
+        math::transform target = {};
+        target.position = math::vec3(0.0f, 9.0f, 0.0f);
+
+        SUBCASE("the body exists: WRONG_BODY_KIND at the call") {
+            fixture.run_step();
+            const core::result<void> refused = fixture.physics.move_kinematic(plate, target);
+            CONJURE_CHECK_ERROR(refused, physics::physics_error::WRONG_BODY_KIND);
+            REQUIRE_FALSE(refused.has_value());
+            CHECK(refused.get_error().message().find("move_kinematic") != std::string::npos);
+            CHECK(refused.get_error().message().find("follows its transform") != std::string::npos);
+            fixture.run_step();
+            CHECK(fixture.physics.stats().droppedCommands == 0);
+        }
+        SUBCASE("the entity is still pending: accepted, then dropped and counted by the push") {
+            CONJURE_CHECK_OK(fixture.physics.move_kinematic(plate, target));
+            fixture.run_step();
+            CHECK(fixture.physics.stats().droppedCommands == 1);
+        }
+        // Either way the body never left the pose its transform gives it.
+        CHECK(fixture.position_of(plate) == math::vec3(0.0f, 5.0f, 0.0f));
+        CHECK(fixture.transform_position(plate) == math::vec3(0.0f, 5.0f, 0.0f));
     }
 }

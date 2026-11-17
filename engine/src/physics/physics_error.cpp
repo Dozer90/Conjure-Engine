@@ -46,6 +46,8 @@ std::string_view physics_error_name(physics_error code) noexcept {
             return "WRONG_THREAD";
         case physics_error::COMMAND_QUEUE_FULL:
             return "COMMAND_QUEUE_FULL";
+        case physics_error::WRONG_BODY_KIND:
+            return "WRONG_BODY_KIND";
         case physics_error::COUNT:
             break;
     }

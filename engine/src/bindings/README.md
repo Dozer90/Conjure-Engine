@@ -102,13 +102,15 @@ a caller's buffer is always filled completely. Lookups by name (`entity_find_by_
 `entity_set_tag` intern, where tools must see the text.
 
 The ray and shape casts refuse a non-finite or negative `max_distance` with `INVALID_ARGUMENT` (it scales the unit
-direction, so an infinity would produce NaN components; zero is a valid miss). An unknown layer index is
-`NOT_FOUND` in `physics_layer_name` and `physics_layers_collide` alike (`15_bindings.md` 2.2). The velocity
-setters write the `rigid_body` mirror only once `physics_world` queued the command: the push diffs the mirror, so
-a refused request (a non-finite vector, a full command queue) must leave it untouched. `physics_character_move`
-writes `character_controller::velocity` under the same rule, since the step feeds that field to Jolt whenever no
-move is queued. `diagnostics_draw_box` builds its twelve edges in one function-local scratch buffer that keeps its
-capacity between calls.
+direction, so an infinity would produce NaN components; zero is a valid miss). An unknown layer index is `NOT_FOUND` in
+`physics_layer_name` and `physics_layers_collide` alike (`15_bindings.md` 2.2). The velocity setters write the
+`rigid_body` mirror only once `physics_world` queued the command: the push diffs the mirror, so a refused request (a
+non-finite vector, a full command queue, a body of a kind the request does not apply to) must leave it untouched.
+`physics_error::WRONG_BODY_KIND` maps to `INVALID_ARGUMENT` (`ArgumentException` in C#, `14_physics.md` P18).
+`physics_character_move` writes `character_controller::velocity` under the same rule, since the step feeds that field to
+Jolt whenever no move is queued, plus the horizontal velocity of the ground that carries the character (`14_physics.md`
+P20). `diagnostics_draw_box` builds its twelve edges in one function-local scratch buffer that keeps its capacity
+between calls.
 
 The read-only asset entries (`asset_ref_get`, `asset_type_of`, `asset_state_of`, the prefab and audio clip
 resolution) never bind: they look the slot up with `asset_manager::find_slot` and ask the sources through

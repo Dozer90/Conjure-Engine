@@ -45,6 +45,22 @@ namespace {
     }
 
     /// <summary>
+    /// True for a static trigger (code sweep F408). To Jolt it is a kinematic sensor that stays active, so
+    /// it goes on seeing a body that fell asleep inside it; a static sensor loses that contact (the comment
+    /// on JPH::Body::SetIsSensor). To the engine it stays a static body in every other respect.
+    /// </summary>
+    [[nodiscard]] constexpr bool is_static_sensor(motion_type motion, bool isTrigger) noexcept {
+        return motion == motion_type::STATIC && isTrigger;
+    }
+
+    /// <summary>
+    /// The motion type Jolt holds for a body: the engine's, except for a static trigger (is_static_sensor).
+    /// </summary>
+    [[nodiscard]] JPH::EMotionType to_jolt(motion_type motion, bool isTrigger) noexcept {
+        return is_static_sensor(motion, isTrigger) ? JPH::EMotionType::Kinematic : to_jolt(motion);
+    }
+
+    /// <summary>
     /// The degrees of freedom the lock flags leave; everything when they would leave none.
     /// </summary>
     [[nodiscard]] JPH::EAllowedDOFs allowed_dofs(rigid_body_flags flags, ecs::entity entity) noexcept {
@@ -503,11 +519,15 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     const physics_material *material = read<physics_material>(target);
     const physics_material surface = material == nullptr ? physics_material() : *material;
 
+    // A static trigger is a kinematic body to Jolt but keeps the static object layer: the layer table never
+    // pairs two static layers (jolt_layers.cpp), so it meets neither static geometry nor another static
+    // trigger, and queries with includeStatic off go on skipping it.
+    const bool staticSensor = is_static_sensor(motion, built.isTrigger);
     JPH::BodyCreationSettings creation(
       built.shape.GetPtr(),
       jolt::to_jolt(pose.position),
       jolt::to_jolt(pose.rotation),
-      to_jolt(motion),
+      to_jolt(motion, built.isTrigger),
       jolt::object_layer(layer, motion)
     );
     creation.mUserData = target.to_u64();
@@ -524,20 +544,28 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     creation.mRestitution = surface.restitution;
     creation.mAllowedDOFs = allowed_dofs(authored.flags, target);
     creation.mApplyGyroscopicForce = has_flag(authored.flags, rigid_body_flags::USE_GYROSCOPIC_FORCE);
-    creation.mLinearVelocity = jolt::to_jolt(authored.linearVelocity);
-    creation.mAngularVelocity = jolt::to_jolt(authored.angularVelocity);
+    // Jolt would move a kinematic body by the velocities a static rigid_body may still carry in its component.
+    creation.mLinearVelocity = staticSensor ? JPH::Vec3::sZero() : jolt::to_jolt(authored.linearVelocity);
+    creation.mAngularVelocity = staticSensor ? JPH::Vec3::sZero() : jolt::to_jolt(authored.angularVelocity);
+    // The kinematic trigger of the engine also reports static geometry. A static trigger does not: the flag
+    // stays off and its layer keeps it from static bodies.
     creation.mCollideKinematicVsNonDynamic = built.isTrigger && motion == motion_type::KINEMATIC;
     // A body authored through rigid_body may change its motion type later; implicit statics never do.
     creation.mAllowDynamicOrKinematic = body != nullptr;
+    // Jolt builds motion properties, which need a mass, for every body a rigid_body authors (static ones
+    // included) and for every static trigger (a kinematic body). The static trigger made of colliders alone
+    // does not reach the last branch today: implicit_static_defaults() carries the default mass of 1 kg, so
+    // the first one takes it. The term stays so that a default without a mass would not hand Jolt a
+    // kinematic body whose shape (a mesh_collider) has none either.
+    const bool hasMotionProperties = body != nullptr || staticSensor;
     if (authored.mass > 0.0f) {
         creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         creation.mMassPropertiesOverride.mMass = authored.mass;
-    } else if (body == nullptr || built.shape->GetMassProperties().mMass > 0.0f) {
+    } else if (!hasMotionProperties || built.shape->GetMassProperties().mMass > 0.0f) {
         creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateMassAndInertia;
     } else {
-        // A shape without a volume (a mesh_collider) derives no mass, yet Jolt builds motion properties for
-        // every body a rigid_body authors, static ones included, and those need a mass: 1 kg. Its zero
-        // inertia makes Jolt fall back to the inertia of a unit sphere.
+        // A shape without a volume (a mesh_collider) derives no mass: 1 kg. Its zero inertia makes Jolt
+        // fall back to the inertia of a unit sphere.
         creation.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         creation.mMassPropertiesOverride.mMass = 1.0f;
     }
@@ -572,8 +600,15 @@ bool physics_world::state::create_body(ecs::entity target, ecs::command_buffer &
     row.lastScale = pose.scale;
     row.convexAsset = built.convexAsset;
     row.meshAsset = built.meshAsset;
+    row.staticSensor = staticSensor;
+    if (staticSensor) {
+        ++staticSensors;
+    }
 
-    const bool startAsleep = motion == motion_type::STATIC || has_flag(authored.flags, rigid_body_flags::START_ASLEEP);
+    // A static trigger is added active (START_ASLEEP means nothing on a static body): only an active sensor
+    // sees sleeping bodies.
+    const bool startAsleep = !staticSensor
+      && (motion == motion_type::STATIC || has_flag(authored.flags, rigid_body_flags::START_ASLEEP));
     if (startAsleep) {
         sleepBatch.push_back(row.bodyId);
     } else {
@@ -625,6 +660,9 @@ void physics_world::state::destroy_body(u32 rowIndex, ecs::command_buffer *defer
         }
         bodies.DestroyBody(row.bodyId);
     }
+    if (row.staticSensor && staticSensors > 0) {
+        --staticSensors;
+    }
 
     const ecs::entity target = row.entity;
     rowOfEntity.erase(target);
@@ -655,6 +693,7 @@ void physics_world::state::destroy_all_bodies() {
     pendingRebuild.clear();
     activePairs.clear();
     characterCount = 0;
+    staticSensors = 0;
     liveRows = 0;
 }
 
@@ -748,11 +787,6 @@ void physics_world::state::apply_motion_type(body_record &row, const rigid_body 
             replacedInPush = true;
             return;
         }
-        bodies.SetMotionType(
-          row.bodyId,
-          to_jolt(body.motionType),
-          body.motionType == motion_type::STATIC ? JPH::EActivation::DontActivate : JPH::EActivation::Activate
-        );
         row.motion = body.motionType;
         if (body.motionType == motion_type::STATIC) {
             remove_interpolated(row.entity, deferred);
@@ -761,10 +795,52 @@ void physics_world::state::apply_motion_type(body_record &row, const rigid_body 
             row.firstPull = true;
         }
     }
+    // A row that reaches this line was authored through rigid_body or kept its motion type, so its body can
+    // take whatever the row asks of it and the call cannot fail (see sync_jolt_motion).
+    const bool synced = sync_jolt_motion(row);
+    CONJURE_ASSERT(synced, "physics_world: a body with a rigid_body has no motion properties");
+    CONJURE_UNUSED(synced);
     bodies.SetObjectLayer(row.bodyId, jolt::object_layer(layer, row.motion));
     row.layer = layer;
     row.movesWithTransform = row.motion == motion_type::KINEMATIC
       && has_flag(body.flags, rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM);
+}
+
+bool physics_world::state::sync_jolt_motion(body_record &row) {
+    const bool staticSensor = is_static_sensor(row.motion, row.isTrigger);
+    const JPH::EMotionType wanted = to_jolt(row.motion, row.isTrigger);
+    JPH::EMotionType current = JPH::EMotionType::Static;
+    {
+        const JPH::BodyLockWrite lock(physicsSystem->GetBodyLockInterface(), row.bodyId);
+        if (!lock.Succeeded()) {
+            return true;
+        }
+        JPH::Body &joltBody = lock.GetBody();
+        if (wanted != JPH::EMotionType::Static && !joltBody.CanBeKinematicOrDynamic()) {
+            return false;
+        }
+        current = joltBody.GetMotionType();
+        joltBody.SetIsSensor(row.isTrigger);
+        joltBody.SetCollideKinematicVsNonDynamic(row.isTrigger && row.motion == motion_type::KINEMATIC);
+    }
+    JPH::BodyInterface &bodies = physicsSystem->GetBodyInterface();
+    // SetMotionType puts a body that becomes static to sleep itself. A body that starts to move wakes, and a
+    // static trigger is active always; a body that keeps its motion type keeps its sleep state.
+    const bool activate = staticSensor || (wanted != current && wanted != JPH::EMotionType::Static);
+    bodies.SetMotionType(
+      row.bodyId,
+      wanted,
+      activate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate
+    );
+    if (staticSensor && !row.staticSensor) {
+        // Jolt moves a kinematic body by its velocity, and the body may have been moving until now.
+        bodies.SetLinearAndAngularVelocity(row.bodyId, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+    }
+    if (staticSensor != row.staticSensor) {
+        staticSensors = staticSensor ? staticSensors + 1 : staticSensors - 1;
+        row.staticSensor = staticSensor;
+    }
+    return true;
 }
 
 void physics_world::state::apply_rebuilds(ecs::command_buffer &deferred) {
@@ -830,20 +906,23 @@ void physics_world::state::apply_rebuilds(ecs::command_buffer &deferred) {
                 mark_rebuild(target, record_dirty_flags::SHAPE);
             }
             if (built.shape != nullptr) {
+                // The sensor flags and, for a static body that became or stopped being a trigger, the motion
+                // type Jolt holds (code sweep F408).
+                row->isTrigger = built.isTrigger;
+                if (!sync_jolt_motion(*row)) {
+                    // An implicit static body was created without motion properties and cannot turn into the
+                    // kinematic sensor of a static trigger: it is replaced, and the flush that follows in
+                    // this push creates the trigger. Its contacts end with EXIT and start anew.
+                    const u32 index = static_cast<u32>(row - records.data());
+                    destroy_body(index, nullptr, true);
+                    mark_pending_create(target);
+                    continue;
+                }
                 JPH::BodyInterface &bodies = physicsSystem->GetBodyInterface();
                 // Mass properties follow separately: SetShape alone would either keep the stale inertia
                 // (false) or discard the authored mass (true).
                 bodies.SetShape(row->bodyId, built.shape.GetPtr(), false, JPH::EActivation::Activate);
                 apply_mass_properties(*row, authored);
-                {
-                    const JPH::BodyLockWrite lock(physicsSystem->GetBodyLockInterface(), row->bodyId);
-                    if (lock.Succeeded()) {
-                        lock.GetBody().SetIsSensor(built.isTrigger);
-                        const bool kinematicTrigger = built.isTrigger && row->motion == motion_type::KINEMATIC;
-                        lock.GetBody().SetCollideKinematicVsNonDynamic(kinematicTrigger);
-                    }
-                }
-                row->isTrigger = built.isTrigger;
                 row->shapeKey = built.leafKey;
                 row->lastScale = pose.scale;
                 row->convexAsset = built.convexAsset;

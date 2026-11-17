@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <format>
+#include <limits>
 #include <string>
 #include <type_traits>
 
@@ -96,6 +97,92 @@ TEST_SUITE("core/glm_types") {
         CHECK_FALSE(nearly_equal(rotation, other));
         CHECK_FALSE(same_rotation(rotation, other));
         CHECK(same_rotation(rotation, other, 0.01f));
+    }
+
+    TEST_CASE("regression - code sweep F213 same_rotation's epsilon is the component tolerance of nearly_equal") {
+        // The old test was |dot| >= 1 - epsilon, a cosine tolerance: the default 1e-6 accepted rotations up to
+        // 0.16 degrees apart, some 2800 times what the same epsilon means in nearly_equal.
+        const vec3 axis = glm::normalize(vec3(1.0f, 1.0f, 0.0f));
+        const quat rotation = glm::angleAxis(radians(40.0f), axis);
+        const quat tenthOfADegree = glm::angleAxis(radians(40.1f), axis);
+        CHECK_FALSE(same_rotation(rotation, tenthOfADegree));
+        CHECK_FALSE(same_rotation(rotation, -tenthOfADegree));
+        CHECK_FALSE(same_rotation(rotation, tenthOfADegree, 1.0e-4f));
+        // 0.1 degrees is 1.75e-3 rad: within 2 * epsilon once epsilon is 1e-3.
+        CHECK(same_rotation(rotation, tenthOfADegree, 1.0e-3f));
+        CHECK(same_rotation(rotation, -tenthOfADegree, 1.0e-3f));
+
+        // With the sign aligned it is nearly_equal, component for component, for the same epsilon.
+        const std::array<f32, 5> tolerances = {0.0f, 1.0e-6f, 1.0e-4f, 1.0e-3f, 1.0e-2f};
+        const std::array<f32, 4> steps = {0.0f, 1.0e-4f, 3.0e-3f, 5.0e-2f};
+        for (const f32 tolerance : tolerances) {
+            for (const f32 step : steps) {
+                CAPTURE(tolerance);
+                CAPTURE(step);
+                const quat turned = glm::angleAxis(radians(40.0f) + step, axis);
+                REQUIRE(glm::dot(rotation, turned) > 0.0f);
+                CHECK(same_rotation(rotation, turned, tolerance) == nearly_equal(rotation, turned, tolerance));
+                CHECK(same_rotation(rotation, -turned, tolerance) == nearly_equal(rotation, turned, tolerance));
+                CHECK(same_rotation(-rotation, turned, tolerance) == nearly_equal(rotation, turned, tolerance));
+            }
+        }
+    }
+
+    TEST_CASE("glm_types - same_rotation accepts turns below 2 epsilon radians and rejects them above 4 epsilon") {
+        // The difference of two unit quaternions an angle t apart has length 2 sin(t / 4), about t / 2, and its
+        // largest component lies between a half and the whole of that length: within epsilon for every axis
+        // when t <= 2 epsilon, above it for every axis once t is a little over 4 epsilon (sin(x) < x).
+        constexpr f32 TOLERANCE = 1.0e-3f;
+        const std::array<quat, 4> bases = {
+            quat(1.0f, 0.0f, 0.0f, 0.0f),
+            glm::angleAxis(radians(40.0f), glm::normalize(vec3(1.0f, 1.0f, 0.0f))),
+            glm::angleAxis(radians(170.0f), glm::normalize(vec3(-1.0f, 2.0f, 3.0f))),
+            glm::normalize(quat(0.5f, 0.5f, 0.5f, 0.5f)),
+        };
+        const std::array<vec3, 5> axes = {
+            vec3(1.0f, 0.0f, 0.0f),
+            vec3(0.0f, 1.0f, 0.0f),
+            vec3(0.0f, 0.0f, 1.0f),
+            glm::normalize(vec3(1.0f, 1.0f, 1.0f)),
+            glm::normalize(vec3(-2.0f, 1.0f, 0.5f)),
+        };
+        for (usize baseIndex = 0; baseIndex < bases.size(); ++baseIndex) {
+            for (usize axisIndex = 0; axisIndex < axes.size(); ++axisIndex) {
+                CAPTURE(baseIndex);
+                CAPTURE(axisIndex);
+                const quat within = bases[baseIndex] * glm::angleAxis(1.9f * TOLERANCE, axes[axisIndex]);
+                const quat beyond = bases[baseIndex] * glm::angleAxis(4.2f * TOLERANCE, axes[axisIndex]);
+                CHECK(same_rotation(bases[baseIndex], within, TOLERANCE));
+                CHECK(same_rotation(bases[baseIndex], -within, TOLERANCE));
+                CHECK(same_rotation(within, bases[baseIndex], TOLERANCE));
+                CHECK_FALSE(same_rotation(bases[baseIndex], beyond, TOLERANCE));
+                CHECK_FALSE(same_rotation(bases[baseIndex], -beyond, TOLERANCE));
+                CHECK_FALSE(same_rotation(beyond, bases[baseIndex], TOLERANCE));
+            }
+        }
+    }
+
+    TEST_CASE("glm_types - same_rotation at its edges: epsilon zero, opposite rotations and NaN") {
+        const vec3 axis = glm::normalize(vec3(1.0f, 1.0f, 0.0f));
+        const quat rotation = glm::angleAxis(radians(40.0f), axis);
+        // Epsilon 0 still equates q with itself and with -q (bit-equal components after the negation).
+        CHECK(same_rotation(rotation, rotation, 0.0f));
+        CHECK(same_rotation(rotation, -rotation, 0.0f));
+        CHECK_FALSE(same_rotation(rotation, glm::angleAxis(radians(40.01f), axis), 0.0f));
+
+        // A half turn apart the dot product is zero: neither sign of b is near a.
+        const quat identity = quat(1.0f, 0.0f, 0.0f, 0.0f);
+        const quat halfTurn = quat(0.0f, 1.0f, 0.0f, 0.0f);
+        CHECK_FALSE(same_rotation(identity, halfTurn));
+        CHECK_FALSE(same_rotation(identity, -halfTurn));
+        CHECK_FALSE(same_rotation(identity, halfTurn, 0.5f));
+        // A full turn is the same rotation, stored as -identity.
+        CHECK(same_rotation(identity, quat(-1.0f, 0.0f, 0.0f, 0.0f)));
+
+        const quat poisoned = quat(std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f, 0.0f);
+        CHECK_FALSE(same_rotation(poisoned, identity));
+        CHECK_FALSE(same_rotation(identity, poisoned));
+        CHECK_FALSE(same_rotation(poisoned, poisoned));
     }
 
     TEST_CASE("glm_types - nearly_equal for matrices compares every element") {

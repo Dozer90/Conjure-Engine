@@ -138,7 +138,9 @@ lost its core no longer stalling the whole pool (`core/jobs` README).
 
 `assets.first_scan_100` is not in the table: it was added after that run (code sweep F243) and is a disk
 benchmark, whose figures say more about the drive than about the code. Its measurements are under
-"Deviations and open points".
+"Deviations and open points". `physics.step_10k_sleeping_1k_triggers` is not in the table either: it was added
+after that run (code sweep F408), and its Debug figures and the reasoning behind its budget are under the same
+heading.
 
 ## What each scenario does
 
@@ -172,6 +174,12 @@ benchmark, whose figures say more about the drive than about the code. Its measu
 - `physics.step_10k_active`: 10,000 dynamic unit boxes resting awake (sleeping disabled) on a static slab,
   one fixed step (push, step, pull, collect) per iteration.
 - `physics.step_10k_sleeping`: the same grid created `START_ASLEEP` after 600 settle steps.
+- `physics.step_10k_sleeping_1k_triggers`: the sleeping grid plus 1,000 static trigger volumes (a static
+  `rigid_body` with one trigger `box_collider`), one over each block of 5 x 2 boxes, so every box sits in
+  exactly one volume. Jolt keeps each static trigger an active kinematic sensor that sees the sleeping boxes
+  (code sweep F408, 14_physics.md P21): the measured step is the cost of a level full of trigger volumes. The
+  scenario skips unless every box is asleep after the 600 settle steps and the volumes reported exactly one
+  `TRIGGER_ENTER` per box with no dropped contact event.
 - `physics.sync_10k`: the engine's FIXED_END over the awake field through an `ecs::scheduler` with
   `physics::register_systems` (stages inline, chunks parallel), i.e. the PARALLEL `physics.pull_transforms`
   fanned out over the benchmark job system exactly as `engine::application` runs it (14_physics.md 3.7),
@@ -219,8 +227,9 @@ is the record).
   unknown members of an entry and of a class object, and a class that sets no limit is `UNTHRESHOLDED` rather
   than a threshold that passes every figure; a misspelled key or class used to read as "not checked" and pass.
   An `allocs` gate alone still counts as a limit for both classes.
-- **Scenario set.** All 18 rows of 08_testing.md 7.1 have a scenario and a `thresholds.json` entry with the
-  design's figures (17 rows until `assets.first_scan_100` joined the table, code sweep F243).
+- **Scenario set.** All 19 rows of 08_testing.md 7.1 have a scenario and a `thresholds.json` entry with the
+  design's figures (17 rows until `assets.first_scan_100` joined the table, code sweep F243, and 18 until
+  `physics.step_10k_sleeping_1k_triggers` did, code sweep F408).
   `core.job_parallel_for_1m`, `renderer.extract_10k` and `scripting.native_call_100k` were
   missing until the fix-4 round (the first integration run's "8 of 17" counted the three unlisted scenarios below
   in their place). Three scenarios the design table does not list exist as well: `scene.snapshot_capture_restore_10k`
@@ -252,6 +261,17 @@ is the record).
   for 10,000 resting bodies (0.8 us per body); the settling columns pay box-on-box as well as box-on-ground
   manifolds, so twice the per-body cost over 2,000 bodies gives 3.2 ms, rounded down to 3.00. Measured:
   1.23 ms.
+- **`physics.step_10k_sleeping_1k_triggers` budget (1.50 ms desktop, 4.50 ms ci, 0 allocations).** Code sweep
+  F408 asks for the row and gives no figure, so the limit is a harness regression guard, not a design number,
+  and no Development tree has measured it yet. The allocation gate is the one `test_physics_stack.cpp` pins for
+  a step over static triggers that hold sleeping boxes. The time is an estimate from the **Debug** tree of the
+  change (`build/lane_2`, `windows-msvc-debug`, default options, other builds running on the machine): two runs
+  gave a median of 4.13 and 5.04 ms, against 0.32 and 0.52 ms for `physics.step_10k_sleeping` in the same runs.
+  The rows whose step is contact work rather than bookkeeping ran 34.7 ms (`physics.step_10k_active`, 3.86 ms
+  in Development) and 13.2 ms (`physics.step_2k_settling`, 1.18 ms) in the second run, a Debug-to-Development
+  factor of 9 to 11; applied to the trigger row it gives 0.4 to 0.55 ms in Development. The budget is about
+  three times that, the ci column three times the desktop one as everywhere in 7.1. Replace both with a
+  measured figure at the next enforced Development run.
 - **`scripting.native_call_100k` spelling.** The design row says `Entity.IsValid`; the managed API has no
   such member, its native liveness check is `Entity.IsAlive` (`docs/api/bindings/csharp-api.md`), which
   the probe calls. One bridge call per iteration, as the row intends.

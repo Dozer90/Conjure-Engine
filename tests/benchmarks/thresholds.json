@@ -53,6 +53,11 @@
             "ci": { "p50_ms": 2.40 },
             "allocs": 0
         },
+        "physics.step_10k_sleeping_1k_triggers": {
+            "desktop": { "p50_ms": 1.50 },
+            "ci": { "p50_ms": 4.50 },
+            "allocs": 0
+        },
         "physics.sync_10k": {
             "desktop": { "p50_ms": 0.30 },
             "ci": { "p50_ms": 0.90 },

@@ -41,7 +41,7 @@ header.
 | `collision_mesh_asset.h`, `register.h` | `collision_mesh_asset`; `register_components`, `register_systems`, `register_asset_types` | same |
 | `physics_world.h`, `physics_settings.h` | `physics_world`, `physics_stats`; `physics_settings` | [The physics world and queries](../../api/physics/physics-world-and-queries.md) |
 | `queries.h`, `contact_events.h`, `physics_debug_draw.h` | `query_filter`, the hit records, the shape descriptions; `contact_event`; `physics_debug_draw` | same |
-| `physics.h`, `physics_error.h`, `log_category.h` | umbrella, `physics_error` (21 codes), `LOG_PHYSICS` | not user-facing |
+| `physics.h`, `physics_error.h`, `log_category.h` | umbrella, `physics_error` (22 codes), `LOG_PHYSICS` | not user-facing |
 
 Private: `jolt_include.h` (the one place `Jolt.h` is included, with the warning pragmas), `jolt_runtime.{h,cpp}`
 (reference-counted process state: memory hooks, trace and assert handlers, `Factory`, `RegisterTypes`),
@@ -81,6 +81,22 @@ existing one on its current shape (`build_shape` reports `pendingAsset` before b
 Rebuilds run before the pending creations, so a rebuild that replaces a body is recreated in the same push; an
 implicit static body replaced later in the push (its static `rigid_body` turned dynamic) gets a second flush.
 
+A static trigger is the one body whose Jolt motion type is not the row's (`14_physics.md` P21, code sweep F408):
+Jolt holds it as a kinematic sensor, added active and without velocity, in the static object layer, so that it
+keeps a body that falls asleep inside it and pairs with neither static geometry nor another static trigger.
+`row.motion` stays `STATIC` and every engine rule keyed on it holds (no pull, no `interpolated_transform`,
+commands refused, `is_sleeping` true); `row.staticSensor` and `state::staticSensors` record the difference, and
+`active_body_count()` subtracts the count from Jolt's. `sync_jolt_motion(row)` is the only place that maps
+`(row.motion, row.isTrigger)` onto Jolt after creation (motion type, sensor flag,
+`mCollideKinematicVsNonDynamic`, activation, zeroed velocities); `apply_motion_type` and the `SHAPE` rebuild both
+end in it, so call it from any new path that changes either input. It returns false for an implicit static
+body that would have to become a trigger: that body has no motion properties, and the rebuild replaces it.
+`validate()` checks the mark, the count and that each static trigger is an active kinematic sensor. The price:
+a static trigger is stepped like an awake body, and a body inside one keeps its body pair and its cached manifold
+while it sleeps (`maxBodyPairs`, `maxContactConstraints`) and one entry of the pair table (`activePairs`, capacity
+`maxContactEventsPerStep`). It costs no raw contact record per step: Jolt reports the pair as persisted in every
+step, and the listener drops persisted contacts of sensor pairs, which nothing reads.
+
 ## 4. The fixed step
 
 `push_transforms` visits the chunks whose `rigid_body`, `character_controller` or `local_transform` column was
@@ -88,7 +104,10 @@ stamped since the previous push (persistent `ecs::query` objects with a `changed
 the mirror kept in its record and applies only what changed: a mass or lock-flag change re-derives the Jolt mass
 properties from the shape, damping, gravity factor, motion quality, sleeping and gyroscopic force follow their
 flags, and a shape rebuild re-applies the same mass properties after `SetShape`. A pose that differs from the
-last pulled pose is a teleport. The chunk filter only sees a row's own columns, so `push_hierarchy_rows` walks the
+last pulled pose is a teleport: `TELEPORT_EPSILON` (1e-4) per position component and, through
+`math::same_rotation`, per quaternion component, which is a turn of 2e-4 to 4e-4 rad depending on the axis (it
+was a cosine tolerance, 1.6 degrees, before code sweep F213). A character whose rotation alone differs is turned
+in place and keeps what its ground carries it with (section 7). The chunk filter only sees a row's own columns, so `push_hierarchy_rows` walks the
 records every push for the rows it cannot cover: `KINEMATIC_MOVES_WITH_TRANSFORM` rows get `MoveKinematic` and
 their `interpolated_transform` written, and parented bodies and characters are composed through their ancestors
 and teleported when an ancestor moved. The teleport tolerance of a parented row grows with its coordinates, since
@@ -114,15 +133,26 @@ bit-identical (`test_determinism.cpp`). `maxJobs` must be a power of two (the po
 ## 6. Contacts, commands and queries
 
 The listener records raw added / persisted / removed contacts into per-thread buffers (global budget
-`maxContactEventsPerStep`); `collect_contact_events` merges them, sorts twice with the stable
+`maxContactEventsPerStep`; persisted contacts of sensor pairs are not recorded, a trigger pair has no `STAY`);
+`collect_contact_events` merges them, sorts twice with the stable
 `core::radix_sort_u64` (sub-shape pair, then body pair) and folds each body pair into one `ENTER` / `STAY` / `EXIT`
 (or `TRIGGER_ENTER` / `TRIGGER_EXIT`) per step, so the span is sorted by body id pair and identical whatever
 thread recorded what (R6). A `STAY` takes its point and normal from a live (added or persisted) record, never
-from a removed one. Destroying a body in contact synthesises its exits.
+from a removed one. Destroying a body in contact synthesises its exits. Jolt removes a contact when the last
+active body of the pair falls asleep, so a solid pair reports `EXIT` at sleep and `ENTER` at wake (kept and
+documented, P21); a static trigger, being an active sensor, keeps its pairs with sleeping bodies.
 
 Forces, impulses, velocities, teleports, wake / sleep, gravity and `character_move` are queued
 (`COMMAND_QUEUE_FULL` when `maxQueuedCommands` is reached, core `INVALID_ARGUMENT` for a non-finite value) and
-applied in the next push; a command on a pending entity is kept for one push. Queries go through the
+applied in the next push; a command on a pending entity is kept for one push. Since code sweep F413 `queue()`
+also refuses, with `WRONG_BODY_KIND`, a command the entity's kind of body cannot take (`14_physics.md` P18 and
+the table of 3.4). `command_applies(kind, command_target)` in `physics_world_internal.h` is the one table: the
+call asks it with `target_of_components` (the kind the components describe, which is what the row will be after
+the next push: that push applies motion type and `rigid_body` changes before the commands), `apply_commands`
+asks it with `target_of_row` and counts a mismatch in `droppedCommands` (a command queued for a pending entity,
+or one whose target changed kind since the call). A new command or kind is one line in that table; never test
+the kind in only one of the two places. Because the call reads `rigid_body` and `character_controller`, a system
+that sends body commands declares both as reads (or is `EXCLUSIVE`). Queries go through the
 narrow-phase query with layer mask, static, trigger and ignore filters; `raycast_all` keeps the nearest hits that
 fit its span, rays are clamped to 1e6 m and non-finite input yields nothing. Calling a query (or `body_pose` /
 `debug_draw`) while `push_transforms`, `step` or `pull_transforms` runs asserts (`STEP_IN_PROGRESS`) and returns
@@ -136,6 +166,24 @@ component, gravity integrated in the air, the vertical component snapped to the 
 the script set an upward (jump) velocity, `CancelVelocityTowardsSteepSlopes`, stair walking and floor sticking by
 `stepHeight`. The pull writes back `velocity`, `ground`, `groundNormal` and `groundEntity`. Authored field
 changes rebuild the character in place with the same inner body id.
+
+Moving ground carries a character (`14_physics.md` P20, code sweep F421). A step that starts `ON_GROUND` calls
+`UpdateGroundVelocity` and stores the horizontal part of the ground velocity in `row.carriedVelocity`; every
+step adds that vector to the velocity it gives Jolt, and `pull_characters` subtracts it again, so the component
+holds the character's own velocity and nothing compounds (Jolt keeps the velocity as set, it does not derive
+one from the displacement). The vector is kept while the character is `IN_AIR`, which is what makes a jump keep
+the platform's speed; a step that starts `ON_STEEP_GROUND` or `NOT_SUPPORTED` clears it, because ground that does
+not carry the character must not push it along a slope. `reposition_character` (both teleports: the command and
+a new position written into `local_transform`, the latter also being how a parented character follows a moving
+parent) clears it and sets `row.skipGroundCarry`, so the next step does not refresh it from a ground state that
+still describes the old place; without that a character parented to the platform under its feet would move
+twice. Keep any new way of moving a character on that function. A rotation alone written into `local_transform`
+is not a move: `teleport_row` applies it with `SetRotation` and the carrying goes on (gameplay turns a character
+that way in every step). The skip is horizontal only. The vertical rule of the step after a teleport still reads
+the stale ground: a character teleported off a rising lift keeps the lift's vertical velocity, and one parented
+to a rising platform under its feet hops. A grounded character on ground that sinks faster than 0.1 m/s passes
+the rule's jump test, so `STICK_TO_FLOOR`, not the rule, takes it down. The render scale is `row.lastScale`, refreshed by the push from
+the entity's world scale; the capsule is never scaled, so a scale change needs no rebuild.
 
 ## 8. Collision meshes
 
@@ -164,8 +212,9 @@ Distribution neither; `Jolt/Core/Core.h` checks them at `RegisterTypes` through 
 ## 10. Threading model
 
 `attach`, `detach`, `push_transforms`, `step`, `collect_contact_events` and the command queue are owner-thread
-only (the thread that constructed the world; asserted, `attach` and the commands return `WRONG_THREAD`).
-`pull_transforms` with a `system_context` runs its chunk pass on the job system; the queries run from any thread
+only (the thread that constructed the world; asserted, `attach` and the commands return `WRONG_THREAD`). A
+body command reads the target's `rigid_body` and `character_controller` at the call, so the system that sends it
+declares both as reads. `pull_transforms` with a `system_context` runs its chunk pass on the job system; the queries run from any thread
 while none of `push_transforms`, `step` and `pull_transforms` is in progress (Jolt's `NarrowPhaseQuery` locks per
 body; the row tables are not locked), which in the engine means outside the PHYSICS_STEP and FIXED_END phases.
 Structural ECS changes on the owner thread run the physics observers, which edit the same tables, so queries from
@@ -178,9 +227,13 @@ buffer of `job_system::thread_index()`.
 plus the design's topic files (`test_layers`, `test_rigid_body`, `test_colliders`, `test_fixed_step`,
 `test_component_sync`, `test_physics_stack`, `test_determinism`). `physics_test_fixture.h` builds a registry,
 world and attached physics world with small budgets and runs push / step / pull / collect; `for_each_job_mode`
-runs a body with 0 and 4 workers. The free-fall and `collisionSteps` tests compare against Jolt's semi-implicit
+runs a body with 0 and 4 workers. Spawn helpers and `trigger_tally` live in the fixture; a helper two test files
+need goes there, never into both. The free-fall and `collisionSteps` tests compare against Jolt's semi-implicit
 Euler closed form; the stack test allows 2 cm at the top (Jolt's solver residual); the GLB and OBJ fixtures of
-`test_collision_mesh_asset.cpp` are generated in memory.
+`test_collision_mesh_asset.cpp` are generated in memory. `test_physics_world.cpp` holds the command tables of
+P18: every command is sent to a body of every kind, once existing (queued or `WRONG_BODY_KIND`) and once
+pending (accepted, the inapplicable ones dropped and counted), `character_move` included with its own code
+(`NOT_A_CHARACTER`); a new command or kind extends its `command` list and `spawn_each_kind`.
 
 ```
 python tools/build.py --build-dir build/mod_physics --target conjure_physics_tests --test -R physics
@@ -193,10 +246,11 @@ python tools/build.py --build-dir build/mod_physics --target conjure_physics_tes
 - The Jolt-free unit test of the job adapter (`14_physics.md` 9 step 2) does not exist: the physics tests include
   no Jolt header, so it needs a test target with Jolt's include paths. Whole-world steps with 0 and 4 workers
   (`test_determinism.cpp`) cover the adapter meanwhile.
-- `tests/benchmarks/bench_physics.cpp` (`physics.step_10k_active`, `physics.step_10k_sleeping`, `physics.sync_10k`,
-  `physics.step_2k_settling`, `engine.full_frame_10k_physics`) holds the scenarios; the raycast batch scenario of
-  the design is not written yet, and the `[bench]` / `[slow]` cases in `tests/physics` cover the allocation-free
-  behaviour.
+- `tests/benchmarks/bench_physics.cpp` (`physics.step_10k_active`, `physics.step_10k_sleeping`,
+  `physics.step_10k_sleeping_1k_triggers`, `physics.sync_10k`, `physics.step_2k_settling`) and
+  `bench_full_frame_10k.cpp` (`engine.full_frame_10k_physics`) hold the physics scenarios; the raycast batch
+  scenario of the design is not written yet, and the `[bench]` / `[slow]` cases in `tests/physics` cover the
+  allocation-free behaviour.
 - The pull writes `local_transform` of bodies directly; a "physics wrote this" flag on `scene::transform_state`
   would let the transform pass skip redundant dirtying.
 - `physics_world::step - 600 empty steps allocate nothing` has been seen to fail once under heavy parallel load

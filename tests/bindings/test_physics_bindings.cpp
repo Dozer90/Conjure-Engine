@@ -6,11 +6,13 @@
 
 #include "conjure/bindings/bindings_error.h"
 #include "conjure/bindings/marshal.h"
+#include "conjure/core/error.h"
 #include "conjure/core/hash.h"
 #include "conjure/core/math/math.h"
 #include "conjure/core/string_id.h"
 #include "conjure/physics/character_controller.h"
 #include "conjure/physics/components.h"
+#include "conjure/physics/physics_error.h"
 #include "conjure/physics/physics_layers.h"
 #include "conjure/physics/physics_world.h"
 #include "conjure/scene/components.h"
@@ -18,6 +20,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <vector>
 
 // physics_* (docs/design/15_bindings.md 10, 14_physics.md 8): queries, velocities, forces, kinematic moves,
@@ -443,6 +446,60 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(api.physics_move_kinematic(platform.to_u64(), nullptr) == to_status(bindings_error::INVALID_ARGUMENT));
         const ecs::entity plain = fixture.base.create("plain");
         CHECK(api.physics_move_kinematic(plain.to_u64(), &target) == to_status(bindings_error::COMPONENT_MISSING));
+    }
+
+    TEST_CASE("physics - a command the kind of body cannot take is INVALID_ARGUMENT and changes nothing") {
+        // physics_world refuses these at the call with WRONG_BODY_KIND (code sweep F413); the caller passed an
+        // entity the command does not apply to, which is INVALID_ARGUMENT (ArgumentException in C#).
+        CHECK(
+          map_error(core::make_error(physics::physics_error::WRONG_BODY_KIND)) == bindings_error::INVALID_ARGUMENT
+        );
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity wall = fixture.spawn_box(math::vec3(0.0f, 1.0f, 0.0f), physics::motion_type::STATIC);
+        const ecs::entity crate = fixture.spawn_box(math::vec3(5.0f, 1.0f, 0.0f));
+        fixture.run_steps(1);
+        const int32_t refused = to_status(bindings_error::INVALID_ARGUMENT);
+        const conjure_vec3 push = {3.0f, 0.0f, 0.0f};
+        const uint8_t force = static_cast<uint8_t>(conjure_force_mode::FORCE);
+        const uint8_t impulse = static_cast<uint8_t>(conjure_force_mode::IMPULSE);
+        conjure_transform target = {};
+        target.position = {0.0f, 2.0f, 0.0f};
+        target.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        target.scale = {1.0f, 1.0f, 1.0f};
+
+        // A static body takes no force, torque, velocity or kinematic move.
+        CHECK(api.physics_add_force(wall.to_u64(), &push, force) == refused);
+        CHECK(last_error_code() == bindings_error::INVALID_ARGUMENT);
+        CHECK(last_error_message().starts_with("physics_add_force: physics.WRONG_BODY_KIND: add_force"));
+        CHECK(api.physics_add_force(wall.to_u64(), &push, impulse) == refused);
+        CHECK(api.physics_add_force_at(wall.to_u64(), &push, &push, force) == refused);
+        CHECK(api.physics_add_torque(wall.to_u64(), &push, force) == refused);
+        CHECK(api.physics_add_torque(wall.to_u64(), &push, impulse) == refused);
+        CHECK(api.physics_move_kinematic(wall.to_u64(), &target) == refused);
+        CHECK(api.physics_set_linear_velocity(wall.to_u64(), &push) == refused);
+        CHECK(api.physics_set_angular_velocity(wall.to_u64(), &push) == refused);
+        // The refused velocity writes left the rigid_body mirror alone.
+        conjure_vec3 read = {1.0f, 1.0f, 1.0f};
+        REQUIRE(api.physics_get_linear_velocity(wall.to_u64(), &read) == 0);
+        CHECK(read.x == 0.0f);
+        REQUIRE(api.physics_get_angular_velocity(wall.to_u64(), &read) == 0);
+        CHECK(read.x == 0.0f);
+        // It can still be teleported, and wake is a successful no-op on it.
+        CHECK(api.physics_teleport(wall.to_u64(), &target) == 0);
+        CHECK(api.physics_wake(wall.to_u64()) == 0);
+
+        // A dynamic body takes everything but the kinematic move.
+        CHECK(api.physics_move_kinematic(crate.to_u64(), &target) == refused);
+        CHECK(last_error_message().starts_with("physics_move_kinematic: physics.WRONG_BODY_KIND: move_kinematic"));
+        CHECK(api.physics_add_force(crate.to_u64(), &push, force) == 0);
+
+        fixture.run_steps(1);
+        CHECK(fixture.base.physics->stats().droppedCommands == 0);
+        const std::optional<math::transform> pose = fixture.base.physics->body_pose(wall);
+        REQUIRE(pose.has_value());
+        CHECK(pose->position.y == doctest::Approx(2.0f));
+        clear_last_error();
     }
 
     TEST_CASE("physics - teleport resets the velocity") {

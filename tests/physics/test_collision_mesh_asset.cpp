@@ -777,4 +777,55 @@ TEST_SUITE("physics/collision_mesh_asset") {
         CHECK(logs.count(core::log_level::ERR) == 0);
         CONJURE_CHECK_OK(fixture.physics.validate());
     }
+
+    TEST_CASE("collision_mesh_asset - a static trigger made of a mesh reports the body that falls through it") {
+        // A static trigger is a kinematic body to Jolt (code sweep F408), which needs a mass the mesh cannot
+        // give it. With a mesh_collider alone the default mass of the implicit static body (1 kg) covers it;
+        // next to a rigid_body without a mass the world falls back to 1 kg itself.
+        const loaded_mesh loaded(box_mesh(math::vec3(2.0f, 0.5f, 2.0f)));
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.allowSleeping = false;
+        physics_fixture fixture(jobs, settings);
+        testing::log_capture logs = {};
+        logs.allow_errors();
+        testing::expect_assert guard = {};
+        const ecs::entity trigger = fixture.create_at(math::vec3(0.0f, 3.0f, 0.0f));
+        SUBCASE("a mesh_collider alone") {}
+        SUBCASE("a mesh_collider next to a static rigid_body without a mass") {
+            physics::rigid_body body = {};
+            body.motionType = physics::motion_type::STATIC;
+            body.mass = 0.0f;
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(trigger, body));
+        }
+        physics::mesh_collider collider = {};
+        collider.mesh = loaded.ref();
+        collider.isTrigger = true;
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::mesh_collider>(trigger, collider));
+        const ecs::entity ball = fixture.spawn_sphere(math::vec3(0.0f, 6.0f, 0.0f), 0.25f);
+
+        // A mesh is a surface: the ball enters at the top face of the box and again at the bottom face.
+        trigger_tally tally = {};
+        tally.trigger = trigger;
+        tally.other = ball;
+        for (u32 step = 0; step < 120; ++step) {
+            CAPTURE(step);
+            tally.run(fixture, 1);
+            // Nothing else is reported: no pair but this one, and no solid contact.
+            for (const physics::contact_event &event : fixture.physics.contact_events()) {
+                CHECK(involves(event, trigger, ball));
+                const bool isTriggerKind = event.kind == physics::contact_kind::TRIGGER_ENTER
+                  || event.kind == physics::contact_kind::TRIGGER_EXIT;
+                CHECK(isTriggerKind);
+            }
+        }
+        CHECK(tally.enters >= 1);
+        CHECK(tally.exits == tally.enters);
+        // No response: the ball is far below the trigger.
+        CHECK(fixture.position_of(ball).y < 0.0f);
+        CHECK(fixture.position_of(trigger) == math::vec3(0.0f, 3.0f, 0.0f));
+        CHECK(guard.count() == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
 }

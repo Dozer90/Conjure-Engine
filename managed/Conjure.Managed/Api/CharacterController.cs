@@ -27,7 +27,10 @@ public readonly struct CharacterController
         ComponentType<CharacterControllerData>.Id != 0 && Entity.HasComponent<CharacterControllerData>();
 
     /// <summary>
-    /// Sets the velocity the next fixed step tries to achieve.
+    /// Sets the velocity the next fixed step tries to achieve. It is the character's own velocity: while the
+    /// character is grounded, the step adds the horizontal velocity of the ground under it, so on a moving
+    /// platform Vector3.Zero stands still on the platform and a jump keeps the platform's speed until the
+    /// character touches ground again.
     /// </summary>
     public unsafe void Move(Vector3 velocity)
     {
@@ -51,7 +54,14 @@ public readonly struct CharacterController
     }
 
     /// <summary>
-    /// The velocity the last step achieved.
+    /// The velocity the last step achieved, without the horizontal velocity the ground added to it: relative
+    /// to the ground while the character is grounded, and in the air relative to the motion the ground it left
+    /// gave it (the same as the world velocity after leaving ground that stood still). On a moving platform a
+    /// character that stands still reads Vector3.Zero. The vertical part is not made relative: on a lift that
+    /// rises, or sinks slower than 0.1 m/s, it reads the lift's vertical velocity. On a lift that sinks faster
+    /// the vertical part is left unchanged (zero for a character that stands still) and
+    /// CharacterFlags.StickToFloor steps the character down after the lift, one step of the lift's motion
+    /// behind (see docs/api/physics/bodies-and-colliders.md).
     /// </summary>
     public unsafe Vector3 Velocity
     {

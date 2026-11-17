@@ -98,11 +98,15 @@ namespace conjure::math {
     }
 
     /// <summary>
-    /// True when two unit quaternions encode the same rotation (q and -q both qualify): the
-    /// absolute value of their dot product is within epsilon of 1.
+    /// True when two unit quaternions encode the same rotation within epsilon. q and -q are one rotation,
+    /// so b is negated first when its dot product with a is negative; then every component of a must be
+    /// within epsilon of the matching component of b, the tolerance nearly_equal() uses. In angles, for a
+    /// small epsilon: two rotations up to 2 * epsilon radians apart compare equal, two more than about
+    /// 4 * epsilon radians apart do not, and in between it depends on the axis. Float rounding of the
+    /// inputs comes on top, so an epsilon near 1e-7 only accepts quaternions equal to the last bit or two.
     /// </summary>
     [[nodiscard]] inline bool same_rotation(const quat &a, const quat &b, f32 epsilon = EPSILON) noexcept {
-        return absolute(glm::dot(a, b)) >= 1.0f - epsilon;
+        return nearly_equal(a, glm::dot(a, b) < 0.0f ? -b : b, epsilon);
     }
 
     /// <summary>

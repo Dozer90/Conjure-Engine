@@ -40,6 +40,7 @@ namespace conjure::physics {
         STEP_IN_PROGRESS,               // a query or body call arrived while step() runs
         WRONG_THREAD,                   // an owner-thread call from another thread
         COMMAND_QUEUE_FULL,             // maxQueuedCommands reached; the command was dropped
+        WRONG_BODY_KIND,                // the entity has a body, but the command does not apply to that kind of body
         COUNT
     };
 

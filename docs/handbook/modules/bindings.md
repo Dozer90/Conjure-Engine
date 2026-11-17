@@ -79,8 +79,11 @@ are never freed. `asset_state_of` answers `UNLOADED` for an unknown uuid where i
 An unknown layer index is `NOT_FOUND` in `physics_layer_name` and `physics_layers_collide` alike (2.2: layers are
 looked up); the ray and shape casts refuse a non-finite or negative `max_distance` with `INVALID_ARGUMENT`. The
 velocity setters write the `rigid_body` mirror only once `physics_world` queued the command, because the push
-diffs the mirror and would otherwise apply a refused request. `physics_character_move` follows the same rule for
-`character_controller::velocity`, which the step feeds to Jolt whenever no move is queued.
+diffs the mirror and would otherwise apply a refused request; a request the entity's kind of body cannot take
+(`physics_error::WRONG_BODY_KIND`, `14_physics.md` P18) is one of those, mapped to `INVALID_ARGUMENT`
+(`ArgumentException` in C#). `physics_character_move` follows the same rule for
+`character_controller::velocity`, which the step feeds to Jolt whenever no move is queued, plus the horizontal
+velocity of the ground that carries the character (`14_physics.md` P20).
 
 ## 4. Structural routing
 

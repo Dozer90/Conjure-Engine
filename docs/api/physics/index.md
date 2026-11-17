@@ -18,7 +18,8 @@ any header.
    `local_transform` and the components) and `collect_contact_events`. The engine's four systems do this for
    you; a tool or a test calls them by hand.
 3. Every gameplay mutation (`add_force`, `set_linear_velocity`, `teleport`, `wake`, `character_move`, ...) is a
-   queued command applied at the next push, so a frame of gameplay sees one consistent state.
+   queued command applied at the next push, so a frame of gameplay sees one consistent state. A command the
+   entity's kind of body cannot take (a force on a static body) is refused at the call with `WRONG_BODY_KIND`.
 4. Contacts come out of `contact_events()` as a span sorted by body pair: one `ENTER`, `STAY` or `EXIT` (or
    `TRIGGER_ENTER` / `TRIGGER_EXIT`) per pair per step, with point, normal and impulse.
 5. Queries (`raycast`, `overlap_sphere`, `overlap_box`, `shape_cast`) are entity-keyed, layer-filtered and

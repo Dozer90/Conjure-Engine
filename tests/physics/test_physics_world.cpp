@@ -6,19 +6,187 @@
 #include "physics_test_fixture.h"
 
 #include "conjure/core/jobs/dedicated_thread.h"
+#include "conjure/core/math/transform.h"
 #include "conjure/core/random.h"
+#include "conjure/core/result.h"
+#include "conjure/physics/components.h"
 #include "conjure/physics/physics_error.h"
 #include "conjure/physics/physics_world.h"
 
+#include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <random>
 #include <vector>
 
 using namespace conjure;
 using namespace physics_test;
+
+namespace {
+
+    /// <summary>
+    /// The entity-keyed commands of physics_world. character_move is the last one: it is refused with its own
+    /// code (NOT_A_CHARACTER) where the others report WRONG_BODY_KIND.
+    /// </summary>
+    enum class command : u8 {
+        ADD_FORCE,
+        ADD_FORCE_AT,
+        ADD_IMPULSE,
+        ADD_IMPULSE_AT,
+        ADD_TORQUE,
+        ADD_ANGULAR_IMPULSE,
+        SET_LINEAR_VELOCITY,
+        SET_ANGULAR_VELOCITY,
+        MOVE_KINEMATIC,
+        TELEPORT,
+        WAKE,
+        SLEEP,
+        CHARACTER_MOVE,
+        COUNT
+    };
+
+    constexpr u32 COMMAND_COUNT = static_cast<u32>(command::COUNT);
+
+    constexpr std::array<const char *, COMMAND_COUNT> COMMAND_NAMES = {
+        "add_force",
+        "add_force_at",
+        "add_impulse",
+        "add_impulse_at",
+        "add_torque",
+        "add_angular_impulse",
+        "set_linear_velocity",
+        "set_angular_velocity",
+        "move_kinematic",
+        "teleport",
+        "wake",
+        "sleep",
+        "character_move",
+    };
+
+    [[nodiscard]] constexpr u32 bit_of(command which) noexcept {
+        return 1u << static_cast<u32>(which);
+    }
+
+    constexpr u32 FORCES = bit_of(command::ADD_FORCE) | bit_of(command::ADD_FORCE_AT) | bit_of(command::ADD_IMPULSE)
+      | bit_of(command::ADD_IMPULSE_AT) | bit_of(command::ADD_TORQUE) | bit_of(command::ADD_ANGULAR_IMPULSE);
+    constexpr u32 VELOCITIES = bit_of(command::SET_LINEAR_VELOCITY) | bit_of(command::SET_ANGULAR_VELOCITY);
+    // teleport moves every kind; wake and sleep succeed on every kind (no-ops where nothing sleeps).
+    constexpr u32 EVERY_KIND = bit_of(command::TELEPORT) | bit_of(command::WAKE) | bit_of(command::SLEEP);
+    constexpr u32 ALL_COMMANDS = (1u << COMMAND_COUNT) - 1u;
+
+    [[nodiscard]] core::result<void> send(
+      physics::physics_world &physics,
+      command which,
+      ecs::entity target,
+      const math::transform &pose
+    ) {
+        const math::vec3 value = math::vec3(0.0f, 0.0f, 0.25f);
+        switch (which) {
+            case command::ADD_FORCE:
+                return physics.add_force(target, value);
+            case command::ADD_FORCE_AT:
+                return physics.add_force_at(target, value, pose.position);
+            case command::ADD_IMPULSE:
+                return physics.add_impulse(target, value);
+            case command::ADD_IMPULSE_AT:
+                return physics.add_impulse_at(target, value, pose.position);
+            case command::ADD_TORQUE:
+                return physics.add_torque(target, value);
+            case command::ADD_ANGULAR_IMPULSE:
+                return physics.add_angular_impulse(target, value);
+            case command::SET_LINEAR_VELOCITY:
+                return physics.set_linear_velocity(target, value);
+            case command::SET_ANGULAR_VELOCITY:
+                return physics.set_angular_velocity(target, value);
+            case command::MOVE_KINEMATIC:
+                return physics.move_kinematic(target, pose);
+            case command::TELEPORT:
+                return physics.teleport(target, pose);
+            case command::WAKE:
+                return physics.wake(target);
+            case command::SLEEP:
+                return physics.sleep(target);
+            case command::CHARACTER_MOVE:
+                return physics.character_move(target, math::vec3(0.0f));
+            case command::COUNT:
+                break;
+        }
+        return core::error(core::error_code::INVALID_ARGUMENT, "not a command");
+    }
+
+    /// <summary>
+    /// Sends every command to 'target' (poses name 'pose', so an applied teleport or move changes nothing) and
+    /// checks that the ones in 'accepted' are queued and every other one is refused: with WRONG_BODY_KIND,
+    /// character_move with NOT_A_CHARACTER.
+    /// </summary>
+    void send_every_command(physics_fixture &fixture, ecs::entity target, const math::transform &pose, u32 accepted) {
+        for (u32 index = 0; index < COMMAND_COUNT; ++index) {
+            CAPTURE(COMMAND_NAMES[index]);
+            const command which = static_cast<command>(index);
+            const core::result<void> outcome = send(fixture.physics, which, target, pose);
+            if ((accepted & (1u << index)) != 0) {
+                CONJURE_CHECK_OK(outcome);
+            } else if (which == command::CHARACTER_MOVE) {
+                CONJURE_CHECK_ERROR(outcome, physics::physics_error::NOT_A_CHARACTER);
+            } else {
+                CONJURE_CHECK_ERROR(outcome, physics::physics_error::WRONG_BODY_KIND);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the bodies of the command tables stand.
+    /// </summary>
+    [[nodiscard]] math::vec3 kind_position() noexcept {
+        return math::vec3(0.0f, 5.0f, 0.0f);
+    }
+
+    /// <summary>
+    /// A body of one kind for the command tables, pending until the next push: the entity and the commands
+    /// that can act on that kind of body.
+    /// </summary>
+    struct body_kind {
+        ecs::entity entity = {};
+        u32 applies = 0;
+    };
+
+    [[nodiscard]] ecs::entity spawn_collider_only(physics_fixture &fixture) {
+        const ecs::entity wall = fixture.create_at(kind_position());
+        CONJURE_REQUIRE_OK(fixture.world.add<physics::box_collider>(wall));
+        return wall;
+    }
+
+    /// <summary>
+    /// One body of every kind a command can meet, each a SUBCASE of the calling case.
+    /// </summary>
+    [[nodiscard]] body_kind spawn_each_kind(physics_fixture &fixture) {
+        body_kind kind = {};
+        SUBCASE("a static body") {
+            kind = {fixture.spawn_box(kind_position(), physics::motion_type::STATIC), EVERY_KIND};
+        }
+        SUBCASE("colliders without a rigid_body") {
+            kind = {spawn_collider_only(fixture), EVERY_KIND};
+        }
+        SUBCASE("a kinematic body") {
+            const ecs::entity plate = fixture.spawn_box(kind_position(), physics::motion_type::KINEMATIC);
+            kind = {plate, EVERY_KIND | VELOCITIES | bit_of(command::MOVE_KINEMATIC)};
+        }
+        SUBCASE("a kinematic body that follows its transform") {
+            kind = {fixture.spawn_following_plate(kind_position()), EVERY_KIND | VELOCITIES};
+        }
+        SUBCASE("a dynamic body") {
+            kind = {fixture.spawn_box(kind_position()), EVERY_KIND | VELOCITIES | FORCES};
+        }
+        SUBCASE("a character") {
+            kind = {fixture.spawn_character(kind_position()), EVERY_KIND | bit_of(command::CHARACTER_MOVE)};
+        }
+        return kind;
+    }
+}
 
 TEST_SUITE("physics/physics_world") {
 
@@ -275,11 +443,23 @@ TEST_SUITE("physics/physics_world") {
         physics_fixture fixture(jobs);
         const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 5.0f, 0.0f));
         fixture.run_step();
+        // The thread is checked before the entity is looked at (its kind is read from ECS components, which
+        // only the owner thread may do): a command the box would take and one it would refuse both report
+        // the thread.
+        bool characterMove = false;
+        SUBCASE("a command the body would take") {
+            characterMove = false;
+        }
+        SUBCASE("a command the body would refuse") {
+            characterMove = true;
+        }
         testing::expect_assert guard = {};
         std::atomic<bool> wrongThread = false;
         {
             core::jobs::dedicated_thread helper("physics-test", [&](std::stop_token) {
-                const core::result<void> outcome = fixture.physics.add_force(box, math::vec3(0.0f, 1.0f, 0.0f));
+                const math::vec3 value = math::vec3(0.0f, 1.0f, 0.0f);
+                const core::result<void> outcome =
+                  characterMove ? fixture.physics.character_move(box, value) : fixture.physics.add_force(box, value);
                 wrongThread = !outcome.has_value() && outcome.get_error().is(physics::physics_error::WRONG_THREAD);
             });
             helper.join();
@@ -311,6 +491,12 @@ TEST_SUITE("physics/physics_world") {
         pose.position = math::vec3(1.0f, 5.0f, 0.0f);
         pose.rotation = math::quat(nan, 0.0f, 0.0f, 0.0f);
         CONJURE_CHECK_ERROR(fixture.physics.teleport(box, pose), core::error_code::INVALID_ARGUMENT);
+        // The value is checked before the kind of body: a NaN is INVALID_ARGUMENT whatever it was sent to.
+        CONJURE_CHECK_ERROR(
+          fixture.physics.character_move(box, math::vec3(nan, 0.0f, 0.0f)),
+          core::error_code::INVALID_ARGUMENT
+        );
+        CONJURE_CHECK_ERROR(fixture.physics.move_kinematic(box, pose), core::error_code::INVALID_ARGUMENT);
 
         fixture.run_step();
         const math::vec3 position = fixture.position_of(box);
@@ -345,6 +531,131 @@ TEST_SUITE("physics/physics_world") {
         REQUIRE(body != nullptr);
         CHECK(body->linearVelocity.x == doctest::Approx(5.0f).epsilon(0.01));
         CHECK(fixture.physics.stats().droppedCommands == 0);
+    }
+
+    TEST_CASE("physics_world - a command the kind of body cannot take is WRONG_BODY_KIND at the call") {
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        const body_kind kind = spawn_each_kind(fixture);
+        fixture.run_step();
+        REQUIRE(fixture.physics.has_body(kind.entity));
+        const std::optional<math::transform> pose = fixture.physics.body_pose(kind.entity);
+        REQUIRE(pose.has_value());
+        send_every_command(fixture, kind.entity, *pose, kind.applies);
+
+        // What was refused was never queued, and what was queued applies (or is the no-op that wake and
+        // sleep are where nothing sleeps): the push drops nothing.
+        fixture.run_step();
+        CHECK(fixture.physics.stats().droppedCommands == 0);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("regression - code sweep F413 a command a pending body cannot take is dropped and counted") {
+        // The entity has no body at the call, so there is no kind to refuse by: everything is accepted and the
+        // push that creates the body drops what does not apply. Forces on a body that is not dynamic and
+        // velocities on a static one used to vanish in Jolt without a count.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        const body_kind kind = spawn_each_kind(fixture);
+        REQUIRE_FALSE(fixture.physics.has_body(kind.entity));
+        math::transform pose = {};
+        pose.position = kind_position();
+        send_every_command(fixture, kind.entity, pose, ALL_COMMANDS);
+        CHECK(fixture.physics.stats().droppedCommands == 0);
+
+        fixture.run_step();
+        REQUIRE(fixture.physics.has_body(kind.entity));
+        const u32 inapplicable = COMMAND_COUNT - static_cast<u32>(std::popcount(kind.applies));
+        CHECK(fixture.physics.stats().droppedCommands == inapplicable);
+        // Dropped once, not carried into the next push.
+        fixture.run_step();
+        CHECK(fixture.physics.stats().droppedCommands == inapplicable);
+        CONJURE_CHECK_OK(fixture.physics.validate());
+    }
+
+    TEST_CASE("regression - code sweep F413 the kind of body is read from the components, not from the last push") {
+        // The push applies a motion type written into rigid_body, and a rigid_body added to or taken from
+        // colliders, before it applies the commands. Refusing by the row of the last push would turn away a
+        // force sent in the frame that makes a body dynamic.
+        core::jobs::job_system jobs = {};
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        physics_fixture fixture(jobs, settings);
+        const math::vec3 impulse = math::vec3(2.0f, 0.0f, 0.0f);
+        math::transform pose = {};
+        pose.position = kind_position();
+
+        SUBCASE("a static body switched to DYNAMIC takes an impulse in the same frame") {
+            const ecs::entity box = fixture.spawn_box(kind_position(), physics::motion_type::STATIC);
+            fixture.run_step();
+            CONJURE_CHECK_ERROR(fixture.physics.add_impulse(box, impulse), physics::physics_error::WRONG_BODY_KIND);
+            physics::rigid_body *authored = fixture.world.get<physics::rigid_body>(box);
+            REQUIRE(authored != nullptr);
+            authored->motionType = physics::motion_type::DYNAMIC;
+            CONJURE_CHECK_OK(fixture.physics.add_impulse(box, impulse));
+            fixture.run_step();
+            const physics::rigid_body *pulled = fixture.world.get<physics::rigid_body>(box);
+            REQUIRE(pulled != nullptr);
+            // 2 N s on 1 kg.
+            CHECK(pulled->linearVelocity.x == doctest::Approx(2.0f).epsilon(0.05));
+            CHECK(fixture.physics.stats().droppedCommands == 0);
+        }
+        SUBCASE("colliders given a dynamic rigid_body take an impulse in the same frame") {
+            const ecs::entity crate = spawn_collider_only(fixture);
+            fixture.run_step();
+            CONJURE_CHECK_ERROR(fixture.physics.add_impulse(crate, impulse), physics::physics_error::WRONG_BODY_KIND);
+            CONJURE_REQUIRE_OK(fixture.world.add<physics::rigid_body>(crate));
+            CONJURE_CHECK_OK(fixture.physics.add_impulse(crate, impulse));
+            fixture.run_step();
+            const physics::rigid_body *pulled = fixture.world.get<physics::rigid_body>(crate);
+            REQUIRE(pulled != nullptr);
+            CHECK(pulled->linearVelocity.x == doctest::Approx(2.0f).epsilon(0.05));
+            CHECK(fixture.physics.stats().droppedCommands == 0);
+        }
+        SUBCASE("a dynamic body switched to STATIC refuses forces and velocities at once") {
+            const ecs::entity box = fixture.spawn_box(kind_position());
+            fixture.run_step();
+            CONJURE_CHECK_OK(fixture.physics.add_impulse(box, impulse));
+            physics::rigid_body *authored = fixture.world.get<physics::rigid_body>(box);
+            REQUIRE(authored != nullptr);
+            authored->motionType = physics::motion_type::STATIC;
+            CONJURE_CHECK_ERROR(fixture.physics.add_impulse(box, impulse), physics::physics_error::WRONG_BODY_KIND);
+            CONJURE_CHECK_ERROR(
+              fixture.physics.set_linear_velocity(box, impulse),
+              physics::physics_error::WRONG_BODY_KIND
+            );
+            fixture.run_step();
+            // The impulse accepted while the component still said DYNAMIC met a static body: the late drop.
+            CHECK(fixture.physics.stats().droppedCommands == 1);
+            CHECK(fixture.position_of(box) == kind_position());
+        }
+        SUBCASE("a dynamic body whose rigid_body is removed refuses forces at once") {
+            const ecs::entity box = fixture.spawn_box(kind_position());
+            fixture.run_step();
+            CONJURE_REQUIRE_OK(fixture.world.remove<physics::rigid_body>(box));
+            REQUIRE(fixture.physics.has_body(box));
+            CONJURE_CHECK_ERROR(fixture.physics.add_impulse(box, impulse), physics::physics_error::WRONG_BODY_KIND);
+            CONJURE_CHECK_OK(fixture.physics.teleport(box, pose));
+            fixture.run_step();
+            CHECK(fixture.physics.stats().droppedCommands == 0);
+        }
+        SUBCASE("a kinematic body told to follow its transform refuses move_kinematic at once") {
+            const ecs::entity plate = fixture.spawn_box(kind_position(), physics::motion_type::KINEMATIC);
+            fixture.run_step();
+            CONJURE_CHECK_OK(fixture.physics.move_kinematic(plate, pose));
+            physics::rigid_body *authored = fixture.world.get<physics::rigid_body>(plate);
+            REQUIRE(authored != nullptr);
+            authored->flags |= physics::rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM;
+            CONJURE_CHECK_ERROR(fixture.physics.move_kinematic(plate, pose), physics::physics_error::WRONG_BODY_KIND);
+            fixture.run_step();
+            // The move accepted while the body was a plain kinematic one met a body that follows its transform.
+            CHECK(fixture.physics.stats().droppedCommands == 1);
+        }
+        CONJURE_CHECK_OK(fixture.physics.validate());
     }
 
     TEST_CASE("physics_world - body components removed again before the push leave nothing behind") {
@@ -386,12 +697,23 @@ TEST_SUITE("physics/physics_world") {
         settings.maxQueuedCommands = 2;
         physics_fixture fixture(jobs, settings);
         testing::log_capture logs = {};
+        const ecs::entity wall = fixture.spawn_box(math::vec3(5.0f, 20.0f, 0.0f), physics::motion_type::STATIC);
+        fixture.run_step();
         const ecs::entity box = fixture.spawn_box(math::vec3(0.0f, 20.0f, 0.0f));
         CONJURE_CHECK_OK(fixture.physics.add_force(box, math::vec3(1.0f)));
         CONJURE_CHECK_OK(fixture.physics.add_torque(box, math::vec3(1.0f)));
         CONJURE_CHECK_ERROR(
           fixture.physics.add_impulse(box, math::vec3(1.0f)),
           physics::physics_error::COMMAND_QUEUE_FULL
+        );
+        CHECK(fixture.physics.stats().droppedCommands == 1);
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        // The kind of body is checked before the queue: with the queue full, a command the body cannot take
+        // is still refused as such, and a refusal is not a drop.
+        CONJURE_CHECK_ERROR(fixture.physics.add_force(wall, math::vec3(1.0f)), physics::physics_error::WRONG_BODY_KIND);
+        CONJURE_CHECK_ERROR(
+          fixture.physics.character_move(wall, math::vec3(1.0f)),
+          physics::physics_error::NOT_A_CHARACTER
         );
         CHECK(fixture.physics.stats().droppedCommands == 1);
         CHECK(logs.count(core::log_level::WARN) == 1);

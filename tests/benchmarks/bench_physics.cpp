@@ -1,6 +1,7 @@
 // Physics scenarios (docs/design/08_testing.md 7.1, 14_physics.md 10): one fixed step over 10,000
 // dynamic boxes resting awake on a plane, the same over 10,000 sleeping boxes after 600 settle steps, the
-// Jolt -> transform sync of 10,000 awake bodies as the engine's FIXED_END phase runs it (the PARALLEL
+// same again with 1,000 static triggers over the sleeping boxes (each an active body to Jolt, 14_physics.md
+// P21), the Jolt -> transform sync of 10,000 awake bodies as the engine's FIXED_END phase runs it (the PARALLEL
 // physics.pull_transforms over chunks, then physics.contact_events) and one fixed step over 2,000
 // settling boxes stacked two high. The step scenarios run the pipeline physics.push_transforms /
 // physics.step / physics.pull_transforms / physics.contact_events inline: push, step, pull, collect.
@@ -40,6 +41,8 @@ namespace {
     constexpr f32 GROUND_HALF_EXTENT = 400.0f;
     constexpr u32 SETTLE_STEPS = 600;
     constexpr u32 SETTLING_BOX_COUNT = 2000;
+    constexpr u32 TRIGGER_COLUMNS_X = 5;        // a trigger volume covers 5 x 2 grid columns: ten boxes
+    constexpr u32 TRIGGER_COLUMNS_Z = 2;
 
     /// <summary>
     /// Registry (scene + physics components), world and an attached physics world.
@@ -130,6 +133,49 @@ namespace {
                       flags
                     );
                     if (box != ecs::NULL_ENTITY) {
+                        ++created;
+                    }
+                }
+                return created;
+            }
+
+            /// <summary>
+            /// Static trigger volumes over the single-layer grid of 'count' boxes that spawn_grid builds, one
+            /// per block of TRIGGER_COLUMNS_X x TRIGGER_COLUMNS_Z columns, each holding the boxes of its block
+            /// and touching no box of a neighbouring block. Returns how many were created; 'expected' is how
+            /// many there should be.
+            /// </summary>
+            [[nodiscard]] u32 spawn_trigger_volumes(u32 count, u32 &expected) {
+                const u32 side = static_cast<u32>(std::ceil(std::sqrt(static_cast<f32>(count))));
+                const u32 blocksX = (side + TRIGGER_COLUMNS_X - 1) / TRIGGER_COLUMNS_X;
+                const u32 blocksZ = (side + TRIGGER_COLUMNS_Z - 1) / TRIGGER_COLUMNS_Z;
+                const f32 origin = -static_cast<f32>(side - 1) * GRID_SPACING * 0.5f;
+                // Box centres of one block span (columns - 1) spacings; a box adds its half extent of 0.5 m
+                // and the volume 0.4 m more, which stays 0.6 m short of the next block's boxes.
+                const math::vec3 halfExtents = math::vec3(
+                  static_cast<f32>(TRIGGER_COLUMNS_X - 1) * GRID_SPACING * 0.5f + 0.9f,
+                  1.0f,
+                  static_cast<f32>(TRIGGER_COLUMNS_Z - 1) * GRID_SPACING * 0.5f + 0.9f
+                );
+                expected = blocksX * blocksZ;
+                u32 created = 0;
+                for (u32 block = 0; block < expected; ++block) {
+                    const f32 x = origin + (static_cast<f32>((block % blocksX) * TRIGGER_COLUMNS_X) +
+                                            static_cast<f32>(TRIGGER_COLUMNS_X - 1) * 0.5f) * GRID_SPACING;
+                    const f32 z = origin + (static_cast<f32>((block / blocksX) * TRIGGER_COLUMNS_Z) +
+                                            static_cast<f32>(TRIGGER_COLUMNS_Z - 1) * 0.5f) * GRID_SPACING;
+                    const ecs::entity volume = spawn_box(
+                      math::vec3(x, 1.0f, z),
+                      physics::motion_type::STATIC,
+                      halfExtents,
+                      physics::rigid_body_flags::NONE
+                    );
+                    if (volume == ecs::NULL_ENTITY) {
+                        continue;
+                    }
+                    physics::box_collider *collider = world.get<physics::box_collider>(volume);
+                    if (collider != nullptr) {
+                        collider->isTrigger = true;
                         ++created;
                     }
                 }
@@ -305,6 +351,47 @@ CONJURE_BENCHMARK(physics.step_10k_sleeping) {
     fixture.run_steps(SETTLE_STEPS);
     if (fixture.physics.active_body_count() != 0) {
         context.skip("the field did not fall asleep within the settle steps");
+        return;
+    }
+    context.set_items(context.entity_count());
+    context.measure([&]() {
+        fixture.run_step();
+    });
+}
+
+CONJURE_BENCHMARK(physics.step_10k_sleeping_1k_triggers) {
+    physics_fixture fixture(context.jobs(), bench_settings(true));
+    if (fixture.spawn_ground() == ecs::NULL_ENTITY) {
+        context.skip("the physics world refused the ground");
+        return;
+    }
+    const physics::rigid_body_flags asleep =
+      physics::rigid_body_flags::ALLOW_SLEEPING | physics::rigid_body_flags::START_ASLEEP;
+    if (fixture.spawn_grid(context.entity_count(), 1, 0.5f, asleep) != context.entity_count()) {
+        context.skip("the physics world refused the bodies");
+        return;
+    }
+    // A static trigger stays an active kinematic sensor in Jolt so that it sees the sleeping boxes inside
+    // it (code sweep F408, 14_physics.md P21): this is the step cost of a level full of trigger volumes.
+    u32 volumes = 0;
+    if (fixture.spawn_trigger_volumes(context.entity_count(), volumes) != volumes) {
+        context.skip("the physics world refused the trigger volumes");
+        return;
+    }
+    u32 entered = 0;
+    for (u32 index = 0; index < SETTLE_STEPS; ++index) {
+        fixture.run_step();
+        for (const physics::contact_event &event : fixture.physics.contact_events()) {
+            entered += event.kind == physics::contact_kind::TRIGGER_ENTER ? 1u : 0u;
+        }
+    }
+    if (fixture.physics.active_body_count() != 0) {
+        context.skip("the field did not fall asleep within the settle steps");
+        return;
+    }
+    // Every box sits in exactly one volume: anything else measures a different scene.
+    if (entered != context.entity_count() || fixture.physics.stats().droppedContactEvents != 0) {
+        context.skip("the trigger volumes did not report every sleeping box once");
         return;
     }
     context.set_items(context.entity_count());

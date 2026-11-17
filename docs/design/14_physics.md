@@ -34,6 +34,10 @@ of the Jolt 5.3 headers.
 | P15 | **Allocation-free steady state.** Job pool, contact buffers, command queue, record table, sort scratch and `JPH::TempAllocatorImpl` are sized at construction (`physics_settings`); overflow degrades with a counted, rate-limited `WARN`, never an allocation inside `step`. `physics.step_10k_sleeping` is the gate. | `08_testing.md` 7.1 budgets (`allocs = 0`). |
 | P16 | **Deterministic by construction.** `JPH::PhysicsSettings::mDeterministicSimulation = true`, body creation and commands applied in a fixed order, contacts sorted. Results are identical for 0 and N workers on the same binary; cross-platform bit equality needs `CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC` (maps to Jolt's `CROSS_PLATFORM_DETERMINISTIC`, OFF by default; `ARCHITECTURE.md` 9, R59). | `tests/physics/test_determinism.cpp` compares 0 vs 4 workers; `08_testing.md` 12 keeps the engine-wide determinism test physics-free until this is proven. |
 | P17 | **Debug drawing is a sink interface.** `physics_debug_draw { line, triangle, text }` is implemented by the engine over `renderer` debug draw; `physics_world::debug_draw(sink, flags)` wraps the sink in a `JPH::DebugRendererSimple` (compiled only when `JPH_DEBUG_RENDERER`, i.e. not in Distribution). | Physics stays renderer-agnostic; tests use a counting sink. |
+| P18 | **A body command is refused at the call when the kind of body is known and cannot take it** (code sweep F413). `physics_error::WRONG_BODY_KIND` when the entity has a body and the command does not apply: forces, impulses and torques on anything but a `DYNAMIC` body; velocities on a static body; `move_kinematic` on anything but a `KINEMATIC` body without `KINEMATIC_MOVES_WITH_TRANSFORM`; every one of these on a character. `teleport` applies to every kind; `wake` and `sleep` succeed on every kind and do nothing on a static body (never awake: `is_sleeping` is true for it) and on a character (never asleep); `character_move` keeps `NOT_A_CHARACTER`. The kind is read from the entity's components (`character_controller`, else `rigid_body::motionType` and flags, else colliders alone = static), never from the row; a system that sends body commands therefore declares `rigid_body` and `character_controller` as reads (or is `EXCLUSIVE`). An entity still pending at the call has no kind: its command is queued and the push that creates the body drops it, counted in `droppedCommands`, when the new body cannot take it (a command whose entity still has no body at the second push after the call is dropped and counted as before); the same late drop meets a command whose target changed kind between the call and the push. One table (`command_applies`, `physics_world_internal.h`) decides the refusal and the late drop. | A command that returned success and then vanished hid the caller's mistake; `CONJURE_TRY` users and C# (`INVALID_ARGUMENT`, `ArgumentException`) now see it at once. The push applies component changes (a motion type written this frame, a `rigid_body` added to or removed from colliders) before the commands, so the row of the last push would refuse a force sent in the frame that makes a body dynamic. |
+| P19 | **Rotations are compared per quaternion component** (code sweep F213). `math::same_rotation(a, b, epsilon)` aligns the sign and then is `nearly_equal`; physics passes it `TELEPORT_EPSILON` (1e-4) for teleport detection and the default 1e-6 for a collider's identity placement. A rotation written into `local_transform` is a teleport above 2e-4 to 4e-4 rad (0.011 to 0.023 degrees, depending on the axis); a lone collider keeps a rotation above 2e-6 to 4e-6 rad (below that it is used as the body's shape without a compound). | The former test, `|dot| >= 1 - epsilon`, was a cosine tolerance: 1e-4 hid turns below 1.6 degrees from the push, which the next pull then overwrote, and 1e-6 dropped collider rotations below 0.16 degrees. The round trip of a pulled rotation (bit-exact for root rows, a few 1e-7 for parented ones) stays far below the new threshold. |
+| P20 | **The engine carries a grounded character with its ground; `character_controller::velocity` is the character's own** (code sweep F421, option A). A step that starts with the character `ON_GROUND` refreshes the ground velocity (`CharacterVirtual::UpdateGroundVelocity`, as Jolt's `CharacterVirtualTest` does) and adds its horizontal part to the velocity it gives Jolt; the pull subtracts the same vector before it writes `velocity`, so nothing compounds and the field, `character_move` and the C# `CharacterController.Velocity` mean "without what the ground adds": relative to the ground while grounded. The vector is kept in the row (`carriedVelocity`) while the character is `IN_AIR`, so **a jump off a moving platform keeps the platform's speed** until the character touches ground again: `ON_GROUND` it takes that ground's velocity (zero on static ground), and a step that starts `ON_STEEP_GROUND` or `NOT_SUPPORTED` clears the vector (ground that does not carry the character must not push it along a slope, and where `CancelVelocityTowardsSteepSlopes` cancels the push the pull would still subtract it). A teleport to a new position (the command, or a position written into `local_transform`, which is also how a character parented to a moving entity follows its parent) clears the vector, and the step after it adds no horizontal ground velocity; a rotation alone written into `local_transform`, which is how gameplay turns a character, is applied with `SetRotation` and leaves the carrying alone. Only the horizontal part is carried; the vertical rule (`APPLY_GRAVITY`: follow the ground unless the script jumps) is unchanged except that it reads the refreshed ground velocity, and rotating ground moves the character without turning it. Limits of the vertical rule, which is not part of the carrying: the step after a teleport still reads the ground state and the ground's vertical velocity of the place the character left, so a character teleported off a rising lift keeps the lift's vertical velocity, and one parented to a rising platform under its feet gets that velocity on top of its parent's motion (it hops; a parent that moves sideways or sinks moves it once); a grounded character whose ground sinks faster than 0.1 m/s is by the rule's own test jumping, so it is followed by `STICK_TO_FLOOR` one step behind, not by the rule. The render scale of a character follows the entity's scale at every push that sees its transform change (the capsule itself is never scaled). | A platform slid away under a character that stood on it, and no script could repair that: the velocity of a `KINEMATIC_MOVES_WITH_TRANSFORM` platform is never pulled into a component. Adding the ground velocity without taking it out again would compound, because the pull writes the velocity back and the next step reads it. Keeping the vector in the air is what the jump test settled: dropping it at take-off makes a character fall behind the platform it jumped from (2 m/s for a second is two metres). Skipping the step after a teleport keeps a character from being moved twice when it is parented to the platform under its feet, and keeps one teleported off a platform from drifting with it: the ground state it has until its next update still describes the place it left. |
+| P21 | **A static trigger is an active kinematic sensor in Jolt; solid contacts keep their `EXIT` at sleep** (code sweep F408, option C plus the documentation of A). A body with `motion == STATIC` whose colliders are all triggers is created with `EMotionType::Kinematic`, `mIsSensor`, zero velocities, and is added active whatever `START_ASLEEP` says; it stays in the static object layer (`object_layer(layer, STATIC)`) and does not get `mCollideKinematicVsNonDynamic`. Jolt documents that an active kinematic sensor also detects sleeping bodies and never falls asleep (`Body::SetIsSensor`, its test `TestDynamicSleepingVsKinematicSensor`), so a body that falls asleep inside the trigger stays inside, and one that is asleep when the trigger meets it is reported. The static layer keeps it from static bodies and from other static triggers (3.2 never enables a static-static pair). Everything else about it stays static to the engine: `row.motion`, commands (P18), `is_sleeping` (true), `active_body_count()` (not counted), queries with `includeStatic` off, no pull, no `interpolated_transform`. `sync_jolt_motion(row)` is the one place that maps `(motion, isTrigger)` to Jolt's motion type, sensor flag and `mCollideKinematicVsNonDynamic` after creation, so a trigger whose motion type changes meets static geometry as its new kind does (a static trigger turned kinematic enters the static bodies it overlaps). Kinematic and dynamic triggers are otherwise unchanged: awake they are active sensors already. Solid pairs still report `EXIT` when their last awake body falls asleep and `ENTER` at wake. | `TRIGGER_EXIT` for a crate still standing on a pressure plate is a gameplay trap, and the former justification ("Unity behaves the same") was wrong: Unity sends neither `OnTriggerExit` nor `OnCollisionExit` at sleep. Suppressing the exits of solid pairs (option B) needs a sweep at wake for pairs that were not re-added and was left out. Cost: every static trigger is an active body in every step, and every body inside one keeps its body pair and its cached manifold while it sleeps (they count against `maxBodyPairs` and `maxContactConstraints`) and its entry in the pair table (`maxContactEventsPerStep` entries, as for every pair in contact). Jolt also reports such a pair as persisted in every step; the listener does not record persisted contacts of sensor pairs (3.6), which nothing reads, so a full trigger volume does not use up the step's raw-contact budget; `physics.step_10k_sleeping_1k_triggers` (`tests/benchmarks/bench_physics.cpp`, `08_testing.md` 7.1) measures the step. |
 
 Rejected: a body handle component (copies alias, archives leak ids); synchronous body creation inside observers (P8);
 an ECS event queue for contacts (R6); `JPH::Character` for v1 (stepping quality); double precision Jolt; a third
@@ -85,7 +89,7 @@ namespace conjure::physics {
 `validate()` rejects: `maxBodies == 0` or `> 1 << 23` (Jolt body index limit), `collisionSteps == 0`,
 `tempAllocatorBytes < 1 MiB`, `maxJobs < 64`, `maxContactEventsPerStep == 0`, `numVelocitySteps == 0`,
 `numPositionSteps == 0`, `timeBeforeSleepSeconds < 0`, and whatever `layers.validate()` rejects. The engine's
-`engine_config::physics_settings {enabled, gravity, maxBodies}` (`06_engine_loop.md` 2.3) stays the small
+`engine::physics_config {enabled, gravity, maxBodies}` (`06_engine_loop.md` 2.3) stays the small
 engine-side struct; `physics_subsystem` calls `physics::physics_settings::from_json` on the raw `project.json`
 sections so every field above is authorable without the engine knowing it (section 8).
 
@@ -195,8 +199,11 @@ struct physics_material { f32 friction = 0.5f; f32 restitution = 0.0f; };   // o
 Rules enforced at body (re)build (3.3): several colliders form a compound shape; all must agree on `isTrigger`
 (`MIXED_TRIGGER_FLAGS`, WARN, body built non-trigger); `mesh_collider` on a `DYNAMIC` body is
 `UNSUPPORTED_SHAPE_FOR_MOTION` (WARN, collider ignored). A trigger body is a Jolt sensor (`mIsSensor = true`): no
-response, `TRIGGER_*` events only; static sensors detect active bodies only, kinematic ones also static geometry
-(`mCollideKinematicVsNonDynamic`).
+response, `TRIGGER_*` events only. A static trigger is a kinematic sensor to Jolt, kept active in the static object
+layer (P21): it detects dynamic and kinematic bodies and characters, awake or asleep, and neither static geometry nor
+another static trigger. A kinematic trigger also detects static geometry (`mCollideKinematicVsNonDynamic`). A
+kinematic or dynamic trigger detects sleeping bodies while it is active itself, which it stays once it is (a sensor
+never falls asleep on its own); created with `START_ASLEEP` or put to sleep it detects active bodies only.
 
 ```cpp
 enum class ground_state : u8 { ON_GROUND, ON_STEEP_GROUND, NOT_SUPPORTED, IN_AIR };   // CharacterBase::EGroundState
@@ -220,7 +227,8 @@ struct character_controller {                         // "conjure.physics.charac
     u8 layer = 0;
     character_flags flags = character_flags::STICK_TO_FLOOR | character_flags::WALK_STAIRS
       | character_flags::APPLY_GRAVITY;
-    math::vec3 velocity = math::vec3(0.0f);           // input: desired velocity for the step; output: achieved velocity
+    math::vec3 velocity = math::vec3(0.0f);           // input: desired velocity for the step; output: achieved velocity;
+                                                      // the character's own, without what its ground adds (P20)
     ground_state ground = ground_state::IN_AIR;       // [runtime]
     math::vec3 groundNormal = math::vec3(0.0f, 1.0f, 0.0f);  // [runtime]
     ecs::entity groundEntity = ecs::NULL_ENTITY;      // [runtime]
@@ -230,6 +238,8 @@ struct character_controller {                         // "conjure.physics.charac
 A `character_controller` excludes `rigid_body` (both present -> `CONFLICTING_BODY_COMPONENTS`, WARN, the character
 wins). Scripts drive it by writing `velocity` (horizontal from input, vertical kept from the previous step unless
 jumping) in `FIXED_UPDATE`; `physics_world::character_move(entity, velocity)` is the queued equivalent for bindings.
+Either way the velocity is the character's own (P20): the step adds the horizontal velocity of the ground that carries
+the character and the pull takes it out again, so on a moving platform zero means standing still on the platform.
 
 ### 2.4 Contact events (`contact_events.h`)
 
@@ -294,7 +304,10 @@ struct body_record {                 // indexed by JPH::BodyID::GetIndex(); grow
     u64 shapeKey = 0;                            // shape_cache key (0 = per-entity compound, not shared)
     rigid_body mirror = {};                      // last pushed/pulled component value (field diffing)
     math::transform lastPulled = {};             // world pose written by the last pull (teleport detection)
-    math::vec3 lastScale = math::vec3(1.0f);     // world scale used to build the shape
+    math::vec3 lastScale = math::vec3(1.0f);     // world scale used to build the shape (characters: the render scale)
+    bool staticSensor = false;                   // a static trigger: an active kinematic sensor in Jolt (P21)
+    bool skipGroundCarry = false;                // CHARACTER rows: moved by a teleport since the last step (P20)
+    math::vec3 carriedVelocity = math::vec3(0.0f);   // CHARACTER rows: the ground velocity step adds and pull removes (P20)
     JPH::Ref<JPH::CharacterVirtual> character;   // CHARACTER rows only
 };
 ```
@@ -370,7 +383,10 @@ physics_world::detach()               unobserve; destroy every body (scene unloa
 `ObjectVsBroadPhaseLayerFilterTable(broadPhaseInterface, 2, pairFilter, 64)` derives the rest. `layer >= layers.count()`
 -> layer 0 + one WARN per entity (`UNKNOWN_LAYER`). Query masks become `layer_mask_object_filter : JPH::ObjectLayerFilter`
 (`ShouldCollide = mask.includes(objectLayer % 32) && (includeStatic || objectLayer >= 32)`) plus a
-`JPH::BroadPhaseLayerFilter` dropping `NON_MOVING` when `!includeStatic`.
+`JPH::BroadPhaseLayerFilter` dropping `NON_MOVING` when `!includeStatic`. A static trigger takes
+`object_layer(layer, STATIC)` like every static body although Jolt holds it as a kinematic body (P21): the disabled
+static-static pairs are what keeps it from static geometry and from other static triggers, and `includeStatic` treats it
+as static.
 
 ### 3.3 Body creation, shapes and destruction
 
@@ -405,14 +421,16 @@ consumers check `is_alive` before touching a participant (sweep F410). A body de
 3. World pose: `compose_world_pose(entity)` walks `scene::parent` + `scene::local_transform` to the root (O(depth), no
    allocation); position/rotation feed `BodyCreationSettings`, scale feeds the shape (`JPH::ScaledShapeSettings` when
    `scale != 1`; `Shape::IsValidScale` failures -> `INVALID_SHAPE_SCALE`, WARN, built unscaled).
-4. `BodyCreationSettings s(shape, position, rotation, EMotionType, object_layer(layer, motion))` with
+4. `BodyCreationSettings s(shape, position, rotation, EMotionType, object_layer(layer, motion))` (`EMotionType` is the
+   motion type, except `Kinematic` for a static trigger, whose velocities are created zero, P21) with
    `mUserData = entity.to_u64()`, damping, `mGravityFactor`, `mMaxLinearVelocity`, `mMotionQuality = LinearCast` when
    `CONTINUOUS_COLLISION`, `mAllowSleeping`, `mIsSensor`, `mFriction/mRestitution` from `physics_material` (0.5 / 0.0),
    `mAllowedDOFs` from the lock flags, `mApplyGyroscopicForce`, initial velocities from the component (a saved scene
    resumes), `mOverrideMassProperties = CalculateInertia` + `mMassPropertiesOverride.mMass = mass` when `mass > 0`
    (else `CalculateMassAndInertia`), `mCollideKinematicVsNonDynamic = isTrigger && motion == KINEMATIC`.
 5. `CreateBody` per entity, then one `AddBodiesPrepare/AddBodiesFinalize` for the batch (`DontActivate` for STATIC
-   and `START_ASLEEP`, else `Activate`). A null `CreateBody` -> `BODY_LIMIT_REACHED`, ERROR once per step, entity stays pending.
+   and `START_ASLEEP`, else `Activate`; a static trigger is always added with `Activate`, P21). A null `CreateBody` ->
+   `BODY_LIMIT_REACHED`, ERROR once per step, entity stays pending.
 6. Rows: `mRecords[bodyId.GetIndex()] = {...}`, `mirror = rigid_body`, `lastPulled = pose`, `awake` from
    activation. `scene::interpolated_transform` is defined and registered by `scene` (`13_scene.md` 2.1) but added
    only by physics: the `ADDED` observer of a `DYNAMIC`/`KINEMATIC` `rigid_body` or of a `character_controller`
@@ -423,7 +441,7 @@ consumers check `is_alive` before touching a participant (sweep F410). A body de
    (scene load path; cheap otherwise).
 
 `build_shape(entity)`: collect colliders in a fixed order (box, sphere, capsule, convex, mesh; one of each type per
-entity, as the ECS stores one component per type). A single collider with zero offset and identity rotation is the
+entity, as the ECS stores one component per type). A single collider with zero offset and identity rotation (`same_rotation` at the default 1e-6, P19) is the
 leaf itself; otherwise `JPH::StaticCompoundShapeSettings` + `AddShape(offset, rotation, leaf)` (a collider change
 rebuilds). Leaves: `BoxShapeSettings(halfExtents, min(convexRadius, minHalfExtent * 0.5))`, `SphereShapeSettings(radius)`,
 `CapsuleShapeSettings(halfHeight, radius)`, `ConvexHullShapeSettings(points, count, convexRadius)`,
@@ -436,6 +454,15 @@ Rebuild (`SHAPE` dirty): `BodyInterface::SetShape(bodyId, shape, updateMassPrope
 `PROPERTIES` dirty: field diff against `mirror` -> `SetFriction`, `SetRestitution`, `SetGravityFactor`, damping via
 `BodyLockWrite` + `MotionProperties::SetLinearDamping/SetAngularDamping`, `SetMotionQuality`. `MOTION` dirty ->
 `SetMotionType(bodyId, type, Activate)` + `SetObjectLayer`. `LAYER` dirty -> `SetObjectLayer`.
+
+Both the `MOTION` path and a `SHAPE` rebuild end in `sync_jolt_motion(row)` (P21), which sets the sensor flag,
+`mCollideKinematicVsNonDynamic` (kinematic triggers only) and the Jolt motion type from `(row.motion, row.isTrigger)`: a
+body that becomes static is put to sleep, one that starts to move is woken, a static trigger is made `Kinematic`,
+activated and stopped (`SetLinearAndAngularVelocity(0, 0)`: the body may have been moving, and a static body keeps the
+velocities it was created with), and a body that keeps its Jolt motion type keeps its sleep state. An implicit static
+body that was no trigger has no motion properties (`mAllowDynamicOrKinematic = false`) and cannot become kinematic:
+when a collider change turns it into a trigger the rebuild destroys it (exits synthesised) and queues it for creation,
+which the flush of the same push performs.
 
 ### 3.4 `physics.push_transforms` (PHYSICS_STEP, `MAIN_THREAD`, `before("physics.step")`)
 
@@ -453,16 +480,39 @@ for each chunk of view<const rigid_body, const scene::local_transform, maybe<con
     pose = compose_world_pose(entity)
     if row.motion == KINEMATIC && KINEMATIC_MOVES_WITH_TRANSFORM:
         BodyInterface::MoveKinematic(bodyId, pos, rot, fixedDeltaTime)
-    else if !nearly_equal(pose.position, lastPulled.position) || !nearly_equal(pose.rotation, lastPulled.rotation):
+    else if !nearly_equal(pose.position, lastPulled.position, TELEPORT_EPSILON)
+         || !same_rotation(pose.rotation, lastPulled.rotation, TELEPORT_EPSILON):   // per component, P19
         teleport: SetPositionAndRotation(bodyId, pos, rot, Activate); lastPulled = pose
         interpolated.previous = interpolated.current = pose
     if pose.scale != row.lastScale: rebuild the shape at the new scale (allocates; editor-time operation)
+characters (changed character_controller or local_transform; parented ones every push): authored fields differ ->
+    rebuild in place; position differs from lastPulled -> teleport: SetPosition / SetRotation, carriedVelocity = 0,
+    skipGroundCarry = true (P20); only the rotation differs -> SetRotation, the carrying stays;
+    row.lastScale = pose.scale (no rebuild: the capsule is not scaled, the pull writes the scale into the
+    render pose)
 for each queued body_command in order (P9): AddForce / AddImpulse / AddTorque / SetLinearVelocity / ActivateBody /
     DeactivateBody / SetPositionAndRotation (+ interpolated reset) / MoveKinematic(pose, fixedDeltaTime) (R49) /
     PhysicsSystem::SetGravity (R49) / character desired velocity; a command on a row
-    that does not exist is kept one step while the entity is pending, else dropped (droppedCommands++)
+    that does not exist is kept one step while the entity is pending, else dropped (droppedCommands++);
+    a command the row's kind cannot take (command_applies, P18) is dropped (droppedCommands++): the call
+    refused it when the body existed, so this is one queued for a pending entity or one whose target
+    changed kind since the call
 mCommands.clear()
 ```
+
+The call side of P18 (`physics_world::state::queue`): `WRONG_THREAD`, then `INVALID_ARGUMENT` for a non-finite
+value, then `NO_BODY` when there is neither a row nor a pending entry, then, when a row exists,
+`command_applies(command, target_of_components(entity))` or `WRONG_BODY_KIND` (`NOT_A_CHARACTER` for
+`character_move` in both places), then `COMMAND_QUEUE_FULL`.
+
+| Command | static, colliders alone | kinematic | kinematic, moves with transform | dynamic | character |
+|---|---|---|---|---|---|
+| `add_force(_at)`, `add_impulse(_at)`, `add_torque`, `add_angular_impulse` | no | no | no | yes | no |
+| `set_linear_velocity`, `set_angular_velocity` | no | yes | yes (the next push re-poses the body from its transform) | yes | no |
+| `move_kinematic` | no | yes | no | no | no |
+| `teleport` | yes | yes | yes | yes | yes |
+| `wake`, `sleep` | accepted, no-op | yes | yes | yes | accepted, no-op |
+| `character_move` | no | no | no | no | yes |
 
 `compose_world_pose` reads other entities' `local_transform` (ancestors). Push is `MAIN_THREAD` in a stage whose
 other systems may not write `local_transform` (scheduler conflict rules), so the reads are race-free. Change
@@ -475,7 +525,15 @@ CONJURE_ASSERT(core::jobs::is_main_thread()); mStepping = true
 dt = context.frame().fixedDeltaTime
 for each CHARACTER row (table order = creation order, deterministic):
     settings = ExtendedUpdateSettings{ stickToFloor ? (0, -stepHeight, 0) : 0, walkStairs ? (0, stepHeight, 0) : 0 }
-    velocity = component.velocity; if APPLY_GRAVITY && ground != ON_GROUND: velocity += gravity * dt
+    velocity = queued character_move, else component.velocity          // the character's own (P20)
+    grounded = character->GetGroundState() == OnGround                 // as the last update left it
+    if row.skipGroundCarry: row.skipGroundCarry = false                // teleported: carriedVelocity is zero
+    else if grounded: character->UpdateGroundVelocity()
+                      row.carriedVelocity = horizontal part of character->GetGroundVelocity()
+    else if ground state is OnSteepGround or NotSupported: row.carriedVelocity = 0   // ground that does not carry
+    if APPLY_GRAVITY: grounded ? (vertical follows the ground's unless 0.1 m/s faster upwards: a jump)
+                               : velocity += gravity * dt              // 'grounded' is stale after a teleport
+    velocity += row.carriedVelocity                                    // kept while InAir: a jump keeps it
     velocity = character->CancelVelocityTowardsSteepSlopes(velocity); character->SetLinearVelocity(velocity)
     character->ExtendedUpdate(dt, gravity, settings, broadPhaseFilter(layer), objectFilter(layer),
                               ignoreInnerBody, {}, *tempAllocator)
@@ -497,7 +555,9 @@ vec3 normal = manifold.mWorldSpaceNormal; u8 pointCount; f32 impulse; }` to `mBu
 (`std::vector<raw_contact>` reserved to `maxContactEventsPerStep`, `push_back` only while `size() < capacity()`,
 else `droppedContactEvents++`); `impulse` is computed in `OnContactAdded` only, when `estimateContactImpulses`,
 with `JPH::EstimateCollisionResponse(body1, body2, manifold, result, settings.mCombinedFriction,
-settings.mCombinedRestitution)` summing `result.mImpulses[i].mContactImpulse`. `OnContactRemoved(subShapePair)` appends
+settings.mCombinedRestitution)` summing `result.mImpulses[i].mContactImpulse`. `OnContactPersisted` records nothing
+when either body is a sensor: a trigger pair has no `STAY`, and a body inside a static trigger is reported as persisted
+in every step, asleep too (P21), which would spend one record of the budget per body and step. `OnContactRemoved(subShapePair)` appends
 `{ pair.GetBody1ID(), pair.GetBody2ID(), REMOVED }`. Bodies are never dereferenced in `OnContactRemoved` (Jolt forbids it).
 `jolt_activation_listener::OnBodyActivated/Deactivated(bodyId, userData)` stores `mRecords[index].awake` (relaxed).
 
@@ -515,9 +575,15 @@ settings.mCombinedRestitution)` summing `result.mImpulses[i].mContactImpulse`. `
    indices are skipped).
 3. Clear the per-thread buffers. The result is sorted by construction (key order, then kind order).
 
-Sleeping: Jolt fires `OnContactRemoved` when a body falls asleep and `OnContactAdded` when it wakes touching something,
-so a resting stack reports `EXIT` once at sleep and `ENTER` once at wake (Unity behaves the same); counting tests
-disable `ALLOW_SLEEPING`.
+Sleeping (P21): Jolt keeps a contact only while one body of the pair is active, so it fires `OnContactRemoved` when the
+last active one falls asleep and `OnContactAdded` when one wakes. A resting stack of solid bodies therefore reports
+`EXIT` once at sleep and `ENTER` once at wake although nothing parted (Unity does not: it sends no `OnCollisionExit` at
+sleep; here the behaviour is kept and documented, and a body whose contacts must stay reported clears
+`ALLOW_SLEEPING`); counting tests disable `ALLOW_SLEEPING`. Triggers differ. A static trigger is an active kinematic
+sensor, so its pair with a body that falls asleep keeps being found every step: no `TRIGGER_EXIT` at sleep, no second
+`TRIGGER_ENTER` at wake, and a body that is asleep when the trigger is created or teleported over it gets its
+`TRIGGER_ENTER`. A kinematic or dynamic trigger behaves the same while it is active; asleep (`START_ASLEEP`, `sleep`) it
+pairs with active bodies only.
 
 ### 3.7 `physics.pull_transforms` (FIXED_END, PARALLEL, `before("physics.contact_events")`)
 
@@ -539,7 +605,9 @@ parallel over chunks (context.parallel_for_chunks):
 serial tail on the calling thread: for each parented row, parentWorld = compose_world_pose(parent);
     local = parentWorld.inverse() * current (scale kept)
 characters (serial, calling thread): position = character->GetPosition(); ground = GetGroundState(); groundNormal;
-    groundEntity from the ground BodyID's row; velocity = GetLinearVelocity(); same interpolated/local write as a root
+    groundEntity from the ground BodyID's row; velocity = GetLinearVelocity() - row.carriedVelocity (P20: Jolt keeps the
+    velocity the step set, so this is the character's own again); same interpolated/local write as a root, with
+    scale = row.lastScale
 ```
 
 The serial tail exists because a parent may itself be a dynamic body whose `local_transform` another grain is writing;
@@ -565,8 +633,10 @@ All `const`, callable from any thread while `!mStepping` (`STEP_IN_PROGRESS` ass
 
 ### 3.9 Sleeping and activation
 
-`is_sleeping(entity)` reads the row's `awake` atomic; `wake`/`sleep` queue `ACTIVATE`/`DEACTIVATE` commands;
-`active_body_count()` = `PhysicsSystem::GetNumActiveBodies(EBodyType::RigidBody)`. Thresholds come from
+`is_sleeping(entity)` reads the row's `awake` atomic and is true for every static row; `wake`/`sleep` queue
+`ACTIVATE`/`DEACTIVATE` commands, which do nothing on a static row;
+`active_body_count()` = `PhysicsSystem::GetNumActiveBodies(EBodyType::RigidBody)` less the static triggers, which Jolt
+keeps active (P21) and the engine counts as static (the world keeps their number). Thresholds come from
 `physics_settings`; `ALLOW_SLEEPING` off per body disables sleep for that body only.
 
 ### 3.10 Debug draw
@@ -609,7 +679,8 @@ Private files (`engine/src/physics/`): `jolt_runtime`, `jolt_memory`, `jolt_job_
 `LAYER_CONFIG_INVALID`, `LAYER_LIMIT_REACHED`, `DUPLICATE_LAYER`, `UNKNOWN_LAYER`, `BODY_LIMIT_REACHED`, `NO_BODY`,
 `NOT_A_CHARACTER`, `NOT_ATTACHED`, `ALREADY_ATTACHED`, `SHAPE_CREATE_FAILED`, `INVALID_SHAPE_SCALE`,
 `UNSUPPORTED_SHAPE_FOR_MOTION`, `MIXED_TRIGGER_FLAGS`, `CONFLICTING_BODY_COMPONENTS`, `GEOMETRY_INVALID`,
-`COLLISION_MESH_PARSE_FAILED`, `STEP_IN_PROGRESS`, `WRONG_THREAD`, `COMMAND_QUEUE_FULL`; plus
+`COLLISION_MESH_PARSE_FAILED`, `STEP_IN_PROGRESS`, `WRONG_THREAD`, `COMMAND_QUEUE_FULL`, `WRONG_BODY_KIND` (P18,
+appended so the earlier values did not move); plus
 `[[nodiscard]] std::string_view physics_error_name(physics_error code) noexcept;` and
 `CONJURE_DECLARE_ERROR_CATEGORY(conjure::physics::physics_error, "physics", conjure::physics::physics_error_name);`.
 Errors are built with `core::make_error(physics_error::X, "...")` (no module-local `make_error`, per `error.h`).
@@ -635,7 +706,8 @@ class physics_world {                // non-copyable, non-movable (Jolt listener
         void collect_contact_events();                                              // 3.6
         [[nodiscard]] std::span<const contact_event> contact_events() const noexcept;   // until the next push (R6)
 
-        // Bodies (queued, applied at the next push_transforms, 3.4). Main thread.
+        // Bodies (queued, applied at the next push_transforms, 3.4). Main thread. WRONG_BODY_KIND at the call when
+        // the entity's kind of body cannot take the command (P18, the table of 3.4).
         [[nodiscard]] bool has_body(ecs::entity target) const noexcept;
         [[nodiscard]] core::result<void> add_force(ecs::entity target, const math::vec3 &force);
         [[nodiscard]] core::result<void> add_force_at(
@@ -654,13 +726,13 @@ class physics_world {                // non-copyable, non-movable (Jolt listener
         [[nodiscard]] core::result<void> set_linear_velocity(ecs::entity target, const math::vec3 &velocity);
         [[nodiscard]] core::result<void> set_angular_velocity(ecs::entity target, const math::vec3 &velocity);
         [[nodiscard]] core::result<void> teleport(ecs::entity target, const math::transform &pose);   // scale ignored; resets velocities and interpolated_transform
-        [[nodiscard]] core::result<void> move_kinematic(ecs::entity target, const math::transform &pose);   // KINEMATIC only: MoveKinematic over the next fixed step (physics_move_kinematic, R49)
+        [[nodiscard]] core::result<void> move_kinematic(ecs::entity target, const math::transform &pose);   // KINEMATIC without KINEMATIC_MOVES_WITH_TRANSFORM only: MoveKinematic over the next fixed step (physics_move_kinematic, R49)
         [[nodiscard]] core::result<void> set_gravity(const math::vec3 &gravity);   // queued: PhysicsSystem::SetGravity at the next push (physics_set_gravity, R49)
         [[nodiscard]] math::vec3 gravity() const noexcept;                          // value after the last applied set_gravity (or settings().gravity)
-        [[nodiscard]] core::result<void> wake(ecs::entity target);
-        [[nodiscard]] core::result<void> sleep(ecs::entity target);
+        [[nodiscard]] core::result<void> wake(ecs::entity target);                  // no-op on a static body and on a character
+        [[nodiscard]] core::result<void> sleep(ecs::entity target);                 // no-op on a static body and on a character
         [[nodiscard]] bool is_sleeping(ecs::entity target) const noexcept;          // false when no body
-        [[nodiscard]] core::result<void> character_move(ecs::entity target, const math::vec3 &velocity);
+        [[nodiscard]] core::result<void> character_move(ecs::entity target, const math::vec3 &velocity);   // NOT_A_CHARACTER
         [[nodiscard]] std::optional<ground_state> character_ground(ecs::entity target) const noexcept;
 
         // Queries (3.8). Any thread while no step runs.
@@ -787,6 +859,7 @@ class physics_debug_draw {           // implemented by the engine over renderer 
 | Trigger and non-trigger colliders on one body | `MIXED_TRIGGER_FLAGS` WARN; body is non-trigger |
 | `rigid_body` and `character_controller` on one entity | `CONFLICTING_BODY_COMPONENTS` WARN; character wins |
 | Body API on entity without body | `NO_BODY` (if the entity is pending, the command is kept one step and `NO_BODY` is not returned) |
+| Body API on a body of a kind the command cannot act on (P18) | `WRONG_BODY_KIND` at the call, nothing queued; `character_move` on a body that is no character: `NOT_A_CHARACTER`. For an entity that was pending at the call, or whose kind changed before the push: dropped at the push, `stats.droppedCommands++` |
 | Command queue full | `COMMAND_QUEUE_FULL`, `stats.droppedCommands++`, rate-limited WARN |
 | Contact buffer full | records dropped, `stats.droppedContactEvents++`, rate-limited WARN suggesting `maxContactEventsPerStep` |
 | `PhysicsSystem::Update` returns an error flag | `stats.updateErrors++`, rate-limited WARN with the flag name and the setting to raise; simulation continues |
@@ -925,27 +998,29 @@ paths are testable), `spawn_box(world, position, motion, halfExtents)`, `spawn_g
 
 | File | Cases (minimum) |
 |---|---|
-| `test_physics_error.cpp` | every enumerator has a name; `make_error(physics_error::NO_BODY).is(physics_error::NO_BODY)`; category name `"physics"` |
+| `test_physics_error.cpp` | every enumerator has a name; `make_error(physics_error::NO_BODY).is(physics_error::NO_BODY)`; category name `"physics"`; `WRONG_BODY_KIND` is the last code and has its name (P18) |
 | `test_physics_settings.cpp` | defaults validate; each rejected field produces `INVALID_SETTINGS` naming it; `from_json` of the `06_engine_loop.md` 2.10 sample; unknown keys ignored with a WARN captured by `log_capture` |
 | `test_physics_layers.cpp` | default table has `default` colliding with itself; `from_json` sample of 2.2; symmetric `set_collides`; 33 names -> `LAYER_LIMIT_REACHED`; duplicate -> `DUPLICATE_LAYER`; unknown in `ignore` -> `UNKNOWN_LAYER`; `collision_mask` bits; `to_json` round trip canonical-equal |
 | `test_components.cpp` | registration of all eight types succeeds and is idempotent; reflection fields/offsets match `offsetof`; `rigid_body` is 52 bytes and trivially copyable (R48); flags enum ops; `component_to_json/from_json` round trip including `asset_ref` uuid strings; `world_hash` changes when `mass` changes |
-| `test_character_controller.cpp` | capsule on a 30 degree slope with `velocity = (2, 0, 0)` for 120 steps: moves up, `ground == ON_GROUND`, `groundEntity` is the slope; 60 degree slope with `maxSlopeAngleDegrees = 45`: `ON_STEEP_GROUND` and no upward progress; walks into a 2 m wall: x stops within `padding + 1 cm` of the wall face; step onto a 0.3 m stair with `stepHeight 0.4` succeeds, 0.5 m stair blocks; `APPLY_GRAVITY` falls off a ledge and lands (`IN_AIR` then `ON_GROUND`); raycast hits the character's inner body; `character_move` on a non-character -> `NOT_A_CHARACTER` |
-| `test_contact_events.cpp` | box dropped on ground (`ALLOW_SLEEPING` off): exactly one `ENTER`, then one `STAY` per step, one `EXIT` after an impulse lifts it; events sorted by body-id pair with 50 boxes landing in one step (checked against a sorted copy and uniqueness per `(a, b, kind)`); trigger box overlapped by a falling sphere: one `TRIGGER_ENTER`, zero while inside, one `TRIGGER_EXIT`; destroying an entity in contact produces `EXIT` next step naming the destroyed entity (no longer alive; consumers check `is_alive`, sweep F410), and no later event references it; `impulse > 0` on ENTER with estimation on and `== 0` with it off; `contact_events()` is empty after the next `push_transforms`; buffer overflow with `maxContactEventsPerStep = 4` drops and counts; sleeping stack reports EXIT once at sleep |
-| `test_queries.cpp` | raycast down onto ground hits the ground entity at `distance == 10 +- 1e-3` with normal `(0, 1, 0)`; layer mask excluding the ground returns `nullopt`; `ignore` skips the caster; `raycast_all` through three stacked plates returns three hits sorted by distance into a span of 8 and truncates into a span of 2; `overlap_sphere` finds exactly the bodies inside; `overlap_box` rotated 45 degrees; `shape_cast` sphere stops at the wall with `fraction` within 1e-3 of analytic; triggers excluded unless `includeTriggers`; queries during a step assert (`expect_assert`) |
-| `test_collision_mesh_asset.cpp` | `from_geometry` rejects out-of-range indices and zero triangles (`GEOMETRY_INVALID`); `ramp.glb` imports to the expected vertex/index counts with node transforms baked, byte-identical across two imports; `hull.obj` convex hull wraps all points; a sphere dropped on the ramp mesh collider slides and lands at the analytic x; convex collider stacks on a box |
+| `test_character_controller.cpp` | capsule on a 30 degree slope with `velocity = (2, 0, 0)` for 120 steps: moves up, `ground == ON_GROUND`, `groundEntity` is the slope; 60 degree slope with `maxSlopeAngleDegrees = 45`: `ON_STEEP_GROUND` and no upward progress; walks into a 2 m wall: x stops within `padding + 1 cm` of the wall face; step onto a 0.3 m stair with `stepHeight 0.4` succeeds, 0.5 m stair blocks; `APPLY_GRAVITY` falls off a ledge and lands (`IN_AIR` then `ON_GROUND`); raycast hits the character's inner body; `character_move` on a non-character -> `NOT_A_CHARACTER`; a body command on a character -> `WRONG_BODY_KIND`, `teleport` moves it, `wake` / `sleep` succeed and drop nothing (P18); P20: a runtime scale change (own or the parent's) reaches the interpolated pose; a character standing on a platform moving at 2 m/s (driven through `local_transform` or by a velocity) keeps its place on it within 1 cm over 60 steps and reads `velocity == 0`; a velocity written once or sent with `character_move` every step stays what it was while the platform moves; a jump keeps the platform's speed in the air and lands where it started, or ahead when the platform stops under it; a teleport (command or `local_transform`) off the platform falls straight down; a character parented to the platform moves with it once when the platform moves sideways or sinks, and hops when it rises (the pinned limit of the vertical rule); a turning platform takes the character round; a character rebuilt while riding stays carried; a character turned by a degree in every step through `local_transform` stays carried and its rotation reaches the body; lifts: rising, rising and moving sideways, and sinking slower than 0.1 m/s are ridden with `velocity.y` reading the lift's, a lift sinking at 1 m/s is followed by `STICK_TO_FLOOR` one step behind with `velocity.y == 0`; a jump off a moving platform onto a 60 degree static slope neither slides along the slope nor reads a horizontal velocity; a heavy dynamic slab sliding on a frictionless floor carries the character; a character without `APPLY_GRAVITY` is carried while its own velocity presses it onto the platform; a teleport off a rising platform takes none of its sideways speed and all of its vertical velocity for one step, then falls |
+| `test_contact_events.cpp` | box dropped on ground (`ALLOW_SLEEPING` off): exactly one `ENTER`, then one `STAY` per step, one `EXIT` after an impulse lifts it; events sorted by body-id pair with 50 boxes landing in one step (checked against a sorted copy and uniqueness per `(a, b, kind)`); trigger box overlapped by a falling sphere: one `TRIGGER_ENTER`, zero while inside, one `TRIGGER_EXIT`; destroying an entity in contact produces `EXIT` next step naming the destroyed entity (no longer alive; consumers check `is_alive`, sweep F410), and no later event references it; `impulse > 0` on ENTER with estimation on and `== 0` with it off; `contact_events()` is empty after the next `push_transforms`; buffer overflow with `maxContactEventsPerStep = 4` drops and counts; sleeping stack reports EXIT once at sleep; P21: a body that falls asleep inside a static trigger (with a `rigid_body` or colliders alone) gets no `TRIGGER_EXIT`, none and no second enter at wake, one exit when it is teleported out; a static trigger reports a body created asleep inside it and one it is moved or teleported over, without waking it; static triggers report neither static geometry nor each other, read `is_sleeping` and leave `active_body_count()` at 0; a static solid that turns into a trigger (converted in place with a `rigid_body`, replaced when made of colliders alone) and back; a static trigger turned kinematic and back keeps the sleeping body; a static trigger does not move by velocities authored or left over; a character walking through a static trigger enters and leaves once; a static trigger with `START_ASLEEP` keeps the body that falls asleep in it; six bodies asleep inside a static trigger of two colliders (twelve records in the step they enter, the whole budget) drop nothing afterwards and a solid pair elsewhere still gets its `ENTER`; a dynamic trigger turned kinematic keeps the static wall it is in, a static one turned kinematic enters it and leaves it when it turns static again |
+| `test_queries.cpp` | raycast down onto ground hits the ground entity at `distance == 10 +- 1e-3` with normal `(0, 1, 0)`; layer mask excluding the ground returns `nullopt`; `ignore` skips the caster; `raycast_all` through three stacked plates returns three hits sorted by distance into a span of 8 and truncates into a span of 2; `overlap_sphere` finds exactly the bodies inside; `overlap_box` rotated 45 degrees; `shape_cast` sphere stops at the wall with `fraction` within 1e-3 of analytic; triggers excluded unless `includeTriggers`, and a static trigger also with `includeStatic` off (P21); queries during a step assert (`expect_assert`) |
+| `test_collision_mesh_asset.cpp` | `from_geometry` rejects out-of-range indices and zero triangles (`GEOMETRY_INVALID`); `ramp.glb` imports to the expected vertex/index counts with node transforms baked, byte-identical across two imports; `hull.obj` convex hull wraps all points; a sphere dropped on the ramp mesh collider slides and lands at the analytic x; convex collider stacks on a box; a static trigger made of a mesh (alone, or next to a static `rigid_body` with mass 0) reports the ball that falls through it without a Jolt assert (P21: Jolt holds it as a kinematic body, which needs a mass) |
 | `test_physics_debug_draw.cpp` | counting sink receives > 0 lines/triangles for `SHAPES | BOUNDING_BOXES` with two bodies and 0 with `NONE`; Distribution-style build (`JPH_DEBUG_RENDERER` undefined) compiles the call to a no-op (guarded `#if`) |
-| `test_physics_world.cpp` | construct/destroy 10 worlds, `memory_guard` clean; Jolt allocations visible: `allocation_scope` around spawning 100 bodies reports `allocation_count() > 0`; 600 empty steps allocation-free; `attach` twice -> `ALREADY_ATTACHED`; `register_systems` before attach -> `NOT_ATTACHED`; `validate()` passes after random create/destroy; `body_pose` equals Jolt truth; `stats()` counts; off-thread `add_force` asserts + `WRONG_THREAD` |
+| `test_physics_world.cpp` | construct/destroy 10 worlds, `memory_guard` clean; Jolt allocations visible: `allocation_scope` around spawning 100 bodies reports `allocation_count() > 0`; 600 empty steps allocation-free; `attach` twice -> `ALREADY_ATTACHED`; `register_systems` before attach -> `NOT_ATTACHED`; `validate()` passes after random create/destroy; `body_pose` equals Jolt truth; `stats()` counts; off-thread `add_force` and `character_move` assert + `WRONG_THREAD`; P18: every command against a body of every kind (the table of 3.4) is queued or `WRONG_BODY_KIND` at the call with nothing dropped later, the same commands on a pending entity are all accepted and the inapplicable ones are dropped and counted by the push (`character_move` is part of both tables, refused with `NOT_A_CHARACTER`), a command the body cannot take is refused as such while the queue is full and is not counted as a drop, and the kind follows the components (a static body switched to `DYNAMIC`, or colliders given a `rigid_body`, take an impulse in the same frame) |
 | `test_register.cpp` | systems registered with the right phases/flags/labels (inspect `scheduler::stages`); `scheduler::finalise()` succeeds together with scene systems; running `PHYSICS_STEP` + `FIXED_END` via `run_phase` moves a falling body |
-| `test_rigid_body.cpp` | free fall: `y(60 steps) == 10 - 0.5 g t^2` within 1 cm (semi-implicit Euler bound documented in the test); kinematic push: a `KINEMATIC_MOVES_WITH_TRANSFORM` plate driven by `local_transform` carries a dynamic box with it; velocity written into the component before a step becomes the body velocity; `teleport` resets `interpolated_transform.previous`; mass 0 derives from volume (`body_pose` unaffected, `validate` ok); `set_linear_velocity` on a pending body applies after creation; `START_ASLEEP` and `wake`; `LOCK_ROTATION` keeps rotation identity after an off-centre impulse |
-| `test_colliders.cpp` | each primitive rests on the ground within 1 cm of its analytic height after 120 steps; offset + rotation compound (box + sphere) centre of mass; mixed trigger flags -> WARN, non-trigger body; `mesh_collider` on a dynamic body -> WARN; collider removed -> shape rebuilt (overlap no longer hits); last collider removed from an implicit static body destroys the body; non-uniform scale on a sphere -> `INVALID_SHAPE_SCALE` WARN; the shape cache shares one Jolt shape across 100 identical boxes (`stats().shapeCacheEntries == 1`) |
+| `test_rigid_body.cpp` | free fall: `y(60 steps) == 10 - 0.5 g t^2` within 1 cm (semi-implicit Euler bound documented in the test); kinematic push: a `KINEMATIC_MOVES_WITH_TRANSFORM` plate driven by `local_transform` carries a dynamic box with it; velocity written into the component before a step becomes the body velocity; `teleport` resets `interpolated_transform.previous`; mass 0 derives from volume (`body_pose` unaffected, `validate` ok); `set_linear_velocity` on a pending body applies after creation; `START_ASLEEP` and `wake`; `LOCK_ROTATION` keeps rotation identity after an off-centre impulse; `move_kinematic` reaches the pose in one step on a kinematic body and is `WRONG_BODY_KIND` on a dynamic one and on one that follows its transform (P18) |
+| `test_colliders.cpp` | each primitive rests on the ground within 1 cm of its analytic height after 120 steps; offset + rotation compound (box + sphere) centre of mass; mixed trigger flags -> WARN, non-trigger body; `mesh_collider` on a dynamic body -> WARN; collider removed -> shape rebuilt (overlap no longer hits); last collider removed from an implicit static body destroys the body; non-uniform scale on a sphere -> `INVALID_SHAPE_SCALE` WARN; the shape cache shares one Jolt shape across 100 identical boxes (`stats().shapeCacheEntries == 1`); a lone collider turned by a tenth of a degree keeps its rotation (P19) |
 | `test_layers.cpp` (topic) | `ignore [["a", "a"]]`: two layer-`a` boxes pass through each other, `a` vs `default` collide; `rigid_body.layer` change at runtime re-filters next step; unknown layer index -> WARN + layer 0 |
 | `test_fixed_step.cpp` (topic) | 600 steps at 1/60 equal 10 s of fall; `interpolated_transform` after a step: `transform::lerp(previous, current, 0.5)` is the midpoint of the two pulled poses; `collisionSteps = 2` matches `collisionSteps = 1` within 1 mm for free fall |
-| `test_component_sync.cpp` (topic) | parented dynamic body under a rotated parent writes a `local_transform` whose composed world pose equals `body_pose` within 1e-4; sleeping bodies are not written (chunk versions unchanged); teleport via `local_transform` write detected while the pull's own write is not; scale change rebuilds the shape; 10k sleeping bodies: `pull_transforms` allocation-free and < 0.3 ms in Development (`[bench]` tag, informative) |
-| `test_physics_stack.cpp` (topic) | 10 boxes stacked over a plane, 180 steps: top box y within 1 cm of `10 * 1 m`; `active_body_count() == 0` at the end; `physics.step_10k_sleeping`-style check: 2,000 settled boxes, one `step()` under `CONJURE_CHECK_NO_ALLOCATIONS` |
+| `test_component_sync.cpp` (topic) | parented dynamic body under a rotated parent writes a `local_transform` whose composed world pose equals `body_pose` within 1e-4; sleeping bodies are not written (chunk versions unchanged); teleport via `local_transform` write detected while the pull's own write is not; a half degree turn written into `local_transform` reaches the body (root, static, parented, through the parent, character; P19); scale change rebuilds the shape; 10k sleeping bodies: `pull_transforms` allocation-free and < 0.3 ms in Development (`[bench]` tag, informative) |
+| `test_physics_stack.cpp` (topic) | 10 boxes stacked over a plane, 180 steps: top box y within 1 cm of `10 * 1 m`; `active_body_count() == 0` at the end; `physics.step_10k_sleeping`-style check: 2,000 settled boxes, one `step()` under `CONJURE_CHECK_NO_ALLOCATIONS`; the same gate over 100 static triggers holding 400 sleeping boxes, each entered once and never left (P21) |
 | `test_determinism.cpp` (topic) | 200 boxes dropped for 300 steps with 0 and 4 workers: every `body_pose` bit-identical and `contact_events()` identical per step |
 
-Benchmarks (`tests/benchmarks/bench_physics.cpp`, not in ctest, thresholds of `08_testing.md` 7.1): `physics.step_10k_active`
-(8.0 ms, 0 allocations), `physics.step_10k_sleeping` (0.8 ms, 0 allocations), `physics.sync_10k` (0.3 ms, 0 allocations).
+Benchmarks (`tests/benchmarks/bench_physics.cpp`, not in ctest, thresholds of `08_testing.md` 7.1):
+`physics.step_10k_active` (8.0 ms, 0 allocations), `physics.step_10k_sleeping` (0.8 ms, 0 allocations),
+`physics.step_10k_sleeping_1k_triggers` (the sleeping field under 1,000 static triggers, P21: 1.5 ms, 0 allocations),
+`physics.sync_10k` (0.3 ms, 0 allocations).
 The `feature_test` entities of `08_testing.md` 7.2 (`Ground`, `Stack_0..9`, `BouncySphere`, `Capsule`, `ConvexProp`,
 `Terrain`, `ForceApplier`) exercise every component type and the force/impulse/velocity bindings.
 

@@ -15,6 +15,13 @@
 // reported by the next step and naming the body's entity. When the body went because that entity was
 // destroyed, the entity is no longer alive: check world::is_alive before touching a participant. The entity's
 // generation keeps the dead id from matching a reused slot, so no later event references it.
+//
+// Sleep (code sweep F408). A solid contact is reported only while one of its two bodies is awake: when the
+// last awake one falls asleep (a box on static ground, a stack come to rest) the pair reports EXIT, and ENTER
+// again when one wakes, although the bodies never parted. A trigger is different: a static trigger reports a
+// body until it really leaves, asleep or not, and a body that is asleep when the trigger meets it; a
+// kinematic or dynamic trigger does the same while it is awake itself (awake it never falls asleep on its
+// own; START_ASLEEP or physics_world::sleep leaves it seeing awake bodies only).
 
 namespace conjure::physics {
 

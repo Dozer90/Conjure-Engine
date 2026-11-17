@@ -342,6 +342,14 @@ TEST_SUITE("physics/queries") {
           math::vec3(10.0f, 0.0f, 0.0f),
           withTriggers
         ).has_value());
+
+        // A static trigger stays a static body to the filters, although Jolt keeps it as an active kinematic
+        // sensor (code sweep F408).
+        physics::query_filter movingOnly = withTriggers;
+        movingOnly.includeStatic = false;
+        CHECK_FALSE(fixture.physics.raycast(down_from(5.0f), 10.0f, movingOnly).has_value());
+        CHECK(fixture.physics.overlap_sphere(math::vec3(0.0f), 0.1f, out, movingOnly) == 0);
+        CHECK(fixture.physics.raycast_all(down_from(5.0f), 10.0f, hits, movingOnly) == 0);
     }
 
     TEST_CASE("queries - during a push step or pull they assert and return nothing") {

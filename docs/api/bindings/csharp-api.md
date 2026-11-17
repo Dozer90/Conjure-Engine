@@ -36,6 +36,9 @@ script goes away. A script created during `OnUpdate` therefore skips that frame'
 runs at the next fixed step or update, its first `OnLateUpdate` after that. Collision callbacks
 (`OnCollisionEnter(in Collision)`, `OnCollisionExit(in Collision)`, `OnTriggerEnter(Entity other)`,
 `OnTriggerExit(Entity other)`) deliver the contacts of the previous fixed step, one step after they happened.
+`OnCollisionExit` also arrives when the last awake body of a solid pair falls asleep, and `OnCollisionEnter` again
+when it wakes; `OnTriggerExit` of a static trigger arrives only when the body really leaves
+([triggers](../physics/bodies-and-colliders.md#triggers)).
 An exit caused by destroying the other entity still names it, although it is no longer alive (and, one step
 later, any `other` may have been destroyed since): check `other.IsAlive` (`collision.Other.IsAlive`) before
 touching it. The handle never matches an entity created later, so a script that tracks occupants by entity can
@@ -114,7 +117,20 @@ named like mirror padding (`Pad1`): only a `[NativeComponent]` mirror treats `Pa
 `Rigidbody` (over `RigidBodyData`): `LinearVelocity`, `AngularVelocity`, `AddForce(force, ForceMode)`,
 `AddForceAtPosition`, `AddTorque`, `MoveKinematic(in TransformData)`, `Teleport`, `IsSleeping`, `WakeUp`.
 `ForceMode` is `Force`, `Impulse`, `VelocityChange` or `Acceleration`, mapped with the body's mass.
-`CharacterController`: `Move(velocity)`, `IsGrounded`, `Velocity`. The static `Physics` class queries the world:
+A request the body's kind cannot take throws `ArgumentException`: `AddForce`, `AddForceAtPosition` and `AddTorque`
+on a body that is not dynamic, a velocity setter on a static body, `MoveKinematic` on anything but a kinematic body
+without `KINEMATIC_MOVES_WITH_TRANSFORM`, and all of these on an entity that also has a character controller.
+`Teleport` works on every kind and `WakeUp` does nothing on a static body. A body created since the last fixed
+step accepts every request and drops, with a count, what it cannot take.
+`CharacterController`: `Move(velocity)`, `IsGrounded`, `Velocity`. Both velocities are the character's own: the
+step adds the horizontal velocity of the ground that carries a grounded character, so on a moving platform
+`Move(Vector3.Zero)` stands still on the platform, `Velocity` reads zero there, and a jump keeps the platform's
+speed until the character touches ground again. Only the horizontal part is carried; on a lift that rises, or
+sinks slower than 0.1 m/s, the vertical part of `Velocity` reads the lift's. On a lift that sinks faster it is
+left unchanged (zero for a character that stands still) and `CharacterFlags.StickToFloor` steps the character
+down after the lift, one step of the lift's motion behind
+([the character controller](../physics/bodies-and-colliders.md#the-character-controller)). The static `Physics`
+class queries the world:
 `Raycast(origin, direction, maxDistance, out RaycastHit, LayerMask)`, `RaycastAll`, the shape casts,
 `OverlapSphere`, `OverlapBox`, `Gravity` (get and set), `Layer(name)`, `LayerIndex`, `LayerName`, `LayersCollide`.
 A query without a mask tests every layer; a mask you pass is used as given, so `LayerMask.None` (or a computed
@@ -124,7 +140,7 @@ non-negative (`ArgumentException` otherwise); there is no infinite ray, pass a w
 A layer index outside the project's layer table throws `KeyNotFoundException` from `LayerName` and `LayersCollide`
 alike. Setting `LinearVelocity` or `AngularVelocity`, or calling `CharacterController.Move`, changes the value the
 matching getter reads only when the physics world accepted the request: a refused one (a non-finite vector, a full
-command queue) throws and leaves the old value in place.
+command queue, a body of a kind the request does not apply to) throws and leaves the old value in place.
 
 `AudioSource` plays the clip of an `audio_source` component: `Play`, `Stop`, `Pause`, `Resume`, `IsPlaying`,
 `Volume`, `Pitch`, `Loop`, `Clip`. The static `Audio` class offers `PlayOneShot(clip, position, volume, group)`,

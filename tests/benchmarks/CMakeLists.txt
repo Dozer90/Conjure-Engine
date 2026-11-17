@@ -76,6 +76,7 @@ if(CONJURE_WITH_PHYSICS AND TARGET conjure::physics)
     list(APPEND CONJURE_BENCHMARK_SCENARIOS
         physics.step_10k_active
         physics.step_10k_sleeping
+        physics.step_10k_sleeping_1k_triggers
         physics.sync_10k
         physics.step_2k_settling
         engine.full_frame_10k_physics

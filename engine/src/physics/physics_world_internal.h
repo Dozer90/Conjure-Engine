@@ -29,6 +29,7 @@
 #include <limits>
 #include <optional>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -70,6 +71,107 @@ namespace conjure::physics {
         math::vec3 vectorB = math::vec3(0.0f);    // application point
         math::quat rotation = math::quat(1.0f, 0.0f, 0.0f, 0.0f);
     };
+
+    /// <summary>
+    /// What a body command meets (code sweep F413): a character, or a body by its motion type, with the
+    /// kinematic body that follows its transform (KINEMATIC_MOVES_WITH_TRANSFORM) told apart from the plain
+    /// one that move_kinematic drives. A collider without a rigid_body is a STATIC_BODY (P8).
+    /// </summary>
+    enum class command_target : u8 {
+        CHARACTER,
+        STATIC_BODY,
+        KINEMATIC_BODY,
+        KINEMATIC_BODY_FOLLOWING_TRANSFORM,
+        DYNAMIC_BODY
+    };
+
+    /// <summary>
+    /// True when the command can act on that kind of body. This one table decides both the refusal at the
+    /// call (physics_world::state::queue, with the kind the components describe) and the counted drop at
+    /// the push (apply_commands, with the kind of the row), so the two can never disagree. wake and sleep
+    /// are accepted everywhere: they do nothing on a static body, which is never awake (is_sleeping is true
+    /// for it), and on a character, which never sleeps.
+    /// </summary>
+    [[nodiscard]] constexpr bool command_applies(body_command::kind type, command_target target) noexcept {
+        switch (type) {
+            case body_command::kind::ADD_FORCE:
+            case body_command::kind::ADD_FORCE_AT:
+            case body_command::kind::ADD_IMPULSE:
+            case body_command::kind::ADD_IMPULSE_AT:
+            case body_command::kind::ADD_TORQUE:
+            case body_command::kind::ADD_ANGULAR_IMPULSE:
+                return target == command_target::DYNAMIC_BODY;
+            case body_command::kind::SET_LINEAR_VELOCITY:
+            case body_command::kind::SET_ANGULAR_VELOCITY:
+                return target != command_target::CHARACTER && target != command_target::STATIC_BODY;
+            case body_command::kind::MOVE_KINEMATIC:
+                return target == command_target::KINEMATIC_BODY;
+            case body_command::kind::CHARACTER_MOVE:
+                return target == command_target::CHARACTER;
+            case body_command::kind::TELEPORT:
+            case body_command::kind::SET_GRAVITY:
+            case body_command::kind::ACTIVATE:
+            case body_command::kind::DEACTIVATE:
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The public function a command came from ("add_force"), for the message of a refusal.
+    /// </summary>
+    [[nodiscard]] constexpr std::string_view command_name(body_command::kind type) noexcept {
+        switch (type) {
+            case body_command::kind::ADD_FORCE:
+                return "add_force";
+            case body_command::kind::ADD_FORCE_AT:
+                return "add_force_at";
+            case body_command::kind::ADD_IMPULSE:
+                return "add_impulse";
+            case body_command::kind::ADD_IMPULSE_AT:
+                return "add_impulse_at";
+            case body_command::kind::ADD_TORQUE:
+                return "add_torque";
+            case body_command::kind::ADD_ANGULAR_IMPULSE:
+                return "add_angular_impulse";
+            case body_command::kind::SET_LINEAR_VELOCITY:
+                return "set_linear_velocity";
+            case body_command::kind::SET_ANGULAR_VELOCITY:
+                return "set_angular_velocity";
+            case body_command::kind::TELEPORT:
+                return "teleport";
+            case body_command::kind::MOVE_KINEMATIC:
+                return "move_kinematic";
+            case body_command::kind::SET_GRAVITY:
+                return "set_gravity";
+            case body_command::kind::ACTIVATE:
+                return "wake";
+            case body_command::kind::DEACTIVATE:
+                return "sleep";
+            case body_command::kind::CHARACTER_MOVE:
+                return "character_move";
+        }
+        return "";
+    }
+
+    /// <summary>
+    /// How a refusal names the kind of body it met ("a static body").
+    /// </summary>
+    [[nodiscard]] constexpr std::string_view command_target_name(command_target target) noexcept {
+        switch (target) {
+            case command_target::CHARACTER:
+                return "a character";
+            case command_target::STATIC_BODY:
+                return "a static body";
+            case command_target::KINEMATIC_BODY:
+                return "a kinematic body";
+            case command_target::KINEMATIC_BODY_FOLLOWING_TRANSFORM:
+                return "a kinematic body that follows its transform";
+            case command_target::DYNAMIC_BODY:
+                return "a dynamic body";
+        }
+        return "";
+    }
 
     /// <summary>
     /// The component ids the world observes and reads, resolved at attach.
@@ -213,6 +315,9 @@ namespace conjure::physics {
         std::vector<JPH::BodyID> sleepBatch = {};
         shape_cache shapes = {};
         u32 characterCount = 0;
+        // Rows with staticSensor set: static triggers, which Jolt counts among its active bodies and
+        // active_body_count() does not (code sweep F408).
+        u32 staticSensors = 0;
 
         // Contacts.
         core::flat_hash_map<u64, contact_pair_state> activePairs = {};
@@ -279,6 +384,33 @@ namespace conjure::physics {
         [[nodiscard]] body_record *row_of_body(u32 bodyIdValue) noexcept;
         [[nodiscard]] const body_record *row_of_body(u32 bodyIdValue) const noexcept;
         [[nodiscard]] bool is_awake(const body_record &row) const noexcept;
+
+        /// <summary>
+        /// The kind of body the entity's components describe: the kind its row has once the next push has
+        /// applied them. queue() refuses by this and not by the row, because that push applies a motion type
+        /// written into rigid_body, and a rigid_body added to or taken from colliders, before it applies the
+        /// commands: the row would refuse a force sent in the frame that makes a body dynamic.
+        /// </summary>
+        [[nodiscard]] command_target target_of_components(ecs::entity target) const noexcept;
+
+        /// <summary>
+        /// The kind of body a live row is.
+        /// </summary>
+        [[nodiscard]] static command_target target_of_row(const body_record &row) noexcept;
+
+        /// <summary>
+        /// Whether a command may be queued for its target: NO_BODY (NOT_A_CHARACTER for character_move) when
+        /// the entity has no body and is not pending, WRONG_BODY_KIND (NOT_A_CHARACTER for character_move)
+        /// when the body exists and command_applies says no for the kind its components describe. A pending
+        /// entity has no kind yet and passes: the push drops its command, counted, if it does not apply.
+        /// Reads ECS components, so owner thread only.
+        /// </summary>
+        [[nodiscard]] core::result<void> check_command_target(const body_command &command) const;
+
+        /// <summary>
+        /// Queues a command for the next push, or refuses it: WRONG_THREAD, INVALID_ARGUMENT (core) for a
+        /// non-finite value, what check_command_target reports, COMMAND_QUEUE_FULL.
+        /// </summary>
         [[nodiscard]] core::result<void> queue(body_command command);
 
         /*---------------------------------------------------------------*/
@@ -306,6 +438,19 @@ namespace conjure::physics {
         void apply_body_properties(body_record &row, const rigid_body &body);
         void apply_mass_properties(body_record &row, const rigid_body &body);
         void apply_motion_type(body_record &row, const rigid_body &body, ecs::command_buffer &deferred);
+
+        /// <summary>
+        /// Brings the Jolt body of a BODY row in line with row.motion and row.isTrigger: the sensor flag,
+        /// mCollideKinematicVsNonDynamic (kinematic triggers only) and the motion type, which is the row's
+        /// except for a static trigger: that one is a kinematic sensor in Jolt, active and without velocity,
+        /// so it keeps seeing bodies that fall asleep inside it (code sweep F408). A body that becomes static
+        /// is put to sleep, one that starts to move is woken, any other keeps its sleep state. Updates
+        /// row.staticSensor and the staticSensors count.
+        /// Returns false, with the body untouched, when the row asks for a moving Jolt body and the body was
+        /// created without motion properties (an implicit static body that was no trigger): the caller
+        /// replaces the body.
+        /// </summary>
+        [[nodiscard]] bool sync_jolt_motion(body_record &row);
         void add_interpolated(ecs::entity target, ecs::command_buffer &deferred);
         void remove_interpolated(ecs::entity target, ecs::command_buffer &deferred);
 
@@ -336,10 +481,28 @@ namespace conjure::physics {
         void apply_commands(f32 fixedDeltaTime);
 
         /// <summary>
+        /// The commands a character takes (apply_commands has checked command_applies): the desired velocity
+        /// of character_move, a teleport, and wake / sleep, which do nothing.
+        /// </summary>
+        void apply_character_command(body_record &row, const body_command &command);
+
+        /// <summary>
         /// Moves a body or character to the pose at once (SetPositionAndRotation), records it as the
         /// last pulled pose and resets the interpolated pose so nothing interpolates across the jump.
+        /// 'positionChanged' says whether the position is a new one or only the rotation: a character that
+        /// was only turned is not repositioned (reposition_character), so its ground goes on carrying it.
         /// </summary>
-        void teleport_row(body_record &row, const math::transform &pose);
+        void teleport_row(body_record &row, const math::transform &pose, bool positionChanged);
+
+        /// <summary>
+        /// Puts a character (row.character is not null) at the pose and ends what the ground carried it with:
+        /// carriedVelocity is cleared and the step that follows adds no horizontal ground velocity (code sweep
+        /// F421; the vertical rule of that step still reads the ground the character left). Both teleports of
+        /// a character go through here: the teleport command and a new position written into its
+        /// local_transform, which is also how a character parented to a moving entity follows its parent. A
+        /// rotation alone written into local_transform does not (teleport_row).
+        /// </summary>
+        void reposition_character(body_record &row, const math::vec3 &position, const math::quat &rotation);
 
         /// <summary>
         /// Writes a world pose into the entity's local_transform: as is for a root, relative to the

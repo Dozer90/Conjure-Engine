@@ -34,21 +34,29 @@ namespace {
           || a.gravityFactor != b.gravityFactor || a.maxLinearVelocity != b.maxLinearVelocity;
     }
 
-    [[nodiscard]] bool pose_differs(
+    /// <summary>
+    /// What a pose composed from local_transform changed against the pose of the last pull. The two parts are
+    /// told apart because a character that was only turned keeps what its ground carries it with (teleport_row).
+    /// </summary>
+    struct pose_change {
+        bool position = false;
+        bool rotation = false;
+
+        [[nodiscard]] bool any() const noexcept {
+            return position || rotation;
+        }
+    };
+
+    [[nodiscard]] pose_change pose_difference(
       const math::transform &a,
       const math::transform &b,
       f32 positionEpsilon,
       f32 rotationEpsilon
     ) noexcept {
-        return !math::nearly_equal(
-          a.position,
-          b.position,
-          positionEpsilon
-        ) || !math::same_rotation(a.rotation, b.rotation, rotationEpsilon);
-    }
-
-    [[nodiscard]] bool pose_differs(const math::transform &a, const math::transform &b, f32 epsilon) noexcept {
-        return pose_differs(a, b, epsilon, epsilon);
+        pose_change change = {};
+        change.position = !math::nearly_equal(a.position, b.position, positionEpsilon);
+        change.rotation = !math::same_rotation(a.rotation, b.rotation, rotationEpsilon);
+        return change;
     }
 
     [[nodiscard]] f32 max_abs_component(const math::vec3 &value) noexcept {
@@ -83,8 +91,9 @@ void physics_world::push_transforms(f32 fixedDeltaTime, ecs::command_buffer *def
 
     ecs::command_buffer &buffer = deferred != nullptr ? *deferred : *s.ownDeferred;
     // Rebuilds go first: one that replaces a body (a rigid_body removed so the colliders make an implicit
-    // static body, an implicit static body given a rigid_body, a shape left without colliders) queues the
-    // replacement for creation, which the flush below then creates in this same push.
+    // static body, an implicit static body given a rigid_body, an implicit static body whose colliders became
+    // triggers (it has no motion properties, P21), a shape left without colliders) queues the replacement for
+    // creation, which the flush below then creates in this same push.
     s.apply_rebuilds(buffer);
     s.flush_pending_creates(buffer);
     s.replacedInPush = false;
@@ -237,8 +246,9 @@ void physics_world::state::push_changed_components(ecs::command_buffer &deferred
             return;
         }
         const math::transform pose = compose_world_pose(target);
-        if (!row->awaitingPull && pose_differs(pose, row->lastPulled, TELEPORT_EPSILON)) {
-            teleport_row(*row, pose);
+        const pose_change change = pose_difference(pose, row->lastPulled, TELEPORT_EPSILON, TELEPORT_EPSILON);
+        if (!row->awaitingPull && change.any()) {
+            teleport_row(*row, pose, change.position);
         }
         if (!math::nearly_equal(pose.scale, row->lastScale, 1.0e-6f)) {
             mark_rebuild(target, record_dirty_flags::SHAPE);
@@ -274,9 +284,12 @@ void physics_world::state::push_changed_components(ecs::command_buffer &deferred
             return;   // push_hierarchy_rows
         }
         const math::transform pose = compose_world_pose(target);
-        if (!row->awaitingPull && pose_differs(pose, row->lastPulled, TELEPORT_EPSILON)) {
-            teleport_row(*row, pose);
+        const pose_change change = pose_difference(pose, row->lastPulled, TELEPORT_EPSILON, TELEPORT_EPSILON);
+        if (!row->awaitingPull && change.any()) {
+            teleport_row(*row, pose, change.position);
         }
+        // The capsule is not scaled, so a new scale needs no rebuild: the pull writes it into the render pose.
+        row->lastScale = pose.scale;
     };
     ecs::query_desc characterDesc = characterChangeQuery->desc();
     characterDesc.sinceVersion = since;
@@ -337,22 +350,31 @@ void physics_world::state::push_hierarchy_rows(f32 fixedDeltaTime) {
           local != nullptr ? max_abs_component(local->position) : 0.0f
         );
         const f32 positionEpsilon = std::max(TELEPORT_EPSILON, magnitude * TELEPORT_RELATIVE_EPSILON);
-        if (!row.awaitingPull && pose_differs(pose, row.lastPulled, positionEpsilon, TELEPORT_EPSILON)) {
-            teleport_row(row, pose);
+        const pose_change change = pose_difference(pose, row.lastPulled, positionEpsilon, TELEPORT_EPSILON);
+        if (!row.awaitingPull && change.any()) {
+            teleport_row(row, pose, change.position);
         }
-        if (row.kind == record_kind::BODY && !math::nearly_equal(pose.scale, row.lastScale, 1.0e-6f)) {
+        if (row.kind == record_kind::CHARACTER) {
+            // As in push_changed_components: the capsule is not scaled, the render pose follows the scale.
+            row.lastScale = pose.scale;
+        } else if (!math::nearly_equal(pose.scale, row.lastScale, 1.0e-6f)) {
             mark_rebuild(row.entity, record_dirty_flags::SHAPE);
         }
     }
 }
 
-void physics_world::state::teleport_row(body_record &row, const math::transform &pose) {
+void physics_world::state::teleport_row(body_record &row, const math::transform &pose, bool positionChanged) {
     if (row.kind == record_kind::CHARACTER) {
         if (row.character == nullptr) {
             return;
         }
-        row.character->SetPosition(jolt::to_jolt(pose.position));
-        row.character->SetRotation(jolt::to_jolt(pose.rotation));
+        if (positionChanged) {
+            reposition_character(row, pose.position, pose.rotation);
+        } else {
+            // Turned on the spot, which is how gameplay turns a character (the engine never does): it stands
+            // where it stood, so its ground state still holds and the ground goes on carrying it.
+            row.character->SetRotation(jolt::to_jolt(pose.rotation));
+        }
     } else {
         physicsSystem->GetBodyInterface().SetPositionAndRotation(
           row.bodyId,
@@ -370,6 +392,23 @@ void physics_world::state::teleport_row(body_record &row, const math::transform 
         interpolated->current.position = pose.position;
         interpolated->current.rotation = pose.rotation;
     }
+}
+
+void physics_world::state::reposition_character(
+  body_record &row,
+  const math::vec3 &position,
+  const math::quat &rotation
+) {
+    row.character->SetPosition(jolt::to_jolt(position));
+    row.character->SetRotation(jolt::to_jolt(rotation));
+    // The character keeps the ground state of the place it left until its next update, so the step that
+    // follows must not carry it with that ground's velocity, and what it carried so far ends here (code sweep
+    // F421). Only the horizontal carrying ends: the vertical rule of that step still reads the stale ground.
+    // Jolt still holds the velocity of the last step with the carried share in it: taken out now, a pull
+    // that runs before the next step goes on reading the character's own velocity.
+    row.character->SetLinearVelocity(row.character->GetLinearVelocity() - jolt::to_jolt(row.carriedVelocity));
+    row.carriedVelocity = math::vec3(0.0f);
+    row.skipGroundCarry = true;
 }
 
 void physics_world::state::write_local_pose(ecs::entity target, const math::transform &worldPose) {
@@ -412,21 +451,15 @@ void physics_world::state::apply_commands(f32 fixedDeltaTime) {
             }
             continue;
         }
+        // queue() refused what cannot apply when the body existed, by the kind its components described.
+        // What still arrives here mismatched was accepted for an entity that was pending at the call, or
+        // the components changed again between the call and this push: the late, counted drop.
+        if (!command_applies(command.type, target_of_row(*row))) {
+            ++stats.droppedCommands;
+            continue;
+        }
         if (row->kind == record_kind::CHARACTER) {
-            if (command.type == body_command::kind::CHARACTER_MOVE) {
-                // Kept in the row: the push declares character_controller as a read.
-                row->desiredVelocity = command.vectorA;
-                row->hasDesiredVelocity = true;
-            } else if (command.type == body_command::kind::TELEPORT && row->character != nullptr) {
-                row->character->SetPosition(jolt::to_jolt(command.vectorA));
-                row->character->SetRotation(jolt::to_jolt(command.rotation));
-                row->lastPulled.position = command.vectorA;
-                row->lastPulled.rotation = command.rotation;
-                row->awaitingPull = true;
-                row->firstPull = true;
-            } else {
-                ++stats.droppedCommands;
-            }
+            apply_character_command(*row, command);
             continue;
         }
         const JPH::BodyID id = row->bodyId;
@@ -487,18 +520,14 @@ void physics_world::state::apply_commands(f32 fixedDeltaTime) {
                 break;
             }
             case body_command::kind::MOVE_KINEMATIC:
-                if (row->motion == motion_type::KINEMATIC) {
-                    bodies.MoveKinematic(
-                      id,
-                      jolt::to_jolt(command.vectorA),
-                      jolt::to_jolt(command.rotation),
-                      fixedDeltaTime
-                    );
-                    // A row driven by its transform is re-posed every push and never pulled.
-                    row->awaitingPull = !row->movesWithTransform;
-                } else {
-                    ++stats.droppedCommands;
-                }
+                // Plain kinematic rows only (command_applies): the pull writes the reached pose back.
+                bodies.MoveKinematic(
+                  id,
+                  jolt::to_jolt(command.vectorA),
+                  jolt::to_jolt(command.rotation),
+                  fixedDeltaTime
+                );
+                row->awaitingPull = true;
                 break;
             case body_command::kind::ACTIVATE:
                 if (row->motion != motion_type::STATIC) {
@@ -513,14 +542,50 @@ void physics_world::state::apply_commands(f32 fixedDeltaTime) {
                 }
                 break;
             case body_command::kind::CHARACTER_MOVE:
-                ++stats.droppedCommands;
-                break;
             case body_command::kind::SET_GRAVITY:
+                // Neither reaches a body row: command_applies drops the first, the loop head takes the second.
                 break;
         }
     }
     commands.swap(commandsScratch);
     commandsScratch.clear();
+}
+
+void physics_world::state::apply_character_command(body_record &row, const body_command &command) {
+    switch (command.type) {
+        case body_command::kind::CHARACTER_MOVE:
+            // Kept in the row: the push declares character_controller as a read.
+            row.desiredVelocity = command.vectorA;
+            row.hasDesiredVelocity = true;
+            return;
+        case body_command::kind::TELEPORT:
+            if (row.character == nullptr) {
+                ++stats.droppedCommands;
+                return;
+            }
+            reposition_character(row, command.vectorA, command.rotation);
+            row.lastPulled.position = command.vectorA;
+            row.lastPulled.rotation = command.rotation;
+            row.awaitingPull = true;
+            row.firstPull = true;
+            return;
+        case body_command::kind::ACTIVATE:
+        case body_command::kind::DEACTIVATE:
+            // A character never sleeps: wake and sleep succeed and change nothing, as on a static body.
+            return;
+        case body_command::kind::ADD_FORCE:
+        case body_command::kind::ADD_FORCE_AT:
+        case body_command::kind::ADD_IMPULSE:
+        case body_command::kind::ADD_IMPULSE_AT:
+        case body_command::kind::ADD_TORQUE:
+        case body_command::kind::ADD_ANGULAR_IMPULSE:
+        case body_command::kind::SET_LINEAR_VELOCITY:
+        case body_command::kind::SET_ANGULAR_VELOCITY:
+        case body_command::kind::MOVE_KINEMATIC:
+        case body_command::kind::SET_GRAVITY:
+            // Not for characters: command_applies dropped these before the call.
+            return;
+    }
 }
 
 

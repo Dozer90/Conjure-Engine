@@ -206,6 +206,77 @@ bool physics_world::state::is_awake(const body_record &row) const noexcept {
     return awake[index].load(std::memory_order_relaxed) != 0;
 }
 
+command_target physics_world::state::target_of_components(ecs::entity target) const noexcept {
+    if (read<character_controller>(target) != nullptr) {
+        // The character wins over a rigid_body on the same entity (CONFLICTING_BODY_COMPONENTS).
+        return command_target::CHARACTER;
+    }
+    const rigid_body *body = read<rigid_body>(target);
+    if (body == nullptr) {
+        return command_target::STATIC_BODY;
+    }
+    switch (body->motionType) {
+        case motion_type::DYNAMIC:
+            return command_target::DYNAMIC_BODY;
+        case motion_type::KINEMATIC:
+            return has_flag(body->flags, rigid_body_flags::KINEMATIC_MOVES_WITH_TRANSFORM)
+              ? command_target::KINEMATIC_BODY_FOLLOWING_TRANSFORM
+              : command_target::KINEMATIC_BODY;
+        case motion_type::STATIC:
+            break;
+    }
+    return command_target::STATIC_BODY;
+}
+
+command_target physics_world::state::target_of_row(const body_record &row) noexcept {
+    if (row.kind == record_kind::CHARACTER) {
+        return command_target::CHARACTER;
+    }
+    switch (row.motion) {
+        case motion_type::DYNAMIC:
+            return command_target::DYNAMIC_BODY;
+        case motion_type::KINEMATIC:
+            return row.movesWithTransform
+              ? command_target::KINEMATIC_BODY_FOLLOWING_TRANSFORM
+              : command_target::KINEMATIC_BODY;
+        case motion_type::STATIC:
+            break;
+    }
+    return command_target::STATIC_BODY;
+}
+
+core::result<void> physics_world::state::check_command_target(const body_command &command) const {
+    if (command.type == body_command::kind::SET_GRAVITY) {
+        return core::result<void>::success();
+    }
+    // character_move keeps the code it always reported for a target that is not a character.
+    const bool characterMove = command.type == body_command::kind::CHARACTER_MOVE;
+    if (find_row(command.target) == nullptr) {
+        if (is_pending(command.target)) {
+            // No body yet, so no kind to refuse by: the push that creates it applies or drops the command.
+            return core::result<void>::success();
+        }
+        if (characterMove) {
+            return core::make_error(physics_error::NOT_A_CHARACTER, "entity {} has no character", command.target);
+        }
+        return core::make_error(physics_error::NO_BODY, "entity {} has no body", command.target);
+    }
+    const command_target kind = target_of_components(command.target);
+    if (command_applies(command.type, kind)) {
+        return core::result<void>::success();
+    }
+    if (characterMove) {
+        return core::make_error(physics_error::NOT_A_CHARACTER, "entity {} is not a character", command.target);
+    }
+    return core::make_error(
+      physics_error::WRONG_BODY_KIND,
+      "{} does not apply to entity {}, which is {}",
+      command_name(command.type),
+      command.target,
+      command_target_name(kind)
+    );
+}
+
 core::result<void> physics_world::state::queue(body_command command) {
     if (!is_owner_thread()) {
         CONJURE_ASSERT(false, "physics_world: body commands are owner-thread only");
@@ -218,11 +289,9 @@ core::result<void> physics_world::state::queue(body_command command) {
           std::format("non-finite value in a body command for entity {}", command.target)
         );
     }
-    if (command.type != body_command::kind::SET_GRAVITY) {
-        const bool known = find_row(command.target) != nullptr || is_pending(command.target);
-        if (!known) {
-            return core::make_error(physics_error::NO_BODY, "entity {} has no body", command.target);
-        }
+    const core::result<void> accepted = check_command_target(command);
+    if (!accepted.has_value()) {
+        return accepted;
     }
     if (commands.size() >= settings.maxQueuedCommands) {
         ++stats.droppedCommands;
@@ -492,17 +561,11 @@ bool physics_world::is_sleeping(ecs::entity target) const noexcept {
     if (row == nullptr) {
         return false;
     }
-    return !mState->is_awake(*row);
+    // A static body is never awake, also the static trigger that Jolt keeps as an active sensor (F408).
+    return row->motion == motion_type::STATIC || !mState->is_awake(*row);
 }
 
 core::result<void> physics_world::character_move(ecs::entity target, const math::vec3 &velocity) {
-    const body_record *row = mState->find_row(target);
-    if (row != nullptr && row->kind != record_kind::CHARACTER) {
-        return core::make_error(physics_error::NOT_A_CHARACTER, "entity {} is not a character", target);
-    }
-    if (row == nullptr && !mState->is_pending(target)) {
-        return core::make_error(physics_error::NOT_A_CHARACTER, "entity {} has no character", target);
-    }
     body_command command = {};
     command.type = body_command::kind::CHARACTER_MOVE;
     command.target = target;
@@ -573,7 +636,9 @@ u32 physics_world::body_count() const noexcept {
 }
 
 u32 physics_world::active_body_count() const noexcept {
-    return mState->physicsSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
+    // Jolt counts the static triggers too: each is an active kinematic sensor there (code sweep F408).
+    const u32 active = mState->physicsSystem->GetNumActiveBodies(JPH::EBodyType::RigidBody);
+    return active > mState->staticSensors ? active - mState->staticSensors : 0;
 }
 
 std::optional<math::transform> physics_world::body_pose(ecs::entity target) const noexcept {
@@ -604,6 +669,7 @@ math::aabb physics_world::bounds() const noexcept {
 core::result<void> physics_world::validate() const {
     const state &s = *mState;
     u32 rows = 0;
+    u32 staticTriggers = 0;
     for (usize index = 0; index < s.records.size(); ++index) {
         const body_record &row = s.records[index];
         if (row.is_free()) {
@@ -644,6 +710,24 @@ core::result<void> physics_world::validate() const {
         }
         if (row.layer >= s.settings.layers.count()) {
             return core::make_error(physics_error::UNKNOWN_LAYER, "row {} is on layer {}", index, row.layer);
+        }
+        // A static trigger is an active kinematic sensor in Jolt (code sweep F408); no other row is marked.
+        const bool staticTrigger = row.kind == record_kind::BODY && row.motion == motion_type::STATIC && row.isTrigger;
+        if (row.staticSensor != staticTrigger) {
+            return core::error(
+              core::error_code::INVALID_STATE,
+              std::format("row {} is marked as a static trigger wrongly", index)
+            );
+        }
+        if (staticTrigger) {
+            ++staticTriggers;
+            const JPH::Body &joltBody = lock.GetBody();
+            if (!joltBody.IsKinematic() || !joltBody.IsSensor() || !joltBody.IsActive()) {
+                return core::error(
+                  core::error_code::INVALID_STATE,
+                  std::format("the static trigger of row {} is not an active kinematic sensor", index)
+                );
+            }
         }
         if (s.world != nullptr && row.kind == record_kind::BODY) {
             const rigid_body *body = s.read<rigid_body>(row.entity);
@@ -699,6 +783,12 @@ core::result<void> physics_world::validate() const {
         return core::error(
           core::error_code::INVALID_STATE,
           std::format("{} rows but the live row counter says {}", rows, s.liveRows)
+        );
+    }
+    if (staticTriggers != s.staticSensors) {
+        return core::error(
+          core::error_code::INVALID_STATE,
+          std::format("{} static triggers but their counter says {}", staticTriggers, s.staticSensors)
         );
     }
     for (const auto &pair : s.activePairs) {
