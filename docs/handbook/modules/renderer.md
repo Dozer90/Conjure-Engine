@@ -1,6 +1,6 @@
 # Renderer module
 
-🛠 **Engineering handbook** · 📘 API: [Rendering](../../api/renderer/index.md), [Rendering a frame](../../api/renderer/rendering-a-frame.md), [Renderer assets](../../api/renderer/renderer-assets.md)
+🛠 **Engineering handbook** · 📘 API: [Rendering](../../api/renderer/index.md), [Rendering a frame](../../api/renderer/rendering-a-frame.md), [Renderer assets](../../api/renderer/renderer-assets.md), [JPEG XL images](../../api/renderer/jpeg-xl.md)
 
 `conjure::renderer` (target `conjure_renderer`, alias `conjure::renderer`) is the wave-3 module that turns a
 `render_scene` into one command list per frame through a render graph over `conjure::rhi`. It owns the GPU
@@ -28,7 +28,7 @@ carries the finer notes.
 ## 1. Shape of the module
 
 `engine/src/renderer/CMakeLists.txt`: `conjure_add_module(renderer ... PUBLIC_DEPS conjure::core conjure::rhi
-conjure::assets PRIVATE_DEPS nvrhi cgltf stb [imgui])`, guarded by `CONJURE_WITH_RENDERER` and the presence of
+conjure::assets PRIVATE_DEPS nvrhi cgltf stb jxl [imgui])`, guarded by `CONJURE_WITH_RENDERER` and the presence of
 `conjure::rhi` and `conjure::assets`. Never `ecs` or `scene` (R7): the components in `components.h` are plain
 reflected structs the engine's `renderer_subsystem` registers and extracts from. `imgui/imgui_renderer.cpp` is
 compiled only with `CONJURE_BUILD_EDITOR` (never in Distribution). `conjure_renderer` depends on `conjure_shaders`
@@ -40,7 +40,7 @@ so `index.json` exists before the renderer is used.
 | Handles | `gpu_ids.h` | `gpu_resource_cache.*` (slot maps, fallbacks, graveyard) |
 | Extraction contract | `render_scene.h`, `camera.h`, `light.h`, `render_settings.h` | one `.cpp` each |
 | 2D and debug | `sprite_batch.h`, `debug_draw.h` | `sprite_batcher.cpp`, `debug_draw.cpp`, `passes/sprite_pass.cpp`, `passes/debug_draw_pass.cpp` |
-| Assets | `mesh_asset.h`, `texture_asset.h`, `material_asset.h`, `model_asset.h`, `environment_asset.h`, `shader_asset.h`, `gltf_importer.h` | `assets/*.cpp`, `import/*` (tangents, mips, image decoding, IBL bake, cgltf) |
+| Assets | `mesh_asset.h`, `texture_asset.h`, `material_asset.h`, `model_asset.h`, `environment_asset.h`, `shader_asset.h`, `gltf_importer.h`, `jpeg_xl.h` | `assets/*.cpp`, `import/*` (tangents, mips, image decoding, JPEG XL codec, IBL bake, cgltf) |
 | Components | `components.h` | `components.cpp` |
 | The frame | `renderer.h`, `render_target.h` | `renderer.cpp`, `renderer_impl.h`, `render_graph.*`, `transient_pool.*`, `framebuffer_cache.*`, `binding_layouts.*`, `pipeline_cache.*`, `shader_program_loader.*`, `frame_resources.*`, `timer_ring.*`, `warn_latch.h`, `gpu_types.*`, `culling.*`, `draw_list_builder.*`, `exposure_math.*`, `shadows/*`, `passes/*` |
 | ImGui | `imgui_renderer.h` | `imgui/imgui_renderer.cpp` |
@@ -111,8 +111,8 @@ when the texture changes), so a handle taken before the resize follows it.
 ## 4. Assets and importers
 
 The five asset types (`mesh`, `texture`, `material`, `model`, `environment`) have CPU-only loaders (R10: no device
-in `finalise`) and four importers (glTF with cgltf, textures with stb, `.cmat` JSON, `.hdr` with the CPU IBL
-bake of R34). `register_asset_types(types, importers, jobs)` registers them; the engine's `renderer_subsystem`
+in `finalise`) and four importers (glTF with cgltf, textures with stb and libjxl, `.cmat` JSON, `.hdr` with the CPU
+IBL bake of R34). `register_asset_types(types, importers, jobs)` registers them; the engine's `renderer_subsystem`
 subscribes to `asset_manager` events and calls `upload_*` on LOADED / RELOADED and `release_*` on UNLOADED.
 The glTF adapter makes the model the primary asset with meshes, materials and textures as sub-assets with stable
 uuids and declared dependencies, so a blocking load of the model brings everything
@@ -121,7 +121,10 @@ A point or spot light without a glTF `range` gets `sqrt(intensity / GLTF_LIGHT_R
 `[GLTF_MIN_LIGHT_RANGE, GLTF_MAX_LIGHT_RANGE]` (`range_from_intensity` in `import/gltf_importer.cpp`), with a
 warning; a sampler whose `wrapT` differs from `wrapS` is a warning (`texture_asset` holds one wrap mode). Any
 change to what the importer produces bumps `GLTF_IMPORTER_VERSION` (2 since the derived range, 3 since
-`generateTangents = false` took effect), which re-imports cached models.
+`generateTangents = false` took effect), which re-imports cached models. The same rule holds for the IBL bake:
+`ENVIRONMENT_IMPORTER_VERSION` is 3 since the bake reads NaN and negative radiance as 0 and anything above
+`MAX_ENVIRONMENT_RADIANCE` as that bound, integrating brighter-than-half radiance unclipped (only the stored
+cubemaps clamp to 65504).
 
 Tangents (design R20, code sweep F391): the packed vertex always has one, and `import_mesh` decides where it
 comes from. A mesh whose primitives all have a usable `TANGENT` (one per vertex) keeps them; a primitive without
@@ -139,6 +142,17 @@ option: a primitive without `TEXCOORD_0` gets the same tangents under the defaul
 > [!IMPORTANT]
 > A new caller of `from_geometry` gets `FROM_UVS` unless it says otherwise. Pass `FROM_NORMAL` only where the
 > caller can also tell the user that normal maps will not work on the result, as the importer does.
+
+Every source image goes through `import/image_loader.cpp`, which routes by signature: JPEG XL to libjxl
+(`import/jpeg_xl_decoder.cpp`), the rest to stb_image. The JPEG XL decoder converts an `SRGB` texture's colour
+profile to sRGB through skcms and keeps a `LINEAR` texture's samples as stored, puts PQ and HLG reference white
+(203 nits) at 1.0, reduces deeper colour and alpha to their high byte like a 16-bit PNG, applies orientation,
+divides premultiplied alpha out before converting, keeps the first animation frame, and checks the image size, the
+extra channels and every layer's size from the headers while holding libjxl to a memory budget derived from the
+image size, the same on any number of workers; the texture and environment importers run it on the job system.
+`TEXTURE_IMPORTER_VERSION` is 2 since JPEG XL. The codec's internals (allocation and threading hooks, the colour
+plan, libjxl's XYB-to-ICC limitation, the resource limits, the binary cost) are in
+[libjxl](../libjxl.md#9-the-renderers-codec).
 
 ## 5. Threading model
 
@@ -216,8 +230,9 @@ around the EXTRACT phase, `set_imgui_draw_data` / `imgui()` for `imgui_layer`, a
 `draw_list_builder`, `cascade_builder`, `shadow_atlas_allocator`, `render_graph`, `transient_pool`,
 `gpu_types`, `tonemap_reference`, `exposure_math`, `pipeline_cache`, `gpu_resource_cache`, `warn_latch`,
 `renderer_null_frame`, `renderer_failures`, `renderer_gpu`). Everything runs on the null device; the `[gpu]`
-cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG and HDR inputs are
-generated in the tests (no binary assets). `tests/integration/test_assets_renderer_headless.cpp` covers the
+cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG, HDR, JPEG XL and ICC inputs
+are generated in the tests (no binary assets); `test_jpeg_xl.cpp` covers the JPEG XL codec through the public
+header and the private `import/jpeg_xl_codec.h`. `tests/integration/test_assets_renderer_headless.cpp` covers the
 asset pipeline into the renderer.
 
 The null command list only counts what it records, so `renderer_test_support` (`make_device`,

@@ -37,7 +37,7 @@ rhi (wave 2): device / swapchain / shader_library over nvrhi backends null | d3d
 | R10 | **SSAO = GTAO-style horizon search at half resolution** (2 slices x 4 steps), 4x4 interleaved rotation pattern, separable depth-aware 4-tap blur, bilateral upsample in the forward shader. Output `R8_UNORM`. No temporal filter in v1. | Matches the brief; temporal filtering needs motion vectors and history, deferred to the TAA work item. |
 | R11 | **HDR chain**: 256-bin log-luminance histogram auto-exposure (50th-90th percentile) with up/down adaptation speeds, or manual EV100; 6-mip bloom (13-tap downsample with Karis average on mip 0, 3x3 tent upsample); tonemap `ACES_FITTED`, `REINHARD_EXTENDED`, `AGX`, `NONE`, chosen by uniform. Tonemap curves live in `tonemap.hlsli`, written in a C++-compilable subset and unit-tested natively. | All three customer operators plus a pass-through for pixel-exact 2D games. CPU-testable curves catch regressions without a GPU. |
 | R12 | **2D**: `WORLD` sprites draw into HDR after blended meshes (depth-tested, premultiplied alpha); `SCREEN` sprites draw after tonemap into the LDR target in pixel space. Orthographic cameras are `projection_type::ORTHOGRAPHIC`; every 3D pass is projection-agnostic. A view with `view_flags::NO_POST_PROCESS` skips exposure, bloom and the operator (exposure 1, sRGB encode only). | No second renderer. A Pac-Man-class game is a 3D frame whose 3D passes are culled by the graph because they have no inputs, with colours untouched. |
-| R13 | **IBL baked on the CPU inside the environment importer** (equirect -> 512^2 cubemap -> SH9 irradiance -> 128^2 x 6-mip GGX prefiltered specular; job-parallel per face; deterministic) and stored in the cooked `.cenv`; the 256^2 `RG16_FLOAT` split-sum BRDF LUT is baked once on the GPU at renderer creation. (Cross-area resolution R34: importers run on worker threads without a device and must be deterministic, so a GPU bake at import is impossible under the asset pipeline's rules.) | Load is upload-only; cooked projects never re-bake; the bake is unit-testable headless and byte-identical across machines, which the content-hash cache requires. |
+| R13 | **IBL baked on the CPU inside the environment importer** (equirect -> 512^2 cubemap -> SH9 irradiance -> 128^2 x 6-mip GGX prefiltered specular; job-parallel per face; deterministic) and stored in the cooked `.cenv`; the 256^2 `RG16_FLOAT` split-sum BRDF LUT is baked once on the GPU at renderer creation. (Cross-area resolution R34: importers run on worker threads without a device and must be deterministic, so a GPU bake at import is impossible under the asset pipeline's rules.) | Load is upload-only; cooked projects never re-bake; the bake is unit-testable headless and byte-identical across runs and worker counts, and across machines for a source whose decode has no CPU-dependent step (a Radiance `.hdr`, a lossless linear-sRGB JPEG XL; 3.13 item 6, which proposes how every JPEG XL sky gets there), which the content-hash cache requires. |
 | R14 | **Shader build**: `conjure_add_shaders()` enumerates `source;entry;stage;defines` entries, runs `dxc` (DXIL, `-T xx_6_5`, `-HV 2018`) and `glslang` (SPIR-V, `vulkan1.2`) per permutation with NVRHI's default Vulkan binding offsets, writes `shaders/index.json`, and supports `CONJURE_SPIRV_COMPILER=glslang|dxc`. `shader_library` resolves `(name, entry, defines)` -> blob. | Honours the fixed decision. glslang's README (checked 2026-11-06) marks its HLSL front-end deprecated since April 2026 with removal at the next major version, so `Dependencies.cmake` must pin a pre-removal tag and the compiler switch keeps the long-term path open without touching shader sources. |
 | R15 | **NVRHI stays in `src/`.** Public `rhi` headers forward-declare `nvrhi::IDevice` / `nvrhi::ITexture` only (no includes) and expose non-owning `native_*()` accessors used by `conjure_renderer`. | Satisfies "no third-party headers in public headers" literally without inventing a parallel type system over NVRHI. |
 | R16 | **`imgui_renderer` is part of `conjure_renderer`**, compiled out under `CONJURE_DISTRIBUTION`, implements `ImGuiBackendFlags_RendererHasTextures` (ImGui >= 1.92 texture protocol). | One NVRHI consumer; the texture protocol is required by upstream for all backends. |
@@ -313,9 +313,13 @@ ambient. Emissive adds `emissiveFactor * emissiveStrength * emissiveTexture`. Al
 sRGB decode happens through `_SRGB` texture formats only.
 
 ### 3.6 IBL bake (`import/ibl_baker`, CPU, runs inside `environment_importer::import` on a worker; R34)
-1. Equirect `.hdr` (stb_image float) -> 512^2 RGBA16F cubemap (bilinear equirect lookup per face texel), then a
-   6-level box-filtered mip chain. Faces are independent, so the baker uses `job_system::parallel_for` over
-   faces when a job system is available and loops inline otherwise; the output is bit-identical either way.
+1. Equirect `.hdr` (stb_image float) or JPEG XL (libjxl, any sample type converted to linear sRGB, PQ and HLG
+   with 1.0 at 203 nits, 3.13), every sample read as finite and non-negative (NaN and negative as 0, above
+   `MAX_ENVIRONMENT_RADIANCE`, the largest float / 2^16, as that bound, so no float sum of the bake overflows; finite
+   HDR radiance below it is kept) -> 512^2 float cubemap (bilinear equirect lookup per face texel), then a
+   6-level box-filtered mip chain, all integrated unclipped and stored as RGBA16F clamped to [0, 65504] last. Faces are independent, so the baker uses `job_system::parallel_for` over
+   faces when a job system is available and loops inline otherwise; the output is bit-identical either way. The
+   bake's own arithmetic is the same on every machine; a JPEG XL source may not be (3.13 item 6).
 2. SH9 irradiance: integrate mip 4 (32^2 x 6 texels) with solid-angle weights into 27 floats.
 3. GGX prefilter: 128^2 x 6 mips, importance sampling with a fixed Hammersley sequence (128 samples) and
    PDF-based source-mip selection; roughness = mip / 5. Deterministic: no clocks, no hash-map order, `float`
@@ -441,6 +445,82 @@ then `create_program_shader` per stage). A permutation added to CMake and not to
 fullscreen-triangle pair); one added to the table and not to CMake fails the same file's `validate` case
 and, once a pipeline variant or the ImGui backend resolves it, `renderer::create` with `SHADER_NOT_FOUND`;
 a table entry nothing resolves fails `test_pipeline_cache` (sweep-2026-11-12 F395).
+
+### 3.13 Source image decoding (`import/image_loader`, `import/jpeg_xl_*`)
+
+`detail::decode_rgba8` and `detail::decode_hdr_rgb` are the only decoders of source images; `texture_asset::decode`,
+the texture importer, glTF images and `equirect_image::decode_hdr` all go through them. A file is routed by its
+signature, never its name: JPEG XL (ISO/IEC 18181; `JxlSignatureCheck`, codestream `FF 0A` or the container's
+signature box) goes to libjxl, everything else to stb_image (PNG, JPEG, TGA, BMP, GIF, Radiance `.hdr`). The JPEG XL
+path (`conjure/renderer/jpeg_xl.h` for the public encoder and signature check):
+
+1. Before any frame is decoded (`INVALID_ARGUMENT`; input above 2 GiB is refused first, as for stb): the basic info
+   against `texture_asset::MAX_DIMENSION` and at most 16 extra channels, and every layer against `MAX_DIMENSION` in a
+   header-only pass (coalescing off). While it decodes, libjxl's allocations count against a budget of 32 MiB, 8 MiB
+   for each of the 16 threads it may run on (counted inline too, so the limit does not depend on the workers) and 64
+   bytes per sample of the image, which bounds reference-only frames, frame state and the ICC profile; a refused
+   allocation fails the decode with `INVALID_ARGUMENT` naming the limit.
+2. Colour: an `SRGB` texture asks libjxl for sRGB (grey for a grey file) through skcms, libjxl's default CMS, so
+   Display P3, linear and ICC-tagged files convert; a file already in sRGB is not touched, so 8-bit sRGB
+   decodes bit-exact. A `LINEAR` texture is data and keeps the file's own encoding: nothing happens for a lossless
+   file; a lossy (XYB) one is rendered into its original encoded profile, or, when the original is an ICC profile
+   (libjxl stops on an internal check when asked to render XYB into one), decoded to linear sRGB floats and
+   converted to the ICC profile through the CMS interface. The HDR path asks for linear sRGB floats. PQ and HLG
+   (display light, decoded by libjxl with 1.0 at the file's intensity target) are rescaled so that 1.0 is 203 nits,
+   BT.2408's reference white: the HDR path keeps values above 1, an `SRGB` texture clips at 1 and applies the sRGB
+   curve, a `LINEAR` one keeps the signal.
+3. Colour and alpha deeper than 8 bits (judged separately) are decoded to 16 bits and keep the high byte, which is
+   stb's reduction of a 16-bit PNG, and 8-bit colour beside them is rounded; orientation is applied; premultiplied
+   alpha is divided out in the encoding the file stores, before any colour conversion (libjxl's own division runs
+   after its colour stages, so it divides only when no conversion follows, chosen by the header pass because libjxl
+   takes the option only before it starts; otherwise the engine divides float output and converts afterwards through
+   the CMS interface); a missing alpha reads 255; grey fills RGB. A file that ends before the data its headers
+   announce fails as truncated, any other libjxl error as corrupt (both `DECODE_FAILED`).
+4. The first displayed frame of an animation is kept; later frames are skipped at their image-out event and
+   counted for one WARN.
+5. libjxl allocates through `core::memory::tracked_allocate` (a `JxlMemoryManager`, 16-byte aligned like malloc)
+   and runs on `core::jobs` when a job system with workers is given (a `JxlParallelRunner` that splits each range
+   into one contiguous task per thread, 16 at most, and passes the task index as libjxl's thread id); otherwise
+   single-threaded. The output does not depend on the worker count, nor does the memory limit (item 1): a decode on
+   workers only adds a few MB for each thread with work, so only a file needing within that of its limit can decode
+   inline and be refused on workers. libjxl's `jxl_threads` is not linked.
+6. Determinism across machines. A decode gives the same bytes on every run and with any worker count (tested). On
+   another x64 CPU it gives the same bytes when no CPU-dependent arithmetic runs: a lossless file output in the
+   encoding it stores (an sRGB file as `SRGB`, any lossless file as `LINEAR`, a linear-sRGB file on the HDR path),
+   whose samples libjxl's output stage scales, dithers and rounds well clear of a rounding boundary. The same bytes
+   are expected, not guaranteed, when skcms alone converts the file (between primaries or through ICC profiles, with
+   no PQ or HLG side and no sRGB-linear pair of the same primaries), as skcms's code paths avoid fused multiply-add
+   by its source, and when libjxl divides 8-bit premultiplied colour: its write stage is correctly rounded operation
+   by operation, which only a compiler that fuses its scale with its dither (GCC may) changes, and only for a sample
+   on a rounding boundary. libjxl's own kernels are dispatched per CPU at run time (Highway's
+   `HWY_DYNAMIC_DISPATCH`), and Highway's `MulAdd` is fused on AVX2 and a separate multiply and add on SSE4. Every
+   lossy (VarDCT, XYB) decode, and every conversion with a PQ or HLG side whatever the primaries or between sRGB and
+   linear with the same primaries, may therefore come out a rounding step apart on another CPU: `JxlCmsInit`
+   (`jxl_cms.cc`) applies those transfer functions itself (`ExtraTF`, and HLG's OOTF) in dispatched code, whether
+   libjxl's pipeline or the engine's own conversion after its division calls the CMS interface. An HDR sky from
+   such a file (in sRGB, PQ or HLG, premultiplied or not) keeps R13 on one machine but its `.cenv` may differ
+   between machines; nothing tests a decode under two Highway targets.
+
+   Proposal to keep R13 for JPEG XL skies (not implemented, in order of preference):
+   - Transfer functions in the engine. The HDR path asks libjxl for float output in the file's own encoding (a
+     lossless file then comes out as stored, with no Highway arithmetic) and converts to linear sRGB in engine code:
+     sRGB, PQ and HLG (with its OOTF) to linear in scalar functions, then a change of primaries through skcms between
+     linear profiles, which takes no `ExtraTF`. Every lossless sky leaves libjxl's dispatched code at the cost of one
+     more pass over the image; lossy skies still depend on Highway's inverse transforms and XYB stage.
+   - Lossless sources. The environment importer logs a WARN for a lossy JPEG XL sky (`uses_original_profile` false),
+     and the API page asks for lossless skies. No decoder change; with the first item it covers every sky that needs
+     to match across machines.
+   - Static Highway dispatch as a build option. Highway compiled with `HWY_COMPILE_ONLY_STATIC` and the baseline
+     x64 target runs the same code on every x64 CPU, lossy files included, but decodes everywhere (textures, glTF
+     images, the encoder) slower by about the AVX2 speed-up; an option for builds that cook for several machines,
+     not the default.
+
+   Whichever lands needs a test that decodes one file under two Highway targets (`hwy::SetSupportedTargetsForTest`
+   behind a codec test hook, since tests never include Highway's headers) and compares the bytes.
+
+libjxl is linked in every configuration: the runtime imports textures when it runs a project from its sources
+(`assets_subsystem` builds the asset database whenever the project is not cooked), so a Distribution runtime
+without the decoder would refuse `.jxl` sources a Development one imports.
 
 ---
 
@@ -599,7 +679,7 @@ next compiled backend and finally `NULL_DEVICE` in headless mode.
 | `mesh_asset.h` | `enum class tangent_generation : std::uint8_t { FROM_UVS, FROM_NORMAL }` (R20), `struct mesh_streams`, `struct submesh`, `class mesh_asset` (`cpu_geometry()` keeps positions + indices in Debug/Development for the editor's CPU picking, R11) |
 | `texture_asset.h` | `enum class texture_colour_space : std::uint8_t { SRGB, LINEAR }`, `enum class sampler_filter : std::uint8_t { LINEAR, POINT }`, `struct texture_mip`, `class texture_asset` |
 | `material_asset.h` | `enum class alpha_mode : std::uint8_t { SOLID, MASK, BLEND }` (`SOLID` is glTF's `OPAQUE`, a Windows macro name, CONVENTIONS 3), `struct material_desc`, `class material_asset` |
-| `environment_asset.h` | `using sh9 = std::array<math::vec3, 9>;`, `class environment_asset` |
+| `environment_asset.h` | `using sh9 = std::array<math::vec3, 9>;`, `class environment_asset`, `MAX_ENVIRONMENT_RADIANCE` |
 | `shader_asset.h` | `struct shader_program_desc { std::string name, vertexEntry, pixelEntry, computeEntry, pixelDefines, vertexDefines; }`, `class shader_asset` (v1: built-in programs only: `built_in_programs()` is the list the renderer loads (R18), `find_built_in(name, pixelDefines, vertexDefines)`, `validate(rhi::shader_library&)`) |
 | `model_asset.h` | `struct model_node`, `class model_asset` (glTF node tree that `scene` turns into a prefab) |
 | `gltf_importer.h` | `struct gltf_import_options`, `struct gltf_import_result`, `class gltf_importer` |
@@ -813,7 +893,7 @@ tests/renderer/fixtures/{quad.gltf,box_textured.glb,alpha_mask.gltf,strips.gltf,
 CMake: `conjure_add_module(rhi SOURCES ... PUBLIC_DEPS conjure_core conjure_platform PRIVATE_DEPS
 conjure::thirdparty::nvrhi [nvrhi_d3d12] [nvrhi_vk])`; `conjure_add_module(renderer SOURCES ...
 PUBLIC_DEPS conjure_core conjure_rhi conjure_assets PRIVATE_DEPS conjure::thirdparty::nvrhi
-conjure::thirdparty::cgltf conjure::thirdparty::stb conjure::thirdparty::imgui)`;
+conjure::thirdparty::cgltf conjure::thirdparty::stb conjure::thirdparty::jxl conjure::thirdparty::imgui)`;
 `add_dependencies(conjure_renderer conjure_shaders)`.
 
 ---
@@ -907,7 +987,7 @@ clamped and logged, so a bad scene never aborts a frame.
   opaque pointers (no Vulkan headers in `platform`), `framebuffer_resized` event.
 - `assets`: `asset_id` (uuid), `asset_ref<T>`, `asset_type_registry`, `importer_registry`
   (`renderer::register_asset_types` registers `gltf_importer` for `.gltf/.glb`, `texture_importer` for
-  `.png/.jpg/.tga`, `material_importer` for `.cmat`, `environment_importer` for `.hdr` -> `.cenv`; the engine's
+  `.png/.jpg/.jpeg/.tga/.bmp/.jxl`, `material_importer` for `.cmat`, `environment_importer` for `.hdr` -> `.cenv`; the engine's
   `renderer_subsystem` calls it), cooked pack reader/writer (renderer defines payloads `.cmesh`, `.ctex`,
   `.cmat` json, `.cenv`, `.cmodel`), `asset_manager` events: the renderer's loaders are CPU-only (`load_cpu`
   decodes, `finalise` is trivial) and the engine's `renderer_subsystem` calls `upload_*` on LOADED/RELOADED
@@ -940,7 +1020,7 @@ reusable by game modules for their own compute shaders.
 3. **rhi/device + message_callback + swapchain** on the null backend; then `d3d12` and `vulkan` backends (device creation, DXGI/VkSwapchainKHR, back-buffer wrapping via `createHandleForNativeTexture`, resize, device-lost detection).
 4. **cmake/ConjureShaders.cmake** + `engine/shaders/CMakeLists.txt` with one trivial shader; `rhi/shader_library` reading `index.json`.
 5. **renderer public data types**: `limits`, `gpu_ids`, `camera`, `light`, `render_settings`, `render_scene` + `render_scene_pair`, `debug_draw`, `sprite_batcher` (all CPU, fully unit-tested before any GPU code).
-6. **Assets (CPU side)**: `mesh_asset` (streams, packing, bounds, `.cmesh`), `texture_asset` (stb decode, CPU mips, `.ctex`), `material_asset` (json), `environment_asset` (`.cenv`), `model_asset`, `shader_asset`; `gltf_importer` + `tangent_generator`.
+6. **Assets (CPU side)**: `mesh_asset` (streams, packing, bounds, `.cmesh`), `texture_asset` (stb and libjxl decode, CPU mips, `.ctex`), `material_asset` (json), `environment_asset` (`.cenv`), `model_asset`, `shader_asset`; `gltf_importer` + `tangent_generator`.
 7. **Renderer core**: `gpu_types` (static_asserts against `gpu_types.hlsli`), `binding_layouts`, `pipeline_cache`, `framebuffer_cache`, `transient_pool`, `render_graph` + `pass_builder`, `gpu_uploader`, `gpu_resource_cache` with fallbacks, `renderer::create` with no passes; `test_renderer_null_frame` renders an empty scene.
 8. **Geometry path**: `culling`, `draw_list_builder`, `depth_prepass`, `forward_pass` with constant ambient, `skybox_pass`, `blit_pass`, `render_target`, `tonemap_pass` with `NONE`; first image on a real device (`samples/feature_test` early).
 9. **Lighting**: `light_cull_pass`, punctual lights in `forward_pbr.hlsl`, `brdf.hlsli`.
@@ -972,8 +1052,9 @@ renderer: `test_camera` (reverse-Z near -> 1 and far -> 0 for perspective and or
 `test_gpu_types` (`sizeof`/offsets equal the HLSL constants),
 `test_mesh_asset` (bounds, normal/tangent packing round trip within 1e-3, tangent generation on a quad yields +X, `tangent_generation::FROM_NORMAL` gives a unit tangent perpendicular to the supplied or generated normal with handedness +1 and leaves supplied tangents alone (R20), `.cmesh` round trip, out-of-range index rejected),
 `test_texture_asset` (mip count, sRGB vs linear format, 1x1 edge, box filter of a checker is mid-grey in linear space, decode failure -> error, `.ctex` round trip),
+`test_jpeg_xl` (encoder round trips lossless and lossy, every pixel layout and sample type, a 16-bit file equal to the same 16-bit PNG, Display P3, linear and ICC files converted, all eight orientations, the first animation frame, premultiplied alpha divided out before conversion (grey included) and by libjxl, into integers or float scanlines, when nothing converts afterwards, 16-bit alpha next to 8-bit colour, which is rounded when converted, PQ and HLG in reference-white units (decoded, lossy, premultiplied, baked, as sRGB textures), NaN and infinite float samples made finite, truncated and corrupt files told apart, oversize images and layers, too many extra channels and an over-budget frame refused, the same refusal or decode near the memory limit on 0, 1, 2 and 8 workers, header-declared ICC and box sizes allocating nothing, the same bytes on 0, 1 and 8 workers, signature routing),
 `test_material_asset` (defaults equal glTF defaults, json round trip, texture flags from missing refs),
-`test_environment_asset` (CPU bake of a constant environment returns the radiance in SH band 0 and a constant prefiltered chain, two bakes are byte-identical, inline and 8-worker bakes are byte-identical, `.cenv` round trip),
+`test_environment_asset` (CPU bake of a constant environment returns the radiance in SH band 0 and a constant prefiltered chain, two bakes are byte-identical, inline and 8-worker bakes are byte-identical, `.cenv` round trip, a 1e5 sun integrated unclipped, NaN, infinite and overflowing radiance baked finite),
 `test_gltf_importer` (fixtures: node tree, material factors, missing normals/tangents generated, `generateTangents = false` builds tangents from the normal and warns once per mesh with a lit normal-mapped material, also through the asset importer's settings, with `generateTangents = false` a primitive keeps the file's TANGENT when others of its mesh have none (the default generates them all from the UVs) unless the mesh's normals are generated (R20), strips triangulated, unsupported extension warns, missing buffer -> error, points -> `UNSUPPORTED`, 16-bit indices widened),
 `test_sprite_batcher` (sort by space/layer/order/texture, run count, pixel-space transform, cap at `MAX_SPRITES_PER_FRAME` dropping world sprites before screen sprites, the overflow WARN logged when the overflow starts and re-armed by a build within the cap or an empty one but not by `clear()`; R19),
 `test_warn_latch` (due when the condition starts, silent while it lasts, due again after it ended; one latch per view index, an index left alone keeps its state, an index of `MAX_VIEWS` or more asserts and changes nothing; R19),

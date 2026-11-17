@@ -324,6 +324,9 @@ when a `FetchContent_Declare` of that file has no notice naming it as `FETCH`. S
 tracked under someone else's licence, code that follows a published implementation), and code a fetched source
 embeds under a copyright of its own (jsmn in `cgltf.h`), keep their licence text in `third_party/licenses/`; a
 notice with `FETCH` names such a file with an absolute path, since its relative ones are read in the fetched source.
+libjxl and the three libraries it builds are pinned by archive SHA-256 in `third_party/jxl.cmake`, which
+`third_party/CMakeLists.txt` includes; neither the `GIT_TAG` comparison nor the declaration scan reaches that file,
+and its own probes check its four notices ([libjxl](libjxl.md#7-licences)).
 
 After changing a pin or a notice, regenerate the tracked document and commit it with the change:
 

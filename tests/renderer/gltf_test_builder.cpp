@@ -139,7 +139,12 @@ u32 gltf_test_builder::add_solid_texture(u32 width, u32 height, u8 r, u8 g, u8 b
     image.fill(core::rgba8{r, g, b, a});
     core::result<std::vector<std::byte>> encoded = image.encode_png();
     CONJURE_REQUIRE_OK(encoded);
-    mImages.push_back(std::move(encoded).value());
+    return add_encoded_texture(std::move(encoded).value(), "image/png");
+}
+
+u32 gltf_test_builder::add_encoded_texture(std::vector<std::byte> bytes, std::string_view mimeType) {
+    mImages.push_back(std::move(bytes));
+    mImageMimeTypes.emplace_back(mimeType);
     return static_cast<u32>(mImages.size() - 1);
 }
 
@@ -506,13 +511,16 @@ std::string gltf_test_builder::json(const layout &packed, std::string_view buffe
                 while (!mImageDataUriPadding && !encoded.empty() && encoded.back() == '=') {
                     encoded.pop_back();
                 }
+                const std::string_view mimeType = mImageMimeTypes[index];
                 text.append(
-                  std::format("{{\"uri\": \"data:image/png;base64,{}\", \"mimeType\": \"image/png\"}}", encoded)
+                  std::format("{{\"uri\": \"data:{};base64,{}\", \"mimeType\": \"{}\"}}", mimeType, encoded, mimeType)
                 );
             } else {
-                text.append(
-                  std::format("{{\"bufferView\": {}, \"mimeType\": \"image/png\"}}", packed.imageViews[index])
-                );
+                text.append(std::format(
+                  "{{\"bufferView\": {}, \"mimeType\": \"{}\"}}",
+                  packed.imageViews[index],
+                  mImageMimeTypes[index]
+                ));
             }
         }
         text.append(

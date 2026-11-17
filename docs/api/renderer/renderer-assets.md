@@ -15,10 +15,11 @@ Headers: `conjure/renderer/mesh_asset.h`, `conjure/renderer/texture_asset.h`, `c
 | Register the five asset types and four importers | `renderer::register_asset_types(types, importers, jobs)` (the engine does it at start-up) |
 | Build a mesh in code | `mesh_asset::unit_cube()`, `uv_sphere(radius, rings, segments)`, `quad(halfSize)`, `mesh_asset::from_geometry(geometry, name, missingTangents)` |
 | Build a texture in code | `texture_asset::solid_colour(...)`, `checker(...)`, `from_rgba8(...)`, `from_image(image, ...)`, `decode(bytes, ...)` |
+| Read or write JPEG XL | `decode` reads it like any image; `encode_jpeg_xl(image, options)` writes it ([JPEG XL images](jpeg-xl.md)) |
 | Describe a material | fill a `material_desc` and construct `material_asset(desc, name)`; `material_asset::fallback()` is the magenta one |
 | Import a glTF in code | `gltf_importer().import(path, options)` or `import_bytes(bytes, options, reader)` |
 | Read a model's node tree | `model_asset::nodes()`, `meshes()`, `materials()`, `root_nodes()`, `children_of(node)`, `world_transform(node)` |
-| Bake lighting from an HDR | `bake_environment(equirect, options, jobs)` or let the `.hdr` importer do it |
+| Bake lighting from an HDR | `bake_environment(equirect, options, jobs)` or let the `.hdr` importer do it (a JPEG XL sky too) |
 | Look at a mesh on the CPU (picking) | `mesh_asset::cpu_geometry()` (Debug and Development builds) |
 
 ## Quick example
@@ -56,10 +57,10 @@ them when they become `LOADED`. The example is what a tool without the pipeline 
 | Type name | C++ type | Source | Importer | Notes |
 |---|---|---|---|---|
 | `conjure.renderer.mesh` | `mesh_asset` | sub-asset of a glTF | glTF | packed vertex streams, submeshes, bounds; positions and indices stay resident for CPU picking |
-| `conjure.renderer.texture` | `texture_asset` | `.png .jpg .jpeg .tga .bmp` | `texture_importer` (`texture_import_settings`: colour space, mips, filter, wrap) | RGBA8, sRGB or linear, full mip chain |
+| `conjure.renderer.texture` | `texture_asset` | `.png .jpg .jpeg .tga .bmp .jxl` | `texture_importer` (`texture_import_settings`: colour space, mips, filter, wrap) | RGBA8, sRGB or linear, full mip chain |
 | `conjure.renderer.material` | `material_asset` | `.cmat` (JSON) or a glTF sub-asset | `material_importer` | `material_desc` below |
 | `conjure.renderer.model` | `model_asset` | `.gltf .glb` (the primary asset) | `gltf_asset_importer` | the node tree; the scene module turns it into a prefab |
-| `conjure.renderer.environment` | `environment_asset` | `.hdr` | `environment_importer` (`environment_bake_options`) | sky cubemap, prefiltered specular mips, SH9 irradiance, baked on the CPU at import |
+| `conjure.renderer.environment` | `environment_asset` | `.hdr` (a JPEG XL through "import as") | `environment_importer` (`environment_bake_options`) | sky cubemap, prefiltered specular mips, SH9 irradiance, baked on the CPU at import |
 
 Every type has a loader (`mesh_loader`, `texture_loader`, ...) that parses the cooked blob on a job and a fallback
 the renderer draws for a missing asset; none of them touches the GPU (that is `renderer::upload_*`).
@@ -84,10 +85,12 @@ submesh and mesh bounds with `INVALID_ASSET`.
 
 `texture_asset` holds RGBA8 mips (`mips()`, `width()`, `height()`, `mip_count()`), a colour space
 (`texture_colour_space::SRGB` or `LINEAR`), a `sampler_filter` and a `texture_wrap`; `pixel(x, y)` reads the top
-mip. `decode(bytes, settings)` runs the image decoders, `from_image` wraps a `core::image`, `load_from_file` reads a
-file (any path, Unicode included; `name()` is its UTF-8 filename), `mip_count_for(width, height)` says how many
-mips a size gets. `MAX_DIMENSION` is 16384: `decode` reads the image header first and refuses a larger image with
-`INVALID_ARGUMENT` before decoding any of it. `parse_blob` accepts only a mip chain the base size allows and an
+mip. `decode(bytes, colourSpace, generateMips, jobs)` runs the image decoders, chosen by the file's signature and
+not its name (JPEG XL, PNG, JPEG, TGA, BMP), `from_image` wraps a `core::image`, `load_from_file` reads a file (any
+path, Unicode included; `name()` is its UTF-8 filename), `mip_count_for(width, height)` says how many mips a size
+gets. `MAX_DIMENSION` is 16384: `decode` reads the image header first and refuses a larger image with
+`INVALID_ARGUMENT` before decoding any of it. Only JPEG XL is colour-managed (converted to sRGB for an sRGB
+texture, kept as stored for a linear one); [JPEG XL images](jpeg-xl.md) lists what its decoder does. `parse_blob` accepts only a mip chain the base size allows and an
 RGBA8 format that matches the colour space (`RGBA8_SRGB` for sRGB, `RGBA8_UNORM` for linear).
 
 ### Materials
@@ -115,8 +118,15 @@ index of 4294967295 or more fails with `INVALID_ARGUMENT` instead of wrapping.
 An `environment_asset` carries the sky `cubemap_data` (six faces, mip chain), the `prefiltered()` specular
 cubemap (`ENVIRONMENT_MIP_COUNT` roughness levels) and the `irradiance()` SH9 coefficients.
 `bake_environment(equirect_image, environment_bake_options {skySize, prefilteredSize, sampleCount}, jobs)`
-produces one from a decoded `.hdr` (`equirect_image::decode_hdr(bytes)`); the cubemaps store radiance clamped to
-the finite half range (65504), so a sun brighter than that bakes as 65504 rather than infinity.
+produces one from a decoded `.hdr` or JPEG XL (`equirect_image::decode_hdr(bytes, jobs)`). The bake reads every texel
+as finite, non-negative radiance: NaN and negative values count as 0 and anything above `MAX_ENVIRONMENT_RADIANCE`
+(about 5.2e33, +inf included) as that bound, so an image filled by hand cannot turn the irradiance into NaN and no sum
+of the bake overflows. Finite radiance below it is integrated as it is, so a sun of 1e5 lights the SH9 irradiance and
+the rough prefiltered mips fully; only the stored cubemap texels are clamped to the finite half range (65504), so the
+sun's own texels bake as 65504 rather than infinity. `decode_hdr` returns its samples already made finite, and a PQ
+or HLG JPEG XL with 1.0 at 203 nits (📘 API: [JPEG XL images](jpeg-xl.md#hdr-skies)). `ENVIRONMENT_IMPORTER_VERSION`
+is 3 since the bake reads samples that way, so a cached environment whose source holds NaN, negative or out-of-range
+radiance bakes again once.
 `environment_asset::uniform(radiance, size)` is a flat sky for tests; the loader's fallback and the renderer's
 ambient for a scene without an environment are both `uniform(FALLBACK_ENVIRONMENT_RADIANCE)` (0.25).
 `evaluate_sh9_irradiance` and `cubemap_texel_direction` are the helpers the shaders mirror.
@@ -224,11 +234,12 @@ custom shader programs will enter later.
 | `material_asset(material_desc, std::string name = {})`, `static material_asset fallback()`, `static result<material_asset> parse_json(string_view)`, `std::string to_json() const` | materials |
 | `u32 model_asset::add_node(model_node)`, `add_mesh(const asset_id &)`, `add_material(const asset_id &)`; `vector<u32> root_nodes() const`, `children_of(u32) const`; `transform world_transform(u32) const` | models |
 | `result<environment_asset> bake_environment(const equirect_image &, const environment_bake_options &, job_system *)`, `static environment_asset environment_asset::uniform(const vec3 &, u32 size = 8)` | environments |
+| `MAX_ENVIRONMENT_RADIANCE`, `ENVIRONMENT_IMPORTER_VERSION` (3), `FALLBACK_ENVIRONMENT_RADIANCE` | the brightest radiance the bake integrates, the importer's cache version, the fallback grey |
 | `result<gltf_import_result> gltf_importer::import(const path &, const gltf_import_options &) const`, `import_bytes(span<const byte>, const gltf_import_options &, const gltf_file_reader &) const` | glTF |
 | `static span<const shader_program_desc> shader_asset::built_in_programs()`, `static result<shader_asset> find_built_in(string_view name, string_view pixelDefines = {}, string_view vertexDefines = {})`, `result<void> validate(rhi::shader_library &) const` | the list of shaders the renderer loads, lookup, check against a library |
 | `static result<void> renderer::register_asset_types(asset_type_registry &, importer_registry &, job_system * = nullptr)` | registration |
 
 ## See also
 
-- 📘 API: [Rendering a frame](rendering-a-frame.md), [Database, importers and hot reload](../assets/database-and-import.md), [Processes, libraries and images](../core/system.md)
+- 📘 API: [Rendering a frame](rendering-a-frame.md), [JPEG XL images](jpeg-xl.md), [Database, importers and hot reload](../assets/database-and-import.md), [Processes, libraries and images](../core/system.md)
 - 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)

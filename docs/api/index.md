@@ -148,6 +148,7 @@ Start with the overview; it gives the mental model in five sentences and a table
 | [Rendering](renderer/index.md) | what the renderer does, CPU assets versus GPU ids, the `render_scene` contract, headless rendering |
 | [Rendering a frame](renderer/rendering-a-frame.md) | `renderer::create`, uploads and ids, views, instances, lights, sprites, debug lines, render targets and read-back, `render_stats`, the components, ImGui |
 | [Renderer assets](renderer/renderer-assets.md) | meshes, textures, materials, models, environments, the glTF importer, the built-in shader programs |
+| [JPEG XL images](renderer/jpeg-xl.md) | `.jxl` textures and skies: colour profiles, bit depths, orientation, animation; `encode_jpeg_xl` |
 
 ## Physics pages
 

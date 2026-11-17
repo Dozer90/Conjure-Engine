@@ -149,21 +149,23 @@ core::result<texture_asset> texture_asset::from_image(
 core::result<texture_asset> texture_asset::decode(
   std::span<const std::byte> encoded,
   texture_colour_space colourSpace,
-  bool generateMips
+  bool generateMips,
+  core::jobs::job_system *jobs
 ) {
     detail::decoded_image image = {};
-    CONJURE_TRY_ASSIGN(image, detail::decode_rgba8(encoded));
+    CONJURE_TRY_ASSIGN(image, detail::decode_rgba8(encoded, colourSpace, jobs));
     return from_rgba8(image.width, image.height, image.rgba, colourSpace, generateMips);
 }
 
 core::result<texture_asset> texture_asset::load_from_file(
   const std::filesystem::path &path,
   texture_colour_space colourSpace,
-  bool generateMips
+  bool generateMips,
+  core::jobs::job_system *jobs
 ) {
     std::vector<std::byte> bytes = {};
     CONJURE_TRY_ASSIGN(bytes, detail::read_file_bytes(path));
-    core::result<texture_asset> decoded = decode(bytes, colourSpace, generateMips);
+    core::result<texture_asset> decoded = decode(bytes, colourSpace, generateMips, jobs);
     if (decoded.has_value()) {
         decoded.value().mName = detail::path_utf8(path.filename());
     }
@@ -418,6 +420,9 @@ core::json::document texture_import_settings::to_document() const {
 
 texture_importer::texture_importer() {}
 
+texture_importer::texture_importer(core::jobs::job_system *jobs) :
+    mJobs(jobs) {}
+
 texture_importer::~texture_importer() {}
 
 std::string_view texture_importer::id() const noexcept {
@@ -441,8 +446,12 @@ core::result<assets::import_output> texture_importer::import(assets::import_cont
     if (!settings.has_value()) {
         return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, settings.get_error().message());
     }
-    core::result<texture_asset> decoded =
-      texture_asset::decode(context.source_bytes(), settings.value().colourSpace, settings.value().generateMips);
+    core::result<texture_asset> decoded = texture_asset::decode(
+      context.source_bytes(),
+      settings.value().colourSpace,
+      settings.value().generateMips,
+      mJobs
+    );
     if (!decoded.has_value()) {
         return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, decoded.get_error().message());
     }

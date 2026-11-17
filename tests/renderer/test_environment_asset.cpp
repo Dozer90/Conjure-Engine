@@ -4,6 +4,9 @@
 #include "conjure/testing/test_environment.h"
 #include "renderer_test_support.h"
 
+#include "renderer/import/ibl_baker.h"
+#include "renderer/import/jpeg_xl_codec.h"
+
 #include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/limits.h"
 #include "conjure/renderer/mesh_asset.h"
@@ -24,6 +27,8 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -31,11 +36,17 @@
 
 // environment_asset.h (docs/design/02_renderer.md R13, 3.6, R34): cubemap storage, equirect
 // decoding and sampling, the deterministic CPU bake (SH9 + GGX prefilter), the .cenv blob, the
-// importer and the loader. The .hdr files are written in-test (flat RGBE, no binary assets).
+// importer and the loader. The .hdr files are written in-test (flat RGBE, no binary assets), the JPEG XL
+// equirects through the renderer's encoder.
 
 using namespace conjure;
 using namespace conjure::renderer;
 using namespace conjure::testing;
+
+// The renderer's private JPEG XL codec writes the equirect fixtures, and its private baker shows the bake's float
+// sums; conjure::testing has a detail namespace of its own.
+namespace codec = conjure::renderer::detail;
+namespace ibl = conjure::renderer::detail;
 
 namespace {
 
@@ -72,6 +83,32 @@ namespace {
         rgb.insert(rgb.end(), 4, math::vec3(0.0f, 0.0f, 2.0f));   // top row: blue
         rgb.insert(rgb.end(), 4, math::vec3(2.0f, 0.0f, 0.0f));   // bottom row: red
         return encode_hdr(4, 2, rgb);
+    }
+
+    /// <summary>
+    /// The pixels of two_row_hdr() as a float JPEG XL tagged linear sRGB: 2.0 and 0.0 are exact in RGBE, so
+    /// both files decode to the same floats.
+    /// </summary>
+    [[nodiscard]] std::vector<std::byte> two_row_jpeg_xl() {
+        std::vector<f32> rgb = {};
+        for (u32 index = 0; index < 4; ++index) {
+            rgb.insert(rgb.end(), {0.0f, 0.0f, 2.0f});
+        }
+        for (u32 index = 0; index < 4; ++index) {
+            rgb.insert(rgb.end(), {2.0f, 0.0f, 0.0f});
+        }
+        std::vector<std::byte> samples(rgb.size() * sizeof(f32));
+        std::memcpy(samples.data(), rgb.data(), samples.size());
+        codec::jpeg_xl_encode_desc desc = {};
+        desc.width = 4;
+        desc.height = 2;
+        desc.channelCount = 3;
+        desc.sampleType = codec::jpeg_xl_sample_type::FLOAT32;
+        desc.colourEncoding = codec::jpeg_xl_colour_encoding::LINEAR_SRGB;
+        desc.frames.push_back(samples);
+        core::result<std::vector<std::byte>> encoded = codec::encode_jpeg_xl(desc, nullptr);
+        CONJURE_REQUIRE_OK(encoded);
+        return std::move(encoded).value();
     }
 
     [[nodiscard]] environment_bake_options small_options() {
@@ -468,6 +505,129 @@ TEST_SUITE("renderer/environment_asset") {
         CHECK(baked.value().sky().texel(0, 2, 0, 0).x == doctest::Approx(1.0f).epsilon(0.01));
     }
 
+    TEST_CASE("bake_environment - NaN, infinite, negative and overflowing radiance filled in by hand bakes finite") {
+        // An infinite texel times a bilinear weight of 0 is NaN, which the SH9 projection would spread into every
+        // coefficient, and the largest float overflows the mip chain's 4-texel sums. sample() reads NaN and
+        // negative values as 0 and anything above MAX_ENVIRONMENT_RADIANCE as that; a bright 1e9 stays 1e9.
+        const f32 infinity = std::numeric_limits<f32>::infinity();
+        equirect_image dirty = equirect_image::constant(32, 16, math::vec3(1.0f));
+        equirect_image clean = dirty;
+        const std::array<std::array<f32, 2>, 6> texels = {{
+          {infinity, MAX_ENVIRONMENT_RADIANCE}, {std::numeric_limits<f32>::quiet_NaN(), 0.0f}, {-3.0f, 0.0f},
+          {-infinity, 0.0f}, {std::numeric_limits<f32>::max(), MAX_ENVIRONMENT_RADIANCE}, {1.0e9f, 1.0e9f}
+        }};
+        for (usize index = 0; index < texels.size(); ++index) {
+            const usize offset = (static_cast<usize>(7) * dirty.width + 13 + index) * 3;
+            dirty.rgb[offset] = texels[index][0];
+            clean.rgb[offset] = texels[index][1];
+        }
+        core::result<environment_asset> dirtyBaked = bake_environment(dirty, small_options(), nullptr);
+        core::result<environment_asset> cleanBaked = bake_environment(clean, small_options(), nullptr);
+        CONJURE_REQUIRE_OK(dirtyBaked);
+        CONJURE_REQUIRE_OK(cleanBaked);
+        for (const math::vec3 &coefficient : dirtyBaked.value().irradiance()) {
+            CHECK(std::isfinite(coefficient.x));
+            CHECK(std::isfinite(coefficient.y));
+            CHECK(std::isfinite(coefficient.z));
+        }
+        const math::vec3 up = evaluate_sh9_irradiance(dirtyBaked.value().irradiance(), math::vec3(0.0f, 1.0f, 0.0f));
+        CHECK(std::isfinite(up.x));
+        CHECK(dirtyBaked.value() == cleanBaked.value());
+        const math::vec3 towardTexels = dirty.sample(math::vec3(0.0f, 0.0f, 1.0f));
+        CHECK(std::isfinite(towardTexels.x));
+        CHECK(towardTexels.x <= MAX_ENVIRONMENT_RADIANCE);
+    }
+
+    TEST_CASE("regression - bake_environment integrates a sun brighter than the half range unclipped") {
+        // A sun of 1e5 on a sky of 1, and the same sky a thousand times darker (a sun of 100, inside the half
+        // range). The bake is linear, so the bright sky's SH9 and rough prefiltered mip are the dark one's times
+        // 1000: clipping the sun at 65504 before integrating would take a third of its light. Only the stored
+        // cubemap texels are clamped.
+        constexpr f32 SCALE = 1000.0f;
+        equirect_image bright = equirect_image::constant(64, 32, math::vec3(1.0f));
+        for (u32 y = 6; y < 10; ++y) {
+            for (u32 x = 30; x < 34; ++x) {
+                const usize index = (static_cast<usize>(y) * bright.width + x) * 3;
+                bright.rgb[index] = 1.0e5f;
+                bright.rgb[index + 1] = 1.0e5f;
+                bright.rgb[index + 2] = 1.0e5f;
+            }
+        }
+        equirect_image dark = bright;
+        for (f32 &value : dark.rgb) {
+            value /= SCALE;
+        }
+        environment_bake_options options = {};
+        options.skySize = 32;
+        options.prefilteredSize = 16;
+        options.sampleCount = 32;
+        core::result<environment_asset> brightBaked = bake_environment(bright, options, nullptr);
+        core::result<environment_asset> darkBaked = bake_environment(dark, options, nullptr);
+        CONJURE_REQUIRE_OK(brightBaked);
+        CONJURE_REQUIRE_OK(darkBaked);
+
+        for (usize coefficient = 0; coefficient < brightBaked.value().irradiance().size(); ++coefficient) {
+            CAPTURE(coefficient);
+            const math::vec3 &actual = brightBaked.value().irradiance()[coefficient];
+            const math::vec3 expected = darkBaked.value().irradiance()[coefficient] * SCALE;
+            CHECK(actual.x == doctest::Approx(expected.x).epsilon(0.001));
+            CHECK(actual.y == doctest::Approx(expected.y).epsilon(0.001));
+            CHECK(actual.z == doctest::Approx(expected.z).epsilon(0.001));
+        }
+        // The sun dominates: band 0 is far above the sky's own share (4 pi x 0.282 = 3.5).
+        CHECK(brightBaked.value().irradiance()[0].x > 1000.0f);
+
+        const cubemap_data &brightPrefiltered = brightBaked.value().prefiltered();
+        const cubemap_data &darkPrefiltered = darkBaked.value().prefiltered();
+        const u32 roughest = brightPrefiltered.mipCount - 1;
+        const u32 edge = brightPrefiltered.mip_size(roughest);
+        for (u32 face = 0; face < CUBEMAP_FACE_COUNT; ++face) {
+            for (u32 y = 0; y < edge; ++y) {
+                for (u32 x = 0; x < edge; ++x) {
+                    CAPTURE(face);
+                    const f32 actual = brightPrefiltered.texel(roughest, face, x, y).x;
+                    const f32 expected = darkPrefiltered.texel(roughest, face, x, y).x * SCALE;
+                    REQUIRE(actual < 65504.0f);
+                    CHECK(actual == doctest::Approx(expected).epsilon(0.003));
+                }
+            }
+        }
+    }
+
+    TEST_CASE("bake_environment - radiance at MAX_ENVIRONMENT_RADIANCE keeps every sum of the bake finite") {
+        // The bound is what the largest sums of the bake can take: the mip chain's four texels, the SH9
+        // projection and the prefilter's 4096 samples (the most environment_bake_options allows).
+        CHECK(MAX_ENVIRONMENT_RADIANCE > 1.0e33f);
+        const equirect_image brightest = equirect_image::constant(16, 8, math::vec3(MAX_ENVIRONMENT_RADIANCE));
+        ibl::cubemap_f32 sky = ibl::equirect_to_cubemap(brightest, 8, ibl::environment_mip_count(8), nullptr);
+        ibl::build_mip_chain(sky, nullptr);
+        const ibl::cubemap_f32 prefiltered = ibl::prefilter_ggx(sky, 2, 2, 4096, nullptr);
+        const auto all_finite = [](const ibl::cubemap_f32 &cubemap) {
+            return std::ranges::all_of(cubemap.texels, [](const math::vec3 &texel) {
+                return std::isfinite(texel.x) && std::isfinite(texel.y) && std::isfinite(texel.z);
+            });
+        };
+        CHECK(all_finite(sky));
+        CHECK(all_finite(prefiltered));
+        CHECK(prefiltered.at(1, 0, 0, 0).x == doctest::Approx(MAX_ENVIRONMENT_RADIANCE).epsilon(0.001));
+
+        core::result<environment_asset> baked = bake_environment(brightest, small_options(), nullptr);
+        CONJURE_REQUIRE_OK(baked);
+        CHECK(baked.value().irradiance()[0].x ==
+          doctest::Approx(MAX_ENVIRONMENT_RADIANCE * 4.0f * math::PI * 0.282095f).epsilon(0.001));
+        const math::vec3 up = evaluate_sh9_irradiance(baked.value().irradiance(), math::vec3(0.0f, 1.0f, 0.0f));
+        CHECK(std::isfinite(up.x));
+
+        // A sky at the largest float would overflow four texels' sum; it bakes as the bound does.
+        const equirect_image beyond =
+          equirect_image::constant(16, 8, math::vec3(std::numeric_limits<f32>::max()));
+        core::result<environment_asset> beyondBaked = bake_environment(beyond, small_options(), nullptr);
+        CONJURE_REQUIRE_OK(beyondBaked);
+        CHECK(std::isfinite(beyondBaked.value().irradiance()[0].x));
+        CHECK(beyondBaked.value() == baked.value());
+        CHECK(ENVIRONMENT_IMPORTER_VERSION == 3);       // the sanitised samples change such a source's bake
+    }
+
     TEST_CASE("environment_importer - decodes and bakes the .hdr with the settings, inline or on jobs") {
         const environment_importer importer(nullptr);
         CHECK(importer.id() == ENVIRONMENT_IMPORTER_ID);
@@ -553,6 +713,65 @@ TEST_SUITE("renderer/environment_asset") {
           {}
         );
         CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::asset_error_code::IMPORT_FAILED);
+    }
+
+    TEST_CASE("environment_importer - bakes a float JPEG XL equirect exactly like the same .hdr") {
+        // .jxl belongs to the texture importer; an HDR JPEG XL reaches this one through its .meta, and the
+        // importer reads it by its signature.
+        const std::vector<std::byte> hdr = two_row_hdr();
+        const std::vector<std::byte> jxl = two_row_jpeg_xl();
+        core::result<equirect_image> fromHdr = equirect_image::decode_hdr(hdr);
+        core::result<equirect_image> fromJxl = equirect_image::decode_hdr(jxl);
+        CONJURE_REQUIRE_OK(fromHdr);
+        CONJURE_REQUIRE_OK(fromJxl);
+        CHECK(fromJxl.value().width == fromHdr.value().width);
+        CHECK(fromJxl.value().height == fromHdr.value().height);
+        CHECK(fromJxl.value().rgb == fromHdr.value().rgb);
+
+        core::vfs::memory_file_system fileSystem = {};
+        assets::sub_asset_table subAssets = {};
+        const core::json::document settings = small_options().to_document();
+        const auto cook = [&](
+          const environment_importer &which,
+          std::string_view name,
+          std::span<const std::byte> bytes
+        ) {
+            assets::import_context context(
+              fileSystem,
+              std::string("assets://sky/") + std::string(name),
+              std::string("assets/sky/") + std::string(name),
+              bytes,
+              settings.root(),
+              "windows",
+              renderer_support::test_asset_id(15),
+              subAssets,
+              {}
+            );
+            return which.import(context);
+        };
+        const environment_importer importer(nullptr);
+        core::result<assets::import_output> cookedHdr = cook(importer, "dawn.hdr", hdr);
+        core::result<assets::import_output> cookedJxl = cook(importer, "dawn.jxl", jxl);
+        CONJURE_REQUIRE_OK(cookedHdr);
+        CONJURE_REQUIRE_OK(cookedJxl);
+        REQUIRE(cookedJxl.value().assets.size() == 1);
+        CHECK(cookedJxl.value().assets[0].displayName == "dawn");
+        CHECK(cookedJxl.value().assets[0].payload == cookedHdr.value().assets[0].payload);
+
+        // Decoded and baked on jobs, the bytes are the same.
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc desc = {};
+        desc.workerCount = environment().jobThreadCount;
+        CONJURE_REQUIRE_OK(jobs.start(desc));
+        const environment_importer parallelImporter(&jobs);
+        core::result<assets::import_output> parallel = cook(parallelImporter, "dawn.jxl", jxl);
+        jobs.stop();
+        CONJURE_REQUIRE_OK(parallel);
+        CHECK(parallel.value().assets[0].payload == cookedHdr.value().assets[0].payload);
+
+        // A truncated JPEG XL fails the import.
+        const std::span<const std::byte> truncated = std::span<const std::byte>(jxl).first(jxl.size() / 2);
+        CONJURE_CHECK_ERROR(cook(importer, "cut.jxl", truncated), assets::asset_error_code::IMPORT_FAILED);
     }
 
     TEST_CASE("environment_loader - loads a blob and falls back to the uniform grey environment") {

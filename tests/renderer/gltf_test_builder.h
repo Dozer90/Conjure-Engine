@@ -12,9 +12,9 @@
 
 // Builds small glTF 2.0 files in memory for the importer tests (docs/design/02_renderer.md 10: "test
 // glTF generated in-test, no binary assets"). Geometry, materials, PNG textures (encoded through
-// core::image), a node tree and KHR_lights_punctual lights go into one binary buffer; the output is
-// either a .gltf with the buffer embedded as a base64 data URI, a .gltf referencing an external
-// .bin, or a .glb.
+// core::image) or images encoded elsewhere (JPEG XL), a node tree and KHR_lights_punctual lights go into
+// one binary buffer; the output is either a .gltf with the buffer embedded as a base64 data URI, a .gltf
+// referencing an external .bin, or a .glb.
 
 namespace conjure::testing::gltf_builder {
 
@@ -78,7 +78,8 @@ namespace conjure::testing::gltf_builder {
             std::vector<mesh_input> mMeshes = {};
             std::vector<std::vector<mesh_input>> mExtraPrimitives = {};   // one list per mesh
             std::vector<material_input> mMaterials = {};
-            std::vector<std::vector<std::byte>> mImages = {};   // PNG bytes
+            std::vector<std::vector<std::byte>> mImages = {};   // encoded image bytes
+            std::vector<std::string> mImageMimeTypes = {};      // one per image
             std::vector<node_input> mNodes = {};
             std::vector<light_input> mLights = {};
             std::vector<std::string> mExtensionsUsed = {};
@@ -106,6 +107,12 @@ namespace conjure::testing::gltf_builder {
             /// Adds a width x height PNG of one colour; returns the texture index.
             /// </summary>
             u32 add_solid_texture(u32 width, u32 height, u8 r, u8 g, u8 b, u8 a = 255);
+
+            /// <summary>
+            /// Adds an already encoded image (a JPEG XL file, say) with the mimeType the JSON names; returns the
+            /// texture index.
+            /// </summary>
+            u32 add_encoded_texture(std::vector<std::byte> bytes, std::string_view mimeType);
 
             u32 add_node(node_input node);
             u32 add_light(light_input light);

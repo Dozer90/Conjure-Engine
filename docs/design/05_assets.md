@@ -824,9 +824,9 @@ factories and `register_type` / `register_importer` on attach, mounts the manife
 `unregister_type` / `unregister_importer`, which are refused while work is in flight or slots of the type are
 loaded.
 
-**Offers to `renderer` (wave 3).** Registers `conjure.renderer.texture` (`.png .jpg .tga .bmp`;
-settings sRGB, mips, compression), `conjure.renderer.environment` (`.hdr`; the importer bakes the cubemap, SH9 and prefiltered specular on
-the CPU so the payload is deterministic, R34), `conjure.renderer.mesh`, `conjure.renderer.material` (flag
+**Offers to `renderer` (wave 3).** Registers `conjure.renderer.texture` (`.png .jpg .jpeg .tga .bmp .jxl`, decoded by
+signature; settings colour space, filter, wrap, mips; importer version 2 since JPEG XL), `conjure.renderer.environment` (`.hdr`, or a JPEG XL whose `.meta` names it; the importer bakes the cubemap, SH9
+and prefiltered specular on the CPU so the payload is deterministic, R34), `conjure.renderer.mesh`, `conjure.renderer.material` (flag
 `RELOAD_WITH_DEPENDENCIES`), `conjure.renderer.model` (glTF importer `conjure.renderer.gltf`: model primary +
 mesh/material/texture sub-assets; external images resolve to their own assets via `find_asset_by_path`,
 `.bin` via `read_side_file`). Registration happens through `renderer::register_asset_types(types, importers)`,

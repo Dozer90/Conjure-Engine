@@ -9,8 +9,9 @@
 #include <memory>
 
 // renderer::register_asset_types (docs/design/02_renderer.md 4.2, R10, R34): the five asset types
-// with their CPU-only loaders and the four importers. Materials and models reload when a dependency
-// changes so hot-reloaded textures and meshes reach the GPU mirrors through the usual events.
+// with their CPU-only loaders and the four importers; the texture importer decodes JPEG XL and the
+// environment importer decodes and bakes on the job system. Materials and models reload when a
+// dependency changes so hot-reloaded textures and meshes reach the GPU mirrors through the usual events.
 
 using namespace conjure;
 
@@ -39,7 +40,7 @@ core::result<void> conjure::renderer::renderer::register_asset_types(
       assets::make_asset_type_desc<environment_asset>(std::make_unique<environment_loader>(), ENVIRONMENT_BLOB_VERSION)
     ));
     CONJURE_TRY(importers.register_importer(std::make_unique<gltf_asset_importer>()));
-    CONJURE_TRY(importers.register_importer(std::make_unique<texture_importer>()));
+    CONJURE_TRY(importers.register_importer(std::make_unique<texture_importer>(jobs)));
     CONJURE_TRY(importers.register_importer(std::make_unique<material_importer>()));
     CONJURE_TRY(importers.register_importer(std::make_unique<environment_importer>(jobs)));
     return core::result<void>();

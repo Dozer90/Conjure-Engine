@@ -50,31 +50,29 @@ conjure_add_test_module(<module>
 conjure_header_check(conjure_<module>)
 ```
 
-`conjure_add_test_module()` (`cmake/ConjureTesting.cmake`) builds `conjure_<module>_tests` from the sources
-plus the two shared translation units, links `conjure::<module>` when that target exists, `conjure::test_support`,
-`conjure::platform_defines`, `conjure::warnings` and `conjure::sanitizers`, adds `engine/src` as a private
-include directory (tests may reach private module headers), and defines per executable
-`CONJURE_TEST_EXECUTABLE_NAME`, `CONJURE_TEST_REPO_ASSET_ROOT` (`tests/assets`), `CONJURE_TEST_DOWNLOADED_ASSET_ROOT`
-(`tests/.downloaded`), `CONJURE_TEST_OUTPUT_ROOT` (`build/<preset>/test_output/<target>`) and
-`CONJURE_TEST_TEMP_ROOT` (`build/<preset>/test_tmp/<target>`). Discovery is `doctest_discover_tests()` with
-`TEST_PREFIX "<module>."`, `EXTRA_ARGS --conjure-isolated`, `WORKING_DIRECTORY bin`, properties `TIMEOUT` and
-`SKIP_RETURN_CODE 77`; the label list is applied by a generated `<target>_labels.cmake` because doctest's
-script flattens nested lists.
+`conjure_add_test_module()` (`cmake/ConjureTesting.cmake`) builds `conjure_<module>_tests` from the sources plus the two
+shared translation units, links `conjure::<module>` when that target exists, `conjure::test_support`,
+`conjure::platform_defines`, `conjure::warnings` and `conjure::sanitizers`, adds `engine/src` as a private include
+directory (tests may reach private module headers), and defines per executable `CONJURE_TEST_EXECUTABLE_NAME`,
+`CONJURE_TEST_REPO_ASSET_ROOT` (`tests/assets`), `CONJURE_TEST_DOWNLOADED_ASSET_ROOT` (`tests/.downloaded`),
+`CONJURE_TEST_OUTPUT_ROOT` (`build/<preset>/test_output/<target>`) and `CONJURE_TEST_TEMP_ROOT`
+(`build/<preset>/test_tmp/<target>`). Discovery is `doctest_discover_tests()` with `TEST_PREFIX "<module>."`,
+`EXTRA_ARGS --conjure-isolated`, `WORKING_DIRECTORY bin`, properties `TIMEOUT` and `SKIP_RETURN_CODE 77`; the label list
+is applied by a generated `<target>_labels.cmake` because doctest's script flattens nested lists.
 
 `ENGINE` links `conjure::test_support_engine` (or `conjure::test_support_engine_shared` together with
-`LINK_ENGINE_SHARED`), the engine-level fixtures of section 4; `tests/integration/CMakeLists.txt` and the
-engine, bindings and editor suites use it. The option is a no-op with a notice when `conjure::engine` is not
-built.
+`LINK_ENGINE_SHARED`), the engine-level fixtures of section 4; `tests/integration/CMakeLists.txt` and the engine,
+bindings and editor suites use it. The option is a no-op with a notice when `conjure::engine` is not built.
 
-`conjure_add_test_executable(<name> SOURCES ... [DEPS ...] [FOLDER ...])` is the executable half without
-CTest registration, used for helper programs such as `conjure_support_child`. `tests/CMakeLists.txt` adds
-every `tests/<module>/` that has a `CMakeLists.txt`; `tests/core/CMakeLists.txt` adds an area directory only
-when `TARGET conjure::core_<area>` exists (`conjure_add_test_module(core_<area> ...)` in
-`tests/core/<area>/CMakeLists.txt`). Every module test directory guards itself the same way, so disabling a
-subsystem disables its tests. Every module directory is in the tree; `tests/integration/` adds the cross-module
-scenarios of `08_testing.md` 6.1 (`conjure_integration_tests`, plus `conjure_integration_plugin_tests` with
-`LINK_ENGINE_SHARED` for the sample plugin scenario), `tests/runtime/` the process tests of the runtime, and
-`tests/benchmarks/` the benchmark harness (section 11).
+`conjure_add_test_executable(<name> SOURCES ... [DEPS ...] [FOLDER ...])` is the executable half without CTest
+registration, used for helper programs such as `conjure_support_child`. `tests/CMakeLists.txt` adds every
+`tests/<module>/` that has a `CMakeLists.txt`; `tests/core/CMakeLists.txt` adds an area directory only when
+`TARGET conjure::core_<area>` exists (`conjure_add_test_module(core_<area> ...)` in `tests/core/<area>/CMakeLists.txt`).
+Every module test directory guards itself the same way, so disabling a subsystem disables its tests. Every module
+directory is in the tree; `tests/integration/` adds the cross-module scenarios of `08_testing.md` 6.1
+(`conjure_integration_tests`, plus `conjure_integration_plugin_tests` with `LINK_ENGINE_SHARED` for the sample plugin
+scenario), `tests/runtime/` the process tests of the runtime, `tests/third_party/` the probes of the third-party pins
+(section 10), and `tests/benchmarks/` the benchmark harness (section 11).
 
 `LINK_ENGINE_SHARED` (used by `tests/modules/`) links the umbrella `conjure::shared` and
 `conjure::test_support_shared` (the support library compiled against it) instead of the static libraries, so
@@ -340,6 +338,7 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 | `style` | `style.check`, `style.check_tool`; also the `exports.*` entries (labels `exports;style`, section 9) | run |
 | `build` | `build.abi_identity_non_ascii_path` (the ABI identity script over a non-ASCII path), `build.managed_project_references` (the managed `<ProjectReference>` parser through the source-tree check), the configure probes `build.missing_engine_module_fails_configure`, `build.missing_core_area_fails_configure`, `build.missing_test_module_fails_configure`, `build.missing_core_test_area_fails_configure`, `build.missing_benchmarks_fail_configure`, `build.missing_integration_fails_configure` (a listed directory without its CMakeLists.txt stops the configure) and `build.development_links_without_incremental` (Development links with /INCREMENTAL:NO, F781); the fourteen notices probes of `cmake/ConjureNotices.cmake` (`notices.configure_*`, `notices.*_fails_configure`, `notices.host_files_without_flag_fail_configure`, `notices.ship_places_and_restores_the_file`); `runtime.msvc_runtime_folder_rules` (labels `runtime;build`: which Visual C++ redistributable folder a Distribution build ships, probed over fake folders on every platform) | run |
 | `tools` | `build.driver_tool`, `build.prune_tool`, `test_assets.downloader_tool`, `native_api.generator_tool`, `runtime.check_distribution_symbols_tool` (labels `runtime;tools`): the tool self-tests; `build.driver_tool` and `build.prune_tool` are not under `build` | run |
+| `third_party` | the libjxl pin probes `third_party.jxl_*` (also labelled `build`), listed in [libjxl](libjxl.md#5-checks) | run |
 | `managed` | `conjure_managed_sources_match.<name>` and `conjure_managed_source_tree_clean.<name>`, registered per managed project by `cmake/ConjureManaged.cmake` (`docs/design/03_scripting.md` 3.10) | run |
 | `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
 | `generated` | `conjure_scripting_api_generated_up_to_date`, `brand.icons_up_to_date`, `brand.icons_tool`, `notices.up_to_date` (`python -I tools/third_party_notices.py --check --manifest <build>/notices/third_party_notices.json`: fails while `THIRD_PARTY_NOTICES.md` differs from the licence files the tree fetched), `notices.tool` (the tool's self-test); both need a Python interpreter | run |

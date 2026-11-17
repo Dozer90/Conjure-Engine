@@ -33,6 +33,7 @@ from them every frame. The renderer itself never includes the ECS.
 |---|---|
 | [Rendering a frame](rendering-a-frame.md) | create the renderer, describe cameras, lights, instances, sprites and debug lines, render into targets, read pixels back, use the null device in tests, tune post-processing, shadows and ambient occlusion |
 | [Renderer assets](renderer-assets.md) | build or import meshes, textures, materials, models and environments, understand the glTF importer, the cooked formats and the shader programs the renderer loads |
+| [JPEG XL images](jpeg-xl.md) | import `.jxl` textures and skies, know what colour profiles, bit depths, orientation and animation turn into, write JPEG XL files |
 
 ## Headers
 
@@ -52,6 +53,7 @@ from them every frame. The renderer itself never includes the ECS.
 | `conjure/renderer/imgui_renderer.h` | `imgui_renderer` (editor builds: draws `ImDrawData`) |
 | `conjure/renderer/mesh_asset.h` | `mesh_asset`, `mesh_geometry`, `tangent_generation`, `submesh`, the vertex packing helpers, `mesh_loader` |
 | `conjure/renderer/texture_asset.h` | `texture_asset`, `texture_import_settings`, `texture_importer`, `texture_loader` |
+| `conjure/renderer/jpeg_xl.h` | `encode_jpeg_xl()`, `jpeg_xl_encode_options`, `is_jpeg_xl()` |
 | `conjure/renderer/material_asset.h` | `material_asset`, `material_desc`, `alpha_mode`, `material_importer`, `material_loader` |
 | `conjure/renderer/model_asset.h` | `model_asset`, `model_node`, `model_loader` |
 | `conjure/renderer/environment_asset.h` | `environment_asset`, `cubemap_data`, `equirect_image`, `bake_environment()`, `environment_importer`, `environment_loader` |

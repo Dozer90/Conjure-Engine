@@ -6,6 +6,7 @@
 #include "renderer_test_support.h"
 
 #include "conjure/renderer/gltf_importer.h"
+#include "conjure/renderer/jpeg_xl.h"
 #include "conjure/renderer/light.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
@@ -15,6 +16,7 @@
 #include "conjure/assets/asset_importer.h"
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/assets_error.h"
+#include "conjure/core/image.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
@@ -696,6 +698,73 @@ TEST_SUITE("renderer/gltf_importer") {
                 CHECK(result.textures[0].pixel(0, 0) == core::rgba8{10, 20, 30, 255});
                 CHECK(result.warnings.empty());
             }
+        }
+    }
+
+    TEST_CASE("gltf_importer - a JPEG XL image decodes from a buffer view, a data URI and a .glb") {
+        // glTF names no JPEG XL extension; the importer decodes every image by its signature, so a texture whose
+        // source is a JPEG XL file imports like a PNG one, whatever its mimeType says. The base colour is sRGB
+        // and the metallic-roughness texture is data (LINEAR), so the second keeps its samples as stored.
+        core::image colour(3, 2);
+        colour.fill(core::rgba8{220, 120, 20, 255});
+        core::image data(2, 2);
+        data.fill(core::rgba8{0, 77, 200, 255});
+        core::result<std::vector<std::byte>> colourFile = encode_jpeg_xl(colour);
+        jpeg_xl_encode_options linear = {};
+        linear.colourSpace = texture_colour_space::LINEAR;
+        core::result<std::vector<std::byte>> dataFile = encode_jpeg_xl(data, linear);
+        CONJURE_REQUIRE_OK(colourFile);
+        CONJURE_REQUIRE_OK(dataFile);
+
+        for (const bool dataUris : {false, true}) {
+            CAPTURE(dataUris);
+            gltf_test_builder builder = {};
+            const u32 colourTexture = builder.add_encoded_texture(colourFile.value(), "image/jxl");
+            const u32 dataTexture = builder.add_encoded_texture(dataFile.value(), "image/jxl");
+            material_input material = {};
+            material.baseColourTexture = colourTexture;
+            material.metallicRoughnessTexture = dataTexture;
+            const u32 index = builder.add_material(material);
+            builder.add_mesh(gltf_test_builder::quad(1.0f, index));
+            node_input node = {};
+            node.mesh = 0;
+            builder.add_node(node);
+            if (dataUris) {
+                builder.use_image_data_uris(true);
+            }
+            const gltf_importer importer = {};
+            std::vector<gltf_import_result> results = {};
+            results.push_back(import_or_fail(importer, bytes_of(builder.build_embedded())));
+            if (!dataUris) {
+                results.push_back(import_or_fail(importer, builder.build_glb()));
+            }
+            for (const gltf_import_result &result : results) {
+                REQUIRE(result.textures.size() == 2);
+                CHECK(result.textures[0].colour_space() == texture_colour_space::SRGB);
+                CHECK(result.textures[0].width() == 3);
+                CHECK(result.textures[0].pixel(2, 1) == core::rgba8{220, 120, 20, 255});
+                CHECK(result.textures[1].colour_space() == texture_colour_space::LINEAR);
+                CHECK(result.textures[1].pixel(1, 1) == core::rgba8{0, 77, 200, 255});
+                CHECK(result.warnings.empty());
+            }
+        }
+
+        // A broken JPEG XL image fails the import like a broken PNG.
+        gltf_test_builder broken = {};
+        const std::vector<std::byte> truncated(colourFile.value().begin(), colourFile.value().begin() + 12);
+        const u32 brokenTexture = broken.add_encoded_texture(truncated, "image/jxl");
+        material_input material = {};
+        material.baseColourTexture = brokenTexture;
+        broken.add_mesh(gltf_test_builder::quad(1.0f, broken.add_material(material)));
+        node_input node = {};
+        node.mesh = 0;
+        broken.add_node(node);
+        const gltf_importer importer = {};
+        const core::result<gltf_import_result> failed =
+          importer.import_bytes(bytes_of(broken.build_embedded()), gltf_import_options(), nullptr);
+        CONJURE_CHECK_ERROR(failed, core::error_code::PARSE_FAILURE);
+        if (!failed.has_value()) {
+            CHECK(failed.get_error().message().find("JPEG XL") != std::string::npos);
         }
     }
 

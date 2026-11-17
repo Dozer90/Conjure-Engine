@@ -5,6 +5,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/core/api.h"
 #include "conjure/core/image.h"
+#include "conjure/core/jobs/job_system.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
@@ -23,15 +24,18 @@
 
 // The CPU texture asset (docs/design/02_renderer.md 2.6, 4.2). Mips are generated on the CPU at
 // import (box filter, sRGB-aware) and stored in the .ctex blob, so the GPU path is upload-only.
-// Decoding goes through stb_image in engine/src (PNG, JPEG, TGA, BMP); the public API only sees bytes.
+// Decoding goes through libjxl (JPEG XL) or stb_image (PNG, JPEG, TGA, BMP) in engine/src, chosen by the file's
+// signature; the public API only sees bytes.
 
 namespace conjure::renderer {
 
     inline constexpr std::string_view TEXTURE_ASSET_TYPE_NAME = "conjure.renderer.texture";
     inline constexpr std::string_view TEXTURE_IMPORTER_ID = "conjure.renderer.texture";
-    inline constexpr u32 TEXTURE_IMPORTER_VERSION = 1;
+    inline constexpr u32 TEXTURE_IMPORTER_VERSION = 2;         // 2: JPEG XL sources, colour-managed
     inline constexpr u32 TEXTURE_BLOB_VERSION = 1;
-    inline constexpr std::array<std::string_view, 5> TEXTURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tga", ".bmp"};
+    inline constexpr std::array<std::string_view, 6> TEXTURE_EXTENSIONS = {
+      ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".jxl"
+    };
 
     enum class texture_colour_space : u8 {
         SRGB = 0,
@@ -114,14 +118,27 @@ namespace conjure::renderer {
             );
 
             /// <summary>
-            /// Decodes an encoded image file (PNG, JPEG, TGA, BMP). Fails with renderer_error::DECODE_FAILED
-            /// for anything stb_image rejects and INVALID_ARGUMENT for empty data or an image larger than
-            /// MAX_DIMENSION.
+            /// Decodes an encoded image file (JPEG XL, PNG, JPEG, TGA, BMP), recognised by its signature. A JPEG
+            /// XL file is colour-managed: SRGB converts its colour profile to sRGB, LINEAR keeps its samples as
+            /// stored (data such as normals must not change). For SRGB a PQ or HLG file is taken to linear light
+            /// with 1.0 at 203 nits (BT.2408's reference white), clipped at 1 and sRGB-encoded, so reference white
+            /// is white and brighter highlights clip. Its orientation is applied, premultiplied alpha is divided
+            /// out in the encoding the file stores, before any conversion, an animation keeps its first frame
+            /// (with a warning), and colour and alpha deeper than 8 bits keep their high byte, as a 16-bit PNG
+            /// does (8-bit colour beside a deeper alpha is rounded). The other formats ignore colour profiles.
+            /// 'jobs' (optional) decodes a JPEG XL file on its workers; the result is the same bytes either way,
+            /// and so is the memory limit below. Fails with renderer_error::DECODE_FAILED for
+            /// anything the decoder rejects, naming a truncated file apart from a corrupt one, and with
+            /// INVALID_ARGUMENT for empty data, an image larger than MAX_DIMENSION, or a JPEG XL file whose header
+            /// asks for more than its limits allow: more than 16 extra channels or a layer larger than
+            /// MAX_DIMENSION (both refused before any frame is decoded), or more decoding memory than the image's
+            /// size allows.
             /// </summary>
             [[nodiscard]] static core::result<texture_asset> decode(
               std::span<const std::byte> encoded,
               texture_colour_space colourSpace,
-              bool generateMips = true
+              bool generateMips = true,
+              core::jobs::job_system *jobs = nullptr
             );
 
             /// <summary>
@@ -131,7 +148,8 @@ namespace conjure::renderer {
             [[nodiscard]] static core::result<texture_asset> load_from_file(
               const std::filesystem::path &path,
               texture_colour_space colourSpace,
-              bool generateMips = true
+              bool generateMips = true,
+              core::jobs::job_system *jobs = nullptr
             );
 
             /// <summary>
@@ -252,11 +270,16 @@ CONJURE_DECLARE_ASSET_TYPE(conjure::renderer::texture_asset, "conjure.renderer.t
 namespace conjure::renderer {
 
     /// <summary>
-    /// The texture importer: .png .jpg .jpeg .tga .bmp -> one .ctex blob (decode + CPU mips).
+    /// The texture importer: .png .jpg .jpeg .tga .bmp .jxl -> one .ctex blob (decode + CPU mips). The file's
+    /// signature picks the decoder, so a misnamed file still imports.
     /// </summary>
     class CONJURE_API texture_importer final : public assets::asset_importer {
+        private:
+            core::jobs::job_system *mJobs = nullptr;    // optional; JPEG XL decodes inline without it
+
         public:
             texture_importer();
+            explicit texture_importer(core::jobs::job_system *jobs);
             ~texture_importer() override;
 
         public:

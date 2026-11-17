@@ -4,6 +4,7 @@
 #include "conjure/testing/temp_directory.h"
 #include "renderer_test_support.h"
 
+#include "conjure/renderer/jpeg_xl.h"
 #include "conjure/renderer/renderer_error.h"
 #include "conjure/renderer/texture_asset.h"
 
@@ -13,6 +14,7 @@
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/assets_error.h"
 #include "conjure/core/image.h"
+#include "conjure/core/jobs/job_system.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/types.h"
 #include "conjure/core/vfs/memory_file_system.h"
@@ -28,7 +30,8 @@
 #include <vector>
 
 // texture_asset.h (docs/design/02_renderer.md 2.6, 4.2): RGBA8 textures with CPU mips, decoding
-// through stb_image, the .ctex blob, the import settings, the importer and the loader.
+// through stb_image and libjxl, the .ctex blob, the import settings, the importer and the loader. The JPEG XL
+// decoder's own behaviour (colour, layouts, orientation, animation, failures) is covered in test_jpeg_xl.cpp.
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -582,6 +585,85 @@ TEST_SUITE("renderer/texture_asset") {
           {}
         );
         CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::asset_error_code::IMPORT_FAILED);
+    }
+
+    TEST_CASE("texture_importer - version 2 claims .jxl and cooks JPEG XL by signature, inline or on jobs") {
+        // Version 2 is the JPEG XL importer: a cache entry cooked by version 1 is stale and the source re-imports.
+        const texture_importer importer = {};
+        CHECK(TEXTURE_IMPORTER_VERSION == 2);
+        CHECK(importer.version() == 2);
+        REQUIRE(importer.extensions().size() == 6);
+        CHECK(importer.extensions()[5] == ".jxl");
+
+        core::image image(5, 3);
+        for (u32 y = 0; y < image.height(); ++y) {
+            for (u32 x = 0; x < image.width(); ++x) {
+                image.set_pixel(x, y, core::rgba8{static_cast<u8>(x * 50), static_cast<u8>(y * 80), 33, 200});
+            }
+        }
+        core::result<std::vector<std::byte>> jxl = encode_jpeg_xl(image);
+        core::result<std::vector<std::byte>> png = image.encode_png();
+        CONJURE_REQUIRE_OK(jxl);
+        CONJURE_REQUIRE_OK(png);
+        core::vfs::memory_file_system fileSystem = {};
+        assets::sub_asset_table subAssets = {};
+        const core::json::document settings = core::json::object({{"generateMips", false}});
+        const auto cook = [&](const texture_importer &which, std::string_view name, std::span<const std::byte> bytes) {
+            const std::string logical = std::string("assets://textures/") + std::string(name);
+            const std::string physical = std::string("assets/textures/") + std::string(name);
+            assets::import_context context(
+              fileSystem,
+              logical,
+              physical,
+              bytes,
+              settings.root(),
+              "windows",
+              renderer_support::test_asset_id(21),
+              subAssets,
+              {}
+            );
+            return which.import(context);
+        };
+
+        core::result<assets::import_output> cooked = cook(importer, "tile.jxl", jxl.value());
+        CONJURE_REQUIRE_OK(cooked);
+        REQUIRE(cooked.value().assets.size() == 1);
+        const std::vector<std::byte> payload = cooked.value().assets[0].payload;
+        core::result<texture_asset> texture = texture_asset::parse_blob(payload);
+        CONJURE_REQUIRE_OK(texture);
+        CHECK(texture.value().name() == "tile.jxl");
+        CHECK(texture.value().pixel(4, 2) == image.pixel(4, 2));
+        CHECK(texture.value().pixel(0, 1) == image.pixel(0, 1));
+
+        // The extension only picks the importer; the signature picks the decoder.
+        const std::span<const std::byte> jxlBytes = jxl.value();
+        const std::span<const std::byte> pngBytes = png.value();
+        for (const std::string_view name : {"misnamed.png", "misnamed.jxl"}) {
+            CAPTURE(std::string(name));
+            const std::span<const std::byte> bytes = name.ends_with(".png") ? jxlBytes : pngBytes;
+            core::result<assets::import_output> misnamed = cook(importer, name, bytes);
+            CONJURE_REQUIRE_OK(misnamed);
+            core::result<texture_asset> decoded = texture_asset::parse_blob(misnamed.value().assets[0].payload);
+            CONJURE_REQUIRE_OK(decoded);
+            CHECK(decoded.value().pixel(4, 2) == image.pixel(4, 2));
+        }
+
+        // On a job system the cooked bytes are the same (the importer output is a cache key).
+        core::jobs::job_system jobs = {};
+        core::jobs::job_system_desc desc = {};
+        desc.workerCount = 4;
+        CONJURE_REQUIRE_OK(jobs.start(desc));
+        const texture_importer parallelImporter(&jobs);
+        core::result<assets::import_output> parallel = cook(parallelImporter, "tile.jxl", jxl.value());
+        jobs.stop();
+        CONJURE_REQUIRE_OK(parallel);
+        CHECK(parallel.value().assets[0].payload == payload);
+
+        // A truncated file is an import failure like any undecodable source.
+        CONJURE_CHECK_ERROR(
+          cook(importer, "cut.jxl", jxlBytes.first(jxlBytes.size() / 2)),
+          assets::asset_error_code::IMPORT_FAILED
+        );
     }
 
     TEST_CASE("texture_loader - loads a blob and falls back to a 1x1 white texture") {

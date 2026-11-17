@@ -1,5 +1,7 @@
 #include "renderer/import/image_loader.h"
+#include "renderer/import/jpeg_xl_codec.h"
 
+#include "conjure/renderer/jpeg_xl.h"
 #include "conjure/renderer/renderer_error.h"
 #include "conjure/renderer/texture_asset.h"
 
@@ -75,7 +77,14 @@ namespace {
     }
 }
 
-core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(std::span<const std::byte> encoded) {
+core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(
+  std::span<const std::byte> encoded,
+  texture_colour_space colourSpace,
+  core::jobs::job_system *jobs
+) {
+    if (is_jpeg_xl(encoded)) {
+        return decode_jpeg_xl_rgba8(encoded, colourSpace, jobs);
+    }
     if (encoded.empty()) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "decode_rgba8: no data");
     }
@@ -117,7 +126,13 @@ core::result<detail::decoded_image> conjure::renderer::detail::decode_rgba8(std:
     return result;
 }
 
-core::result<detail::decoded_hdr_image> conjure::renderer::detail::decode_hdr_rgb(std::span<const std::byte> encoded) {
+core::result<detail::decoded_hdr_image> conjure::renderer::detail::decode_hdr_rgb(
+  std::span<const std::byte> encoded,
+  core::jobs::job_system *jobs
+) {
+    if (is_jpeg_xl(encoded)) {
+        return decode_jpeg_xl_rgb_float(encoded, jobs);
+    }
     if (encoded.empty()) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "decode_hdr_rgb: no data");
     }

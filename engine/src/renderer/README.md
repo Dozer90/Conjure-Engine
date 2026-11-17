@@ -10,8 +10,9 @@ Design: `docs/design/02_renderer.md`; cross-area decisions: `docs/design/09_cros
 
 Public: `conjure::core`, `conjure::rhi`, `conjure::assets`. Never `ecs` or `scene` (R7): the
 components in `components.h` are plain reflected structs the engine registers.
-Private: NVRHI (through `rhi::device::native_device()`), cgltf, stb (image and HDR decoding) and
-Dear ImGui (only with `CONJURE_BUILD_EDITOR`, never in Distribution).
+Private: NVRHI (through `rhi::device::native_device()`), cgltf, stb (image and HDR decoding), libjxl
+(`conjure::thirdparty::jxl`: JPEG XL decoding and encoding, every configuration) and Dear ImGui (only with
+`CONJURE_BUILD_EDITOR`, never in Distribution).
 
 ## Layout
 
@@ -21,7 +22,7 @@ Dear ImGui (only with `CONJURE_BUILD_EDITOR`, never in Distribution).
 | Handles | `gpu_ids.h` | `gpu_resource_cache.*` (slot maps, fallbacks, graveyard) |
 | Extraction contract | `render_scene.h`, `camera.h`, `light.h`, `render_settings.h` | `render_scene.cpp`, `camera.cpp`, `light.cpp`, `render_settings.cpp` |
 | 2D and debug | `sprite_batch.h`, `debug_draw.h` | `sprite_batcher.cpp`, `debug_draw.cpp`, `passes/sprite_pass.cpp`, `passes/debug_draw_pass.cpp` |
-| Assets | `mesh_asset.h`, `texture_asset.h`, `material_asset.h`, `model_asset.h`, `environment_asset.h`, `shader_asset.h`, `gltf_importer.h` | `assets/*.cpp`, `import/*` (tangents, mips, image decoding, IBL bake, cgltf) |
+| Assets | `mesh_asset.h`, `texture_asset.h`, `material_asset.h`, `model_asset.h`, `environment_asset.h`, `shader_asset.h`, `gltf_importer.h`, `jpeg_xl.h` | `assets/*.cpp`, `import/*` (tangents, mips, image decoding, JPEG XL codec, IBL bake, cgltf) |
 | Components | `components.h` | `components.cpp` |
 | The frame | `renderer.h`, `render_target.h` | `renderer.cpp`, `renderer_impl.h`, `render_graph.*`, `transient_pool.*`, `framebuffer_cache.*`, `binding_layouts.*`, `pipeline_cache.*`, `shader_program_loader.*`, `frame_resources.*`, `timer_ring.*`, `warn_latch.h`, `gpu_types.*`, `culling.*`, `draw_list_builder.*`, `exposure_math.*`, `shadows/*`, `passes/*` |
 | ImGui | `imgui_renderer.h` | `imgui/imgui_renderer.cpp` |
@@ -196,6 +197,37 @@ holding the id follows the resize.
 - The exposure histogram meters the view's viewport rectangle only; its origin and size travel in
   the draw push constants.
 
+## Image decoding and JPEG XL
+
+`import/image_loader.cpp` holds the only two source-image decoders (`detail::decode_rgba8`, `detail::decode_hdr_rgb`);
+`texture_asset::decode`, the texture importer, glTF images and `equirect_image::decode_hdr` share them. They route by
+signature (`is_jpeg_xl`): JPEG XL to `import/jpeg_xl_decoder.cpp`, the rest to stb_image. Only the three
+`import/jpeg_xl_*.cpp` files include libjxl:
+
+| File | Holds |
+| --- | --- |
+| `jpeg_xl_codec.h` | the private API: `decode_jpeg_xl_rgba8`, `decode_jpeg_xl_rgb_float`, `jpeg_xl_encode_desc` and `encode_jpeg_xl` (every layout, for tools and the tests' fixtures) |
+| `jpeg_xl_decoder.cpp` | the decoder: the limits read from the headers (size, extra channels, every layer in a header-only pass), the memory budget, the colour plan, the 16-bit reduction callback, frame skipping, the engine's float steps (CMS conversions, unpremultiplying, the PQ and HLG scale), `is_jpeg_xl` |
+| `jpeg_xl_encoder.cpp` | the encoder and the public RGBA8 `encode_jpeg_xl` |
+| `jpeg_xl_hooks.*` | the `JxlMemoryManager` over `core::memory` with its per-decode `jpeg_xl_memory_budget`, and the `JxlParallelRunner` over `core::jobs` |
+
+Rules the decoder keeps (`docs/design/02_renderer.md` 3.13): an `SRGB` texture is converted to sRGB through
+skcms, a `LINEAR` one keeps the file's own encoding; PQ and HLG come out with 1.0 at 203 nits (BT.2408's reference
+white), an `SRGB` texture of one clipped at 1; colour and alpha deeper than 8 bits keep their high byte (stb's
+reduction of a 16-bit PNG), 8-bit colour beside them is rounded; orientation applied, premultiplied alpha divided
+out in the stored encoding before any conversion (by libjxl, into integers, when no conversion follows), the first
+animation frame kept with a WARN; the image size, the extra channels (at most 16) and every layer's size checked
+from the headers before any frame is decoded, and libjxl's memory held to a budget derived from the image size and
+16 threads whatever the worker count, on at most 16 threads (`docs/handbook/libjxl.md` 9.3). libjxl cannot render a lossy (XYB) image into an ICC profile (a
+debug build stops on `stage_from_linear.cc` "Invalid target encoding"), so for a `LINEAR` texture such a file is
+decoded to linear sRGB floats and converted to its ICC profile through `JxlCmsInterface` row by row.
+`equirect_image::decode_hdr` and `sample` read NaN and negative samples as 0 and anything above
+`MAX_ENVIRONMENT_RADIANCE` (the largest float / 2^16) as that bound, so the bake's float sums stay finite while a sun
+brighter than a half holds is integrated unclipped; only `pack_cubemap` clamps to 65504.
+The texture and environment importers pass the job system `register_asset_types` received; glTF images decode
+on the calling thread. `TEXTURE_IMPORTER_VERSION` is 2 since JPEG XL; `ENVIRONMENT_IMPORTER_VERSION` is 3 since the
+bake reads samples that way.
+
 ## Failure model
 
 `renderer::create` fails at start-up with `renderer_error::SHADER_NOT_FOUND` (naming the shader
@@ -225,8 +257,9 @@ using a refused texture rebind that slot to its fallback (white, flat normal or 
 `draw_list_builder`, `cascade_builder`, `shadow_atlas_allocator`, `render_graph`, `transient_pool`,
 `gpu_types`, `tonemap_reference`, `exposure_math`, `pipeline_cache`, `gpu_resource_cache`,
 `warn_latch`, `renderer_null_frame`, `renderer_failures`, `renderer_gpu`). Everything runs on the null device; the
-`[gpu]` cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG and
-HDR inputs are generated in the tests (no binary assets). The allocation gates
+`[gpu]` cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG, HDR,
+JPEG XL and ICC inputs are generated in the tests (no binary assets): `test_jpeg_xl.cpp` writes every JPEG XL
+layout through the private encoder, a 16-bit PNG and ICC v2 profiles by hand. The allocation gates
 (`CONJURE_CHECK_NO_ALLOCATIONS`) live next to the code they pin: the whole frame and extraction plus
 culling in `test_renderer_null_frame.cpp`, the warm `cull_scratch` in `test_culling.cpp`, the rebuilt
 graph in `test_render_graph.cpp` and the repeated atlas allocation in `test_shadow_atlas_allocator.cpp`.

@@ -301,20 +301,21 @@ chapter documents them in full; the build-relevant facts are:
 
 ## 8. Third-party dependencies
 
-Every dependency is declared exactly once in `third_party/CMakeLists.txt` with `FetchContent`, pinned to a
-tag or commit, declared `SYSTEM` and (where upstream CMake is used) `EXCLUDE_FROM_ALL`, and exposed as a
-`conjure::thirdparty::<name>` target. Engine code never names an upstream target, so a dependency can be
-swapped or vendored in one place. `BUILD_SHARED_LIBS` is forced `OFF` for the duration and restored;
-`CMAKE_POLICY_VERSION_MINIMUM 3.5` keeps old upstream `cmake_minimum_required` lines configurable under
-CMake 4; `FETCHCONTENT_UPDATES_DISCONNECTED ON` stops re-fetching on every configure.
+Every dependency is declared exactly once in `third_party/CMakeLists.txt` or a file it includes (`jxl.cmake`) with
+`FetchContent`, pinned to a tag, a commit or an archive SHA-256, declared `SYSTEM` and (where upstream CMake is used)
+`EXCLUDE_FROM_ALL`, and exposed as a `conjure::thirdparty::<name>` target. Engine code never names an upstream target,
+so a dependency can be swapped or vendored in one place. `BUILD_SHARED_LIBS` is forced `OFF` for the duration and
+restored; `CMAKE_POLICY_VERSION_MINIMUM 3.5` keeps old upstream `cmake_minimum_required` lines configurable under CMake
+4; `FETCHCONTENT_UPDATES_DISCONNECTED ON` stops re-fetching on every configure.
 
 | Target | Upstream | Pin | Built when | Notes |
 |---|---|---|---|---|
-| `conjure::thirdparty::stb` | nothings/stb | commit `d14d46f6` | always | `src/stb_impl.c`; private to `core_system` (and linked by `conjure_core_system_tests` to decode fixtures) |
+| `conjure::thirdparty::stb` | nothings/stb | commit `d14d46f6` | always | `src/stb_impl.c`; private to `core_system` and `renderer` (and linked by `conjure_core_system_tests` to decode fixtures) |
 | `conjure::thirdparty::cgltf` | jkuhlmann/cgltf | `v1.14` | always | `src/cgltf_impl.c` |
 | `conjure::thirdparty::miniaudio` | mackron/miniaudio | `0.11.22` | `CONJURE_WITH_AUDIO` | `src/miniaudio_impl.c`; links `dl pthread m` on Linux |
 | `conjure::thirdparty::glm` | g-truc/glm | `1.0.1` | always | interface target with `GLM_FORCE_RADIANS`, `GLM_FORCE_DEPTH_ZERO_TO_ONE`, `GLM_ENABLE_EXPERIMENTAL`, `GLM_FORCE_SILENT_WARNINGS`, `GLM_FORCE_EXPLICIT_CTOR`; the only third-party header allowed in a public header, via `conjure/core/math/glm_types.h` |
 | `conjure::thirdparty::yyjson` | ibireme/yyjson | `0.10.0` | always | private to `core_json` |
+| `conjure::thirdparty::jxl` | libjxl/libjxl, with google/highway, google/brotli and google/skcms in its tree | `v0.13.0` tarball, commits `457c8917`, `db24a98a`, `96d9171c`, each by URL and SHA-256 | always (built when linked: `CONJURE_WITH_RENDERER`) | `third_party/jxl.cmake`: libjxl's static `jxl` (encoder, decoder, skcms colour management), checked at configure time; private to `renderer` (its JPEG XL codec); [libjxl](libjxl.md) |
 | `conjure::thirdparty::doctest` | doctest/doctest | `v2.4.11` | `CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS` | also includes `scripts/cmake/doctest.cmake` and caches `_DOCTEST_DISCOVER_TESTS_SCRIPT` for the `tests/` directories |
 | `conjure::thirdparty::glfw` | glfw/glfw | `3.4` | `CONJURE_PLATFORM_GLFW` | static; Wayland and X11 both on Linux |
 | `conjure::thirdparty::nvrhi` | NVIDIA-RTX/NVRHI | commit `bf0bbd9b` | `CONJURE_WITH_RENDERER` | D3D12 (`d3d12 dxgi dxguid`) and/or Vulkan per `CONJURE_RHI_*`; validation layer on |
@@ -332,11 +333,10 @@ included without a directory, so they are grouped as third-party rather than sta
 needs no entry: it accepts only Conjure and C++ standard library headers and rejects every other include on its own.
 
 > [!NOTE]
-> The design records (`docs/design/00_brief.md`, `02_renderer.md`, `11_platform.md`, `14_physics.md`) name the
-> file `cmake/Dependencies.cmake` (and `00_brief.md` the warning file `CompilerWarnings.cmake`); the
-> implementation put the declarations in `third_party/CMakeLists.txt` and the warnings in
-> `cmake/ConjureWarnings.cmake`. The rules are identical, and `.github/workflows/ci.yml` keys its dependency cache
-> on the hash of `third_party/CMakeLists.txt`.
+> The design records (`docs/design/00_brief.md`, `02_renderer.md`, `11_platform.md`, `14_physics.md`) name the file
+> `cmake/Dependencies.cmake` (and `00_brief.md` the warning file `CompilerWarnings.cmake`); the implementation put the
+> declarations in `third_party/CMakeLists.txt` and the warnings in `cmake/ConjureWarnings.cmake`. The rules are
+> identical; CI keys its `_deps` cache on the hash of `third_party/CMakeLists.txt` and `third_party/*.cmake`.
 
 ## 9. Generated build info
 

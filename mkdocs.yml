@@ -115,6 +115,7 @@ nav:
           - api/renderer/index.md
           - Rendering a frame: api/renderer/rendering-a-frame.md
           - Renderer assets: api/renderer/renderer-assets.md
+          - JPEG XL images: api/renderer/jpeg-xl.md
       - Physics:
           - api/physics/index.md
           - Bodies, colliders and characters: api/physics/bodies-and-colliders.md
@@ -146,6 +147,7 @@ nav:
       - Architecture: handbook/architecture.md
       - Repository layout: handbook/repository-layout.md
       - Build pipeline: handbook/build-pipeline.md
+      - libjxl (JPEG XL): handbook/libjxl.md
       - Coding standards: handbook/coding-standards.md
       - Data-oriented design: handbook/data-oriented-design.md
       - Testing: handbook/testing.md

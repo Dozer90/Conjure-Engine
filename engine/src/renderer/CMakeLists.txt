@@ -1,7 +1,8 @@
 # conjure_renderer - render graph over the rhi, render_scene contract, PBR / IBL / shadows / SSAO / HDR
 # chain, 2D sprites, debug draw, the renderer asset types with their importers, and the ImGui backend
 # (docs/design/02_renderer.md). Depends publicly on conjure::core, conjure::rhi and conjure::assets
-# (never on ecs, R7); NVRHI, cgltf, stb and ImGui are private. The ImGui backend is compiled only in
+# (never on ecs, R7); NVRHI, cgltf, stb, libjxl (JPEG XL, every configuration: a runtime that runs a project from
+# its sources imports textures too) and ImGui are private. The ImGui backend is compiled only in
 # editor builds (CONJURE_BUILD_EDITOR, never Distribution). The shaders are built by conjure_shaders
 # (engine/shaders), which this target depends on so index.json exists before the renderer is used.
 
@@ -22,6 +23,7 @@ set(CONJURE_RENDERER_PUBLIC_HEADERS
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/gltf_importer.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/gpu_ids.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/imgui_renderer.h
+    ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/jpeg_xl.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/light.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/limits.h
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/renderer/log_category.h
@@ -95,6 +97,11 @@ set(CONJURE_RENDERER_SOURCES
     import/ibl_baker.h
     import/image_loader.cpp
     import/image_loader.h
+    import/jpeg_xl_codec.h
+    import/jpeg_xl_decoder.cpp
+    import/jpeg_xl_encoder.cpp
+    import/jpeg_xl_hooks.cpp
+    import/jpeg_xl_hooks.h
     import/mip_generator.cpp
     import/mip_generator.h
     import/tangent_generator.cpp
@@ -123,6 +130,7 @@ set(CONJURE_RENDERER_PRIVATE_DEPS
     conjure::thirdparty::nvrhi
     conjure::thirdparty::cgltf
     conjure::thirdparty::stb
+    conjure::thirdparty::jxl
 )
 if(CONJURE_BUILD_EDITOR AND TARGET conjure::thirdparty::imgui)
     list(APPEND CONJURE_RENDERER_SOURCES imgui/imgui_renderer.cpp)

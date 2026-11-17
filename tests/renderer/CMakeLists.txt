@@ -31,6 +31,7 @@ set(CONJURE_RENDERER_TEST_SOURCES
     test_gpu_resource_cache.cpp
     test_gpu_types.cpp
     test_imgui_renderer.cpp
+    test_jpeg_xl.cpp
     test_light.cpp
     test_limits.cpp
     test_log_category.cpp

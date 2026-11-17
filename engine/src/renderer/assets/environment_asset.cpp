@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 using namespace conjure;
@@ -30,6 +31,28 @@ namespace {
     constexpr f32 SH_A0 = math::PI;
     constexpr f32 SH_A1 = 2.0f * math::PI / 3.0f;
     constexpr f32 SH_A2 = math::PI / 4.0f;
+
+    // The prefilter's sum over MAX_BAKE_SAMPLES samples is the largest of the bake; the bound keeps it finite with
+    // a factor of 16 to spare (environment_asset.h).
+    static_assert(
+      static_cast<f64>(MAX_ENVIRONMENT_RADIANCE) * MAX_BAKE_SAMPLES * 16.0 <=
+        static_cast<f64>(std::numeric_limits<f32>::max()),
+      "MAX_ENVIRONMENT_RADIANCE must keep the prefilter's sum finite"
+    );
+
+    /// <summary>
+    /// A radiance sample the bake can sum: NaN and negative values (no light) become 0, and anything above
+    /// MAX_ENVIRONMENT_RADIANCE, +inf included, becomes that bound. Finite HDR radiance below it passes unchanged:
+    /// the half range is the stored cubemaps' limit (pack_cubemap), not the bake's. An infinity left in would turn
+    /// bilinear weights of 0 into NaN and the SH9 projection into NaN, and a value near the float limit would
+    /// overflow the mip and prefilter sums into infinity.
+    /// </summary>
+    [[nodiscard]] f32 sanitise_radiance(f32 value) noexcept {
+        if (std::isnan(value)) {
+            return 0.0f;
+        }
+        return std::clamp(value, 0.0f, MAX_ENVIRONMENT_RADIANCE);
+    }
 
     [[nodiscard]] core::error invalid_options(std::string_view detail) {
         return core::make_error(core::error_code::INVALID_ARGUMENT, "environment bake options: {}", detail);
@@ -126,13 +149,19 @@ bool cubemap_data::is_consistent() const noexcept {
 /*===========================================================================*/
 // equirect_image
 
-core::result<equirect_image> equirect_image::decode_hdr(std::span<const std::byte> encoded) {
+core::result<equirect_image> equirect_image::decode_hdr(
+  std::span<const std::byte> encoded,
+  core::jobs::job_system *jobs
+) {
     detail::decoded_hdr_image decoded = {};
-    CONJURE_TRY_ASSIGN(decoded, detail::decode_hdr_rgb(encoded));
+    CONJURE_TRY_ASSIGN(decoded, detail::decode_hdr_rgb(encoded, jobs));
     equirect_image image = {};
     image.width = decoded.width;
     image.height = decoded.height;
     image.rgb = std::move(decoded.rgb);
+    for (f32 &value : image.rgb) {
+        value = sanitise_radiance(value);
+    }
     return image;
 }
 
@@ -170,9 +199,14 @@ math::vec3 equirect_image::sample(const math::vec3 &direction) const noexcept {
         const i32 w = static_cast<i32>(width);
         return static_cast<u32>(((x % w) + w) % w);
     };
+    // Sanitised here as well, for images filled by hand rather than by decode_hdr.
     const auto pixel = [this](u32 x, u32 y) -> math::vec3 {
         const usize index = (static_cast<usize>(y) * width + x) * 3;
-        return math::vec3(rgb[index], rgb[index + 1], rgb[index + 2]);
+        return math::vec3(
+          sanitise_radiance(rgb[index]),
+          sanitise_radiance(rgb[index + 1]),
+          sanitise_radiance(rgb[index + 2])
+        );
     };
     const u32 xa = wrapX(x0);
     const u32 xb = wrapX(x0 + 1);
@@ -423,7 +457,7 @@ core::result<assets::import_output> environment_importer::import(assets::import_
     if (!options.has_value()) {
         return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, options.get_error().message());
     }
-    core::result<equirect_image> image = equirect_image::decode_hdr(context.source_bytes());
+    core::result<equirect_image> image = equirect_image::decode_hdr(context.source_bytes(), mJobs);
     if (!image.has_value()) {
         return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, image.get_error().message());
     }
