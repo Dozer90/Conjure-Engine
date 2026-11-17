@@ -55,7 +55,7 @@ The ten rules of `AGENTS.md` section 2, in one line each:
 6. Warnings are errors; never disable one, fix the code or include the offending third-party header through `SYSTEM`.
 7. Build and run the tests before reporting done; "should compile" is a failure.
 8. Review before commit; every commit builds and passes tests on its own.
-9. No globbing in CMake; no new third-party dependency without a pinned entry in `third_party/CMakeLists.txt` and a `conjure::thirdparty::` alias, and its licence notice (`conjure_third_party_notice()` beside the pin, then `python tools/third_party_notices.py --build-dir <tree>`; CTest `notices.up_to_date` fails until then).
+9. No globbing in CMake; no new third-party dependency without an entry pinned to a tag, commit or archive SHA-256 in `third_party/CMakeLists.txt` or a file it includes (`jxl.cmake`) and a `conjure::thirdparty::` alias, and its licence notice (`conjure_third_party_notice()` beside the pin, then `python tools/third_party_notices.py --build-dir <tree>`; CTest `notices.up_to_date` fails until then). The configure checks the notices of `third_party/CMakeLists.txt` itself; an included file needs tests that check its own, as the probes of `tests/third_party` do for `jxl.cmake`.
 10. Platform code stays behind backends; no `#ifdef _WIN32` outside `conjure/core/platform_detect.h` and backend implementation files; everything builds on Windows, Linux and macOS.
 
 > [!IMPORTANT]

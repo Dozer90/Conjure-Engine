@@ -189,14 +189,18 @@ there for a native game module that uses them).
 contributors": there is no individual holder, because Conjure is meant as a learning tool that others can use and
 extend. The README says the same instead of "All rights reserved".
 
-**Third-party software** is registered once, next to its pin in `third_party/CMakeLists.txt`, with
-`conjure_third_party_notice()` (`cmake/ConjureNotices.cmake`): name, pin, licence, source, the licence files of the
-fetched source and a scope. `RUNTIME` is linked into `conjure_shared` or `conjure_runtime` or placed next to them;
-`EDITOR` is linked into `conjure_shared` and `conjure_editor` in a tree that builds the editor (Dear ImGui lives in
-`conjure_shared`, R9); `BUILD` is a build or test tool and reaches no binary that ships. The notices sit outside the
-option blocks, so every tree knows the whole list. A configure fails when a notice names another version than the
-`GIT_TAG` beside it, when a licence file of software the tree uses does not exist, and when a `FetchContent_Declare`
-of that file has no notice naming it as `FETCH`. From the registrations come two files:
+**Third-party software** is registered once, next to its pin in `third_party/CMakeLists.txt` or a file it includes
+(`third_party/jxl.cmake`), with `conjure_third_party_notice()` (`cmake/ConjureNotices.cmake`): name, pin, licence,
+source, the licence files of the fetched source and a scope. `RUNTIME` is linked into `conjure_shared` or
+`conjure_runtime` or placed next to them; `EDITOR` is linked into `conjure_shared` and `conjure_editor` in a tree
+that builds the editor (Dear ImGui lives in `conjure_shared`, R9); `BUILD` is a build or test tool and reaches no
+binary that ships. The notices sit outside the option blocks, so every tree knows the whole list. A configure fails
+when a notice names another version than the `GIT_TAG` beside it, when a licence file of software the tree uses does
+not exist, and when a `FetchContent_Declare` in `third_party/CMakeLists.txt` has no notice naming it as `FETCH`. The
+first and the last check do not reach `jxl.cmake`: libjxl and the three libraries it builds are pinned there by URL
+and SHA-256, so there is no `GIT_TAG` to compare and each `VERSION` reads the variable its URL reads, and the
+declaration scan reads only the file that calls it. The probes of `tests/third_party` hold its four notices instead:
+each must be used and find its licence files. From the registrations come two files:
 
 - **`THIRD_PARTY_NOTICES.md`** (tracked, repository root): every notice with its licence text, for all platforms and
   options. `tools/third_party_notices.py` writes it from the manifest a configure leaves in

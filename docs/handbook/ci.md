@@ -76,7 +76,7 @@ WARP adapter, so the `[gpu]` cases run there); the `[dotnet]` cases run because 
 | Linux packages | `sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev` | GLFW (X11 + Wayland), miniaudio and the Vulkan loader |
 | macOS packages | `brew install ninja` | |
 | MSVC | `ilammy/msvc-dev-cmd@v1` with `arch: x64` | the equivalent of `vcvars64.bat`, which `tools/build.py` does locally |
-| Dependency cache | `actions/cache@v4` on `build/<preset>/_deps`, key `deps-<leg>-<hash of third_party/CMakeLists.txt>` | changing a pin or a licence notice registered in that file (`conjure_third_party_notice()`) invalidates the cache; nothing else does |
+| Dependency cache | `actions/cache@v4` on `build/<preset>/_deps`, key `deps-<leg>-<hash of third_party/CMakeLists.txt and third_party/*.cmake>` | changing a pin or a licence notice registered in those files (`conjure_third_party_notice()`) invalidates the cache; nothing else does |
 | Test asset cache and download | `actions/cache@v4` on `tests/.downloaded` and `tests/.assets_ready`, key from `tools/test_assets.json`; `python tools/download_test_assets.py` | the `downloaded` label runs on every leg; every file is verified against the committed `tools/test_assets.lock` (a mismatch fails the step; a file the lock does not know yet is pinned and reported, and the lock is committed with the change) |
 | Configure | `cmake --preset <preset> <configure-args>` | |
 | Build | `cmake --build --preset <preset> --parallel` | warnings are errors |

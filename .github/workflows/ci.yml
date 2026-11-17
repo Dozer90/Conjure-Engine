@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/${{ matrix.preset }}/_deps
-          key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt', 'third_party/*.cmake') }}
 
       - name: Cache downloaded test assets
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -208,7 +208,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/linux-gcc-debug/_deps
-          key: deps-style-and-headers-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-style-and-headers-${{ hashFiles('third_party/CMakeLists.txt', 'third_party/*.cmake') }}
 
       - name: Header check
         run: |

@@ -1,8 +1,9 @@
 # Third-party licence notices (docs/design/06_engine_loop.md D15, code sweep F200).
 #
 # Every piece of third-party software the build uses is registered once, next to its pin in
-# third_party/CMakeLists.txt, with conjure_third_party_notice(). At the end of that file
-# conjure_write_third_party_notices() turns the registrations into two files of the build tree:
+# third_party/CMakeLists.txt or a file it includes (jxl.cmake), with conjure_third_party_notice(). At the end of
+# third_party/CMakeLists.txt conjure_write_third_party_notices() turns the registrations into two files of the build
+# tree:
 #
 #   <build>/notices/third_party_notices.json   the manifest: every registered notice, whether this tree uses it and
 #                                              the licence files it found. tools/third_party_notices.py builds
@@ -165,7 +166,8 @@ endfunction()
 
 # Fails the configure when the notice names a VERSION other than the GIT_TAG its dependency is declared with. Only
 # a FetchContent_Declare in the file that registered the notice can be compared; a dependency another dependency
-# declares (NVRHI fetches the Vulkan and DirectX headers) passes its pin as VERSION directly.
+# declares (NVRHI fetches the Vulkan and DirectX headers) passes its pin as VERSION directly, and one pinned by URL
+# and URL_HASH (third_party/jxl.cmake) has no GIT_TAG to compare, so its notices read the variables its URLs read.
 function(_conjure_notice_check_pin id fetch version listFile)
     file(READ "${listFile}" listText)
     string(REGEX MATCH
@@ -258,8 +260,8 @@ endfunction()
 
 # Writes the manifest and the runtime notices of this configuration (see the file comment) and publishes their
 # paths as the global properties CONJURE_NOTICES_MANIFEST and CONJURE_NOTICES_FILE. Call it once, after every
-# dependency was made available, from the file that declares them: a FetchContent_Declare there that no notice
-# names as FETCH fails the configure.
+# dependency was made available, from the file that declares them: a FetchContent_Declare there (not in a file it
+# includes) that no notice names as FETCH fails the configure.
 function(conjure_write_third_party_notices)
     get_property(written GLOBAL PROPERTY CONJURE_NOTICES_FILE SET)
     if(written)
@@ -393,7 +395,10 @@ function(conjure_write_third_party_notices)
 
     # Every dependency the calling file pins needs a notice that names it as FETCH: one declared without would
     # pass every other check while its licence never reaches the notices. Names are compared as FetchContent
-    # does, without regard to case; whole-line comments are not declarations.
+    # does, without regard to case; whole-line comments are not declarations. Only the calling file is scanned, not
+    # a file it includes: third_party/jxl.cmake declares libjxl and, inside libjxl's tree, libjxl_highway,
+    # libjxl_brotli and libjxl_skcms, whose notices all name FETCH libjxl (a clone declares none of the three), so a
+    # scan of it would have to accept those three names; tests/third_party checks that its four notices ship.
     set(fetchNames "")
     foreach(id IN LISTS ids)
         get_property(fetch GLOBAL PROPERTY "CONJURE_NOTICE_${id}_FETCH")

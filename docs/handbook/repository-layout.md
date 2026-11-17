@@ -25,7 +25,7 @@ generated or downloaded and therefore never committed.
 | `CMakeLists.txt` | root build: options, configurations, global compiler settings, `add_subdirectory` order |
 | `CMakePresets.json` | configure, build, test and workflow presets per platform and configuration |
 | `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake`, `ConjureNotices.cmake` (licence notices: registration, the runtime `THIRD_PARTY_NOTICES.txt`, the `notices.*` CTest entries) and its probe `ConjureNoticesProbe.cmake` |
-| `third_party/` | `CMakeLists.txt` with every pinned dependency and its licence notice (`conjure_third_party_notice()`), `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) and `licenses/` with the licence texts of software that is followed, not fetched (the two tonemap fits) |
+| `third_party/` | `CMakeLists.txt` with every pinned dependency and its licence notice (`conjure_third_party_notice()`), `jxl.cmake` (libjxl and the three libraries it builds, pinned by archive SHA-256, with their four notices) and its configure checks `jxl_checks.cmake`, `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) and `licenses/` with the licence texts of software that is followed, not fetched (the two tonemap fits) |
 | `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `shaders/` the engine's HLSL sources and their `CMakeLists.txt` (`conjure_add_shaders`), `CMakeLists.txt` with the module list |
 | `editor/` | the `conjure_editor` executable: `src/main.cpp` over `conjure::shared` ([Editor module](modules/editor.md)); `resources/` the Windows icon resource and its generated `.ico` |
 | `runtime/` | the `conjure_runtime` executable: `src/main.cpp` over `conjure::shared` ([Runtime](modules/runtime.md)); `cmake/` holds `ConjureMsvcRuntime.cmake` (which Visual C++ redistributable folder a Distribution build ships) and its probe |
@@ -106,10 +106,10 @@ has its own `README.md` with the same four sections as a module README.
 
 ```
 tests/CMakeLists.txt                   adds support/, benchmarks/ with CONJURE_BUILD_BENCHMARKS, then one directory per
-                                       module (CONJURE_TEST_MODULES) and integration/; a listed directory without its
-                                       CMakeLists.txt stops the configure. Registers the Python CTest entries:
-                                       style.check and docs.check, the tools' self-tests and brand.icons_up_to_date
-                                       (section 4)
+                                       module (CONJURE_TEST_MODULES), integration/ and third_party/; a listed
+                                       directory without its CMakeLists.txt stops the configure. Registers the Python
+                                       CTest entries: style.check and docs.check, the tools' self-tests and
+                                       brand.icons_up_to_date (section 4)
 tests/support/                         conjure_test_support (and conjure_test_support_shared, the same sources against
                                        conjure::shared): include/conjure/testing/*.h, src/*.cpp, src/test_main.cpp,
                                        src/tracked_global_new.cpp; tests/ holds its self-tests (conjure_support_tests)
@@ -118,6 +118,8 @@ tests/<module>/                        conjure_<module>_tests: test_<header>.cpp
 tests/core/<area>/                     conjure_core_<area>_tests, mirroring engine/src/core/<area>
 tests/modules/fixtures/<name>/         one fixture plugin per directory (module.json and a .cpp), built with
                                        conjure_add_game_module() into build/<preset>/test_modules/<name>/
+tests/third_party/                     configure probes of the third-party pin checks and of jxl.cmake
+                                       (third_party.jxl_*): no executable, no download
 ```
 
 Conventions worth knowing when looking for something:
@@ -184,7 +186,7 @@ Nothing in this table is committed; `.gitignore` covers all of it.
 | `build/<preset>/generated/include/conjure/modules/abi_identity.h` | the `conjure_abi_identity` target (`cmake/ConjureSharedLibrary.cmake`) | header hash, compiler major and runtime facts; rewritten at build time when a public header changes |
 | `build/<preset>/bin/shaders/` (`*.dxil`, `*.spv`, `index.json`) | `conjure_add_shaders()` from `engine/shaders/CMakeLists.txt` | read by `rhi::shader_library` from next to the executable; depfiles make a changed `.hlsli` rebuild its permutations |
 | `build/<preset>/test_modules/<name>/` | `tests/modules/CMakeLists.txt` | the fixture plugins' `module.json` copies and `bin/<platform>-<arch>-<config>/` binaries |
-| `build/<preset>/_deps/` | FetchContent | cached in CI keyed by the hash of `third_party/CMakeLists.txt` |
+| `build/<preset>/_deps/` | FetchContent | cached in CI keyed by the hash of `third_party/CMakeLists.txt` and `third_party/*.cmake`; libjxl unpacks into `libjxl-<version>-src` with Highway, Brotli and skcms inside its `third_party/` |
 | `build/<preset>/notices/` | every configure (`cmake/ConjureNotices.cmake`) | the notices manifest `third_party_notices.json` and the runtime notices |
 | `build/<preset>/bin/THIRD_PARTY_NOTICES.txt` | building `conjure_runtime` | the licence notices placed next to the runtime; export step 5 ships the file |
 | `build/<preset>/tests/.../header_check/<target>/*.cpp` | `conjure_header_check()` | one stub per public header, regenerated only when the header list changes |
@@ -204,8 +206,8 @@ icon (`editor/resources/conjure_editor.ico`, `engine/src/editor/ui/editor_icon_d
 `THIRD_PARTY_NOTICES.md` comes from `tools/third_party_notices.py`, and `notices.up_to_date` fails while it
 differs from the licence files the tree fetched.
 
-`.gitattributes` normalises every text file to LF and marks `.png .ico .jpg .hdr .glb .bin .wav .ogg .mp3 .ttf
-.dxil .spv` as binary; `tools/check_style.py` rejects a CRLF source file, so configure your editor rather than git.
+`.gitattributes` normalises every text file to LF and marks `.png .ico .jpg .jxl .hdr .glb .bin .wav .ogg .mp3
+.ttf .dxil .spv` as binary; `tools/check_style.py` rejects a CRLF source file, so configure your editor rather than git.
 
 ## Related
 

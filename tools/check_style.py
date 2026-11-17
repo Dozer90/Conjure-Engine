@@ -93,6 +93,8 @@ WINDOWS_MACRO_NAMES = {
 THIRD_PARTY_INCLUDE_ROOTS = (
     "glm/", "yyjson", "stb_", "nvrhi", "Jolt/", "GLFW/", "imgui", "ImGuizmo", "miniaudio", "cgltf", "doctest",
     "nethost", "hostfxr", "coreclr", "vulkan/", "d3d12", "dxgi", "windows.h", "Windows.h",
+    # libjxl's C API and the Highway headers its usage requirements put on the include path (third_party/jxl.cmake).
+    "jxl/", "hwy/",
 )
 # Third-party single-file headers that are included without a directory prefix; everything else
 # without a '/' in angle brackets is a standard library or operating-system header.

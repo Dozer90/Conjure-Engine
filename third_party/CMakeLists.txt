@@ -1,6 +1,7 @@
 # Third-party dependencies.
 #
-# Every dependency is declared here exactly once, pinned to a tag or commit, and exposed to the
+# Every dependency is declared here, or in a file this one includes (jxl.cmake), exactly once, pinned to a
+# tag or commit or to an archive URL with its SHA-256, and exposed to the
 # engine through a conjure::thirdparty::<name> target. Engine code never references the raw
 # upstream targets so that a dependency can be swapped or vendored in one place.
 #
@@ -10,9 +11,10 @@
 # Every dependency also has a conjure_third_party_notice() beside its declaration (cmake/ConjureNotices.cmake,
 # docs/design/06_engine_loop.md D15): its name, pin, licence and licence files. The notices are registered
 # outside the option blocks, so every tree knows the whole list and a tree that does not fetch a dependency
-# says so. VERSION repeats the GIT_TAG and the configure fails when the two differ. After a pin or a notice
-# changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir <tree>
-# (docs/handbook/getting-started.md 11).
+# says so. VERSION repeats the GIT_TAG and the configure fails when the two differ; a dependency pinned by URL and
+# URL_HASH (jxl.cmake) has no GIT_TAG to compare, so its notices read the variables its URLs read. After a pin or a
+# notice changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir
+# <tree> (docs/handbook/getting-started.md 11).
 
 include(FetchContent)
 include(ConjureNotices)
@@ -152,6 +154,12 @@ set(YYJSON_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(yyjson)
 add_library(conjure::thirdparty::yyjson ALIAS yyjson)
 set_target_properties(yyjson PROPERTIES FOLDER "ThirdParty")
+
+#------------------------------------------------------------------------------
+# JPEG XL: libjxl with Highway, Brotli and skcms, pinned by URL and SHA-256 in jxl.cmake, which registers their
+# four notices too (the declaration scan of conjure_write_third_party_notices() reads this file only)
+#------------------------------------------------------------------------------
+include("${CMAKE_CURRENT_SOURCE_DIR}/jxl.cmake")
 
 #------------------------------------------------------------------------------
 # doctest

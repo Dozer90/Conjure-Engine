@@ -3,7 +3,7 @@
 # target exists (the directory's own CMakeLists.txt checks that), so disabling a subsystem also disables its
 # tests. The root enters this directory for CONJURE_BUILD_TESTS or CONJURE_BUILD_BENCHMARKS: the support library
 # serves both, the test modules, the style, documentation and tool entries and the build entries need the first,
-# the benchmarks the second.
+# the benchmarks the second. third_party/ holds the configure probes of the third-party pins (no engine module).
 
 add_subdirectory(support)
 
@@ -50,6 +50,9 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt")
     message(FATAL_ERROR "tests: ${CMAKE_CURRENT_SOURCE_DIR}/integration/CMakeLists.txt does not exist")
 endif()
 add_subdirectory(integration)
+
+# The configure probes of the third-party pins (third_party/jxl_checks.cmake, jxl.cmake): no compiler, no download.
+add_subdirectory(third_party)
 
 # Style check (docs/design/08_testing.md 7.3 style-and-headers job): tools/check_style.py over every
 # C++ file of the repository plus the test-mirrors-header rule, registered as the CTest entry

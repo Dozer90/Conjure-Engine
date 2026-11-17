@@ -123,6 +123,18 @@ def quoted_non_conjure_include(checker, root: pathlib.Path) -> None:
 
 
 #------------------------------------------------------------------------------
+# include-order
+#------------------------------------------------------------------------------
+
+def quoted_jpeg_xl_headers(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "#include \"jxl/decode.h\"\n#include \"hwy/base.h\"\n\n#include <jxl/encode.h>\n\n#include <vector>\n")
+    result = run(checker, root, "engine/src/foo/bar.cpp")
+    quoted = [line for line in result.of_rule("include-order") if "must use angle brackets" in line]
+    assert [line.split(":")[1] for line in quoted] == ["1", "2"], result.findings
+
+
+#------------------------------------------------------------------------------
 # windows-macro
 #------------------------------------------------------------------------------
 
@@ -365,6 +377,7 @@ CASES = [
     ("third-party-include - standard headers and glm in glm_types.h are allowed", standard_and_glm_allowed),
     ("third-party-include - glm outside glm_types.h is reported", glm_outside_glm_types),
     ("third-party-include - a quoted non-Conjure include in a public header is reported", quoted_non_conjure_include),
+    ("include-order - a quoted libjxl or Highway header must use angle brackets", quoted_jpeg_xl_headers),
     ("windows-macro - enumerators of anonymous enums are checked", anonymous_enums_checked),
     ("windows-macro - an ALL_CAPS const constant is checked", all_caps_const_checked),
     ("windows-macro - a camelCase const local is a variable, not a constant", camel_case_const_local_is_variable),
