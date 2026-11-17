@@ -13,8 +13,8 @@
 #include <utility>
 
 // view.* (docs/design/04_editor.md 3.8, 3.10, 4.4, 7): the editor camera lives in core, so set_camera, focus
-// and pick work headless; screenshots need a device (NOT_AVAILABLE on the null rhi); debug_draw flags are
-// stored for the viewport panel.
+// and pick work headless; screenshots need a device (NOT_AVAILABLE on the null rhi) and are PNG or lossless JPEG
+// XL files; debug_draw flags are stored for the viewport panel.
 
 namespace conjure::editor::support {
 
@@ -254,13 +254,16 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "view.screenshot",
-            "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG (a "
-            "relative path is relative to the project root).",
+            "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG, or a "
+            "lossless JPEG XL when format is \"jxl\" or the path ends in .jxl (a relative path is relative to the "
+            "project root).",
             R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer","minimum":1},)"
-            R"("height":{"type":"integer","minimum":1},"camera":{"type":"string"},"format":{"type":"string"},)"
+            R"("height":{"type":"integer","minimum":1},"camera":{"type":"string"},)"
+            R"("format":{"type":"string","enum":["png","jxl"]},)"
             R"("waitFrames":{"type":"integer","minimum":0}},"required":["path"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer"},)"
-            R"("height":{"type":"integer"},"frame":{"type":"integer"}}})",
+            R"("height":{"type":"integer"},"frame":{"type":"integer"},)"
+            R"("format":{"type":"string","enum":["png","jxl"]}}})",
             command_flags::ASYNC,
             &view_screenshot
           )

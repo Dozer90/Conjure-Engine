@@ -108,6 +108,12 @@ Events: `log`, `selection.changed`, `play.state`, `scene.changed`, `scene.loaded
 `script.reloaded`, `asset.imported`, `module.state`, `command.executed`, `client.connected`,
 `client.disconnected`, `events.dropped`, `warning`.
 
+`view.screenshot {path, width?, height?, camera?, format?, waitFrames?}` answers `{path, width, height, frame,
+format}`. It writes a PNG unless the path ends in `.jxl` or `format` is `"jxl"`: then a lossless JPEG XL with the
+same pixels, usually a third to a half of the PNG's size. A `format` that contradicts a `.png` or `.jxl` path is
+`INVALID_ARGS` (details in
+[Headless mode and the command model](headless-and-commands.md#picking-screenshots-camera-console)).
+
 Every `play.*` command answers, and every `play.state` event carries, `{state, frame, simulationFrame,
 simulationTime, fixedStepIndex}`. `frame` is the engine frame; the other three are the clocks of the play session.
 `play.start` sets them to 0. `simulationTime` (seconds) and `fixedStepIndex` advance with fixed steps only, so they

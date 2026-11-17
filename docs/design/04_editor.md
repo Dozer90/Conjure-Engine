@@ -433,13 +433,20 @@ the centroid) with the drag session as `coalesceKey`; on release it dispatches `
 
 ### 3.10 Screenshot
 
-`view.screenshot {path, width?, height?, camera?:"editor"|"game"|guid, format?:"png", waitFrames?=0}`
+`view.screenshot {path, width?, height?, camera?:"editor"|"game"|guid, format?:"png"|"jxl", waitFrames?=0}`
 (async): `screenshot_service` creates (or reuses) a `renderer::render_target` of the requested size and, during
 EXTRACT, appends a `render_view` targeting it with the chosen camera for `waitFrames + 1` frames; it then calls
 `renderer::read_back(target)` (synchronous, waits for idle; the renderer offers no asynchronous capture, R12) on
 the main thread. The service hands the `core::image` to a job that encodes it with `core::image::save_png`
 (any other `format` is `INVALID_ARGS`), writes the file and completes the reply with `{path, width, height,
 frame}`. `null` RHI -> `NOT_AVAILABLE` (also in headless CI; area H's tests assert that code).
+
+As built (JPEG XL adoption): `format` is `screenshot_format` (`"png"` or `"jxl"`). Without it the path's extension
+decides: `.jxl` (any case) is a lossless JPEG XL and anything else stays a PNG, so goldens and tools keep their
+format; a `format` that contradicts a `.png` / `.jxl` extension, or any other value, is `INVALID_ARGS`. The job
+encodes a JPEG XL with `renderer::encode_jpeg_xl` (lossless, tagged sRGB, effort 2, on the job system's workers);
+`core::image` stays PNG-only and libjxl-free. A build without the renderer cannot write JPEG XL
+(`screenshot_service::supports`, `NOT_AVAILABLE`). The reply adds `format`.
 
 As built (code sweep F104): the view is not appended during EXTRACT. `renderer::submit_view(view)` queues a view
 that the next `end_extract()` appends to the extracted scene, for one frame per call, and the editor submits
@@ -1011,7 +1018,7 @@ other command. Required args in **bold**. Every mutating result includes `revisi
 | `editor.theme.save` / `editor.theme.delete` | | `{**theme**}` -> `{name, validation}` / `{**name**}` (user themes only; built-ins `INVALID_ARGS`) |
 | `editor.layout.reset` | | -> `{}` (rebuilds the default layout, 3.14; `NOT_AVAILABLE` headless) |
 | `input.inject` / `input.clear` | | `{key?, button?, axis?, value?, action:"press"\|"release"\|"tap", holdFrames?}` |
-| `view.screenshot` | A | `{path, width?, height?, camera?, format?, waitFrames?}` -> `{path, width, height, frame}` (a relative `path` is relative to the project root, and the answer names the absolute one, D24) |
+| `view.screenshot` | A | `{path, width?, height?, camera?, format?:"png"\|"jxl", waitFrames?}` -> `{path, width, height, frame, format}` (a relative `path` is relative to the project root, and the answer names the absolute one, D24) |
 | `view.set_camera` / `view.get_camera` / `view.focus` | | `{position, target, fov?}` / -> same / `{entity}` |
 | `view.pick` | S | `{x?, y?}` (normalised viewport) or `{origin, direction}`, `mode?` -> `pick_result` |
 | `view.set_mode` / `view.mode` / `view.debug_draw` | | `{mode:"3d"\|"2d"}` / -> `{mode}` / `{physics?, bounds?, grid?}` |
@@ -1242,7 +1249,8 @@ libraries; `tools/check_distribution_symbols.py` fails CI if the Distribution `c
 - `test_picker.cpp`: `nearest_aabb_wins`, `miss`, `tie_smaller_volume`, `ray_inside_box`,
   `triangle_narrow_phase_beats_bounds`, `sprite_quad`, `physics_mode_delegates`.
 - `test_editor_camera.cpp`: `screen_ray_centre_matches_forward`, `focus_frames_bounds`.
-- `test_screenshot_service.cpp`: `null_rhi_not_available`, `fake_capture_writes_png_and_replies`.
+- `test_screenshot_service.cpp`: `null_rhi_not_available`, `fake_capture_writes_png_and_replies`,
+  `jxl_decodes_to_the_png_pixels`, `format_follows_extension_unless_named`, `unknown_format_refused`.
 - `test_console_buffer.cpp`: `ring_wraps`, `read_since_seq`, `min_level_filter`, `thread_safe_sink`.
 - `test_event_broadcaster.cpp`: `subscription_filter`, `log_min_level`, `seq_monotonic`,
   `default_subscriptions_exclude_log`.

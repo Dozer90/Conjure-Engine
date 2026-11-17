@@ -9,11 +9,22 @@
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/jobs/main_thread.h"
 #include "conjure/core/platform_detect.h"
+#include "conjure/core/string_utils.h"
 #include "conjure/core/uuid.h"
 #include "conjure/engine/engine_config.h"
 
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #include "conjure/renderer/jpeg_xl.h"
+    #include "conjure/renderer/texture_asset.h"
+#endif
+
+#include <cstddef>
 #include <format>
+#include <fstream>
+#include <ios>
 #include <memory>
+#include <span>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -22,16 +33,104 @@ namespace conjure::editor {
     namespace {
         constexpr u32 MAX_SCREENSHOT_DIMENSION = 16384;
 
+        // A lossless file is exact at every effort; effort only trades encode time for size. On 1280 x 720 test
+        // frames in a Debug build, effort 2 wrote a third to a half of the PNG's bytes in less time than the PNG
+        // encode, while libjxl's default 7 took 3 to 9 seconds and was larger than effort 2 on a noisy frame.
+        constexpr u32 SCREENSHOT_JPEG_XL_EFFORT = 2;
+
         /// <summary>
-        /// Encodes and writes the PNG (any thread).
+        /// A lossless JPEG XL file of the capture, tagged sRGB (read_back hands over sRGB-encoded pixels).
         /// </summary>
-        core::result<void> write_png(const screenshot_request &request, const core::image &image) {
+        core::result<std::vector<std::byte>> encode_lossless_jpeg_xl(
+          const core::image &image,
+          core::jobs::job_system *jobs
+        ) {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+            renderer::jpeg_xl_encode_options options = {};
+            options.lossless = true;
+            options.effort = SCREENSHOT_JPEG_XL_EFFORT;
+            options.colourSpace = renderer::texture_colour_space::SRGB;
+            return renderer::encode_jpeg_xl(image, options, jobs);
+#else
+            (void) image;
+            (void) jobs;
+            return make_editor_error(
+              protocol_error_code::NOT_AVAILABLE,
+              "JPEG XL screenshots need the renderer module, which this build leaves out"
+            );
+#endif
+        }
+
+        /// <summary>
+        /// Writes an encoded file. The messages leave the path out: finish() names it in the reply.
+        /// </summary>
+        core::result<void> write_bytes(const std::filesystem::path &path, std::span<const std::byte> bytes) {
+            std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+            if (!stream.is_open()) {
+                return core::make_error(core::error_code::IO_FAILURE, "the file cannot be opened for writing");
+            }
+            stream.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            stream.flush();
+            if (!stream) {
+                return core::make_error(core::error_code::IO_FAILURE, "the file cannot be written");
+            }
+            return core::result<void>::success();
+        }
+
+        /// <summary>
+        /// Encodes the capture in the request's format and writes it (any thread). 'jobs' may be null.
+        /// </summary>
+        core::result<void> write_screenshot(
+          const screenshot_request &request,
+          const core::image &image,
+          core::jobs::job_system *jobs
+        ) {
             std::error_code ignored = {};
             if (request.path.has_parent_path()) {
                 std::filesystem::create_directories(request.path.parent_path(), ignored);
             }
-            return image.save_png(request.path);
+            if (request.format == screenshot_format::PNG) {
+                return image.save_png(request.path);
+            }
+            CONJURE_TRY_ASSIGN(const std::vector<std::byte> encoded, encode_lossless_jpeg_xl(image, jobs));
+            return write_bytes(request.path, encoded);
         }
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
+    // Formats
+
+    std::string_view to_string(screenshot_format format) noexcept {
+        switch (format) {
+            case screenshot_format::PNG:
+                return "png";
+            case screenshot_format::JPEG_XL:
+                return "jxl";
+        }
+        return "";
+    }
+
+    std::optional<screenshot_format> parse_screenshot_format(std::string_view text) noexcept {
+        if (text == "png") {
+            return screenshot_format::PNG;
+        }
+        if (text == "jxl") {
+            return screenshot_format::JPEG_XL;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<screenshot_format> screenshot_format_of(const std::filesystem::path &path) {
+        const std::u8string extension = path.extension().u8string();
+        const std::string_view text(reinterpret_cast<const char *>(extension.data()), extension.size());
+        if (core::str::iequals(text, ".png")) {
+            return screenshot_format::PNG;
+        }
+        if (core::str::iequals(text, ".jxl")) {
+            return screenshot_format::JPEG_XL;
+        }
+        return std::nullopt;
     }
 
     /*===========================================================================*/
@@ -135,15 +234,30 @@ namespace conjure::editor {
             }
             request.camera = std::string(camera);
         }
+        // An explicit format wins over an extension the path does not claim (shot.bin), but never contradicts a
+        // ".png" or ".jxl" one: the file would carry the other format's bytes under its name.
+        const std::optional<screenshot_format> named = screenshot_format_of(request.path);
+        request.format = named.value_or(screenshot_format::PNG);
         if (args.contains("format")) {
-            const std::string_view format = args["format"].as_string();
-            if (format != "png") {
+            const std::string_view text = args["format"].as_string();
+            const std::optional<screenshot_format> format = parse_screenshot_format(text);
+            if (!format.has_value()) {
                 return make_editor_error(
                   protocol_error_code::INVALID_ARGS,
-                  std::format("args.format: only \"png\" is supported (got \"{}\")", format)
+                  std::format("args.format: expected \"png\" or \"jxl\" (got \"{}\")", text)
                 );
             }
-            request.format = std::string(format);
+            if (named.has_value() && named.value() != format.value()) {
+                return make_editor_error(
+                  protocol_error_code::INVALID_ARGS,
+                  std::format(
+                    "args.format: \"{}\" contradicts the path's extension \"{}\"",
+                    text,
+                    request.path.extension().generic_string()
+                  )
+                );
+            }
+            request.format = format.value();
         }
         if (args.contains("waitFrames")) {
             const i64 waitFrames = args["waitFrames"].as_i64(-1);
@@ -155,13 +269,33 @@ namespace conjure::editor {
         return request;
     }
 
+    bool screenshot_service::supports(screenshot_format format) noexcept {
+        switch (format) {
+            case screenshot_format::PNG:
+                return true;
+            case screenshot_format::JPEG_XL:
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+                return true;
+#else
+                return false;
+#endif
+        }
+        return false;
+    }
+
     void screenshot_service::request(const screenshot_request &value, async_reply reply) {
         if (value.path.empty() || value.width == 0 || value.height == 0) {
             reply.fail(protocol_error_code::INVALID_ARGS, "a screenshot needs a path and a non-zero size");
             return;
         }
-        if (value.format != "png") {
-            reply.fail(protocol_error_code::INVALID_ARGS, "only png screenshots are supported");
+        if (!supports(value.format)) {
+            reply.fail(
+              protocol_error_code::NOT_AVAILABLE,
+              std::format(
+                "{} screenshots need the renderer module, which this build leaves out",
+                to_string(value.format)
+              )
+            );
             return;
         }
         if (mBackend == nullptr) {
@@ -258,16 +392,17 @@ namespace conjure::editor {
     void screenshot_service::encode_and_complete(screenshot_request request, async_reply reply, core::image image) {
         core::jobs::job_system *jobs = mContext->engine_context().jobs;
         if (jobs == nullptr || !jobs->is_running() || jobs->worker_count() == 0) {
-            finish(request, reply, write_png(request, image));
+            finish(request, reply, write_screenshot(request, image, nullptr));
             return;
         }
         ++mEncoding;
         // The job owns the image; the completion runs on the main thread and checks that the service still
-        // exists (the editor may have restarted its engine or shut down meanwhile).
+        // exists (the editor may have restarted its engine or shut down meanwhile). A JPEG XL encode inside the
+        // job spreads over the same system (waiting from a job is safe) and gives the same bytes either way.
         std::weak_ptr<bool> alive = mAlive;
         screenshot_service *self = this;
-        (void) jobs->schedule([self, alive, request = std::move(request), reply, image = std::move(image)]() {
-            const core::result<void> written = write_png(request, image);
+        (void) jobs->schedule([self, alive, jobs, request = std::move(request), reply, image = std::move(image)]() {
+            const core::result<void> written = write_screenshot(request, image, jobs);
             core::jobs::post_to_main_thread([self, alive, request, reply, written]() {
                 const std::shared_ptr<bool> stillAlive = alive.lock();
                 if (stillAlive == nullptr || !*stillAlive) {
@@ -300,6 +435,7 @@ namespace conjure::editor {
           {"width", request.width},
           {"height", request.height},
           {"frame", mContext->frame_index()},
+          {"format", to_string(request.format)},
         }));
     }
 }

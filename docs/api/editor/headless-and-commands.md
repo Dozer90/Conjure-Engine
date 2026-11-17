@@ -27,6 +27,7 @@ events (`conjure/editor/event_broadcaster.h`) and what a module adds (`conjure/e
 | Undo and redo programmatically | `context.undo()`: `pop_for_undo()`, `pop_for_redo()`, `begin_transaction`, `end_transaction` |
 | Switch play state | `context.play()`: `start()`, `stop()`, `pause()`, `resume()`, `step(n, reply)` |
 | Pick what is under a viewport point | `gather_pick_candidates(scene)`, `pick(ray, candidates, context, mode)` |
+| Save a screenshot as lossless JPEG XL instead of PNG | `view.screenshot` with a `.jxl` path or `"format": "jxl"`; `screenshot_request::format = screenshot_format::JPEG_XL` from C++ |
 
 ## The process object
 
@@ -281,7 +282,7 @@ follows the cursor at any zoom), `to_json()` / `apply_json()` (what `view.get_ca
 exchange, `fov` in degrees). The viewport keeps orbiting or panning while a drag that started on it continues
 outside the panel.
 `screenshot_service` parks a `screenshot_request { path, camera, format, width, height, waitFrames }`, captures
-through a `screenshot_backend` on the main thread after the wait and encodes the PNG on a job. The renderer
+through a `screenshot_backend` on the main thread after the wait and encodes the file on a job. The renderer
 backend draws the scene through the requested camera into a render target of the requested size and reads it
 back; a frame counts as waited only once the engine has rendered one for the request
 (`screenshot_backend::frame_rendered`), so the capture is never an empty target. Pictures are taken one at a
@@ -289,6 +290,22 @@ time, in request order: a request made while another waits is begun when its tur
 `memory_screenshot_backend`, and headless there is no backend (`available()` false, `NOT_AVAILABLE`).
 `view.screenshot`'s `camera` is `"editor"`, `"game"` or an entity by guid, path or name that must carry a camera
 component (`COMPONENT_NOT_FOUND` otherwise); the service receives its guid.
+
+A screenshot is a PNG unless it asks for JPEG XL (`screenshot_format`, wire names `"png"` and `"jxl"`):
+
+| `view.screenshot` arguments | File written |
+|---|---|
+| `path` ends in `.jxl` (any case), no `format` | lossless JPEG XL |
+| any other `path` (`.png`, another extension, none), no `format` | PNG, the default: golden images and review tools read it |
+| `"format": "jxl"` or `"png"` with a path whose extension names no format (`shot.bin`) | that format |
+| `format` contradicting a `.png` / `.jxl` extension, or any other `format` | `INVALID_ARGS` naming `args.format` |
+
+`screenshot_format_of(path)` is the extension rule and `screenshot_service::parse_request` applies the table; the
+answer carries `format`, so a client knows what it got. A JPEG XL screenshot holds exactly the pixels of the PNG one
+(sRGB, alpha kept) and is encoded at effort 2 by the renderer's `encode_jpeg_xl` (📘 API:
+[JPEG XL images](../renderer/jpeg-xl.md)): faster than the PNG encode and usually a third to a half of its size. A
+build without the renderer module cannot write it: `screenshot_service::supports(format)` is false and the request
+answers `NOT_AVAILABLE`.
 `console_buffer` is the log ring the `console.read` command and the console panel read (`install_sink()`,
 `read(console_query)`, `clear()`): `read` returns the oldest matches up to `limit`, or with `console_query::newest`
 the newest ones (still oldest first), which is what the panel draws so new lines keep appearing past its limit.
@@ -344,6 +361,7 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 | `void play_controller::keep_file_edit(string_view, command_request, command_inverse)` / `usize kept_file_edits()` / `void note_unrecorded_edit()` | edits made while playing |
 | `pick_result pick(const math::ray &, span<const pick_candidate>, const pick_context &, pick_mode)` | picking |
 | `void screenshot_service::request(const screenshot_request &, async_reply)` / `bool available()` | screenshots |
+| `optional<screenshot_format> screenshot_format_of(const path &)` / `parse_screenshot_format(string_view)` / `string_view to_string(screenshot_format)` / `static bool screenshot_service::supports(screenshot_format)` | the screenshot file format |
 | `static result<ecs::entity> entity_ref::resolve(const json::value &, scene::scene &)` | guid or path to entity |
 | `static result<reflection_path> reflection_path::parse(string_view)` / `result<json::document> read_at(...)` / `result<void> write_at(...)` | field paths |
 

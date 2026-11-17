@@ -289,7 +289,9 @@ unloads, adds the consumer and loads again (section 11).
 
 Main thread only, except the stdio reader thread (R38) and the screenshot encode job: a capture is taken on the
 main thread and encoded and written on a `core::jobs` job that posts the completion back (`screenshot_service`);
-without a job system the encode runs inline. Sockets are non-blocking and polled on main.
+without a job system the encode runs inline. A JPEG XL screenshot (a `.jxl` path or `"format": "jxl"`) is encoded
+inside that job by `renderer::encode_jpeg_xl`, which spreads libjxl's work over the same job system (waiting from a
+job is safe) and writes the same bytes with or without workers. Sockets are non-blocking and polled on main.
 
 ## 9. Extension points
 

@@ -1,0 +1,17 @@
+{
+  "_comment": "A .png path cannot hold a JPEG XL file: the format contradicts the extension.",
+  "setup": [],
+  "request": {
+    "cmd": "view.screenshot",
+    "args": {
+      "path": "${project}/shot.png",
+      "format": "jxl"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}

@@ -18,7 +18,7 @@ areas that the design panel must refine. Everything in "Fixed decisions" is sett
 | Audio | miniaudio behind `audio` backend abstraction (`miniaudio` + `null`) |
 | Physics | Jolt Physics behind `physics` module |
 | Scripting | C# on .NET 8+ hosted via `nethost`/`hostfxr`. Managed SDK `Conjure.Managed`, user game assembly loaded in a collectible `AssemblyLoadContext` for hot reload |
-| glTF | cgltf; images via stb_image (LDR + .hdr), screenshots via stb_image_write |
+| glTF | cgltf; images via stb_image (LDR + .hdr) and libjxl (JPEG XL), screenshots via stb_image_write (PNG) or libjxl (lossless JPEG XL) |
 | JSON | yyjson (C, no exceptions) wrapped in `conjure::core::json` |
 | Editor UI | Dear ImGui (docking branch) + ImGuizmo, rendered through a custom NVRHI ImGui backend |
 | Tests | doctest. Every module ships `tests/<module>/test_*.cpp`, registered with CTest. Headless (`null` backends) so they run in CI |

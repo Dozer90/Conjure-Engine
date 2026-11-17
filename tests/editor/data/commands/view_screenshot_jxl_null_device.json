@@ -1,0 +1,16 @@
+{
+  "_comment": "A .jxl path is a valid JPEG XL request, so it reaches the device check; the null device has no pixels.",
+  "setup": [],
+  "request": {
+    "cmd": "view.screenshot",
+    "args": {
+      "path": "${project}/shot.jxl"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "NOT_AVAILABLE"
+    }
+  }
+}

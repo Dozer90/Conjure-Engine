@@ -131,7 +131,10 @@ configuration refuses it the editor logs a warning and falls back to the null de
 through its camera into a render target (`core/scene_view.h`: `scene_view`, `make_editor_camera_view`,
 `resolve_camera_view`; the viewport panel shows the editor camera the same way), is captured on the main thread
 once a frame has been rendered into the target, and is encoded and written on a `core::jobs` job that posts the
-completion back; screenshots asked for together are taken one at a time, in request order. `--exec file.json`
+completion back; screenshots asked for together are taken one at a time, in request order. A screenshot is a PNG
+(`core::image::save_png`) unless its path ends in `.jxl` or `format` is `"jxl"`: then a lossless JPEG XL from
+`renderer::encode_jpeg_xl` at effort 2, spread over the job system's workers (`screenshot_format`,
+`screenshot_service::supports`; without the renderer module JPEG XL is `NOT_AVAILABLE`). `--exec file.json`
 runs a JSON array or NDJSON of requests through `headless_runner` (exit 0 / 1 / 2 / 3). The file is read and
 parsed in `editor_application::initialise` (`headless_runner::load_command_file`), after the arguments and the
 project were checked and before `boot_engine` starts the engine, so a missing or malformed file exits 3 without an

@@ -10,28 +10,56 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Screenshots (docs/design/04_editor.md 3.10, R12): view.screenshot parks its request, the service waits the
 // asked number of frames, captures an RGBA8 image through its backend on the main thread, then hands the image
-// to a core::jobs job that encodes the PNG and writes the file (a 16384 x 16384 capture must not stall the
-// frame); the job posts the completion back to the main thread, which answers {path, width, height, frame}.
-// Without a job system the encode runs inline. The renderer backend draws the scene through the requested
-// camera ("editor", "game" or a camera entity) into a render target of the requested size and captures it
-// through renderer::read_back once a frame has been rendered into it; on the null RHI (every headless run)
-// there is no backend and the request fails with NOT_AVAILABLE. Tests install a memory backend that paints a
-// solid colour.
+// to a core::jobs job that encodes the file (PNG, or lossless JPEG XL through the renderer's encoder) and writes
+// it (a 16384 x 16384 capture must not stall the frame); the job posts the completion back to the main thread,
+// which answers {path, width, height, frame, format}. Without a job system the encode runs inline. The renderer
+// backend draws the scene through the requested camera ("editor", "game" or a camera entity) into a render
+// target of the requested size and captures it through renderer::read_back once a frame has been rendered into
+// it; on the null RHI (every headless run) there is no backend and the request fails with NOT_AVAILABLE. Tests
+// install a memory backend that paints a solid colour.
 
 namespace conjure::editor {
 
     class editor_context;
 
+    /// <summary>
+    /// The file a screenshot is written as. PNG is the default: golden images, review tools and every viewer read
+    /// it. JPEG_XL is a lossless JPEG XL file (the same pixels, usually a smaller file), encoded by the renderer
+    /// module, so a build without the renderer cannot write it.
+    /// </summary>
+    enum class screenshot_format : u8 {
+        PNG = 0,
+        JPEG_XL
+    };
+
+    /// <summary>
+    /// The wire name of a format: "png" or "jxl".
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string_view to_string(screenshot_format format) noexcept;
+
+    /// <summary>
+    /// Parses a wire name ("png" or "jxl", exactly); nullopt for anything else.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::optional<screenshot_format> parse_screenshot_format(std::string_view text) noexcept;
+
+    /// <summary>
+    /// The format a path's extension names: ".png" or ".jxl" in any case; nullopt for any other extension or none.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::optional<screenshot_format> screenshot_format_of(const std::filesystem::path &path);
+
     struct screenshot_request {
         std::filesystem::path path = {};
         // "editor", "game" or an entity guid (view.screenshot resolves a path or name to it).
         std::string camera = "editor";
-        std::string format = "png";
+        // What is written to 'path', whatever its extension (parse_request derives it from the extension).
+        screenshot_format format = screenshot_format::PNG;
         u32 width = 1280;
         u32 height = 720;
         u32 waitFrames = 0;
@@ -138,19 +166,20 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Validates and parks a request: INVALID_ARGS for an empty path, a zero size or a format other than
-            /// "png"; NOT_AVAILABLE without a backend. On failure the reply is completed with that error.
-            /// Pictures are taken one at a time, in request order: a request made while another waits is
-            /// begun with the backend when its turn comes, and a refusal by the backend (a camera that does
-            /// not exist) is answered then.
+            /// Validates and parks a request: INVALID_ARGS for an empty path or a zero size; NOT_AVAILABLE for a
+            /// format this build cannot write (supports()) and without a backend. On failure the reply is
+            /// completed with that error. Pictures are taken one at a time, in request order: a request made while
+            /// another waits is begun with the backend when its turn comes, and a refusal by the backend (a camera
+            /// that does not exist) is answered then.
             /// </summary>
             void request(const screenshot_request &value, async_reply reply);
 
             /// <summary>
             /// Once per frame, for the first request: counts down its wait (a frame counts once the backend
             /// drew one for it), has the backend draw it again while it waits, captures it when due and hands
-            /// the image to a job that encodes, writes and completes the reply on the main thread (IO_ERROR
-            /// when the file cannot be written); the request behind it is begun in the same call.
+            /// the image to a job that encodes it in the request's format (a JPEG XL encode also spreads over
+            /// the job system's workers), writes and completes the reply on the main thread (IO_ERROR when the
+            /// file cannot be encoded or written); the request behind it is begun in the same call.
             /// </summary>
             void tick();
 
@@ -180,10 +209,18 @@ namespace conjure::editor {
 
             /// <summary>
             /// Parses the view.screenshot arguments: INVALID_ARGS for an empty path, a zero or oversized size
-            /// (above 16384), a format other than "png", an empty camera or a waitFrames outside 0..100000; any
-            /// camera other than "editor" / "game" names an entity, which view.screenshot resolves to its guid.
+            /// (above 16384), a format other than "png" or "jxl", a format the path's ".png" / ".jxl" extension
+            /// contradicts, an empty camera or a waitFrames outside 0..100000. Without "format" the extension
+            /// decides (screenshot_format_of) and any other path is a PNG. Any camera other than "editor" /
+            /// "game" names an entity, which view.screenshot resolves to its guid.
             /// </summary>
             [[nodiscard]] static core::result<screenshot_request> parse_request(const core::json::value &args);
+
+            /// <summary>
+            /// True when this build can write the format: PNG always, JPEG_XL when the renderer module (which
+            /// holds the JPEG XL encoder) is compiled in.
+            /// </summary>
+            [[nodiscard]] static bool supports(screenshot_format format) noexcept;
 
             /// <summary>
             /// The renderer-backed backend when the context has a renderer on a real device; nullptr on the

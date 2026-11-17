@@ -183,6 +183,12 @@ command changes nothing, so an inspect-only session may run it, section 1.1).
   - `prefab.create`, `scene.save` and `scene.save_as` answer `WRONG_PLAY_STATE`: stop first.
 - **Determinism for files**: pass `guid` / `guids` / `uuid` to `entity.create`, `entity.create_many`,
   `prefab.instantiate` and `prefab.create` so a command file replays identically.
+- **Screenshots**: `view.screenshot {"path":"shots/a.png","width":1280,"height":720,"camera":"game"}` writes a
+  PNG (the default, which golden images and review tools read). A path ending in `.jxl`, or `"format":"jxl"` with a
+  path whose extension names no format, writes a lossless JPEG XL instead: the same pixels, usually a third to a
+  half of the bytes. `format` is `"png"` or `"jxl"` only, and one that contradicts a `.png` / `.jxl` path is
+  `INVALID_ARGS`; the answer's `format` says which was written. Headless (the null device) answers
+  `NOT_AVAILABLE`: run with `--offscreen` or a window.
 - **Units and encodings**: angles cross the protocol in degrees (`view.set_camera {"fov":60}`, euler
   rotations), `input.inject {"text":...}` is UTF-8 and injects one text event per code point, and a line
   that is not valid UTF-8 answers `PARSE_ERROR` like any other unparseable line (after the client's

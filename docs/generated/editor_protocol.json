@@ -3865,7 +3865,7 @@
         },
         {
             "name": "view.screenshot",
-            "summary": "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG (a relative path is relative to the project root).",
+            "summary": "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG, or a lossless JPEG XL when format is \"jxl\" or the path ends in .jxl (a relative path is relative to the project root).",
             "flags": [
                 "async",
                 "not_in_batch"
@@ -3889,7 +3889,11 @@
                         "type": "string"
                     },
                     "format": {
-                        "type": "string"
+                        "type": "string",
+                        "enum": [
+                            "png",
+                            "jxl"
+                        ]
                     },
                     "waitFrames": {
                         "type": "integer",
@@ -3914,6 +3918,13 @@
                     },
                     "frame": {
                         "type": "integer"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": [
+                            "png",
+                            "jxl"
+                        ]
                     }
                 }
             }
@@ -4070,5 +4081,5 @@
         "PROJECT_NOT_TRUSTED",
         "INTERNAL"
     ],
-    "schemaHash": "39ed2d60d8094f31"
+    "schemaHash": "124270e7cda25e9a"
 }

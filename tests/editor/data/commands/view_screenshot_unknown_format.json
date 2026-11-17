@@ -1,0 +1,17 @@
+{
+  "_comment": "A format that is neither png nor jxl; the schema refuses it before the device is checked.",
+  "setup": [],
+  "request": {
+    "cmd": "view.screenshot",
+    "args": {
+      "path": "${project}/shot.png",
+      "format": "bmp"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "INVALID_ARGS"
+    }
+  }
+}
