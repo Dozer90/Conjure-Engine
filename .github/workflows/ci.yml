@@ -136,14 +136,16 @@ jobs:
       # The Development leg exports a project with the editor and boots the result with the runtime for 120
       # frames (ARCHITECTURE.md 11 "Wave 4 exit"). tests/assets/projects/minimal stands in for
       # samples/feature_test until wave 5 lands the sample; the project is copied first because the asset
-      # database writes .meta sidecars and its cache next to the sources.
+      # database writes .meta sidecars and its cache next to the sources. Nobody on the runner answered for the
+      # copy, so the export needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27); the
+      # runtime has no trust question.
       - name: Export smoke
         if: matrix.export-smoke
         shell: pwsh
         run: |
           Copy-Item -Recurse tests/assets/projects/minimal build/export_smoke_project
           build/${{ matrix.preset }}/bin/conjure_editor.exe --headless --project build/export_smoke_project `
-            --export build/export_smoke_out
+            --trust-project --export build/export_smoke_out
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           build/${{ matrix.preset }}/bin/conjure_runtime.exe --project build/export_smoke_out --headless --frames 120
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

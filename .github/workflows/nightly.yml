@@ -203,20 +203,21 @@ jobs:
       - name: Distribution symbol check and process tests
         run: ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error
       # Export tests/assets/projects/minimal (samples/feature_test once wave 5 lands it) with the Development
-      # editor, copying the Distribution runtime, shared library and (Windows) nethost.dll into the folder, then
-      # run that runtime headless for 300 frames (08_testing.md 7.3 nightly table). On MSVC conjure_shared
-      # imports nethost.dll (engine/src/scripting/CMakeLists.txt) and --export does not copy it, so the runtime
-      # would not load without the guarded copy.
+      # editor and --distribution, the export path a user takes: step 5 copies the Distribution runtime,
+      # conjure_shared, nethost.dll when present, the Visual C++ runtime DLLs (06_engine_loop.md D14), the
+      # licence notices (D15) and shaders/ (engine/src/engine/export_pipeline.cpp). The step checks that the
+      # notices and, on Windows, vcruntime140.dll arrived, then runs that runtime headless for 300 frames
+      # (08_testing.md 7.3 nightly table). Nobody on the runner answered for the copied project, so the export
+      # needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27).
       - name: Export and run
         shell: bash
         run: |
           cp -r tests/assets/projects/minimal build/export_project
           build/${{ matrix.dev-preset }}/bin/conjure_editor${{ matrix.exe }} --headless --project build/export_project \
-            --export build/export_out
-          cp build/${{ matrix.dist-preset }}/bin/conjure_runtime${{ matrix.exe }} build/export_out/
-          cp build/${{ matrix.dist-preset }}/bin/*conjure_shared* build/export_out/
-          if [ -f build/${{ matrix.dist-preset }}/bin/nethost.dll ]; then
-            cp build/${{ matrix.dist-preset }}/bin/nethost.dll build/export_out/
+            --trust-project --export build/export_out --distribution build/${{ matrix.dist-preset }}/bin
+          test -f build/export_out/THIRD_PARTY_NOTICES.txt
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            test -f build/export_out/vcruntime140.dll
           fi
           build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
           python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
