@@ -180,8 +180,9 @@ Every module must be testable in CI without a GPU, window, audio device or .NET 
 - `core::vfs::memory_file_system` replaces the disk; `core::manual_clock` replaces time; `core::random::seed`
   fixes randomness; a `job_system` started with `workerCount = 0` runs every job inline.
 - The editor runs the same command dispatcher headless: `conjure_editor --headless --exec commands.json
-  --project <dir>` (exit codes 0/1/2/3).
-- `conjure_runtime --project <dir> --headless --frames N` boots an exported folder without a window.
+  --project <dir> --trust-project` (exit codes 0/1/2/3; without an answer for the project it exits with 2).
+- `conjure_runtime --project <dir> --headless --frames N` boots an exported folder without a window. A headless
+  run executes no C#; `--scripting` runs the project's scripts (06 D12).
 
 > [!WARNING]
 > Tests are forbidden from touching the wall clock, sleeping, creating `std::thread`s or reading environment

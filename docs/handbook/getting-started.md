@@ -19,6 +19,7 @@ documentation site and how to start the editor and the runtime you built.
 - [IDE notes](#8-ide-notes)
 - [Documentation toolchain](#9-documentation-toolchain)
 - [Running the editor and the runtime](#10-running-the-editor-and-the-runtime)
+- [Licence and third-party notices](#11-licence-and-third-party-notices)
 
 ## 1. Prerequisites
 
@@ -56,7 +57,7 @@ Build products land in predictable places so executables find each other without
 
 | Path | Content |
 |---|---|
-| `build/<preset>/bin/` | `conjure_editor`, `conjure_runtime`, `conjure_shared`, the test executables and helper programs (`conjure_process_child`); `managed/` holds the C# assemblies |
+| `build/<preset>/bin/` | `conjure_editor`, `conjure_runtime`, `conjure_shared`, the test executables and helper programs (`conjure_process_child`); `managed/` holds the C# assemblies; `THIRD_PARTY_NOTICES.txt` holds the licence notices of what the tree links (section 11); a `windows-msvc-dist` tree also holds the Visual C++ runtime DLLs (`vcruntime140*.dll`, `msvcp140*.dll`) that an export ships |
 | `build/<preset>/bin/shaders/` | compiled shaders and `index.json` (target `conjure_shaders`), next to the executables that open them |
 | `build/<preset>/lib/` | the static library of every engine module and core area (`conjure_<module>.lib`, `conjure_core_<area>.lib` on MSVC; `lib*.a` on GCC and Clang) |
 | `build/<preset>/generated/include/conjure/core/build_info.h` | generated from `engine/src/core/foundation/build_info.h.in` |
@@ -274,7 +275,7 @@ Distribution build ships.
 ```bash
 cp -r tests/assets/projects/minimal build/minimal_project      # a scratch copy, see the warning below
 build/<preset>/bin/conjure_editor --project build/minimal_project
-build/<preset>/bin/conjure_editor --project build/minimal_project --headless \
+build/<preset>/bin/conjure_editor --project build/minimal_project --trust-project --headless \
     --exec <commands.json> --out <replies.ndjson>
 build/<preset>/bin/conjure_editor --help                       # every option and the exit codes
 build/<preset>/bin/conjure_runtime --project build/minimal_project
@@ -289,9 +290,12 @@ the shaders (code sweep 2026-11-12, F329).
 The first editor line opens a window over the project; the second runs the requests of a
 JSON array or NDJSON file without a window and exits with 0 when every command succeeded and 1 when one failed
 (`--keep-going` continues past a failure), writing the responses and events to the `--out` file instead of standard
-output. The runtime runs the same project as a game with no editor code; `--headless --frames 60` is the smoke test
-without a window. Driving the editor as an agent is the `editor-ai-control` skill
-(`.claude/skills/editor-ai-control/SKILL.md`).
+output. The editor opens a project only after somebody answered for it: the window asks once whether you trust
+the copied project, and the headless run answers with `--trust-project` (without it, and without an earlier answer
+in the window, the run exits with 2). The runtime runs the same project as a game with no editor code;
+`--headless --frames 60` is the smoke test without a window. A headless run executes no C#; add `--scripting` to
+smoke-test a scripted game with its scripts running (06 D12). Driving the editor as an agent is the
+`editor-ai-control` skill (`.claude/skills/editor-ai-control/SKILL.md`).
 
 > [!WARNING]
 > Open a copy of a fixture project, never `tests/assets/projects/` itself: the asset database writes `.meta`
@@ -300,6 +304,45 @@ without a window. Driving the editor as an agent is the `editor-ai-control` skil
 
 Every option and what each executable needs next to it: 📘 API: [The editor](../api/editor/index.md),
 📘 API: [The runtime](../api/runtime/index.md).
+
+## 11. Licence and third-party notices
+
+Conjure is licensed under the Apache License, Version 2.0 (design record `06_engine_loop.md` D15). Four files carry
+that and the licences of the software it builds on:
+
+| File | Content | Written by |
+|---|---|---|
+| `LICENSE`, `NOTICE` | the Apache licence text, unchanged; the copyright holders, "the Conjure contributors" | tracked, not generated |
+| `THIRD_PARTY_NOTICES.md` | every third-party dependency of every platform with its pin and licence, and the licence text of each pinned one | `tools/third_party_notices.py`, tracked |
+| `build/<tree>/bin/THIRD_PARTY_NOTICES.txt` | `NOTICE`, `LICENSE` and the licence text of what this tree links into `conjure_shared` and `conjure_runtime` | the configure writes it, building `conjure_runtime` places it; an export that copies the runtime copies it into the game |
+
+A dependency is registered once, beside its pin in `third_party/CMakeLists.txt`, with
+`conjure_third_party_notice(<id> NAME ... VERSION <the GIT_TAG> LICENSE_ID ... SCOPE RUNTIME|EDITOR|BUILD FETCH <name>
+LICENSE_FILES <files in the fetched source>)` (`cmake/ConjureNotices.cmake` documents every argument). The
+configure fails when `VERSION` is not the `GIT_TAG`, when a licence file of software the tree uses is missing, and
+when a `FetchContent_Declare` of that file has no notice naming it as `FETCH`. Software that is not fetched (a file
+tracked under someone else's licence, code that follows a published implementation), and code a fetched source
+embeds under a copyright of its own (jsmn in `cgltf.h`), keep their licence text in `third_party/licenses/`; a
+notice with `FETCH` names such a file with an absolute path, since its relative ones are read in the fetched source.
+
+After changing a pin or a notice, regenerate the tracked document and commit it with the change:
+
+```bash
+python tools/third_party_notices.py --build-dir build/<tree>            # write THIRD_PARTY_NOTICES.md
+python tools/third_party_notices.py --build-dir build/<tree> --check    # what the CTest entry notices.up_to_date runs
+```
+
+The tool rewrites the sections of the software the tree uses and keeps the others, so any tree can bring its own
+sections up to date; it stops when a kept section was written for another pin or licence than the tree registers,
+and then a tree that fetches that software has to run it. A Windows tree
+configured with `-DCONJURE_RHI_VULKAN=ON` (`python tools/build.py --build-dir build/<name> --configure-only --
+-DCONJURE_RHI_VULKAN=ON`) fetches every pinned dependency at once, the Direct3D 12 headers included, which no
+Linux or macOS tree has. `notices.tool` is the self-test of the tool.
+
+> [!NOTE]
+> .NET is found on the build machine instead of pinned, so its licence text is in no tracked file: each build
+> copies `LICENSE.txt` and `ThirdPartyNotices.txt` of the .NET installation it links into its
+> `THIRD_PARTY_NOTICES.txt`, and the configure warns when it finds neither.
 
 ## Related
 

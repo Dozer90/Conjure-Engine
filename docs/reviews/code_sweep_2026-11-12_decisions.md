@@ -41,7 +41,19 @@ before the commits:
 
 What that work left open is on the [status page](code_sweep_2026-11-12_status.md), under the follow-ups.
 
-The other 28 decisions of effort M and the 20 of effort L are still to do.
+Thirteen more were implemented on 2026-11-17 in the same way, among them the priority decisions F200 (licence and
+notices) and F187 with F740 (protocol security):
+
+| Commit | Decisions |
+|---|---|
+| `84757d2` engine | F075, F200, F626, F790 |
+| `9d19284` physics | F213, F408, F413, F421 |
+| `6d53c3e` renderer | F391, F395, F612 |
+| `2232427` editor | F187, F740 |
+| `97deb14` ci | the workflow side of F187, F200 and F790 |
+
+Still to do: 17 decisions of effort M and 18 of effort L. The next round holds the 17 of effort M and F778 (.NET
+10); F194 (audio fixtures) waits for an audio encoder on the build host.
 
 ## Tests and CI
 

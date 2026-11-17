@@ -160,7 +160,10 @@ is its summary.
 
 - Modules are declared with `conjure_add_module(<name> SOURCES ... PUBLIC_DEPS ... PRIVATE_DEPS ...)`.
 - Third-party dependencies are declared once in `third_party/CMakeLists.txt` (FetchContent, pinned
-  tags/commits, `SYSTEM`, `EXCLUDE_FROM_ALL`) and exposed as `conjure::thirdparty::<name>` targets.
+  tags/commits, `SYSTEM`, `EXCLUDE_FROM_ALL`) and exposed as `conjure::thirdparty::<name>` targets. Each one
+  registers its licence with `conjure_third_party_notice()` beside the pin; `THIRD_PARTY_NOTICES.md` is generated
+  from those (`python tools/third_party_notices.py --build-dir <tree>`; CTest `notices.up_to_date` fails until
+  then).
 - Warnings are errors. The warning set is in `cmake/ConjureWarnings.cmake`. Third-party targets
   have warnings suppressed via `SYSTEM` includes.
 - No globbing for sources. List every file.

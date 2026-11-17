@@ -109,7 +109,8 @@ wave 5  samples     feature_test scene exercising every component and the whole 
    at 60 Hz without frame loss on a mid-range desktop. Benchmarks in `tests/benchmarks`.
 3. **AI-controllable editor.** Every editor action is a command (undoable) and every command is
    reachable through a JSON protocol so an agent can author a whole game without a human. Headless
-   batch mode: `conjure_editor --headless --exec commands.json --project path`.
+   batch mode: `conjure_editor --headless --exec commands.json --project path --trust-project` (a project
+   nobody answered for is not opened, 04 D27).
 4. **Everything testable headless.** `null` backends for platform/rhi/audio allow unit tests of every
    system in CI without a GPU or window.
 5. **Export.** `conjure_editor --export <dir>` cooks assets, copies runtime + managed assemblies,

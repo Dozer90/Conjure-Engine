@@ -480,7 +480,10 @@ namespace conjure::testing {
 
         public:
             [[nodiscard]] static core::result<protocol_client> connect_in_process(editor::protocol_server &server);   // loopback_transport
-            [[nodiscard]] static core::result<protocol_client> connect_tcp(uint16_t loopbackPort);
+            // A TCP client presents the token of <project>/.conjure/ai_token, or of ai_token_inspect for a client
+            // that only runs read_only commands, as args.token of a session.hello sent as its first request
+            // (04 D23, D25).
+            [[nodiscard]] static core::result<protocol_client> connect_tcp(uint16_t loopbackPort, std::string_view token);
 
             // Blocks until the response for this request arrives; streamed events are buffered.
             [[nodiscard]] core::result<core::json::document> send(
@@ -636,8 +639,9 @@ absolute error limit of 1.0 binds first.
    against the JSON schemas in `engine/src/editor/core/protocol/schema/` (installed next to the editor
    for agents; R15).
 8. `test_editor_process.cpp` (label `process`, excluded from the default preset, run in CI): spawns the
-   real `conjure_editor --headless --exec tests/assets/commands/build_grid_sweeper.json --project <tmp>` via
-   `core::process`, checks exit 0 and that the saved scene hash equals the in-process result.
+   real `conjure_editor --headless --exec tests/assets/commands/build_grid_sweeper.json --project <tmp>
+   --trust-project --trust-store <tmp file>` via `core::process`, checks exit 0 and that the saved scene hash equals
+   the in-process result; process cases never read or write the per-user trust store (04 D27).
 
 ---
 
@@ -657,6 +661,7 @@ absolute error limit of 1.0 binds first.
 | `assets.first_scan_100` | project folder on disk (`native_file_system`) with 100 sources that have no `.meta` | first `asset_database::scan()` | 1,000 ms | 3,000 ms | n/a |
 | `physics.step_10k_active` | 10,000 dynamic boxes falling onto a plane | one fixed step | 8.00 ms | 24.0 ms | 0 |
 | `physics.step_10k_sleeping` | same after 600 settle steps | one fixed step | 0.80 ms | 2.40 ms | 0 |
+| `physics.step_10k_sleeping_1k_triggers` | same, plus 1,000 static triggers over ten sleeping boxes each (`14_physics.md` P21; the budget is a regression guard, `tests/benchmarks/README.md`) | one fixed step | 1.50 ms | 4.50 ms | 0 |
 | `physics.sync_10k` | 10,000 bodies | Jolt -> transform sync | 0.30 ms | 0.90 ms | 0 |
 | `renderer.extract_10k` | 10,000 mesh renderers, 50 % visible | extraction + culling | 1.00 ms | 3.00 ms | 0 |
 | `scripting.update_10k` `[scripting]` | 10,000 `BenchMover.cs` | batched managed update | 2.50 ms | 7.50 ms | 0 (native) |

@@ -187,8 +187,8 @@ Start with the overview; it gives the mental model in five sentences and a table
 | Page | Covers |
 |---|---|
 | [The editor](editor/index.md) | the two libraries and the executable, the command line, headless and windowed modes, where to go next |
-| [The AI control protocol](editor/ai-protocol.md) | the NDJSON protocol over TCP, stdio and the loopback, requests, responses, events, error codes, the command groups, `editor.schema` |
-| [Headless mode and the command model](editor/headless-and-commands.md) | `editor_application`, `editor_options`, `headless_runner` and `--exec`, `command_dispatcher`, undo, play mode, picking, screenshots, `editor_context` |
+| [The AI control protocol](editor/ai-protocol.md) | the NDJSON protocol over TCP, stdio and the loopback, requests, responses, events, error codes, the command groups, `editor.schema`, the two tokens (full control, inspect only) and the audit log |
+| [Headless mode and the command model](editor/headless-and-commands.md) | `editor_application`, `editor_options`, `headless_runner` and `--exec`, `command_dispatcher`, undo, play mode, picking, screenshots, `editor_context`, project trust |
 | [The workspace UI](editor/workspace-ui.md) | `editor_layer`, `editor_workspace`, the panels, `editor_panel`, `property_drawer`, gizmos, layouts |
 
 ## Runtime page

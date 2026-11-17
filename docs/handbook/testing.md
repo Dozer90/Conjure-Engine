@@ -190,7 +190,7 @@ turns into *Not Run*; in a direct run it emits a doctest `MESSAGE` and returns f
 | `REAL_WINDOW` | `CONJURE_TEST_WINDOW=1`; used by `tests/platform/test_backend_conformance.cpp` to run the GLFW backend through the same cases as the null backend |
 | `SOFTWARE_GPU_ADAPTER` | the probe `tests/rhi/rhi_test_support.cpp` installs with `set_precondition_probe()` can create a device with `preferSoftwareAdapter` (WARP on Windows); guards the D3D12 and Vulkan cases of `test_device`, `test_swapchain` and `test_shader_library` ([RHI module](modules/rhi.md#9-tests)) |
 | `AUDIO_DEVICE` | the probe `tests/audio/audio_test_support.cpp` installs finds a miniaudio playback device; guards `test_miniaudio_backend` ([Audio module](modules/audio.md#13-tests)) |
-| `DOTNET_RUNTIME` | the probe the scripting, bindings and engine support libraries install finds the managed SDK this tree built (`Conjure.Managed.dll` under the `CONJURE_TEST_MANAGED_DIR` definition) and a .NET 8 runtime; guards every `[dotnet]` and `[scripting]` case |
+| `DOTNET_RUNTIME` | the probe the scripting, bindings and engine support libraries install finds the managed SDK this tree built (`Conjure.Managed.dll` under the `CONJURE_TEST_MANAGED_DIR` definition) and a .NET 8 runtime; guards every `[dotnet]` and `[scripting]` case. The runtime tests install their own probe (`tests/runtime/runtime_test_support.cpp`): the managed SDK in `managed/` next to `conjure_runtime`, `Conjure.TestScripts` v1 and a .NET runtime; their `[dotnet]` case is compiled only where `CONJURE_RUNTIME_TEST_HAS_DOTNET` is 1 |
 | `LOOPBACK_TCP` | the probe `tests/editor/editor_test_support.cpp` installs can open and connect a loopback socket; guards the TCP transport cases |
 
 The default test presets exclude the labels `benchmark|golden|downloaded|slow|process`, so a fresh clone
@@ -325,10 +325,11 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
   links, page length, markers and header coverage of both documentation sets; `tools/tests/test_check_docs.py`
   (CTest `docs.check_tool`) is the checker's self-test over a fake docs tree it generates in a temporary
   directory. The [Documentation](documentation.md#4-tooling) chapter explains both.
-- **Generated outputs.** `python -I tools/generate_brand_icons.py --check` (CTest `brand.icons_up_to_date`,
-  label `generated`) fails while the editor's committed icon differs from what the logo drawings produce;
-  `tools/tests/test_generate_brand_icons.py` (CTest `brand.icons_tool`) is the generator's self-test. The
-  [Logo and application icon](brand.md#5-changing-a-drawing) chapter explains both.
+- **Generated outputs.** `python -I tools/generate_brand_icons.py --check` (CTest `brand.icons_up_to_date`, label
+  `generated`) fails while the editor's committed icon differs from what the logo drawings produce;
+  `tools/tests/test_generate_brand_icons.py` (CTest `brand.icons_tool`) is the generator's self-test. The [Logo and
+  application icon](brand.md#5-changing-a-drawing) chapter explains both; the notices entries are in the `generated` row
+  of section 10.
 
 ## 10. Labels
 
@@ -337,11 +338,11 @@ leak; an unexpected `CONJURE_ASSERT` prints its source location and aborts the p
 | `unit`, `<module>` | every entry from `conjure_add_test_module()` (`core_math`, `support`, ...) | run |
 | extra `LABELS` | e.g. `support` on the self-tests | run |
 | `style` | `style.check`, `style.check_tool`; also the `exports.*` entries (labels `exports;style`, section 9) | run |
-| `build` | `build.abi_identity_non_ascii_path` (the ABI identity script over a non-ASCII path), `build.managed_project_references` (the managed `<ProjectReference>` parser through the source-tree check), the configure probes `build.missing_engine_module_fails_configure`, `build.missing_core_area_fails_configure`, `build.missing_test_module_fails_configure`, `build.missing_core_test_area_fails_configure`, `build.missing_benchmarks_fail_configure`, `build.missing_integration_fails_configure` (a listed directory without its CMakeLists.txt stops the configure) and `build.development_links_without_incremental` (Development links with /INCREMENTAL:NO, F781) | run |
+| `build` | `build.abi_identity_non_ascii_path` (the ABI identity script over a non-ASCII path), `build.managed_project_references` (the managed `<ProjectReference>` parser through the source-tree check), the configure probes `build.missing_engine_module_fails_configure`, `build.missing_core_area_fails_configure`, `build.missing_test_module_fails_configure`, `build.missing_core_test_area_fails_configure`, `build.missing_benchmarks_fail_configure`, `build.missing_integration_fails_configure` (a listed directory without its CMakeLists.txt stops the configure) and `build.development_links_without_incremental` (Development links with /INCREMENTAL:NO, F781); the fourteen notices probes of `cmake/ConjureNotices.cmake` (`notices.configure_*`, `notices.*_fails_configure`, `notices.host_files_without_flag_fail_configure`, `notices.ship_places_and_restores_the_file`); `runtime.msvc_runtime_folder_rules` (labels `runtime;build`: which Visual C++ redistributable folder a Distribution build ships, probed over fake folders on every platform) | run |
 | `tools` | `build.driver_tool`, `build.prune_tool`, `test_assets.downloader_tool`, `native_api.generator_tool`, `runtime.check_distribution_symbols_tool` (labels `runtime;tools`): the tool self-tests; `build.driver_tool` and `build.prune_tool` are not under `build` | run |
 | `managed` | `conjure_managed_sources_match.<name>` and `conjure_managed_source_tree_clean.<name>`, registered per managed project by `cmake/ConjureManaged.cmake` (`docs/design/03_scripting.md` 3.10) | run |
 | `docs` | `docs.check`, `docs.check_tool` (`docs/design/16_documentation.md` D9 and section 6) | run |
-| `generated` | `conjure_scripting_api_generated_up_to_date`, `brand.icons_up_to_date`, `brand.icons_tool` | run |
+| `generated` | `conjure_scripting_api_generated_up_to_date`, `brand.icons_up_to_date`, `brand.icons_tool`, `notices.up_to_date` (`python -I tools/third_party_notices.py --check --manifest <build>/notices/third_party_notices.json`: fails while `THIRD_PARTY_NOTICES.md` differs from the licence files the tree fetched), `notices.tool` (the tool's self-test); both need a Python interpreter | run |
 | `integration`, `engine`, `bindings`, `editor`, `runtime`, `benchmarks` | the wave-4 suites (`benchmarks` is the harness self-test, not the scenarios) | run |
 | `dotnet` | cases that start the real CLR (`tests/scripting`, `tests/bindings`, the `[scripting]` integration scenarios, the scripting benchmarks) | run; *Not Run* without the SDK |
 | `benchmark` | one entry per scenario of `conjure_benchmarks` (`benchmark.<module>.<scenario>`, plus the module label) | excluded; nightly `benchmarks-ci-class` |

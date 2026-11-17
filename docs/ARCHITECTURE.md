@@ -324,7 +324,10 @@ C# game assembly (collectible ALC)  <->  Conjure.Managed (default ALC)  <->  con
 
 ```
 agent / UI panel / --exec file
-   -> protocol_server (tcp 127.0.0.1:47820+, stdio, loopback)  newline-delimited JSON, id echoed
+   -> protocol_server (tcp 127.0.0.1:47820+, stdio, loopback)  newline-delimited JSON, id echoed;
+      token handshake on TCP with two tokens, full control and inspect only (04 D23, D25); requests of
+      transport clients recorded in <project>/.conjure/ai_audit.log (04 D26); a project is opened only
+      after a trust answer (04 D27)
    -> command_dispatcher: registry lookup -> schema validation -> preconditions -> handler (all-or-nothing)
    -> handler mutates through editor_context: scene_manager -> scene -> ecs::world,
       component_registry + ecs::component_to_json/from_json, entity_archive, asset_database, script_runtime,
@@ -337,10 +340,10 @@ Entities cross the protocol as scene guids or hierarchy paths, never as `ecs::en
 component type (`08_testing.md` D8). `play.start` snapshots the scene (`scene_serializer::capture`),
 `play.stop` restores it. Picking is CPU-side over per-entity bounds and `mesh_asset::cpu_geometry()` (R11);
 screenshots render into a `render_target` and `read_back` synchronously (R12). Headless:
-`conjure_editor --headless --exec commands.json --project <dir>` runs the same dispatcher over a `null`
-platform/rhi/audio application and pumps `step_frame()` for async commands; exit codes 0/1/2/3. Module
-tooling: `module.*` commands only enqueue requests; `editor_module_consumer` applies module panels and
-commands (R14).
+`conjure_editor --headless --exec commands.json --project <dir> --trust-project` (a project nobody answered for
+is not opened: 04 D27) runs the same dispatcher over a `null` platform/rhi/audio application and pumps
+`step_frame()` for async commands; exit codes 0/1/2/3. Module tooling: `module.*` commands only enqueue
+requests; `editor_module_consumer` applies module panels and commands (R14).
 
 ---
 
@@ -354,7 +357,11 @@ commands (R14).
 3. `dotnet publish managed/Conjure.Bootstrap` (framework-dependent or self-contained) and `dotnet build` of
    the game scripts -> `<dir>/managed/` (skipped when scripting is disabled).
 4. `modules::module_manager::export_layout(<dir>, DISTRIBUTION)` -> `<dir>/modules/<name>/{module.json, bin/<triplet>/, managed/}`.
-5. Copy the Distribution `conjure_runtime`, `conjure_shared` and `shaders/` (index.json + DXIL/SPIR-V blobs).
+5. Copy the Distribution `conjure_runtime`, `conjure_shared` and `shaders/` (index.json + DXIL/SPIR-V blobs),
+   with `THIRD_PARTY_NOTICES.txt`, the licence notices the build wrote next to the runtime (06 D15; a
+   distribution directory without it exports with a warning). Also `nethost.dll` when the folder holds it (a
+   Windows build with scripting) and, from an MSVC build, the Visual C++ runtime DLLs (every `vcruntime140*.dll`
+   and `msvcp140*.dll` except the debug runtime, 06 D14).
 6. Write `<dir>/project.json` with `"cooked": true`; the runtime then mounts only `engine://` and `cooked://`.
 
 `conjure_runtime --project <dir>` runs the result with no editor code linked (CI greps the Distribution

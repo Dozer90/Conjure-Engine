@@ -12,7 +12,7 @@ finding's full evidence.
 |---|---|---|
 | FIXED | 446 | 422 |
 | CHALLENGING | 239 | 213 |
-| NEEDS_DECISION (decided; 49 implemented, the rest to do) | 99 | 96 |
+| NEEDS_DECISION (decided; 62 implemented, the rest to do) | 99 | 96 |
 | NOT_A_BUG | 8 | 8 |
 
 A finding that repeats another one points at it with *same as*; only the primary carries the plan.
@@ -43,6 +43,18 @@ A finding that repeats another one points at it with *same as*; only the primary
   - Editor, error codes for a path of the wrong kind (`04_editor.md` D20) still differ in corners: `script.compile` with `Game.csproj` a directory (`COMPILE_FAILED`), `asset.import` with a folder as source (`ASSET_NOT_FOUND`), `project.create` over a `project.json` that is a directory (`INVALID_ARGS`), `script.list` with `scripts` a file (empty list), `asset.delete` of an unregistered file (`ASSET_NOT_FOUND`), and `asset.create_folder` with a name that is not portable (`IO_ERROR`, where `asset.create_material` answers `INVALID_ARGS`).
   - Editor: `scene.open` keeps the client's spelling of the path, so on a case-insensitive volume a later `scene.save` can register the same file a second time (`commands_scene.cpp`). `asset.restore` imports without reloading a loaded asset, unlike `asset.set` and `prefab.apply`. The `STARTUP_SCENE_FAILED` warning reaches only the `--exec` output and a `project.open` restart; other sessions learn it from the log. `property_drawer_registry::set` with an empty function answers the fallback drawer, not the built-in one its summary promises.
   - Documents and tools: `docs/handbook/modules/audio.md` is at the 400-line limit and `docs/handbook/testing.md` at 399; `08_testing.md` 6.1 says `test_ai_protocol_e2e.cpp` drives the command file through `headless_runner::run`, but the test calls `parse_command_file` and `run_requests`; `tools/check_style.py` reports `std::async` and the raw OS thread calls outside `tests/` only.
+- Seen while implementing the second set of medium decisions (2026-11-17: engine and licence, physics, editor security, renderer), not in the sweep report and not fixed:
+  - Open decisions for the owner:
+    - Editor (F187): a failed handshake leaves no audit trace (on purpose) and an asynchronous command's outcome is not in the audit log; there is no UI that lists or revokes remembered projects, and the trust dialog does not say who asked; a restricted "open without running code" mode needs an engine switch first (`06_engine_loop.md`, `07_modules.md`); the start screen and File > Open must send `project.open` when they are built. F181 (idle unauthenticated connections hold every seat) stays its own finding.
+    - Physics: velocities on a `KINEMATIC_MOVES_WITH_TRANSFORM` body are accepted and last one step; `WRONG_BODY_KIND` reaches C# as `ArgumentException`; a jump keeps the platform's speed; a teleport that only turns a character ends the carrying. Pinned and documented: a lift sinking faster than 0.1 m/s is followed by `STICK_TO_FLOOR` one step behind, and a character parented to a rising platform hops about 6 cm.
+    - Renderer: `warnedNoSwapchain` is never re-armed; a glTF mesh with `TANGENT` on only some primitives keeps the file's tangents there when `generateTangents` is false; with `generateTangents` true a mesh without UVs gets normal-only tangents without a warning.
+    - Licence and export: the AgX copyright line (`third_party/licenses/minimal_agx.txt`, `tonemap.hlsli`) is confirmed only through a secondary source; a Distribution build ships all eight `vcruntime140*` / `msvcp140*` DLLs where four are imported.
+    - Benchmarks: the `physics.step_10k_sleeping_1k_triggers` budget (1.50 ms desktop, 4.50 ms CI) is an estimate until a Development run measures it.
+  - Not verified on the Windows build host: the POSIX side of owner-only files (`engine/src/core/vfs/native_platform_posix.cpp`), the nightly's switch to the real export path with `--distribution` and its check for `vcruntime140.dll`, and the `--trust-project` flag in both workflows; they were simulated locally, not run in CI. The `project.export` warnings case in `tests/editor` was not proved by disabling the engine code it covers.
+  - Renderer: `transient_pool.cpp` logs an ERROR for every refused texture or buffer, every frame.
+  - Bindings: the summary of `bindings_error.h` still ends its mapping list with "everything else INTERNAL" although `bindings_error.cpp` maps more codes; `engine/src/physics/README.md` lists "raycast batches" among the benchmark scenarios, which do not exist.
+  - Platform: when `platform` gains per-user folders, `user_state_directory()` should replace the editor's own `user_paths_*` (04 D27, 09 R66).
+  - Lines over 120 columns that predate this work: `engine/src/rhi/README.md` (null swapchain bullet), `docs/api/editor/ai-protocol.md` (three prose lines), `docs/design/09_cross_area_resolutions.md` (one row), and long message strings in `cmake/ConjureModule.cmake`, `ConjureShaders.cmake` and `FindNetHost.cmake`, which `check_style.py` does not scan.
 
 ## Found while reviewing the decision fixes
 

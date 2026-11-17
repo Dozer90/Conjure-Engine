@@ -21,13 +21,14 @@ generated or downloaded and therefore never committed.
 |---|---|
 | `AGENTS.md`, `CLAUDE.md` | the entry point for every contributor; `CLAUDE.md` only points at `AGENTS.md` |
 | `README.md` | short project description, build requirements, pointers into `docs/` |
+| `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` | the Apache-2.0 text, the copyright notice ("the Conjure contributors") and the generated list of every third-party dependency with its licence, and the licence text of each pinned one (`06_engine_loop.md` D15) |
 | `CMakeLists.txt` | root build: options, configurations, global compiler settings, `add_subdirectory` order |
 | `CMakePresets.json` | configure, build, test and workflow presets per platform and configuration |
-| `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake` |
-| `third_party/` | `CMakeLists.txt` with every pinned dependency and `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) |
+| `cmake/` | build helpers: `ConjureConfigs.cmake`, `ConjureModule.cmake` (modules, core areas, executables, `conjure_add_game_module`), `ConjureSharedLibrary.cmake` (the umbrella `conjure_shared`, `abi_identity.h`), `ConjureShaders.cmake` and `ConjureShaderIndex.cmake` (shader compilation and `index.json`), `ConjureTesting.cmake`, `ConjureWarnings.cmake`, `ConjureSanitizers.cmake`, `FindNetHost.cmake`, `ConjureNotices.cmake` (licence notices: registration, the runtime `THIRD_PARTY_NOTICES.txt`, the `notices.*` CTest entries) and its probe `ConjureNoticesProbe.cmake` |
+| `third_party/` | `CMakeLists.txt` with every pinned dependency and its licence notice (`conjure_third_party_notice()`), `src/` with the single-file implementation units (`stb_impl.c`, `cgltf_impl.c`, `miniaudio_impl.c`) and `licenses/` with the licence texts of software that is followed, not fetched (the two tonemap fits) |
 | `engine/` | the engine: `include/conjure/<module>/` public headers, `src/<module>/` implementation, `shaders/` the engine's HLSL sources and their `CMakeLists.txt` (`conjure_add_shaders`), `CMakeLists.txt` with the module list |
 | `editor/` | the `conjure_editor` executable: `src/main.cpp` over `conjure::shared` ([Editor module](modules/editor.md)); `resources/` the Windows icon resource and its generated `.ico` |
-| `runtime/` | the `conjure_runtime` executable: `src/main.cpp` over `conjure::shared` ([Runtime](modules/runtime.md)) |
+| `runtime/` | the `conjure_runtime` executable: `src/main.cpp` over `conjure::shared` ([Runtime](modules/runtime.md)); `cmake/` holds `ConjureMsvcRuntime.cmake` (which Visual C++ redistributable folder a Distribution build ships) and its probe |
 | `managed/` | the C# SDK (`Conjure.Managed`), the test scripts and the project templates built with `dotnet` |
 | `samples/` | sample projects, first `feature_test` (wave 5; skipped until `feature_test/CMakeLists.txt` exists) |
 | `tests/` | the test support library, one test directory per module, the style check registration |
@@ -153,6 +154,7 @@ Conventions worth knowing when looking for something:
 | `tools/ctest_check_skips.py` | fails a CI run when a skipped test carries no allowed label or name tag, reading the ctest JUnit output; used in `ci.yml` and `nightly.yml`, with `--self-test` in `style-and-headers` |
 | `tools/generate_native_api.py` | generates `native_api_hash.h`, `NativeApi.g.cs` and `docs/generated/native_api_manifest.json` from `native_api.inl`, and `BindingStatus.g.cs` from `bindings_error.inl`; CTest `conjure_scripting_api_generated_up_to_date` runs `--check` |
 | `tools/generate_brand_icons.py`, `tools/tests/test_generate_brand_icons.py` | the editor icon ([Logo and application icon](brand.md)); CTest `brand.icons_up_to_date` and `brand.icons_tool` |
+| `tools/third_party_notices.py`, `tools/tests/test_third_party_notices.py` | writes and checks `THIRD_PARTY_NOTICES.md` from a build tree's notices manifest (`--build-dir`, `--manifest`, `--check`); CTest `notices.up_to_date` and `notices.tool` |
 | `tools/tests/test_build.py`, `test_prune_builds.py`, `test_check_style.py`, `test_download_test_assets.py`, `test_generate_native_api.py` | the self-tests of `build.py`, `prune_builds.py`, `check_style.py`, `download_test_assets.py` and `generate_native_api.py`; CTest `build.driver_tool`, `build.prune_tool`, `style.check_tool`, `test_assets.downloader_tool`, `native_api.generator_tool` |
 | `tools/docs.py` | `install`, `serve`, `build`, `check` for the documentation site |
 | `tools/docs_requirements.txt` | pinned MkDocs toolchain |
@@ -183,6 +185,8 @@ Nothing in this table is committed; `.gitignore` covers all of it.
 | `build/<preset>/bin/shaders/` (`*.dxil`, `*.spv`, `index.json`) | `conjure_add_shaders()` from `engine/shaders/CMakeLists.txt` | read by `rhi::shader_library` from next to the executable; depfiles make a changed `.hlsli` rebuild its permutations |
 | `build/<preset>/test_modules/<name>/` | `tests/modules/CMakeLists.txt` | the fixture plugins' `module.json` copies and `bin/<platform>-<arch>-<config>/` binaries |
 | `build/<preset>/_deps/` | FetchContent | cached in CI keyed by the hash of `third_party/CMakeLists.txt` |
+| `build/<preset>/notices/` | every configure (`cmake/ConjureNotices.cmake`) | the notices manifest `third_party_notices.json` and the runtime notices |
+| `build/<preset>/bin/THIRD_PARTY_NOTICES.txt` | building `conjure_runtime` | the licence notices placed next to the runtime; export step 5 ships the file |
 | `build/<preset>/tests/.../header_check/<target>/*.cpp` | `conjure_header_check()` | one stub per public header, regenerated only when the header list changes |
 | `build/<preset>/tests/.../<target>_labels.cmake`, `<target>_tests-*.cmake` | `conjure_add_test_module()`, doctest discovery | the CTest entries and their labels |
 | `build/<preset>/test_output/<executable>/`, `test_tmp/<executable>/` | test executables | `temp_directory` lives under `test_tmp`; per executable so parallel CTest processes never share a directory |
@@ -196,7 +200,9 @@ Nothing in this table is committed; `.gitignore` covers all of it.
 
 Generator outputs that the build needs on every machine are committed instead and checked by CTest: the editor's
 icon (`editor/resources/conjure_editor.ico`, `engine/src/editor/ui/editor_icon_data.cpp`) comes from
-`tools/generate_brand_icons.py`, and `brand.icons_up_to_date` fails while either differs from the drawings.
+`tools/generate_brand_icons.py`, and `brand.icons_up_to_date` fails while either differs from the drawings;
+`THIRD_PARTY_NOTICES.md` comes from `tools/third_party_notices.py`, and `notices.up_to_date` fails while it
+differs from the licence files the tree fetched.
 
 `.gitattributes` normalises every text file to LF and marks `.png .ico .jpg .hdr .glb .bin .wav .ogg .mp3 .ttf
 .dxil .spv` as binary; `tools/check_style.py` rejects a CRLF source file, so configure your editor rather than git.
