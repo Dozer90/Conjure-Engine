@@ -73,11 +73,14 @@ set(CONJURE_RENDERER_SOURCES
     renderer.cpp
     renderer_error.cpp
     renderer_impl.h
+    shader_program_loader.cpp
+    shader_program_loader.h
     sprite_batcher.cpp
     timer_ring.cpp
     timer_ring.h
     transient_pool.cpp
     transient_pool.h
+    warn_latch.h
     assets/asset_registration.cpp
     assets/blob_io.h
     assets/environment_asset.cpp

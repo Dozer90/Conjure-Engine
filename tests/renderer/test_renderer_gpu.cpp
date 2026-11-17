@@ -18,6 +18,7 @@
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 #include "conjure/rhi/device.h"
+#include "conjure/rhi/rhi_error.h"
 #include "conjure/rhi/shader_library.h"
 #include "conjure/rhi/swapchain.h"
 
@@ -803,6 +804,77 @@ TEST_SUITE("renderer/gpu") {
         swapchain.value().reset();
         shaders.reset();
         device.value().reset();
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F612 [gpu] a swapchain refusing the acquire is logged once until one succeeds") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // The headless case injects the refusal with null_fault::ACQUIRE_OUT_OF_DATE; this one takes the
+        // path of a real swapchain. On D3D12 a resize that goes around the renderer is refused by
+        // ResizeBuffers (the renderer still holds framebuffers over the back buffers) and leaves the
+        // swapchain without back buffers, so every acquire answers OUT_OF_DATE until
+        // renderer::resize_swapchain repairs it.
+        // Each such frame used to log a WARN.
+        log_capture logs = {};
+        std::unique_ptr<rhi::device> device = make_device(true);
+        std::unique_ptr<rhi::shader_library> shaders = open_shaders(*device);
+        rhi::swapchain_desc swapchainDesc = {};
+        swapchainDesc.width = 160;
+        swapchainDesc.height = 96;
+        core::result<std::unique_ptr<rhi::swapchain>> swapchain = rhi::swapchain::create(
+          *device,
+          rhi::native_window(),
+          swapchainDesc
+        );
+        CONJURE_REQUIRE_OK(swapchain);
+        renderer_desc desc = headless_desc(*device, *shaders);
+        desc.swapchain = swapchain.value().get();
+        core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(created);
+        renderer_type &instance = *created.value();
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), render_target_id()));
+        const char *const warningText = " skipped: ";
+
+        for (u32 round = 1; round <= 2; ++round) {
+            CAPTURE(round);
+            // One frame per back buffer, so a framebuffer of the renderer references each of them.
+            for (u32 frame = 0; frame < swapchainDesc.bufferCount; ++frame) {
+                CAPTURE(frame);
+                CONJURE_REQUIRE_OK(instance.render(scene));
+                CHECK(instance.stats().viewsRendered == 1);
+            }
+            CHECK(warning_count(logs, warningText) == round - 1);
+
+            const core::result<void> refused = swapchain.value()->resize(96 + round, 64);
+            CONJURE_CHECK_ERROR(refused, rhi::rhi_error::SWAPCHAIN_CREATION_FAILED);
+            REQUIRE(swapchain.value()->buffer_count() == 0);
+
+            // Every frame is skipped and counted; the first of the round is the one that is logged.
+            for (u32 frame = 0; frame < 4; ++frame) {
+                CAPTURE(frame);
+                CONJURE_REQUIRE_OK(instance.render(scene));
+                CHECK(instance.stats().viewsRendered == 0);
+                CHECK(instance.stats().viewsSkipped == 1);
+                CHECK(warning_count(logs, warningText) == round);
+            }
+
+            // The acquire that succeeds after the repair re-arms the warning for the next round.
+            CONJURE_REQUIRE_OK(instance.resize_swapchain(math::uvec2(96 + round, 64)));
+            CONJURE_REQUIRE_OK(instance.render(scene));
+            CHECK(instance.stats().viewsRendered == 1);
+            CHECK(instance.stats().viewsSkipped == 0);
+            CHECK(warning_count(logs, warningText) == round);
+        }
+        CHECK(logs.contains(core::log_level::WARN, "logged once until an acquire succeeds"));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "present failed"));
+        CHECK_FALSE(device->is_lost());
+
+        // Teardown in the engine's order, with the last present still queued.
+        created.value().reset();
+        swapchain.value().reset();
+        shaders.reset();
+        device.reset();
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

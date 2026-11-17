@@ -2,6 +2,8 @@
 
 #include "renderer/binding_layouts.h"
 
+#include "conjure/renderer/shader_asset.h"
+
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/rhi/shader_library.h"
@@ -18,6 +20,11 @@
 // exist twice (back-face culled and double-sided). Blit pipelines are the one exception: their
 // colour format is the target's, so they are created per format at create (swapchain) and at
 // create_render_target, never during a frame.
+//
+// The cache names no shader blob of its own (R18, code sweep F395): every variant maps to one program
+// of shader_asset's built-in table (program_of), the blit to blit_program(), and create() resolves
+// each through renderer/shader_program_loader.h, which validates the whole program against the
+// shader library before a stage of it is created.
 
 namespace conjure::renderer {
 
@@ -91,9 +98,12 @@ namespace conjure::renderer {
 
         public:
             /// <summary>
-            /// Loads every shader permutation and creates every pipeline. Fails with
-            /// renderer_error::SHADER_NOT_FOUND naming the key of a missing blob and
-            /// PIPELINE_CREATION_FAILED naming the variant the device refused.
+            /// Resolves the built-in program of every variant and of the blit, and creates every
+            /// pipeline. Fails with renderer_error::SHADER_NOT_FOUND naming the key of the first stage
+            /// the library's index lacks (a program is checked whole before any of its shaders is
+            /// created), the key of a listed blob that cannot be read (found when that stage is
+            /// loaded) or the program the built-in table lacks, and with PIPELINE_CREATION_FAILED
+            /// naming the shader, input layout or variant the device refused.
             /// </summary>
             [[nodiscard]] static core::result<std::unique_ptr<pipeline_cache>> create(
               nvrhi::IDevice &device,
@@ -134,13 +144,29 @@ namespace conjure::renderer {
             /// </summary>
             [[nodiscard]] static nvrhi::FramebufferInfo framebuffer_info(graphics_variant variant) noexcept;
 
+            /// <summary>
+            /// The built-in program a graphics variant is created from (variants that differ only in
+            /// pipeline state share one), looked up in shader_asset's table without a shader library.
+            /// Fails with core::error_code::NOT_FOUND when the table has no such program, and for COUNT.
+            /// </summary>
+            [[nodiscard]] static core::result<shader_asset> program_of(graphics_variant variant);
+
+            /// <summary>
+            /// The built-in program a compute variant is created from, looked up in shader_asset's
+            /// table without a shader library. Fails with core::error_code::NOT_FOUND when the table has
+            /// no such program, and for COUNT.
+            /// </summary>
+            [[nodiscard]] static core::result<shader_asset> program_of(compute_variant variant);
+
+            /// <summary>
+            /// The built-in program every blit pipeline is created from, looked up in shader_asset's
+            /// table without a shader library. Fails with core::error_code::NOT_FOUND when the table has
+            /// no such program.
+            /// </summary>
+            [[nodiscard]] static core::result<shader_asset> blit_program();
+
         private:
-            [[nodiscard]] core::result<nvrhi::ShaderHandle> load_shader(
-              std::string_view name,
-              std::string_view entry,
-              std::string_view defines,
-              nvrhi::ShaderType type
-            );
+            [[nodiscard]] core::result<nvrhi::ShaderHandle> create_vertex_shader(graphics_variant variant);
             [[nodiscard]] core::result<void> create_input_layouts();
             [[nodiscard]] core::result<void> create_graphics(graphics_variant variant);
             [[nodiscard]] core::result<void> create_compute(compute_variant variant);

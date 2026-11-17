@@ -63,19 +63,23 @@ void sprite_batcher::build(std::span<const sprite> sprites) {
     const usize emittedWorld = std::min<usize>(worldCount, MAX_SPRITES_PER_FRAME - emittedScreen);
     const usize emitted = emittedWorld + emittedScreen;
     mDropped = static_cast<u32>(total - emitted);
-    if (mDropped != mLastWarnedDropped) {
-        if (mDropped > 0) {
-            CONJURE_LOG_WARN(
-              LOG_RENDERER,
-              "sprite_batcher: {} sprites exceed MAX_SPRITES_PER_FRAME ({}); {} WORLD and {} SCREEN sprites, the last "
-              "of each space in sort order, are dropped",
-              total,
-              MAX_SPRITES_PER_FRAME,
-              worldCount - emittedWorld,
-              screenCount - emittedScreen
-            );
-        }
-        mLastWarnedDropped = mDropped;
+
+    // The WARN is logged by the build in which the overflow starts and not again until a build within
+    // the cap has re-armed it: a sprite count that moves from frame to frame while it stays above the
+    // cap would otherwise log every frame (02_renderer.md R19). dropped_count() has every build's count.
+    const bool overflowStarted = mDropped > 0 && !mOverflowWarned;
+    mOverflowWarned = mDropped > 0;
+    if (overflowStarted) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "sprite_batcher: {} sprites exceed MAX_SPRITES_PER_FRAME ({}); {} WORLD and {} SCREEN sprites, the last "
+          "of each space in sort order, are dropped (logged once until a build is within the cap, "
+          "dropped_count() counts every build)",
+          total,
+          MAX_SPRITES_PER_FRAME,
+          worldCount - emittedWorld,
+          screenCount - emittedScreen
+        );
     }
     if (total == 0) {
         return;

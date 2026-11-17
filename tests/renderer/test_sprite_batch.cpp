@@ -11,6 +11,7 @@
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
+#include <array>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -179,16 +180,77 @@ TEST_SUITE("renderer/sprite_batch") {
         CHECK(logs.count(core::log_level::WARN) == 1);
         CHECK(logs.contains(core::log_level::WARN, "exceed MAX_SPRITES_PER_FRAME"));
         CHECK(logs.contains(core::log_level::WARN, "2 WORLD and 0 SCREEN sprites"));
-        // The same overflow again does not warn again; a different one does.
-        batcher.build(sprites);
-        CHECK(logs.count(core::log_level::WARN) == 1);
+        // One more screen sprite takes one more slot from the world sprites. The overflow has not ended
+        // in between, so its warning is not repeated: dropped_count() is where the new count shows.
         sprites.push_back(make_sprite(sprite_space::SCREEN, 0, 0, 3));
         batcher.build(sprites);
         CHECK(batcher.dropped_count() == 3);
         CHECK(batcher.runs().size() == 4);
         CHECK(batcher.runs().back().texture == texture(3));
-        CHECK(logs.count(core::log_level::WARN) == 2);
-        CHECK(logs.contains(core::log_level::WARN, "3 WORLD and 0 SCREEN sprites"));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+    }
+
+    TEST_CASE("regression - code sweep F612 sprite_batcher warns when an overflow starts, not when its count changes") {
+        log_capture logs = {};
+        const sprite filler = make_sprite(sprite_space::WORLD, 0, 0, 1);
+        std::vector<sprite> sprites(MAX_SPRITES_PER_FRAME + 2, filler);
+        sprite_batcher batcher = {};
+        batcher.build(sprites);
+        REQUIRE(batcher.dropped_count() == 2);
+        REQUIRE(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "2 WORLD and 0 SCREEN sprites"));
+
+        // An overflow that lasts stays silent whether its count grows, shrinks or repeats (a count that
+        // moved used to warn on every build); every build still reports its own count.
+        const std::array<u32, 4> lastingOverflows = {5, 1, 1, 9};
+        for (const u32 overflow : lastingOverflows) {
+            CAPTURE(overflow);
+            sprites.resize(MAX_SPRITES_PER_FRAME + overflow, filler);
+            batcher.build(sprites);
+            CHECK(batcher.sprite_count() == MAX_SPRITES_PER_FRAME);
+            CHECK(batcher.dropped_count() == overflow);
+            CHECK(logs.count(core::log_level::WARN) == 1);
+        }
+
+        SUBCASE("a build of exactly the cap ends the overflow and the next one warns again") {
+            sprites.resize(MAX_SPRITES_PER_FRAME, filler);
+            batcher.build(sprites);
+            CHECK(batcher.dropped_count() == 0);
+            CHECK(logs.count(core::log_level::WARN) == 1);   // the end of an overflow is not logged
+            sprites.resize(MAX_SPRITES_PER_FRAME + 3, filler);
+            batcher.build(sprites);
+            CHECK(batcher.dropped_count() == 3);
+            CHECK(logs.count(core::log_level::WARN) == 2);
+            CHECK(logs.contains(core::log_level::WARN, "3 WORLD and 0 SCREEN sprites"));
+            batcher.build(sprites);
+            CHECK(logs.count(core::log_level::WARN) == 2);
+        }
+
+        SUBCASE("an empty build ends the overflow too") {
+            batcher.build({});
+            CHECK(batcher.dropped_count() == 0);
+            batcher.build(sprites);
+            CHECK(batcher.dropped_count() == 9);
+            CHECK(logs.count(core::log_level::WARN) == 2);
+            CHECK(logs.contains(core::log_level::WARN, "9 WORLD and 0 SCREEN sprites"));
+        }
+
+        SUBCASE("clear forgets the count but does not end the overflow") {
+            batcher.clear();
+            CHECK(batcher.dropped_count() == 0);
+            batcher.build(sprites);
+            CHECK(batcher.dropped_count() == 9);
+            CHECK(logs.count(core::log_level::WARN) == 1);
+        }
+
+        SUBCASE("another batcher warns for itself") {
+            sprite_batcher other = {};
+            other.build(sprites);
+            CHECK(other.dropped_count() == 9);
+            CHECK(logs.count(core::log_level::WARN) == 2);
+            batcher.build(sprites);
+            CHECK(logs.count(core::log_level::WARN) == 2);
+        }
     }
 
     TEST_CASE("sprite_batcher - more screen sprites than MAX_SPRITES_PER_FRAME drop every world sprite") {

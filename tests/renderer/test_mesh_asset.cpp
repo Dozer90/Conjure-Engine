@@ -12,6 +12,7 @@
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -34,6 +35,20 @@ namespace {
         geometry.indices = {0, 1, 2};
         return geometry;
     }
+
+    /// <summary>
+    /// The triangle with U running along +Y and V along +X: its UV tangent is +Y with handedness -1,
+    /// while its +Z normal alone gives +X with handedness +1, so the two ways of generating a tangent
+    /// can be told apart.
+    /// </summary>
+    [[nodiscard]] mesh_geometry turned_uv_triangle() {
+        mesh_geometry geometry = triangle_geometry();
+        geometry.uv0 = {math::vec2(0.0f, 0.0f), math::vec2(0.0f, 1.0f), math::vec2(1.0f, 0.0f)};
+        return geometry;
+    }
+
+    constexpr math::vec4 TURNED_UV_TANGENT = math::vec4(0.0f, 1.0f, 0.0f, -1.0f);
+    constexpr math::vec4 Z_NORMAL_TANGENT = math::vec4(1.0f, 0.0f, 0.0f, 1.0f);
 
     [[nodiscard]] std::vector<std::byte> corrupt(std::vector<std::byte> blob, usize offset, std::byte value) {
         blob[offset] = value;
@@ -188,6 +203,149 @@ TEST_SUITE("renderer/mesh_asset") {
         CHECK(unpack_half(attributes.uv1[0]) == doctest::Approx(0.5f));
         CHECK(attributes.colour == 0xFFFFFFFFu);
         CONJURE_CHECK_APPROX(attributes.uv0, math::vec2(0.0f));
+    }
+
+    TEST_CASE("mesh_asset - tangents a geometry lacks come from the UVs or, when asked, from the normal alone") {
+        const mesh_geometry geometry = turned_uv_triangle();
+
+        SUBCASE("FROM_UVS is the default and follows the texture") {
+            core::result<mesh_asset> byDefault = mesh_asset::from_geometry(geometry, "tri");
+            core::result<mesh_asset> fromUvs = mesh_asset::from_geometry(
+              geometry,
+              "tri",
+              tangent_generation::FROM_UVS
+            );
+            CONJURE_REQUIRE_OK(byDefault);
+            CONJURE_REQUIRE_OK(fromUvs);
+            CHECK(byDefault.value() == fromUvs.value());
+            const std::span<const packed_vertex_attributes> attributes = fromUvs.value().streams().attributes;
+            REQUIRE(attributes.size() == 3);
+            for (usize vertex = 0; vertex < attributes.size(); ++vertex) {
+                CAPTURE(vertex);
+                CONJURE_CHECK_APPROX(renderer_support::unpacked_tangent(attributes[vertex]), TURNED_UV_TANGENT);
+            }
+        }
+        SUBCASE("FROM_NORMAL reads no UV and changes nothing but the tangent") {
+            core::result<mesh_asset> fromUvs = mesh_asset::from_geometry(geometry, "tri");
+            core::result<mesh_asset> fromNormal = mesh_asset::from_geometry(
+              geometry,
+              "tri",
+              tangent_generation::FROM_NORMAL
+            );
+            CONJURE_REQUIRE_OK(fromUvs);
+            CONJURE_REQUIRE_OK(fromNormal);
+            const mesh_streams &streams = fromNormal.value().streams();
+            REQUIRE(streams.attributes.size() == 3);
+            for (usize vertex = 0; vertex < streams.attributes.size(); ++vertex) {
+                CAPTURE(vertex);
+                const packed_vertex_attributes &attributes = streams.attributes[vertex];
+                const packed_vertex_attributes &textured = fromUvs.value().streams().attributes[vertex];
+                CONJURE_CHECK_APPROX(renderer_support::unpacked_tangent(attributes), Z_NORMAL_TANGENT);
+                CONJURE_CHECK_APPROX(
+                  renderer_support::unpacked_normal(attributes),
+                  renderer_support::unpacked_normal(textured)
+                );
+                CONJURE_CHECK_APPROX(attributes.uv0, geometry.uv0[vertex]);
+                CHECK(attributes.uv1 == textured.uv1);
+                CHECK(attributes.colour == textured.colour);
+            }
+            CHECK(streams.positions == fromUvs.value().streams().positions);
+            CHECK(streams.indices == fromUvs.value().streams().indices);
+            CHECK(fromNormal.value().bounds() == fromUvs.value().bounds());
+            CHECK_FALSE(fromNormal.value() == fromUvs.value());
+        }
+        SUBCASE("a geometry without uv0 gets the FROM_NORMAL tangent under either value") {
+            mesh_geometry bare = geometry;
+            bare.uv0.clear();
+            core::result<mesh_asset> fromUvs = mesh_asset::from_geometry(bare, "tri", tangent_generation::FROM_UVS);
+            core::result<mesh_asset> fromNormal = mesh_asset::from_geometry(
+              bare,
+              "tri",
+              tangent_generation::FROM_NORMAL
+            );
+            CONJURE_REQUIRE_OK(fromUvs);
+            CONJURE_REQUIRE_OK(fromNormal);
+            CHECK(fromUvs.value() == fromNormal.value());
+            CONJURE_CHECK_APPROX(
+              renderer_support::unpacked_tangent(fromUvs.value().streams().attributes[0]),
+              Z_NORMAL_TANGENT
+            );
+        }
+        SUBCASE("tangents the geometry carries are kept under either value") {
+            mesh_geometry authored = geometry;
+            authored.normals.assign(3, math::vec3(0.0f, 0.0f, 1.0f));
+            authored.tangents.assign(3, math::vec4(0.0f, -1.0f, 0.0f, 1.0f));
+            core::result<mesh_asset> fromUvs = mesh_asset::from_geometry(authored, "tri");
+            core::result<mesh_asset> fromNormal = mesh_asset::from_geometry(
+              authored,
+              "tri",
+              tangent_generation::FROM_NORMAL
+            );
+            CONJURE_REQUIRE_OK(fromUvs);
+            CONJURE_REQUIRE_OK(fromNormal);
+            CHECK(fromUvs.value() == fromNormal.value());
+            CONJURE_CHECK_APPROX(
+              renderer_support::unpacked_tangent(fromNormal.value().streams().attributes[1]),
+              math::vec4(0.0f, -1.0f, 0.0f, 1.0f)
+            );
+        }
+        SUBCASE("every FROM_NORMAL tangent is a unit vector perpendicular to its normal, handedness +1") {
+            // Both sides of the 0.99 threshold on |y| where the helper axis changes, a normal that is
+            // not unit length and a zero one (packed as +Z).
+            const std::array<math::vec3, 9> normals = {
+              math::vec3(1.0f, 0.0f, 0.0f),   math::vec3(0.0f, 1.0f, 0.0f),  math::vec3(0.0f, -1.0f, 0.0f),
+              math::vec3(0.0f, 0.0f, -1.0f),  math::vec3(0.3f, -0.5f, 0.8f), math::vec3(0.1f, 0.995f, 0.0f),
+              math::vec3(0.15f, 0.98f, 0.1f), math::vec3(-4.0f, 2.0f, 4.0f), math::vec3(0.0f),
+            };
+            mesh_geometry varied = {};
+            for (usize index = 0; index < normals.size(); ++index) {
+                varied.positions.emplace_back(static_cast<f32>(index), static_cast<f32>(index % 3), 0.0f);
+                varied.normals.push_back(normals[index]);
+                varied.uv0.emplace_back(static_cast<f32>(index), 0.5f);
+                varied.indices.push_back(static_cast<u32>(index));
+            }
+            core::result<mesh_asset> created = mesh_asset::from_geometry(
+              varied,
+              "varied",
+              tangent_generation::FROM_NORMAL
+            );
+            CONJURE_REQUIRE_OK(created);
+            REQUIRE(created.value().vertex_count() == normals.size());
+            for (usize index = 0; index < normals.size(); ++index) {
+                CAPTURE(index);
+                const packed_vertex_attributes &attributes = created.value().streams().attributes[index];
+                const math::vec3 normal = renderer_support::unpacked_normal(attributes);
+                const math::vec4 tangent = renderer_support::unpacked_tangent(attributes);
+                CHECK(glm::length(math::vec3(tangent)) == doctest::Approx(1.0f).epsilon(1.0e-3));
+                CHECK(std::abs(glm::dot(normal, math::vec3(tangent))) < 1.0e-3f);
+                CHECK(tangent.w == doctest::Approx(1.0f));
+            }
+        }
+        SUBCASE("FROM_NORMAL uses the flat normals generated for a geometry without normals") {
+            // Two faces sharing an edge: the XY triangle faces +Z, the one in the XZ plane faces -Y.
+            mesh_geometry folded = {};
+            folded.positions = {
+              math::vec3(0.0f, 0.0f, 0.0f), math::vec3(1.0f, 0.0f, 0.0f), math::vec3(0.0f, 1.0f, 0.0f),
+              math::vec3(0.0f, 0.0f, -1.0f),
+            };
+            folded.indices = {0, 1, 2, 0, 3, 1};
+            core::result<mesh_asset> created = mesh_asset::from_geometry(
+              folded,
+              "folded",
+              tangent_generation::FROM_NORMAL
+            );
+            CONJURE_REQUIRE_OK(created);
+            const mesh_streams &streams = created.value().streams();
+            REQUIRE(streams.attributes.size() == 6);   // one vertex per corner
+            for (usize vertex = 0; vertex < streams.attributes.size(); ++vertex) {
+                CAPTURE(vertex);
+                const bool upper = vertex < 3;
+                const math::vec3 normal = upper ? math::vec3(0.0f, 0.0f, 1.0f) : math::vec3(0.0f, -1.0f, 0.0f);
+                const math::vec4 tangent = upper ? Z_NORMAL_TANGENT : math::vec4(0.0f, 0.0f, -1.0f, 1.0f);
+                CONJURE_CHECK_APPROX(renderer_support::unpacked_normal(streams.attributes[vertex]), normal);
+                CONJURE_CHECK_APPROX(renderer_support::unpacked_tangent(streams.attributes[vertex]), tangent);
+            }
+        }
     }
 
     TEST_CASE("mesh_asset - submesh counts partition the index list and carry their material slots") {

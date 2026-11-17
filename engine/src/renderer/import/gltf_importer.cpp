@@ -1,6 +1,7 @@
 #include "conjure/renderer/gltf_importer.h"
 #include "conjure/renderer/log_category.h"
 #include "renderer/import/file_bytes.h"
+#include "renderer/import/tangent_generator.h"
 
 #include "conjure/assets/assets_error.h"
 #include "conjure/core/assert.h"
@@ -16,7 +17,9 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
+#include <vector>
 
 // glTF 2.0 through cgltf (docs/design/02_renderer.md 4.2). cgltf parses the JSON / GLB container;
 // buffers are resolved here (GLB chunk, data URI, or the caller's reader) so the importer never
@@ -338,11 +341,47 @@ namespace {
         return triangles;
     }
 
-    [[nodiscard]] core::result<mesh_asset> import_mesh(const cgltf_mesh &mesh, std::string name) {
+    /// <summary>
+    /// The name the material asset of a glTF material gets: its own, or "material_<index>".
+    /// </summary>
+    [[nodiscard]] std::string material_asset_name(const cgltf_data &data, const cgltf_material &material) {
+        return material.name != nullptr ? std::string(material.name)
+          : std::format("material_{}", index_of(data, &material));
+    }
+
+    /// <summary>
+    /// One imported glTF mesh and where the tangents of its primitives came from (R20). A mesh whose
+    /// primitives all have a usable TANGENT (one element per vertex) keeps them, and a mesh where none
+    /// has one gets them built as the caller's tangent_generation says. A mixed mesh, with TANGENT on
+    /// some primitives only, keeps it there under FROM_NORMAL and builds the others from the normal;
+    /// under FROM_UVS, the default, all of its tangents are generated from the UVs, as before code
+    /// sweep F391. A mixed mesh whose normals are generated (a primitive has no usable NORMAL) keeps
+    /// none of the file's tangents under either value.
+    /// </summary>
+    struct imported_mesh {
+        mesh_asset asset = {};
+        std::vector<bool> fileTangents = {};    // one per primitive: its tangents are the file's TANGENT
+        bool unusedTangents = false;            // a mixed mesh whose normals are generated: no TANGENT kept
+    };
+
+    /// <summary>
+    /// The vertices one primitive owns in the concatenated arrays of its mesh.
+    /// </summary>
+    struct primitive_vertices {
+        u32 first = 0;
+        u32 count = 0;
+    };
+
+    [[nodiscard]] core::result<imported_mesh> import_mesh(
+      const cgltf_mesh &mesh,
+      std::string name,
+      tangent_generation missingTangents
+    ) {
         // Every primitive becomes one submesh; the geometry arrays are concatenated with offsets.
         mesh_geometry geometry = {};
+        std::vector<primitive_vertices> vertexRanges = {};
+        std::vector<bool> fileTangents = {};
         bool anyNormals = false;
-        bool anyTangents = false;
         bool anyUv0 = false;
         bool anyUv1 = false;
         bool anyColours = false;
@@ -351,16 +390,14 @@ namespace {
             for (cgltf_size attributeIndex = 0; attributeIndex < primitive.attributes_count; ++attributeIndex) {
                 const cgltf_attribute &attribute = primitive.attributes[attributeIndex];
                 anyNormals = anyNormals || attribute.type == cgltf_attribute_type_normal;
-                anyTangents = anyTangents || attribute.type == cgltf_attribute_type_tangent;
                 anyUv0 = anyUv0 || (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0);
                 anyUv1 = anyUv1 || (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 1);
                 anyColours = anyColours || (attribute.type == cgltf_attribute_type_color && attribute.index == 0);
             }
         }
-        // A mesh whose primitives disagree on normals falls back to generated attributes for all of
-        // them; the common case is uniform attributes across primitives.
+        // A mesh whose primitives disagree on normals falls back to generated ones for all of them; the
+        // common case is uniform attributes across primitives.
         bool allNormals = anyNormals;
-        bool allTangents = anyTangents;
 
         for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; ++primitiveIndex) {
             const cgltf_primitive &primitive = mesh.primitives[primitiveIndex];
@@ -431,7 +468,8 @@ namespace {
             } else {
                 allNormals = false;
             }
-            if (tangents != nullptr && tangents->count == vertexCount) {
+            const bool usableTangent = tangents != nullptr && tangents->count == vertexCount;
+            if (usableTangent) {
                 std::vector<f32> values = {};
                 CONJURE_TRY_ASSIGN(values, unpack_floats(*tangents, 4));
                 for (u32 vertex = 0; vertex < vertexCount; ++vertex) {
@@ -443,8 +481,12 @@ namespace {
                     );
                 }
             } else {
-                allTangents = false;
+                // A placeholder per vertex keeps the array in step with the positions; it is replaced
+                // or the whole array dropped once every primitive is read.
+                geometry.tangents.resize(geometry.tangents.size() + vertexCount, math::vec4(0.0f));
             }
+            vertexRanges.push_back(primitive_vertices{baseVertex, vertexCount});
+            fileTangents.push_back(usableTangent);
             if (anyUv0) {
                 if (uv0 != nullptr && uv0->count == vertexCount) {
                     std::vector<f32> values = {};
@@ -510,14 +552,111 @@ namespace {
         if (!allNormals) {
             geometry.normals.clear();
         }
-        if (!allTangents) {
+        // Tangents (R20). With FROM_NORMAL a mesh that has TANGENT on some primitives only keeps it
+        // there, and the other primitives get theirs built here from the file's normals. Everything is
+        // left to from_geometry instead when no primitive has a usable TANGENT, when such a mixed mesh
+        // has generated normals (the normals the missing tangents need exist only once from_geometry has
+        // given every triangle corner a vertex of its own), and for a mixed mesh under FROM_UVS, the
+        // default, whose tangents were all generated from the UVs before F391 decided the FROM_NORMAL
+        // case only.
+        const usize keptCount = static_cast<usize>(std::count(fileTangents.begin(), fileTangents.end(), true));
+        const bool mixedTangents = keptCount != 0 && keptCount != fileTangents.size();
+        const bool unusedTangents = mixedTangents && !allNormals;
+        const bool keepMixed = mixedTangents && missingTangents == tangent_generation::FROM_NORMAL;
+        if (keptCount == 0 || unusedTangents || (mixedTangents && !keepMixed)) {
             geometry.tangents.clear();
+            fileTangents.assign(fileTangents.size(), false);
+        } else if (keepMixed) {
+            const std::vector<math::vec4> builtTangents = detail::missing_tangents(
+              geometry.positions,
+              geometry.normals,
+              geometry.uv0,
+              geometry.indices,
+              missingTangents
+            );
+            for (usize primitiveIndex = 0; primitiveIndex < vertexRanges.size(); ++primitiveIndex) {
+                if (fileTangents[primitiveIndex]) {
+                    continue;
+                }
+                const primitive_vertices &range = vertexRanges[primitiveIndex];
+                const std::span<const math::vec4> source = std::span<const math::vec4>(builtTangents).subspan(
+                  range.first,
+                  range.count
+                );
+                std::ranges::copy(source, std::span<math::vec4>(geometry.tangents).subspan(range.first).begin());
+            }
         }
-        core::result<mesh_asset> built = mesh_asset::from_geometry(geometry, std::move(name));
+        core::result<mesh_asset> built = mesh_asset::from_geometry(geometry, std::move(name), missingTangents);
         if (!built.has_value()) {
             return parse_failure(built.get_error().message());
         }
-        return built;
+        imported_mesh imported = {};
+        imported.asset = std::move(built).value();
+        imported.fileTangents = std::move(fileTangents);
+        imported.unusedTangents = unusedTangents;
+        return imported;
+    }
+
+    /// <summary>
+    /// The warning for a mesh imported with generateTangents off (docs/design/02_renderer.md R20), or
+    /// an empty string when it has nothing to report. It names the materials that need a tangent which
+    /// follows the texture (lit, with a normal texture) and are drawn by a primitive whose tangents
+    /// were built from the normal alone, each once, in primitive order.
+    /// </summary>
+    [[nodiscard]] std::string normal_tangent_warning(
+      const cgltf_data &data,
+      const cgltf_mesh &mesh,
+      std::string_view meshName,
+      const imported_mesh &imported
+    ) {
+        std::vector<const cgltf_material *> affected = {};
+        bool anyFileTangents = false;
+        for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; ++primitiveIndex) {
+            if (imported.fileTangents[primitiveIndex]) {
+                anyFileTangents = true;
+                continue;
+            }
+            // A submesh beyond the last material slot draws with that slot's material (import_mesh,
+            // convert_node): the material of the primitive that owns the slot, not its own.
+            const cgltf_size slotOwner = std::min<cgltf_size>(primitiveIndex, MAX_MATERIAL_SLOTS - 1);
+            const cgltf_material *material = mesh.primitives[slotOwner].material;
+            // The unlit path of the forward shader never samples the normal texture.
+            if (material == nullptr || material->unlit || material->normal_texture.texture == nullptr) {
+                continue;
+            }
+            if (std::find(affected.begin(), affected.end(), material) == affected.end()) {
+                affected.push_back(material);
+            }
+        }
+        if (affected.empty()) {
+            return std::string();
+        }
+        std::string names = {};
+        for (const cgltf_material *material : affected) {
+            names += names.empty() ? "'" : ", '";
+            names += material_asset_name(data, *material);
+            names += "'";
+        }
+        std::string_view reason = "it has no TANGENT, so its tangents are built from the normal alone";
+        std::string_view where = {};
+        if (imported.unusedTangents) {
+            reason =
+              "only some of its primitives have a usable TANGENT and its normals are generated, so the file's "
+              "tangents are not used and all of them are built from the normal alone";
+        } else if (anyFileTangents) {
+            reason =
+              "only some of its primitives have a usable TANGENT, so the tangents of the others are built from "
+              "the normal alone";
+            where = " on those primitives";
+        }
+        return std::format(
+          "mesh '{}': generateTangents is false and {}; the normal texture of {} {} will not shade correctly{}",
+          meshName,
+          reason,
+          affected.size() == 1 ? "material" : "materials",
+          names,
+          where
+        );
     }
 
     /// <summary>
@@ -1018,14 +1157,15 @@ core::result<gltf_import_result> gltf_importer::import_bytes(
         const cgltf_material &material = data.materials[index];
         material_texture_indices textureIndices = {};
         const material_desc desc = import_material(data, material, textureIndices, result.warnings);
-        result.materials.emplace_back(
-          desc,
-          material.name != nullptr ? material.name : std::format("material_{}", index)
-        );
+        result.materials.emplace_back(desc, material_asset_name(data, material));
         result.materialTextures.push_back(textureIndices);
     }
 
-    // Meshes.
+    // Meshes. The packed stream always holds a tangent: the file's or, for a primitive without one,
+    // one generated from the UVs or with generateTangents off one built from the normal alone, which
+    // a normal map cannot use (R20).
+    const tangent_generation missingTangents = options.generateTangents ? tangent_generation::FROM_UVS
+      : tangent_generation::FROM_NORMAL;
     std::vector<u32> meshIndexByGltfMesh(data.meshes_count, INVALID_INDEX);
     for (cgltf_size index = 0; index < data.meshes_count; ++index) {
         const cgltf_mesh &mesh = data.meshes[index];
@@ -1033,17 +1173,18 @@ core::result<gltf_import_result> gltf_importer::import_bytes(
             result.warnings.push_back(std::format("mesh {} has no primitives", index));
             continue;
         }
-        mesh_asset asset = {};
-        CONJURE_TRY_ASSIGN(asset, import_mesh(mesh, mesh.name != nullptr ? mesh.name : std::format("mesh_{}", index)));
+        const std::string meshName = mesh.name != nullptr ? std::string(mesh.name) : std::format("mesh_{}", index);
+        imported_mesh imported = {};
+        CONJURE_TRY_ASSIGN(imported, import_mesh(mesh, meshName, missingTangents));
         meshIndexByGltfMesh[index] = static_cast<u32>(result.meshes.size());
-        result.meshes.push_back(std::move(asset));
-    }
-    if (!options.generateTangents) {
-        // Tangents are always present in the packed stream; the option only documents that glTF
-        // tangents are preferred when present, which from_geometry already does.
-        result.warnings.push_back(
-          "generateTangents = false: tangents are still generated for primitives without TANGENT"
-        );
+        result.meshes.push_back(std::move(imported.asset));
+        if (options.generateTangents) {
+            continue;
+        }
+        std::string warning = normal_tangent_warning(data, mesh, meshName, imported);
+        if (!warning.empty()) {
+            result.warnings.push_back(std::move(warning));
+        }
     }
 
     // Node tree: the default scene, the first scene, or every parentless node.

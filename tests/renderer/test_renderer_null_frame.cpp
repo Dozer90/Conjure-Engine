@@ -539,7 +539,7 @@ TEST_SUITE("renderer/null_frame") {
         CHECK(stats.count("light_cull") == MAX_VIEWS);
         const u32 warnings = logs.count(core::log_level::WARN);
         CONJURE_REQUIRE_OK(fixture->render(scene));
-        CHECK(logs.count(core::log_level::WARN) == warnings);   // once per change of the overflow
+        CHECK(logs.count(core::log_level::WARN) == warnings);   // the overflows last: not logged again
         // A view into the target counts frames once per view.
         CHECK(fixture->get_render_target(target)->frames_rendered() == 2 * MAX_VIEWS);
     }

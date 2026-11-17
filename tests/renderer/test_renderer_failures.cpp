@@ -5,24 +5,33 @@
 #include "renderer_test_support.h"
 
 #include "conjure/renderer/camera.h"
+#include "conjure/renderer/gpu_ids.h"
 #include "conjure/renderer/light.h"
+#include "conjure/renderer/limits.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/renderer/renderer_error.h"
+#include "conjure/renderer/sprite_batch.h"
+#include "conjure/renderer/texture_asset.h"
 
 #include "conjure/core/image.h"
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 #include "conjure/rhi/device.h"
+#include "conjure/rhi/native_window.h"
 #include "conjure/rhi/rhi_error.h"
 #include "conjure/rhi/shader_library.h"
+#include "conjure/rhi/swapchain.h"
 #include "conjure/rhi/texture_format.h"
 
+#include <array>
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 
 // The failure paths (docs/design/02_renderer.md 6, 10 "test_renderer_failures"): creation refusals
 // name their cause, bad arguments are rejected before any GPU work, device loss stops rendering
@@ -32,6 +41,45 @@ using namespace conjure;
 using namespace conjure::renderer;
 using namespace conjure::testing;
 using namespace conjure::testing::renderer_support;
+
+namespace {
+
+    /// <summary>
+    /// A validated null device, its shader library, a null swapchain and a renderer presenting to it,
+    /// destroyed in reverse order; the swapchain refusals are injected with rhi::null_fault.
+    /// </summary>
+    struct presenting_renderer {
+        std::unique_ptr<rhi::device> device = nullptr;
+        std::unique_ptr<rhi::shader_library> shaders = nullptr;
+        std::unique_ptr<rhi::swapchain> swapchain = nullptr;
+        std::unique_ptr<renderer_type> instance = nullptr;
+    };
+
+    /// <summary>
+    /// Creates the four objects of a presenting_renderer or fails the case.
+    /// </summary>
+    presenting_renderer make_presenting_renderer() {
+        presenting_renderer created = {};
+        created.device = make_device();
+        created.shaders = open_shaders(*created.device);
+        rhi::swapchain_desc swapchainDesc = {};
+        swapchainDesc.width = 64;
+        swapchainDesc.height = 32;
+        core::result<std::unique_ptr<rhi::swapchain>> swapchain = rhi::swapchain::create(
+          *created.device,
+          rhi::native_window(),
+          swapchainDesc
+        );
+        CONJURE_REQUIRE_OK(swapchain);
+        created.swapchain = std::move(swapchain).value();
+        renderer_desc desc = headless_desc(*created.device, *created.shaders);
+        desc.swapchain = created.swapchain.get();
+        core::result<std::unique_ptr<renderer_type>> instance = renderer_type::create(desc);
+        CONJURE_REQUIRE_OK(instance);
+        created.instance = std::move(instance).value();
+        return created;
+    }
+}
 
 TEST_SUITE("renderer/failures") {
 
@@ -48,12 +96,10 @@ TEST_SUITE("renderer/failures") {
 
     TEST_CASE("failures - a missing shader permutation fails creation with SHADER_NOT_FOUND naming the key") {
         temp_directory directory("empty_shaders");
-        CONJURE_REQUIRE_OK(directory.write_text("index.json", "{ \"version\": 1, \"shaders\": [] }"));
         std::unique_ptr<rhi::device> device = make_device();
-        core::result<std::unique_ptr<rhi::shader_library>> empty = rhi::shader_library::open(*device, directory.path());
-        CONJURE_REQUIRE_OK(empty);
+        std::unique_ptr<rhi::shader_library> empty = open_written_shaders(*device, directory);
         const core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(
-          headless_desc(*device, *empty.value())
+          headless_desc(*device, *empty)
         );
         CONJURE_CHECK_ERROR(created, renderer_error::SHADER_NOT_FOUND);
         const std::string message = created.get_error().message();
@@ -233,11 +279,7 @@ TEST_SUITE("renderer/failures") {
         scene.views[5].cameraData.orthographicHeight = 0.0f;
 
         const auto cameraWarnings = [&logs]() {
-            u32 count = 0;
-            for (const std::string &message : logs.messages(core::log_level::WARN)) {
-                count += message.find("invalid camera") != std::string::npos ? 1u : 0u;
-            }
-            return count;
+            return warning_count(logs, "invalid camera");
         };
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().viewsRendered == 6);
@@ -260,6 +302,285 @@ TEST_SUITE("renderer/failures") {
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(cameraWarnings() == 6);
         CHECK(fixture->stats().viewsRendered == 6);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F612 an overflow of views or lights warns when it starts, not when it changes") {
+        // The warnings used to follow the count: an overflow whose size moved from frame to frame was
+        // logged every frame. They follow the condition now; render_stats has every frame's count.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        const core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const render_view view = look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value());
+        light local = {};
+        local.type = light_type::POINT;
+        local.position = math::vec3(0.0f, 2.0f, 0.0f);
+        local.range = 4.0f;
+
+        struct frame_expectation {
+            u32 extraViews = 0;         // views beyond MAX_VIEWS
+            u32 extraLights = 0;        // lights beyond MAX_LIGHTS_PER_VIEW
+            u32 viewWarnings = 0;       // "exceed MAX_VIEWS" warnings logged once the frame is rendered
+            u32 lightWarnings = 0;      // "exceed MAX_LIGHTS_PER_VIEW" warnings by then
+        };
+        const std::array<frame_expectation, 9> frames = {{
+          {2, 10, 1, 1},    // both overflows start
+          {5, 3, 1, 1},     // both last with other counts
+          {1, 40, 1, 1},
+          {5, 3, 1, 1},     // a count seen before is still the same overflow
+          {0, 3, 1, 1},     // the views are within the budget again; the end is not logged
+          {2, 3, 2, 1},     // the view overflow starts anew while the light overflow never ended
+          {2, 0, 2, 1},     // the lights are within the budget again
+          {2, 7, 2, 2},     // and overflow anew while the view overflow lasts
+          {0, 0, 2, 2},
+        }};
+        for (usize index = 0; index < frames.size(); ++index) {
+            CAPTURE(index);
+            const frame_expectation &expected = frames[index];
+            render_scene scene = {};
+            scene.views.assign(MAX_VIEWS + expected.extraViews, view);
+            scene.lights.assign(MAX_LIGHTS_PER_VIEW + expected.extraLights, local);
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsRendered == MAX_VIEWS);
+            CHECK(fixture->stats().viewsSkipped == expected.extraViews);
+            CHECK(fixture->stats().lightsDropped == expected.extraLights * MAX_VIEWS);
+            CHECK(warning_count(logs, "exceed MAX_VIEWS") == expected.viewWarnings);
+            CHECK(warning_count(logs, "exceed MAX_LIGHTS_PER_VIEW") == expected.lightWarnings);
+        }
+
+        // The light budget is looked at when a view is prepared. A frame without a view does not see
+        // that the overflow ended, so the frame after it inherits the overflow of the frame before.
+        render_scene scene = {};
+        scene.views.assign(1, view);
+        scene.lights.assign(MAX_LIGHTS_PER_VIEW + 4, local);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(warning_count(logs, "exceed MAX_LIGHTS_PER_VIEW") == 3);
+        CONJURE_REQUIRE_OK(fixture->render(render_scene()));
+        CHECK(fixture->stats().lightsDropped == 0);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().lightsDropped == 4);
+        CHECK(warning_count(logs, "exceed MAX_LIGHTS_PER_VIEW") == 3);
+        CHECK(warning_count(logs, "exceed MAX_VIEWS") == 2);
+    }
+
+    TEST_CASE("regression - code sweep F612 a view with an unknown render target warns once until its index has one") {
+        // The warning used to be logged for every such view in every frame.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        const core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        render_target_id unknown = {};
+        unknown.index = 99;
+        unknown.generation = 7;
+        render_target_id otherUnknown = {};
+        otherUnknown.index = 123;
+        otherUnknown.generation = 2;
+        const render_view known = look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value());
+        render_scene scene = {};
+        scene.views.assign(3, known);
+        scene.views[1].target = unknown;
+        scene.views[2].target = unknown;
+        const char *const warningText = "targets an unknown render target";
+
+        // Both views are skipped in every frame and logged in the first.
+        for (u32 frame = 0; frame < 3; ++frame) {
+            CAPTURE(frame);
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsRendered == 1);
+            CHECK(fixture->stats().viewsSkipped == 2);
+            CHECK(warning_count(logs, warningText) == 2);
+        }
+        CHECK(logs.contains(core::log_level::WARN, "view 1 targets an unknown render target (index 99, generation 7)"));
+        CHECK(logs.contains(core::log_level::WARN, "view 2 targets an unknown render target (index 99, generation 7)"));
+
+        SUBCASE("another unknown target at the same index is the same problem") {
+            scene.views[1].target = otherUnknown;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsSkipped == 2);
+            CHECK(warning_count(logs, warningText) == 2);
+        }
+
+        SUBCASE("a known target re-arms the warning of its view index only") {
+            scene.views[1].target = target.value();
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsRendered == 2);
+            CHECK(fixture->stats().viewsSkipped == 1);
+            CHECK(warning_count(logs, warningText) == 2);
+            scene.views[1].target = otherUnknown;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsSkipped == 2);
+            CHECK(warning_count(logs, warningText) == 3);
+            CHECK(logs.contains(core::log_level::WARN, "view 1 targets an unknown render target (index 123, "));
+        }
+
+        SUBCASE("a view of the swapchain at the index re-arms it too") {
+            // Headless, so that view is skipped for its own reason, which has its own warning.
+            scene.views[2].target = render_target_id();
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsSkipped == 2);
+            CHECK(warning_count(logs, warningText) == 2);
+            CHECK(warning_count(logs, "headless") == 1);
+            scene.views[2].target = unknown;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(warning_count(logs, warningText) == 3);
+        }
+
+        SUBCASE("destroying the target of a view starts the problem for that view") {
+            fixture->destroy_render_target(target.value());
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsRendered == 0);
+            CHECK(fixture->stats().viewsSkipped == 3);
+            CHECK(warning_count(logs, warningText) == 3);
+            CHECK(logs.contains(core::log_level::WARN, "view 0 targets an unknown render target"));
+        }
+
+        SUBCASE("an index the scene does not have for a while keeps its state") {
+            // The state belongs to the view index: frames without a view there neither end nor
+            // restart the problem, so the views that come back to it with the same fault stay quiet.
+            render_scene oneView = {};
+            oneView.views.assign(1, known);
+            CONJURE_REQUIRE_OK(fixture->render(oneView));
+            CHECK(fixture->stats().viewsSkipped == 0);
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().viewsSkipped == 2);
+            CHECK(warning_count(logs, warningText) == 2);
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F612 render_stats counts the sprites every frame drops, the WARN comes once") {
+        // spritesDropped is what dropped_count() of the renderer's own batcher says, which nothing
+        // outside the renderer could read before; the warning follows the batcher's rule.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        const core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const gpu_texture_id texture = fixture->upload_texture(
+          test_asset_id(1),
+          texture_asset::checker(core::rgba8{}, core::rgba8{255, 255, 255, 255}, 4, 2)
+        );
+        sprite world = {};
+        world.texture = texture;
+        sprite screen = world;
+        screen.space = sprite_space::SCREEN;
+        const render_view view = look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value());
+        const char *const warningText = "exceed MAX_SPRITES_PER_FRAME";
+
+        struct frame_expectation {
+            u32 views = 0;
+            u32 sprites = 0;            // three of them SCREEN sprites, the rest WORLD
+            u32 dropped = 0;
+            u32 warnings = 0;           // overflow warnings logged once the frame is rendered
+        };
+        const std::array<frame_expectation, 6> frames = {{
+          {2, MAX_SPRITES_PER_FRAME + 4, 4, 1},     // counted once for the frame, not once per view
+          {1, MAX_SPRITES_PER_FRAME + 7, 7, 1},     // the overflow lasts with another count
+          {0, MAX_SPRITES_PER_FRAME + 1, 1, 1},     // the batch is built before the views: counted without one
+          {1, MAX_SPRITES_PER_FRAME, 0, 1},         // exactly the cap ends it
+          {1, MAX_SPRITES_PER_FRAME + 2, 2, 2},     // and the next overflow is logged again
+          {1, 5, 0, 2},
+        }};
+        for (usize index = 0; index < frames.size(); ++index) {
+            CAPTURE(index);
+            const frame_expectation &expected = frames[index];
+            render_scene scene = {};
+            scene.views.assign(expected.views, view);
+            scene.sprites.assign(expected.sprites, world);
+            for (usize slot = 0; slot < 3; ++slot) {
+                scene.sprites[slot] = screen;
+            }
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            const render_stats &stats = fixture->stats();
+            CHECK(stats.viewsRendered == expected.views);
+            CHECK(stats.spritesDropped == expected.dropped);
+            CHECK(stats.spritesDrawn == (expected.sprites - expected.dropped) * expected.views);
+            CHECK(warning_count(logs, warningText) == expected.warnings);
+        }
+        CHECK(logs.contains(core::log_level::WARN, "4 WORLD and 0 SCREEN sprites"));
+        CHECK(logs.contains(core::log_level::WARN, "2 WORLD and 0 SCREEN sprites"));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F612 a refused acquire is logged once until one succeeds") {
+        // Every frame a swapchain refused to acquire used to log a WARN. The null swapchain refuses one
+        // acquire per injected fault, as an out-of-date one does every frame until it is resized.
+        log_capture logs = {};
+        const presenting_renderer fixture = make_presenting_renderer();
+        renderer_type &instance = *fixture.instance;
+        render_scene scene = {};
+        scene.views.assign(2, look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), render_target_id()));
+        const char *const warningText = " skipped: ";
+
+        for (u32 round = 1; round <= 2; ++round) {
+            CAPTURE(round);
+            // Every refused frame is skipped and counts all its views; the first of the round is logged.
+            for (u32 frame = 0; frame < 3; ++frame) {
+                CAPTURE(frame);
+                fixture.device->inject_null_fault(rhi::null_fault::ACQUIRE_OUT_OF_DATE);
+                CONJURE_REQUIRE_OK(instance.render(scene));
+                CHECK(instance.stats().viewsRendered == 0);
+                CHECK(instance.stats().viewsSkipped == 2);
+                CHECK(warning_count(logs, warningText) == round);
+            }
+            CHECK_FALSE(fixture.device->is_lost());
+
+            // The acquire that succeeds re-arms the warning for the next round.
+            CONJURE_REQUIRE_OK(instance.render(scene));
+            CHECK(instance.stats().viewsRendered == 2);
+            CHECK(instance.stats().viewsSkipped == 0);
+            CHECK(warning_count(logs, warningText) == round);
+        }
+        CHECK(logs.contains(core::log_level::WARN, "null acquire refused as out of date"));
+        CHECK(logs.contains(core::log_level::WARN, "logged once until an acquire succeeds"));
+        // A skipped frame records nothing, so only the two frames that acquired presented.
+        const rhi::null_device_stats stats = fixture.device->null_stats().value();
+        CHECK(stats.acquires == 8);
+        CHECK(stats.presents == 2);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F612 a refused present is logged once until one succeeds") {
+        // Every frame whose present was refused without device loss used to log a WARN. The frame is
+        // recorded and executed either way, and render() succeeds.
+        log_capture logs = {};
+        const presenting_renderer fixture = make_presenting_renderer();
+        renderer_type &instance = *fixture.instance;
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), render_target_id()));
+        const char *const warningText = "present failed";
+
+        for (u32 round = 1; round <= 2; ++round) {
+            CAPTURE(round);
+            for (u32 frame = 0; frame < 3; ++frame) {
+                CAPTURE(frame);
+                fixture.device->inject_null_fault(rhi::null_fault::PRESENT_FAILED);
+                CONJURE_REQUIRE_OK(instance.render(scene));
+                CHECK(instance.stats().viewsRendered == 1);
+                CHECK(warning_count(logs, warningText) == round);
+            }
+            CHECK_FALSE(fixture.device->is_lost());
+            CHECK_FALSE(instance.is_lost());
+            // No refused present advanced the image.
+            CHECK(fixture.swapchain->current_index() == (round - 1) % fixture.swapchain->buffer_count());
+
+            // The present that succeeds re-arms the warning for the next round.
+            CONJURE_REQUIRE_OK(instance.render(scene));
+            CHECK(instance.stats().viewsRendered == 1);
+            CHECK(warning_count(logs, warningText) == round);
+        }
+        CHECK(logs.contains(core::log_level::WARN, "null present refused"));
+        CHECK(logs.contains(core::log_level::WARN, "logged once until a present succeeds"));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, " skipped: "));
+        CHECK(fixture.device->null_stats().value().presents == 8);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 

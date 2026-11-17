@@ -4,8 +4,10 @@
 # engine opens <executable directory>/shaders by default (renderer_subsystem::shader_directory), so the
 # blobs are built next to conjure_editor and conjure_runtime, where an export's distribution directory
 # also takes them from. The fullscreen triangle is the pair that proves the pipeline on every CI
-# platform; the rest are the renderer's pass shaders (engine/src/renderer/assets/shader_asset.cpp lists
-# the same permutations, and engine/src/renderer/pipeline_cache.cpp creates a pipeline from each).
+# platform; the rest are the renderer's shaders: every permutation listed here must be a stage of a
+# program in the table of engine/src/renderer/assets/shader_asset.cpp, the one list the renderer loads
+# its pipelines and the ImGui backend from (docs/design/02_renderer.md R18;
+# tests/renderer/test_shader_asset.cpp fails when the two lists disagree).
 
 # Every shared .hlsli is listed as a DEPENDENCIES entry: generators without depfile support (the
 # windows-vs preset) rebuild the blobs from this list, and sourceHash in index.json covers them.

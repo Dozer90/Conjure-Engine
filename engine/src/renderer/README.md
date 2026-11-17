@@ -23,14 +23,67 @@ Dear ImGui (only with `CONJURE_BUILD_EDITOR`, never in Distribution).
 | 2D and debug | `sprite_batch.h`, `debug_draw.h` | `sprite_batcher.cpp`, `debug_draw.cpp`, `passes/sprite_pass.cpp`, `passes/debug_draw_pass.cpp` |
 | Assets | `mesh_asset.h`, `texture_asset.h`, `material_asset.h`, `model_asset.h`, `environment_asset.h`, `shader_asset.h`, `gltf_importer.h` | `assets/*.cpp`, `import/*` (tangents, mips, image decoding, IBL bake, cgltf) |
 | Components | `components.h` | `components.cpp` |
-| The frame | `renderer.h`, `render_target.h` | `renderer.cpp`, `renderer_impl.h`, `render_graph.*`, `transient_pool.*`, `framebuffer_cache.*`, `binding_layouts.*`, `pipeline_cache.*`, `frame_resources.*`, `timer_ring.*`, `gpu_types.*`, `culling.*`, `draw_list_builder.*`, `exposure_math.*`, `shadows/*`, `passes/*` |
+| The frame | `renderer.h`, `render_target.h` | `renderer.cpp`, `renderer_impl.h`, `render_graph.*`, `transient_pool.*`, `framebuffer_cache.*`, `binding_layouts.*`, `pipeline_cache.*`, `shader_program_loader.*`, `frame_resources.*`, `timer_ring.*`, `warn_latch.h`, `gpu_types.*`, `culling.*`, `draw_list_builder.*`, `exposure_math.*`, `shadows/*`, `passes/*` |
 | ImGui | `imgui_renderer.h` | `imgui/imgui_renderer.cpp` |
 
 Shaders live in `engine/shaders/` and are compiled by `conjure_add_shaders` into
-`<build>/bin/shaders/index.json`; `shader_asset::built_in_programs()` lists every permutation the
-renderer loads and `pipeline_cache` turns each into a pipeline at `renderer::create`. The structs in
-`shared/gpu_types.hlsli` are mirrored in `gpu_types.h` with static_asserted sizes; the tests re-read
-the HLSL defines to keep the two in step.
+`<build>/bin/shaders/index.json`. The structs in `shared/gpu_types.hlsli` are mirrored in `gpu_types.h`
+with static_asserted sizes; the tests re-read the HLSL defines to keep the two in step.
+
+### Which shaders are loaded
+
+There are two lists and no third (design R18, code sweep F395):
+
+- `engine/shaders/CMakeLists.txt` says what the build compiles into the index.
+- `shader_asset::built_in_programs()` (the table in `assets/shader_asset.cpp`) says what the renderer
+  loads: one `shader_program_desc` per program permutation (name, the entry of each stage it has, the
+  pixel and vertex define strings).
+
+No other source names a shader blob. `pipeline_cache.cpp` maps every `graphics_variant` and
+`compute_variant`, and the blit, to the identity of a table entry (`key_of`, exposed to the tests as
+`pipeline_cache::program_of` / `blit_program`); `imgui/imgui_renderer.cpp` asks for the `imgui` program.
+Both go through `shader_program_loader.h`: `resolve_built_in_program` is `shader_asset::find_built_in`
+plus `validate` against the shader library, so a program is refused whole, before any of its device
+shaders exists, when the table lacks it or the index lacks one of its stages; `create_program_shader`
+then loads one stage's blob and creates the device shader. The input layouts take the vertex shader of a
+variant that draws with them (`create_vertex_shader`), not a name of their own.
+
+To add a shader permutation: list it in `engine/shaders/CMakeLists.txt`, add or extend its row in the
+table, and map a variant to it in `key_of`. `test_shader_asset` fails when the two lists disagree in
+either direction (the index may hold nothing but the table's stages and the rhi module's
+fullscreen-triangle pair), `test_pipeline_cache` when a variant does not resolve or a table row is used
+by nothing. `validate` reads the index only: a blob the index lists but the directory lacks is reported
+by `create_program_shader`, also as `SHADER_NOT_FOUND`.
+
+### Where a mesh's tangents come from
+
+Stream 1 always holds a tangent (design R8), so "no tangents" is not a state a packed mesh can be in.
+`mesh_asset::from_geometry(geometry, name, missingTangents)` packs the tangents the geometry carries;
+when it carries none it builds them, as `tangent_generation` says (design R20, code sweep F391):
+
+- `FROM_UVS` (the default): `detail::generate_tangents`, the uv0 derivatives of the triangles around a
+  vertex, Gram-Schmidt against the normal, handedness from the UV winding. A geometry without uv0, and a
+  vertex whose UVs give no direction, falls back to the next one.
+- `FROM_NORMAL`: `detail::normal_tangents`, `any_perpendicular(normal)` with handedness +1. No UV is read.
+  Lighting works, a normal map does not: the tangent does not follow the texture.
+
+Both live in `import/tangent_generator.*`, behind `detail::missing_tangents(..., tangent_generation)`. The
+glTF importer picks by `gltf_import_options::generateTangents` (`import_mesh`). A mesh whose primitives all
+have a usable `TANGENT` (one per vertex) keeps them; when no primitive has one, `from_geometry` builds them
+all. A mixed mesh, with `TANGENT` on some primitives only, is decided per primitive with the option off:
+`import_mesh` calls `missing_tangents` itself and fills the primitives without, so the file's tangents of
+the others survive. With the option on, the default, the mixed mesh keeps the rule from before F391 (which
+decided the off case only): the tangent array is cleared and `from_geometry` generates all of it from the
+UVs. One mixed mesh keeps none under either value: one with a primitive that lacks `NORMAL`. The normals
+are then generated inside `from_geometry` (one vertex per triangle corner), the importer has no normal to
+build the missing tangents from, and the file's tangents would sit on normals that are not used, so the
+tangent array is cleared and `from_geometry` builds all of it. No vertex flag, material flag or shader
+branch marks a normal-only tangent; with the option off the importer warns instead, once per mesh, naming
+the lit materials with a normal texture that a primitive with normal-only tangents draws with
+(`normal_tangent_warning`; a primitive past `MAX_MATERIAL_SLOTS` draws with the material of the primitive
+that owns the last slot). The warning follows the option, so a primitive without `TEXCOORD_0` imported with
+the option on gets the same tangents unreported. An output change of the importer bumps
+`GLTF_IMPORTER_VERSION` (3 since this one).
 
 ## The frame
 
@@ -146,22 +199,32 @@ holding the id follows the resize.
 ## Failure model
 
 `renderer::create` fails at start-up with `renderer_error::SHADER_NOT_FOUND` (naming the shader
-key), `PIPELINE_CREATION_FAILED` or `RESOURCE_CREATION_FAILED`; nothing is created mid-frame except
+key; a stage missing from the index is found before any shader of its program is created, a blob file
+missing from the directory when that stage is loaded, see "Which shaders are loaded"),
+`PIPELINE_CREATION_FAILED` or `RESOURCE_CREATION_FAILED`; nothing is created mid-frame except
 a blit pipeline the first time a new target format appears (outside frames). `render` fails only with
-`rhi::rhi_error::DEVICE_LOST`; every other problem of a scene is clamped and logged (views beyond
-`MAX_VIEWS`, lights beyond `MAX_LIGHTS_PER_VIEW`, sprite and debug caps, atlas overflow). A stale
-gpu id draws the fallback (unit cube, white texture, magenta unlit material, grey environment) and
-WARNs once. An upload whose GPU objects the device refuses logs an ERROR naming the kind, name and
-asset, counts in `upload_report::failed` and leaves its id on the fallback (a failed replacement
-drops the previous mirror too); the materials using a refused texture rebind that slot to its
-fallback (white, flat normal or black).
+`rhi::rhi_error::DEVICE_LOST`; every other problem of a scene is clamped and counted (views beyond
+`MAX_VIEWS`, lights beyond `MAX_LIGHTS_PER_VIEW`, sprite and debug caps, atlas overflow). The frame
+path logs a WARN when a problem starts and not again while it lasts, whatever its size does; a frame
+that sees the problem gone arms the WARN again (`warn_latch.h`, design R19, code sweep F612). That
+covers the view, light and sprite budgets, per view index a clamped camera and an unknown render
+target, and a swapchain refusing the acquire or the present without device loss. `render_stats`
+(`viewsSkipped`, `lightsDropped`, `spritesDropped`) has every frame's count; the handbook page
+(`docs/handbook/modules/renderer.md` section 7) lists what each latch looks at and the warnings
+that are logged once and never armed again.
+
+A stale gpu id draws the fallback (unit cube, white texture, magenta unlit material, grey
+environment) and WARNs once per id (for the first 1024 such ids). An upload whose GPU objects the
+device refuses logs an ERROR naming the kind, name and asset, counts in `upload_report::failed` and
+leaves its id on the fallback (a failed replacement drops the previous mirror too); the materials
+using a refused texture rebind that slot to its fallback (white, flat normal or black).
 
 ## Tests
 
 `tests/renderer/` holds one file per public header plus the topic files of the design (`culling`,
 `draw_list_builder`, `cascade_builder`, `shadow_atlas_allocator`, `render_graph`, `transient_pool`,
 `gpu_types`, `tonemap_reference`, `exposure_math`, `pipeline_cache`, `gpu_resource_cache`,
-`renderer_null_frame`, `renderer_failures`, `renderer_gpu`). Everything runs on the null device; the
+`warn_latch`, `renderer_null_frame`, `renderer_failures`, `renderer_gpu`). Everything runs on the null device; the
 `[gpu]` cases use WARP and skip without `precondition::SOFTWARE_GPU_ADAPTER`. Test glTF, PNG and
 HDR inputs are generated in the tests (no binary assets). The allocation gates
 (`CONJURE_CHECK_NO_ALLOCATIONS`) live next to the code they pin: the whole frame and extraction plus

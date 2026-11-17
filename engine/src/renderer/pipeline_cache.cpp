@@ -1,5 +1,6 @@
 #include "renderer/pipeline_cache.h"
 #include "renderer/gpu_types.h"
+#include "renderer/shader_program_loader.h"
 #include "conjure/renderer/debug_draw.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/renderer_error.h"
@@ -9,7 +10,7 @@
 #include "conjure/core/error.h"
 
 #include <cstddef>
-#include <string>
+#include <string_view>
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -54,66 +55,77 @@ namespace {
         return target;
     }
 
-    struct variant_shaders {
-        const char *name = "";
-        const char *vertexDefines = "";
-        const char *pixelEntry = "ps_main";
-        const char *pixelDefines = "";
+    /// <summary>
+    /// What shader_asset::find_built_in takes: the identity of one program of the built-in table.
+    /// </summary>
+    struct program_key {
+        std::string_view name = "";
+        std::string_view pixelDefines = "";
+        std::string_view vertexDefines = "";
     };
 
-    [[nodiscard]] variant_shaders shaders_of(graphics_variant variant) noexcept {
+    constexpr program_key BLIT_PROGRAM = {"blit", "", ""};
+
+    [[nodiscard]] program_key key_of(graphics_variant variant) noexcept {
         switch (variant) {
             case graphics_variant::SHADOW_DEPTH:
-                return {"shadow_depth", "ALPHA_MASK=0", "", ""};
+                return {"shadow_depth", "", "ALPHA_MASK=0"};
             case graphics_variant::SHADOW_DEPTH_MASKED:
-                return {"shadow_depth", "ALPHA_MASK=1", "ps_main", "ALPHA_MASK=1"};
+                return {"shadow_depth", "ALPHA_MASK=1", "ALPHA_MASK=1"};
             case graphics_variant::DEPTH_PREPASS:
-                return {"depth_prepass", "", "ps_main", "ALPHA_MASK=0"};
+                return {"depth_prepass", "ALPHA_MASK=0", ""};
             case graphics_variant::DEPTH_PREPASS_MASKED:
-                return {"depth_prepass", "", "ps_main", "ALPHA_MASK=1"};
+                return {"depth_prepass", "ALPHA_MASK=1", ""};
             case graphics_variant::FORWARD_OPAQUE:
             case graphics_variant::FORWARD_BLEND:
-                return {"forward_pbr", "", "ps_main", "ALPHA_MASK=0"};
+                return {"forward_pbr", "ALPHA_MASK=0", ""};
             case graphics_variant::FORWARD_MASKED:
-                return {"forward_pbr", "", "ps_main", "ALPHA_MASK=1"};
+                return {"forward_pbr", "ALPHA_MASK=1", ""};
             case graphics_variant::SKYBOX:
-                return {"skybox", "", "ps_main", ""};
+                return {"skybox", "", ""};
             case graphics_variant::WORLD_SPRITES:
             case graphics_variant::SCREEN_SPRITES:
-                return {"sprite", "", "ps_main", ""};
+                return {"sprite", "", ""};
             case graphics_variant::DEBUG_DEPTH_TESTED:
             case graphics_variant::DEBUG_OVERLAY:
-                return {"debug_draw", "", "ps_main", ""};
+                return {"debug_draw", "", ""};
             case graphics_variant::TONEMAP:
-                return {"tonemap", "", "ps_main", ""};
+                return {"tonemap", "", ""};
             case graphics_variant::BRDF_LUT:
-                return {"ibl_brdf_lut", "", "ps_main", ""};
+                return {"ibl_brdf_lut", "", ""};
             case graphics_variant::COUNT:
                 break;
         }
         return {};
     }
 
-    [[nodiscard]] const char *compute_name(compute_variant variant) noexcept {
+    [[nodiscard]] program_key key_of(compute_variant variant) noexcept {
         switch (variant) {
             case compute_variant::LIGHT_CULL:
-                return "light_cull";
+                return {"light_cull", "", ""};
             case compute_variant::SSAO_GTAO:
-                return "ssao_gtao";
+                return {"ssao_gtao", "", ""};
             case compute_variant::SSAO_BLUR:
-                return "ssao_blur";
+                return {"ssao_blur", "", ""};
             case compute_variant::EXPOSURE_HISTOGRAM:
-                return "exposure_histogram";
+                return {"exposure_histogram", "", ""};
             case compute_variant::EXPOSURE_ADAPT:
-                return "exposure_adapt";
+                return {"exposure_adapt", "", ""};
             case compute_variant::BLOOM_DOWN:
-                return "bloom_down";
+                return {"bloom_down", "", ""};
             case compute_variant::BLOOM_UP:
-                return "bloom_up";
+                return {"bloom_up", "", ""};
             case compute_variant::COUNT:
                 break;
         }
-        return "";
+        return {};
+    }
+
+    /// <summary>
+    /// The program of a key, checked whole against the shader library (resolve_built_in_program).
+    /// </summary>
+    [[nodiscard]] core::result<shader_asset> resolve(rhi::shader_library &shaders, const program_key &key) {
+        return resolve_built_in_program(shaders, key.name, key.pixelDefines, key.vertexDefines);
     }
 }
 
@@ -240,53 +252,42 @@ core::result<std::unique_ptr<pipeline_cache>> pipeline_cache::create(
     for (usize index = 0; index < COMPUTE_COUNT; ++index) {
         CONJURE_TRY(cache->create_compute(static_cast<compute_variant>(index)));
     }
-    CONJURE_TRY_ASSIGN(cache->mBlitVertex, cache->load_shader("blit", "vs_main", "", nvrhi::ShaderType::Vertex));
-    CONJURE_TRY_ASSIGN(cache->mBlitPixel, cache->load_shader("blit", "ps_main", "", nvrhi::ShaderType::Pixel));
+    CONJURE_TRY_ASSIGN(const shader_asset blitProgram, resolve(shaders, BLIT_PROGRAM));
+    CONJURE_TRY_ASSIGN(
+      cache->mBlitVertex,
+      create_program_shader(device, shaders, blitProgram, nvrhi::ShaderType::Vertex)
+    );
+    CONJURE_TRY_ASSIGN(
+      cache->mBlitPixel,
+      create_program_shader(device, shaders, blitProgram, nvrhi::ShaderType::Pixel)
+    );
     return cache;
 }
 
-core::result<nvrhi::ShaderHandle> pipeline_cache::load_shader(
-  std::string_view name,
-  std::string_view entry,
-  std::string_view defines,
-  nvrhi::ShaderType type
-) {
-    rhi::shader_key key = {};
-    key.name = name;
-    key.entry = entry;
-    key.defines = defines;
-    core::result<rhi::shader_blob> blob = mShaders->get(key);
-    if (!blob.has_value()) {
-        return core::make_error(
-          renderer_error::SHADER_NOT_FOUND,
-          "shader '{}' entry '{}' defines '{}': {}",
-          name,
-          entry,
-          defines,
-          blob.get_error().message()
-        );
-    }
-    nvrhi::ShaderDesc desc = {};
-    desc.shaderType = type;
-    desc.entryName = std::string(entry);
-    desc.debugName = std::string(name) + "." + std::string(entry) + (defines.empty() ? "" : "." + std::string(defines));
-    nvrhi::ShaderHandle shader = mDevice->createShader(desc, blob.value().bytes.data(), blob.value().bytes.size());
-    if (shader == nullptr) {
-        return core::make_error(
-          renderer_error::PIPELINE_CREATION_FAILED,
-          "shader '{}' entry '{}' was refused by the device",
-          name,
-          entry
-        );
-    }
-    return shader;
+core::result<shader_asset> pipeline_cache::program_of(graphics_variant variant) {
+    const program_key key = key_of(variant);
+    return shader_asset::find_built_in(key.name, key.pixelDefines, key.vertexDefines);
+}
+
+core::result<shader_asset> pipeline_cache::program_of(compute_variant variant) {
+    const program_key key = key_of(variant);
+    return shader_asset::find_built_in(key.name, key.pixelDefines, key.vertexDefines);
+}
+
+core::result<shader_asset> pipeline_cache::blit_program() {
+    return shader_asset::find_built_in(BLIT_PROGRAM.name, BLIT_PROGRAM.pixelDefines, BLIT_PROGRAM.vertexDefines);
+}
+
+core::result<nvrhi::ShaderHandle> pipeline_cache::create_vertex_shader(graphics_variant variant) {
+    CONJURE_TRY_ASSIGN(const shader_asset program, resolve(*mShaders, key_of(variant)));
+    return create_program_shader(*mDevice, *mShaders, program, nvrhi::ShaderType::Vertex);
 }
 
 core::result<void> pipeline_cache::create_input_layouts() {
-    // The input layout needs a vertex shader for reflection on some backends; the forward vertex
-    // shader covers every mesh attribute.
+    // The input layout needs a vertex shader for reflection on some backends; each layout takes the
+    // one of a variant that draws with it. The forward vertex shader covers every mesh attribute.
     nvrhi::ShaderHandle meshVertex = nullptr;
-    CONJURE_TRY_ASSIGN(meshVertex, load_shader("forward_pbr", "vs_main", "", nvrhi::ShaderType::Vertex));
+    CONJURE_TRY_ASSIGN(meshVertex, create_vertex_shader(graphics_variant::FORWARD_OPAQUE));
     const std::array<nvrhi::VertexAttributeDesc, 6> meshAttributes = {
       nvrhi::VertexAttributeDesc()
         .setName("POSITION")
@@ -338,7 +339,7 @@ core::result<void> pipeline_cache::create_input_layouts() {
     }
 
     nvrhi::ShaderHandle shadowVertex = nullptr;
-    CONJURE_TRY_ASSIGN(shadowVertex, load_shader("shadow_depth", "vs_main", "ALPHA_MASK=0", nvrhi::ShaderType::Vertex));
+    CONJURE_TRY_ASSIGN(shadowVertex, create_vertex_shader(graphics_variant::SHADOW_DEPTH));
     mPositionLayout = mDevice->createInputLayout(meshAttributes.data(), 1, shadowVertex.Get());
     if (mPositionLayout == nullptr) {
         return core::make_error(
@@ -348,7 +349,7 @@ core::result<void> pipeline_cache::create_input_layouts() {
     }
 
     nvrhi::ShaderHandle spriteVertex = nullptr;
-    CONJURE_TRY_ASSIGN(spriteVertex, load_shader("sprite", "vs_main", "", nvrhi::ShaderType::Vertex));
+    CONJURE_TRY_ASSIGN(spriteVertex, create_vertex_shader(graphics_variant::WORLD_SPRITES));
     const std::array<nvrhi::VertexAttributeDesc, 3> spriteAttributes = {
       nvrhi::VertexAttributeDesc()
         .setName("POSITION")
@@ -379,7 +380,7 @@ core::result<void> pipeline_cache::create_input_layouts() {
     }
 
     nvrhi::ShaderHandle debugVertex = nullptr;
-    CONJURE_TRY_ASSIGN(debugVertex, load_shader("debug_draw", "vs_main", "", nvrhi::ShaderType::Vertex));
+    CONJURE_TRY_ASSIGN(debugVertex, create_vertex_shader(graphics_variant::DEBUG_DEPTH_TESTED));
     const std::array<nvrhi::VertexAttributeDesc, 2> debugAttributes = {
       nvrhi::VertexAttributeDesc()
         .setName("POSITION")
@@ -407,14 +408,12 @@ core::result<void> pipeline_cache::create_input_layouts() {
 }
 
 core::result<void> pipeline_cache::create_graphics(graphics_variant variant) {
-    const variant_shaders names = shaders_of(variant);
+    CONJURE_TRY_ASSIGN(const shader_asset program, resolve(*mShaders, key_of(variant)));
     nvrhi::GraphicsPipelineDesc desc = {};
-    CONJURE_TRY_ASSIGN(desc.VS, load_shader(names.name, "vs_main", names.vertexDefines, nvrhi::ShaderType::Vertex));
-    if (names.pixelEntry[0] != '\0') {
-        CONJURE_TRY_ASSIGN(
-          desc.PS,
-          load_shader(names.name, names.pixelEntry, names.pixelDefines, nvrhi::ShaderType::Pixel)
-        );
+    CONJURE_TRY_ASSIGN(desc.VS, create_program_shader(*mDevice, *mShaders, program, nvrhi::ShaderType::Vertex));
+    // A depth-only program (the unmasked shadow pass) has no pixel stage.
+    if (!program.desc().pixelEntry.empty()) {
+        CONJURE_TRY_ASSIGN(desc.PS, create_program_shader(*mDevice, *mShaders, program, nvrhi::ShaderType::Pixel));
     }
     desc.primType = nvrhi::PrimitiveType::TriangleList;
     desc.renderState.rasterState.frontCounterClockwise = true;
@@ -535,8 +534,9 @@ core::result<void> pipeline_cache::create_graphics(graphics_variant variant) {
 }
 
 core::result<void> pipeline_cache::create_compute(compute_variant variant) {
+    CONJURE_TRY_ASSIGN(const shader_asset program, resolve(*mShaders, key_of(variant)));
     nvrhi::ComputePipelineDesc desc = {};
-    CONJURE_TRY_ASSIGN(desc.CS, load_shader(compute_name(variant), "cs_main", "", nvrhi::ShaderType::Compute));
+    CONJURE_TRY_ASSIGN(desc.CS, create_program_shader(*mDevice, *mShaders, program, nvrhi::ShaderType::Compute));
     switch (variant) {
         case compute_variant::LIGHT_CULL: {
             desc.bindingLayouts.push_back(mLayouts->lightCull);

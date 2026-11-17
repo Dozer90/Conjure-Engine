@@ -38,6 +38,11 @@ core::result<u32> null_swapchain::acquire() {
     mDevice.record([](null_device_stats &stats) {
         ++stats.acquires;
     });
+    if (mDevice.consume_fault(null_fault::ACQUIRE_OUT_OF_DATE)) {
+        // What a minimised window or a failed resize gives a real swapchain: the device is healthy and
+        // the caller skips the frame until an acquire succeeds again.
+        return core::make_error(rhi_error::OUT_OF_DATE, "null acquire refused as out of date (injected null_fault)");
+    }
     return mCurrentIndex;
 }
 
@@ -50,6 +55,11 @@ core::result<void> null_swapchain::present() {
         // lost and reports DEVICE_LOST; the image is not advanced.
         mDevice.messages().mark_lost();
         return core::make_error(rhi_error::DEVICE_LOST, "null present reported device loss (injected null_fault)");
+    }
+    if (mDevice.consume_fault(null_fault::PRESENT_FAILED)) {
+        // A refusal without removal (DXGI_ERROR_INVALID_CALL, an unexpected VkResult): the device stays
+        // healthy and the image is not advanced.
+        return core::make_error(rhi_error::PRESENT_FAILED, "null present refused (injected null_fault)");
     }
     mCurrentIndex = (mCurrentIndex + 1) % mDesc.bufferCount;
     return core::result<void>::success();

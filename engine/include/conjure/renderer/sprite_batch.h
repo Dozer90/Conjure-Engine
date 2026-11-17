@@ -71,8 +71,10 @@ namespace conjure::renderer {
     /// and splits the result into runs. The capacity is MAX_SPRITES_PER_FRAME and SCREEN sprites (the
     /// HUD) take their slots first: beyond it the WORLD sprites last in sort order (the front-most) are
     /// dropped, then, only when SCREEN sprites alone exceed the cap, the last SCREEN sprites. Dropped
-    /// sprites are counted, with a WARN naming the count per space logged once per change of the
-    /// dropped count.
+    /// sprites are counted by every build (dropped_count()). A WARN naming the count per space is
+    /// logged by the build in which the overflow starts: the builds that follow stay silent while they
+    /// drop sprites, whatever the count becomes, and a build that drops none (an empty one included)
+    /// arms the warning again. clear() does not arm it.
     /// </summary>
     class CONJURE_API sprite_batcher {
         private:
@@ -84,7 +86,7 @@ namespace conjure::renderer {
             std::vector<u64> mScratchKeys = {};
             std::vector<u32> mScratchValues = {};
             u32 mDropped = 0;
-            u32 mLastWarnedDropped = 0;
+            bool mOverflowWarned = false;               // the last build dropped sprites: the WARN is spent
 
         public:
             sprite_batcher();
@@ -95,7 +97,8 @@ namespace conjure::renderer {
 
         public:
             /// <summary>
-            /// Rebuilds vertices, indices and runs from the sprites. Keeps capacity between calls.
+            /// Rebuilds vertices, indices and runs from the sprites. Keeps capacity between calls. Logs
+            /// the overflow WARN when this build drops sprites and the one before it dropped none.
             /// </summary>
             void build(std::span<const sprite> sprites);
 
@@ -112,7 +115,8 @@ namespace conjure::renderer {
             }
 
             /// <summary>
-            /// Sprites dropped by the last build because the cap was reached (both spaces).
+            /// Sprites dropped by the last build because the cap was reached (both spaces); 0 after
+            /// clear(). The renderer reports its batcher's count as render_stats::spritesDropped.
             /// </summary>
             [[nodiscard]] u32 dropped_count() const noexcept {
                 return mDropped;
@@ -126,7 +130,8 @@ namespace conjure::renderer {
             }
 
             /// <summary>
-            /// Forgets the output; capacity is kept.
+            /// Forgets the output and the dropped count; capacity is kept, and so is whether the
+            /// overflow WARN is armed (only a build decides that).
             /// </summary>
             void clear() noexcept;
 

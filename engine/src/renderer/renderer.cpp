@@ -790,25 +790,27 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
     state.atlasTileData.clear();
     state.lightTileBase.assign(scene.lights.size(), INVALID_INDEX);
 
-    // Views beyond the budget are dropped with a WARN once per change of count.
+    // Views beyond the budget are dropped. The WARN is logged when the overflow starts and not again
+    // until a frame within the budget has re-armed it, however the count moves in between (R19);
+    // render_stats::viewsSkipped has this frame's count.
     const u32 viewCount = static_cast<u32>(std::min<usize>(scene.views.size(), MAX_VIEWS));
     const u32 viewOverflow = static_cast<u32>(scene.views.size()) - viewCount;
-    if (viewOverflow != state.lastViewOverflow) {
-        if (viewOverflow > 0) {
-            CONJURE_LOG_WARN(
-              LOG_RENDERER,
-              "{} views exceed MAX_VIEWS ({}); the last {} are skipped",
-              scene.views.size(),
-              MAX_VIEWS,
-              viewOverflow
-            );
-        }
-        state.lastViewOverflow = viewOverflow;
+    if (state.viewOverflowWarning.update(viewOverflow > 0)) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "{} views exceed MAX_VIEWS ({}); the last {} are skipped (logged once until a frame is within the "
+          "limit, render_stats::viewsSkipped counts every frame)",
+          scene.views.size(),
+          MAX_VIEWS,
+          viewOverflow
+        );
     }
     state.stats.viewsSkipped += viewOverflow;
 
-    // Sprites and debug lines are shared by every view: one upload each.
+    // Sprites and debug lines are shared by every view: one upload each. The batcher warns about its
+    // own overflow by the same rule; the count of this frame goes into the statistics.
     state.sprites.build(scene.sprites);
+    state.stats.spritesDropped = state.sprites.dropped_count();
     if (state.sprites.sprite_count() > 0) {
         const std::span<const sprite_vertex> vertices = state.sprites.vertices();
         const std::span<const u32> indices = state.sprites.indices();
@@ -948,14 +950,26 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
         stateOfView.debugDepthTestedVertices = static_cast<u32>(depthTested.size());
         stateOfView.debugOverlayVertices = static_cast<u32>(overlay.size());
 
-        // Target.
+        // Target. A view naming a render target the renderer does not have (destroyed, or never
+        // created here) is skipped every frame it does so, with one WARN per view index when that
+        // starts; a frame in which the index names a known target or the swapchain re-arms it (R19).
+        std::unique_ptr<render_target> *slot = view.target.is_valid() ? state.targets.find(view.target) : nullptr;
+        const bool unknownTarget = view.target.is_valid() && (slot == nullptr || *slot == nullptr);
+        if (state.unknownTargetWarning.update(viewIndex, unknownTarget)) {
+            CONJURE_LOG_WARN(
+              LOG_RENDERER,
+              "view {} targets an unknown render target (index {}, generation {}); skipped (logged once until "
+              "the view at this index has a known target, render_stats::viewsSkipped counts every frame)",
+              viewIndex,
+              view.target.index,
+              view.target.generation
+            );
+        }
+        if (unknownTarget) {
+            ++state.stats.viewsSkipped;
+            continue;
+        }
         if (view.target.is_valid()) {
-            std::unique_ptr<render_target> *slot = state.targets.find(view.target);
-            if (slot == nullptr || *slot == nullptr) {
-                CONJURE_LOG_WARN(LOG_RENDERER, "view {} targets an unknown render target; skipped", viewIndex);
-                ++state.stats.viewsSkipped;
-                continue;
-            }
             render_target::impl &targetState = renderer_access::state(**slot);
             stateOfView.targetTexture = targetState.colour.Get();
             stateOfView.targetSize = targetState.desc.size;
@@ -1009,10 +1023,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     // A bad camera in the scene data is clamped with one WARN per view until it is valid again
     // (renderer.h: a bad scene never aborts a frame); clip_from_view would assert on it.
     const camera cameraData = sanitised_camera(view.cameraData);
-    const u32 viewBit = 1u << stateOfView.viewIndex;
-    if (usable_camera(view.cameraData)) {
-        state.invalidCameraViews &= ~viewBit;
-    } else if ((state.invalidCameraViews & viewBit) == 0) {
+    if (state.invalidCameraWarning.update(stateOfView.viewIndex, !usable_camera(view.cameraData))) {
         CONJURE_LOG_WARN(
           LOG_RENDERER,
           "view {}: invalid camera (near {}, far {}, fov {}, height {}) clamped",
@@ -1022,7 +1033,6 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
           view.cameraData.verticalFovRadians,
           view.cameraData.orthographicHeight
         );
-        state.invalidCameraViews |= viewBit;
     }
 
     const f32 aspect = static_cast<f32>(
@@ -1084,18 +1094,19 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
         return left < right;
     });
     const u32 lightCount = static_cast<u32>(std::min<usize>(order.size(), MAX_LIGHTS_PER_VIEW));
+    // The overflow is the scene's, the same for every view of the frame, so one latch serves all of
+    // them: the WARN is logged by the first view prepared with too many lights and armed again by a
+    // view prepared within the budget (R19). A frame that prepares no view does not look.
     const u32 lightOverflow = static_cast<u32>(order.size()) - lightCount;
-    if (lightOverflow != state.lastLightOverflow) {
-        if (lightOverflow > 0) {
-            CONJURE_LOG_WARN(
-              LOG_RENDERER,
-              "{} lights exceed MAX_LIGHTS_PER_VIEW ({}); the least important {} are dropped",
-              order.size(),
-              MAX_LIGHTS_PER_VIEW,
-              lightOverflow
-            );
-        }
-        state.lastLightOverflow = lightOverflow;
+    if (state.lightOverflowWarning.update(lightOverflow > 0)) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "{} lights exceed MAX_LIGHTS_PER_VIEW ({}); the least important {} are dropped (logged once until a "
+          "view is within the limit, render_stats::lightsDropped counts every frame)",
+          order.size(),
+          MAX_LIGHTS_PER_VIEW,
+          lightOverflow
+        );
     }
     state.stats.lightsDropped += lightOverflow;
 
@@ -1471,12 +1482,23 @@ core::result<void> renderer::render(const render_scene &scene) {
     nvrhi::ITexture *backBuffer = nullptr;
     if (swapchain != nullptr) {
         core::result<u32> acquired = swapchain->acquire();
+        if (!acquired.has_value() && acquired.get_error().is(rhi::rhi_error::DEVICE_LOST)) {
+            state.lost = true;
+            return device_lost_error();
+        }
+        // A swapchain that is out of date (a minimised window, a resize that has not completed)
+        // refuses every frame until it is resized: the first skipped frame is logged, the ones that
+        // follow are not, and the next acquire that succeeds re-arms the warning (R19).
+        if (state.acquireFailureWarning.update(!acquired.has_value())) {
+            CONJURE_LOG_WARN(
+              LOG_RENDERER,
+              "frame {} skipped: {} (logged once until an acquire succeeds, every such frame counts its views "
+              "in render_stats::viewsSkipped)",
+              state.frameIndex,
+              acquired.get_error().message()
+            );
+        }
         if (!acquired.has_value()) {
-            if (acquired.get_error().is(rhi::rhi_error::DEVICE_LOST)) {
-                state.lost = true;
-                return device_lost_error();
-            }
-            CONJURE_LOG_WARN(LOG_RENDERER, "frame {} skipped: {}", state.frameIndex, acquired.get_error().message());
             state.stats.viewsSkipped = static_cast<u32>(scene.views.size());
             return core::result<void>();
         }
@@ -1525,12 +1547,19 @@ core::result<void> renderer::render(const render_scene &scene) {
     device.executeCommandLists(&frameList, 1);
     if (swapchain != nullptr) {
         core::result<void> presented = swapchain->present();
-        if (!presented.has_value()) {
-            if (presented.get_error().is(rhi::rhi_error::DEVICE_LOST)) {
-                state.lost = true;
-                return device_lost_error();
-            }
-            CONJURE_LOG_WARN(LOG_RENDERER, "present failed: {}", presented.get_error().message());
+        if (!presented.has_value() && presented.get_error().is(rhi::rhi_error::DEVICE_LOST)) {
+            state.lost = true;
+            return device_lost_error();
+        }
+        // Like the acquire: logged when presenting starts to fail, armed again by a present that
+        // succeeds (R19). The frame was recorded and executed either way.
+        if (state.presentFailureWarning.update(!presented.has_value())) {
+            CONJURE_LOG_WARN(
+              LOG_RENDERER,
+              "frame {}: present failed: {} (logged once until a present succeeds)",
+              state.frameIndex,
+              presented.get_error().message()
+            );
         }
     }
     if (state.desc.device->is_lost()) {

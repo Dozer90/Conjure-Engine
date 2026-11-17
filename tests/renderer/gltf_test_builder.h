@@ -23,6 +23,10 @@ namespace conjure::testing::gltf_builder {
     /// </summary>
     [[nodiscard]] std::string base64_encode(std::span<const std::byte> bytes);
 
+    /// <summary>
+    /// One glTF primitive. add_mesh makes it the first primitive of a new mesh named 'name';
+    /// add_primitive appends it to an existing mesh, where its name is not written.
+    /// </summary>
     struct mesh_input {
         std::string name = "mesh";
         std::vector<math::vec3> positions = {};
@@ -72,6 +76,7 @@ namespace conjure::testing::gltf_builder {
     class gltf_test_builder {
         private:
             std::vector<mesh_input> mMeshes = {};
+            std::vector<std::vector<mesh_input>> mExtraPrimitives = {};   // one list per mesh
             std::vector<material_input> mMaterials = {};
             std::vector<std::vector<std::byte>> mImages = {};   // PNG bytes
             std::vector<node_input> mNodes = {};
@@ -88,6 +93,13 @@ namespace conjure::testing::gltf_builder {
 
         public:
             u32 add_mesh(mesh_input mesh);
+
+            /// <summary>
+            /// Appends a further primitive to mesh 'mesh' (an index add_mesh returned), with its own
+            /// attributes, indices, material and mode.
+            /// </summary>
+            void add_primitive(u32 mesh, mesh_input primitive);
+
             u32 add_material(material_input material);
 
             /// <summary>

@@ -206,7 +206,11 @@ mesh_asset::mesh_asset() {}
 
 mesh_asset::~mesh_asset() {}
 
-core::result<mesh_asset> mesh_asset::from_geometry(const mesh_geometry &geometry, std::string name) {
+core::result<mesh_asset> mesh_asset::from_geometry(
+  const mesh_geometry &geometry,
+  std::string name,
+  tangent_generation missingTangents
+) {
     if (geometry.positions.empty()) {
         return invalid_geometry("no positions");
     }
@@ -276,9 +280,17 @@ core::result<mesh_asset> mesh_asset::from_geometry(const mesh_geometry &geometry
     const std::span<const math::vec3> normals = source->normals.empty() ? std::span<const math::vec3>(generatedNormals)
                                                                         : std::span<const math::vec3>(source->normals);
 
+    // Missing tangents follow the texture (UV derivatives) unless the caller asked for the frame
+    // that needs the normal only (docs/design/02_renderer.md R20).
     std::vector<math::vec4> generatedTangents = {};
     if (source->tangents.empty()) {
-        generatedTangents = detail::generate_tangents(source->positions, normals, source->uv0, source->indices);
+        generatedTangents = detail::missing_tangents(
+          source->positions,
+          normals,
+          source->uv0,
+          source->indices,
+          missingTangents
+        );
     }
     const std::span<const math::vec4> tangents = source->tangents.empty()
       ? std::span<const math::vec4>(generatedTangents)

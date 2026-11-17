@@ -50,7 +50,7 @@ from them every frame. The renderer itself never includes the ECS.
 | `conjure/renderer/limits.h` | the budgets: `MAX_VIEWS`, `MAX_LIGHTS_PER_VIEW`, `MAX_SHADOW_CASCADES`, `MAX_SPRITES_PER_FRAME`, `MAX_MATERIAL_SLOTS`, ... |
 | `conjure/renderer/components.h` | the five reflected components and `register_components()` |
 | `conjure/renderer/imgui_renderer.h` | `imgui_renderer` (editor builds: draws `ImDrawData`) |
-| `conjure/renderer/mesh_asset.h` | `mesh_asset`, `mesh_geometry`, `submesh`, the vertex packing helpers, `mesh_loader` |
+| `conjure/renderer/mesh_asset.h` | `mesh_asset`, `mesh_geometry`, `tangent_generation`, `submesh`, the vertex packing helpers, `mesh_loader` |
 | `conjure/renderer/texture_asset.h` | `texture_asset`, `texture_import_settings`, `texture_importer`, `texture_loader` |
 | `conjure/renderer/material_asset.h` | `material_asset`, `material_desc`, `alpha_mode`, `material_importer`, `material_loader` |
 | `conjure/renderer/model_asset.h` | `model_asset`, `model_node`, `model_loader` |

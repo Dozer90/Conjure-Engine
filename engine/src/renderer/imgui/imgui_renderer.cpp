@@ -2,6 +2,7 @@
 
 #if defined(CONJURE_BUILD_EDITOR) && CONJURE_BUILD_EDITOR
 
+#include "renderer/shader_program_loader.h"
 #include "conjure/renderer/log_category.h"
 #include "conjure/renderer/renderer_error.h"
 #include "rhi/texture_format_mapping.h"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 // Dear ImGui backend (docs/design/02_renderer.md 3.11, R16). With ImGui >= 1.92 (IMGUI_HAS_TEXTURES)
@@ -28,6 +30,7 @@ using namespace conjure::renderer;
 namespace {
     constexpr u32 INITIAL_VERTEX_CAPACITY = 4096;
     constexpr u32 INITIAL_INDEX_CAPACITY = 8192;
+    constexpr std::string_view IMGUI_PROGRAM_NAME = "imgui";
 
     struct imgui_push_constants {
         f32 displayX = 0.0f;
@@ -309,37 +312,13 @@ core::result<std::unique_ptr<imgui_renderer>> imgui_renderer::create(
     state.resolver = std::move(resolver);
     nvrhi::IDevice &native = *state.device;
 
-    const auto loadShader = [&](std::string_view entry, nvrhi::ShaderType type) -> core::result<nvrhi::ShaderHandle> {
-        rhi::shader_key key = {};
-        key.name = "imgui";
-        key.entry = entry;
-        core::result<rhi::shader_blob> blob = shaders.get(key);
-        if (!blob.has_value()) {
-            return core::make_error(
-              renderer_error::SHADER_NOT_FOUND,
-              "shader 'imgui' entry '{}': {}",
-              entry,
-              blob.get_error().message()
-            );
-        }
-        nvrhi::ShaderDesc desc = {};
-        desc.shaderType = type;
-        desc.entryName = std::string(entry);
-        desc.debugName = "imgui." + std::string(entry);
-        nvrhi::ShaderHandle shader = native.createShader(desc, blob.value().bytes.data(), blob.value().bytes.size());
-        if (shader == nullptr) {
-            return core::make_error(
-              renderer_error::PIPELINE_CREATION_FAILED,
-              "the device refused the imgui {} shader",
-              entry
-            );
-        }
-        return shader;
-    };
+    // The backend's shaders are the "imgui" program of shader_asset's built-in table, checked whole
+    // against the library before either stage is created (design R18, code sweep F395).
+    CONJURE_TRY_ASSIGN(const shader_asset program, resolve_built_in_program(shaders, IMGUI_PROGRAM_NAME));
     nvrhi::ShaderHandle vertex = nullptr;
     nvrhi::ShaderHandle pixel = nullptr;
-    CONJURE_TRY_ASSIGN(vertex, loadShader("vs_main", nvrhi::ShaderType::Vertex));
-    CONJURE_TRY_ASSIGN(pixel, loadShader("ps_main", nvrhi::ShaderType::Pixel));
+    CONJURE_TRY_ASSIGN(vertex, create_program_shader(native, shaders, program, nvrhi::ShaderType::Vertex));
+    CONJURE_TRY_ASSIGN(pixel, create_program_shader(native, shaders, program, nvrhi::ShaderType::Pixel));
 
     nvrhi::BindingLayoutDesc layout = {};
     layout.visibility = nvrhi::ShaderType::All;

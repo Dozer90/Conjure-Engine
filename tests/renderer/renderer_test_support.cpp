@@ -4,6 +4,7 @@
 #include "renderer_test_support.h"
 
 #include "conjure/renderer/camera.h"
+#include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/renderer.h"
 
@@ -17,6 +18,9 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #ifndef CONJURE_TEST_SHADER_DIR
@@ -119,6 +123,35 @@ std::unique_ptr<rhi::shader_library> conjure::testing::renderer_support::open_sh
     return std::move(opened).value();
 }
 
+std::unique_ptr<rhi::shader_library> conjure::testing::renderer_support::open_written_shaders(
+  rhi::device &device,
+  const temp_directory &directory,
+  std::span<const index_stage> stages
+) {
+    std::string index = "{ \"version\": 1, \"shaders\": [";
+    for (usize position = 0; position < stages.size(); ++position) {
+        const index_stage &stage = stages[position];
+        const std::string blobName = "stage_" + std::to_string(position) + ".bin";
+        if (stage.writeBlob) {
+            CONJURE_REQUIRE_OK(directory.write_text(blobName, "placeholder bytecode"));
+        }
+        index.append(position == 0 ? " " : ", ");
+        index.append("{ \"name\": \"").append(stage.name);
+        index.append("\", \"entry\": \"").append(stage.entry);
+        index.append("\", \"stage\": \"").append(stage.stage);
+        index.append("\", \"defines\": \"").append(stage.defines);
+        index.append("\", \"dxil\": \"").append(blobName);
+        index.append("\", \"spirv\": \"").append(blobName);
+        index.append("\", \"sourceHash\": \"0\" }");
+    }
+    index.append(" ] }");
+    CONJURE_REQUIRE_OK(directory.write_text("index.json", index));
+    core::result<std::unique_ptr<rhi::shader_library>> opened = rhi::shader_library::open(device, directory.path());
+    CONJURE_REQUIRE_OK(opened);
+    REQUIRE(opened.value()->entry_count() == stages.size());
+    return std::move(opened).value();
+}
+
 renderer::renderer_desc conjure::testing::renderer_support::headless_desc(
   rhi::device &device,
   rhi::shader_library &shaders,
@@ -152,6 +185,37 @@ headless_renderer conjure::testing::renderer_support::make_headless_renderer(
 
 headless_renderer conjure::testing::renderer_support::make_raw_headless_renderer(core::jobs::job_system *jobs) {
     return renderer_on(make_raw_device(), jobs);
+}
+
+u32 conjure::testing::renderer_support::warning_count(const log_capture &logs, std::string_view text) {
+    u32 count = 0;
+    for (const std::string &message : logs.messages(core::log_level::WARN)) {
+        if (message.find(text) != std::string::npos) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+math::vec3 conjure::testing::renderer_support::unpacked_normal(
+  const renderer::packed_vertex_attributes &attributes
+) noexcept {
+    return math::vec3(
+      renderer::unpack_snorm16(attributes.normal[0]),
+      renderer::unpack_snorm16(attributes.normal[1]),
+      renderer::unpack_snorm16(attributes.normal[2])
+    );
+}
+
+math::vec4 conjure::testing::renderer_support::unpacked_tangent(
+  const renderer::packed_vertex_attributes &attributes
+) noexcept {
+    return math::vec4(
+      renderer::unpack_snorm16(attributes.tangent[0]),
+      renderer::unpack_snorm16(attributes.tangent[1]),
+      renderer::unpack_snorm16(attributes.tangent[2]),
+      renderer::unpack_snorm16(attributes.normal[3])
+    );
 }
 
 assets::asset_id conjure::testing::renderer_support::test_asset_id(u64 index) noexcept {

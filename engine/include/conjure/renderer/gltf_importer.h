@@ -23,13 +23,20 @@
 // glTF 2.0 import (docs/design/02_renderer.md 4.2): .gltf / .glb -> CPU meshes, materials,
 // textures and a model node tree. cgltf does the parsing in engine/src; this header carries only
 // engine types. Unsupported features (skins, animations, KHR_texture_transform, unknown extensions)
-// are warnings; parse errors, missing buffers, non-triangle topology and unsupported accessor
-// layouts are failures.
+// are warnings, and so is a normal-mapped mesh imported with generateTangents off (R20); parse
+// errors, missing buffers, non-triangle topology and unsupported accessor layouts are failures.
 
 namespace conjure::renderer {
 
     inline constexpr std::string_view GLTF_IMPORTER_ID = "conjure.renderer.gltf";
-    inline constexpr u32 GLTF_IMPORTER_VERSION = 2;
+
+    /// <summary>
+    /// Bumped whenever the importer's output changes for some input: a cached import made by another
+    /// version is stale. 2: a light without a range gets one from its intensity. 3: generateTangents
+    /// = false builds tangents from the normal alone, and with it a primitive keeps its TANGENT when
+    /// other primitives of its mesh have none (sweep-2026-11-12 F391).
+    /// </summary>
+    inline constexpr u32 GLTF_IMPORTER_VERSION = 3;
     inline constexpr std::array<std::string_view, 2> GLTF_EXTENSIONS = {".gltf", ".glb"};
 
     /// <summary>
@@ -42,6 +49,24 @@ namespace conjure::renderer {
     inline constexpr f32 GLTF_MIN_LIGHT_RANGE = 0.1f;
     inline constexpr f32 GLTF_MAX_LIGHT_RANGE = 100.0f;
 
+    /// <summary>
+    /// 'generateTangents' decides how a primitive gets its tangents when the file does not give them
+    /// (docs/design/02_renderer.md R20): true builds them from the TEXCOORD_0 derivatives
+    /// (tangent_generation::FROM_UVS), false from the normal alone (FROM_NORMAL), which is only
+    /// right where no normal map is drawn. A mesh whose primitives all have a TANGENT (an element per
+    /// vertex) keeps them under either value. In a mesh where only some primitives have one, false
+    /// keeps those and builds the others from the normal, while true generates every tangent of the
+    /// mesh from the UVs. One exception: in a mesh where some primitive lacks NORMAL the normals of
+    /// all primitives are generated, and if only some of its primitives have a TANGENT, none of those
+    /// is kept under either value. With false, a mesh gets one import warning when a lit material
+    /// with a normal texture is drawn by a primitive whose tangents were built from the normal: the
+    /// materials the file gives the mesh are looked at (a primitive after the first
+    /// MAX_MATERIAL_SLOTS draws with the material of the last slot), a material assigned to the mesh
+    /// after the import is not. With true nothing is reported, also not for a mesh without
+    /// TEXCOORD_0, whose generated tangents come from the normal alone too.
+    /// 'scale' multiplies the translation and the scale of the root nodes. 'importCameras' and
+    /// 'importLights' put glTF cameras and KHR_lights_punctual lights on the model's nodes.
+    /// </summary>
     struct gltf_import_options {
         bool generateTangents = true;
         f32 scale = 1.0f;
@@ -112,6 +137,7 @@ namespace conjure::renderer {
     /// materials and textures are sub-assets ("mesh/<index>", "material/<index>", "texture/<index>")
     /// with stable uuids. Settings mirror gltf_import_options as
     /// { "generateTangents": true, "scale": 1.0, "importCameras": false, "importLights": true }.
+    /// The importer's warnings become the import's warnings.
     /// </summary>
     class CONJURE_API gltf_asset_importer final : public assets::asset_importer {
         public:

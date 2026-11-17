@@ -5,6 +5,15 @@
 using namespace conjure;
 using namespace conjure::renderer;
 
+namespace {
+    /// <summary>
+    /// The tangent of a vertex nothing but the normal is known of.
+    /// </summary>
+    [[nodiscard]] math::vec4 normal_tangent(const math::vec3 &normal) noexcept {
+        return math::vec4(detail::any_perpendicular(normal), 1.0f);
+    }
+}
+
 math::vec3 conjure::renderer::detail::any_perpendicular(const math::vec3 &normal) noexcept {
     const math::vec3 unit = math::safe_normalize(normal, math::vec3(0.0f, 0.0f, 1.0f));
     const math::vec3 helper = math::absolute(
@@ -47,7 +56,7 @@ std::vector<math::vec4> conjure::renderer::detail::generate_tangents(
     if (uv0.size() != vertexCount || normals.size() != vertexCount) {
         for (usize index = 0; index < vertexCount; ++index) {
             const math::vec3 normal = index < normals.size() ? normals[index] : math::vec3(0.0f, 0.0f, 1.0f);
-            tangents[index] = math::vec4(any_perpendicular(normal), 1.0f);
+            tangents[index] = normal_tangent(normal);
         }
         return tangents;
     }
@@ -88,7 +97,7 @@ std::vector<math::vec4> conjure::renderer::detail::generate_tangents(
         // UVs gave nothing usable.
         math::vec3 orthogonal = accumulated - normal * glm::dot(normal, accumulated);
         if (glm::dot(orthogonal, orthogonal) <= 1.0e-12f) {
-            tangents[index] = math::vec4(any_perpendicular(normal), 1.0f);
+            tangents[index] = normal_tangent(normal);
             continue;
         }
         orthogonal = glm::normalize(orthogonal);
@@ -96,4 +105,25 @@ std::vector<math::vec4> conjure::renderer::detail::generate_tangents(
         tangents[index] = math::vec4(orthogonal, handedness);
     }
     return tangents;
+}
+
+std::vector<math::vec4> conjure::renderer::detail::normal_tangents(std::span<const math::vec3> normals) {
+    std::vector<math::vec4> tangents(normals.size(), math::vec4(0.0f));
+    for (usize index = 0; index < normals.size(); ++index) {
+        tangents[index] = normal_tangent(normals[index]);
+    }
+    return tangents;
+}
+
+std::vector<math::vec4> conjure::renderer::detail::missing_tangents(
+  std::span<const math::vec3> positions,
+  std::span<const math::vec3> normals,
+  std::span<const math::vec2> uv0,
+  std::span<const u32> indices,
+  tangent_generation source
+) {
+    if (source == tangent_generation::FROM_NORMAL) {
+        return normal_tangents(normals);
+    }
+    return generate_tangents(positions, normals, uv0, indices);
 }

@@ -30,7 +30,6 @@
 #include <array>
 #include <memory>
 #include <optional>
-#include <string>
 #include <string_view>
 
 // renderer.h (docs/design/02_renderer.md 1, 3, 5, 6): creation, the upload / find / release
@@ -247,8 +246,14 @@ TEST_SUITE("renderer/renderer") {
 
     TEST_CASE("render_stats - reset clears everything while executed and count query the pass names") {
         render_stats stats = {};
+        CHECK(stats.viewsSkipped == 0);
+        CHECK(stats.lightsDropped == 0);
+        CHECK(stats.spritesDropped == 0);
         stats.drawCalls = 4;
         stats.uploadBytes = 10;
+        stats.viewsSkipped = 1;
+        stats.lightsDropped = 2;
+        stats.spritesDropped = 3;
         stats.passNames.push_back("depth_prepass");
         stats.passNames.push_back("bloom_down_0");
         stats.passNames.push_back("bloom_down_0");
@@ -266,6 +271,9 @@ TEST_SUITE("renderer/renderer") {
         stats.reset();
         CHECK(stats.drawCalls == 0);
         CHECK(stats.uploadBytes == 0);
+        CHECK(stats.viewsSkipped == 0);
+        CHECK(stats.lightsDropped == 0);
+        CHECK(stats.spritesDropped == 0);
         CHECK(stats.passNames.empty());
         CHECK(stats.passTimings.empty());
         CHECK_FALSE(stats.executed("depth_prepass"));
@@ -427,11 +435,7 @@ TEST_SUITE("renderer/renderer") {
         core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
         CONJURE_REQUIRE_OK(created);
         renderer_type &instance = *created.value();
-        u32 atlasWarnings = 0;
-        for (const std::string &message : logs.messages(core::log_level::WARN)) {
-            atlasWarnings += message.find("atlasResolution") != std::string::npos ? 1u : 0u;
-        }
-        CHECK(atlasWarnings == 1);
+        CHECK(warning_count(logs, "atlasResolution") == 1);
         CHECK(logs.contains(core::log_level::WARN, "using 2048"));
         CHECK(instance.desc().atlasResolution == 3000);   // the description as given
 

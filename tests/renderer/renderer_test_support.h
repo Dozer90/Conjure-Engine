@@ -1,6 +1,10 @@
 #pragma once
 
+#include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
+
 #include "conjure/renderer/camera.h"
+#include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/renderer.h"
 
@@ -14,6 +18,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string_view>
 
 // Helpers shared by the renderer tests.
@@ -22,6 +27,9 @@
 //   CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);       // [gpu] cases, WARP through software_device_desc()
 //   headless_renderer gpu = make_headless_renderer(true);           // the WARP device
 //   headless_renderer gate = make_raw_headless_renderer();          // allocation gates: no validation layer
+//   open_written_shaders(device, directory, stages);                // a hand-written index: missing shaders
+//   CHECK(warning_count(logs, "exceed MAX_VIEWS") == 1);            // how often one warning was logged
+//   CONJURE_CHECK_APPROX(unpacked_tangent(vertex), math::vec4(1.0f, 0.0f, 0.0f, 1.0f));   // a packed vertex
 //
 // The null device runs under NVRHI's validation layer (enableDebugLayer), so command-list misuse such
 // as recording on a closed list or drawing without a graphics state logs an ERROR, which fails every
@@ -77,6 +85,30 @@ namespace conjure::testing::renderer_support {
     [[nodiscard]] std::unique_ptr<rhi::shader_library> open_shaders(rhi::device &device);
 
     /// <summary>
+    /// One shader of a hand-written index: 'stage' is "vertex", "pixel" or "compute". With 'writeBlob'
+    /// unset the index still lists the blob file but the file does not exist.
+    /// </summary>
+    struct index_stage {
+        std::string_view name = "";
+        std::string_view entry = "";
+        std::string_view stage = "";
+        std::string_view defines = "";
+        bool writeBlob = true;
+    };
+
+    /// <summary>
+    /// Writes index.json into 'directory' listing exactly 'stages' (none gives the empty index) and
+    /// opens it on 'device', or fails the case. Every stage names one blob file of placeholder bytes in
+    /// both the DXIL and the SPIR-V column, so the library finds it whichever column the device's
+    /// backend selects; only the null device accepts such bytes as a shader.
+    /// </summary>
+    [[nodiscard]] std::unique_ptr<rhi::shader_library> open_written_shaders(
+      rhi::device &device,
+      const temp_directory &directory,
+      std::span<const index_stage> stages = {}
+    );
+
+    /// <summary>
     /// A renderer description with small shadow resolutions and no swapchain.
     /// </summary>
     [[nodiscard]] renderer::renderer_desc headless_desc(
@@ -124,9 +156,25 @@ namespace conjure::testing::renderer_support {
     [[nodiscard]] headless_renderer make_raw_headless_renderer(core::jobs::job_system *jobs = nullptr);
 
     /// <summary>
+    /// Number of WARN messages 'logs' captured so far whose text contains 'text'; for the cases that
+    /// count how often one warning of the frame was logged while others are logged around it.
+    /// </summary>
+    [[nodiscard]] u32 warning_count(const log_capture &logs, std::string_view text);
+
+    /// <summary>
     /// A deterministic asset id for tests: {0x7E57, index}.
     /// </summary>
     [[nodiscard]] assets::asset_id test_asset_id(u64 index) noexcept;
+
+    /// <summary>
+    /// The normal a packed vertex holds (stream 1 of mesh_asset.h), unpacked from its 16-bit form.
+    /// </summary>
+    [[nodiscard]] math::vec3 unpacked_normal(const renderer::packed_vertex_attributes &attributes) noexcept;
+
+    /// <summary>
+    /// The tangent a packed vertex holds, with the handedness the vertex keeps in its normal's w as w.
+    /// </summary>
+    [[nodiscard]] math::vec4 unpacked_tangent(const renderer::packed_vertex_attributes &attributes) noexcept;
 
     /// <summary>
     /// A perspective view looking from 'eye' at 'target' (y up) into the given render target.

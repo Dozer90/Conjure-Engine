@@ -152,6 +152,66 @@ TEST_SUITE("rhi/swapchain") {
         CHECK(created->null_stats().value().presents == 2);
     }
 
+    TEST_CASE("swapchain - an injected ACQUIRE_OUT_OF_DATE refuses one acquire and leaves the device healthy") {
+        log_capture logs = {};
+        const std::unique_ptr<device> created = make_null_device();
+        core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
+          *created,
+          headless_window(),
+          small_swapchain_desc()
+        );
+        CONJURE_REQUIRE_OK(chain);
+        swapchain &target = *chain.value();
+        CONJURE_CHECK_OK(target.acquire());
+        CONJURE_CHECK_OK(target.present());
+        REQUIRE(target.current_index() == 1);
+
+        created->inject_null_fault(null_fault::ACQUIRE_OUT_OF_DATE);
+        const core::result<u32> refused = target.acquire();
+
+        CONJURE_CHECK_ERROR(refused, rhi_error::OUT_OF_DATE);
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.get_error().message().find("injected null_fault") != std::string::npos);
+        CHECK_FALSE(created->is_lost());
+        CHECK(target.current_index() == 1);
+        // The fault fired once: the next acquire answers the same index and the chain cycles on.
+        const core::result<u32> acquired = target.acquire();
+        CONJURE_REQUIRE_OK(acquired);
+        CHECK(acquired.value() == 1);
+        CONJURE_CHECK_OK(target.present());
+        CHECK(target.current_index() == 2);
+        CHECK(created->null_stats().value().acquires == 3);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("swapchain - an injected PRESENT_FAILED refuses one present and leaves the device healthy") {
+        log_capture logs = {};
+        const std::unique_ptr<device> created = make_null_device();
+        core::result<std::unique_ptr<swapchain>> chain = swapchain::create(
+          *created,
+          headless_window(),
+          small_swapchain_desc()
+        );
+        CONJURE_REQUIRE_OK(chain);
+        swapchain &target = *chain.value();
+        CONJURE_CHECK_OK(target.acquire());
+
+        created->inject_null_fault(null_fault::PRESENT_FAILED);
+        const core::result<void> refused = target.present();
+
+        CONJURE_CHECK_ERROR(refused, rhi_error::PRESENT_FAILED);
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.get_error().message().find("injected null_fault") != std::string::npos);
+        CHECK_FALSE(created->is_lost());
+        // The image was not presented, so the index stays; the swapchain logs only device loss.
+        CHECK(target.current_index() == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        CONJURE_CHECK_OK(target.acquire());
+        CONJURE_CHECK_OK(target.present());
+        CHECK(target.current_index() == 1);
+        CHECK(created->null_stats().value().presents == 2);
+    }
+
     TEST_CASE("swapchain - [gpu] a headless D3D12 swapchain clears and presents every back buffer") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};

@@ -271,9 +271,12 @@ TEST_CASE("my pass - records one draw under its marker") {
 ```
 
 `inject_null_fault(null_fault::WAIT_IDLE)` makes the next `wait_idle()` fail and mark the device lost;
-`inject_null_fault(null_fault::PRESENT)` makes the next null present report `DEVICE_LOST`. Each fault fires
-once, `null_fault::NONE` disarms, and the calls do nothing on a real backend. That is how the engine's own
-error paths run in CTest.
+`inject_null_fault(null_fault::PRESENT)` makes the next null present report `DEVICE_LOST`.
+`null_fault::ACQUIRE_OUT_OF_DATE` makes the next `acquire()` fail with `OUT_OF_DATE` and
+`null_fault::PRESENT_FAILED` the next `present()` with `PRESENT_FAILED`; those two leave the device healthy and the
+back-buffer index where it was, as a real swapchain refuses without device loss. Each fault fires once,
+`null_fault::NONE` disarms, and the calls do nothing on a real backend. That is how the engine's own error paths
+run in CTest.
 
 > [!WARNING]
 > `null_stats()` is a copy taken under a lock, so it is safe to read from any thread and never changes after

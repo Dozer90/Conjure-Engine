@@ -1,9 +1,9 @@
 # renderer tests: one file per public header of conjure::renderer plus the topic files
 # docs/design/02_renderer.md 10 names (culling, draw lists, cascades, the atlas allocator, the render
 # graph, the transient pool, the GPU type mirror, the tonemap reference, exposure maths, the
-# pipeline and resource caches, the null-device frame and the failure paths). Everything runs on
-# the null device; the [gpu] cases create a WARP D3D12 device and skip (exit 77) when
-# precondition::SOFTWARE_GPU_ADAPTER does not hold. The shader index conjure_shaders produces is
+# pipeline and resource caches, the warning latches, the null-device frame and the failure paths).
+# Everything runs on the null device; the [gpu] cases create a WARP D3D12 device and skip (exit 77)
+# when precondition::SOFTWARE_GPU_ADAPTER does not hold. The shader index conjure_shaders produces is
 # read through CONJURE_TEST_SHADER_DIR; the HLSL sources (gpu_types.hlsli, tonemap.hlsli) through
 # CONJURE_TEST_SHADER_SOURCE_DIR and CONJURE_TEST_TONEMAP_HLSLI. Private renderer headers
 # (engine/src/renderer) are reachable because the topic tests exercise the internals directly.
@@ -53,6 +53,7 @@ set(CONJURE_RENDERER_TEST_SOURCES
     test_texture_asset.cpp
     test_tonemap_reference.cpp
     test_transient_pool.cpp
+    test_warn_latch.cpp
 )
 
 set(CONJURE_RENDERER_TEST_DEPS

@@ -31,7 +31,7 @@ rhi (wave 2): device / swapchain / shader_library over nvrhi backends null | d3d
 | R4 | **Double-buffered `render_scene` (AoS vectors) is the only ECS -> renderer bridge.** The renderer never touches the ECS. The engine module writes it; disjoint-range writes from jobs are supported through `allocate_meshes()`. | Clear ownership, trivially testable (tests build a `render_scene` by hand), and a render thread (area F) becomes a flip, not a redesign. |
 | R5 | **Render-thread ownership**: all NVRHI object creation, command recording and `render()` run on one thread (main thread in v1). Asset uploads are queued from any thread and flushed at the start of `render()`. Culling, sorting and instance-buffer filling are job-parallel over disjoint ranges. One command list per frame. | NVRHI permits concurrent recording of different command lists, but a single list in v1 removes ordering bugs; recording a few hundred draws is < 1 ms. Parallel recording is a v2 item. |
 | R6 | **All per-frame GPU data goes through `ICommandList::writeBuffer`** into persistent buffers (instances, lights, tile lists, sprites, debug lines) and volatile constant buffers for view/pass constants. No application-level ring buffers. | NVRHI's command-list upload manager recycles staging memory on fence completion and the copy executes in queue order before the frame's draws, so frame N's write cannot race frame N-1's reads. Removes an entire category of frames-in-flight bugs. |
-| R7 | **One PBR material model (glTF metallic-roughness).** Texture presence, double-sided, unlit, UV transform are **uniform-driven**. The only static shader permutation axis is `ALPHA_MASK` (forward PS, prepass PS, shadow PS). Blend mode is pipeline state, not a shader permutation. Every permutation is enumerated in CMake and created at `renderer::create` ("fail at init, never mid-frame"). | Branches on constant-buffer values are coherent and free; permutation explosion is the classic source of untested shader paths. |
+| R7 | **One PBR material model (glTF metallic-roughness).** Texture presence, double-sided, unlit, UV transform are **uniform-driven**. The only static shader permutation axis is `ALPHA_MASK` (forward PS, prepass PS, shadow PS). Blend mode is pipeline state, not a shader permutation. Every permutation is enumerated in CMake and created at `renderer::create` ("fail at init, never mid-frame"); the C++ list of what is loaded is `shader_asset`'s table (R18). | Branches on constant-buffer values are coherent and free; permutation explosion is the classic source of untested shader paths. |
 | R8 | **Vertex layout: two streams.** Stream 0 = position `RGB32_FLOAT` (12 B). Stream 1 = normal `RGBA16_SNORM` (w = tangent sign), tangent `RGBA16_SNORM`, uv0 `RG32_FLOAT`, uv1 `RG16_FLOAT`, colour `RGBA8_UNORM` (32 B). Indices `R32_UINT`. | Shadow and depth-only passes bind stream 0 only (one third of the bandwidth of an interleaved layout) while keeping full-precision positions and UV0. Meshes without colours get white, without uv1 get zero, so no permutations. |
 | R9 | **Shadows**: directional = 4 stabilised cascades in a `D32_FLOAT` `Texture2DArray` (2048^2 per slice, tunable), practical split lambda 0.7, texel snapping; spot/point = one 4096^2 `D32_FLOAT` atlas with a quadtree tile allocator (1024 / 512 / 256 tiles), point lights take 6 tiles. Filter is **per light**: `HARD`, `PCF` (16-tap rotated Poisson), `PCSS`; `DEFAULT` resolves to `shadow_settings::defaultFilter` so the editor can flip all lights at once. | Two shadow SRVs for the whole scene; fixed budgets mean no in-frame allocation; per-light filter lets the sun use PCSS while cheap point lights stay hard. |
 | R10 | **SSAO = GTAO-style horizon search at half resolution** (2 slices x 4 steps), 4x4 interleaved rotation pattern, separable depth-aware 4-tap blur, bilateral upsample in the forward shader. Output `R8_UNORM`. No temporal filter in v1. | Matches the brief; temporal filtering needs motion vectors and history, deferred to the TAA work item. |
@@ -42,6 +42,9 @@ rhi (wave 2): device / swapchain / shader_library over nvrhi backends null | d3d
 | R15 | **NVRHI stays in `src/`.** Public `rhi` headers forward-declare `nvrhi::IDevice` / `nvrhi::ITexture` only (no includes) and expose non-owning `native_*()` accessors used by `conjure_renderer`. | Satisfies "no third-party headers in public headers" literally without inventing a parallel type system over NVRHI. |
 | R16 | **`imgui_renderer` is part of `conjure_renderer`**, compiled out under `CONJURE_DISTRIBUTION`, implements `ImGuiBackendFlags_RendererHasTextures` (ImGui >= 1.92 texture protocol). | One NVRHI consumer; the texture protocol is required by upstream for all backends. |
 | R17 | **Null backend** = full `nvrhi::IDevice` implementation (`engine/src/rhi/backends/null/`) that stores descriptors and returns valid handles; command lists record only counters and debug-marker names into `null_device_stats`. The whole renderer (graph, culling, sorting, stats, readback) runs on it in CTest. Command-list misuse checks are NVRHI's validation layer's (`enableDebugLayer`), not the null list's: the renderer tests run the null device under it, except the allocation gates (10; sweep-2026-11-12 F171). | Requirement 4 of the brief (everything testable headless). Re-implementing NVRHI's validation in the null list would duplicate it for about 40 recording methods. |
+| R18 | **The renderer loads its shaders through `shader_asset`'s built-in table** (sweep-2026-11-12 F395). `pipeline_cache` maps every graphics and compute variant, and the blit, to one program of `shader_asset::built_in_programs()`; `imgui_renderer` takes the `imgui` program. Each is found with `find_built_in`, checked whole with `validate` (every stage in the shader library's index, before a device shader of the program exists) and only then created stage by stage (`engine/src/renderer/shader_program_loader.h`). No other renderer source names a shader blob. Two lists remain: `engine/shaders/CMakeLists.txt` (what the build compiles) and the C++ table (what the renderer loads). | Before, the table was a third copy nothing read, so it could drift from what `pipeline_cache` loaded without a test noticing. With one C++ list a missing program or stage fails `renderer::create` with `SHADER_NOT_FOUND`, and the tests hold the two remaining lists against each other in both directions (`test_shader_asset`) and every variant against the table (`test_pipeline_cache`). The table is also where custom programs will enter (11). `validate` reads the index only: a blob the index lists but the directory lacks is still found at load, with the same error code. |
+| R19 | **A render-path warning is logged when its condition starts** (sweep-2026-11-12 F612), not again while the condition lasts, and it is armed again once a frame has seen the condition end; the end itself is not logged. The condition is "over the budget", never the count: views beyond `MAX_VIEWS`, lights beyond `MAX_LIGHTS_PER_VIEW` and sprites beyond `MAX_SPRITES_PER_FRAME` warn when the overflow goes from none to some and stay silent while it grows or shrinks. A camera that had to be clamped and a render target the renderer does not know are kept per view index (one bit each). A swapchain that refuses the acquire or the present without the device being lost warns once and is armed again by the next acquire or present that succeeds. The counts stay readable every frame in `render_stats`: `viewsSkipped`, `lightsDropped` and `spritesDropped` (new with this decision; before, only the renderer's own `sprite_batcher::dropped_count()` knew). Renderer only: `warn_latch` / `view_warn_latch` in `engine/src/renderer/warn_latch.h`, and a flag of the same rule inside the public `sprite_batcher`. A latch learns only from a frame that looks at its condition; section 6 lists what each frame looks at. | Before, the overflow warnings followed the *count* ("once per change"), so a count that moves every frame, the normal case for sprites, logged every frame; the unknown-target, acquire and present warnings were logged every frame for as long as their cause lasted (a minimised window is seconds of `OUT_OF_DATE`). A log that repeats one line sixty times a second hides every other line and costs the frame. A shared rate limiter in `core` (the physics module has a private one) was considered and left for the day more modules need one. |
+| R20 | **`gltf_import_options::generateTangents` decides how a primitive without a usable `TANGENT` gets its tangents** (sweep-2026-11-12 F391; the owner chose to implement the option rather than remove it). `true`, the default: from the `TEXCOORD_0` derivatives, as before. `false`: from the normal alone, a unit vector perpendicular to it with handedness +1. The choice is the third parameter of `mesh_asset::from_geometry`, `tangent_generation::FROM_UVS` (its default, what every other caller gets) or `FROM_NORMAL`; the importer passes one or the other. The packed vertex holds a tangent either way (R8): no vertex flag or material flag marks a normal-only tangent and no shader changed, so a normal map on such a mesh is applied in a direction that has nothing to do with the texture. The importer says so instead: a mesh gets **one import warning** when a lit material with a normal texture is drawn by a primitive whose tangents were built that way, naming the mesh and each such material once. `GLTF_IMPORTER_VERSION` is 3. Limits, all stated where the option is documented: with `false` tangents are decided per primitive, as the decision words it ("primitives without TANGENT"): a primitive with a `TANGENT` (one per vertex) keeps it and the others of its mesh are built, by `mesh_asset::from_geometry` when no primitive has one and by the importer (`detail::missing_tangents`) when only some have; with `true` the whole-mesh rule stays, so a mesh keeps the file's tangents only when every primitive has them and otherwise has all of them generated from the UVs; one exception holds under either value: a mesh with `TANGENT` on some primitives only in which a primitive lacks `NORMAL` has its normals generated per face inside `from_geometry`, so none of the file's tangents is kept and with `false` the warning says so; the warning looks at the materials the file gives the mesh (a primitive after the first `MAX_MATERIAL_SLOTS` draws with the material of the last slot; an unlit material never samples its normal texture and is skipped), not at a material assigned later; and it follows the option, so with `true` a primitive without `TEXCOORD_0`, which ends up with the same normal-only tangents, is not reported. Until this decision a mesh kept the file's tangents only when every primitive had them; under the default value it still does, because F391 decided the `false` case only. | Before, the option was parsed, written to every `.meta` and documented as a setting, but tangents were generated from the UVs whatever it said, and its only effect was a warning on every import saying so. The warning was chosen over a material flag that switches normal mapping off: the flag needs a shader branch, a material field and a `.cmat` key for a case the author fixes by turning the option on or exporting tangents. The version is bumped although no project assets exist yet, because the bump invalidates the cached imports of developer build trees and test caches. |
 
 ### 1.2 Explicit non-goals for v1
 Skinning, GPU-driven culling/indirect draws, TAA, order-independent transparency, block-compressed
@@ -348,10 +351,14 @@ uploaded with one `writeBuffer`, and yields `sprite_run { space, texture, firstI
 one `drawIndexed` per run. `WORLD` vertices are world space (quad of `size` centred on the
 transform); `SCREEN` vertices are pixel space, origin top-left, y down, projected with an
 orthographic matrix from the viewport. Texture filter is the texture's `sampler_filter`
-(`LINEAR` or `POINT` for pixel art). Capped at `MAX_SPRITES_PER_FRAME` with a once-per-change WARN that names
-the dropped count per space. `SCREEN` sprites (the HUD) take their slots first, `min(screen count, cap)`, and the
-remaining slots go to `WORLD` sprites in sort order, so the overflow drops the front-most world sprites and UI
-never vanishes under a burst of world sprites (sweep-2026-11-12 F386).
+(`LINEAR` or `POINT` for pixel art). Capped at `MAX_SPRITES_PER_FRAME`. The build in which an overflow starts
+logs a WARN that names the dropped count per space; the builds after it stay silent while they drop sprites,
+whatever the count becomes, and a build that drops none arms the WARN again (R19). `dropped_count()` has every
+build's count and `clear()` resets it without arming the WARN; the renderer copies the count of its own batcher
+into `render_stats::spritesDropped`, once per frame and whether or not a view draws sprites. `SCREEN` sprites
+(the HUD) take their slots first, `min(screen count, cap)`, and the remaining slots go to `WORLD` sprites in sort
+order, so the overflow drops the front-most world sprites and UI never vanishes under a burst of world sprites
+(sweep-2026-11-12 F386).
 
 ### 3.10 Debug draw
 `debug_draw_buffer` (in the write scene) collects `line/box/sphere/frustum/axes/grid` as
@@ -424,6 +431,16 @@ the HLSL 2018 subset both compilers accept: no templates, no wave intrinsics, no
 `{ name, entry, stage, defines, dxil, spirv, sourceHash }` and makes `conjure_shaders` a dependency of
 `conjure_renderer` and its tests. Missing compilers: `dxc` from the Windows SDK or a fetched DXC
 release; `glslang` via FetchContent pinned to the last tag that ships the HLSL front-end.
+
+The `SHADERS` list of `engine/shaders/CMakeLists.txt` says what is compiled. What the renderer loads is
+the second and last list, `shader_asset`'s built-in table (R18): one `shader_program_desc` per program
+permutation, resolved by `pipeline_cache` and `imgui_renderer` through
+`engine/src/renderer/shader_program_loader.h` (`resolve_built_in_program` = `find_built_in` + `validate`,
+then `create_program_shader` per stage). A permutation added to CMake and not to the table fails
+`test_shader_asset` (the index holds more entries than the table's stages plus the rhi module's
+fullscreen-triangle pair); one added to the table and not to CMake fails the same file's `validate` case
+and, once a pipeline variant or the ImGui backend resolves it, `renderer::create` with `SHADER_NOT_FOUND`;
+a table entry nothing resolves fails `test_pipeline_cache` (sweep-2026-11-12 F395).
 
 ---
 
@@ -579,11 +596,11 @@ next compiled backend and finally `NULL_DEVICE` in headless mode.
 | `render_scene.h` | `mesh_instance`, `sprite`, `sprite_space`, `view_flags`, `render_view`, `render_scene`, `class render_scene_pair` |
 | `render_target.h` | `struct render_target_desc { math::uvec2 size; rhi::texture_format colourFormat = RGBA8_SRGB; bool withDepth = true; }`, `class render_target` |
 | `renderer.h` | `struct renderer_desc`, `struct render_stats`, `class renderer` |
-| `mesh_asset.h` | `struct mesh_streams`, `struct submesh`, `class mesh_asset` (`cpu_geometry()` keeps positions + indices in Debug/Development for the editor's CPU picking, R11) |
+| `mesh_asset.h` | `enum class tangent_generation : std::uint8_t { FROM_UVS, FROM_NORMAL }` (R20), `struct mesh_streams`, `struct submesh`, `class mesh_asset` (`cpu_geometry()` keeps positions + indices in Debug/Development for the editor's CPU picking, R11) |
 | `texture_asset.h` | `enum class texture_colour_space : std::uint8_t { SRGB, LINEAR }`, `enum class sampler_filter : std::uint8_t { LINEAR, POINT }`, `struct texture_mip`, `class texture_asset` |
 | `material_asset.h` | `enum class alpha_mode : std::uint8_t { SOLID, MASK, BLEND }` (`SOLID` is glTF's `OPAQUE`, a Windows macro name, CONVENTIONS 3), `struct material_desc`, `class material_asset` |
 | `environment_asset.h` | `using sh9 = std::array<math::vec3, 9>;`, `class environment_asset` |
-| `shader_asset.h` | `struct shader_program_desc { std::string name; std::string vertexEntry; std::string pixelEntry; }`, `class shader_asset` (v1: built-in programs only, `validate(rhi::shader_library&)`) |
+| `shader_asset.h` | `struct shader_program_desc { std::string name, vertexEntry, pixelEntry, computeEntry, pixelDefines, vertexDefines; }`, `class shader_asset` (v1: built-in programs only: `built_in_programs()` is the list the renderer loads (R18), `find_built_in(name, pixelDefines, vertexDefines)`, `validate(rhi::shader_library&)`) |
 | `model_asset.h` | `struct model_node`, `class model_asset` (glTF node tree that `scene` turns into a prefab) |
 | `gltf_importer.h` | `struct gltf_import_options`, `struct gltf_import_result`, `class gltf_importer` |
 | `components.h` | `mesh_renderer_component`, `sprite_component`, `camera_component`, `light_component`, `environment_component`, `register_components()` |
@@ -622,9 +639,10 @@ namespace conjure::renderer {
         bool enableImGui = true;                  // ignored in Distribution
     };
 
-    // render_stats: std::uint32_t viewsRendered, passesExecuted, passesCulled, drawCalls, instancesDrawn,
-    // instancesCulled, trianglesDrawn, lightsRendered, shadowTilesAllocated, shadowTilesDropped,
-    // spritesDrawn, uploadsCompleted, fallbacksUsed, transientTexturesLive, transientTexturesCreated;
+    // render_stats: std::uint32_t viewsRendered, viewsSkipped, passesExecuted, passesCulled, drawCalls,
+    // instancesDrawn, instancesCulled, trianglesDrawn, lightsRendered, lightsDropped, shadowTilesAllocated,
+    // shadowTilesDropped, spritesDrawn, spritesDropped (R19), uploadsCompleted, fallbacksUsed,
+    // transientTexturesLive, transientTexturesCreated;
     // std::uint64_t uploadBytes;
     // core::small_vector<const char *, MAX_VIEWS * MAX_PASSES_PER_VIEW> passNames (executed, in order);
     // core::small_vector<pass_timing, 48> passTimings (name + GPU milliseconds, Development builds).
@@ -733,13 +751,16 @@ namespace conjure::renderer {
 `alphaCutoff` 0.5, `alphaMode` OPAQUE, `doubleSided` false, `unlit` false) and five
 `assets::asset_ref<texture_asset>` slots (base colour, metallic-roughness, normal, occlusion,
 emissive). `gltf_import_options { bool generateTangents = true; float scale = 1.0f; bool importCameras
-= false; }`. `gltf_import_result` holds `std::vector` of `mesh_asset`, `material_asset`,
-`texture_asset`, a `model_asset` (node tree referencing them by index) and `warnings`.
+= false; bool importLights = true; }` (`generateTangents`: R20). `gltf_import_result` holds
+`std::vector` of `mesh_asset`, `material_asset`, `texture_asset`, a `model_asset` (node tree
+referencing them by index) and `warnings`.
 
 glTF mapping: node -> `model_node` (TRS or matrix decomposed); primitive -> one `submesh`
 (triangles, strips and fans triangulated, points/lines rejected with `error::UNSUPPORTED`);
 attributes POSITION, NORMAL, TANGENT, TEXCOORD_0, TEXCOORD_1, COLOR_0 (missing normals computed
-flat per face, missing tangents via UV derivatives + Gram-Schmidt, missing colours white); indices
+flat per face, the tangents of a primitive without TANGENT via UV derivatives + Gram-Schmidt, or from the
+normal alone when `generateTangents` is `false`, with a warning for a mesh on which a normal map is drawn
+with such tangents (R20), missing colours white); indices
 widened to `R32_UINT`; `pbrMetallicRoughness` -> `material_desc` 1:1 (metallic in B, roughness in G
 as glTF defines, no swizzle, occlusion in R); `normalTexture.scale`, `occlusionTexture.strength`,
 `emissiveFactor`, `KHR_materials_emissive_strength`, `alphaMode/alphaCutoff/doubleSided`,
@@ -751,7 +772,9 @@ fixed at import, so a later intensity change does not move it; directional light
 F392); base colour and emissive textures import as `SRGB`, all others `LINEAR`; samplers map to
 `LINEAR`/`POINT` + wrap mode on the texture asset (`wrapS`; a sampler whose `wrapT` differs warns, since
 `.ctex` holds one wrap mode); skins, animations, `KHR_texture_transform` warn and skip. Any change to the
-importer's output bumps `GLTF_IMPORTER_VERSION` (2 since the derived range).
+importer's output bumps `GLTF_IMPORTER_VERSION` (2 since the derived range, 3 since `generateTangents = false`
+builds tangents from the normal alone and, with it, a primitive keeps its TANGENT when others of its mesh have
+none, R20).
 
 `components.h` holds plain structs registered with `core::reflect` through
 `register_components()`; the renderer does not depend on `ecs`. The engine's `renderer_subsystem` registers them
@@ -775,8 +798,8 @@ engine/src/rhi/backends/{d3d12,vulkan}/{device,swapchain}_<backend>.{h,cpp}
 engine/src/rhi/backends/null/{null_device,null_resources,null_command_list,null_swapchain}.{h,cpp}
 engine/include/conjure/renderer/<4.2 table>
 engine/src/renderer/{renderer,render_graph,pass_builder,transient_pool,framebuffer_cache,pipeline_cache,
-  binding_layouts,gpu_types,gpu_uploader,gpu_resource_cache,draw_list_builder,culling,render_target,
-  timer_ring,render_scene,camera,debug_draw,sprite_batcher}.{h,cpp}  README.md
+  shader_program_loader,binding_layouts,gpu_types,gpu_uploader,gpu_resource_cache,draw_list_builder,culling,
+  render_target,timer_ring,render_scene,camera,debug_draw,sprite_batcher}.{h,cpp}  warn_latch.h  README.md
 engine/src/renderer/passes/<one .h/.cpp per pass row in 3.3>   shadows/{cascade_builder,shadow_atlas_allocator}
 engine/src/renderer/{imgui/imgui_renderer,import/{gltf_importer,tangent_generator,image_loader,mip_generator,
   ibl_baker},assets/<one .cpp per asset header>}
@@ -824,11 +847,17 @@ conjure::thirdparty::cgltf conjure::thirdparty::stb conjure::thirdparty::imgui)`
 |---|---|
 | Backend not compiled in / API refuses | `device::create` -> `error::UNSUPPORTED` / `error::DEVICE_CREATION_FAILED` with the backend message; engine tries the next backend, then `NULL_DEVICE` in headless mode. |
 | Device removed (`DXGI_ERROR_DEVICE_REMOVED`, `VK_ERROR_DEVICE_LOST`, NVRHI `Fatal` message) | `device::is_lost()` becomes true; `swapchain::present` / `renderer::render` return `rhi_error::DEVICE_LOST`; the engine logs, calls `renderer::on_device_lost()` (recording stops, GPU mirrors dropped) and quits with `exit_code::DEVICE_LOST`. Device recreation and re-upload is a v2 item (R8, `06_engine_loop.md` 6). |
-| Missing shader / permutation / pipeline creation failure | `renderer::create` fails with `error::SHADER_NOT_FOUND` or `error::PIPELINE_CREATION_FAILED` naming the key. Nothing is lazily created at frame time. |
-| glTF parse error, missing buffer, bad accessor, non-triangle topology | `gltf_importer::import` -> `error_code::PARSE_FAILURE` / `error_code::NOT_FOUND` / `error_code::UNSUPPORTED`; unknown extensions are `warnings`, never failures. |
+| Missing shader / permutation / pipeline creation failure | `renderer::create` fails with `error::SHADER_NOT_FOUND` or `error::PIPELINE_CREATION_FAILED` naming the key. A program is looked up in `shader_asset`'s table and validated whole before one of its shaders is created (R18), so the key named is the first stage of that program the library's index lacks. Nothing is lazily created at frame time. |
+| glTF parse error, missing buffer, bad accessor, non-triangle topology | `gltf_importer::import` -> `error_code::PARSE_FAILURE` / `error_code::NOT_FOUND` / `error_code::UNSUPPORTED`; unknown extensions are `warnings`, never failures, and so is a mesh imported with `generateTangents = false` whose lit material has a normal texture (R20). |
 | Texture decode failure, zero-sized image, > `maxTextureDimension2d` | `texture_asset::load_from_file` -> `error::DECODE_FAILED` / `error::INVALID_ARGUMENT`. |
-| Stale or invalid gpu id in `render_scene` | Fallback object + `WARN` once per id; `render_stats::fallbacksUsed` increments. |
-| More than `MAX_LIGHTS_PER_VIEW`, `MAX_VIEWS`, `MAX_SPRITES_PER_FRAME`, `MAX_DEBUG_VERTICES` | Clamped by importance / order with a `WARN` once per change of count; `CONJURE_ASSERT` in Debug. |
+| Stale or invalid gpu id in `render_scene` | Fallback object + `WARN` once per id for the first 1024 such ids of a renderer, never armed again; `render_stats::fallbacksUsed` counts every frame. |
+| More than `MAX_VIEWS`, `MAX_LIGHTS_PER_VIEW`, `MAX_SPRITES_PER_FRAME` | Clamped by order / importance / sort order. `WARN` when the overflow starts, silent while it lasts whatever the count does, armed again by a frame within the budget (R19); no assert. Every frame counts: `render_stats::viewsSkipped`, `lightsDropped` (summed over the prepared views), `spritesDropped`. The light budget is looked at when a view is prepared, so a frame that prepares none neither starts nor ends that overflow. |
+| More than `MAX_DEBUG_VERTICES` in a debug list | The vertices are refused and counted in `debug_draw_buffer::dropped_count()`; nothing is logged and nothing asserts. |
+| A view names a render target the renderer does not know (destroyed, or never created by it) | The view is skipped and counted in `viewsSkipped` every frame. `WARN` per view index when it starts; a frame in which the view at that index names a known target or the swapchain arms it again (R19). The state belongs to the index: another unknown id at the same index is the same problem, and a frame whose scene has no view at the index leaves it as it was. Views beyond `MAX_VIEWS` are never looked at. |
+| A view targets the swapchain of a headless renderer | Skipped and counted in `viewsSkipped` every frame; `WARN` once per renderer, not armed again when the scene stops and later resumes doing so (not part of R19). |
+| A view's camera is one `clip_from_view` would reject | Rendered with the camera clamped; `WARN` per view index until a view drawn at that index has a valid camera again (sweep-2026-11-12 F052; the per-index latch of R19). A view skipped for its target is not drawn, so it leaves the camera warning of its index as it was. |
+| `swapchain::acquire` refuses without device loss (`OUT_OF_DATE`, `PRESENT_FAILED`) | The frame is skipped: nothing is recorded, `viewsSkipped` is the scene's view count and `render()` succeeds. `WARN` naming the frame and the error when it starts; the next acquire that succeeds arms it again (R19). A skipped frame looks at no other condition, so every other warning stays as it was. |
+| `swapchain::present` refuses without device loss | The frame was recorded and executed; `render()` succeeds. `WARN` when it starts; the next present that succeeds arms it again (R19). A frame skipped at the acquire does not present and leaves this warning as it was. |
 | Shadow atlas exhausted | Least important lights render unshadowed; `shadowTilesDropped` counts them. |
 | Upload budget exceeded in a frame | Remaining uploads wait for the next frame; the asset keeps its fallback until then. |
 | Graph validation (read before write, write to an unknown resource, missing depth target for a depth-tested pass) | `CONJURE_ASSERT` in Debug; in Development/Distribution the pass is skipped and `ERROR` logged once. |
@@ -941,19 +970,21 @@ renderer: `test_camera` (reverse-Z near -> 1 and far -> 0 for perspective and or
 `test_render_graph` (declaration order kept, dead pass culled, imported-target pass never culled, read-before-write asserts, lifetimes `[first,last]` correct, framebuffer cache hits, 2D-only scene allocates only `hdr`/`ldr`),
 `test_transient_pool` (same desc reused across frames, different debug names share, no reuse within a frame, eviction after 120 frames, `transientTexturesCreated` zero on frame 2),
 `test_gpu_types` (`sizeof`/offsets equal the HLSL constants),
-`test_mesh_asset` (bounds, normal/tangent packing round trip within 1e-3, tangent generation on a quad yields +X, `.cmesh` round trip, out-of-range index rejected),
+`test_mesh_asset` (bounds, normal/tangent packing round trip within 1e-3, tangent generation on a quad yields +X, `tangent_generation::FROM_NORMAL` gives a unit tangent perpendicular to the supplied or generated normal with handedness +1 and leaves supplied tangents alone (R20), `.cmesh` round trip, out-of-range index rejected),
 `test_texture_asset` (mip count, sRGB vs linear format, 1x1 edge, box filter of a checker is mid-grey in linear space, decode failure -> error, `.ctex` round trip),
 `test_material_asset` (defaults equal glTF defaults, json round trip, texture flags from missing refs),
 `test_environment_asset` (CPU bake of a constant environment returns the radiance in SH band 0 and a constant prefiltered chain, two bakes are byte-identical, inline and 8-worker bakes are byte-identical, `.cenv` round trip),
-`test_gltf_importer` (fixtures: node tree, material factors, missing normals/tangents generated, strips triangulated, unsupported extension warns, missing buffer -> error, points -> `UNSUPPORTED`, 16-bit indices widened),
-`test_sprite_batcher` (sort by space/layer/order/texture, run count, pixel-space transform, cap at `MAX_SPRITES_PER_FRAME` dropping world sprites before screen sprites),
+`test_gltf_importer` (fixtures: node tree, material factors, missing normals/tangents generated, `generateTangents = false` builds tangents from the normal and warns once per mesh with a lit normal-mapped material, also through the asset importer's settings, with `generateTangents = false` a primitive keeps the file's TANGENT when others of its mesh have none (the default generates them all from the UVs) unless the mesh's normals are generated (R20), strips triangulated, unsupported extension warns, missing buffer -> error, points -> `UNSUPPORTED`, 16-bit indices widened),
+`test_sprite_batcher` (sort by space/layer/order/texture, run count, pixel-space transform, cap at `MAX_SPRITES_PER_FRAME` dropping world sprites before screen sprites, the overflow WARN logged when the overflow starts and re-armed by a build within the cap or an empty one but not by `clear()`; R19),
+`test_warn_latch` (due when the condition starts, silent while it lasts, due again after it ended; one latch per view index, an index left alone keeps its state, an index of `MAX_VIEWS` or more asserts and changes nothing; R19),
 `test_debug_draw` (box emits 24 vertices, sphere/frustum counts, timed entries expire, concurrent append from 8 jobs),
 `test_tonemap_reference` (ACES/Reinhard/AgX monotonic, 0 -> 0, large input <= 1, Reinhard reaches 1 at the white point, `NONE` is identity below 1),
 `test_exposure_math` (EV100 <-> luminance, `exposure` formula, adaptation converges with up/down speeds),
-`test_pipeline_cache` (variant count equals the CMake permutation list, key equality),
+`test_pipeline_cache` (every graphics and compute variant resolves to a built-in program of `shader_asset` and its pipeline carries that program's stages, no built-in program is unused, a program with a missing stage is refused before any of its shaders is created, the loader's failure paths, binding-set key equality; R18),
+`test_shader_asset` (the table's programs, lookup by name and permutation, every program validates against the compiled index and the index holds nothing else but the rhi fullscreen-triangle pair, `validate` names the missing key),
 `test_gpu_resource_cache` (upload from a worker thread resolves after one frame, stale generation -> fallback and one WARN, deferred release after `bufferCount + 1` frames),
 `test_renderer_null_frame` (10,000 instances, 64 lights, 4 shadowed: expected `passNames` in order, draw/instance counts, zero views is a no-op, `NO_POST_PROCESS` culls exposure/bloom, headless view targeting the swapchain is skipped),
-`test_renderer_failures` (missing shader -> `SHADER_NOT_FOUND` naming the key, `MAX_LIGHTS_PER_VIEW` clamp, device lost -> `DEVICE_LOST` and no further recording),
+`test_renderer_failures` (missing shader -> `SHADER_NOT_FOUND` naming the key, `MAX_LIGHTS_PER_VIEW` clamp, device lost -> `DEVICE_LOST` and no further recording; R19: view and light overflows warn when they start and not when their count changes, an unknown render target warns once per view index, `spritesDropped` counts every frame),
 `test_render_target` (create/resize/destroy, the colour id kept across a resize, `read_back` size and zero fill),
 `test_imgui_renderer` (two command lists -> two draws, `WantCreate/WantUpdates/WantDestroy` handled, scissor clamp, texture registration).
 

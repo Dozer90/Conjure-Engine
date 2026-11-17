@@ -14,6 +14,7 @@
 #include "renderer/shadows/shadow_atlas_allocator.h"
 #include "renderer/timer_ring.h"
 #include "renderer/transient_pool.h"
+#include "renderer/warn_latch.h"
 
 #include "conjure/renderer/imgui_renderer.h"
 #include "conjure/renderer/render_scene.h"
@@ -84,11 +85,15 @@ namespace conjure::renderer {
         core::flat_hash_map<u64, u32> atlasKeyOccurrences = {};  // lights sharing an atlas key this frame
         bool atlasRendered = false;                               // a prepared view owns the atlas pass this frame
         u32 atlasLayerMask = 0;                                   // union of the shadowing views' layer masks
-        u32 lastViewOverflow = 0;
-        u32 lastLightOverflow = 0;
-        u32 invalidCameraViews = 0;                               // one bit per view index: its invalid camera WARNed
-        static_assert(MAX_VIEWS <= 32, "invalidCameraViews holds one bit per view");
-        bool warnedNoSwapchain = false;
+        // The warnings of the frame path: each is logged when its condition starts and armed again once
+        // the condition has been seen to end (warn_latch.h, 02_renderer.md R19).
+        warn_latch viewOverflowWarning = {};                      // more views than MAX_VIEWS
+        warn_latch lightOverflowWarning = {};                     // more lights than MAX_LIGHTS_PER_VIEW
+        warn_latch acquireFailureWarning = {};                    // swapchain::acquire refused, device not lost
+        warn_latch presentFailureWarning = {};                    // swapchain::present refused, device not lost
+        view_warn_latch invalidCameraWarning = {};                // per view index: the camera was clamped
+        view_warn_latch unknownTargetWarning = {};                // per view index: the render target is unknown
+        bool warnedNoSwapchain = false;                           // once: a headless renderer stays headless
 
         pass_shared shared = {};
         render_graph graph = {};

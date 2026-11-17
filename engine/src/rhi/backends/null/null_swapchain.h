@@ -14,7 +14,9 @@
 // The null swapchain (docs/design/02_renderer.md 7): bufferCount null textures in the Present
 // state; acquire() returns the current index and present() advances it, so acquire/present pairs
 // cycle 0, 1, ..., bufferCount - 1, 0. Every call is counted in null_device_stats. An armed
-// null_fault::PRESENT makes one present() report device loss the way a real backend does, and
+// null_fault::PRESENT makes one present() report device loss the way a real backend does, while
+// null_fault::ACQUIRE_OUT_OF_DATE and null_fault::PRESENT_FAILED make one acquire() or present()
+// refuse with OUT_OF_DATE or PRESENT_FAILED and leave the device healthy and the index where it was.
 // resize() refuses with SWAPCHAIN_CREATION_FAILED while a back buffer is referenced outside the
 // swapchain, as IDXGISwapChain::ResizeBuffers does (the chain is left as it was).
 

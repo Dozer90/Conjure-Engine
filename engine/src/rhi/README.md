@@ -56,7 +56,9 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   backend destructors) ask the same polling `is_lost()` before waiting for the GPU. Recovery is the
   engine's job (v1 quits, R8). `simulate_device_loss()` exists for those tests on every backend;
   `inject_null_fault(null_fault::WAIT_IDLE | PRESENT)` arms one failure on the null backend so the
-  "failed waitForIdle marks the device lost" and "present reports DEVICE_LOST" paths run in CTest.
+  "failed waitForIdle marks the device lost" and "present reports DEVICE_LOST" paths run in CTest;
+  `ACQUIRE_OUT_OF_DATE` and `PRESENT_FAILED` make one null acquire or present refuse with that error
+  without losing the device, so a caller's "skip the frame, warn once" paths run headless too.
 - **Present failures.** An acquire or present the API refuses for a reason other than removal or an
   out-of-date surface (`DXGI_ERROR_INVALID_CALL`, an unexpected `VkResult`) is
   `rhi_error::PRESENT_FAILED`; `SWAPCHAIN_CREATION_FAILED` is reserved for creation and resize.
@@ -99,10 +101,11 @@ cmake/ConjureShaders.cmake         conjure_add_shaders(); cmake/ConjureShaderInd
   starts the marker-name recording: a test that asserts on the pass stream resets first.
 - **Null swapchain.** `bufferCount` textures in the `Present` state with `keepInitialState`;
   `acquire()` returns the current index and `present()` advances it, so acquire/present pairs
-  cycle `0, 1, 2, 0, ...`; `resize` recreates the buffers and restarts at 0, and refuses with
-  `SWAPCHAIN_CREATION_FAILED` (changing nothing) while a back buffer is referenced outside the
-  swapchain, as `IDXGISwapChain::ResizeBuffers` does, so a caller that resizes before dropping its
-  framebuffers fails headless too. A null command list drops what it references when it is executed,
+  cycle `0, 1, 2, 0, ...` (a refusal injected by a `null_fault` advances nothing);
+  `resize` recreates the buffers and restarts at 0, and refuses with `SWAPCHAIN_CREATION_FAILED`
+  (changing nothing) while a back buffer is referenced outside the swapchain, as
+  `IDXGISwapChain::ResizeBuffers` does, so a caller that resizes before dropping its framebuffers
+  fails headless too. A null command list drops what it references when it is executed,
   as NVRHI's queue does once the GPU has finished. Zero sizes are `INVALID_DESC`. The window handle is ignored. On every backend `buffer_count()` is the number of
   back buffers that exist right now (`back_buffer(i)` is non-null exactly for `i < buffer_count()`),
   which is 0 after a failed resize until a later one succeeds.

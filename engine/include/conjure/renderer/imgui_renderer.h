@@ -70,8 +70,13 @@ namespace conjure::renderer {
         public:
             /// <summary>
             /// Builds the pipeline (imgui.hlsl: premultiplied alpha, scissor, no depth) for the given
-            /// framebuffer colour format. Fails with renderer_error::SHADER_NOT_FOUND or
-            /// PIPELINE_CREATION_FAILED. A null resolver makes register_texture always fail.
+            /// framebuffer colour format from the "imgui" program of shader_asset's built-in table.
+            /// Fails with renderer_error::SHADER_NOT_FOUND naming the shader key when the library's
+            /// index lacks a stage of that program (both stages are checked before any device object
+            /// is created) or a listed blob file cannot be read (found when that stage is loaded), with
+            /// PIPELINE_CREATION_FAILED when the device refuses a shader, the layouts or the pipeline,
+            /// and with RESOURCE_CREATION_FAILED when it refuses the sampler or the buffers. A null
+            /// resolver makes register_texture always fail.
             /// </summary>
             [[nodiscard]] static core::result<std::unique_ptr<imgui_renderer>> create(
               rhi::device &device,

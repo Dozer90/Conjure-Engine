@@ -33,6 +33,7 @@
 #include <imgui.h>
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -373,14 +374,37 @@ TEST_SUITE("renderer/imgui_renderer") {
     TEST_CASE("imgui_renderer - a missing imgui shader fails creation with SHADER_NOT_FOUND") {
         imgui_scope imgui = {};
         temp_directory directory("imgui_shaders");
-        CONJURE_REQUIRE_OK(directory.write_text("index.json", "{ \"version\": 1, \"shaders\": [] }"));
         std::unique_ptr<rhi::device> device = make_device();
-        core::result<std::unique_ptr<rhi::shader_library>> empty = rhi::shader_library::open(*device, directory.path());
-        CONJURE_REQUIRE_OK(empty);
+        std::unique_ptr<rhi::shader_library> empty = open_written_shaders(*device, directory);
         const core::result<std::unique_ptr<imgui_renderer>> created =
-          imgui_renderer::create(*device, *empty.value(), rhi::texture_format::RGBA8_SRGB, nullptr);
+          imgui_renderer::create(*device, *empty, rhi::texture_format::RGBA8_SRGB, nullptr);
         CONJURE_CHECK_ERROR(created, renderer_error::SHADER_NOT_FOUND);
-        CHECK(created.get_error().message().find("imgui") != std::string::npos);
+        const std::string message = created.get_error().message();
+        CHECK(message.find("shader 'imgui'") != std::string::npos);
+        CHECK(message.find("entry 'vs_main'") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F395 imgui_renderer checks its whole program before it creates a shader") {
+        // The index carries the vertex stage of the imgui program but not the pixel stage. A backend that
+        // asked the library for its two blobs by name would create the vertex shader and then fail;
+        // resolved through shader_asset's table, the program is refused before any device object exists.
+        imgui_scope imgui = {};
+        temp_directory directory("partial_imgui_shaders");
+        std::unique_ptr<rhi::device> device = make_device();
+        const std::array<index_stage, 1> stages = {{{"imgui", "vs_main", "vertex", ""}}};
+        std::unique_ptr<rhi::shader_library> partial = open_written_shaders(*device, directory, stages);
+        REQUIRE(partial->contains({"imgui", "vs_main", ""}));
+        const core::result<std::unique_ptr<imgui_renderer>> created =
+          imgui_renderer::create(*device, *partial, rhi::texture_format::RGBA8_SRGB, nullptr);
+        CONJURE_CHECK_ERROR(created, renderer_error::SHADER_NOT_FOUND);
+        const std::string message = created.get_error().message();
+        CHECK(message.find("shader 'imgui'") != std::string::npos);
+        CHECK(message.find("entry 'ps_main'") != std::string::npos);
+        const std::optional<rhi::null_device_stats> stats = device->null_stats();
+        REQUIRE(stats.has_value());
+        CHECK(stats->shadersCreated == 0);
+        CHECK(stats->bindingLayoutsCreated == 0);
+        CHECK(partial->loaded_blob_count() == 0);
     }
 }
 

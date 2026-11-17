@@ -11,9 +11,11 @@ using namespace conjure::renderer;
 
 namespace {
     /// <summary>
-    /// Every shader permutation the renderer needs, as (name, vertexEntry, pixelEntry, computeEntry,
-    /// pixelDefines, vertexDefines). Kept in step with engine/shaders/CMakeLists.txt and
-    /// engine/src/renderer/pipeline_cache.cpp.
+    /// Every shader permutation the renderer loads, as (name, vertexEntry, pixelEntry, computeEntry,
+    /// pixelDefines, vertexDefines). This is the list pipeline_cache and imgui_renderer resolve their
+    /// programs in (renderer/shader_program_loader.h; design R18, code sweep F395), so an entry
+    /// missing here fails renderer::create. The other list is engine/shaders/CMakeLists.txt, which
+    /// names what the build compiles: test_shader_asset holds the two against each other.
     /// </summary>
     const std::array<shader_program_desc, 20> &program_table() {
         static const std::array<shader_program_desc, 20> table = {{

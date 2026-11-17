@@ -110,7 +110,7 @@ struct gltf_test_builder::layout {
     std::vector<std::byte> buffer = {};
     std::vector<view> views = {};
     std::vector<accessor> accessors = {};
-    std::vector<primitive> primitives = {};
+    std::vector<std::vector<primitive>> meshes = {};   // the primitives of each mesh, add_mesh's first
     std::vector<u32> imageViews = {};
 };
 
@@ -120,7 +120,13 @@ gltf_test_builder::~gltf_test_builder() = default;
 
 u32 gltf_test_builder::add_mesh(mesh_input mesh) {
     mMeshes.push_back(std::move(mesh));
+    mExtraPrimitives.emplace_back();
     return static_cast<u32>(mMeshes.size() - 1);
+}
+
+void gltf_test_builder::add_primitive(u32 mesh, mesh_input primitive) {
+    REQUIRE(mesh < mExtraPrimitives.size());
+    mExtraPrimitives[mesh].push_back(std::move(primitive));
 }
 
 u32 gltf_test_builder::add_material(material_input material) {
@@ -232,7 +238,7 @@ void gltf_test_builder::pack(layout &out) const {
         return static_cast<u32>(out.accessors.size() - 1);
     };
 
-    for (const mesh_input &mesh : mMeshes) {
+    const auto packPrimitive = [&addView, &addAccessor](const mesh_input &mesh) -> layout::primitive {
         layout::primitive primitive = {};
         if (!mesh.positions.empty()) {
             math::vec3 low(std::numeric_limits<f32>::max());
@@ -297,7 +303,15 @@ void gltf_test_builder::pack(layout &out) const {
               {}
             );
         }
-        out.primitives.push_back(primitive);
+        return primitive;
+    };
+    for (usize index = 0; index < mMeshes.size(); ++index) {
+        std::vector<layout::primitive> primitives = {};
+        primitives.push_back(packPrimitive(mMeshes[index]));
+        for (const mesh_input &extra : mExtraPrimitives[index]) {
+            primitives.push_back(packPrimitive(extra));
+        }
+        out.meshes.push_back(std::move(primitives));
     }
     for (const std::vector<std::byte> &image : mImages) {
         out.imageViews.push_back(addView(image.data(), image.size(), std::nullopt));
@@ -393,11 +407,8 @@ std::string gltf_test_builder::json(const layout &packed, std::string_view buffe
 
     // Meshes.
     text.append("  \"meshes\": [");
-    for (usize index = 0; index < mMeshes.size(); ++index) {
-        const mesh_input &mesh = mMeshes[index];
-        const layout::primitive &primitive = packed.primitives[index];
-        text.append(index == 0 ? "" : ", ");
-        text.append(std::format("{{\"name\": \"{}\", \"primitives\": [{{\"attributes\": {{", mesh.name));
+    const auto appendPrimitive = [&text](const mesh_input &mesh, const layout::primitive &primitive) {
+        text.append("{\"attributes\": {");
         bool first = true;
         const auto attribute = [&](const char *name, const std::optional<u32> &accessor) {
             if (accessor.has_value()) {
@@ -418,7 +429,18 @@ std::string gltf_test_builder::json(const layout &packed, std::string_view buffe
         if (mesh.material.has_value()) {
             text.append(std::format(", \"material\": {}", *mesh.material));
         }
-        text.append(std::format(", \"mode\": {}}}]}}", mesh.mode));
+        text.append(std::format(", \"mode\": {}}}", mesh.mode));
+    };
+    for (usize index = 0; index < mMeshes.size(); ++index) {
+        const std::vector<layout::primitive> &primitives = packed.meshes[index];
+        text.append(index == 0 ? "" : ", ");
+        text.append(std::format("{{\"name\": \"{}\", \"primitives\": [", mMeshes[index].name));
+        appendPrimitive(mMeshes[index], primitives[0]);
+        for (usize extra = 0; extra < mExtraPrimitives[index].size(); ++extra) {
+            text.append(", ");
+            appendPrimitive(mExtraPrimitives[index][extra], primitives[extra + 1]);
+        }
+        text.append("]}");
     }
     text.append("],\n");
 

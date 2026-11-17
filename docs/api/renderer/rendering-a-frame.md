@@ -106,12 +106,26 @@ frame); `render_stats::uploadsPending` says how many wait.
 aspect)` builds the reverse-Z projection, `frustum_from_clip` the culling planes and `ray_from_viewport` a picking
 ray from a pixel.
 
-Everything beyond a budget is clamped and logged, never fatal: views past `MAX_VIEWS` are skipped
+Everything beyond a budget is clamped and counted, never fatal: views past `MAX_VIEWS` are skipped
 (`render_stats::viewsSkipped`), lights past `MAX_LIGHTS_PER_VIEW` dropped (`lightsDropped`), sprites past
-`MAX_SPRITES_PER_FRAME` and debug vertices past `MAX_DEBUG_VERTICES` counted as dropped. A view whose `camera`
-`clip_from_view` would reject (near not above zero, far not beyond near, a field of view outside (0, pi), an
-orthographic height not above zero, or a non-finite value) renders with those fields clamped or reset to the
-defaults, with one WARN per view until its camera is valid again.
+`MAX_SPRITES_PER_FRAME` dropped (`spritesDropped`), and debug vertices past `MAX_DEBUG_VERTICES` refused
+(`debug_draw_buffer::dropped_count()`, never logged). A view whose `camera` `clip_from_view` would reject (near
+not above zero, far not beyond near, a field of view outside (0, pi), an orthographic height not above zero, or a
+non-finite value) renders with those fields clamped or reset to the defaults. A view naming a render target the
+renderer does not know, for example one that was destroyed, is skipped and counted in `viewsSkipped`.
+
+> [!NOTE]
+> The log tells you when a problem began, the statistics how big it is now. A WARN is written by the frame in
+> which a problem starts and not again while it lasts, even when its size changes: 70 000 sprites one frame and
+> 90 000 the next is one line, not two. A later frame that checks and finds the problem gone arms the WARN again.
+> This holds for views, lights and sprites over their budget; per view index for a clamped camera and an unknown
+> render target; and for a swapchain that refuses to acquire a back buffer (the frame is skipped, `viewsSkipped`
+> is the scene's view count) or to present.
+>
+> Not every frame checks everything. A frame skipped at the acquire checks nothing else. The light budget and a
+> view's camera are checked only when a view is drawn, and the per-view state belongs to the position in
+> `scene.views`, not to the view: a frame with fewer views leaves the higher positions as they were. A view
+> targeting the swapchain of a renderer created without one is logged once for the life of the renderer.
 
 A view draws an instance when the two layer masks share a bit (`instance.layerMask & view.layerMask`). The sun's
 shadow cascades are culled with each view's own mask. The shadows of spot and point lights live in one atlas
@@ -141,7 +155,10 @@ rectangle, a colour, a `size` (world units or pixels), a `sprite_space` and a la
 sorts world-space sprites with the 3D scene and screen-space ones on top.
 `sprite_batcher` is the CPU batching the renderer uses, exposed for tools that want the vertex runs. Past
 `MAX_SPRITES_PER_FRAME`, screen-space sprites (the HUD) keep their place: the world-space sprites last in sort
-order, the front-most ones, are dropped first, with one WARN naming the count per space.
+order, the front-most ones, are dropped first. `dropped_count()` says how many the last `build` dropped (the
+renderer reports its own batcher's count as `render_stats::spritesDropped`). The WARN naming the count per space
+is logged by the build in which the overflow starts and not again until a build has dropped nothing; `clear()`
+resets the count but does not arm the WARN.
 
 `debug_draw_buffer` collects lines (`line`, `box`, `sphere`, `frustum`, `axes`, `grid`); each shape takes a
 `debug_depth` after its colour (after `length` for `axes`; `sphere` takes its segment count after it):
@@ -169,7 +186,11 @@ Screen-space sprites draw after the tonemapper and keep their authored colours.
 
 `render_stats` is filled on every device: `viewsRendered`, `passesExecuted` and `passNames` (in order),
 `drawCalls`, `instancesDrawn`, `instancesCulled`, `trianglesDrawn`, `lightsRendered`, `shadowCascadesRendered`,
-`shadowTilesAllocated`, `spritesDrawn`, `uploadsCompleted`, `fallbacksUsed`, `transientTexturesLive` and more;
+`shadowTilesAllocated`, `spritesDrawn`, `uploadsCompleted`, `fallbacksUsed`, `transientTexturesLive` and more.
+What a frame clamped is counted every frame, whether or not a WARN was logged for it: `viewsSkipped`,
+`lightsDropped` (summed over the views drawn), `spritesDropped` (once per frame, both sprite spaces) and
+`shadowTilesDropped`. A frame whose back buffer could not be acquired reports only `viewsSkipped`.
+`render_stats` also answers which passes ran:
 `executed("tonemap")` and `count(name)` query the pass list, which holds every executed pass of the largest frame
 (`MAX_VIEWS` views of `MAX_PASSES_PER_VIEW` passes each). On the null device the `rhi::device::null_stats()`
 counters say what was recorded (draws, dispatches, buffers and textures created, command lists submitted), which

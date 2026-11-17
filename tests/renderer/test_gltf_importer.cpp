@@ -161,6 +161,81 @@ namespace {
     [[nodiscard]] std::string failure_message(const core::result<gltf_import_result> &imported) {
         return imported.has_value() ? std::string() : std::string(imported.get_error().message());
     }
+
+    /// <summary>
+    /// How many of the import's warnings contain 'fragment'.
+    /// </summary>
+    [[nodiscard]] usize import_warning_count(const gltf_import_result &imported, std::string_view fragment) {
+        const auto contains = [fragment](const std::string &warning) {
+            return warning.find(fragment) != std::string::npos;
+        };
+        return static_cast<usize>(std::ranges::count_if(imported.warnings, contains));
+    }
+
+    /// <summary>
+    /// The builder's quad with U running along +Y and V along +X: the tangent generated from its UVs is
+    /// QUAD_UV_TANGENT, the one its +Z normal alone gives is QUAD_NORMAL_TANGENT, so the two can be
+    /// told apart (with the builder's own UVs both are +X).
+    /// </summary>
+    [[nodiscard]] mesh_input turned_uv_quad(std::string name, std::optional<u32> material = std::nullopt) {
+        mesh_input mesh = gltf_test_builder::quad(1.0f, material);
+        mesh.name = std::move(name);
+        mesh.uv0 = {math::vec2(0.0f, 0.0f), math::vec2(0.0f, 1.0f), math::vec2(1.0f, 1.0f), math::vec2(1.0f, 0.0f)};
+        return mesh;
+    }
+
+    constexpr math::vec4 QUAD_UV_TANGENT = math::vec4(0.0f, 1.0f, 0.0f, -1.0f);
+    constexpr math::vec4 QUAD_NORMAL_TANGENT = math::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+    /// <summary>
+    /// A tangent no generator produces for the quad, for meshes that bring their own TANGENT.
+    /// </summary>
+    constexpr math::vec4 QUAD_FILE_TANGENT = math::vec4(0.0f, -1.0f, 0.0f, 1.0f);
+
+    /// <summary>
+    /// Adds a material with a normal texture of its own and returns its index.
+    /// </summary>
+    [[nodiscard]] u32 add_normal_mapped_material(gltf_test_builder &builder, std::string name, bool unlit = false) {
+        material_input material = {};
+        material.name = std::move(name);
+        material.normalTexture = builder.add_solid_texture(2, 2, 128, 128, 255);
+        material.unlit = unlit;
+        return builder.add_material(material);
+    }
+
+    /// <summary>
+    /// Adds the mesh and a root node that shows it; returns the mesh index.
+    /// </summary>
+    u32 add_placed_mesh(gltf_test_builder &builder, mesh_input mesh) {
+        node_input node = {};
+        node.name = mesh.name;
+        node.mesh = builder.add_mesh(std::move(mesh));
+        builder.add_node(node);
+        return *node.mesh;
+    }
+
+    /// <summary>
+    /// The options with generateTangents off.
+    /// </summary>
+    [[nodiscard]] gltf_import_options without_generated_tangents() {
+        gltf_import_options options = {};
+        options.generateTangents = false;
+        return options;
+    }
+
+    /// <summary>
+    /// True when every vertex of the mesh in [first, first + count) packs 'tangent' (xyz and handedness).
+    /// </summary>
+    [[nodiscard]] bool tangents_are(const mesh_asset &mesh, usize first, usize count, const math::vec4 &tangent) {
+        const std::span<const packed_vertex_attributes> attributes = mesh.streams().attributes;
+        if (first + count > attributes.size()) {
+            return false;
+        }
+        const auto matches = [&tangent](const packed_vertex_attributes &vertex) {
+            return approx_equal(renderer_support::unpacked_tangent(vertex), tangent);
+        };
+        return std::ranges::all_of(attributes.subspan(first, count), matches);
+    }
 }
 
 TEST_SUITE("renderer/gltf_importer") {
@@ -244,12 +319,11 @@ TEST_SUITE("renderer/gltf_importer") {
         CHECK(result.warnings.empty());
     }
 
-    TEST_CASE("gltf_importer - options control lights, cameras, the root scale and the tangent warning") {
+    TEST_CASE("gltf_importer - options control the lights and the root scale") {
         gltf_test_builder builder = scene_builder();
         gltf_import_options options = {};
         options.importLights = false;
         options.scale = 0.5f;
-        options.generateTangents = false;
         const gltf_importer importer = {};
         const gltf_import_result result = import_or_fail(importer, bytes_of(builder.build_embedded()), options);
         CHECK_FALSE(result.model.nodes()[2].hasLight);
@@ -257,8 +331,266 @@ TEST_SUITE("renderer/gltf_importer") {
         CONJURE_CHECK_APPROX(result.model.nodes()[0].localTransform.scale, math::vec3(1.0f));
         // children unscaled
         CONJURE_CHECK_APPROX(result.model.nodes()[1].localTransform.position, math::vec3(0.0f, 1.0f, 0.0f));
-        REQUIRE(result.warnings.size() == 1);
-        CHECK(result.warnings[0].find("generateTangents") != std::string::npos);
+        CHECK(result.warnings.empty());
+    }
+
+    TEST_CASE("regression - code sweep F391 generateTangents false builds tangents from the normal alone") {
+        // The option was read from the settings and written back to them, but the importer generated the
+        // tangents from the UVs whatever it said and only appended a warning to every import.
+        CHECK(GLTF_IMPORTER_VERSION == 3);   // imported meshes change, so cached imports are stale
+        gltf_test_builder builder = {};
+        add_placed_mesh(builder, turned_uv_quad("plate"));
+        const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+        const gltf_importer importer = {};
+        const gltf_import_result textured = import_or_fail(importer, bytes);
+        const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+        REQUIRE(textured.meshes.size() == 1);
+        REQUIRE(plain.meshes.size() == 1);
+        const mesh_streams &fromUvs = textured.meshes[0].streams();
+        const mesh_streams &fromNormal = plain.meshes[0].streams();
+        REQUIRE(fromUvs.attributes.size() == 4);
+        REQUIRE(fromNormal.attributes.size() == 4);
+        CHECK(tangents_are(textured.meshes[0], 0, 4, QUAD_UV_TANGENT));
+        CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_NORMAL_TANGENT));
+        // Nothing but the tangent and its handedness differs.
+        for (usize vertex = 0; vertex < fromNormal.attributes.size(); ++vertex) {
+            CAPTURE(vertex);
+            CONJURE_CHECK_APPROX(
+              renderer_support::unpacked_normal(fromNormal.attributes[vertex]),
+              math::vec3(0.0f, 0.0f, 1.0f)
+            );
+            CONJURE_CHECK_APPROX(fromNormal.attributes[vertex].uv0, fromUvs.attributes[vertex].uv0);
+            CHECK(fromNormal.attributes[vertex].colour == fromUvs.attributes[vertex].colour);
+        }
+        CHECK(fromNormal.positions == fromUvs.positions);
+        CHECK(fromNormal.indices == fromUvs.indices);
+        CHECK(std::ranges::equal(plain.meshes[0].submeshes(), textured.meshes[0].submeshes()));
+        CHECK(plain.model == textured.model);
+        // No material of the mesh has a normal texture: neither import has anything to say, and the old
+        // line that every import with the option off carried is gone.
+        CHECK(textured.warnings.empty());
+        CHECK(plain.warnings.empty());
+    }
+
+    TEST_CASE("gltf_importer - generateTangents false warns for a mesh whose lit material has a normal texture") {
+        const gltf_importer importer = {};
+        gltf_test_builder builder = {};
+
+        SUBCASE("one warning names the mesh and the material, and only with the option off") {
+            const u32 bricks = add_normal_mapped_material(builder, "bricks");
+            add_placed_mesh(builder, turned_uv_quad("wall", bricks));
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            REQUIRE(plain.warnings.size() == 1);
+            CHECK(import_warning_count(plain, "mesh 'wall': generateTangents is false and it has no TANGENT") == 1);
+            CHECK(import_warning_count(plain, "the normal texture of material 'bricks' will not shade correctly") == 1);
+            CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_NORMAL_TANGENT));
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            CHECK(textured.warnings.empty());
+            CHECK(tangents_are(textured.meshes[0], 0, 4, QUAD_UV_TANGENT));
+        }
+        SUBCASE("no material, no normal texture and an unlit material do not warn") {
+            material_input flat = {};
+            flat.name = "flat";
+            flat.baseColourTexture = builder.add_solid_texture(2, 2, 10, 20, 30);
+            const u32 flatIndex = builder.add_material(flat);
+            const u32 unlit = add_normal_mapped_material(builder, "sign", true);
+            add_placed_mesh(builder, turned_uv_quad("bare"));
+            add_placed_mesh(builder, turned_uv_quad("painted", flatIndex));
+            add_placed_mesh(builder, turned_uv_quad("glowing", unlit));
+            const gltf_import_result plain = import_or_fail(
+              importer,
+              bytes_of(builder.build_embedded()),
+              without_generated_tangents()
+            );
+            REQUIRE(plain.meshes.size() == 3);
+            for (const mesh_asset &mesh : plain.meshes) {
+                CAPTURE(mesh.name());
+                CHECK(tangents_are(mesh, 0, 4, QUAD_NORMAL_TANGENT));
+            }
+            CHECK(plain.warnings.empty());
+        }
+        SUBCASE("a mesh that brings TANGENT keeps it under either value and does not warn") {
+            const u32 bricks = add_normal_mapped_material(builder, "bricks");
+            mesh_input authored = turned_uv_quad("wall", bricks);
+            authored.tangents.assign(4, QUAD_FILE_TANGENT);
+            add_placed_mesh(builder, authored);
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            REQUIRE(plain.meshes.size() == 1);
+            CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_FILE_TANGENT));
+            CHECK(plain.meshes[0] == textured.meshes[0]);
+            CHECK(plain.warnings.empty());
+            CHECK(textured.warnings.empty());
+        }
+        SUBCASE("a mesh with several primitives gets one warning that names each material once") {
+            const u32 bricks = add_normal_mapped_material(builder, "bricks");
+            const u32 tiles = add_normal_mapped_material(builder, "tiles");
+            const u32 house = add_placed_mesh(builder, turned_uv_quad("house", bricks));
+            builder.add_primitive(house, turned_uv_quad("roof", tiles));
+            builder.add_primitive(house, turned_uv_quad("back", bricks));
+            const gltf_import_result plain = import_or_fail(
+              importer,
+              bytes_of(builder.build_embedded()),
+              without_generated_tangents()
+            );
+            REQUIRE(plain.meshes.size() == 1);
+            CHECK(plain.meshes[0].submeshes().size() == 3);
+            CHECK(tangents_are(plain.meshes[0], 0, 12, QUAD_NORMAL_TANGENT));
+            REQUIRE(plain.warnings.size() == 1);
+            CHECK(import_warning_count(plain, "mesh 'house'") == 1);
+            CHECK(import_warning_count(plain, "the normal texture of materials 'bricks', 'tiles' will not") == 1);
+        }
+        SUBCASE("a primitive past the last material slot draws with that slot's material and is not named") {
+            const u32 bricks = add_normal_mapped_material(builder, "bricks");
+            const u32 strip = add_placed_mesh(builder, turned_uv_quad("strip"));
+            for (u32 primitive = 1; primitive < MAX_MATERIAL_SLOTS; ++primitive) {
+                builder.add_primitive(strip, turned_uv_quad("part"));
+            }
+            builder.add_primitive(strip, turned_uv_quad("extra", bricks));
+            const gltf_import_result plain = import_or_fail(
+              importer,
+              bytes_of(builder.build_embedded()),
+              without_generated_tangents()
+            );
+            REQUIRE(plain.meshes.size() == 1);
+            REQUIRE(plain.meshes[0].submeshes().size() == MAX_MATERIAL_SLOTS + 1);
+            CHECK(plain.meshes[0].submeshes()[MAX_MATERIAL_SLOTS].materialSlot == MAX_MATERIAL_SLOTS - 1);
+            REQUIRE(plain.model.nodes().size() == 1);
+            CHECK(plain.model.nodes()[0].materials[MAX_MATERIAL_SLOTS - 1] == INVALID_INDEX);
+            CHECK(plain.warnings.empty());
+        }
+        SUBCASE("a mesh without TEXCOORD_0 has the same tangents under either value, the warning follows the option") {
+            const u32 bricks = add_normal_mapped_material(builder, "bricks");
+            mesh_input unmapped = turned_uv_quad("wall", bricks);
+            unmapped.uv0.clear();
+            add_placed_mesh(builder, unmapped);
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            REQUIRE(plain.meshes.size() == 1);
+            CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_NORMAL_TANGENT));
+            CHECK(plain.meshes[0] == textured.meshes[0]);
+            // The warning is about the option: with it on, a mesh the UVs give nothing for is not reported.
+            CHECK(textured.warnings.empty());
+            CHECK(plain.warnings.size() == 1);
+        }
+    }
+
+    TEST_CASE("gltf_importer - with generateTangents off a primitive keeps its TANGENT when others have none") {
+        // Tangents used to be decided for a whole mesh: one primitive without TANGENT made the importer
+        // drop the tangents the file gave the others. With generateTangents off those would then come
+        // from the normal alone, which the normal maps drawn on them cannot use. The default keeps that
+        // whole-mesh rule: such a mesh has all of its tangents generated from the UVs.
+        const gltf_importer importer = {};
+        gltf_test_builder builder = {};
+        const u32 bricks = add_normal_mapped_material(builder, "bricks");
+        const u32 tiles = add_normal_mapped_material(builder, "tiles");
+        mesh_input authored = turned_uv_quad("house", bricks);
+        authored.tangents.assign(4, QUAD_FILE_TANGENT);
+
+        SUBCASE("the other primitives get theirs from the normal, and only their materials are reported") {
+            const u32 house = add_placed_mesh(builder, authored);
+            builder.add_primitive(house, turned_uv_quad("roof", tiles));
+            builder.add_primitive(house, authored);
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            // The default does not keep the file's tangents of a mixed mesh (F391 decided the option off).
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            REQUIRE(textured.meshes.size() == 1);
+            CHECK(tangents_are(textured.meshes[0], 0, 12, QUAD_UV_TANGENT));
+            CHECK(textured.warnings.empty());
+
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            REQUIRE(plain.meshes.size() == 1);
+            CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_FILE_TANGENT));
+            CHECK(tangents_are(plain.meshes[0], 4, 4, QUAD_NORMAL_TANGENT));
+            CHECK(tangents_are(plain.meshes[0], 8, 4, QUAD_FILE_TANGENT));
+            CHECK(plain.model == textured.model);
+            // The material of the primitives that kept their tangents shades as authored: not named.
+            REQUIRE(plain.warnings.size() == 1);
+            CHECK(
+              import_warning_count(
+                plain,
+                "mesh 'house': generateTangents is false and only some of its primitives have a usable TANGENT, "
+                "so the tangents of the others are built from the normal alone"
+              ) == 1
+            );
+            CHECK(
+              import_warning_count(
+                plain,
+                "the normal texture of material 'tiles' will not shade correctly on those primitives"
+              ) == 1
+            );
+            CHECK(import_warning_count(plain, "bricks") == 0);
+        }
+        SUBCASE("nothing is reported when no primitive without TANGENT draws a normal map") {
+            const u32 house = add_placed_mesh(builder, authored);
+            builder.add_primitive(house, turned_uv_quad("roof"));
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            REQUIRE(textured.meshes.size() == 1);
+            REQUIRE(plain.meshes.size() == 1);
+            CHECK(tangents_are(textured.meshes[0], 0, 8, QUAD_UV_TANGENT));
+            CHECK(tangents_are(plain.meshes[0], 0, 4, QUAD_FILE_TANGENT));
+            CHECK(tangents_are(plain.meshes[0], 4, 4, QUAD_NORMAL_TANGENT));
+            CHECK(textured.warnings.empty());
+            CHECK(plain.warnings.empty());
+        }
+        SUBCASE("a primitive past the last material slot is reported with the material that slot draws") {
+            // Every primitive up to the owner of the last slot brings TANGENT; the one after it does not,
+            // and it draws with the owner's material, never with its own.
+            mesh_input part = turned_uv_quad("strip");
+            part.tangents.assign(4, QUAD_FILE_TANGENT);
+            const u32 strip = add_placed_mesh(builder, part);
+            for (u32 primitive = 1; primitive + 1 < MAX_MATERIAL_SLOTS; ++primitive) {
+                builder.add_primitive(strip, part);
+            }
+            builder.add_primitive(strip, authored);
+            builder.add_primitive(strip, turned_uv_quad("extra", tiles));
+            const gltf_import_result plain = import_or_fail(
+              importer,
+              bytes_of(builder.build_embedded()),
+              without_generated_tangents()
+            );
+            REQUIRE(plain.meshes.size() == 1);
+            REQUIRE(plain.meshes[0].submeshes().size() == MAX_MATERIAL_SLOTS + 1);
+            CHECK(tangents_are(plain.meshes[0], 0, 4 * MAX_MATERIAL_SLOTS, QUAD_FILE_TANGENT));
+            CHECK(tangents_are(plain.meshes[0], 4 * MAX_MATERIAL_SLOTS, 4, QUAD_NORMAL_TANGENT));
+            REQUIRE(plain.warnings.size() == 1);
+            CHECK(import_warning_count(plain, "the normal texture of material 'bricks' will not shade") == 1);
+            CHECK(import_warning_count(plain, "tiles") == 0);
+        }
+        SUBCASE("a mesh whose normals are generated keeps none of the file's tangents") {
+            // The roof has no NORMAL, so the normals of the whole mesh are generated per face, and the
+            // tangents the file gave the wall, which belong to normals that are not used, go with them.
+            mesh_input roof = turned_uv_quad("roof", tiles);
+            roof.normals.clear();
+            const u32 house = add_placed_mesh(builder, authored);
+            builder.add_primitive(house, roof);
+            const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+            const gltf_import_result textured = import_or_fail(importer, bytes);
+            REQUIRE(textured.meshes.size() == 1);
+            REQUIRE(textured.meshes[0].vertex_count() == 12);   // one vertex per triangle corner
+            CHECK(tangents_are(textured.meshes[0], 0, 12, QUAD_UV_TANGENT));
+            CHECK(import_warning_count(textured, "TANGENT") == 0);
+
+            const gltf_import_result plain = import_or_fail(importer, bytes, without_generated_tangents());
+            REQUIRE(plain.meshes.size() == 1);
+            REQUIRE(plain.meshes[0].vertex_count() == 12);
+            CHECK(tangents_are(plain.meshes[0], 0, 12, QUAD_NORMAL_TANGENT));
+            CHECK(import_warning_count(plain, "TANGENT") == 1);
+            CHECK(
+              import_warning_count(
+                plain,
+                "only some of its primitives have a usable TANGENT and its normals are generated, so the file's "
+                "tangents are not used and all of them are built from the normal alone"
+              ) == 1
+            );
+            CHECK(import_warning_count(plain, "materials 'bricks', 'tiles' will not shade correctly") == 1);
+            CHECK(import_warning_count(plain, "on those primitives") == 0);
+        }
     }
 
     TEST_CASE(
@@ -268,7 +600,7 @@ TEST_SUITE("renderer/gltf_importer") {
         // light's default 10 m. It now uses the distance at which intensity / d^2 falls to
         // GLTF_LIGHT_RANGE_CUTOFF, clamped, and warns. texture_asset holds one wrap mode: wrapS is used,
         // and a sampler whose wrapT differs is warned about.
-        CHECK(GLTF_IMPORTER_VERSION == 2);   // imported models change
+        CHECK(GLTF_IMPORTER_VERSION >= 2);   // imported models change
         const std::string document = embedded_document(
           TRIANGLE_POSITIONS,
           std::string(R"("bufferViews": [{"buffer": 0, "byteLength": 36}], )") +
@@ -299,22 +631,17 @@ TEST_SUITE("renderer/gltf_importer") {
         CHECK(nodes[4].lightData.type == light_type::DIRECTIONAL);
         CHECK(nodes[4].lightData.range == doctest::Approx(light().range));   // directional lights ignore it
         CHECK(nodes[5].lightData.range == doctest::Approx(4.0f));
-        const auto warned = [](const gltf_import_result &imported, std::string_view fragment) {
-            return std::ranges::count_if(imported.warnings, [fragment](const std::string &warning) {
-                return warning.find(fragment) != std::string::npos;
-            });
-        };
         CHECK(result.warnings.size() == 4);
-        CHECK(warned(result, "has no range") == 3);
-        CHECK(warned(result, "light 0 ('bulb') has no range; using 31.6 m") == 1);
-        CHECK(warned(result, "sampler 0: wrapT REPEAT differs from wrapS CLAMP_TO_EDGE") == 1);
-        CHECK(warned(result, "sampler 1") == 0);
+        CHECK(import_warning_count(result, "has no range") == 3);
+        CHECK(import_warning_count(result, "light 0 ('bulb') has no range; using 31.6 m") == 1);
+        CHECK(import_warning_count(result, "sampler 0: wrapT REPEAT differs from wrapS CLAMP_TO_EDGE") == 1);
+        CHECK(import_warning_count(result, "sampler 1") == 0);
 
         // Lights that are not imported are not warned about.
         gltf_import_options options = {};
         options.importLights = false;
         const gltf_import_result unlit = import_or_fail(importer, bytes_of(document), options);
-        CHECK(warned(unlit, "has no range") == 0);
+        CHECK(import_warning_count(unlit, "has no range") == 0);
         CHECK(unlit.warnings.size() == 1);
     }
 
@@ -734,6 +1061,19 @@ TEST_SUITE("renderer/gltf_importer") {
           gltf_import_options_from_json(core::json::object({{"importLights", 1}}).root()),
           core::error_code::INVALID_ARGUMENT
         );
+        CONJURE_CHECK_ERROR(
+          gltf_import_options_from_json(core::json::object({{"generateTangents", "no"}}).root()),
+          core::error_code::INVALID_ARGUMENT
+        );
+        // A null is a wrong type, not "use the default".
+        const core::result<core::json::document> nullTangents = core::json::document::parse(
+          R"({"generateTangents": null})"
+        );
+        CONJURE_REQUIRE_OK(nullTangents);
+        CONJURE_CHECK_ERROR(
+          gltf_import_options_from_json(nullTangents.value().root()),
+          core::error_code::INVALID_ARGUMENT
+        );
         const core::result<core::json::document> array = core::json::document::parse("[]");
         CONJURE_REQUIRE_OK(array);
         CONJURE_CHECK_ERROR(gltf_import_options_from_json(array.value().root()), core::error_code::INVALID_ARGUMENT);
@@ -890,5 +1230,56 @@ TEST_SUITE("renderer/gltf_importer") {
         CONJURE_REQUIRE_OK(importer.import(externalContext));
         REQUIRE(externalContext.side_files().size() == 1);
         CHECK(externalContext.side_files()[0] == "assets://models/ext.bin");
+    }
+
+    TEST_CASE("gltf_asset_importer - generateTangents in the settings reaches the cooked mesh and the warnings") {
+        gltf_test_builder builder = {};
+        add_placed_mesh(builder, turned_uv_quad("wall", add_normal_mapped_material(builder, "bricks")));
+        const std::vector<std::byte> bytes = bytes_of(builder.build_embedded());
+        const gltf_asset_importer importer = {};
+        core::vfs::memory_file_system fileSystem = {};
+        assets::sub_asset_table subAssets = {};
+        const core::json::document off = core::json::object({{"generateTangents", false}});
+        const core::json::document on = core::json::object({{"generateTangents", true}});
+
+        struct expectation {
+            std::string_view name = "";
+            core::json::value settings = {};
+            math::vec4 tangent = math::vec4(0.0f);
+            usize warnings = 0;
+        };
+        const std::array<expectation, 3> expectations = {
+          expectation{"no settings", core::json::value(), QUAD_UV_TANGENT, 0},
+          expectation{"generateTangents true", on.root(), QUAD_UV_TANGENT, 0},
+          expectation{"generateTangents false", off.root(), QUAD_NORMAL_TANGENT, 1},
+        };
+        for (const expectation &expected : expectations) {
+            CAPTURE(expected.name);
+            assets::import_context context(
+              fileSystem,
+              "assets://models/wall.gltf",
+              "assets/models/wall.gltf",
+              bytes,
+              expected.settings,
+              "windows",
+              renderer_support::test_asset_id(30),
+              subAssets,
+              {}
+            );
+            core::result<assets::import_output> imported = importer.import(context);
+            CONJURE_REQUIRE_OK(imported);
+            const auto isMesh = [](const assets::imported_asset &asset) {
+                return asset.subPath == "mesh/0";
+            };
+            const auto cooked = std::ranges::find_if(imported.value().assets, isMesh);
+            REQUIRE(cooked != imported.value().assets.end());
+            core::result<mesh_asset> mesh = mesh_asset::parse_blob(cooked->payload);
+            CONJURE_REQUIRE_OK(mesh);
+            CHECK(tangents_are(mesh.value(), 0, 4, expected.tangent));
+            REQUIRE(context.warnings().size() == expected.warnings);
+            if (expected.warnings > 0) {
+                CHECK(context.warnings()[0].find("mesh 'wall': generateTangents is false") != std::string::npos);
+            }
+        }
     }
 }

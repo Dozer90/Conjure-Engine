@@ -84,9 +84,25 @@ namespace conjure::renderer {
     // Geometry
 
     /// <summary>
+    /// How mesh_asset::from_geometry builds the tangents of a geometry that carries none
+    /// (docs/design/02_renderer.md R20). FROM_UVS takes them from the uv0 derivatives of the
+    /// triangles around each vertex, made perpendicular to the normal, with the handedness of the
+    /// UV winding: the frame a tangent-space normal map needs. A geometry without uv0, and a vertex
+    /// whose UVs give no direction (degenerate or cancelling triangles), gets the FROM_NORMAL
+    /// tangent. FROM_NORMAL reads no UV: the tangent is a unit vector perpendicular to the normal,
+    /// handedness +1. Lighting works with it; a tangent-space normal map does not shade correctly,
+    /// because the tangent does not follow the texture.
+    /// </summary>
+    enum class tangent_generation : u8 {
+        FROM_UVS = 0,
+        FROM_NORMAL
+    };
+
+    /// <summary>
     /// Unpacked geometry as importers produce it. Optional attributes are either empty or one per
-    /// position; missing normals are computed flat per face, missing tangents from the UV
-    /// derivatives, missing uv1 is zero and missing colours are white.
+    /// position; missing normals are computed flat per face, missing tangents as the
+    /// tangent_generation given to from_geometry says (from the UV derivatives by default),
+    /// missing uv1 is zero and missing colours are white.
     /// </summary>
     struct mesh_geometry {
         std::vector<math::vec3> positions = {};
@@ -143,12 +159,15 @@ namespace conjure::renderer {
             /// <summary>
             /// Packs geometry into streams. Fails with INVALID_ARGUMENT for no positions, an
             /// attribute array whose size differs from the position count, an index count that is
-            /// not a multiple of three, an index out of range, or submesh counts that do not
-            /// partition the index list. Missing attributes are generated as described above.
+            /// not a multiple of three, an index out of range, a non-finite position, or submesh
+            /// counts that do not partition the index list. Missing attributes are generated as
+            /// described above; 'missingTangents' chooses how and is not read when the geometry
+            /// has tangents.
             /// </summary>
             [[nodiscard]] static core::result<mesh_asset> from_geometry(
               const mesh_geometry &geometry,
-              std::string name = {}
+              std::string name = {},
+              tangent_generation missingTangents = tangent_generation::FROM_UVS
             );
 
             /// <summary>

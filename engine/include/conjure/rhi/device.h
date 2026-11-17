@@ -28,11 +28,16 @@ namespace conjure::rhi {
     /// A failure the null backend can be told to report once, so the engine's error paths run in
     /// CTest without a GPU: WAIT_IDLE makes the next waitForIdle fail (wait_idle() then marks the
     /// device lost), PRESENT makes the next null swapchain present report device loss.
+    /// ACQUIRE_OUT_OF_DATE makes the next null swapchain acquire fail with rhi_error::OUT_OF_DATE and
+    /// PRESENT_FAILED the next present with rhi_error::PRESENT_FAILED; neither marks the device lost
+    /// or advances the back-buffer index, the way a real swapchain refuses without device loss.
     /// </summary>
     enum class null_fault : u8 {
         NONE = 0,
         WAIT_IDLE,
-        PRESENT
+        PRESENT,
+        ACQUIRE_OUT_OF_DATE,
+        PRESENT_FAILED
     };
 
     struct device_desc {
