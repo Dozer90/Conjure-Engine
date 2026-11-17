@@ -210,7 +210,7 @@ namespace conjure::editor::support {
               filterSchema
             ),
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &physics_raycast
           )
         );
@@ -227,7 +227,7 @@ namespace conjure::editor::support {
               filterSchema
             ),
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &physics_overlap_sphere
           )
         );

@@ -151,7 +151,7 @@ namespace conjure::editor::support {
             "and fixed steps.",
             std::string(EMPTY_SCHEMA),
             stateSchema,
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &play_state
           )
         );

@@ -396,9 +396,10 @@ namespace conjure::editor::support {
             }
             if (assetPath.empty()) {
                 copiedIn = true;
-                // A file outside the assets root: copy it in. The destination is checked before anything is read
-                // or written.
-                const std::filesystem::path source = std::filesystem::path(std::string(sourceText));
+                // A file outside the assets root: copy it in. A relative source that is no asset names a file
+                // under the project root, never one in the editor's working directory (decision D24, code sweep
+                // F187). The destination is checked before anything is read or written.
+                const std::filesystem::path source = project_relative_path(context, sourceText);
                 const std::string fileName = source.filename().generic_string();
                 CONJURE_TRY_ASSIGN(assetPath, checked_asset_path(destination.empty() ? fileName : destination));
                 CONJURE_TRY_ASSIGN(const std::string content, read_source_file(source));
@@ -833,9 +834,11 @@ namespace conjure::editor::support {
           make_command(
             "asset.import",
             "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta "
-            "settings. importer names the importer to use instead of the one chosen by extension (a .glb as "
-            "\"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's "
-            "defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
+            "settings. source is an asset path or a file on disk; a relative one that is no asset is looked up "
+            "under the project root. importer names the importer to use instead of the one chosen by extension "
+            "(a .glb as \"conjure.physics.collision_mesh_importer\"); switching resets the settings to that "
+            "importer's defaults. Undo removes a copied file; importing a file already inside the project records "
+            "nothing.",
             R"({"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"},)"
             R"("importer":{"type":"string"},)"
             R"("options":{"type":"object","additionalProperties":true}},"required":["source"]})",
@@ -852,7 +855,7 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"filter":{"type":"string"},"type":{"type":"string"},)"
             R"("subAssets":{"type":"boolean"}}})",
             R"({"type":"object","properties":{"assets":{"type":"array"},"count":{"type":"integer"}}})",
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &asset_list
           )
         );
@@ -863,7 +866,7 @@ namespace conjure::editor::support {
             "One asset's record, dependencies, sub-assets and importer settings.",
             R"({"type":"object","properties":{"asset":{"type":"string"}},"required":["asset"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &asset_info
           )
         );

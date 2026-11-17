@@ -7,6 +7,7 @@
 #include "conjure/core/json/writer.h"
 #include "conjure/core/string_utils.h"
 #include "conjure/core/vfs/path_utils.h"
+#include "conjure/engine/project.h"
 #include "conjure/scene/components.h"
 #include "conjure/scene/hierarchy.h"
 #include "conjure/scene/scene_serializer.h"
@@ -69,6 +70,18 @@ namespace conjure::editor::support {
             return path_not_found(std::move(message));
         }
         return io_error(std::move(message));
+    }
+
+    std::filesystem::path project_relative_path(const editor_context &context, std::filesystem::path path) {
+        const engine::project *project = context.project();
+        if (path.empty() || path.is_absolute() || project == nullptr) {
+            return path;
+        }
+        return project->root_directory() / path;
+    }
+
+    std::filesystem::path project_relative_path(const editor_context &context, std::string_view text) {
+        return project_relative_path(context, std::filesystem::path(std::string(text)));
     }
 
     core::error wrap(const core::error &failure) {

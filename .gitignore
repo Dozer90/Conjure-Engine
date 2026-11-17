@@ -9,9 +9,11 @@ CMakeUserPresets.json
 # Dependency caches
 /third_party/_deps/
 
-# Per-project editor and import state: <project>/.conjure holds the import cache, editor_layout.ini and ai_port
-# (docs/design/04_editor.md D12); never versioned. The .meta sidecars are deliberately not ignored: tests and CI
-# copy a fixture project before opening it, so a .meta file appearing in the tree is a warning to heed.
+# Per-project editor and import state: <project>/.conjure holds the import cache, editor_layout.ini, ai_port, the
+# token files ai_token and ai_token_inspect, and the audit log ai_audit.log / ai_audit.1.log
+# (docs/design/04_editor.md D12, D23, D25, D26); never versioned, the token files least of all. The .meta sidecars
+# are deliberately not ignored: tests and CI copy a fixture project before opening it, so a .meta file appearing in
+# the tree is a warning to heed.
 **/.conjure/
 
 # Managed (.NET) build outputs

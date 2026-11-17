@@ -5,11 +5,14 @@
 #include "conjure/core/hash.h"
 #include "conjure/core/image.h"
 #include "conjure/core/json/writer.h"
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/core/vfs/native_file_system.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/headless_runner.h"
+#include "conjure/editor/project_trust.h"
 #include "conjure/engine/project.h"
 #include "conjure/scene/scene_serializer.h"
 #include "editor/core/net/socket.h"
@@ -19,8 +22,12 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <format>
 #include <fstream>
+#include <memory>
+#include <span>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -84,23 +91,76 @@ namespace editor_test {
         const probe_installer sProbeInstaller = {};
 
         void write_project_file(const std::filesystem::path &directory, const headless_editor_options &options) {
+            write_project(directory, options.projectName, options.extraProjectJson);
             std::error_code ignored = {};
             std::filesystem::create_directories(directory / "assets" / "scenes", ignored);
             std::filesystem::create_directories(directory / "assets" / "prefabs", ignored);
             std::filesystem::create_directories(directory / "scripts", ignored);
-            std::string text = std::format(
-              "{{\n  \"schema_version\": 1,\n  \"name\": \"{}\",\n  \"assets_root\": \"assets\"",
-              options.projectName
-            );
-            if (!options.extraProjectJson.empty()) {
-                text += ",\n  ";
-                text += options.extraProjectJson;
-            }
-            text += "\n}\n";
-            std::ofstream stream(directory / "project.json", std::ios::binary | std::ios::trunc);
-            REQUIRE(stream.is_open());
-            stream << text;
         }
+    }
+
+    std::string project_key_of(const std::filesystem::path &projectRoot) {
+        const core::result<std::string> key = editor::project_trust::project_key(projectRoot);
+        REQUIRE_MESSAGE(key.has_value(), testing::describe_error(key));
+        return key.value();
+    }
+
+    bool owner_only_files_available(const std::filesystem::path &directory) {
+        const core::result<void> probe = core::vfs::write_private_file(directory / "owner_only_probe", {});
+        if (probe.has_value()) {
+            return true;
+        }
+        MESSAGE("this volume keeps no owner-only files (" << probe.get_error().message() << "): the case did not run");
+        return false;
+    }
+
+    replace_blocker::replace_blocker(const std::filesystem::path &file) :
+        mFolder(file.parent_path()) {
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            // A reader opened without the right to share deletion: no rename may replace the file under it.
+            mReader.open(file, std::ios::binary);
+            mActive = mReader.is_open();
+        } else {
+            std::error_code failure = {};
+            std::filesystem::permissions(
+              mFolder,
+              std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
+              failure
+            );
+            // An account that passes every permission creates files here all the same.
+            const std::filesystem::path probe = mFolder / "replace_blocker_probe";
+            const std::ofstream attempt(probe, std::ios::binary);
+            mActive = !failure && !attempt.is_open();
+        }
+        if (!mActive) {
+            MESSAGE("this account can replace the file whatever its folder allows: the case did not run");
+        }
+    }
+
+    replace_blocker::~replace_blocker() {
+        mReader.close();
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 0) {
+            std::error_code ignored = {};
+            std::filesystem::permissions(mFolder, std::filesystem::perms::owner_all, ignored);
+            std::filesystem::remove(mFolder / "replace_blocker_probe", ignored);
+        }
+    }
+
+    void write_project(const std::filesystem::path &directory, std::string_view name, std::string_view extraMembers) {
+        std::error_code ignored = {};
+        std::filesystem::create_directories(directory / "assets", ignored);
+        std::string text = std::format(
+          "{{\n  \"schema_version\": 1,\n  \"name\": \"{}\",\n  \"assets_root\": \"assets\"",
+          name
+        );
+        if (!extraMembers.empty()) {
+            text += ",\n  ";
+            text += extraMembers;
+        }
+        text += "\n}\n";
+        std::ofstream stream(directory / "project.json", std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.is_open());
+        stream << text;
     }
 
     /*===========================================================================*/
@@ -120,6 +180,9 @@ namespace editor_test {
         if (options.withProject) {
             write_project_file(mDirectory.path(), options);
             editorOptions.projectPath = mDirectory.path();
+            // The scratch project is the test's own: answered for this editor only, as --trust-project does. No
+            // trust store is named, so nothing a case trusts is remembered anywhere (04_editor.md D27).
+            editorOptions.trustProject = true;
         }
         const core::result<void> initialised = mApplication.initialise(editorOptions, {});
         REQUIRE_MESSAGE(initialised.has_value(), testing::describe_error(initialised));
@@ -195,6 +258,11 @@ namespace editor_test {
         return response.errorCode;
     }
 
+    void headless_editor::trust_project(const std::filesystem::path &root) {
+        const core::result<editor::trust_state> trusted = mApplication.trust().trust(root, false, "test");
+        REQUIRE_MESSAGE(trusted.has_value(), testing::describe_error(trusted));
+    }
+
     void headless_editor::pump(u32 frames) {
         for (u32 frame = 0; frame < frames; ++frame) {
             const core::result<void> stepped = mApplication.pump_frame();
@@ -244,6 +312,66 @@ namespace editor_test {
 
     /*===========================================================================*/
     /*===========================================================================*/
+    // loopback_session
+
+    loopback_session::loopback_session(headless_editor &editor) :
+        mEditor(&editor) {
+        std::unique_ptr<editor::loopback_transport> transport = std::make_unique<editor::loopback_transport>();
+        mClient = transport->connect();
+        const core::result<void> added = editor.application().server().add_transport(std::move(transport));
+        REQUIRE_MESSAGE(added.has_value(), testing::describe_error(added));
+        editor.pump(1);
+        REQUIRE(mClient.is_connected());
+    }
+
+    editor::protocol_response loopback_session::request(std::string_view command, core::json::document args) {
+        editor::protocol_request request = {};
+        request.id = editor::make_id(mNextId++);
+        request.command = std::string(command);
+        request.args = std::move(args);
+        return send_line(serialise(request), request.id.root().as_i64());
+    }
+
+    editor::protocol_response loopback_session::send_line(const std::string &line, i64 expectedId) {
+        mClient.send(line);
+        for (u32 frame = 0; frame < 20000; ++frame) {
+            mEditor->pump(1);
+            for (std::string &received : mClient.receive_all()) {
+                const core::result<editor::protocol_event> event = editor::parse_event(received);
+                if (event.has_value()) {
+                    mEvents.push_back(event.value());
+                    continue;
+                }
+                core::result<editor::protocol_response> response = editor::parse_response(received);
+                REQUIRE_MESSAGE(response.has_value(), received);
+                if (response.value().id.root().as_i64(-1) == expectedId) {
+                    return std::move(response).value();
+                }
+            }
+        }
+        FAIL("no response to " << line);
+        return {};
+    }
+
+    core::json::document loopback_session::ok(std::string_view command, core::json::document args) {
+        const editor::protocol_response response = request(command, std::move(args));
+        REQUIRE_MESSAGE(
+          response.ok,
+          std::format("{}: {} {}", command, to_string(response.errorCode), response.errorMessage)
+        );
+        return response.result;
+    }
+
+    usize loopback_session::count_events(std::string_view name) const {
+        usize count = 0;
+        for (const editor::protocol_event &event : mEvents) {
+            count += event.name == name ? 1 : 0;
+        }
+        return count;
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
     // Snapshots
 
     std::map<std::string, std::string> project_file_snapshot(const std::filesystem::path &projectRoot) {
@@ -258,7 +386,8 @@ namespace editor_test {
             const std::filesystem::directory_entry &entry = *iterator;
             const std::filesystem::path relative = entry.path().lexically_relative(projectRoot);
             std::error_code ignored = {};
-            // .conjure/ holds the cache, ai_port and editor_layout.ini: volatile by design (04_editor.md 3.14).
+            // .conjure/ holds the cache, ai_port, ai_token and editor_layout.ini: volatile by design
+            // (04_editor.md 3.14).
             if (iterator.depth() == 0 && entry.is_directory(ignored) && relative == ".conjure") {
                 iterator.disable_recursion_pending();
             } else if (entry.is_regular_file(ignored)) {
@@ -415,6 +544,16 @@ namespace editor_test {
         return editor.project_directory() / "assets" / "scenes" / "test.scene.json";
     }
 
+    std::vector<core::json::document> read_json_lines(const std::filesystem::path &path) {
+        std::vector<core::json::document> documents = {};
+        for (const std::string &line : non_empty_lines(read_text_file(path))) {
+            core::result<core::json::document> document = core::json::document::parse(line);
+            REQUIRE_MESSAGE(document.has_value(), line);
+            documents.push_back(std::move(document).value());
+        }
+        return documents;
+    }
+
     std::vector<std::string> non_empty_lines(std::string_view text) {
         std::vector<std::string> lines = {};
         for (const std::string_view line : core::str::split_lines(text)) {
@@ -435,6 +574,39 @@ namespace editor_test {
         std::stringstream buffer = {};
         buffer << input.rdbuf();
         return buffer.str();
+    }
+
+    void send_all(const editor::net::socket_handle &socket, std::string_view text) {
+        usize offset = 0;
+        u32 spins = 0;
+        while (offset < text.size() && spins < 100000) {
+            usize sent = 0;
+            const std::span<const std::byte> bytes(
+              reinterpret_cast<const std::byte *>(text.data()) + offset,
+              text.size() - offset
+            );
+            const editor::net::io_status status = editor::net::send(socket, bytes, sent);
+            REQUIRE(status != editor::net::io_status::FAILED);
+            REQUIRE(status != editor::net::io_status::CLOSED);
+            offset += sent;
+            ++spins;
+        }
+        REQUIRE(offset == text.size());
+    }
+
+    std::string receive_some(const editor::net::socket_handle &socket, usize atLeast, u32 attempts) {
+        std::string received = {};
+        std::array<std::byte, 4096> buffer = {};
+        for (u32 attempt = 0; attempt < attempts && received.size() < atLeast; ++attempt) {
+            usize count = 0;
+            const editor::net::io_status status = editor::net::receive(socket, buffer, count);
+            if (status == editor::net::io_status::OK) {
+                received.append(reinterpret_cast<const char *>(buffer.data()), count);
+            } else if (status == editor::net::io_status::CLOSED || status == editor::net::io_status::FAILED) {
+                break;
+            }
+        }
+        return received;
     }
 
     std::string expand_project(std::string_view text, const std::filesystem::path &projectRoot) {

@@ -4,6 +4,8 @@
 
 #include <Windows.h>
 
+#include <AclAPI.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -168,6 +170,106 @@ namespace {
         CloseHandle(sourceHandle);
         return errorCode;
     }
+
+    // Fills 'outTokenUser' with the TOKEN_USER block of the process: the account the process runs as.
+    // Returns the Win32 error code, ERROR_SUCCESS on success.
+    DWORD query_process_user(std::vector<std::byte> &outTokenUser) {
+        HANDLE token = nullptr;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) == 0) {
+            return GetLastError();
+        }
+
+        // The block ends in a security identifier of variable length: the first call reports the size.
+        DWORD needed = 0;
+        DWORD errorCode = ERROR_INVALID_DATA;
+        if (GetTokenInformation(token, TokenUser, nullptr, 0, &needed) == 0) {
+            errorCode = GetLastError();
+        }
+        if (errorCode == ERROR_INSUFFICIENT_BUFFER && needed >= sizeof(TOKEN_USER)) {
+            outTokenUser.assign(needed, std::byte{0});
+            const BOOL filled = GetTokenInformation(token, TokenUser, outTokenUser.data(), needed, &needed);
+            errorCode = filled != 0 ? ERROR_SUCCESS : GetLastError();
+        }
+        CloseHandle(token);
+        return errorCode;
+    }
+
+    // The security identifier inside a block query_process_user filled; it points into the block.
+    PSID sid_of(const std::vector<std::byte> &tokenUser) noexcept {
+        return reinterpret_cast<const TOKEN_USER *>(tokenUser.data())->User.Sid;
+    }
+
+    // True when the security descriptor leaves the file to 'user' alone: the user owns it (an owner may
+    // always rewrite the list), the list exists (none at all grants everyone everything), is protected
+    // from the folder's inheritable entries, and holds nothing but entries allowing that user.
+    bool grants_user_only(PSECURITY_DESCRIPTOR descriptor, PSID owner, PACL list, PSID user) noexcept {
+        if (owner == nullptr || list == nullptr || EqualSid(owner, user) == 0) {
+            return false;
+        }
+        SECURITY_DESCRIPTOR_CONTROL control = 0;
+        DWORD revision = 0;
+        if (GetSecurityDescriptorControl(descriptor, &control, &revision) == 0) {
+            return false;
+        }
+        if ((control & SE_DACL_PROTECTED) == 0) {
+            return false;
+        }
+        for (DWORD index = 0; index < list->AceCount; ++index) {
+            void *entry = nullptr;
+            if (GetAce(list, index, &entry) == 0) {
+                return false;
+            }
+            if (static_cast<const ACE_HEADER *>(entry)->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+                return false;
+            }
+            ACCESS_ALLOWED_ACE *const allowed = static_cast<ACCESS_ALLOWED_ACE *>(entry);
+            if (EqualSid(reinterpret_cast<PSID>(&allowed->SidStart), user) == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Decides whether the file behind 'handle' (opened with READ_CONTROL) can be opened by 'user' alone:
+    // its volume keeps access control lists and its descriptor passes grants_user_only. Returns the Win32
+    // error code of a query that failed, ERROR_SUCCESS when 'outPrivate' holds the answer.
+    DWORD inspect_privacy(HANDLE handle, PSID user, bool &outPrivate) noexcept {
+        outPrivate = false;
+        DWORD volumeFlags = 0;
+        if (GetVolumeInformationByHandleW(handle, nullptr, 0, nullptr, nullptr, &volumeFlags, nullptr, 0) == 0) {
+            return GetLastError();
+        }
+        if ((volumeFlags & FILE_PERSISTENT_ACLS) == 0) {
+            return ERROR_SUCCESS;
+        }
+
+        PSID owner = nullptr;
+        PACL list = nullptr;
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        const SECURITY_INFORMATION wanted = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        const DWORD outcome = GetSecurityInfo(
+          handle,
+          SE_FILE_OBJECT,
+          wanted,
+          &owner,
+          nullptr,
+          &list,
+          nullptr,
+          &descriptor
+        );
+        if (outcome != ERROR_SUCCESS) {
+            return outcome;
+        }
+        outPrivate = grants_user_only(descriptor, owner, list, user);
+        LocalFree(descriptor);
+        return ERROR_SUCCESS;
+    }
+
+    // Closes and removes a file create_private_file made and cannot keep.
+    void discard_new_file(HANDLE handle, const std::filesystem::path &path) noexcept {
+        CloseHandle(handle);
+        DeleteFileW(path.c_str());
+    }
 }
 
 
@@ -299,6 +401,127 @@ bool internal::flush_is_unsupported(u32 platformError) noexcept {
     // What a driver without a flush routine answers (some RAM disks and redirectors). Everything else,
     // ERROR_ACCESS_DENIED and the device errors included, is a flush that was attempted and failed.
     return platformError == ERROR_INVALID_FUNCTION || platformError == ERROR_NOT_SUPPORTED;
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Private files
+
+result<void> internal::create_private_file(
+  const std::filesystem::path &path,
+  std::span<const std::byte> data,
+  std::string_view displayPath
+) {
+    std::vector<std::byte> tokenUser = {};
+    const DWORD userError = query_process_user(tokenUser);
+    if (userError != ERROR_SUCCESS) {
+        return io_failure("identify the owner of", displayPath, userError);
+    }
+    const PSID user = sid_of(tokenUser);
+
+    // One entry, the process user with every right. SE_DACL_PROTECTED keeps the folder's inheritable
+    // entries (typically Users or Authenticated Users with read access) out of the list.
+    const DWORD aclBytes = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD))
+                           + GetLengthSid(user);
+    std::vector<std::byte> aclStorage(aclBytes, std::byte{0});
+    const PACL acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor = {};
+    const bool described = InitializeAcl(acl, aclBytes, ACL_REVISION) != 0
+                           && AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, user) != 0
+                           && InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) != 0
+                           && SetSecurityDescriptorOwner(&descriptor, user, FALSE) != 0
+                           && SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) != 0
+                           && SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED) != 0;
+    if (!described) {
+        return io_failure("describe the access to", displayPath, GetLastError());
+    }
+
+    // CREATE_NEW refuses an entry that already exists, so the list above is the one the file is born with;
+    // no sharing, so nobody opens the file before it is complete.
+    SECURITY_ATTRIBUTES attributes = {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    attributes.bInheritHandle = FALSE;
+    const HANDLE handle = CreateFileW(
+      path.c_str(),
+      GENERIC_WRITE | READ_CONTROL,
+      0,
+      &attributes,
+      CREATE_NEW,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr
+    );
+    if (handle == INVALID_HANDLE_VALUE) {
+        return io_failure("create", displayPath, GetLastError());
+    }
+
+    // A volume without access control lists (FAT, exFAT) takes the call and drops the list.
+    bool isPrivate = false;
+    const DWORD inspectError = inspect_privacy(handle, user, isPrivate);
+    if (inspectError != ERROR_SUCCESS) {
+        discard_new_file(handle, path);
+        return io_failure("inspect", displayPath, inspectError);
+    }
+    if (!isPrivate) {
+        discard_new_file(handle, path);
+        return make_error(
+          error_code::UNSUPPORTED,
+          std::format(
+            "'{}' cannot be restricted to its owner: the volume does not keep access control lists",
+            displayPath
+          )
+        );
+    }
+
+    const DWORD writeError = write_all(handle, data);
+    if (writeError != ERROR_SUCCESS) {
+        discard_new_file(handle, path);
+        return io_failure("write", displayPath, writeError);
+    }
+    CloseHandle(handle);
+    return result<void>::success();
+}
+
+result<bool> internal::is_private_file(const std::filesystem::path &path, std::string_view displayPath) {
+    // FILE_FLAG_OPEN_REPARSE_POINT opens a link itself instead of the file it names; a link is never
+    // private, whatever it points at.
+    const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+    const HANDLE handle = CreateFileW(path.c_str(), READ_CONTROL, share, nullptr, OPEN_EXISTING, flags, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD errorCode = GetLastError();
+        if (errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND) {
+            return not_found(displayPath);
+        }
+        return io_failure("inspect", displayPath, errorCode);
+    }
+
+    BY_HANDLE_FILE_INFORMATION information = {};
+    if (GetFileInformationByHandle(handle, &information) == 0) {
+        const DWORD errorCode = GetLastError();
+        CloseHandle(handle);
+        return io_failure("inspect", displayPath, errorCode);
+    }
+    constexpr DWORD NOT_A_PLAIN_FILE = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
+    if ((information.dwFileAttributes & NOT_A_PLAIN_FILE) != 0) {
+        CloseHandle(handle);
+        return false;
+    }
+
+    std::vector<std::byte> tokenUser = {};
+    const DWORD userError = query_process_user(tokenUser);
+    if (userError != ERROR_SUCCESS) {
+        CloseHandle(handle);
+        return io_failure("identify the owner of", displayPath, userError);
+    }
+    bool isPrivate = false;
+    const DWORD inspectError = inspect_privacy(handle, sid_of(tokenUser), isPrivate);
+    CloseHandle(handle);
+    if (inspectError != ERROR_SUCCESS) {
+        return io_failure("inspect", displayPath, inspectError);
+    }
+    return isPrivate;
 }
 
 

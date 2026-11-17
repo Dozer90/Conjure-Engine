@@ -24,6 +24,7 @@ and the code win**; the area documents are corrected by the wave 1 documentation
 | C13 | **Core has no copy-control base class** (code sweep F212, option B: delete). `conjure/core/non_copyable.h` with `non_copyable` and `non_movable` is removed: no engine type derived from them, they had no test, and the style exception excusing the missing test described them wrongly. A type that must not be copied deletes its copy constructor and copy assignment itself and defaults (`noexcept`) or deletes its moves, in the class, where a reader of a learning engine sees standard C++ directly; game code does the same. `docs/CODE_STYLE.cpp` carries the example of a non-copyable but movable type and `docs/CONVENTIONS.md` section 3 the rule. No such base is to be added again. |
 | C14 | **`system` depends on `jobs`, and the process pipe readers are `jobs::dedicated_thread`s** (code sweep F233, option B). C2 gains `system` -> `jobs` as a private link (no cycle: the `jobs` library links only `foundation`), which makes C4 true as written: nothing outside `jobs` creates a `std::thread` or `std::jthread`. Both process backends start their readers through `detail::pipe_reader` (`engine/src/core/system/system_internal.h`), which holds the `dedicated_thread`, registers it with the completion latch and joins it through `dedicated_thread::join()`. The threads are named `process-stdout` and `process-stderr` on Windows and `process-pipes` on POSIX (each within the 15 bytes Linux keeps). A reader ignores its stop token, since a blocking read cannot be interrupted; it ends when the last writer of its pipe is gone, so the destructor kills the process tree before joining and `wait()` does once its timeout has passed (without a timeout `wait()` waits for the last writer to go). A refused thread is handled where every `dedicated_thread` handles it: the `std::system_error` is not caught and ends the process (2.7, sweep F225). There is no new toolchain requirement, because `jobs` and its `std::jthread` check are part of every build already. |
 | C15 | **Infinite floats are written as the strings `"inf"` and `"-inf"`** (code sweep F250, option B). The reflection JSON conversion (2.11) writes +infinity as `"inf"`, -infinity as `"-inf"`, NaN as `null` (unchanged) and every finite float as a number, for `F32`, `F64` and each component of `VEC2/3/4`, `QUAT`, `MAT4` and `TRANSFORM`; reading accepts a number, `null` and exactly those two strings, so all three round-trip and a "no limit" sentinel no longer comes back as NaN. Any other string for a float is `INVALID_ARGUMENT` naming the field path. Compatibility: data written before this decision stored an infinity as `null` and still loads, as NaN; data holding one of the strings does not load in an older build. Everything that reads the engine's JSON without going through reflection (tools reading scene files, the script-field paths of the scripting layer) must accept the two strings where it expects a float; the editor's property drawers read and write them (`04_editor.md`), and the script-field paths adopt the same encoding as a scripting follow-up. |
+| C16 | **`same_rotation` compares per component** (code sweep F213, option B). `same_rotation(a, b, epsilon)` is `nearly_equal(a, dot(a, b) < 0 ? -b : b, epsilon)`: epsilon means what it means in `nearly_equal`, and `q` and `-q` stay equal. In angles, for a small epsilon, two rotations up to 2 epsilon radians apart always compare equal and two more than about 4 epsilon radians apart never do; in between it depends on the axis (`conjure/core/math/glm_types.h`). The former `\|dot\| >= 1 - epsilon` was a cosine tolerance, some 2800 times looser at the default 1e-6 (0.16 degrees), so one epsilon meant two different things in one header. Physics consequences: `14_physics.md` P19; the editor's cached Euler angles use the same check with a tolerance of their own (`engine/src/editor/ui/property_drawer.cpp`). |
 
 ## 2. Area contracts
 
@@ -53,6 +54,8 @@ namespace conjure::math {
     inline constexpr f32 PI = 3.14159265358979323846f;  inline constexpr f32 EPSILON = 1.0e-6f;
     [[nodiscard]] constexpr f32 radians(f32 degrees) noexcept; [[nodiscard]] constexpr f32 degrees(f32 radians) noexcept;
     [[nodiscard]] bool nearly_equal(f32 a, f32 b, f32 epsilon = EPSILON) noexcept;  // also vec2/3/4, quat, mat4
+    // same_rotation(quat a, quat b, epsilon) for rotations: nearly_equal(a, dot(a, b) < 0 ? -b : b, epsilon), so q
+    // and -q are equal; in angle, up to 2 epsilon rad apart compare equal, beyond about 4 epsilon rad never (C16)
     [[nodiscard]] constexpr u32 align_up(u32 value, u32 alignment) noexcept;        // also usize, u64; power-of-two helpers
     [[nodiscard]] constexpr bool is_power_of_two(u64 value) noexcept;
 
@@ -350,6 +353,9 @@ namespace conjure::core::vfs {
         [[nodiscard]] virtual result<std::unique_ptr<file>> open_read(std::string_view path) = 0;
         [[nodiscard]] virtual bool is_read_only() const noexcept; };
     class native_file_system final : public file_system { public: explicit native_file_system(std::filesystem::path root, bool readOnly = false); const std::filesystem::path &root() const noexcept; [[nodiscard]] result<std::filesystem::path> to_native(std::string_view path) const; /* checked like the file methods: an escape is PERMISSION_DENIED (C10) */ };
+    // native_file_system.h also declares two free functions on on-disk paths (code sweep F740, 09 R66):
+    [[nodiscard]] result<void> write_private_file(const std::filesystem::path &path, std::span<const std::byte> data);  // owner-only temporary, checked before data, renamed over path; UNSUPPORTED on FAT/exFAT; not flushed
+    [[nodiscard]] result<bool> is_private_file(const std::filesystem::path &path);  // only the process user may open it
     class memory_file_system final : public file_system { /* in-memory tree; thread-safe via mutex; write times from a counter */ };
     class mount_table final : public file_system {   // "scheme://path" routing: project://, assets://, engine://, cooked://, modules://<name>/
         public: [[nodiscard]] result<void> mount(std::string_view scheme, std::shared_ptr<file_system> backend);   // ALREADY_EXISTS
@@ -367,6 +373,12 @@ Tests: a **conformance suite** template run against `native_file_system` (in a `
 `test_path_utils.cpp`, `test_native_file_system.cpp` (root escape rejected, atomic write leaves no temp file and
 flushes its data, write time changes), `test_memory_file_system.cpp` (concurrent writers). The conformance suite
 covers the names of new entries (C12) for both backends.
+
+`write_private_file` exists for secrets other accounts of the machine must not read; its callers are the editor's
+two token files, its audit log (which falls back to an ordinary file on `UNSUPPORTED`) and its trust store
+(`04_editor.md` D23, D25, D26, D27). The per-OS creation and check live in `native_platform_windows.cpp` /
+`native_platform_posix.cpp`; the decision, and why it lives in core rather than platform, is
+`09_cross_area_resolutions.md` R66.
 
 ### 2.10 system (`conjure/core/`)
 

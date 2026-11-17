@@ -216,6 +216,35 @@ namespace conjure::editor {
     }
 
     /*---------------------------------------------------------------*/
+    // Project trust
+
+    bool editor_context::raise_trust_prompt(const std::filesystem::path &projectRoot) {
+        if (!mTrustPromptEnabled || projectRoot.empty()) {
+            return false;
+        }
+        // The question names what an answer records: the resolved folder, not the spelling somebody typed (a
+        // path relative to the working directory, the name of a link). Through char8_t, as the key is UTF-8.
+        const core::result<std::string> key = project_trust::project_key(projectRoot);
+        if (key.has_value()) {
+            mTrustPrompt = std::filesystem::path(std::u8string(key.value().begin(), key.value().end()));
+        } else {
+            mTrustPrompt = projectRoot;
+        }
+        return true;
+    }
+
+    void editor_context::close_trust_prompt_for(const std::filesystem::path &projectRoot) {
+        if (!mTrustPrompt.has_value()) {
+            return;
+        }
+        const core::result<std::string> asked = project_trust::project_key(*mTrustPrompt);
+        const core::result<std::string> answered = project_trust::project_key(projectRoot);
+        if (asked.has_value() && answered.has_value() && asked.value() == answered.value()) {
+            mTrustPrompt.reset();
+        }
+    }
+
+    /*---------------------------------------------------------------*/
     // Project and scene state
 
     engine::project *editor_context::project() noexcept {
@@ -299,13 +328,6 @@ namespace conjure::editor {
     u64 editor_context::bump_revision() {
         ++mRevision;
         return mRevision;
-    }
-
-    void editor_context::set_token(std::string token) {
-        mToken = std::move(token);
-        if (mServer != nullptr) {
-            mServer->set_token(mToken);
-        }
     }
 
     void editor_context::set_dotnet_executable(std::string executable) {
@@ -435,6 +457,11 @@ namespace conjure::editor {
         state.set("port", mServer == nullptr ? u32{0} : u32{mServer->bound_port()});
         state.set("clients", mServer == nullptr ? usize{0} : mServer->client_count());
         state.set("frame", frame_index());
+        if (mTrustPrompt.has_value()) {
+            state.set("trustPrompt", mTrustPrompt->generic_string());
+        } else {
+            state.set_null("trustPrompt");
+        }
         return state;
     }
 
@@ -445,6 +472,8 @@ namespace conjure::editor {
         const engine::engine_context &context = engine.context();
         if (context.project != nullptr) {
             mProject = *context.project;
+            // The project the window asked about is open now: the question is settled.
+            close_trust_prompt_for(mProject->root_directory());
         } else {
             mProject.reset();
         }

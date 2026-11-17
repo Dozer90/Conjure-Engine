@@ -377,7 +377,7 @@ namespace conjure::editor::support {
             R"("required":["entity","path"]}})", entityRef),
             R"({"type":"object","properties":{"value":{},"type":{"type":"string"},"path":{"type":"string"},)"
             R"("kind":{"type":"string"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &component_get
           )
         );
@@ -388,7 +388,7 @@ namespace conjure::editor::support {
             "The editable component types an entity carries.",
             std::format(R"({{"type":"object","properties":{{"entity":{}}},"required":["entity"]}})", entityRef),
             R"({"type":"object","properties":{"types":{"type":"array"},"count":{"type":"integer"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &component_list
           )
         );

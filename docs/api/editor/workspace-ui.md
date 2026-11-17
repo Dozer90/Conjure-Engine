@@ -45,6 +45,15 @@ button calls `save_scene_as(context, path)`, which sends `scene.save_as` and kee
 and both requests do nothing: `scene.save` and `scene.save_as` are editing-state commands, because the scene then
 holds the play session's state, which Stop discards.
 
+The workspace also asks the one question the editor has about a project: "Do you trust the authors of this
+project?". It is a modal dialog shown while `editor_context::trust_prompt()` names a project, which happens when
+the editor was started with `--project` on a project nobody answered for, or when a `project.open` for such a
+project was refused ([Project trust](headless-and-commands.md#project-trust)). *Trust and Open* calls
+`answer_trust_prompt(context, true)`: it sends `project.trust` and then `project.open`, the two requests a
+protocol client would send, and keeps the error text when the first fails (`trust_prompt_error()`). *Don't Open*
+(or Escape) calls `answer_trust_prompt(context, false)`: the dialog closes and nothing is recorded. The dialog
+also closes by itself when a protocol client trusts the project meanwhile.
+
 ## Panels
 
 `editor_panel` is a titled ImGui window with an open flag; `draw(context)` brackets the window and calls the
@@ -60,8 +69,8 @@ subclass. The built-in panels:
 | `history_panel` (`conjure/editor/ui/panels/history_panel.h`) | the undo entries with label and client, the cursor, undo / redo / clear |
 | `toolbar_panel` (`conjure/editor/ui/panels/toolbar_panel.h`) | play / pause / resume / step / stop (`play.*`), the play state and frame, undo and redo (the keyboard shortcuts belong to the workspace) |
 | `profiler_panel` (`conjure/editor/ui/panels/profiler_panel.h`) | frame-time history from `engine::frame_stats` as a plot, the phase breakdown of the latest frame |
-| `ai_session_panel` (`conjure/editor/ui/panels/ai_session_panel.h`) | the server's port and clients, a request line sent through an in-process loopback client, the responses and events |
-| `export_dialog` (`conjure/editor/ui/panels/export_dialog.h`) | the output directory, the `project.export` command and its `progress` events (an export is always a Distribution export, so there is no configuration to pick) |
+| `ai_session_panel` (`conjure/editor/ui/panels/ai_session_panel.h`) | the server's port and clients, the paths of the port file, the two token files and the audit log (never a token), a request line sent through an in-process loopback client that opens with `session.hello`, the responses and events |
+| `export_dialog` (`conjure/editor/ui/panels/export_dialog.h`) | the output directory (a relative one is relative to the project root, as in the command; the status line names the folder that was written), the `project.export` command and its `progress` events (an export is always a Distribution export, so there is no configuration to pick) |
 
 ```cpp
 #include "conjure/editor/ui/editor_panel.h"
@@ -144,6 +153,7 @@ can be drawn against the null device in a unit test.
 | `void panel_registry::add(panel_descriptor)` / `add_module_panel(string_view owner, const panel_desc &)` / `descriptors()` | the panel list |
 | `void editor_workspace::create_default_panels(editor_context &)` / `sync_module_panels` / `update` / `draw` / `save_layout` | the dockspace |
 | `void editor_workspace::request_save_scene(editor_context &)` / `request_save_scene_as` / `bool save_scene_as(editor_context &, string_view)` / `save_as_pending()` | Save Scene and Save Scene As |
+| `bool editor_workspace::answer_trust_prompt(editor_context &, bool trust)` / `trust_prompt_error()` | the answer to the project trust question: Trust and Open, or Don't Open |
 | `void property_drawer_registry::set(field_kind, draw_fn)` / `install_defaults()` | widgets per field kind |
 | `void gizmo_controller::apply_delta(editor_context &, const math::mat4 &)` / `end_drag` / `set_operation` / `set_space` / `set_snap` / `snap_enabled()` / `is_over()` | the gizmo |
 | `void hierarchy_cache::rebuild(const scene::scene &, const selection_set &)` / `set_filter` / `set_expanded(const scene::scene &, entity, bool)` / `reveal` / `refresh_labels` / `rows()` | the hierarchy rows |

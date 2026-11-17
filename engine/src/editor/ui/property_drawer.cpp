@@ -86,6 +86,11 @@ namespace conjure::editor::ui {
 
         constexpr std::string_view POSITIVE_INFINITY_TEXT = "inf";
         constexpr std::string_view NEGATIVE_INFINITY_TEXT = "-inf";
+        // The per-component tolerance under which a rotation still matches the one its cached Euler angles were
+        // made for (math::same_rotation): above float rounding of a value written and read back, below any change
+        // made on purpose: rotations more than about 0.002 degrees (4e-5 radians) apart are a new rotation, whose
+        // angles are decomposed afresh.
+        constexpr f32 EULER_CACHE_TOLERANCE = 1.0e-5f;
 
         /// <summary>
         /// The value of a float in reflection JSON: a number, "inf", "-inf" or null (NaN). 'fallback' for anything
@@ -455,8 +460,7 @@ namespace conjure::editor::ui {
                 // normalises through inf * 0) may carry a sign, which the C library prints ("-nan(ind)", "-nan").
                 // Typing an angle repairs the rotation, with the angles that are still not numbers taken as zero.
                 degrees.fill(std::numeric_limits<f32>::quiet_NaN());
-            } else if (storage->GetBool(keys.valid) && std::abs(glm::dot(cached, rotation)) >= 1.0f - 1.0e-6f) {
-                // q and -q are the same rotation, hence the absolute value.
+            } else if (storage->GetBool(keys.valid) && math::same_rotation(cached, rotation, EULER_CACHE_TOLERANCE)) {
                 for (usize axis = 0; axis < degrees.size(); ++axis) {
                     degrees[axis] = storage->GetFloat(keys.degrees[axis]);
                 }

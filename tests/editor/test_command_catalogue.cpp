@@ -6,7 +6,11 @@
 #include "conjure/core/string_utils.h"
 #include "conjure/editor/builtin_commands.h"
 #include "conjure/editor/command_registry.h"
+#include "conjure/editor/editor_command.h"
+#include "conjure/editor/play_controller.h"
+#include "conjure/editor/protocol/access_token.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/editor/protocol/protocol_server.h"
 
 #include <filesystem>
 #include <format>
@@ -19,6 +23,8 @@
 // The command catalogue (docs/design/04_editor.md 10, 08_testing.md 6.3 item 2, D8c): one fixture per command
 // under tests/editor/data/commands/ runs through the dispatcher; every undoable mutation must change the
 // snapshot, then is undone and redone, and the serialised scene and the project files must come back exactly.
+// The same fixtures hold the read_only flag to its promise (D25): a command an inspect-only client may run
+// leaves the editor as it found it, and such a client is refused every other command.
 
 using namespace conjure;
 using namespace conjure::editor;
@@ -101,6 +107,27 @@ namespace {
                "when its effect lies outside the snapshot)";
     }
 
+    /// <summary>
+    /// The state the editor shares between its clients besides the scene and the project files, as text: the
+    /// selection, the camera and view mode, the play state, the scene revision and the size of the history.
+    /// </summary>
+    std::string shared_state(editor_test::headless_editor &editor) {
+        editor_context &context = editor.context();
+        std::string text = std::format(
+          "play {} revision {} undo {} view {} camera {} selection",
+          to_string(context.play().state()),
+          context.revision(),
+          context.undo().size(),
+          context.current_view_mode() == editor_context::view_mode::TWO_D ? "2d" : "3d",
+          context.camera().to_json().to_string()
+        );
+        for (const core::uuid &guid : context.selection().guids()) {
+            text += ' ';
+            text += guid.to_string();
+        }
+        return text;
+    }
+
     void write_fixture_files(const editor_test::command_fixture &fixture, const std::filesystem::path &projectRoot) {
         const core::json::value files = fixture.document.root()["files"];
         if (!files.is_object()) {
@@ -160,10 +187,20 @@ namespace {
           root["roundTrip"].as_bool(true);
         const editor_test::editor_snapshot before = editor_test::capture_snapshot(editor);
         const usize undoBefore = editor.context().undo().size();
+        const std::string sharedBefore = shared_state(editor);
         const protocol_response response = editor.send(
           command,
           expanded_args(root["request"]["args"], editor.project_directory())
         );
+        if (has_command_flag(*descriptor, command_flags::READ_ONLY)) {
+            // The promise of the flag: whatever the command answered, nothing other clients share has changed.
+            const editor_test::editor_snapshot after = editor_test::capture_snapshot(editor);
+            CHECK_MESSAGE(
+              before == after,
+              std::format("read_only: {}", editor_test::describe_difference(before, after))
+            );
+            CHECK(shared_state(editor) == sharedBefore);
+        }
 
         std::string why = "";
         bool matched = false;
@@ -257,6 +294,92 @@ TEST_SUITE("editor/command_catalogue") {
         for (const std::string &name : covered) {
             CHECK_MESSAGE(registry.find(name) != nullptr, std::format("fixture names unknown command '{}'", name));
         }
+    }
+
+    TEST_CASE("command_catalogue - the commands an inspect-only client may run are these and no others") {
+        // Pinned on purpose: flagging one more command read_only opens it to every inspect-only client, and
+        // that is a decision to take here, in the open (docs/design/04_editor.md D25).
+        const std::set<std::string> expected = {
+            "asset.info", "asset.list", "component.get", "component.list", "console.read", "editor.schema",
+            "editor.state", "editor.wait_frames", "entity.bounds", "entity.find", "entity.get", "history.list",
+            "module.list", "physics.overlap_sphere", "physics.raycast", "play.state", "profiler.frame_stats",
+            "project.info", "project.list_scenes", "project.trust_state", "reflection.asset_types",
+            "reflection.components", "reflection.type", "scene.get_hierarchy", "scene.info", "scene.query",
+            "script.list", "script.read", "selection.get", "session.hello", "session.ping", "session.subscribe",
+            "view.get_camera", "view.mode", "view.pick",
+        };
+        command_registry registry = {};
+        register_builtin_commands(registry);
+        std::set<std::string> flagged = {};
+        for (const command_descriptor *descriptor : registry.descriptors()) {
+            CAPTURE(descriptor->name);
+            const bool readOnly = has_command_flag(*descriptor, command_flags::READ_ONLY);
+            CHECK(readOnly == expected.contains(descriptor->name));
+            const access_level expectedAccess = readOnly ? access_level::INSPECT : access_level::FULL_CONTROL;
+            CHECK(required_access(descriptor->flags) == expectedAccess);
+            if (readOnly) {
+                flagged.insert(descriptor->name);
+                // What the registry also enforces: no command that mutates is open to inspect-only clients.
+                CHECK_FALSE(has_command_flag(*descriptor, command_flags::MUTATES));
+            }
+        }
+        CHECK(flagged.size() == expected.size());
+    }
+
+    TEST_CASE("regression - code sweep F187 an inspect-only client is refused every command that is not read_only, "
+              "and no command that is") {
+        editor_test::headless_editor editor = {};
+        const std::string entity = editor.create_entity("Watched");
+        protocol_server &server = editor.application().server();
+        CONJURE_REQUIRE_OK(server.set_token("tok-7f3a9c"));
+        CONJURE_REQUIRE_OK(server.set_inspect_token("look-51d0e2"));
+        editor_test::loopback_session session(editor);
+        const core::json::document hello = session.ok("session.hello", core::json::object({{"token", "look-51d0e2"}}));
+        REQUIRE(hello.root()["access"].as_string() == "inspect");
+        const editor_test::editor_snapshot before = editor_test::capture_snapshot(editor);
+        const std::string sharedBefore = shared_state(editor);
+
+        usize refused = 0;
+        usize allowed = 0;
+        for (const command_descriptor *descriptor : editor.context().registry().descriptors()) {
+            CAPTURE(descriptor->name);
+            // No arguments at all: a command that is refused never gets as far as looking at them, and one that
+            // is allowed answers whatever it answers to that (INVALID_ARGS for most). session.hello alone needs
+            // its token, or its own handler would refuse the hello.
+            core::json::document args = core::json::document::object();
+            if (descriptor->name == "session.hello") {
+                args.set("token", "look-51d0e2");
+            }
+            const protocol_response response = session.request(descriptor->name, std::move(args));
+            if (has_command_flag(*descriptor, command_flags::READ_ONLY)) {
+                CHECK(response.errorCode != protocol_error_code::UNAUTHORISED);
+                ++allowed;
+                continue;
+            }
+            CHECK_FALSE(response.ok);
+            CHECK(response.errorCode == protocol_error_code::UNAUTHORISED);
+            CHECK(response.errorDetails.root()["required"].as_string() == "full_control");
+            CHECK(response.errorDetails.root()["granted"].as_string() == "inspect");
+            CHECK(response.errorMessage.find(descriptor->name) != std::string::npos);
+            ++refused;
+        }
+        CHECK(allowed == 35);
+        CHECK(refused == editor.context().registry().size() - allowed);
+
+        // Nothing happened: editor.quit, play.start, scene.close, entity.destroy_many and the rest never ran.
+        const editor_test::editor_snapshot after = editor_test::capture_snapshot(editor);
+        CHECK_MESSAGE(before == after, editor_test::describe_difference(before, after));
+        CHECK(shared_state(editor) == sharedBefore);
+        CHECK(editor.context().dispatcher().pending_count() == 0);
+        CHECK_FALSE(editor.application().quit_requested());
+        // A refusal does not cost the client its connection, and the other token opens the same commands.
+        CHECK(session.client().is_connected());
+        const core::json::document raised = session.ok("session.hello", core::json::object({{"token", "tok-7f3a9c"}}));
+        CHECK(raised.root()["access"].as_string() == "full_control");
+        (void) session.ok("entity.rename", core::json::object({{"entity", entity}, {"name", "Renamed"}}));
+        CHECK(editor.scene().world().entity_count() == 1);
+        CHECK_FALSE(editor.log().contains("tok-7f3a9c"));
+        CHECK_FALSE(editor.log().contains("look-51d0e2"));
     }
 
     TEST_CASE(

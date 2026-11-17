@@ -88,7 +88,7 @@ namespace conjure::editor::support {
             "The selected entities.",
             std::string(EMPTY_SCHEMA),
             resultSchema,
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &selection_get
           )
         );

@@ -35,8 +35,10 @@ namespace conjure::editor {
             descriptor.flags = desc.flags & ~command_flags::ON_DISK;
             if (has_flag(desc.flags, command_flags::MUTATES)) {
                 // The record's handler returns a result document only: it can never supply an inverse, so a
-                // module mutation bumps the revision but is not undoable.
+                // module mutation bumps the revision but is not undoable. And a command that says it mutates
+                // is not one for inspect-only clients, whatever else it says (the registry refuses the pair).
                 descriptor.flags |= command_flags::NO_UNDO;
+                descriptor.flags &= ~command_flags::READ_ONLY;
             }
             descriptor.owner = std::string(owner);
             const command_handler_fn handler = desc.handler;

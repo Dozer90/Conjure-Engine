@@ -10,6 +10,7 @@ umbrella. The binding contract is `docs/design/10_core.md` section 2.9.
 |---|---|---|
 | `file_stat`, `enumerate_flags`, `file`, `file_system` | `file_system.h` | the backend interface: `read_file`, `read_text_file`, `write_file`, `write_file_atomic`, `write_text_file`, `stat`, `exists`, `enumerate`, `rename`, `remove`, `remove_all`, `create_directories`, `open_read`, `is_read_only` |
 | `native_file_system` | `native_file_system.h` | a directory on disk; `root()`, `to_native()` (checked: `result<path>`); rejects root escapes |
+| `write_private_file`, `is_private_file` | `native_file_system.h` | free functions over an on-disk path: a file only the user the process runs as may open, and the check for it |
 | `memory_file_system` | `memory_file_system.h` | an in-memory tree; `set_read_only()`, `write_counter()` |
 | `mount_table` | `mount_table.h` | routes `scheme://path` to backends; `mount`, `unmount`, `find_mount`, `schemes`, `split` |
 | `path_utils` | `path_utils.h` | `normalize`, `join`, `parent`, `filename`, `stem`, `extension`, `has_extension`, `is_absolute`, `relative_to`, `is_portable_name` |
@@ -161,6 +162,31 @@ the new ones. That costs one device flush per call (milliseconds); `write_file` 
 - `path_utils::parent` keeps a root's separator: `"/a"` -> `"/"`, `"C:/a"` -> `"C:/"` (the bare
   `"C:"` would mean "the current directory of drive C").
 
+## Private files
+
+`write_private_file(path, data)` is for a secret that other accounts of the machine must not read; its first
+caller is the editor's AI-protocol token (`docs/design/04_editor.md` D23, code sweep F740,
+`09_cross_area_resolutions.md` R66). It takes an on-disk path, not a VFS path: the caller is outside any
+mount. The data never passes through a file with wider access:
+
+- `internal::create_private_file` (`native_platform.h`) creates a temporary beside the target with the
+  restriction in place from the first instant. POSIX: `open(O_CREAT | O_EXCL, 0600)`, then `fchmod(0600)` so a
+  strict umask does not take the owner's own bits away. Windows: `CreateFileW(CREATE_NEW)` with a security
+  descriptor built from the process token's user: owner that user, one access-allowed entry for that user,
+  `SE_DACL_PROTECTED` so the folder's inheritable entries stay out.
+- The result is then checked on the open handle, before a byte of data is written: POSIX `fstat` (regular
+  file, owned by the effective user, no group or other bits); Windows `FILE_PERSISTENT_ACLS` on the volume and
+  the descriptor read back with `GetSecurityInfo`. A volume that dropped the restriction (FAT, exFAT, a mount
+  with fixed permissions) answers `UNSUPPORTED` and the temporary is removed.
+- `internal::replace_file` renames the temporary over the target, so a reader sees the old file or the new
+  one, and a symbolic link or a file with wider permissions at the target is replaced, not written through.
+
+`is_private_file(path)` applies the same check to an existing entry without following a link. What neither
+function covers: accounts the operating system lets pass any permission (root, administrators, backup
+operators), access control lists beyond the mode bits on POSIX (macOS), and the folder, which whoever may write
+it can use to replace or delete the file. Nothing is flushed to the device: a secret that is regenerated at
+every start need not survive a power cut.
+
 ## Threading
 
 - `native_file_system` holds no mutable state; one instance can be used from any thread (the flush
@@ -192,7 +218,8 @@ calls, the rank of the refusal); the other files cover the interface defaults, t
 (root escapes, UTF-8 names, atomic writes leaving no temporary and flushing exactly once, the
 flushing writer itself, entries with names that cannot be created being read, moved and removed
 under an ordinary root and under one in the extended-length form, a dotted name next to its plain
-neighbour, write times), `path_utils::is_portable_name`, the
+neighbour, write times, private files: content, the restriction read back, a file open to others and a
+symbolic link being replaced, the refusals), `path_utils::is_portable_name`, the
 memory specifics (counter semantics, snapshots, concurrent writers and readers) and the mount
 table (routing, error pass-through, cross-mount rename with its error codes and their order, which is
 that of a rename within one backend, nested tables and the

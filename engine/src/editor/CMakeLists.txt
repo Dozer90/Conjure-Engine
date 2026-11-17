@@ -39,11 +39,14 @@ set(CONJURE_EDITOR_CORE_PUBLIC_HEADERS
     ${CONJURE_EDITOR_INCLUDE}/panel_desc.h
     ${CONJURE_EDITOR_INCLUDE}/picker.h
     ${CONJURE_EDITOR_INCLUDE}/play_controller.h
+    ${CONJURE_EDITOR_INCLUDE}/project_trust.h
     ${CONJURE_EDITOR_INCLUDE}/reflection_path.h
     ${CONJURE_EDITOR_INCLUDE}/schema_validator.h
     ${CONJURE_EDITOR_INCLUDE}/screenshot_service.h
     ${CONJURE_EDITOR_INCLUDE}/selection_set.h
     ${CONJURE_EDITOR_INCLUDE}/undo_stack.h
+    ${CONJURE_EDITOR_INCLUDE}/protocol/access_token.h
+    ${CONJURE_EDITOR_INCLUDE}/protocol/audit_log.h
     ${CONJURE_EDITOR_INCLUDE}/protocol/line_splitter.h
     ${CONJURE_EDITOR_INCLUDE}/protocol/loopback_transport.h
     ${CONJURE_EDITOR_INCLUDE}/protocol/protocol_message.h
@@ -71,6 +74,7 @@ set(CONJURE_EDITOR_CORE_SOURCES
     core/log_category.cpp
     core/picker.cpp
     core/play_controller.cpp
+    core/project_trust.cpp
     core/reflection_path.cpp
     core/scene_view.cpp
     core/scene_view.h
@@ -78,6 +82,8 @@ set(CONJURE_EDITOR_CORE_SOURCES
     core/screenshot_service.cpp
     core/selection_set.cpp
     core/undo_stack.cpp
+    core/user_paths.cpp
+    core/user_paths.h
     core/commands/command_support.cpp
     core/commands/command_support.h
     core/commands/commands_asset.cpp
@@ -100,6 +106,8 @@ set(CONJURE_EDITOR_CORE_SOURCES
     core/commands/commands_session.cpp
     core/commands/commands_view.cpp
     core/net/socket.h
+    core/protocol/access_token.cpp
+    core/protocol/audit_log.cpp
     core/protocol/line_splitter.cpp
     core/protocol/loopback_transport.cpp
     core/protocol/protocol_message.cpp
@@ -111,12 +119,12 @@ set(CONJURE_EDITOR_CORE_SOURCES
     core/protocol/tcp_transport.h
 )
 
-# The socket layer is the one platform-specific file pair (04_editor.md 3.12): selected here, no #ifdef
-# anywhere else in the module.
+# The two platform-specific file pairs of the module, selected here so that no other file needs an #ifdef: the
+# socket layer (04_editor.md 3.12) and the per-user state folder that holds the project trust store (D27).
 if(WIN32)
-    list(APPEND CONJURE_EDITOR_CORE_SOURCES core/net/socket_win32.cpp)
+    list(APPEND CONJURE_EDITOR_CORE_SOURCES core/net/socket_win32.cpp core/user_paths_windows.cpp)
 else()
-    list(APPEND CONJURE_EDITOR_CORE_SOURCES core/net/socket_posix.cpp)
+    list(APPEND CONJURE_EDITOR_CORE_SOURCES core/net/socket_posix.cpp core/user_paths_posix.cpp)
 endif()
 
 set(CONJURE_EDITOR_CORE_PRIVATE_DEPS "")
@@ -138,7 +146,9 @@ if(TARGET conjure::bindings)
     list(APPEND CONJURE_EDITOR_CORE_PRIVATE_DEFINES CONJURE_EDITOR_WITH_BINDINGS=1)
 endif()
 if(WIN32)
-    list(APPEND CONJURE_EDITOR_CORE_PRIVATE_DEPS ws2_32)
+    # ws2_32: the socket layer. shell32, ole32 and uuid: SHGetKnownFolderPath, CoTaskMemFree and the known-folder
+    # identifiers of core/user_paths_windows.cpp.
+    list(APPEND CONJURE_EDITOR_CORE_PRIVATE_DEPS ws2_32 shell32 ole32 uuid)
 endif()
 
 conjure_add_module(editor_core

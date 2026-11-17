@@ -16,7 +16,7 @@ namespace conjure::editor {
             std::string_view name = "";
         };
 
-        constexpr std::array<flag_name, 10> FLAG_NAMES = {
+        constexpr std::array<flag_name, 11> FLAG_NAMES = {
             flag_name{command_flags::MUTATES, "mutates"},
             flag_name{command_flags::REQUIRES_PROJECT, "requires_project"},
             flag_name{command_flags::REQUIRES_SCENE, "requires_scene"},
@@ -27,6 +27,7 @@ namespace conjure::editor {
             flag_name{command_flags::NOT_IN_BATCH, "not_in_batch"},
             flag_name{command_flags::NO_UNDO, "no_undo"},
             flag_name{command_flags::ON_DISK, "on_disk"},
+            flag_name{command_flags::READ_ONLY, "read_only"},
         };
     }
 

@@ -12,6 +12,7 @@
 #include "conjure/editor/screenshot_service.h"
 #include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/project.h"
 
 #include <filesystem>
 #include <fstream>
@@ -464,5 +465,19 @@ TEST_SUITE("editor/screenshot_service") {
         CHECK(image.value().pixel(1, 1) == core::rgba8{1, 2, 3, 4});
         CHECK(backend.begun() == 1);
         CHECK(backend.captured() == 1);
+    }
+
+    TEST_CASE("regression - code sweep F187 view.screenshot writes a relative path under the project root") {
+        editor_test::headless_editor editor = {};
+        editor.context().screenshots().set_backend(
+          std::make_unique<memory_screenshot_backend>(core::rgba8{10, 20, 30, 255})
+        );
+        const core::json::document result = editor.ok(
+          "view.screenshot",
+          core::json::object({{"path", "shots/relative.png"}, {"width", 8}, {"height", 8}})
+        );
+        const std::filesystem::path expected = editor.context().project()->root_directory() / "shots" / "relative.png";
+        CHECK(std::filesystem::path(std::string(result.root()["path"].as_string())) == expected);
+        CHECK(std::filesystem::is_regular_file(expected));
     }
 }

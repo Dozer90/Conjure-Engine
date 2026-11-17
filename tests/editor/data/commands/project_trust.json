@@ -1,0 +1,18 @@
+{
+  "_comment": "The scratch project is trusted for the session already; with no trust store the answer stays one for the session.",
+  "setup": [],
+  "request": {
+    "cmd": "project.trust",
+    "args": {
+      "path": "${project}"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "state": "session",
+      "trusted": true,
+      "remembered": false
+    }
+  }
+}

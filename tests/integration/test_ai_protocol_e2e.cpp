@@ -60,6 +60,9 @@ namespace {
                 options.aiPort = u16{0};
                 options.timeoutSeconds = 30.0;
                 options.projectPath = mDirectory.path();
+                // The scratch project is the test's own: answered for this editor, as --trust-project does, with
+                // no trust store named, so nothing is remembered (04_editor.md D27).
+                options.trustProject = true;
                 options.engineArguments = {"--log-level", "warn"};
                 CONJURE_REQUIRE_OK(mApplication.initialise(options, {}));
                 // script.compile is not part of the file; a missing dotnet keeps any build attempt a clean failure.

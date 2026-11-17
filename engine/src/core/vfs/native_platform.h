@@ -11,7 +11,8 @@
 #include <system_error>
 
 // The pieces of the native backend that need operating system calls: replacing a file in a single
-// step, writing a file so that it has reached the storage device, and reading a file through a handle
+// step, writing a file so that it has reached the storage device, creating a file only its owner may
+// open, and reading a file through a handle
 // that lets other callers rename or delete it meanwhile (std::ifstream denies that on Windows). The
 // free functions are implemented once per platform in native_platform_<platform>.cpp; read_handle and
 // the flush statistics live in native_platform.cpp.
@@ -114,6 +115,39 @@ namespace conjure::core::vfs::internal {
       std::span<const std::byte> data,
       std::string_view displayPath
     );
+
+    /// <summary>
+    /// Creates the regular file at 'path', which must not exist yet, so that only the user the process
+    /// runs as may open it, and writes 'data'. The restriction is part of the creation, so the file is
+    /// never visible with wider access: on POSIX it is created with mode 0600 (open with O_EXCL, then
+    /// fchmod, so neither a link planted at the path nor the process umask changes the outcome), on
+    /// Windows with an access control list that names that user alone, is protected from the folder's
+    /// inheritable entries and makes the user the owner. The result is then checked on the open file
+    /// (is_private_file's rule): a volume that did not apply the restriction, such as FAT or exFAT, or
+    /// a POSIX mount whose owner and mode come from its mount options, answers UNSUPPORTED and the file
+    /// is removed again, before any of 'data' was written. The parent directory must exist. The data is
+    /// not flushed to the device. Every other failure is IO_FAILURE with the operating system's text, and
+    /// leaves no file behind unless removing it failed as well; 'displayPath' is used in messages.
+    /// </summary>
+    [[nodiscard]] result<void> create_private_file(
+      const std::filesystem::path &path,
+      std::span<const std::byte> data,
+      std::string_view displayPath
+    );
+
+    /// <summary>
+    /// Whether the entry at 'path' is a regular file that only the user the process runs as may open.
+    /// POSIX: the entry itself (a symbolic link is not followed and is never private) is a regular file
+    /// owned by the effective user with no permission bit for its group or for others; access control
+    /// lists beyond the mode bits (macOS) are not read. Windows: the entry is a file and not a reparse
+    /// point, its volume keeps access control lists, its owner is the process user, and its list is
+    /// protected from inheritance and holds nothing but entries allowing that user. Accounts the
+    /// operating system lets pass any permission (root; administrators and backup operators) are not
+    /// covered by either rule. NOT_FOUND when nothing is at the path, IO_FAILURE when the entry cannot
+    /// be inspected; a file another user made private is IO_FAILURE on Windows (it cannot be opened to
+    /// look) and false on POSIX. 'displayPath' is used in messages.
+    /// </summary>
+    [[nodiscard]] result<bool> is_private_file(const std::filesystem::path &path, std::string_view displayPath);
 
     /// <summary>
     /// True when a flush refused with 'platformError' means the volume or its driver has no flush, not

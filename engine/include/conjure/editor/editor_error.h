@@ -41,7 +41,10 @@ namespace conjure::editor {
         BUSY,                   // too many pending asynchronous requests for the client
         TIMEOUT,                // an asynchronous command did not complete in time
         CANCELLED,              // the client disconnected before an asynchronous reply
-        UNAUTHORISED,           // the first request of a client was not a valid session.hello
+        UNAUTHORISED,           // where a token is required, a first request that is not a valid session.hello
+                                // (the client is disconnected); a later hello with a wrong token; a command the
+                                // client's token does not open (details {required, granted}; the client stays)
+        PROJECT_NOT_TRUSTED,    // nobody answered for the project on this machine; project.trust comes first
         INTERNAL,               // an invariant failed; the message says which
         COUNT
     };

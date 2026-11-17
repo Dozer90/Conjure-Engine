@@ -1,0 +1,14 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.trust_state",
+    "args": {}
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "state": "session",
+      "trusted": true
+    }
+  }
+}

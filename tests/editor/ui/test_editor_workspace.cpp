@@ -14,6 +14,7 @@
 
 #include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 // editor_workspace.h: the dockspace, the default panels, the global shortcuts, Save Scene As and the layout file.
@@ -230,6 +231,89 @@ TEST_SUITE("editor/ui/editor_workspace") {
         workspace.request_save_scene(editor.context());
         CHECK_FALSE(workspace.save_as_pending());
         CHECK_FALSE(editor.context().scene_dirty());
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_workspace asks about an untrusted project and Trust and Open "
+              "sends project.trust, then project.open") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path other = editor.project_directory() / "downloaded";
+        editor_test::write_project(other, "downloaded");
+        editor_workspace workspace = {};
+        workspace.create_default_panels(editor.context());
+        imgui_frame_scope scope{};
+        draw_frame(editor, workspace, scope);
+        scope.begin_frame();
+        CHECK_FALSE(ImGui::IsPopupOpen("Trust This Project?"));
+        scope.end_frame();
+        // Nothing is asked: there is nothing to answer.
+        CHECK_FALSE(workspace.answer_trust_prompt(editor.context(), true));
+        CHECK_FALSE(workspace.answer_trust_prompt(editor.context(), false));
+
+        // What a windowed session does when project.open (or --project) meets a project nobody answered for.
+        editor.context().set_trust_prompt_enabled(true);
+        CHECK(editor.fail(
+          "project.open",
+          core::json::object({{"path", other.generic_string()}})
+        ) == protocol_error_code::PROJECT_NOT_TRUSTED);
+        REQUIRE(editor.context().trust_prompt().has_value());
+        for (int frame = 0; frame < 2; ++frame) {
+            draw_frame(editor, workspace, scope);
+        }
+        // The question stays up across frames until somebody answers, and showing it answers nothing.
+        scope.begin_frame();
+        CHECK(ImGui::IsPopupOpen("Trust This Project?"));
+        scope.end_frame();
+        CHECK_FALSE(editor.application().trust().is_trusted(other));
+        CHECK(editor.context().project()->description().name == "editor_test");
+
+        SUBCASE("Don't Open closes the question and records nothing") {
+            CHECK(workspace.answer_trust_prompt(editor.context(), false));
+            CHECK_FALSE(editor.context().trust_prompt().has_value());
+            CHECK_FALSE(editor.application().trust().is_trusted(other));
+            CHECK_FALSE(editor.application().has_pending_project_open());
+            draw_frame(editor, workspace, scope);
+            scope.begin_frame();
+            CHECK_FALSE(ImGui::IsPopupOpen("Trust This Project?"));
+            scope.end_frame();
+            CHECK(editor.context().project()->description().name == "editor_test");
+        }
+        SUBCASE("Trust and Open trusts the project and opens it") {
+            CHECK(workspace.answer_trust_prompt(editor.context(), true));
+            CHECK(workspace.trust_prompt_error().empty());
+            CHECK(editor.application().trust().is_trusted(other));
+            CHECK_FALSE(editor.context().trust_prompt().has_value());
+            CHECK(editor.application().has_pending_project_open());
+            editor.pump(1);
+            CHECK(editor.context().project()->description().name == "downloaded");
+        }
+        SUBCASE("a project that vanished meanwhile leaves the question open with the reason") {
+            std::error_code ignored = {};
+            REQUIRE(std::filesystem::remove_all(other, ignored) > 0);
+            CHECK_FALSE(workspace.answer_trust_prompt(editor.context(), true));
+            CHECK(workspace.trust_prompt_error().find("PATH_NOT_FOUND") != std::string::npos);
+            CHECK(editor.context().trust_prompt().has_value());
+            CHECK_FALSE(editor.application().trust().is_trusted(other));
+            draw_frame(editor, workspace, scope);
+            // Don't Open still closes it, and the error goes with it.
+            CHECK(workspace.answer_trust_prompt(editor.context(), false));
+            CHECK(workspace.trust_prompt_error().empty());
+        }
+        SUBCASE("Trust and Open while playing keeps the answer and leaves the opening to a later request") {
+            (void) editor.ok("play.start");
+            CHECK_FALSE(workspace.answer_trust_prompt(editor.context(), true));
+            CHECK(editor.application().trust().is_trusted(other));
+            CHECK_FALSE(editor.context().trust_prompt().has_value());
+            CHECK_FALSE(editor.application().has_pending_project_open());
+            (void) editor.ok("play.stop");
+            (void) editor.ok("project.open", core::json::object({{"path", other.generic_string()}}));
+        }
+        SUBCASE("an answer from a protocol client closes the window's question on the next frame") {
+            (void) editor.ok("project.trust", core::json::object({{"path", other.generic_string()}}));
+            draw_frame(editor, workspace, scope);
+            scope.begin_frame();
+            CHECK_FALSE(ImGui::IsPopupOpen("Trust This Project?"));
+            scope.end_frame();
+        }
     }
 
     TEST_CASE("editor_workspace - Ctrl+Z and F5 work with the toolbar panel closed") {

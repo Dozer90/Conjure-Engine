@@ -542,3 +542,51 @@ result<void> native_file_system::write_bytes(
     }
     return result<void>::success();
 }
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Private files
+
+result<void> conjure::core::vfs::write_private_file(
+  const std::filesystem::path &path,
+  std::span<const std::byte> data
+) {
+    const std::string displayPath = internal::path_to_utf8(path);
+    if (!path.has_filename()) {
+        // An empty path, or one that ends in a separator: there is no name to give the file, and the
+        // temporary would be created in whatever directory the remainder happens to mean.
+        return make_error(error_code::INVALID_ARGUMENT, std::format("'{}' does not name a file", displayPath));
+    }
+    const std::filesystem::path target = internal::extend_native_path(path);
+    std::error_code ignored = {};
+    if (std::filesystem::is_directory(std::filesystem::symlink_status(target, ignored))) {
+        return is_a_directory(displayPath);
+    }
+
+    // As in write_file_atomic: the temporary is longer than the target, so it gets its own extended form.
+    const std::string temporaryName = std::format(
+      "{}.tmp-{}",
+      internal::path_to_utf8(target.filename()),
+      uuid::generate().to_string()
+    );
+    const std::filesystem::path temporary =
+      internal::extend_native_path(target.parent_path() / internal::path_from_utf8(temporaryName));
+    CONJURE_TRY(internal::create_private_file(temporary, data, displayPath));
+
+    // The rename replaces the entry at the target itself: an older file keeps none of its permissions and
+    // a link there is not followed.
+    const result<void> replaced = internal::replace_file(temporary, target);
+    if (!replaced.has_value()) {
+        ignored.clear();
+        std::filesystem::remove(temporary, ignored);
+        if (ignored) {
+            CONJURE_LOG_WARN(LOG_CORE, "vfs: could not remove temporary file '{}'", internal::path_to_utf8(temporary));
+        }
+    }
+    return replaced;
+}
+
+result<bool> conjure::core::vfs::is_private_file(const std::filesystem::path &path) {
+    return internal::is_private_file(internal::extend_native_path(path), internal::path_to_utf8(path));
+}

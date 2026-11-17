@@ -8,6 +8,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include <filesystem>
 #include <format>
 #include <utility>
 
@@ -52,6 +53,21 @@ namespace conjure::editor::ui {
             if (!server->port_file().empty()) {
                 const std::string portFile = server->port_file().generic_string();
                 ImGui::TextDisabled("port file: %s", portFile.c_str());
+            }
+            if (!server->token_file().empty()) {
+                // Where the tokens are, for whoever sets up a client; a token itself is never drawn.
+                const std::string tokenFile = server->token_file().generic_string();
+                ImGui::TextDisabled("token file: %s", tokenFile.c_str());
+            }
+            if (!server->inspect_token_file().empty()) {
+                const std::string tokenFile = server->inspect_token_file().generic_string();
+                ImGui::TextDisabled("inspect-only token file: %s", tokenFile.c_str());
+            }
+            const std::filesystem::path auditFile = server->audit().file();
+            if (!auditFile.empty()) {
+                // Named whether or not it exists yet: the first recorded command creates it.
+                const std::string auditText = auditFile.generic_string();
+                ImGui::TextDisabled("audit log: %s", auditText.c_str());
             }
         }
         ImGui::Separator();
@@ -124,18 +140,24 @@ namespace conjure::editor::ui {
         mClient = server->local_loopback().connect();
         mConnected = true;
         append("[connected through the in-process loopback transport]");
-        if (server->token().empty()) {
-            return;
+        // The panel opens with session.hello, as every client should: the server disconnects a client whose
+        // first line is not a request, and what is typed into the panel next may be anything. With --ai-token
+        // or --ai-inspect-token the hello carries the full-control token (the panel runs in the editor's
+        // process, so it presents the token itself: the user at the editor is not an inspect-only client);
+        // the tokens the editor generates for its TCP port do not gate the in-process loopback. The token is
+        // never echoed to the transcript.
+        const bool presentToken = server->requires_token(transport_kind::LOOPBACK);
+        core::json::document args = core::json::object({{"clientName", "AI Session panel"}});
+        if (presentToken) {
+            args.set("token", std::string_view(server->token()));
         }
-        // With --ai-token the first request must be session.hello or the server disconnects. The panel runs in
-        // the editor's process, so it presents the token itself; it is never echoed to the transcript.
         const core::json::document hello = core::json::object({
           {"id", "ai_session_panel.hello"},
           {"cmd", "session.hello"},
-          {"args", core::json::object({{"token", server->token()}, {"clientName", "AI Session panel"}})},
+          {"args", args},
         });
         mClient.send(hello.to_string());
-        append("> session.hello (token hidden)");
+        append(presentToken ? "> session.hello (token hidden)" : "> session.hello");
     }
 
     void ai_session_panel::append(std::string line) {

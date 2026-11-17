@@ -114,6 +114,7 @@ namespace conjure::editor::support {
                   "renderer",
                   core::json::object({
                     {"viewsRendered", render.viewsRendered},
+                    {"viewsSkipped", render.viewsSkipped},
                     {"passesExecuted", render.passesExecuted},
                     {"drawCalls", render.drawCalls},
                     {"dispatches", render.dispatches},
@@ -121,6 +122,9 @@ namespace conjure::editor::support {
                     {"instancesCulled", render.instancesCulled},
                     {"trianglesDrawn", render.trianglesDrawn},
                     {"lightsRendered", render.lightsRendered},
+                    // What the frame clamped, every frame: the WARN about it is logged once, when it starts.
+                    {"lightsDropped", render.lightsDropped},
+                    {"spritesDropped", render.spritesDropped},
                   })
                 );
             }
@@ -145,12 +149,17 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"cpuMs":{"type":"number"},"gpuMs":{"type":["number","null"]},)"
             R"("systems":{"type":"array"},"phases":{"type":"array"},)"
             R"("drawCalls":{"type":"integer"},"entityCount":{"type":"integer"},)"
+            R"("renderer":{"type":"object","description":"the last frame's renderer counters, in a session with )"
+            R"(a renderer: viewsRendered, viewsSkipped, passesExecuted, drawCalls, dispatches, instancesDrawn, )"
+            R"(instancesCulled, trianglesDrawn, lightsRendered, lightsDropped and spritesDropped; viewsSkipped, )"
+            R"(lightsDropped and spritesDropped count what the frame left out, every frame, while the log warns )"
+            R"(once when that starts"},)"
             R"("simulationTime":{"type":"number",)"
             R"("description":"the engine's scaled seconds since it started, which project.open restarts"},)"
             R"("fixedStepIndex":{"type":"integer",)"
             R"("description":"the engine's fixed steps since it started, which project.open restarts"}},)"
             R"("additionalProperties":true})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &profiler_frame_stats
           )
         );

@@ -135,6 +135,7 @@ nav:
       - Editor:
           - api/editor/index.md
           - The AI control protocol: api/editor/ai-protocol.md
+          - Access tokens and the audit log: api/editor/access-and-audit.md
           - Headless mode and the command model: api/editor/headless-and-commands.md
           - The workspace UI: api/editor/workspace-ui.md
       - Runtime: api/runtime/index.md

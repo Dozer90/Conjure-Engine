@@ -7,6 +7,7 @@
 #include "conjure/editor/editor_module_consumer.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/play_controller.h"
+#include "conjure/editor/project_trust.h"
 #include "conjure/editor/protocol/protocol_server.h"
 #include "conjure/editor/screenshot_service.h"
 #include "conjure/editor/selection_set.h"
@@ -142,7 +143,9 @@ namespace conjure::editor {
             engine::application *mEngine = nullptr;
             editor_host *mHost = nullptr;
             protocol_server *mServer = nullptr;
+            project_trust *mTrust = nullptr;
             std::optional<engine::project> mProject = std::nullopt;
+            std::optional<std::filesystem::path> mTrustPrompt = std::nullopt;   // the project the window asks about
             command_registry mRegistry = {};
             undo_stack mUndo = {};
             event_broadcaster mEvents = {};
@@ -160,7 +163,6 @@ namespace conjure::editor {
             std::vector<std::unique_ptr<frame_task>> mFrameTasks = {};
             std::weak_ptr<void> mScriptCompileToken = {};   // held by the running script.compile task
             std::string mScenePath = "";
-            std::string mToken = "";
             std::string mDotnetExecutable = "dotnet";
             std::string mLastScriptConfiguration = "Debug"; // of the last script.compile that succeeded
             debug_draw_flags mDebugDraw = {};
@@ -174,6 +176,7 @@ namespace conjure::editor {
             bool mHeadless = true;
             bool mOffscreen = false;
             bool mConsumerInstalled = false;
+            bool mTrustPromptEnabled = false;           // a window is there to ask in (set by the application)
 
         public:
             /// <summary>
@@ -315,6 +318,68 @@ namespace conjure::editor {
             }
 
             /*---------------------------------------------------------------*/
+            // Project trust (decision D27 of 04_editor.md)
+
+            /// <summary>
+            /// The answers about which projects may be opened, or nullptr (a context built over a bare
+            /// application in tests: project.trust, project.revoke_trust and project.trust_state then answer
+            /// NOT_AVAILABLE). The editor_application owns it and applies it where a project is opened.
+            /// </summary>
+            [[nodiscard]] project_trust *trust() noexcept {
+                return mTrust;
+            }
+
+            void set_trust(project_trust *answers) noexcept {
+                mTrust = answers;
+            }
+
+            /// <summary>
+            /// Whether a refused project is asked about in the editor window. The application turns it on for
+            /// a windowed session that runs neither --exec nor --export; everywhere else nobody could answer.
+            /// </summary>
+            void set_trust_prompt_enabled(bool enabled) noexcept {
+                mTrustPromptEnabled = enabled;
+            }
+
+            [[nodiscard]] bool trust_prompt_enabled() const noexcept {
+                return mTrustPromptEnabled;
+            }
+
+            /// <summary>
+            /// Makes 'projectRoot' the project the window asks about ("Do you trust the authors of this
+            /// project?"), replacing an earlier one, and returns true. The question keeps the folder as
+            /// project_trust::project_key resolves it (absolute, links followed), which is what an answer
+            /// records and what PROJECT_NOT_TRUSTED reports, so the person is shown the folder that would be
+            /// trusted whatever spelling asked for it; the path as given only when it has no key. Does
+            /// nothing and returns false while prompts are not enabled or for an empty path. The prompt is
+            /// editor state, not a command: it survives an engine restart and is reported by editor.state as
+            /// trustPrompt.
+            /// </summary>
+            bool raise_trust_prompt(const std::filesystem::path &projectRoot);
+
+            /// <summary>
+            /// The project the window asks about, as raise_trust_prompt kept it; nullopt when it asks about
+            /// none.
+            /// </summary>
+            [[nodiscard]] const std::optional<std::filesystem::path> &trust_prompt() const noexcept {
+                return mTrustPrompt;
+            }
+
+            /// <summary>
+            /// Closes the question unanswered ("Don't open"): nothing is recorded, the project stays as it was.
+            /// </summary>
+            void dismiss_trust_prompt() noexcept {
+                mTrustPrompt.reset();
+            }
+
+            /// <summary>
+            /// Closes the question when it is about 'projectRoot' (the same project_trust::project_key): the
+            /// project was trusted by somebody, or it is the project that is now open. Another project's
+            /// question stays.
+            /// </summary>
+            void close_trust_prompt_for(const std::filesystem::path &projectRoot);
+
+            /*---------------------------------------------------------------*/
             // Project and scene state
 
             [[nodiscard]] bool has_project() const noexcept {
@@ -406,12 +471,6 @@ namespace conjure::editor {
                 return mDebugDraw;
             }
 
-            [[nodiscard]] const std::string &token() const noexcept {
-                return mToken;
-            }
-
-            void set_token(std::string token);
-
             /// <summary>
             /// The dotnet program script.compile spawns ("dotnet" by default; tests point it elsewhere).
             /// </summary>
@@ -499,7 +558,8 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Writes {project, scene, playState, revision, selection, headless, offscreen, port, clients}.
+            /// Writes {project, scene, playState, revision, selection, headless, offscreen, port, clients, frame,
+            /// trustPrompt}; trustPrompt is the path of the project the window asks about, or null.
             /// </summary>
             [[nodiscard]] core::json::document describe_state() const;
 

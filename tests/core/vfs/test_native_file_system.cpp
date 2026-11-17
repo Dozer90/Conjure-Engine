@@ -46,6 +46,22 @@ namespace {
         std::ifstream stream(path, std::ios::binary);
         return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
     }
+
+    /// <summary>
+    /// True when the volume of 'directory' can restrict a file to its owner. Where it cannot (FAT, exFAT, a
+    /// mount whose permissions are fixed) a MESSAGE says that the calling case did not run.
+    /// </summary>
+    bool private_files_supported(const std::filesystem::path &directory) {
+        const std::filesystem::path probe = directory / "private_probe.tmp";
+        const result<void> written = write_private_file(probe, {});
+        std::error_code ignored = {};
+        std::filesystem::remove(probe, ignored);
+        if (code_of(written) != error_code::UNSUPPORTED) {
+            return true;
+        }
+        MESSAGE("no owner-only files on this volume (" << written.get_error().message() << "): the case did not run");
+        return false;
+    }
 }
 
 TEST_SUITE("core/native_file_system") {
@@ -925,5 +941,163 @@ TEST_SUITE("core/native_file_system") {
         const result<enumeration> files = enumerate_all(fileSystem, "", allFiles);
         REQUIRE(files);
         CHECK(files->paths.size() == 100);
+    }
+
+    TEST_CASE("write_private_file - writes the data into a file only its owner may open") {
+        const testing::temp_directory directory = {};
+        const std::filesystem::path target = directory.path() / "secret.txt";
+        if (!private_files_supported(directory.path())) {
+            return;
+        }
+
+        CONJURE_REQUIRE_OK(write_private_file(target, to_bytes("the token\n")));
+        CHECK(read_native(target) == "the token\n");
+        const result<bool> isPrivate = is_private_file(target);
+        CONJURE_REQUIRE_OK(isPrivate);
+        CHECK(*isPrivate);
+        // Only the target is left: the temporary took its place.
+        CHECK(native_entries(directory.path()) == std::vector<std::string>{"secret.txt"});
+
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 0) {
+            // The mode bits themselves, read without the engine: read and write for the owner, nothing else.
+            // On Windows permissions() only mirrors the read-only attribute; there is_private_file above read
+            // the access control list back from the file.
+            std::error_code ignored = {};
+            const std::filesystem::perms mode = std::filesystem::status(target, ignored).permissions();
+            CHECK(mode == (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write));
+        }
+    }
+
+    TEST_CASE("write_private_file - an empty payload and a large one both arrive whole and private") {
+        const testing::temp_directory directory = {};
+        if (!private_files_supported(directory.path())) {
+            return;
+        }
+        const std::filesystem::path empty = directory.path() / "empty.bin";
+        CONJURE_REQUIRE_OK(write_private_file(empty, {}));
+        CHECK(std::filesystem::file_size(empty) == 0);
+        CHECK(is_private_file(empty).value_or(false));
+
+        const std::string payload(3 * 1024 * 1024 + 17, 'z');
+        const std::filesystem::path large = directory.path() / "large.bin";
+        CONJURE_REQUIRE_OK(write_private_file(large, to_bytes(payload)));
+        CHECK(read_native(large) == payload);
+        CHECK(is_private_file(large).value_or(false));
+    }
+
+    TEST_CASE("write_private_file - replaces a file that was open to others and keeps none of its permissions") {
+        const testing::temp_directory directory = {};
+        if (!private_files_supported(directory.path())) {
+            return;
+        }
+        const std::filesystem::path target = directory.path() / "shared.txt";
+        {
+            std::ofstream stream(target, std::ios::binary);
+            stream << "written by the standard library, a longer text than the replacement";
+        }
+        // Whatever the umask of the machine: the group and others may read the old file. (On Windows the call
+        // changes nothing; an ordinary file there carries the entries its folder hands down.)
+        std::error_code ignored = {};
+        const std::filesystem::perms open = std::filesystem::perms::owner_all | std::filesystem::perms::group_read
+                                            | std::filesystem::perms::others_read;
+        std::filesystem::permissions(target, open, ignored);
+        const result<bool> before = is_private_file(target);
+        CONJURE_REQUIRE_OK(before);
+        CHECK_FALSE(*before);
+
+        CONJURE_REQUIRE_OK(write_private_file(target, to_bytes("new")));
+        CHECK(read_native(target) == "new");
+        CHECK(is_private_file(target).value_or(false));
+        CHECK(native_entries(directory.path()) == std::vector<std::string>{"shared.txt"});
+
+        // And again over the private file itself: a second session writes its own secret.
+        CONJURE_REQUIRE_OK(write_private_file(target, to_bytes("newer")));
+        CHECK(read_native(target) == "newer");
+        CHECK(is_private_file(target).value_or(false));
+    }
+
+    TEST_CASE("write_private_file - a symbolic link at the path is replaced, and the file it named is not written") {
+        const testing::temp_directory directory = {};
+        if (!private_files_supported(directory.path())) {
+            return;
+        }
+        const std::filesystem::path victim = directory.path() / "victim.txt";
+        const std::filesystem::path link = directory.path() / "link.txt";
+        {
+            std::ofstream stream(victim, std::ios::binary);
+            stream << "untouched";
+        }
+        std::error_code linkError = {};
+        std::filesystem::create_symlink(victim, link, linkError);
+        if (linkError) {
+            // Windows creates symbolic links only for administrators or in developer mode.
+            MESSAGE("this account cannot create a symbolic link (" << linkError.message() << "): the case did not run");
+            return;
+        }
+        const result<bool> linkIsPrivate = is_private_file(link);
+        CONJURE_REQUIRE_OK(linkIsPrivate);
+        CHECK_FALSE(*linkIsPrivate);
+
+        CONJURE_REQUIRE_OK(write_private_file(link, to_bytes("secret")));
+        CHECK(read_native(victim) == "untouched");
+        CHECK(read_native(link) == "secret");
+        std::error_code ignored = {};
+        CHECK_FALSE(std::filesystem::is_symlink(std::filesystem::symlink_status(link, ignored)));
+        CHECK(is_private_file(link).value_or(false));
+    }
+
+    TEST_CASE("write_private_file - a directory at the path and a missing folder are refused, nothing is left behind") {
+        const testing::temp_directory directory = {};
+        const std::filesystem::path folder = directory.path() / "folder";
+        std::filesystem::create_directories(folder);
+
+        CHECK(code_of(write_private_file(folder, to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(std::filesystem::is_directory(folder));
+        CHECK(native_entries(folder).empty());
+        // No file name at all: an empty path, and a path that ends in a separator below a folder that exists.
+        CHECK(code_of(write_private_file(std::filesystem::path(), to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(code_of(write_private_file(folder / "", to_bytes("x"))) == error_code::INVALID_ARGUMENT);
+        CHECK(native_entries(folder).empty());
+
+        const result<void> orphan = write_private_file(directory.path() / "missing" / "secret.txt", to_bytes("x"));
+        CHECK(code_of(orphan) == error_code::IO_FAILURE);
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "missing"));
+        CHECK(native_entries(directory.path()) == std::vector<std::string>{"folder"});
+    }
+
+    TEST_CASE("create_private_file - refuses a path that exists and leaves the entry as it was") {
+        const testing::temp_directory directory = {};
+        const std::filesystem::path existing = directory.path() / "existing.txt";
+        {
+            std::ofstream stream(existing, std::ios::binary);
+            stream << "mine";
+        }
+        // The exclusive creation is what keeps a planted file or link from being written through.
+        const result<void> refused = internal::create_private_file(existing, to_bytes("secret"), "existing.txt");
+        CHECK(code_of(refused) == error_code::IO_FAILURE);
+        CHECK(read_native(existing) == "mine");
+        CHECK(native_entries(directory.path()) == std::vector<std::string>{"existing.txt"});
+    }
+
+    TEST_CASE("is_private_file - a missing path is NOT_FOUND, a folder and an ordinary file are not private") {
+        const testing::temp_directory directory = {};
+        CHECK(code_of(is_private_file(directory.path() / "nothing.txt")) == error_code::NOT_FOUND);
+        CHECK(code_of(is_private_file(directory.path() / "no_folder" / "nothing.txt")) == error_code::NOT_FOUND);
+
+        const result<bool> folder = is_private_file(directory.path());
+        CONJURE_REQUIRE_OK(folder);
+        CHECK_FALSE(*folder);
+
+        const std::filesystem::path ordinary = directory.path() / "ordinary.txt";
+        {
+            std::ofstream stream(ordinary, std::ios::binary);
+            stream << "x";
+        }
+        std::error_code ignored = {};
+        const std::filesystem::perms open = std::filesystem::perms::owner_all | std::filesystem::perms::others_read;
+        std::filesystem::permissions(ordinary, open, ignored);
+        const result<bool> plain = is_private_file(ordinary);
+        CONJURE_REQUIRE_OK(plain);
+        CHECK_FALSE(*plain);
     }
 }

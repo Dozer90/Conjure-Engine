@@ -45,11 +45,16 @@ namespace conjure::editor {
         if (response.has_value()) {
             response->clientId = request.clientId;
         }
+        audit(request, response, false);
+        // Every subscribed client hears this event, an inspect-only one among them, and the name of an unknown
+        // command is whatever its sender typed: a token must not travel in it.
+        const protocol_server *server = mContext->server();
+        const bool nameHoldsToken = server != nullptr && server->contains_token(request.command);
         mContext->events().emit(
           editor_event::COMMAND_EXECUTED,
           core::json::object({
             {"clientId", request.clientId},
-            {"cmd", std::string_view(request.command)},
+            {"cmd", nameHoldsToken ? audit_log::TOKEN_MARK : std::string_view(request.command)},
             {"ok", response.has_value() ? response->ok : true},
             {"async", !response.has_value()},
           })
@@ -240,6 +245,7 @@ namespace conjure::editor {
                 // Cannot happen: NOT_IN_BATCH covers ASYNC; keep the batch consistent anyway.
                 response = make_error_response(request.id.root(), protocol_error_code::INTERNAL, "asynchronous child");
             }
+            audit(request, response, true);
             const bool ok = response->ok;
             responses.push_back(std::move(*response));
             if (!ok) {
@@ -368,6 +374,25 @@ namespace conjure::editor {
               protocol_error_code::UNKNOWN_COMMAND,
               std::format("unknown command '{}'", echoed_name(request.command)),
               std::move(details)
+            );
+        }
+
+        // The scope of the client's token (D25), before anything of the request is looked at: an inspect-only
+        // client learns nothing about the arguments or the state a command it may not run would have met.
+        const access_level required = required_access(descriptor->flags);
+        const access_level granted = access_of_client(request.clientId);
+        if (granted < required) {
+            return make_error_response(
+              id,
+              protocol_error_code::UNAUTHORISED,
+              std::format(
+                "'{}' needs {} access and this client has {}: the inspect-only token runs the commands flagged "
+                "read_only, the full-control token every command",
+                request.command,
+                to_string(required),
+                to_string(granted)
+              ),
+              core::json::object({{"required", to_string(required)}, {"granted", to_string(granted)}})
             );
         }
 
@@ -585,6 +610,32 @@ namespace conjure::editor {
           request.clientId,
           request.coalesceKey
         );
+    }
+
+    access_level command_dispatcher::access_of_client(u32 clientId) const noexcept {
+        const protocol_server *server = mContext->server();
+        // Without a server every caller is in-process code (tests, the UI): the editor itself.
+        return server == nullptr ? access_level::FULL_CONTROL : server->access_of_client(clientId);
+    }
+
+    void command_dispatcher::audit(
+      const protocol_request &request,
+      const std::optional<protocol_response> &response,
+      bool batchChild
+    ) const {
+        protocol_server *server = mContext->server();
+        if (server == nullptr) {
+            return;
+        }
+        audit_entry entry = {};
+        entry.command = request.command;
+        entry.args = request.args.root();
+        entry.clientId = request.clientId;
+        entry.ok = !response.has_value() || response->ok;
+        entry.error = response.has_value() ? response->errorCode : protocol_error_code::NONE;
+        entry.async = !response.has_value();
+        entry.batchChild = batchChild;
+        server->record_command(entry);
     }
 
     void command_dispatcher::keep_play_edits(batch_state &batch) {

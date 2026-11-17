@@ -32,6 +32,7 @@ namespace conjure::editor {
             "TIMEOUT",
             "CANCELLED",
             "UNAUTHORISED",
+            "PROJECT_NOT_TRUSTED",
             "INTERNAL",
         };
 
@@ -56,6 +57,7 @@ namespace conjure::editor {
             protocol_error_code::TIMEOUT,
             protocol_error_code::CANCELLED,
             protocol_error_code::UNAUTHORISED,
+            protocol_error_code::PROJECT_NOT_TRUSTED,
             protocol_error_code::INTERNAL,
         };
     }

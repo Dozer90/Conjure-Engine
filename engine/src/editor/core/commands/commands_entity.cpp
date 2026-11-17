@@ -852,7 +852,7 @@ namespace conjure::editor::support {
               entityRef
             ),
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &entity_get
           )
         );
@@ -865,7 +865,7 @@ namespace conjure::editor::support {
             R"("layer":{"type":"integer","minimum":0,"maximum":31},"component":{"type":"string"},)"
             R"("limit":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"guids":{"type":"array"},"total":{"type":"integer"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &entity_find
           )
         );
@@ -878,7 +878,7 @@ namespace conjure::editor::support {
             std::format(R"({{"type":"object","properties":{{"entity":{}}},"required":["entity"]}})", entityRef),
             R"({"type":"object","properties":{"min":{"type":"array"},"max":{"type":"array"},)"
             R"("fromRenderBounds":{"type":"boolean"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &entity_bounds
           )
         );

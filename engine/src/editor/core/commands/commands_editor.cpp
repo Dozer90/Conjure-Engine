@@ -249,7 +249,7 @@ namespace conjure::editor::support {
         core::result<command_outcome> editor_exec_file(command_invocation &invocation) {
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const bool keepGoing = bool_or(invocation.args, "keepGoing", false);
-            const std::filesystem::path file = std::filesystem::path(std::string(pathText));
+            const std::filesystem::path file = project_relative_path(invocation.context, pathText);
             std::error_code probe = {};
             if (!std::filesystem::is_regular_file(file, probe)) {
                 return unusable_path(file, "not a regular file");
@@ -303,7 +303,7 @@ namespace conjure::editor::support {
             "The whole command catalogue with argument and result schemas, or one command's descriptor.",
             R"({"type":"object","properties":{"command":{"type":"string"}}})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &editor_schema
           )
         );
@@ -314,7 +314,7 @@ namespace conjure::editor::support {
             "Project, scene, play state, revision, selection and transport facts.",
             R"({"type":"object"})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &editor_state
           )
         );
@@ -361,7 +361,7 @@ namespace conjure::editor::support {
             "Answers once the engine ran the given number of frames.",
             R"({"type":"object","properties":{"frames":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"frame":{"type":"integer"}}})",
-            command_flags::ASYNC,
+            command_flags::ASYNC | command_flags::READ_ONLY,
             &editor_wait_frames
           )
         );
@@ -369,7 +369,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "editor.exec_file",
-            "Runs a command file (JSON array or NDJSON) and answers with the execution summary.",
+            "Runs a command file (JSON array or NDJSON; a relative path is relative to the project root) and "
+            "answers with the execution summary.",
             R"({"type":"object","properties":{"path":{"type":"string"},"keepGoing":{"type":"boolean"}},)"
             R"("required":["path"]})",
             R"({"type":"object","properties":{"executed":{"type":"integer"},"succeeded":{"type":"integer"},)"

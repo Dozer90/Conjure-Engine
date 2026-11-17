@@ -3,7 +3,8 @@
 📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
 
 The editor from the C++ side: the process object (`conjure/editor/editor_application.h`,
-`conjure/editor/editor_options.h`), the service table (`conjure/editor/editor_context.h`), the command model
+`conjure/editor/editor_options.h`), which projects it opens (`conjure/editor/project_trust.h`), the service
+table (`conjure/editor/editor_context.h`), the command model
 (`conjure/editor/command_dispatcher.h`, `conjure/editor/command_registry.h`, `conjure/editor/editor_command.h`,
 `conjure/editor/builtin_commands.h`, `conjure/editor/schema_validator.h`), the services commands drive
 (`conjure/editor/undo_stack.h`, `conjure/editor/selection_set.h`, `conjure/editor/play_controller.h`,
@@ -17,6 +18,7 @@ events (`conjure/editor/event_broadcaster.h`) and what a module adds (`conjure/e
 | You want to... | Use |
 |---|---|
 | Run the editor headless from a test or tool | `editor_options { headless = true, projectPath, aiPort = 0 }`, `editor_application::initialise(options, {})`, `pump_frame()` |
+| Open a project the editor did not create | answer for it first: `options.trustProject = true` for this run, or `application.trust().trust(root, remember, origin)`; see [Project trust](#project-trust) |
 | Send a command from C++ | `context.dispatcher().dispatch(request)` (a response, or `nullopt` for an asynchronous one that answers through a sink) |
 | Register a command | `context.registry().add(command_descriptor)`; from a module, a `command_desc` extension record |
 | Add a panel from a module | a `panel_desc` extension record; `editor_module_consumer` attaches it |
@@ -30,13 +32,24 @@ events (`conjure/editor/event_broadcaster.h`) and what a module adds (`conjure/e
 
 `editor_options` is the parsed command line (`parse_editor_options(args)`): `projectPath`, `execFile`,
 `outputFile`, `exportDirectory`, `exportDistribution` (`--distribution <dir>`, only with `--export`: the folder
-`conjure_runtime`, `conjure_shared` and `shaders/` are copied from; without it the export holds the pack and the
-project files only and its reply warns that the runtime was not copied), `aiToken`, `aiPort` (`0` disables the
-server), `timeoutSeconds` (a positive
+`conjure_runtime`, `conjure_shared`, `shaders/` and `THIRD_PARTY_NOTICES.txt` are copied from, with
+`nethost.dll` and the Visual C++ runtime DLLs when it holds them; without it the export holds the pack and the
+project files only and its reply warns that the runtime was not copied; a folder without the notices, or on
+Windows without the runtime DLLs, exports with a warning, and debug runtime DLLs in it are left behind with a
+warning), `aiToken` and `aiInspectToken`
+(`--ai-token <t>`, `--ai-inspect-token <t>`; left empty, the server generates the tokens for its TCP port; an
+empty value on the command line is refused, and so is the same text for both; see
+[Access tokens and the audit log](access-and-audit.md#who-may-connect-and-what-a-client-may-do)), `aiPort`
+(`0` disables the server), `timeoutSeconds` (a positive
 finite number; `0` is refused), `headless`, `offscreen`, `keepGoing`, `aiStdio`, `noScripting`, `dotnetHost`
-(`--dotnet`: a headless session keeps the real .NET script host), `showHelp` and `engineArguments` (everything the
+(`--dotnet`: a headless session keeps the real .NET script host), `trustProject` and `trustStoreFile`
+(`--trust-project`, which needs `--project`, and `--trust-store <file>`; see [Project trust](#project-trust)),
+`showHelp` and `engineArguments` (everything the
 editor did not recognise goes to the engine's parser; an option the engine does not know either fails with
-`engine_error::BAD_ARGUMENTS`, exit code 3, before the project is loaded). `editor_options_help()` is the usage
+`engine_error::BAD_ARGUMENTS`, exit code 3, before the project is loaded). `--scripting` is one of those engine
+flags: a headless session already runs scripting (null host, or .NET with `--dotnet`), so it only changes a
+windowed session of a project whose `scripting.enabled` is false; together with `--no-scripting` it is
+`engine_error::BAD_ARGUMENTS`, exit code 3. `editor_options_help()` is the usage
 text `--help` prints: the editor's options followed by the engine's (`engine::command_line_help()`, without the
 `--project`, `--headless`, `--no-scripting` and `--help` lines the editor describes itself, and without the
 engine's note that unknown options are passed on). `stdout_carries_protocol()` is true for `--ai-stdio`, `--exec`
@@ -50,12 +63,15 @@ creates the context, pushes the frame layer and, with a factory, the UI layer, a
 Before the engine starts it checks what needs none: the arguments, `project.json` and the merged configuration,
 then the command file of `--exec`, which it reads and parses (`headless_runner::load_command_file`). A missing
 or malformed file fails `initialise` with `engine_error::BAD_ARGUMENTS` (exit code 3) without a window, a device
-or an asset scan. `startup_scene_warning()` is the `{code: "STARTUP_SCENE_FAILED", message}` of a startup scene
+or an asset scan. The last of these checks is whether the project may be opened at all: a session nobody can
+be asked in fails with `PROJECT_NOT_TRUSTED` (exit code 2) for a project nobody answered for
+([Project trust](#project-trust)). `startup_scene_warning()` is the `{code: "STARTUP_SCENE_FAILED", message}` of a startup scene
 the engine could not load (`engine::application::startup_scene_failure()`), which an `--exec` output opens with
 (📘 [The AI control protocol](ai-protocol.md#the-headless-runner)).
 `run()` exports (`--export`), executes (`--exec`) or loops frames; `pump_frame()` runs one engine frame and
 applies a pending `project.open`; `request_open_project(dir)` restarts the engine on another project at the next
-frame boundary (the AI port file moves with it), stopping a play session first, and `play.start` answers `BUSY`
+frame boundary (the AI port file moves with it; `PROJECT_NOT_TRUSTED`, and no restart, for a project nobody
+answered for), stopping a play session first, and `play.start` answers `BUSY`
 while such a restart is pending; `make_engine_desc(options, projectPath)` shows the merged engine
 configuration. A headless `--ai-stdio` session without a TCP server ends `run()` with 0 once standard input
 ends.
@@ -65,6 +81,7 @@ editor::editor_options options = {};
 options.headless = true;
 options.aiPort = u16{0};
 options.projectPath = scratch.path();
+options.trustProject = true;        // your own project: answered for this run, remembered nowhere
 options.engineArguments = {"--log-level", "warn"};
 editor::editor_application app = {};
 CONJURE_TRY(app.initialise(options, {}));
@@ -82,13 +99,62 @@ const std::optional<editor::protocol_response> response = app.context().dispatch
 > refuses that today (headless rendering means the null device), the editor logs a warning and falls back to the
 > null device, and `view.screenshot` answers `NOT_AVAILABLE`.
 
+## Project trust
+
+Opening a project runs code from its folder with your rights: the engine loads the project's native modules and
+its game assembly while it starts, and `script.compile`, `module.build` and `play.start` run more of it. The
+editor therefore opens a project only after somebody answered for it. There is one gate, at the opening, and an
+untrusted project is not opened at all; there is no mode that opens it without its code.
+
+| Where | A project nobody answered for | The explicit answer |
+|---|---|---|
+| The editor window | the editor starts without it and asks "Do you trust the authors of this project?" | *Trust and Open*, or *Don't Open* (nothing is recorded) |
+| `--headless`, `--exec`, `--export` | `initialise` fails with `PROJECT_NOT_TRUSTED` before the engine starts (exit code 2) | `--trust-project` for this run, or an earlier `project.trust` |
+| `project.open` | `PROJECT_NOT_TRUSTED` with `details {path, state, prompt}`; nothing is scheduled, and a window asks the person at it | `project.trust {path}` first |
+| `request_open_project(dir)` | `PROJECT_NOT_TRUSTED` | `application.trust().trust(dir, remember, origin)` |
+
+`project_trust` keeps the answers; `editor_application::trust()` is the one the application asks, and
+`editor_context::trust()` points at it. `trust(root, remember, origin)` records an answer and returns the
+`trust_state` the project now has: `REMEMBERED` when the trust store took it, `SESSION` when it holds until the
+editor exits (not asked to remember, no store, or a store that could not be written or did not show the answer
+right after it was written, which is a WARN and not an error). `state_of(root)` and `is_trusted(root)` ask, `revoke(root)` takes an answer back, `remembered()` lists the
+store. A project is `project_key(root)`: the resolved absolute path of its root folder.
+
+The trust store is one JSON file per user of the machine, outside every project, so that a project cannot bring
+its own answer. `default_trust_store_file()` names it: `trusted_projects.json` under `%LOCALAPPDATA%/Conjure`,
+under `$XDG_STATE_HOME/conjure` or `~/.local/state/conjure`, or under `~/Library/Application Support/Conjure`.
+`--trust-store <file>` (`editor_options::trustStoreFile`) names another file. Only `conjure_editor` fills in the
+default: an `editor_application` you start with an empty `trustStoreFile` remembers nothing, so a test or a tool
+never writes to the user's folder. The file is written for its owner alone and is ignored, with a WARN, when
+another account could have written it, when it does not parse or when it is larger than 4 MiB; it keeps the
+newest 1024 answers. That check and the read are two steps on the path, so a file swapped in between them is
+believed: keep the store in a folder other accounts cannot write to (the default folder is one).
+
+The commands are `project.trust {path, remember?}`, `project.revoke_trust {path}` and `project.trust_state
+{path?}` (the last one is `read_only`; the first two cannot run in a batch). `project.create` trusts the project
+it writes into a folder that did not exist (`result.trust`); a project created in an existing folder, even an
+empty one, is asked about like any other. The window's question is `editor_context::trust_prompt()`, which
+`editor.state` reports as `trustPrompt`; `raise_trust_prompt`, `dismiss_trust_prompt` and `close_trust_prompt_for`
+move it, and `editor_application::can_ask_about_trust(options)` says whether a session has a window to ask in.
+
+> [!IMPORTANT]
+> A script that runs `conjure_editor --headless --project <dir> ...` must pass `--trust-project`, or trust the
+> project once with `project.trust`. Without an answer the run exits with 2 and says so on standard error.
+
+> [!WARNING]
+> Trust belongs to the folder's path, not to its files. What is later put into a trusted folder runs without a
+> question, a project that is moved or copied is asked about again, and revoking does not close the project that
+> is open. A command file is commands: one that came with a project can answer for it, so read it before you
+> pass it to `--exec` or `editor.exec_file`.
+
 ## The service table
 
 `editor_context` holds references into the running engine (`engine()`, `engine_context()`, `scene()`,
 `scene_manager()`, `world()`, `components()`, `filesystem()`, `assets()`, `asset_database()`, `input()`,
 `renderer()`, `physics()`, `scripting()`, `modules()`, `frame_index()`; the pointers are null for a disabled
 module) and owns the editor's own services: `registry()`, `dispatcher()`, `undo()`, `events()`, `console()`,
-`selection()`, `camera()`, `play()`, `screenshots()`, `module_consumer()`. `has_project()`, `has_scene()`,
+`selection()`, `camera()`, `play()`, `screenshots()`, `module_consumer()`; `trust()` is the application's
+`project_trust` (null for a context built over a bare engine). `has_project()`, `has_scene()`,
 `scene_path()`, `scene_dirty()`, `headless()`, `offscreen()` describe the state; `rebind(application)` follows a
 project restart. `normalise_scene_path(text)` turns a scene argument into the canonical asset path the database
 registers (forward slashes, no `.` or `..` segments, `.scene.json` matched without case) and answers `""` for a
@@ -107,16 +173,17 @@ thread only.
 A `command_descriptor` is `name`, `summary`, `argsSchema` and `resultSchema` (a hand-validated JSON Schema
 subset: `type`, `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`, `maximum`),
 `flags` (`MUTATES`, `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`, `PLAYING_ONLY`, `ASYNC`, `UI_ONLY`,
-`NOT_IN_BATCH`, `NO_UNDO`, `ON_DISK`), `owner` and the `command_handler`. The handler receives a `command_invocation`
+`NOT_IN_BATCH`, `NO_UNDO`, `ON_DISK`, `READ_ONLY`), `owner` and the `command_handler`. The handler receives a `command_invocation`
 (context, args, clientId, an `async_reply` for `ASYNC` commands) and returns a `command_outcome`: `result`,
 the `inverse` (mandatory for `MUTATES` without `NO_UNDO`; `skipRecording` when nothing undoable happened), an
 optional normalised `replay` and an undo `label`. `builtin_command_count()` says how many the editor registers
-(105); `command_registry` adds, finds, lists (`names()`, `closest_names(name, count)` for `didYouMean`, empty
+(108); `command_registry` adds, finds, lists (`names()`, `closest_names(name, count)` for `didYouMean`, empty
 for a name over 128 bytes) and describes commands (`describe_all` is `editor.schema`; `schema_hash()` the
 `schemaHash`, recomputed on first use after a change).
 
-`command_dispatcher::dispatch(request)` runs the pipeline: unknown name, schema validation, preconditions,
-handler, undo recording, revision, events. `execute(command_request)` is the in-process form that returns the
+`command_dispatcher::dispatch(request)` runs the pipeline: unknown name, the scope of the client's token
+(`UNAUTHORISED` when `required_access(flags)` is above what the client was granted), schema validation,
+preconditions, handler, undo recording, revision, events, and the audit record of a transport client's request. `execute(command_request)` is the in-process form that returns the
 result document; `run_batch` runs children atomically (the rollback works while playing and when the batch is
 itself an undo or redo step, too); `resolve_completed` delivers finished asynchronous replies once per frame;
 `cancel_client` / `cancel_all` answer pending requests with `CANCELLED`; `set_async_timeout_seconds`,
@@ -153,6 +220,16 @@ The flag is a promise about both requests: neither the inverse nor the replay ma
 they run after the restore. `command_registry::add` answers `INVALID_ARGS` for `ON_DISK` without `MUTATES` or
 together with `NO_UNDO`, and a module command loses the flag (it has no inverse to keep). A command that writes
 a file *and* changes the scene so that its inverse touches both is `EDITING_ONLY` instead, as `prefab.create` is.
+
+Flag a command `READ_ONLY` when a client that holds only the inspect token may run it
+([Two tokens](access-and-audit.md#two-tokens-full-control-and-inspect-only)). The flag is a promise: the handler
+changes nothing clients share (the scene, a file, the selection, the camera, the play state, the console, the
+history), starts no program and loads no code; what belongs to the calling client alone, such as its event
+subscriptions, is its own. `required_access(flags)` is the whole rule (`INSPECT` with the flag, `FULL_CONTROL`
+without), so a command without the flag is closed to inspect-only clients by default. `command_registry::add`
+answers `INVALID_ARGS` for `READ_ONLY` together with `MUTATES`, and a module command that says both keeps
+`MUTATES` and loses `READ_ONLY`. The editor's own callers (the UI, `--exec`, `editor.exec_file`) always have
+full control.
 
 ## Undo, selection, play
 
@@ -248,8 +325,14 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 | `result<editor_options> parse_editor_options(span<const string_view>)` / `std::string editor_options_help()` / `bool editor_options::stdout_carries_protocol()` | the editor command line |
 | `result<void> editor_application::initialise(const editor_options &, layer_factory)` / `int run()` / `result<void> pump_frame()` / `void shutdown()` | the process object |
 | `editor_context &editor_application::context()` / `engine::application &engine()` / `protocol_server &server()` | its parts |
+| `project_trust &editor_application::trust()` / `static bool can_ask_about_trust(const editor_options &)` | the answers the application opens projects by, and whether a session has a window to ask in |
+| `static result<startup_project> resolve_startup_project(const editor_options &, project_trust &)` / `static result<startup_plan> plan_startup(...)` | what `initialise` does about `--project`: open it, leave it out for the window to ask about (`unanswered`), or `PROJECT_NOT_TRUSTED`; the plan adds the engine description, which holds no project that was left out |
+| `result<trust_state> project_trust::trust(const path &, bool remember, string_view origin)` / `result<bool> revoke(const path &)` / `trust_state state_of(const path &)` / `bool is_trusted(const path &)` / `vector<trusted_project> remembered()` | answering, taking back and asking |
+| `static result<string> project_trust::project_key(const path &)` / `void set_store_file(path)` / `result<path> default_trust_store_file()` | what a project is remembered under, and where |
+| `bool editor_context::raise_trust_prompt(const path &)` / `const optional<path> &trust_prompt()` / `void dismiss_trust_prompt()` / `void close_trust_prompt_for(const path &)` | the window's question |
 | `optional<json::document> editor_application::startup_scene_warning()` | `{code: "STARTUP_SCENE_FAILED", message}` when the engine started without the startup scene |
 | `optional<protocol_response> command_dispatcher::dispatch(const protocol_request &)` / `result<json::document> execute(const command_request &)` | running a command |
+| `constexpr access_level required_access(command_flags)` | what a client must have been granted to run a command: `INSPECT` for `READ_ONLY`, `FULL_CONTROL` otherwise |
 | `result<void> command_registry::add(command_descriptor)` / `json::document describe_all(bool)` / `vector<string> closest_names(string_view, usize)` | the catalogue |
 | `result<compiled_schema> compile_schema(string_view)` / `result<void> validate_args(const compiled_schema &, const json::value &)` | argument validation |
 | `optional<undo_entry> undo_stack::pop_for_undo()` / `pop_for_redo()` / `result<void> begin_transaction(string_view, u32)` / `end_transaction(u32)` / `bool has_open_transaction()` | undo |

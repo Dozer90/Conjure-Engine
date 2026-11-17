@@ -3,8 +3,10 @@
 #include "conjure/core/api.h"
 #include "conjure/core/vfs/file_system.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string_view>
 
 namespace conjure::core::vfs {
@@ -89,4 +91,44 @@ namespace conjure::core::vfs {
               std::span<const std::byte> data
             ) const;
     };
+
+    /// <summary>
+    /// Writes 'data' to the file at the on-disk path 'path' so that only the user the process runs as may
+    /// open it: the place for a secret that other accounts of the machine must not read. The data goes
+    /// into a new file beside 'path' that is created with the restriction already in place (POSIX: mode
+    /// 0600; Windows: an access control list that names that user alone, inherits nothing from the folder
+    /// and makes the user the owner), and that file then takes the place of 'path' in one step. A reader
+    /// therefore sees the old contents or the new ones, never a part, and what was at 'path' before (a
+    /// file with wider permissions, a symbolic link) is replaced, not written through. The folder must
+    /// exist. 'path' must name a file: an empty path, one that ends in a separator and one that is a
+    /// directory are INVALID_ARGUMENT, and nothing is created.
+    ///
+    /// Limits. UNSUPPORTED, with nothing written, when the volume cannot restrict a file to its owner:
+    /// FAT and exFAT, and POSIX mounts whose owner and mode are fixed by mount options. Accounts the
+    /// operating system lets pass any permission still read the file (root; on Windows administrators
+    /// and backup operators). Access control lists beyond the mode bits are not examined on POSIX
+    /// (macOS). The folder is the caller's business: an account that may write it can replace or delete
+    /// the file, though not read it. The data is not flushed to the device, so a power cut may lose it.
+    /// Every other failure is IO_FAILURE with the operating system's text. The data is written only once
+    /// the restriction was checked on the new file, and a failure removes that file again; should the
+    /// removal fail as well, it stays beside 'path' as "&lt;name&gt;.tmp-&lt;uuid&gt;", either holding
+    /// none of the data or restricted to its owner.
+    /// </summary>
+    [[nodiscard]] CONJURE_API result<void> write_private_file(
+      const std::filesystem::path &path,
+      std::span<const std::byte> data
+    );
+
+    /// <summary>
+    /// Whether the entry at the on-disk path 'path' is a regular file that only the user the process runs
+    /// as may open, by the rule write_private_file establishes. POSIX: a regular file (a symbolic link is
+    /// not followed and is never private) owned by the effective user with no permission bit for its
+    /// group or for others. Windows: a file that is not a reparse point, on a volume that keeps access
+    /// control lists, owned by the process user, whose list is protected from inheritance and holds
+    /// nothing but entries allowing that user. The limits of write_private_file apply (privileged
+    /// accounts, access control lists on POSIX). NOT_FOUND when nothing is at 'path', IO_FAILURE when the
+    /// entry cannot be inspected. A file another user made private is IO_FAILURE on Windows, where it
+    /// cannot be opened to look, and false on POSIX.
+    /// </summary>
+    [[nodiscard]] CONJURE_API result<bool> is_private_file(const std::filesystem::path &path);
 }

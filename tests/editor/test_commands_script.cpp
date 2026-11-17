@@ -9,6 +9,7 @@
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/project.h"
 
 #include <cctype>
 #include <filesystem>
@@ -568,5 +569,20 @@ TEST_SUITE("editor/commands_script") {
         (void) editor.ok("history.redo");
         CHECK(editor_test::read_text_file(scripts / "Live.cs") == liveSource);
         CHECK_FALSE(std::filesystem::exists(scripts / "Old.cs"));
+    }
+
+    TEST_CASE("regression - code sweep F187 script.reload reads a relative assembly path against the project root") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path root = editor.context().project()->root_directory();
+        const core::json::document args = core::json::object({{"assembly", "scripts/bin/Game.dll"}});
+        const protocol_response missing = editor.send("script.reload", args);
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+
+        // The null host loads any file that exists.
+        const std::filesystem::path assembly = root / "scripts" / "bin" / "Game.dll";
+        write_file(assembly, "not really an assembly");
+        const core::json::document loaded = editor.ok("script.reload", args);
+        CHECK(std::filesystem::path(std::string(loaded.root()["assembly"].as_string())) == assembly);
     }
 }

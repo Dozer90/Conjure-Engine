@@ -13,7 +13,6 @@
     #include <fcntl.h>
 #endif
 
-#include <array>
 #include <cerrno>
 #include <string>
 #include <vector>
@@ -22,6 +21,8 @@
 
 using namespace conjure;
 using namespace conjure::editor;
+using editor_test::receive_some;
+using editor_test::send_all;
 
 namespace {
     struct polled {
@@ -49,38 +50,6 @@ namespace {
         return all;
     }
 
-    void send_all(const net::socket_handle &socket, std::string_view text) {
-        usize offset = 0;
-        u32 spins = 0;
-        while (offset < text.size() && spins < 100000) {
-            usize sent = 0;
-            const std::span<const std::byte> bytes(
-              reinterpret_cast<const std::byte *>(text.data()) + offset,
-              text.size() - offset
-            );
-            const net::io_status status = net::send(socket, bytes, sent);
-            REQUIRE(status != net::io_status::FAILED);
-            REQUIRE(status != net::io_status::CLOSED);
-            offset += sent;
-            ++spins;
-        }
-        REQUIRE(offset == text.size());
-    }
-
-    std::string receive_some(const net::socket_handle &socket, usize atLeast, u32 attempts = 200000) {
-        std::string received = {};
-        std::array<std::byte, 4096> buffer = {};
-        for (u32 attempt = 0; attempt < attempts && received.size() < atLeast; ++attempt) {
-            usize count = 0;
-            const net::io_status status = net::receive(socket, buffer, count);
-            if (status == net::io_status::OK) {
-                received.append(reinterpret_cast<const char *>(buffer.data()), count);
-            } else if (status == net::io_status::CLOSED || status == net::io_status::FAILED) {
-                break;
-            }
-        }
-        return received;
-    }
 }
 
 TEST_SUITE("editor/protocol/tcp_transport") {

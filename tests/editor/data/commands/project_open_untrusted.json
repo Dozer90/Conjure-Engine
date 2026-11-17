@@ -1,0 +1,19 @@
+{
+  "_comment": "A project.json written by hand stands for a project that came from elsewhere: nobody answered for it.",
+  "files": {
+    "downloaded/project.json": "{\"schema_version\": 1, \"name\": \"Downloaded\", \"assets_root\": \"assets\"}"
+  },
+  "setup": [],
+  "request": {
+    "cmd": "project.open",
+    "args": {
+      "path": "${project}/downloaded"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PROJECT_NOT_TRUSTED"
+    }
+  }
+}

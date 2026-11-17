@@ -369,7 +369,7 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"includeHidden":{"type":"boolean"},"fields":{"type":"boolean"},)"
             R"("module":{"type":"string"}}})",
             R"({"type":"object","properties":{"components":{"type":"array"},"count":{"type":"integer"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &reflection_components
           )
         );
@@ -380,7 +380,7 @@ namespace conjure::editor::support {
             "The field tree of a component (name, alias or suffix), a reflected struct or an enumeration.",
             R"({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &reflection_type
           )
         );
@@ -392,7 +392,7 @@ namespace conjure::editor::support {
             "schema.",
             std::string(EMPTY_SCHEMA),
             R"({"type":"object","properties":{"types":{"type":"array"},"importers":{"type":"array"}}})",
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &reflection_asset_types
           )
         );

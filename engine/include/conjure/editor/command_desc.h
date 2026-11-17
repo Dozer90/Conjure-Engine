@@ -26,6 +26,14 @@ namespace conjure::editor {
     /// playing the dispatcher keeps its inverse and play.stop records every kept one as a single undo entry
     /// (docs/design/04_editor.md D21). It needs MUTATES, excludes NO_UNDO, and promises that neither the inverse
     /// nor the replay refers to scene state; the editor drops it from a module command, which has no inverse.
+    /// READ_ONLY marks the commands a client holding the inspect-only token may run (docs/design/04_editor.md
+    /// D25): the handler promises to change nothing but what belongs to the calling client alone (its event
+    /// subscriptions, its own pending reply), that is, not the scene, not a file, not the selection, the camera,
+    /// the play state, the console or the history, and to start no program and load no code. A command without
+    /// the flag needs the full-control token. The flag excludes MUTATES: the registry refuses the pair for a
+    /// built-in command, and the editor drops READ_ONLY from a module command that also says MUTATES. The editor
+    /// cannot check a module's promise; a module that flags a command which changes something hands that change
+    /// to every inspect-only client.
     /// </summary>
     enum class command_flags : u16 {
         NONE = 0,
@@ -38,7 +46,8 @@ namespace conjure::editor {
         UI_ONLY = 1 << 6,
         NOT_IN_BATCH = 1 << 7,
         NO_UNDO = 1 << 8,
-        ON_DISK = 1 << 9
+        ON_DISK = 1 << 9,
+        READ_ONLY = 1 << 10
     };
     CONJURE_ENUM_FLAGS(command_flags);
 

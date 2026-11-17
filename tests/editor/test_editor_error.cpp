@@ -32,6 +32,15 @@ TEST_SUITE("editor/editor_error") {
         CHECK_FALSE(parse_error_code("not-a-code").has_value());
     }
 
+    TEST_CASE("protocol_error_code - PROJECT_NOT_TRUSTED is a code of its own that a client can branch on") {
+        CHECK(to_string(protocol_error_code::PROJECT_NOT_TRUSTED) == "PROJECT_NOT_TRUSTED");
+        CHECK(parse_error_code("PROJECT_NOT_TRUSTED") == protocol_error_code::PROJECT_NOT_TRUSTED);
+        const core::error refused = make_editor_error(protocol_error_code::PROJECT_NOT_TRUSTED, "not trusted");
+        CHECK(classify_error(refused) == protocol_error_code::PROJECT_NOT_TRUSTED);
+        // INTERNAL stays the last code: it is the answer for everything no other code names.
+        CHECK(all_error_codes().back() == protocol_error_code::INTERNAL);
+    }
+
     TEST_CASE("make_editor_error - carries the editor category, the code and the message") {
         const core::error error = make_editor_error(protocol_error_code::ENTITY_NOT_FOUND, "no such entity");
         CHECK(error.is(protocol_error_code::ENTITY_NOT_FOUND));

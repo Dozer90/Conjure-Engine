@@ -27,6 +27,7 @@ set(CONJURE_EDITOR_TEST_SOURCES
     test_commands_component.cpp
     test_commands_entity.cpp
     test_commands_input.cpp
+    test_commands_project_trust.cpp
     test_commands_scene_project.cpp
     test_commands_script.cpp
     test_console_buffer.cpp
@@ -45,6 +46,7 @@ set(CONJURE_EDITOR_TEST_SOURCES
     test_panel_desc.cpp
     test_picker.cpp
     test_play_controller.cpp
+    test_project_trust.cpp
     test_protocol_robustness.cpp
     test_reflection_commands.cpp
     test_reflection_path.cpp
@@ -53,6 +55,8 @@ set(CONJURE_EDITOR_TEST_SOURCES
     test_screenshot_service.cpp
     test_selection_set.cpp
     test_undo_stack.cpp
+    protocol/test_access_token.cpp
+    protocol/test_audit_log.cpp
     protocol/test_line_splitter.cpp
     protocol/test_loopback_transport.cpp
     protocol/test_protocol_message.cpp

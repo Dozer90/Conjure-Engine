@@ -14,6 +14,7 @@
 #include "conjure/editor/undo_stack.h"
 #include "conjure/engine/application.h"
 #include "conjure/engine/project.h"
+#include "conjure/modules/module_abi.h"
 
 #include <array>
 #include <filesystem>
@@ -400,6 +401,61 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(runtimeWarnings(chosen) == 0);
     }
 
+    TEST_CASE("regression - code sweep F200 F790 project.export tells the client what the runtime step left out") {
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("scene.save");
+        const std::filesystem::path root = editor.project_directory();
+        const std::filesystem::path distribution = root / "distribution";
+        std::error_code ignored = {};
+        std::filesystem::create_directories(distribution, ignored);
+        const auto standIn = [&distribution](std::string_view name) {
+            std::ofstream stream(distribution / name, std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+            stream << "stand-in";
+        };
+        standIn("conjure_runtime");
+        standIn("conjure_runtime.exe");
+        standIn(core::dynamic_library::decorate_name("conjure_shared"));
+        const auto exported = [&editor, &root, &distribution](std::string_view folder) {
+            return editor.ok(
+              "project.export",
+              core::json::object({
+                {"directory", (root / folder).generic_string()},
+                {"distributionDirectory", distribution.generic_string()},
+                {"publishManaged", false},
+              })
+            );
+        };
+        const auto warned = [](const core::json::document &result, std::string_view text) {
+            for (const core::json::value warning : result.root()["warnings"]) {
+                if (warning.as_string().find(text) != std::string_view::npos) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        SUBCASE("no notices and only the debug Visual C++ runtime: both are named, and the debug runtime stays") {
+            standIn("vcruntime140d.dll");
+            const core::json::document result = exported("export_bare");
+            CHECK(warned(result, "holds no THIRD_PARTY_NOTICES.txt"));
+            CHECK(warned(result, "debug Visual C++ runtime (vcruntime140d.dll)"));
+            CHECK_FALSE(std::filesystem::exists(root / "export_bare" / "vcruntime140d.dll"));
+            // Only a build that imports the DLL runtime of Microsoft's standard library needs the libraries.
+            const bool needsLibraries = CONJURE_PLATFORM_WINDOWS == 1 && CONJURE_STDLIB_MSVC == 1
+              && (modules::ABI_SIGNATURE_RUNTIME_FLAGS & modules::ABI_RUNTIME_DYNAMIC_CRT) != 0;
+            CHECK(warned(result, "holds no Visual C++ runtime DLL") == needsLibraries);
+        }
+        SUBCASE("the notices and the redistributable runtime are copied without a word") {
+            standIn("THIRD_PARTY_NOTICES.txt");
+            standIn("vcruntime140.dll");
+            const core::json::document result = exported("export_complete");
+            CHECK_FALSE(warned(result, "THIRD_PARTY_NOTICES.txt"));
+            CHECK_FALSE(warned(result, "Visual C++"));
+            CHECK(std::filesystem::is_regular_file(root / "export_complete" / "THIRD_PARTY_NOTICES.txt"));
+            CHECK(std::filesystem::is_regular_file(root / "export_complete" / "vcruntime140.dll"));
+        }
+    }
+
     TEST_CASE("regression - F029 conjure_editor --export forwards --distribution so the runtime is copied") {
         testing::log_capture logs = {};
         testing::temp_directory directory = {};
@@ -421,12 +477,13 @@ TEST_SUITE("editor/commands_scene_project") {
             REQUIRE(stream.is_open());
             stream << "stand-in";
         }
-        // What --project <dir> --export <out> [--distribution <dir>] parse into.
+        // What --project <dir> --trust-project --export <out> [--distribution <dir>] parse into.
         const auto exportWith = [&project](const std::filesystem::path &output, const std::filesystem::path &from) {
             editor_options options = {};
             options.headless = true;
             options.aiPort = u16{0};
             options.projectPath = project;
+            options.trustProject = true;
             options.exportDirectory = output;
             options.exportDistribution = from;
             options.engineArguments = {"--log-level", "warn"};
@@ -762,5 +819,37 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(editor_test::project_file_snapshot(editor.project_directory()) == before);
         (void) editor.ok("history.redo");
         CHECK(editor.ok("project.info").root()["startupScene"].as_string() == "scenes/live.scene.json");
+    }
+
+    TEST_CASE("regression - code sweep F187 project.export resolves relative directories against the project root") {
+        editor_test::headless_editor editor = {};
+        (void) editor.create_entity("Exported");
+        (void) editor.ok("scene.save");
+        const std::filesystem::path root = editor.context().project()->root_directory();
+
+        // The folder the runtime is copied from is checked first, so nothing is written for this half: a relative
+        // distributionDirectory that does not exist is looked for in the project, and the answer says where.
+        const protocol_response missing = editor.send(
+          "project.export",
+          core::json::object({
+            {"directory", "exported/refused"},
+            {"distributionDirectory", "no_such_build"},
+            {"publishManaged", false},
+          })
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        const std::string expectedBuild = (root / "no_such_build").generic_string();
+        CHECK_MESSAGE(missing.errorMessage.find(expectedBuild) != std::string::npos, missing.errorMessage);
+        CHECK_FALSE(std::filesystem::exists(root / "exported"));
+
+        const core::json::document result = editor.ok(
+          "project.export",
+          core::json::object({{"directory", "exported/relative"}, {"copyRuntime", false}, {"publishManaged", false}})
+        );
+        const std::filesystem::path expected = root / "exported" / "relative";
+        // The answer names the folder that was written, so a client need not know the rule to find it.
+        CHECK(std::filesystem::path(std::string(result.root()["directory"].as_string())) == expected);
+        CHECK(std::filesystem::is_regular_file(expected / "project.json"));
     }
 }

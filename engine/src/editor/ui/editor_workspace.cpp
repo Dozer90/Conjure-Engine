@@ -31,6 +31,9 @@ namespace conjure::editor::ui {
     namespace {
         constexpr const char *DOCKSPACE_ID = "conjure_editor_dockspace";
         constexpr const char *SAVE_AS_POPUP = "Save Scene As";
+        constexpr const char *TRUST_POPUP = "Trust This Project?";
+        // The width the trust question wraps its text at, in font sizes: a path and three sentences stay readable.
+        constexpr f32 TRUST_POPUP_WRAP_EMS = 34.0f;
 
         struct builtin_panel {
             const char *name = "";
@@ -228,6 +231,7 @@ namespace conjure::editor::ui {
             entry.panel->draw(context);
         }
         draw_save_as_modal(context);
+        draw_trust_prompt(context);
         if (mShowDemo) {
             ImGui::ShowDemoWindow(&mShowDemo);
         }
@@ -468,6 +472,82 @@ namespace conjure::editor::ui {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
             ImGui::TextWrapped("%s", mSaveAsError.c_str());
             ImGui::PopStyleColor();
+        }
+        ImGui::EndPopup();
+    }
+
+    bool editor_workspace::answer_trust_prompt(editor_context &context, bool trust) {
+        if (!context.trust_prompt().has_value()) {
+            return false;
+        }
+        if (!trust) {
+            context.dismiss_trust_prompt();
+            mTrustPromptError.clear();
+            return true;
+        }
+        const std::string path = context.trust_prompt()->generic_string();
+        const core::result<core::json::document> trusted = support::run_command(
+          context,
+          "project.trust",
+          core::json::object({{"path", path}})
+        );
+        if (!trusted.has_value()) {
+            mTrustPromptError = support::error_text(trusted.get_error());
+            return false;
+        }
+        // project.trust closed the question. The open is a command like any other: a refusal (the editor is
+        // playing) is logged, and the answer that was given stands.
+        mTrustPromptError.clear();
+        return support::run_command(context, "project.open", core::json::object({{"path", path}})).has_value();
+    }
+
+    void editor_workspace::draw_trust_prompt(editor_context &context) {
+        const bool asked = context.trust_prompt().has_value();
+        if (asked && !ImGui::IsPopupOpen(TRUST_POPUP)) {
+            ImGui::OpenPopup(TRUST_POPUP);
+        }
+        if (!ImGui::BeginPopupModal(TRUST_POPUP, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            return;
+        }
+        if (!asked) {
+            // Answered from elsewhere: a protocol client sent project.trust, or the project was opened.
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+            return;
+        }
+        const std::string path = context.trust_prompt()->generic_string();
+        const project_trust *trust = context.trust();
+        const bool remembered = trust != nullptr && !trust->store_file().empty();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * TRUST_POPUP_WRAP_EMS);
+        ImGui::TextUnformatted("Do you trust the authors of this project?");
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", path.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+          "Opening a project runs code from its folder with your rights on this computer: its C# scripts, its "
+          "native modules and the build files of both. Trust it only when you know where it came from."
+        );
+        support::hint_text(
+          remembered
+            ? "The answer is remembered for this folder, for you, on this computer."
+            : "No trust store is in use: the answer holds until the editor exits."
+        );
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        if (ImGui::Button("Trust and Open")) {
+            (void) answer_trust_prompt(context, true);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Don't Open") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            (void) answer_trust_prompt(context, false);
+        }
+        if (!mTrustPromptError.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            ImGui::TextWrapped("%s", mTrustPromptError.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (!context.trust_prompt().has_value()) {
+            ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }

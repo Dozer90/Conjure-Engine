@@ -82,7 +82,12 @@ threads touch.
   exists (wave 4, `conjure/editor/protocol/loopback_transport.h`), but the in-process and TCP factories of
   the design (`connect_in_process` over `editor::loopback_transport`, and `connect_tcp`) and the design-11
   cases "tcp ping on ephemeral port" and "closed port returns error" are still owed
-  (`docs/design/09_cross_area_resolutions.md` 4 item 15(e)). The `LOOPBACK_TCP` precondition probe is
+  (`docs/design/09_cross_area_resolutions.md` 4 item 15(e)). A TCP factory, when it is written, has to open
+  with `session.hello` carrying the token the editor writes to `<project>/.conjure/ai_token` (or the one in
+  `ai_token_inspect`, for a client that may only run the `read_only` commands, D25), or the server
+  answers `UNAUTHORISED` and closes the connection (`docs/design/04_editor.md` D23); the editor tests do
+  that over a raw socket (`tests/editor/protocol/test_protocol_server.cpp`,
+  `tests/editor/test_ai_protocol_e2e.cpp`). The `LOOPBACK_TCP` precondition probe is
   installed by the editor tests (`tests/editor/editor_test_support.cpp`), not by this library.
   `scripted_protocol_channel::send_line` collects a handler's lines in a list local to the call, so a
   handler that forwards through the same channel loses nothing.

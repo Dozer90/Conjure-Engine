@@ -17,19 +17,27 @@ namespace conjure::editor::support {
         core::result<command_outcome> session_hello(command_invocation &invocation) {
             editor_context &context = invocation.context;
             const std::string_view token = string_or(invocation.args, "token", "");
-            // --ai-token gates the transports (TCP, stdio, loopback). In-process clients (an --exec file, an
-            // editor.exec_file task, the UI) have no transport entry and are trusted.
+            // The server decides, with the comparison its own handshake uses: a token gates the transports that
+            // require one (TCP always; stdio and loopback under --ai-token or --ai-inspect-token), and the
+            // token presented decides what the client may run from here on (D25). In-process clients (an
+            // --exec file, an editor.exec_file task, the UI) have no transport entry and are trusted.
             protocol_server *server = context.server();
-            const bool transportClient = server != nullptr && server->client(invocation.clientId) != nullptr;
-            if (transportClient && !context.token().empty() && token != context.token()) {
+            if (server != nullptr && !server->accept_hello(invocation.clientId, token)) {
                 return make_editor_error(protocol_error_code::UNAUTHORISED, "session.hello: the token does not match");
             }
-            if (server != nullptr) {
-                server->mark_authenticated(invocation.clientId);
-            }
+            const access_level access =
+              server != nullptr ? server->access_of_client(invocation.clientId) : access_level::FULL_CONTROL;
             const std::string_view clientName = string_or(invocation.args, "clientName", "");
-            if (!clientName.empty()) {
-                CONJURE_LOG_INFO(LOG_EDITOR, "client {} says hello as '{}'", invocation.clientId, clientName);
+            // A client that put its token into the wrong argument must not see it land in the log.
+            const bool nameIsSafe = server == nullptr || !server->contains_token(clientName);
+            if (!clientName.empty() && nameIsSafe) {
+                CONJURE_LOG_INFO(
+                  LOG_EDITOR,
+                  "client {} says hello as '{}' ({} access)",
+                  invocation.clientId,
+                  clientName,
+                  to_string(access)
+                );
             }
             command_outcome outcome = {};
             outcome.result = core::json::object({
@@ -38,6 +46,7 @@ namespace conjure::editor::support {
               {"schemaHash", std::format("{:016x}", context.registry().schema_hash())},
               {"clientId", invocation.clientId},
               {"headless", context.headless()},
+              {"access", to_string(access)},
             });
             return outcome;
         }
@@ -86,11 +95,15 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "session.hello",
-            "Handshake: reports the protocol and engine versions, the schema hash and the client id.",
+            "Handshake: reports the protocol and engine versions, the schema hash, the client id and the access "
+            "the token grants. The first request of a TCP client, with a token the editor wrote under "
+            "<project>/.conjure: ai_token opens every command (access full_control), ai_token_inspect the "
+            "commands flagged read_only (access inspect). A later hello with the other token changes the access.",
             R"({"type":"object","properties":{"token":{"type":"string"},"clientName":{"type":"string"}}})",
             R"({"type":"object","properties":{"protocolVersion":{"type":"integer"},"engineVersion":{"type":"string"},)"
-            R"("schemaHash":{"type":"string"},"clientId":{"type":"integer"},"headless":{"type":"boolean"}}})",
-            command_flags::NONE,
+            R"("schemaHash":{"type":"string"},"clientId":{"type":"integer"},"headless":{"type":"boolean"},)"
+            R"("access":{"type":"string","enum":["inspect","full_control"]}}})",
+            command_flags::READ_ONLY,
             &session_hello
           )
         );
@@ -103,7 +116,7 @@ namespace conjure::editor::support {
             R"("minLogLevel":{"type":"string","enum":["trace","debug","info","warn","error","fatal"]}},)"
             R"("required":["events"]})",
             R"({"type":"object","properties":{"subscribed":{"type":"array","items":{"type":"string"}}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &session_subscribe
           )
         );
@@ -114,7 +127,7 @@ namespace conjure::editor::support {
             "The current frame and scene revision.",
             R"({"type":"object"})",
             R"({"type":"object","properties":{"frame":{"type":"integer"},"revision":{"type":"integer"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &session_ping
           )
         );

@@ -66,6 +66,26 @@ namespace {
         } while (outcome != 0 && errno == EINTR);
         return outcome == 0 ? 0 : errno;
     }
+
+    // Read and write for the owner, nothing for the group or for others.
+    constexpr mode_t OWNER_ONLY_MODE = S_IRUSR | S_IWUSR;
+
+    // Every permission bit of the group and of others.
+    constexpr mode_t GROUP_AND_OTHERS_MODE = S_IRWXG | S_IRWXO;
+
+    // True for a regular file of the effective user that carries no permission bit for its group or for
+    // others.
+    bool is_owner_only(const struct stat &info) noexcept {
+        const bool regular = S_ISREG(info.st_mode);
+        const bool closedToOthers = (info.st_mode & GROUP_AND_OTHERS_MODE) == 0;
+        return regular && closedToOthers && info.st_uid == ::geteuid();
+    }
+
+    // Closes and removes a file create_private_file made and cannot keep.
+    void discard_new_file(int descriptor, const std::filesystem::path &path) noexcept {
+        ::close(descriptor);
+        ::unlink(path.c_str());
+    }
 }
 
 
@@ -184,6 +204,74 @@ bool internal::flush_is_unsupported(u32 platformError) noexcept {
     // What fsync answers for a file system that has no synchronisation at all. Everything else, EIO
     // and ENOSPC included, is a flush that was attempted and failed.
     return platformError == static_cast<u32>(EINVAL) || platformError == static_cast<u32>(ENOTSUP);
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Private files
+
+result<void> internal::create_private_file(
+  const std::filesystem::path &path,
+  std::span<const std::byte> data,
+  std::string_view displayPath
+) {
+    // O_EXCL refuses an entry that already exists, a symbolic link included, so the file is always a new
+    // one that was never readable by anyone else.
+    int descriptor = -1;
+    do {
+        descriptor = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, OWNER_ONLY_MODE);
+    } while (descriptor < 0 && errno == EINTR);
+    if (descriptor < 0) {
+        return io_failure("create", displayPath, errno);
+    }
+
+    // The mode given to open already left out everyone but the owner, and a umask can only take more away;
+    // fchmod gives the owner back what a strict umask removed. A file system that ignores both (FAT, a
+    // mount with fixed permissions) is caught by the check that follows.
+    const int modeError = ::fchmod(descriptor, OWNER_ONLY_MODE) == 0 ? 0 : errno;
+    struct stat info = {};
+    if (::fstat(descriptor, &info) != 0) {
+        const int statError = errno;
+        discard_new_file(descriptor, path);
+        return io_failure("inspect", displayPath, statError);
+    }
+    if (!is_owner_only(info)) {
+        discard_new_file(descriptor, path);
+        const std::string reason = modeError != 0
+          ? std::error_code(modeError, std::generic_category()).message()
+          : std::string("the file system does not keep owner-only permissions");
+        return make_error(
+          error_code::UNSUPPORTED,
+          std::format("'{}' cannot be restricted to its owner: {}", displayPath, reason)
+        );
+    }
+
+    const int writeError = write_all(descriptor, data);
+    if (writeError != 0) {
+        discard_new_file(descriptor, path);
+        return io_failure("write", displayPath, writeError);
+    }
+    if (::close(descriptor) != 0) {
+        // The descriptor is gone either way; a deferred write error (a full disk, a lost network mount)
+        // surfaces here, and the file may be short.
+        const int closeError = errno;
+        ::unlink(path.c_str());
+        return io_failure("write", displayPath, closeError);
+    }
+    return result<void>::success();
+}
+
+result<bool> internal::is_private_file(const std::filesystem::path &path, std::string_view displayPath) {
+    struct stat info = {};
+    if (::lstat(path.c_str(), &info) != 0) {
+        const int errorNumber = errno;
+        if (errorNumber == ENOENT || errorNumber == ENOTDIR) {
+            return not_found(displayPath);
+        }
+        return io_failure("inspect", displayPath, errorNumber);
+    }
+    return is_owner_only(info);
 }
 
 

@@ -2,6 +2,8 @@
 
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_options.h"
+#include "conjure/editor/log_category.h"
+#include "conjure/editor/project_trust.h"
 #include "conjure/editor/ui/editor_layer.h"
 
 #include "conjure/core/error.h"
@@ -13,11 +15,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // conjure_editor (docs/design/04_editor.md 3.1, 3.11, 8): parses the editor command line, builds an
@@ -25,8 +29,10 @@
 //
 //   0  ok
 //   1  a command of --exec failed, or --export failed
-//   2  engine or project startup failure: project.json missing or invalid (its own settings included), a device
-//      or subsystem that did not start, an explicit --ai-port that is busy in headless mode; also a frame failure
+//   2  engine or project startup failure: project.json missing or invalid (its own settings included), a project
+//      nobody answered for where no window can ask (PROJECT_NOT_TRUSTED: --trust-project, or project.trust
+//      beforehand), a device or subsystem that did not start, an explicit --ai-port that is busy in headless
+//      mode; also a frame failure
 //   3  bad arguments: a bad editor flag, an option neither the editor nor the engine knows, a bad engine flag
 //      value or one that makes the merged configuration invalid, an unreadable --exec file
 //   4  the graphics device was lost (windowed only)
@@ -36,6 +42,10 @@
 // (--ai-stdio, --exec without --out, --export) every log message goes to standard error instead. With --ai-stdio
 // the reader thread may still block in getline on the terminal when the session ends, so the process leaves
 // through std::quick_exit after an orderly shutdown instead of waiting for it.
+//
+// Project trust (04_editor.md D27): this is the one place that names the per-user trust store. Without
+// --trust-store the answers are remembered in default_trust_store_file(); when the system names no such folder a
+// WARN says that answers hold for the session only.
 
 namespace {
     using namespace conjure;
@@ -87,13 +97,26 @@ namespace {
             std::cerr << "conjure_editor: " << parsed.get_error().message() << "\n\n" << editor::editor_options_help();
             return EXIT_BAD_ARGUMENTS;
         }
-        const editor::editor_options &options = parsed.value();
+        editor::editor_options options = parsed.value();
         if (options.showHelp) {
             std::cout << editor::editor_options_help();
             return static_cast<int>(engine::exit_code::OK);
         }
         if (options.stdout_carries_protocol()) {
             route_log_to_standard_error();
+        }
+        if (options.trustStoreFile.empty()) {
+            core::result<std::filesystem::path> store = editor::default_trust_store_file();
+            if (store.has_value()) {
+                options.trustStoreFile = std::move(store).value();
+            } else {
+                CONJURE_LOG_WARN(
+                  editor::LOG_EDITOR,
+                  "project trust: answers are not remembered beyond this run ({}); --trust-store <file> names a "
+                  "store",
+                  store.get_error().message()
+                );
+            }
         }
         editor::editor_application application = {};
         const core::result<void> initialised = application.initialise(options, [](editor::editor_context &context) {

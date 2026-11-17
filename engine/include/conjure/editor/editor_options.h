@@ -15,6 +15,11 @@
 // everything else (--rhi, --log-level, --frames, ...) is passed on to the engine's parser through engineArguments.
 // A bad editor flag is INVALID_ARGS; an option the engine does not know either, or a bad engine flag value, is
 // refused by editor_application::make_engine_desc with BAD_ARGUMENTS. main() exits with 3 for both.
+//
+// The two trust options (decision D27): trustProject answers for the project of --project for this run and is
+// remembered nowhere; trustStoreFile names the file remembered answers are kept in. An editor_application given
+// no file remembers nothing: conjure_editor's main fills in default_trust_store_file() (conjure/editor/
+// project_trust.h) when --trust-store was not given, so only the executable touches the user's own folder.
 
 namespace conjure::editor {
 
@@ -35,7 +40,9 @@ namespace conjure::editor {
         std::filesystem::path outputFile = {};              // --out <responses.ndjson>; empty = stdout
         std::filesystem::path exportDirectory = {};         // --export <dir>
         std::filesystem::path exportDistribution = {};      // --distribution <dir>, with --export
-        std::string aiToken = {};                           // --ai-token <t>
+        std::filesystem::path trustStoreFile = {};          // --trust-store <file>; empty = nothing is remembered
+        std::string aiToken = {};                           // --ai-token <t>; empty = generated for TCP
+        std::string aiInspectToken = {};                    // --ai-inspect-token <t>; empty = generated likewise
         std::vector<std::string> engineArguments = {};      // everything else, for the engine's parser
         std::optional<u16> aiPort = std::nullopt;           // --ai-port <n>; 0 disables the server
         f64 timeoutSeconds = 120.0;                         // --timeout-seconds <s>, asynchronous replies
@@ -45,6 +52,7 @@ namespace conjure::editor {
         bool aiStdio = false;                               // --ai-stdio
         bool noScripting = false;                           // --no-scripting (also passed to the engine)
         bool dotnetHost = false;                            // --dotnet: headless keeps the real .NET script host
+        bool trustProject = false;                          // --trust-project: trust --project for this run
         bool showHelp = false;                              // --help
 
         /// <summary>
@@ -77,9 +85,12 @@ namespace conjure::editor {
 
     /// <summary>
     /// Parses argv[1..]. INVALID_ARGS for a flag without its value, a value that does not parse (port above
-    /// 65535, a timeout that is not a positive finite number), --exec together with --ai-stdio, --out without
-    /// --exec, or --distribution without --export. Every other token is kept in engineArguments for the engine's
-    /// parser, and editor_application::make_engine_desc refuses what that parser does not know either.
+    /// 65535, a timeout that is not a positive finite number, an empty --ai-token, --ai-inspect-token or
+    /// --trust-store), --ai-token and --ai-inspect-token naming the same token, --exec together with --ai-stdio,
+    /// --out without --exec, --offscreen without --headless, --export or --trust-project without --project, or
+    /// --distribution without --export.
+    /// Every other token is kept in engineArguments for the engine's parser, and
+    /// editor_application::make_engine_desc refuses what that parser does not know either.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<editor_options> parse_editor_options(std::span<const std::string_view> args);
 

@@ -21,8 +21,11 @@ core/commands/         one file per command group (session, editor, history, con
                        component, asset, prefab, script, play, input, view, physics, selection, reflection,
                        modules, profiler) plus command_support.{h,cpp}
 core/component_access  component JSON in protocol form (entity refs as guid strings, aliases, suffix lookup)
-core/protocol/         protocol_message, line_splitter, protocol_server, transports (tcp, stdio, loopback)
-core/net/              socket.h + socket_win32.cpp / socket_posix.cpp (the only platform-specific files)
+core/protocol/         protocol_message, line_splitter, protocol_server, access_token, audit_log, transports (tcp,
+                       stdio, loopback)
+core/net/              socket.h + socket_win32.cpp / socket_posix.cpp
+core/user_paths*       the per-user state folder: user_paths.{h,cpp} + user_paths_windows.cpp /
+                       user_paths_posix.cpp (with the socket pair, the only platform-specific files)
 ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_cache, property_drawer,
                        gizmo_controller, imgui_frame_scope, ui_support, editor_icon (+ generated
                        editor_icon_data.cpp, see docs/handbook/brand.md), panels/
@@ -33,11 +36,13 @@ ui/                    editor_layer, editor_workspace, editor_panel, hierarchy_c
 1. A transport yields a line; `protocol_server::poll` parses it (`PARSE_ERROR`, `INVALID_REQUEST`,
    `MESSAGE_TOO_LARGE` answered immediately) and caps requests per frame; the backlog carries over.
    `line_splitter` frames the bytes with a per-line limit and reports an oversized line as a marker at its
-   position in the stream; the server marks the client `closing` on `MESSAGE_TOO_LARGE` or a failed token
-   handshake and ignores the client's remaining lines of that poll. A line that is not valid UTF-8 is a
-   `PARSE_ERROR` and keeps the client connected (04_editor.md table 6 lists `IO_ERROR` + disconnect; the
+   position in the stream; the server marks the client `closing` on `MESSAGE_TOO_LARGE`, on a failed token
+   handshake and on a first line that is not a request ("Who may connect"), and ignores the client's remaining
+   lines of that poll. After a client's first request a line that is not valid UTF-8 is a `PARSE_ERROR` and
+   keeps the client connected (04_editor.md table 6 lists `IO_ERROR` + disconnect; the
    robustness tests pin the gentler behaviour, so the design table is the one to update).
-2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean`; the compiled JSON Schema
+2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean`; a command the client's
+   token does not open -> `UNAUTHORISED` (see "Who may connect"); the compiled JSON Schema
    of the arguments -> `INVALID_ARGS` naming the path; `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`,
    `PLAYING_ONLY` -> the matching code before the handler runs.
    A file or folder that is not there is `PATH_NOT_FOUND` in every command and one that exists but cannot be
@@ -139,9 +144,9 @@ thread is left blocked at exit (documented) and never touches the destroyed tran
 ends, `protocol_server::stdio_closed()` turns true and a headless `--ai-stdio` editor without a TCP server quits
 with 0 (`editor_application::run`). Whenever standard output carries protocol data (`--ai-stdio`, `--exec`
 without `--out`, `--export`: `editor_options::stdout_carries_protocol`), `main` replaces the console sink with
-one that writes every log line to standard error, so each stdout line parses. The TCP port file
-`<project>/.conjure/ai_port` follows `project.open`: `apply_pending_project_open` moves it with
-`protocol_server::set_project_root`. `initialise` failures exit 3 for `BAD_ARGUMENTS` (an option neither the
+one that writes every log line to standard error, so each stdout line parses. The session files
+`<project>/.conjure/ai_port`, `ai_token` and `ai_token_inspect` follow `project.open`, and so does the audit log
+`ai_audit.log`: `apply_pending_project_open` moves them with `protocol_server::set_project_root`. `initialise` failures exit 3 for `BAD_ARGUMENTS` (an option neither the
 editor nor the engine knows, refused by `make_engine_desc` before the project loads) or an `INVALID_CONFIG` a
 flag caused, otherwise 2.
 
@@ -153,6 +158,40 @@ of them carry `primary` as null for an empty selection, never `""`.
 
 Units: `view.set_camera` / `view.get_camera` carry `fov` in degrees; `input.inject {"text"}` is UTF-8 and
 injects one text event per code point (`INVALID_ARGS` for malformed bytes).
+
+## Who may connect
+
+A protocol client with the full-control token has the reach of the user running the editor, so the connection
+is what is guarded (04_editor.md D23, D24; the handbook page, section 4.1, has the table of the pieces). A TCP
+client must open with `session.hello {token}`. Two tokens are generated when the TCP transport starts
+(`protocol/access_token.h`), compared in one place (`protocol_server::access_of`, constant time; the guards that look for a token inside client text use `constant_time_contains` too) and written to
+`<project>/.conjure/ai_token` and `ai_token_inspect` through `core::vfs::write_private_file`, readable by their
+owner only, before `ai_port` is written beside them. `--ai-token` and `--ai-inspect-token` replace them and gate
+stdio and the loopback too. A client whose first line is not a request is disconnected on every transport,
+which ends an HTTP request at its request line. Never log a token, put it in an event or quote it in an error;
+the tests search for both. A path argument becomes an on-disk path in `support::project_relative_path` only:
+relative means relative to the project root.
+
+Scoped tokens and the audit log (04_editor.md D25, D26; handbook section 4.2). The inspect-only token opens the
+commands flagged `command_flags::READ_ONLY` and no others: `required_access(flags)` is the rule and
+`command_dispatcher::dispatch_internal` applies it before the arguments are validated. Flag a new command only
+if it changes nothing clients share, starts no program and loads no code, and add it to the pinned list in
+`tests/editor/test_command_catalogue.cpp`. Every request of a transport client is appended to
+`<project>/.conjure/ai_audit.log` (`protocol/audit_log.h`: one JSON line, tokens kept out, at most 4 MiB per
+file and one previous file); the editor's own requests are not recorded.
+
+## Which projects are opened
+
+Opening a project runs its native modules and scripts, so the editor opens one only after somebody answered for
+it (04_editor.md D27; handbook section 5.1). `project_trust` holds the answers: for the session in memory,
+remembered in the per-user trust store outside every project (`default_trust_store_file()`, or `--trust-store`).
+`editor_application::require_trusted` is the one gate, asked by `initialise` (`--project`),
+`request_open_project` (`project.open`) and the restart itself; it answers `PROJECT_NOT_TRUSTED`. Answers are
+always explicit: the window's question (`editor_context::trust_prompt`, drawn by the workspace),
+`--trust-project` for one run, or `project.trust`. A headless, `--exec` or `--export` session cannot ask and
+fails with exit code 2. Do not add a command that trusts as a side effect (`project.create` does so only for a
+folder it made itself), and route every new way of opening a project through `require_trusted`. The
+library never names the user's store by itself: `editor/src/main.cpp` does, so tests remember nothing.
 
 ## Modules
 
@@ -167,7 +206,9 @@ consumer and loads again; a pre-load hook on the modules subsystem would remove 
 under `tests/editor/data/commands/`, the loopback end-to-end session, the headless runner, the Grid Sweeper
 command file, the private helpers (`test_command_support.cpp`: base64, the build diagnostic parser) and the UI
 panels drawn inside `imgui_frame_scope` on the null rhi. Every fixed bug has a `regression - ...` case next to
-the behaviour it pins.
+the behaviour it pins. `headless_editor` trusts its scratch project for the session and names no trust store;
+`headless_editor::trust_project` answers for a second hand-written project, and the process cases give the real
+executable a `--trust-store` in a scratch folder.
 
 ```
 python tools/build.py --build-dir build/mod_editor --target conjure_editor_tests --test -R editor

@@ -6,10 +6,12 @@
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/editor_options.h"
 #include "conjure/editor/play_controller.h"
+#include "conjure/editor/project_trust.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
@@ -38,36 +40,20 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 // editor_application.h (docs/design/04_editor.md 3.1): the process object behind conjure_editor.
 
 using namespace conjure;
 using namespace conjure::editor;
+using editor_test::write_project;
 
 namespace {
-    /// <summary>
-    /// Writes a minimal project.json and its assets folder; 'extraMembers' are further members of the root object
-    /// (R"("startup_scene": "scenes/main.scene.json")").
-    /// </summary>
-    void write_project(
-      const std::filesystem::path &directory,
-      std::string_view name,
-      std::string_view extraMembers = {}
-    ) {
-        std::error_code ignored = {};
-        std::filesystem::create_directories(directory / "assets", ignored);
-        std::ofstream stream(directory / "project.json", std::ios::binary | std::ios::trunc);
-        REQUIRE(stream.is_open());
-        stream << "{\n  \"schema_version\": 1,\n  \"name\": \"" << name << "\",\n  \"assets_root\": \"assets\"";
-        if (!extraMembers.empty()) {
-            stream << ",\n  " << extraMembers;
-        }
-        stream << "\n}\n";
-    }
 
     /// <summary>
-    /// The options of a headless `--project <project> --exec <commands>` run without a protocol server.
+    /// The options of a headless `--project <project> --trust-project --exec <commands>` run without a protocol
+    /// server.
     /// </summary>
     [[nodiscard]] editor_options exec_options(
       const std::filesystem::path &project,
@@ -77,9 +63,36 @@ namespace {
         options.headless = true;
         options.aiPort = u16{0};
         options.projectPath = project;
+        options.trustProject = true;
         options.execFile = commands;
         options.engineArguments = {"--log-level", "warn"};
         return options;
+    }
+
+    /// <summary>
+    /// The options of a headless editor without a protocol server and without a project: the cases about project
+    /// trust add what they are about.
+    /// </summary>
+    [[nodiscard]] editor_options bare_options() {
+        editor_options options = {};
+        options.headless = true;
+        options.aiPort = u16{0};
+        options.engineArguments = {"--log-level", "warn"};
+        return options;
+    }
+
+    /// <summary>
+    /// Runs a command as the editor's own client and returns its result or its error.
+    /// </summary>
+    [[nodiscard]] core::result<core::json::document> execute(
+      editor_application &application,
+      std::string_view command,
+      core::json::document args
+    ) {
+        command_request request = {};
+        request.name = std::string(command);
+        request.args = std::move(args);
+        return application.context().dispatcher().execute(request);
     }
 
 #if defined(CONJURE_EDITOR_TEST_HAS_BINDINGS) && CONJURE_EDITOR_TEST_HAS_BINDINGS
@@ -160,6 +173,42 @@ TEST_SUITE("editor/editor_application") {
         CHECK_FALSE(application.is_initialised());
     }
 
+    TEST_CASE("regression - code sweep F075 the editor forwards --scripting") {
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "unscripted", R"("scripting": {"enabled": false})");
+        const auto descOf = [&directory](std::vector<std::string_view> arguments) {
+            const core::result<editor_options> parsed = parse_editor_options(arguments);
+            REQUIRE_MESSAGE(parsed.has_value(), testing::describe_error(parsed));
+            return editor_application::make_engine_desc(parsed.value(), directory.path());
+        };
+        SUBCASE("with --no-scripting it is BAD_ARGUMENTS, in either order") {
+            CONJURE_CHECK_ERROR(descOf({"--scripting", "--no-scripting"}), engine::engine_error::BAD_ARGUMENTS);
+            CONJURE_CHECK_ERROR(descOf({"--no-scripting", "--scripting"}), engine::engine_error::BAD_ARGUMENTS);
+            CONJURE_CHECK_ERROR(
+              descOf({"--headless", "--scripting", "--no-scripting"}),
+              engine::engine_error::BAD_ARGUMENTS
+            );
+        }
+        SUBCASE("a windowed session turns scripting on for a project that disables it") {
+            const core::result<engine::application_desc> plain = descOf({});
+            CONJURE_REQUIRE_OK(plain);
+            CHECK_FALSE(plain.value().config.scripting.enabled);
+            const core::result<engine::application_desc> scripted = descOf({"--scripting"});
+            CONJURE_REQUIRE_OK(scripted);
+            CHECK(scripted.value().config.scripting.enabled);
+            CHECK_FALSE(scripted.value().config.scripting.required);
+        }
+        SUBCASE("with --headless it changes nothing: the editor's own rule is applied after the merge") {
+            const core::result<engine::application_desc> plain = descOf({"--headless"});
+            const core::result<engine::application_desc> scripted = descOf({"--headless", "--scripting"});
+            CONJURE_REQUIRE_OK(plain);
+            CONJURE_REQUIRE_OK(scripted);
+            CHECK(scripted.value().config.scripting == plain.value().config.scripting);
+            CHECK(scripted.value().config.scripting.enabled);
+            CHECK(scripted.value().config.scripting.useNullHost);
+        }
+    }
+
     TEST_CASE("editor_application::make_engine_desc - --offscreen enables rendering") {
         editor_options options = {};
         options.headless = true;
@@ -178,6 +227,7 @@ TEST_SUITE("editor/editor_application") {
         options.headless = true;
         options.aiPort = u16{0};
         options.projectPath = directory.path();
+        options.trustProject = true;
         options.engineArguments = {"--log-level", "warn"};
         editor_application application = {};
         CHECK_FALSE(application.is_initialised());
@@ -219,6 +269,7 @@ TEST_SUITE("editor/editor_application") {
         options.headless = true;
         options.aiPort = u16{0};
         options.projectPath = directory.path();
+        options.trustProject = true;
         options.engineArguments = {"--log-level", "warn"};
         editor_application application = {};
         CONJURE_REQUIRE_OK(application.initialise(options, {}));
@@ -300,6 +351,7 @@ TEST_SUITE("editor/editor_application") {
         CHECK_FALSE(editor.application().has_pending_project_open());
         const std::filesystem::path other = editor.project_directory() / "other";
         write_project(other, "other");
+        editor.trust_project(other);
         CONJURE_REQUIRE_OK(editor.application().request_open_project(other));
         CHECK(editor.application().has_pending_project_open());
         editor.pump(1);
@@ -324,6 +376,7 @@ TEST_SUITE("editor/editor_application") {
         options.headless = true;
         options.aiPort = u16{0};
         options.projectPath = directory.path();
+        options.trustProject = true;
         options.execFile = commands;
         options.outputFile = directory.file("out.ndjson");
         options.engineArguments = {"--log-level", "warn"};
@@ -570,6 +623,8 @@ TEST_SUITE("editor/editor_application") {
         write_project(broken, "broken", R"("startup_scene": "scenes/gone.scene.json")");
         const std::filesystem::path sound = editor.project_directory() / "sound";
         write_project(sound, "sound");
+        editor.trust_project(broken);
+        editor.trust_project(sound);
 
         editor.clear_events();
         CONJURE_REQUIRE_OK(editor.application().request_open_project(broken));
@@ -602,6 +657,297 @@ TEST_SUITE("editor/editor_application") {
         CHECK_FALSE(editor.saw_event("warning"));
     }
 
+    TEST_CASE("editor_application::can_ask_about_trust - only a window that runs neither --exec nor --export asks") {
+        editor_options options = {};
+        CHECK(editor_application::can_ask_about_trust(options));
+        // Neither trust option changes who can be asked.
+        options.trustStoreFile = "trusted_projects.json";
+        options.projectPath = "project";
+        options.trustProject = true;
+        CHECK(editor_application::can_ask_about_trust(options));
+        SUBCASE("a headless session") {
+            options.headless = true;
+        }
+        SUBCASE("--exec in a window runs to its end unattended") {
+            options.execFile = "commands.json";
+        }
+        SUBCASE("--export in a window as well") {
+            options.exportDirectory = "exported";
+        }
+        CHECK_FALSE(editor_application::can_ask_about_trust(options));
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application a windowed session starts without a project nobody "
+              "answered for and asks about it") {
+        // initialise() of a windowed session needs a real window; what it starts from is decided by plan_startup,
+        // which needs none. The engine description is the whole of what the engine loads a project from.
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "downloaded";
+        write_project(project, "downloaded");
+        editor_options options = bare_options();
+        options.headless = false;
+        options.projectPath = project;
+        project_trust trust = {};
+
+        SUBCASE("nobody answered: the description holds no project and the window is asked about it") {
+            const core::result<startup_plan> plan = editor_application::plan_startup(options, trust);
+            CONJURE_REQUIRE_OK(plan);
+            CHECK_FALSE(plan.value().desc.project.has_value());
+            CHECK(plan.value().unanswered == project);
+            const core::result<startup_project> startup = editor_application::resolve_startup_project(options, trust);
+            CONJURE_REQUIRE_OK(startup);
+            CHECK(startup.value().open.empty());
+            CHECK(startup.value().unanswered == project);
+            // Leaving the project out is not an answer.
+            CHECK(trust.state_of(project) == trust_state::UNTRUSTED);
+        }
+        SUBCASE("--trust-project: the project is in the description and nothing is asked") {
+            options.trustProject = true;
+            const core::result<startup_plan> plan = editor_application::plan_startup(options, trust);
+            CONJURE_REQUIRE_OK(plan);
+            REQUIRE(plan.value().desc.project.has_value());
+            CHECK(plan.value().desc.project->description().name == "downloaded");
+            CHECK(plan.value().unanswered.empty());
+            CHECK(trust.state_of(project) == trust_state::SESSION);
+        }
+        SUBCASE("a remembered answer: the project is in the description and nothing is asked") {
+            if (!editor_test::owner_only_files_available(directory.path())) {
+                return;
+            }
+            trust.set_store_file(directory.file("state/trusted_projects.json"));
+            CONJURE_REQUIRE_OK(trust.trust(project, true, "test"));
+            REQUIRE(trust.state_of(project) == trust_state::REMEMBERED);
+            const core::result<startup_plan> plan = editor_application::plan_startup(options, trust);
+            CONJURE_REQUIRE_OK(plan);
+            REQUIRE(plan.value().desc.project.has_value());
+            CHECK(plan.value().desc.project->description().name == "downloaded");
+            CHECK(plan.value().unanswered.empty());
+        }
+        SUBCASE("headless, nobody to ask: refused, and nothing is left out to ask about") {
+            options.headless = true;
+            CONJURE_CHECK_ERROR(
+              editor_application::plan_startup(options, trust),
+              protocol_error_code::PROJECT_NOT_TRUSTED
+            );
+            CONJURE_CHECK_ERROR(
+              editor_application::resolve_startup_project(options, trust),
+              protocol_error_code::PROJECT_NOT_TRUSTED
+            );
+        }
+        SUBCASE("no project named: nothing to open, nothing to ask") {
+            options.projectPath.clear();
+            const core::result<startup_plan> plan = editor_application::plan_startup(options, trust);
+            CONJURE_REQUIRE_OK(plan);
+            CHECK_FALSE(plan.value().desc.project.has_value());
+            CHECK(plan.value().unanswered.empty());
+        }
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application starts no engine over a project nobody answered for "
+              "where no window can ask") {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "downloaded";
+        write_project(project, "downloaded");
+        // The asset cache under .conjure/ is the trace an engine start leaves in a project.
+        const std::filesystem::path engineTrace = project / ".conjure";
+        editor_options options = bare_options();
+        options.projectPath = project;
+        SUBCASE("a headless server") {
+        }
+        SUBCASE("--exec") {
+            options.execFile = directory.write_file("commands.json", R"([{"cmd":"editor.state"}])");
+        }
+        SUBCASE("--export") {
+            options.exportDirectory = directory.path() / "exported";
+        }
+        SUBCASE("--exec in a window, where the run is unattended all the same") {
+            options.headless = false;
+            options.execFile = directory.write_file("commands.json", R"([{"cmd":"editor.state"}])");
+        }
+        SUBCASE("a trust store that does not name the project") {
+            options.trustStoreFile = directory.file("trusted_projects.json");
+        }
+        editor_application application = {};
+        const core::result<void> initialised = application.initialise(options, {});
+        CONJURE_CHECK_ERROR(initialised, protocol_error_code::PROJECT_NOT_TRUSTED);
+        REQUIRE_FALSE(initialised.has_value());
+        // The message says which project and names the two explicit ways to answer.
+        const std::string message = initialised.get_error().message();
+        CHECK(message.find("downloaded") != std::string::npos);
+        CHECK(message.find("project.trust") != std::string::npos);
+        CHECK(message.find("--trust-project") != std::string::npos);
+        CHECK_FALSE(application.is_initialised());
+        CHECK_FALSE(std::filesystem::exists(engineTrace));
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "exported"));
+        CHECK(application.run() == static_cast<int>(engine::exit_code::INIT_FAILURE));
+        // A refusal is not an answer: the project is as untrusted as before, and nothing was written.
+        CHECK(application.trust().state_of(project) == trust_state::UNTRUSTED);
+        CHECK_FALSE(std::filesystem::exists(directory.file("trusted_projects.json")));
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application --trust-project opens the project for this run and "
+              "remembers nothing") {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project, "trusted_once");
+        const std::filesystem::path store = directory.file("state/trusted_projects.json");
+        editor_options options = bare_options();
+        options.projectPath = project;
+        options.trustStoreFile = store;
+        options.trustProject = true;
+        {
+            editor_application application = {};
+            CONJURE_REQUIRE_OK(application.initialise(options, {}));
+            REQUIRE(application.context().has_project());
+            CHECK(application.context().project()->description().name == "trusted_once");
+            CHECK(application.trust().store_file() == store);
+            CHECK(application.trust().state_of(project) == trust_state::SESSION);
+            CHECK(application.context().trust() == &application.trust());
+            // Nobody sits at a headless editor, so nothing is ever asked there.
+            CHECK_FALSE(application.context().trust_prompt_enabled());
+            CHECK_FALSE(application.context().trust_prompt().has_value());
+            application.shutdown();
+        }
+        CHECK_FALSE(std::filesystem::exists(store));
+        CHECK_FALSE(std::filesystem::exists(store.parent_path()));
+        // The flag answered for one run: the next one without it is refused again.
+        options.trustProject = false;
+        editor_application again = {};
+        CONJURE_CHECK_ERROR(again.initialise(options, {}), protocol_error_code::PROJECT_NOT_TRUSTED);
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application a remembered answer opens the project in a later "
+              "run, until it is revoked") {
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        if (!editor_test::owner_only_files_available(directory.path())) {
+            return;
+        }
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project, "remembered");
+        const std::filesystem::path store = directory.file("state/trusted_projects.json");
+        const core::json::document path = core::json::object({{"path", project.generic_string()}});
+        {
+            // No project at the start: project.trust is the explicit answer, project.open follows it.
+            editor_options options = bare_options();
+            options.trustStoreFile = store;
+            editor_application application = {};
+            CONJURE_REQUIRE_OK(application.initialise(options, {}));
+            CHECK_FALSE(application.context().has_project());
+            CONJURE_CHECK_ERROR(execute(application, "project.open", path), protocol_error_code::PROJECT_NOT_TRUSTED);
+            const core::result<core::json::document> trusted = execute(application, "project.trust", path);
+            CONJURE_REQUIRE_OK(trusted);
+            CHECK(trusted.value().root()["state"].as_string() == "remembered");
+            CONJURE_REQUIRE_OK(execute(application, "project.open", path));
+            CONJURE_REQUIRE_OK(application.pump_frame());
+            REQUIRE(application.context().has_project());
+            CHECK(application.context().project()->description().name == "remembered");
+            application.shutdown();
+        }
+        editor_options options = bare_options();
+        options.projectPath = project;
+        options.trustStoreFile = store;
+        {
+            // Another run, no flag: the store answers.
+            editor_application application = {};
+            CONJURE_REQUIRE_OK(application.initialise(options, {}));
+            REQUIRE(application.context().has_project());
+            CHECK(application.trust().state_of(project) == trust_state::REMEMBERED);
+            const core::result<core::json::document> revoked = execute(application, "project.revoke_trust", path);
+            CONJURE_REQUIRE_OK(revoked);
+            CHECK(revoked.value().root()["revoked"].as_bool());
+            // Taking the answer back does not close the project that is open; it counts from the next opening.
+            CHECK(application.context().has_project());
+            application.shutdown();
+        }
+        editor_application refused = {};
+        CONJURE_CHECK_ERROR(refused.initialise(options, {}), protocol_error_code::PROJECT_NOT_TRUSTED);
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application request_open_project refuses a project nobody "
+              "answered for") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path other = editor.project_directory() / "other";
+        write_project(other, "other");
+        CONJURE_CHECK_ERROR(
+          editor.application().request_open_project(other),
+          protocol_error_code::PROJECT_NOT_TRUSTED
+        );
+        CHECK_FALSE(editor.application().has_pending_project_open());
+        editor.pump(2);
+        REQUIRE(editor.context().project() != nullptr);
+        CHECK(editor.context().project()->description().name == "editor_test");
+        // A folder without a project is still reported as missing, not as untrusted.
+        CONJURE_CHECK_ERROR(
+          editor.application().request_open_project(editor.project_directory() / "missing"),
+          engine::engine_error::PROJECT_NOT_FOUND
+        );
+        editor.trust_project(other);
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(other));
+        editor.pump(1);
+        CHECK(editor.context().project()->description().name == "other");
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application a project whose trust is revoked before the frame "
+              "boundary is not opened") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path other = editor.project_directory() / "other";
+        write_project(other, "other");
+        editor.trust_project(other);
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(other));
+        REQUIRE(editor.application().has_pending_project_open());
+        const core::result<bool> revoked = editor.application().trust().revoke(other);
+        CONJURE_REQUIRE_OK(revoked);
+        CHECK(revoked.value());
+        const std::string entity = editor.create_entity("still here");
+        editor.pump(1);
+        // The restart was dropped before anything of the running engine was touched.
+        CHECK_FALSE(editor.application().has_pending_project_open());
+        REQUIRE(editor.context().project() != nullptr);
+        CHECK(editor.context().project()->description().name == "editor_test");
+        CHECK(editor.application().options().projectPath == editor.project_directory());
+        CHECK(editor.log().contains(core::log_level::WARN, "project.open dropped"));
+        (void) editor.ok("entity.get", core::json::object({{"entity", entity}}));
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_application a failed project.open reopens the previous project "
+              "only while it is trusted") {
+        editor_test::headless_editor editor = {};
+        editor.log().allow_errors();
+        const std::filesystem::path previous = editor.project_directory();
+        // project::load accepts it; the engine refuses to start over it (its cooked root does not exist).
+        const std::filesystem::path broken = previous / "broken";
+        write_project(broken, "broken", R"("cooked": true, "cooked_root": "nowhere")");
+        editor.trust_project(broken);
+        bool revoke = false;
+        SUBCASE("the previous project is still trusted") {
+        }
+        SUBCASE("the previous project's answer was taken back while it was open") {
+            revoke = true;
+        }
+        if (revoke) {
+            const core::result<bool> revoked = editor.application().trust().revoke(previous);
+            CONJURE_REQUIRE_OK(revoked);
+            REQUIRE(revoked.value());
+        }
+        CONJURE_REQUIRE_OK(editor.application().request_open_project(broken));
+        editor.pump(1);
+        CHECK(editor.log().contains(core::log_level::ERR, "failed"));
+        CHECK_FALSE(editor.application().quit_requested());
+        if (revoke) {
+            CHECK(editor.context().project() == nullptr);
+            CHECK(editor.application().options().projectPath.empty());
+            CHECK(editor.log().contains(core::log_level::WARN, "is no longer trusted"));
+        } else {
+            REQUIRE(editor.context().project() != nullptr);
+            CHECK(editor.context().project()->description().name == "editor_test");
+            CHECK(editor.application().options().projectPath == previous);
+        }
+    }
+
     TEST_CASE("editor_application - run without initialise reports INIT_FAILURE") {
         editor_application application = {};
         CHECK(application.run() == static_cast<int>(engine::exit_code::INIT_FAILURE));
@@ -625,6 +971,7 @@ TEST_SUITE("editor/editor_application") {
         // project.open restarts the engine: the new application gets the subsystem as well.
         const std::filesystem::path other = editor.project_directory() / "other";
         write_project(other, "other");
+        editor.trust_project(other);
         CONJURE_REQUIRE_OK(editor.application().request_open_project(other));
         editor.pump(1);
         REQUIRE(editor.context().scripting() != nullptr);

@@ -175,7 +175,7 @@ TEST_SUITE("editor/reflection_commands") {
         CHECK(hello.root()["headless"].as_bool());
         // The headless editor's client is in process (like an --exec file): --ai-token gates only the transports,
         // so a wrong or missing token does not fail its hello (F477).
-        editor.context().set_token("secret");
+        CONJURE_REQUIRE_OK(editor.application().server().set_token("secret"));
         (void) editor.ok("session.hello", core::json::object({{"token", "wrong"}}));
         (void) editor.ok("session.hello");
         (void) editor.ok("session.hello", core::json::object({{"token", "secret"}}));

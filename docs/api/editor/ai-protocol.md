@@ -6,7 +6,8 @@ How an agent, a script or a test drives the editor: newline-delimited JSON over 
 loopback, and a command file for `--exec`. The wire types are `conjure/editor/protocol/protocol_message.h`, the
 server `conjure/editor/protocol/protocol_server.h`, the transports `conjure/editor/protocol/protocol_transport.h`
 and `conjure/editor/protocol/loopback_transport.h`, the framing `conjure/editor/protocol/line_splitter.h`, the
-error codes `conjure/editor/editor_error.h`, the runner `conjure/editor/headless_runner.h`. The agent-facing
+tokens `conjure/editor/protocol/access_token.h`, the audit log `conjure/editor/protocol/audit_log.h`, the error
+codes `conjure/editor/editor_error.h`, the runner `conjure/editor/headless_runner.h`. The agent-facing
 walkthrough with the whole catalogue is the skill `.claude/skills/editor-ai-control/SKILL.md`; the committed
 `editor.schema` dump is `docs/generated/editor_protocol.json`.
 
@@ -14,10 +15,14 @@ walkthrough with the whole catalogue is the skill `.claude/skills/editor-ai-cont
 
 | You want to... | Do |
 |---|---|
-| Start a server on the default port (47820, nine fallbacks) | `conjure_editor --project <dir>` (the UI) or `--headless --ai-port 47820`; the bound port is written to `<project>/.conjure/ai_port`, and moves to the new project's folder when `project.open` switches projects |
-| Talk over standard input and output | `conjure_editor --project <dir> --headless --ai-stdio` (requests on stdin, responses and events on stdout, logs on stderr); without `--ai-port` the editor exits with code 0 once standard input ends |
-| Run a prepared command file and exit | `conjure_editor --project <dir> --headless --exec commands.json [--out replies.ndjson] [--keep-going]` (without `--out` standard output carries only the NDJSON and the log goes to stderr) |
-| Require a token | `--ai-token <t>`; `session.hello` must carry it or every request answers `UNAUTHORISED`, and no event is delivered before a valid `session.hello`. The token guards the TCP, stdio and loopback connections; an `--exec` file, an `editor.exec_file` and other in-process clients are trusted, so their `session.hello` needs no token |
+| Start a server on the default port (47820, nine fallbacks) | `conjure_editor --project <dir>` (the UI) or `--headless --ai-port 47820` (headless, add `--trust-project` unless the project was trusted before); the bound port is written to `<project>/.conjure/ai_port` and the two tokens to `ai_token` and `ai_token_inspect` beside it; all three move to the new project's folder when `project.open` switches projects |
+| Connect over TCP | read `<project>/.conjure/ai_port` and `ai_token`, connect to `127.0.0.1:<port>`, send `session.hello {"token": "<token>"}` first (see [Access tokens](access-and-audit.md#who-may-connect-and-what-a-client-may-do)) |
+| Let a program look without letting it change anything | give it `ai_token_inspect` instead: it runs the commands flagged `read_only` and is refused the rest (see [Two tokens](access-and-audit.md#two-tokens-full-control-and-inspect-only)) |
+| See what clients did | `<project>/.conjure/ai_audit.log`, one JSON line per command (see [The audit log](access-and-audit.md#the-audit-log)) |
+| Open a project the editor did not create | `project.trust {"path": "<dir>"}` once (the answer is remembered per user on this machine, outside the project), then `project.open`; `--trust-project` answers for one run. Until then `project.open` answers `PROJECT_NOT_TRUSTED` and a headless `--project` exits with 2: opening runs the project's scripts and native modules, and that is never implied (see [Project trust](headless-and-commands.md#project-trust)) |
+| Talk over standard input and output | `conjure_editor --project <dir> --trust-project --headless --ai-stdio` (requests on stdin, responses and events on stdout, logs on stderr); without `--ai-port` the editor exits with code 0 once standard input ends |
+| Run a prepared command file and exit | `conjure_editor --project <dir> --trust-project --headless --exec commands.json [--out replies.ndjson] [--keep-going]` (without `--out` standard output carries only the NDJSON and the log goes to stderr) |
+| Choose a token yourself | `--ai-token <t>` replaces the generated full-control token, `--ai-inspect-token <t>` the inspect-only one; either makes stdio and loopback clients present a token too. A command line is visible to other users of the machine, so prefer the generated tokens there |
 | Discover commands, components, assets | `editor.schema`, `reflection.components`, `reflection.type`, `reflection.asset_types`, `editor.state` |
 | Address an entity | by guid string, by hierarchy path `"Board/Cell_3"`, or by unique name |
 | Address a field | `transform.position.x`, `script.scripts[0].fields.mine`, `camera.cameraData.projection` |
@@ -39,7 +44,11 @@ line still parses.
 ```
 
 - The first request of a TCP or stdio client is `session.hello {clientName?, token?}`; it answers
-  `protocolVersion`, `engineVersion`, `schemaHash`, `clientId` and `headless`.
+  `protocolVersion`, `engineVersion`, `schemaHash`, `clientId`, `headless` and `access` (`"full_control"` or
+  `"inspect"`: what the client may run). A TCP client must send a token with it.
+- The first line of a connection must be a request. A client that opens with anything else (text that is not
+  JSON, JSON without `cmd`, an empty line) gets `PARSE_ERROR` or `INVALID_REQUEST` and is disconnected. After
+  a first request a malformed line is answered and the connection stays.
 - The server takes up to 8 TCP clients at once; a further client receives one `BUSY` line with id null and is
   closed.
 - A new client receives every event except `log` and `command.executed`; `session.subscribe {"events":[...],
@@ -55,28 +64,45 @@ line still parses.
 
 | Error code | When |
 |---|---|
-| `PARSE_ERROR`, `INVALID_REQUEST`, `MESSAGE_TOO_LARGE` | the line is not JSON, not a request, or too long (then disconnect); `id` is null, except that `INVALID_REQUEST` echoes an integer or string `id` the object carried |
+| `PARSE_ERROR`, `INVALID_REQUEST`, `MESSAGE_TOO_LARGE` | the line is not JSON, not a request, or too long; `id` is null, except that `INVALID_REQUEST` echoes an integer or string `id` the object carried. A line that is too long disconnects the client, and so do the first two when the line is the client's first |
 | `UNKNOWN_COMMAND` (`details.didYouMean`, empty for a name over 128 bytes; the message quotes at most 128 bytes of it), `INVALID_ARGS` (names `args.<path>`) | the request |
 | `ENTITY_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `TYPE_NOT_FOUND`, `ASSET_NOT_FOUND` | a reference did not resolve; `ASSET_NOT_FOUND` is an asset reference (uuid or asset path) that names no asset in the database |
 | `PATH_NOT_FOUND` | a reflection path does not resolve, or a file or folder a command needs does not exist: the `asset.import` source, the `scene.open` file, the `project.open` directory or its `project.json`, the `editor.exec_file` file, a script, the `module.discover` directory, the `distributionDirectory` of a `project.export` that copies the runtime, the source file of a registered asset (`asset.set`, `asset.delete`, `asset.reimport`, `prefab.apply`) |
-| `PROJECT_NOT_OPEN`, `SCENE_NOT_OPEN`, `WRONG_PLAY_STATE` (`details.state`) | a precondition |
+| `PROJECT_NOT_OPEN`, `SCENE_NOT_OPEN`, `WRONG_PLAY_STATE` (`details.state`), `PROJECT_NOT_TRUSTED` (`details {path, state, prompt}`) | a precondition; the last one is `project.open` of a project nobody answered for on this machine: send `project.trust` first (`prompt` says whether the editor window asks its user as well) |
 | `NOT_AVAILABLE`, `IO_ERROR`, `COMPILE_FAILED` (`details.diagnostics`) | the environment: a null backend, a file, a build. `IO_ERROR` is a file or folder that exists but cannot be read (a directory where a file is expected or a file where a folder is, a denied access, a scene file that does not load) or a write that failed, never a missing one (`script.reload` answers `PATH_NOT_FOUND` when no assembly was built yet and `IO_ERROR` when the runtime cannot load the one that exists) |
 | `BUSY`, `TIMEOUT`, `CANCELLED` | the asynchronous queue (also `BUSY`: a second `script.compile` while one runs, and `play.start` while a `project.open` waits for its restart) |
-| `UNAUTHORISED`, `INTERNAL` | the handshake, an invariant |
+| `UNAUTHORISED`, `INTERNAL` | the handshake (a first request without a token where one is required: answered once, then the client is disconnected; a later `session.hello` with a wrong token: answered, the client stays), a command the client's token does not open (`details {required, granted}`; the client stays), an invariant |
+
+## Who may connect, and what a client may do
+
+The port is a loopback port that every program on the machine, and a web page through the browser, can reach,
+so a TCP client must open with `session.hello` and one of the two tokens the editor writes next to `ai_port`:
+`ai_token` opens every command, `ai_token_inspect` only the commands flagged `read_only`. Every command a
+transport client sent is recorded in `<project>/.conjure/ai_audit.log`. The rules, the limits and the C++ side
+(`access_token.h`, `audit_log.h`) are on their own page: 📘 [Access tokens and the audit log](access-and-audit.md).
+
+**Paths in arguments.** A relative on-disk path is relative to the project root, never to the directory the
+editor was started in: `editor.exec_file {path}`, `project.export {directory, distributionDirectory}`,
+`module.discover {directory}`, `script.reload {assembly}`, `view.screenshot {path}` and `asset.import {source}`
+(a source that is no asset path). `..` is allowed, and the answers of `project.export`, `script.reload` and
+`view.screenshot` name the absolute path that was used. While no project is open a relative path is left to
+the editor's working directory. An empty `directory` of `module.discover` is the project root. `project.create`
+and `project.open` name a project and take their `path` as the operating system resolves it. On the command
+line `--export`, `--distribution` and `--exec` are relative to the working directory, as in any shell.
 
 ## The catalogue
 
-105 commands in 19 groups (`editor.schema` lists each with its summary, flags and the JSON schemas of its
+108 commands in 19 groups (`editor.schema` lists each with its summary, flags and the JSON schemas of its
 arguments and result): `session.*`, `editor.*` (`schema`, `state`, `batch`, `begin_transaction`,
-`end_transaction`, `wait_frames`, `exec_file`, `quit`), `history.*`, `project.*` (incl. `export`), `scene.*`,
-`entity.*` (`create`, `create_many`, `destroy`, `destroy_many`, `restore`, `duplicate`, `rename`, `set_parent`,
+`end_transaction`, `wait_frames`, `exec_file`, `quit`), `history.*`, `project.*` (incl. `export`, `trust`,
+`revoke_trust`, `trust_state`), `scene.*`, `entity.*` (`create`, `create_many`, `destroy`, `destroy_many`, `restore`, `duplicate`, `rename`, `set_parent`,
 `set_transform`, `set_enabled`, `get`, `find`, `bounds`), `component.*` (`add`, `remove`, `set`, `set_many`, `get`,
 `list`), `selection.*`, `asset.*`, `prefab.*`, `script.*` (`create`, `read`, `write`, `delete`, `list`, `compile`,
 `reload`, `gc`, `attach`), `play.*` (`start`, `stop`, `pause`, `resume`, `step`, `state`), `input.*`, `view.*`
 (`screenshot`, `set_camera`, `get_camera`, `focus`, `pick`, `mode`, `set_mode`, `debug_draw`), `physics.*`,
 `reflection.*`, `module.*`, `profiler.frame_stats`, `console.*`. Flags: `mutates`, `no_undo`, `async`,
 `requires_project`, `requires_scene`, `editing_only`, `playing_only`, `not_in_batch`, `on_disk` (an undoable
-change to the project's files, see the warning below).
+change to the project's files, see the warning below), `read_only` (open to inspect-only clients, see above).
 
 Events: `log`, `selection.changed`, `play.state`, `scene.changed`, `scene.loaded`, `progress`, `script.compiled`,
 `script.reloaded`, `asset.imported`, `module.state`, `command.executed`, `client.connected`,
@@ -90,7 +116,9 @@ answers with the ended session's values, and `play.state` keeps reporting them u
 `play.stop` alone adds `fileChanges`: how many file edits the ended session made (0 when none).
 `profiler.frame_stats` has two fields of the same names that are instead the engine's clocks (`engine_time.time` and
 `fixedStepIndex`, the clocks game code reads) since the engine started: they run on across play sessions, and
-`project.open` restarts them.
+`project.open` restarts them. In a session with a renderer its `renderer` object holds the last frame's counters;
+`viewsSkipped`, `lightsDropped` and `spritesDropped` count what that frame left out, every frame, while the log
+warns only once when it starts.
 
 ```
 -> {"id":40,"cmd":"play.step","args":{"fixedSteps":3}}
@@ -186,8 +214,8 @@ standard output, and the run stops at the first failure unless `--keep-going`. `
 its reply, and a non-zero `exitCode` becomes the process exit code (its default 0 still reports 1 when an earlier
 request failed under `--keep-going`). The warning logged for a failed request names its 1-based position and its
 `id`. Exit codes of `conjure_editor`: 0 every request ok, 1 a request failed (the NDJSON names the index), 2 the
-project or engine failed to start (project.json missing or invalid, a device or subsystem that did not start, a
-busy explicit `--ai-port`, or a `project.open` in the file whose restart failed for the new and the previous
+project or engine failed to start (project.json missing or invalid, a project nobody answered for and no
+`--trust-project`, a device or subsystem that did not start, a busy explicit `--ai-port`, or a `project.open` in the file whose restart failed for the new and the previous
 project) or the responses could not be written (the run stops after the request whose answer was lost), 3 bad
 arguments (an option neither the editor nor the engine knows, a bad flag value, a flag that makes
 the configuration invalid) or a command file that is missing or does not parse, 4 the graphics device was lost
@@ -242,9 +270,19 @@ app.shutdown();
 plugs another one in (tests add a `loopback_transport` and talk through its `loopback_client`: `send(line)`,
 `receive()`, `receive_all()`, `disconnect()`). The editor polls the server once per frame (`poll(outRequests,
 maxRequests)`), dispatches, `send(response)`s and `flush()`es; `take_closed(out)` reports disconnected clients
-so their pending requests are cancelled. `set_project_root(root)` moves the port file when the editor switches
-projects; `stdio_closed()` turns true once the stdio client is gone (standard input ended, or the client was
-disconnected), and a headless `--ai-stdio` editor without a TCP server then quits with 0. `protocol_message.h` has
+so their pending requests are cancelled. `set_project_root(root)` moves the port file, the token files and the
+audit log when the editor switches projects (`port_file()`, `token_file()`, `inspect_token_file()`);
+`stdio_closed()` turns true once the stdio client is gone (standard input ended, or the client was
+disconnected), and a headless `--ai-stdio` editor without a TCP server then quits with 0. `set_token(token)` and
+`set_inspect_token(token)` set a token explicitly, as `--ai-token` and `--ai-inspect-token` do (`INVALID_ARGS`
+for the text the other level already has); a TCP transport never runs without tokens, so `start()` and
+`add_transport()` generate them when none is set. `requires_token(kind)` says whether a transport's clients must
+present one, `access_of(presented)` what a presented token grants (`access_level::NONE`, `INSPECT` or
+`FULL_CONTROL`), `access_of_client(id)` what a client may do now (`FULL_CONTROL` for the editor's own,
+in-process clients), and `required_access(flags)` in `conjure/editor/editor_command.h` what a command asks for.
+`record_command(entry)` is what the dispatcher calls for the audit log, and `audit()` is the `audit_log` itself;
+that class and `access_token.h` are described in full on 📘 [Access tokens and the audit log](access-and-audit.md).
+`protocol_message.h` has
 the three structs (`protocol_request`, `protocol_response`, `protocol_event`), `parse_request` / `parse_response`
 / `parse_event`, `serialise` for each, `make_ok_response`, `make_error_response`, `make_id`. `line_splitter`
 frames bytes into lines with the size limit and reports an oversized line as a marker at its position.
@@ -261,7 +299,10 @@ frames bytes into lines with the size limit and reports an oversized line as a m
 | `result<protocol_request> parse_request(string_view)` / `std::string serialise(const protocol_response &)` | wire conversion |
 | `result<void> protocol_server::start(const editor_options &, const path &)` / `add_transport(unique_ptr<protocol_transport>)` | starting |
 | `void poll(vector<protocol_request> &, usize)` / `send(const protocol_response &)` / `flush()` / `take_closed(vector<u32> &)` | one frame of the server |
-| `void protocol_server::set_project_root(const path &)` / `bool stdio_closed()` | the port file on a project switch, the end of a stdio session |
+| `void protocol_server::set_project_root(const path &)` / `bool stdio_closed()` | the port file, the token files and the audit log on a project switch, the end of a stdio session |
+| `result<void> protocol_server::set_token(std::string)` / `set_inspect_token(std::string)` / `bool requires_token(transport_kind)` | an explicit token of either level, who must present one |
+| `access_level access_of(string_view)` / `access_of_client(u32)` / `constexpr access_level required_access(command_flags)` | what a presented token grants, what a client may do, what a command asks for |
+| `void protocol_server::record_command(audit_entry)` / `audit_log &audit()` | the audit log (the class and the token helpers: [Access tokens and the audit log](access-and-audit.md#api-summary)) |
 | `loopback_client loopback_transport::connect()` | an in-process client |
 | `static result<vector<protocol_request>> headless_runner::load_command_file(const path &)` / `parse_command_file(string_view)` | reading and parsing a command file, without an engine |
 | `result<exec_summary> headless_runner::run(editor_application &, const editor_options &, span<const protocol_request>)` / `exec_summary run_requests(...)` | `--exec` |
@@ -270,5 +311,5 @@ frames bytes into lines with the size limit and reports an oversized line as a m
 
 ## See also
 
-- 📘 API: [Headless mode and the command model](headless-and-commands.md), [The workspace UI](workspace-ui.md)
+- 📘 API: [Access tokens and the audit log](access-and-audit.md), [Headless mode and the command model](headless-and-commands.md), [The workspace UI](workspace-ui.md)
 - 🛠 Handbook: [Editor module](../../handbook/modules/editor.md), [Testing](../../handbook/testing.md) (the `protocol_client` fixture)

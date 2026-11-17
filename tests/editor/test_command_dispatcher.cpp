@@ -4,11 +4,14 @@
 
 #include "conjure/core/event.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/log.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/play_controller.h"
+#include "conjure/editor/protocol/access_token.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/editor/protocol/protocol_server.h"
 #include "conjure/editor/undo_stack.h"
 
 #include <array>
@@ -48,6 +51,52 @@ namespace {
 
     core::json::document child(std::string_view command, core::json::document args) {
         return core::json::object({{"cmd", command}, {"args", args}});
+    }
+
+    /// <summary>
+    /// Lets INFO lines through for its lifetime and puts the previous global level back.
+    /// </summary>
+    class info_log_scope {
+        private:
+            core::log_level mPrevious = core::log::global_level();
+
+        public:
+            info_log_scope() {
+                core::log::set_global_level(core::log_level::INFO);
+            }
+
+            ~info_log_scope() {
+                core::log::set_global_level(mPrevious);
+            }
+
+            info_log_scope(const info_log_scope &) = delete;
+            info_log_scope &operator=(const info_log_scope &) = delete;
+    };
+
+    constexpr std::string_view FULL_TOKEN = "tok-7f3a9c41";
+    constexpr std::string_view INSPECT_TOKEN = "look-51d0e2b7";
+
+    /// <summary>
+    /// Sets both tokens, which gates every transport, and returns the server.
+    /// </summary>
+    protocol_server &gated_server(editor_test::headless_editor &editor) {
+        protocol_server &server = editor.application().server();
+        CONJURE_REQUIRE_OK(server.set_token(std::string(FULL_TOKEN)));
+        CONJURE_REQUIRE_OK(server.set_inspect_token(std::string(INSPECT_TOKEN)));
+        return server;
+    }
+
+    core::json::document hello_args(std::string_view token) {
+        return core::json::object({{"token", token}, {"clientName", "dispatcher-test"}});
+    }
+
+    /// <summary>
+    /// The records of the project's audit log, one parsed document per line. The editor is pumped once first:
+    /// the records of a frame reach the file with that frame's flush.
+    /// </summary>
+    std::vector<core::json::document> audit_records(editor_test::headless_editor &editor) {
+        editor.pump(1);
+        return editor_test::read_json_lines(editor.project_directory() / ".conjure" / "ai_audit.log");
     }
 }
 
@@ -606,5 +655,253 @@ TEST_SUITE("editor/command_dispatcher") {
         CHECK(editor.ok("play.stop").root()["fileChanges"].as_u64() == 0);
         CHECK(editor.context().undo().size() == 0);
         CHECK(std::filesystem::is_regular_file(inPlace));
+    }
+
+    TEST_CASE("regression - code sweep F187 an inspect-only client's command is refused before anything of it is "
+              "looked at") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        editor_test::loopback_session session(editor);
+        CHECK(session.ok("session.hello", hello_args(INSPECT_TOKEN)).root()["access"].as_string() == "inspect");
+        const u64 revision = editor.context().revision();
+        protocol_response response = {};
+
+        SUBCASE("a mutation with good arguments") {
+            response = session.request("entity.create", core::json::object({{"name", "Intruder"}}));
+        }
+        SUBCASE("a mutation with arguments the schema would refuse: UNAUTHORISED, not INVALID_ARGS") {
+            response = session.request("entity.create", core::json::object({{"name", 5}}));
+        }
+        SUBCASE("a command whose play state is wrong: UNAUTHORISED, not WRONG_PLAY_STATE") {
+            response = session.request("play.pause");
+        }
+        SUBCASE("a command that changes no scene but is not read_only") {
+            response = session.request("selection.clear");
+        }
+        SUBCASE("a file written anywhere on disk") {
+            response = session.request("view.screenshot", core::json::object({{"path", "shot.png"}}));
+        }
+        SUBCASE("a batch, even one of read_only children") {
+            core::json::document commands = core::json::document::array();
+            commands.push_back(child("scene.info", core::json::document::object()));
+            response = session.request("editor.batch", core::json::object({{"commands", commands}}));
+        }
+        REQUIRE_FALSE(response.ok);
+        CHECK(response.errorCode == protocol_error_code::UNAUTHORISED);
+        CHECK(response.errorDetails.root()["required"].as_string() == "full_control");
+        CHECK(response.errorDetails.root()["granted"].as_string() == "inspect");
+        CHECK(response.errorMessage.find("read_only") != std::string::npos);
+        CHECK(response.errorMessage.find(FULL_TOKEN) == std::string::npos);
+        CHECK(response.errorMessage.find(INSPECT_TOKEN) == std::string::npos);
+        CHECK(editor.scene().world().entity_count() == 0);
+        CHECK(editor.context().undo().size() == 0);
+        CHECK(editor.context().revision() == revision);
+        CHECK(editor.context().dispatcher().pending_count() == 0);
+        CHECK_FALSE(std::filesystem::exists(editor.project_directory() / "shot.png"));
+        // The client stays, and still gets what its token opens.
+        CHECK(session.client().is_connected());
+        CHECK(session.ok("scene.info").root().contains("entityCount"));
+    }
+
+    TEST_CASE("command_dispatcher - an inspect-only client learns that a command is unknown, as any client does") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        editor_test::loopback_session session(editor);
+        (void) session.ok("session.hello", hello_args(INSPECT_TOKEN));
+        const protocol_response response = session.request("entity.craete");
+        CHECK(response.errorCode == protocol_error_code::UNKNOWN_COMMAND);
+        CHECK(response.errorDetails.root()["didYouMean"].size() >= 1);
+    }
+
+    TEST_CASE("command_dispatcher - an inspect-only client runs the read_only commands, asynchronous ones included") {
+        editor_test::headless_editor editor = {};
+        const std::string guid = editor.create_entity("Watched");
+        (void) editor.ok("script.write", editor_test::script_write_args("Watcher.cs", "class Watcher {}"));
+        (void) gated_server(editor);
+        editor_test::loopback_session session(editor);
+        (void) session.ok("session.hello", hello_args(INSPECT_TOKEN));
+
+        CHECK(session.ok("entity.find", core::json::object({{"name", "Watched"}})).root()["total"].as_u64() == 1);
+        CHECK(session.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Watched");
+        CHECK(session.ok("script.read", core::json::object({{"path", "Watcher.cs"}})).root()["source"].as_string()
+              == "class Watcher {}");
+        CHECK(session.ok("editor.wait_frames", core::json::object({{"frames", 2}})).root().contains("frame"));
+        CHECK(session.ok("session.ping").root().contains("revision"));
+        // Its own subscriptions are its own business.
+        (void) session.ok("session.subscribe", core::json::object({{"events", core::json::document::array()}}));
+
+        SUBCASE("script.read does not reach the token files: its paths end inside scripts/") {
+            const protocol_response outside = session.request(
+              "script.read",
+              core::json::object({{"path", "../.conjure/ai_token"}})
+            );
+            CHECK(outside.errorCode == protocol_error_code::INVALID_ARGS);
+        }
+        SUBCASE("the full-control token raises the client, and the inspect token lowers it again") {
+            const core::json::document raised = session.ok("session.hello", hello_args(FULL_TOKEN));
+            CHECK(raised.root()["access"].as_string() == "full_control");
+            (void) session.ok("entity.rename", core::json::object({{"entity", guid}, {"name", "Renamed"}}));
+            const core::json::document lowered = session.ok("session.hello", hello_args(INSPECT_TOKEN));
+            CHECK(lowered.root()["access"].as_string() == "inspect");
+            const protocol_response refused = session.request(
+              "entity.rename",
+              core::json::object({{"entity", guid}, {"name", "Again"}})
+            );
+            CHECK(refused.errorCode == protocol_error_code::UNAUTHORISED);
+            // A wrong token in between is refused by the handler and changes nothing.
+            const protocol_response wrong = session.request("session.hello", hello_args("wrong"));
+            CHECK(wrong.errorCode == protocol_error_code::UNAUTHORISED);
+            CHECK_FALSE(wrong.errorDetails.root().contains("required"));
+            CHECK(session.ok("session.ping").root().contains("frame"));
+            CHECK(session.request("history.undo").errorCode == protocol_error_code::UNAUTHORISED);
+        }
+    }
+
+    TEST_CASE("command_dispatcher - the editor's own clients have full control whatever tokens are set") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        // The fixture's client has no transport: the UI, an --exec run and an editor.exec_file task are like it.
+        CHECK(editor.ok("session.hello").root()["access"].as_string() == "full_control");
+        CHECK(editor.ok("session.hello", hello_args(INSPECT_TOKEN)).root()["access"].as_string() == "full_control");
+        (void) editor.create_entity("Made in process");
+        CHECK(editor.scene().world().entity_count() == 1);
+        // The UI's client 0 as well.
+        command_request request = {};
+        request.name = "entity.create";
+        request.args = core::json::object({{"name", "Made by the UI"}});
+        CONJURE_REQUIRE_OK(editor.context().dispatcher().execute(request));
+        CHECK(editor.scene().world().entity_count() == 2);
+    }
+
+    TEST_CASE("regression - code sweep F187 session.hello does not log a client name that holds a token") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        editor_test::loopback_session session(editor);
+        // The line in question is an INFO; the fixture's editor logs from WARN up.
+        const info_log_scope infoLogging = {};
+        // The token in the wrong argument as well as in the right one.
+        (void) session.ok(
+          "session.hello",
+          core::json::object({{"token", INSPECT_TOKEN}, {"clientName", std::format("agent {}", FULL_TOKEN)}})
+        );
+        CHECK_FALSE(editor.log().contains(FULL_TOKEN));
+        CHECK_FALSE(editor.log().contains(INSPECT_TOKEN));
+        CHECK_FALSE(editor.log().contains("says hello"));
+        (void) session.ok("session.hello", core::json::object({{"token", INSPECT_TOKEN}, {"clientName", "agent"}}));
+        CHECK(editor.log().contains(core::log_level::INFO, "says hello as 'agent' (inspect access)"));
+    }
+
+    TEST_CASE("regression - code sweep F187 a command name that holds a token is not passed on in command.executed") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        // The fixture's own client listens the way another connected client would.
+        const u64 everything = default_subscriptions() | event_bit(editor_event::COMMAND_EXECUTED);
+        editor.context().events().set_subscriptions(editor.client_id(), everything);
+        editor_test::loopback_session session(editor);
+        (void) session.ok("session.hello", hello_args(FULL_TOKEN));
+        editor.clear_events();
+
+        // A hello sent as one text: the token sits in what the editor takes for the command name.
+        const protocol_response slip = session.request(std::format("session.hello {}", INSPECT_TOKEN));
+        CHECK(slip.errorCode == protocol_error_code::UNKNOWN_COMMAND);
+        (void) session.ok("session.ping");
+
+        std::vector<std::string> names = {};
+        for (const protocol_event &event : editor.events()) {
+            CAPTURE(event.name);
+            CHECK(serialise(event).find(INSPECT_TOKEN) == std::string::npos);
+            CHECK(serialise(event).find(FULL_TOKEN) == std::string::npos);
+            if (event.name == "command.executed") {
+                names.emplace_back(event.data.root()["cmd"].as_string());
+            }
+        }
+        // The slip is still announced, without what was slipped; every other name is passed on as it is.
+        REQUIRE(names.size() == 2);
+        CHECK(names[0] == audit_log::TOKEN_MARK);
+        CHECK(names[1] == "session.ping");
+        CHECK_FALSE(editor.log().contains(INSPECT_TOKEN));
+    }
+
+    TEST_CASE("regression - code sweep F187 every request of a transport client reaches the audit log, the editor's "
+              "own requests do not") {
+        editor_test::headless_editor editor = {};
+        (void) gated_server(editor);
+        const std::filesystem::path log = editor.project_directory() / ".conjure" / "ai_audit.log";
+        // The editor's own client is not a protocol client: no record, and not even a file.
+        (void) editor.create_entity("Made in process");
+        editor.pump(1);
+        CHECK_FALSE(std::filesystem::exists(log));
+
+        editor_test::loopback_session session(editor);
+        const u32 id = session.client().client_id();
+        (void) session.ok("session.hello", hello_args(INSPECT_TOKEN));
+        (void) session.ok("scene.info");
+        CHECK(session.request("entity.create", core::json::object({{"name", "Refused"}})).errorCode
+              == protocol_error_code::UNAUTHORISED);
+        (void) session.ok("session.hello", hello_args(FULL_TOKEN));
+        const std::string guid = std::string(
+          session.ok("entity.create", core::json::object({{"name", "Recorded"}})).root()["guid"].as_string()
+        );
+        CHECK(session.request("entity.create", core::json::object({{"name", 5}})).errorCode
+              == protocol_error_code::INVALID_ARGS);
+        CHECK(session.request("entity.craete").errorCode == protocol_error_code::UNKNOWN_COMMAND);
+        (void) session.ok("editor.wait_frames", core::json::object({{"frames", 1}}));
+        // An atomic batch whose second child fails: both children are recorded, the rollback is not a request.
+        core::json::document commands = core::json::document::array();
+        commands.push_back(child("entity.create", core::json::object({{"name", "In a batch"}})));
+        commands.push_back(child(
+          "entity.rename",
+          core::json::object({{"entity", "00000000-0000-4000-8000-000000000001"}, {"name", "Nobody"}})
+        ));
+        CHECK_FALSE(session.request("editor.batch", core::json::object({{"commands", commands}})).ok);
+        // history.undo dispatches the recorded inverse: one record, for the request the client sent.
+        (void) session.ok("history.undo");
+        (void) editor.ok("scene.info");
+
+        const std::vector<core::json::document> records = audit_records(editor);
+        struct expected_record {
+            std::string_view command = "";
+            std::string_view access = "";
+            std::string_view error = "";
+            bool async = false;
+            bool batch = false;
+        };
+        const std::array<expected_record, 12> expected = {
+            expected_record{"session.hello", "inspect", "", false, false},
+            expected_record{"scene.info", "inspect", "", false, false},
+            expected_record{"entity.create", "inspect", "UNAUTHORISED", false, false},
+            expected_record{"session.hello", "full_control", "", false, false},
+            expected_record{"entity.create", "full_control", "", false, false},
+            expected_record{"entity.create", "full_control", "INVALID_ARGS", false, false},
+            expected_record{"entity.craete", "full_control", "UNKNOWN_COMMAND", false, false},
+            expected_record{"editor.wait_frames", "full_control", "", true, false},
+            expected_record{"entity.create", "full_control", "", false, true},
+            expected_record{"entity.rename", "full_control", "ENTITY_NOT_FOUND", false, true},
+            expected_record{"editor.batch", "full_control", "ENTITY_NOT_FOUND", false, false},
+            expected_record{"history.undo", "full_control", "", false, false},
+        };
+        REQUIRE(records.size() == expected.size());
+        for (usize index = 0; index < expected.size(); ++index) {
+            CAPTURE(index);
+            const core::json::value record = records[index].root();
+            CHECK(record["cmd"].as_string() == expected[index].command);
+            CHECK(record["access"].as_string() == expected[index].access);
+            CHECK(record["clientId"].as_u64() == id);
+            CHECK(record["transport"].as_string() == "loopback");
+            CHECK(record["ok"].as_bool(false) == expected[index].error.empty());
+            CHECK(record["error"].as_string() == expected[index].error);
+            CHECK(record["async"].as_bool(false) == expected[index].async);
+            CHECK(record["batch"].as_bool(false) == expected[index].batch);
+            CHECK(record["time"].as_string().size() == 20);
+        }
+        // What was done is on record, the tokens that were presented are not.
+        CHECK(records[4].root()["args"]["name"].as_string() == "Recorded");
+        CHECK(records[0].root()["args"]["token"].as_string() == audit_log::WITHHELD);
+        CHECK(records[0].root()["args"]["clientName"].as_string() == "dispatcher-test");
+        const std::string text = editor_test::read_text_file(log);
+        CHECK(text.find(FULL_TOKEN) == std::string::npos);
+        CHECK(text.find(INSPECT_TOKEN) == std::string::npos);
+        CHECK(editor.scene().world().entity_count() == 1);
+        CHECK(guid.size() == 36);
     }
 }

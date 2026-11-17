@@ -48,6 +48,14 @@ TEST_SUITE("editor/command_desc") {
         CHECK(stripped == (command_flags::MUTATES | command_flags::REQUIRES_PROJECT));
     }
 
+    TEST_CASE("command_flags - READ_ONLY is its own bit, above every other flag") {
+        CHECK(static_cast<u16>(command_flags::READ_ONLY) == 1024);
+        const command_flags query = command_flags::REQUIRES_SCENE | command_flags::READ_ONLY;
+        CHECK(has_flag(query, command_flags::READ_ONLY));
+        CHECK_FALSE(has_flag(query, command_flags::MUTATES));
+        CHECK((query & ~command_flags::READ_ONLY) == command_flags::REQUIRES_SCENE);
+    }
+
     TEST_CASE("command_desc - the C handler receives the arguments and the user data") {
         int calls = 0;
         command_desc desc = {};

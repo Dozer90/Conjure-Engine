@@ -683,7 +683,7 @@ namespace conjure::editor::support {
             }
             std::filesystem::path assembly = runtime->assembly_path();
             if (invocation.args.contains("assembly")) {
-                assembly = std::filesystem::path(std::string(string_or(invocation.args, "assembly", "")));
+                assembly = project_relative_path(context, string_or(invocation.args, "assembly", ""));
             }
             if (assembly.empty()) {
                 // The output of the last successful script.compile (bin/<configuration>/Game.dll).
@@ -836,7 +836,7 @@ namespace conjure::editor::support {
             "Reads a script source (path relative to <project>/scripts).",
             R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
             R"({"type":"object","properties":{"path":{"type":"string"},"source":{"type":"string"}}})",
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &script_read
           )
         );
@@ -876,7 +876,7 @@ namespace conjure::editor::support {
             R"({"type":"object"})",
             R"({"type":"object","properties":{"scripts":{"type":"array"},"loadedClasses":{"type":"array"},)"
             R"("project":{"type":"string"}}})",
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &script_list
           )
         );
@@ -896,7 +896,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "script.reload",
-            "Reloads the game assembly (hot reload) through the script runtime.",
+            "Reloads the game assembly (hot reload) through the script runtime; a relative assembly path is "
+            "relative to the project root.",
             R"({"type":"object","properties":{"assembly":{"type":"string"}}})",
             R"({"type":"object","properties":{"assembly":{"type":"string"},"reloadCount":{"type":"integer"},)"
             R"("classes":{"type":"integer"}}})",

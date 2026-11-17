@@ -163,7 +163,7 @@ namespace conjure::editor::support {
             "The undo entries (newest last) and the cursor.",
             R"({"type":"object","properties":{"limit":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"entries":{"type":"array"},"cursor":{"type":"integer"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &history_list
           )
         );

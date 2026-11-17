@@ -12,10 +12,12 @@
 #include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_error.h"
 #include "conjure/editor/editor_options.h"
+#include "conjure/editor/protocol/loopback_transport.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/scene/scene.h"
 
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
@@ -24,8 +26,14 @@
 
 // Shared fixtures of the editor tests (docs/design/04_editor.md 10, 08_testing.md 6.3): a headless editor over a
 // scratch project (null platform, rhi and audio, scripting on the null host), request helpers that pump frames
-// until an asynchronous reply arrives, state snapshots for the inverse round trips of the command catalogue, the
-// fixture file format of tests/editor/data/commands/ and the LOOPBACK_TCP precondition probe.
+// until an asynchronous reply arrives, a protocol client of that editor on a loopback transport, state snapshots
+// for the inverse round trips of the command catalogue, the
+// fixture file format of tests/editor/data/commands/, the LOOPBACK_TCP precondition probe and the two helpers
+// that move bytes over a test's loopback socket.
+
+namespace conjure::editor::net {
+    class socket_handle;
+}
 
 namespace editor_test {
 
@@ -41,8 +49,8 @@ namespace editor_test {
 
     /// <summary>
     /// A fully initialised editor_application in headless mode with no protocol transport (requests go straight to
-    /// the dispatcher as an in-process client) and a temp project. Owns a log_capture: an ERROR fails the case
-    /// unless allow_errors() was called.
+    /// the dispatcher as an in-process client) and a temp project, trusted for the session and without a trust
+    /// store. Owns a log_capture: an ERROR fails the case unless allow_errors() was called.
     /// </summary>
     class headless_editor {
         private:
@@ -119,6 +127,13 @@ namespace editor_test {
             );
 
             /// <summary>
+            /// Trusts another project for this editor's session, the way the fixture trusts its own scratch project
+            /// (04_editor.md D27): a case that writes a second project by hand calls this before it opens it. A
+            /// project made with project.create in a new folder needs no call.
+            /// </summary>
+            void trust_project(const std::filesystem::path &root);
+
+            /// <summary>
             /// Runs engine frames (the editor ticks inside them).
             /// </summary>
             void pump(conjure::u32 frames = 1);
@@ -157,6 +172,117 @@ namespace editor_test {
     };
 
     /// <summary>
+    /// A protocol client of a headless_editor on a loopback transport of its own: unlike the editor's in-process
+    /// client it has a transport entry in the protocol server, so the token handshake, the scope of its token
+    /// and the audit log apply to it. Sends a line, pumps frames until the response with the id arrives, and
+    /// keeps the events seen on the way. The editor must outlive the session.
+    /// </summary>
+    class loopback_session {
+        private:
+            headless_editor *mEditor = nullptr;
+            conjure::editor::loopback_client mClient = {};
+            std::vector<conjure::editor::protocol_event> mEvents = {};
+            conjure::i64 mNextId = 1;
+
+        public:
+            explicit loopback_session(headless_editor &editor);
+
+        public:
+            /// <summary>
+            /// Sends the command with the next id and returns its response.
+            /// </summary>
+            [[nodiscard]] conjure::editor::protocol_response request(
+              std::string_view command,
+              conjure::core::json::document args = conjure::core::json::document::object()
+            );
+
+            /// <summary>
+            /// Sends 'line' as it is and pumps frames until the response that echoes 'expectedId' arrived; fails
+            /// the case when none does.
+            /// </summary>
+            [[nodiscard]] conjure::editor::protocol_response send_line(
+              const std::string &line,
+              conjure::i64 expectedId
+            );
+
+            /// <summary>
+            /// request() that REQUIREs success and returns the result.
+            /// </summary>
+            [[nodiscard]] conjure::core::json::document ok(
+              std::string_view command,
+              conjure::core::json::document args = conjure::core::json::document::object()
+            );
+
+            /// <summary>
+            /// Events that reached the client so far.
+            /// </summary>
+            [[nodiscard]] const std::vector<conjure::editor::protocol_event> &events() const noexcept {
+                return mEvents;
+            }
+
+            [[nodiscard]] conjure::usize count_events(std::string_view name) const;
+
+            [[nodiscard]] conjure::editor::loopback_client &client() noexcept {
+                return mClient;
+            }
+    };
+
+    /// <summary>
+    /// Writes a minimal project by hand, the way a project that came from elsewhere lies on disk: the folder, its
+    /// assets folder and a project.json with the name and assets_root; 'extraMembers' are further members of the
+    /// root object (R"("startup_scene": "scenes/main.scene.json")"). The editor trusts no such project by itself
+    /// (04_editor.md D27): a case opens it with trustProject / --trust-project, headless_editor::trust_project or
+    /// the project.trust command. Fails the case when project.json cannot be written.
+    /// </summary>
+    void write_project(
+      const std::filesystem::path &directory,
+      std::string_view name,
+      std::string_view extraMembers = {}
+    );
+
+    /// <summary>
+    /// project_trust::project_key of a project root (what the trust store and the answers of the trust commands
+    /// name the project by); fails the case when the path has none.
+    /// </summary>
+    [[nodiscard]] std::string project_key_of(const std::filesystem::path &projectRoot);
+
+    /// <summary>
+    /// Whether 'directory' lies on a volume where a file can be restricted to its owner
+    /// (core::vfs::write_private_file; the probe leaves an empty file "owner_only_probe" there). False, with a
+    /// MESSAGE that says the case did not run, on FAT, exFAT and the like: the trust store, the token files and
+    /// the audit log are owner-only files, so a case about one of them returns when this is false.
+    /// </summary>
+    [[nodiscard]] bool owner_only_files_available(const std::filesystem::path &directory);
+
+    /// <summary>
+    /// Makes a file impossible to replace for as long as the object lives: the way a case reaches the failure
+    /// path of code that rewrites a file through core::vfs::write_private_file (a temporary beside the file,
+    /// renamed over it). Windows: the file is held open by a reader, which forbids renaming over it. POSIX: the
+    /// file's folder loses its write permission, so no temporary can be created in it; the folder should hold
+    /// nothing else the case writes meanwhile. active() is false, after a MESSAGE that says the case did not
+    /// run, where that does not hold the account back: one that passes every permission (root in a container).
+    /// The file must exist. The destructor gives the folder its permissions back.
+    /// </summary>
+    class replace_blocker {
+        private:
+            std::filesystem::path mFolder = {};
+            std::ifstream mReader = {};
+            bool mActive = false;
+
+        public:
+            explicit replace_blocker(const std::filesystem::path &file);
+            ~replace_blocker();
+
+            replace_blocker(const replace_blocker &) = delete;
+            replace_blocker &operator=(const replace_blocker &) = delete;
+
+        public:
+            [[nodiscard]] bool active() const noexcept {
+                return mActive;
+            }
+    };
+
+    /// <summary>
     /// The asset path of the scene a headless_editor starts with (withScene). The scene has no file until it is
     /// saved.
     /// </summary>
@@ -171,6 +297,12 @@ namespace editor_test {
     /// The lines of 'text' that are not empty, in order (one NDJSON record each in a runner's output).
     /// </summary>
     [[nodiscard]] std::vector<std::string> non_empty_lines(std::string_view text);
+
+    /// <summary>
+    /// A file of JSON lines (the audit log, an NDJSON output) as one parsed document per non-empty line; fails
+    /// the case when the file cannot be read or a line does not parse.
+    /// </summary>
+    [[nodiscard]] std::vector<conjure::core::json::document> read_json_lines(const std::filesystem::path &path);
 
     /// <summary>
     /// The arguments of script.write for a file under scripts/: {path, source}.
@@ -241,6 +373,22 @@ namespace editor_test {
     /// Reads a whole text file; fails the case when it cannot be read.
     /// </summary>
     [[nodiscard]] std::string read_text_file(const std::filesystem::path &path);
+
+    /// <summary>
+    /// Writes all of 'text' to a non-blocking loopback socket of a test (editor/core/net/socket.h); fails the
+    /// case when the socket breaks or does not take the bytes.
+    /// </summary>
+    void send_all(const conjure::editor::net::socket_handle &socket, std::string_view text);
+
+    /// <summary>
+    /// Reads from a non-blocking loopback socket of a test until 'atLeast' bytes arrived, the peer closed the
+    /// connection or the attempts ran out, and returns what arrived.
+    /// </summary>
+    [[nodiscard]] std::string receive_some(
+      const conjure::editor::net::socket_handle &socket,
+      conjure::usize atLeast,
+      conjure::u32 attempts = 200000
+    );
 
     /// <summary>
     /// Replaces ${project} in a text (the fixtures' placeholder).

@@ -7,6 +7,7 @@
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/editor_module_consumer.h"
 #include "conjure/editor/panel_desc.h"
+#include "conjure/engine/project.h"
 #include "conjure/modules/module_context.h"
 #include "conjure/modules/module_entry.h"
 #include "conjure/modules/module_error.h"
@@ -16,7 +17,9 @@
 #include "conjure/modules/module_version.h"
 
 #include <cstring>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 // editor_module_consumer.h (docs/design/04_editor.md R14, 07_modules.md): modules contribute commands and
 // panels through the editor.command and editor.panel extension points.
@@ -247,6 +250,42 @@ TEST_SUITE("editor/editor_module_consumer") {
         CHECK(editor.context().registry().find("plugin.read_file") == nullptr);
     }
 
+    TEST_CASE("editor_module_consumer - a module command keeps READ_ONLY unless it also says MUTATES") {
+        editor_test::headless_editor editor = {};
+        editor_module_consumer consumer(editor.context().registry(), &editor.context().play());
+        const modules::module_id id = any_module(editor);
+        const modules::module_registry &moduleRegistry = editor.context().modules()->registry();
+        modules::module_context context(
+          id,
+          modules::module_host_kind::EDITOR,
+          modules::host_engine_version(),
+          moduleRegistry.manifest(id),
+          moduleRegistry.root_directory(id),
+          editor.context().modules()->services()
+        );
+        modules::module_registration_set set = {};
+        command_desc query = make_command("plugin.query");
+        query.flags = command_flags::READ_ONLY;
+        add_extension(set, query);
+        // The registry would refuse the pair; the consumer keeps the stricter reading instead of losing the
+        // command: it mutates, so it is not one for inspect-only clients.
+        command_desc confused = make_command("plugin.confused");
+        confused.flags = command_flags::READ_ONLY | command_flags::MUTATES;
+        add_extension(set, confused);
+        CONJURE_REQUIRE_OK(consumer.validate(id, set, moduleRegistry));
+        consumer.attach(id, context, set);
+
+        const command_descriptor *queryDescriptor = editor.context().registry().find("plugin.query");
+        REQUIRE(queryDescriptor != nullptr);
+        CHECK(queryDescriptor->flags == command_flags::READ_ONLY);
+        CHECK(required_access(queryDescriptor->flags) == access_level::INSPECT);
+        const command_descriptor *confusedDescriptor = editor.context().registry().find("plugin.confused");
+        REQUIRE(confusedDescriptor != nullptr);
+        CHECK(confusedDescriptor->flags == (command_flags::MUTATES | command_flags::NO_UNDO));
+        CHECK(required_access(confusedDescriptor->flags) == access_level::FULL_CONTROL);
+        consumer.detach(id, nullptr);
+    }
+
     TEST_CASE("editor_module_consumer - can_detach is UNLOAD_BLOCKED while playing") {
         editor_test::headless_editor editor = {};
         editor_module_consumer &consumer = editor.context().module_consumer();
@@ -344,5 +383,24 @@ TEST_SUITE("editor/editor_module_consumer") {
         );
         REQUIRE_FALSE(missing.ok);
         CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+    }
+
+    TEST_CASE("module.discover - a relative directory is looked up in the project and an empty one is its root") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path root = editor.context().project()->root_directory();
+        std::filesystem::create_directories(root / "modules");
+        const core::json::document relative = editor.ok(
+          "module.discover",
+          core::json::object({{"directory", "modules"}})
+        );
+        CHECK(std::filesystem::path(std::string(relative.root()["directory"].as_string())) == root / "modules");
+        CHECK(relative.root()["added"].as_i64() == 0);
+
+        // The project root itself, as before the path rule was shared with the other commands (F187).
+        const core::json::document empty = editor.ok("module.discover", core::json::object({{"directory", ""}}));
+        std::error_code ignored = {};
+        const std::filesystem::path reported = std::string(empty.root()["directory"].as_string());
+        CHECK(std::filesystem::equivalent(reported, root, ignored));
+        CHECK(empty.root()["added"].as_i64() == 0);
     }
 }

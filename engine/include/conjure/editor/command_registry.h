@@ -42,7 +42,8 @@ namespace conjure::editor {
             /// <summary>
             /// Registers a command. INVALID_ARGS when the name is empty or taken, the handler is empty, a schema
             /// does not compile, or the flags contradict each other: ON_DISK needs MUTATES and excludes NO_UNDO
-            /// (the flag promises an inverse to keep while playing).
+            /// (the flag promises an inverse to keep while playing), and READ_ONLY excludes MUTATES (the flag
+            /// opens the command to inspect-only clients).
             /// </summary>
             [[nodiscard]] core::result<void> add(command_descriptor descriptor);
 

@@ -445,7 +445,7 @@ namespace conjure::editor::support {
             "Path, name, entity count, structure version, dirty flag and settings of the open scene.",
             R"({"type":"object"})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &scene_info
           )
         );
@@ -459,7 +459,7 @@ namespace conjure::editor::support {
             R"("items":{"type":"string"}},)"
             R"("limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}}})",
             R"({"type":"object","properties":{"rows":{"type":"array"},"total":{"type":"integer"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &scene_query
           )
         );
@@ -470,7 +470,7 @@ namespace conjure::editor::support {
             "The scene tree as nested {guid, name, children} nodes.",
             R"({"type":"object","properties":{"root":{"type":"string"},"depth":{"type":"integer","minimum":0}}})",
             R"({"type":"object","properties":{"roots":{"type":"array"},"entityCount":{"type":"integer"}}})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &scene_get_hierarchy
           )
         );

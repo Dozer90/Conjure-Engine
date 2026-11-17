@@ -178,7 +178,7 @@ helpers (`namespace conjure::core::vfs`).
 | Header | Contents |
 |---|---|
 | `conjure/core/vfs/file_system.h` | `file_stat`, `enumerate_flags`, `file` (`read_at`, `size`), `file_system`: `read_file`, `read_text_file`, `write_file`, `write_file_atomic`, `write_text_file`, `stat`, `exists`, `enumerate`, `rename`, `remove`, `remove_all`, `create_directories`, `open_read`, `is_read_only` |
-| `conjure/core/vfs/native_file_system.h` | a directory on disk: `root()`, `to_native()` (a `result<path>`, checked like the file methods), rejects root escapes |
+| `conjure/core/vfs/native_file_system.h` | a directory on disk: `root()`, `to_native()` (a `result<path>`, checked like the file methods), rejects root escapes; free functions `write_private_file(path, data)` and `is_private_file(path)`: a file only the process user may open, created restricted through a temporary beside it (POSIX `O_EXCL` + mode 0600 via `fchmod`, Windows a protected access control list naming that user as owner and sole entry, in `native_platform_{posix,windows}.cpp`), the restriction checked on the open file before any data is written (`UNSUPPORTED` on FAT and exFAT), then renamed over the target; not flushed (09 R66; callers: the editor's token files, audit log and trust store, 04 D23, D25-D27) |
 | `conjure/core/vfs/memory_file_system.h` | an in-memory tree: `set_read_only`, `write_counter` |
 | `conjure/core/vfs/mount_table.h` | routes `scheme://path`: `mount`, `unmount`, `find_mount`, `schemes`, static `split` |
 | `conjure/core/vfs/path_utils.h` | `normalize`, `join`, `parent`, `filename`, `stem`, `extension` (lower-cased), `has_extension`, `is_absolute`, `relative_to`, `is_portable_name` |

@@ -8,11 +8,14 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/process.h"
 #include "conjure/core/string_utils.h"
+#include "conjure/core/vfs/native_file_system.h"
 #include "conjure/editor/headless_runner.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/engine/exit_code.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -31,19 +34,44 @@ using namespace conjure;
 using namespace conjure::editor;
 
 namespace {
+    constexpr std::string_view TRUST_STORE_FLAG = "--trust-store";
+
+    /// <summary>
+    /// A project written by hand, which the editor trusts only when the run says so (--trust-project).
+    /// </summary>
     void write_project(const std::filesystem::path &directory) {
-        std::error_code ignored = {};
-        std::filesystem::create_directories(directory / "assets", ignored);
-        std::ofstream stream(directory / "project.json", std::ios::binary | std::ios::trunc);
-        REQUIRE(stream.is_open());
-        stream << "{\n  \"schema_version\": 1,\n  \"name\": \"process_test\",\n  \"assets_root\": \"assets\"\n}\n";
+        editor_test::write_project(directory, "process_test");
     }
 
-    core::process_result run_editor(const std::vector<std::string> &arguments, f64 timeoutSeconds = 600.0) {
+    /// <summary>
+    /// The path as UTF-8 bytes, the way the editor's command line expects it on every platform.
+    /// </summary>
+    std::string path_argument(const std::filesystem::path &path) {
+        const std::u8string generic = path.generic_u8string();
+        return std::string(generic.begin(), generic.end());
+    }
+
+    /// <summary>
+    /// Runs conjure_editor. The executable remembers trusted projects in the per-user trust store unless
+    /// --trust-store names another file, so every run that names none gets a store of its own in a scratch folder:
+    /// no case reads or writes the store of whoever runs the tests. A case that opens a project passes
+    /// --trust-project itself (04_editor.md D27).
+    /// </summary>
+    core::process_result run_editor(
+      const std::vector<std::string> &arguments,
+      f64 timeoutSeconds = 600.0,
+      const std::filesystem::path &workingDirectory = {}
+    ) {
+        const testing::temp_directory trustStore = {};
         core::process_desc desc = {};
         desc.executable = CONJURE_EDITOR_EXECUTABLE;
         desc.arguments = arguments;
+        if (std::find(arguments.begin(), arguments.end(), TRUST_STORE_FLAG) == arguments.end()) {
+            desc.arguments.emplace_back(TRUST_STORE_FLAG);
+            desc.arguments.push_back(path_argument(trustStore.file("trusted_projects.json")));
+        }
         desc.timeoutSeconds = timeoutSeconds;
+        desc.workingDirectory = workingDirectory;
         core::result<core::process_result> result = core::process::run(desc);
         REQUIRE_MESSAGE(result.has_value(), testing::describe_error(result));
         return std::move(result).value();
@@ -53,14 +81,6 @@ namespace {
         std::ofstream stream(path, std::ios::binary | std::ios::trunc);
         REQUIRE(stream.is_open());
         stream << text;
-    }
-
-    /// <summary>
-    /// The path as UTF-8 bytes, the way the editor's command line expects it on every platform.
-    /// </summary>
-    std::string path_argument(const std::filesystem::path &path) {
-        const std::u8string generic = path.generic_u8string();
-        return std::string(generic.begin(), generic.end());
     }
 
     /// <summary>
@@ -93,9 +113,8 @@ TEST_SUITE("editor/editor_process") {
         const std::filesystem::path commands = editor_test::fixture_directory() / "build_grid_sweeper.json";
         const std::filesystem::path output = directory.path() / "responses.ndjson";
         const core::process_result result = run_editor({
-          "--headless", "--project", project.generic_string(), "--exec", commands.generic_string(), "--out",
-          output.generic_string(),
-          "--ai-port", "0", "--log-level", "warn",
+          "--headless", "--project", project.generic_string(), "--trust-project", "--exec", commands.generic_string(),
+          "--out", output.generic_string(), "--ai-port", "0", "--log-level", "warn",
         });
         CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
         CHECK_FALSE(result.timedOut);
@@ -224,8 +243,8 @@ TEST_SUITE("editor/editor_process") {
           R"([{"cmd":"scene.new","args":{"name":"s","path":"scenes/utf8"}},{"cmd":"scene.save"}])"
         );
         const core::process_result result = run_editor({
-          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
-          "--log-level", "warn",
+          "--headless", "--project", path_argument(project), "--trust-project", "--exec", path_argument(commands),
+          "--ai-port", "0", "--log-level", "warn",
         });
         CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
         CHECK(result.standardError.find("PROJECT_NOT_FOUND") == std::string::npos);
@@ -242,7 +261,8 @@ TEST_SUITE("editor/editor_process") {
         write_text(commands, R"([{"cmd":"editor.state"},{"cmd":"scene.new","args":{"name":"s"}}])");
         // No --log-level: the engine's INFO lines are produced and must all reach standard error.
         const core::process_result result = run_editor({
-          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
+          "--headless", "--project", path_argument(project), "--trust-project", "--exec", path_argument(commands),
+          "--ai-port", "0",
         });
         CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
         CHECK(result.standardOutput.find("\"ok\":true") != std::string::npos);
@@ -260,7 +280,7 @@ TEST_SUITE("editor/editor_process") {
         // The child's standard input is the null device, so the input ends at once. Before the fix the editor
         // kept running until the timeout killed it.
         const core::process_result result = run_editor(
-          {"--headless", "--project", path_argument(project), "--ai-stdio"},
+          {"--headless", "--project", path_argument(project), "--trust-project", "--ai-stdio"},
           120.0
         );
         CHECK_FALSE(result.timedOut);
@@ -312,7 +332,8 @@ TEST_SUITE("editor/editor_process") {
             const std::filesystem::path commands = directory.path() / "state.json";
             write_text(commands, R"([{"cmd":"editor.state"}])");
             const core::process_result result = run_editor({
-              "--headless", "--project", path_argument(project), "--ai-port", "0", "--exec", path_argument(commands),
+              "--headless", "--project", path_argument(project), "--trust-project", "--ai-port", "0", "--exec",
+              path_argument(commands),
             });
             CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
             CHECK(result.standardError.find(ENGINE_RUNNING) != std::string::npos);
@@ -341,8 +362,8 @@ TEST_SUITE("editor/editor_process") {
         const std::filesystem::path commands = directory.path() / "state.json";
         write_text(commands, R"([{"cmd":"editor.state"},{"cmd":"scene.new","args":{"name":"fresh"}}])");
         const core::process_result result = run_editor({
-          "--headless", "--project", path_argument(project), "--exec", path_argument(commands), "--ai-port", "0",
-          "--log-level", "warn",
+          "--headless", "--project", path_argument(project), "--trust-project", "--exec", path_argument(commands),
+          "--ai-port", "0", "--log-level", "warn",
         });
         CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
         const std::vector<std::string> lines = editor_test::non_empty_lines(result.standardOutput);
@@ -377,18 +398,140 @@ TEST_SUITE("editor/editor_process") {
             R"({"cmd":"entity.create","args":{"name":"never"}}])";
         }
         const core::process_result result = run_editor({
-          "--headless", "--project", project.generic_string(), "--exec", commands.generic_string(), "--ai-port", "0",
-          "--log-level", "warn",
+          "--headless", "--project", project.generic_string(), "--trust-project", "--exec", commands.generic_string(),
+          "--ai-port", "0", "--log-level", "warn",
         });
         CHECK(result.exitCode == 1);
         CHECK(result.standardOutput.find("ENTITY_NOT_FOUND") != std::string::npos);
         CHECK(result.standardOutput.find("\"never\"") == std::string::npos);
         const core::process_result keepGoing = run_editor({
-          "--headless", "--project", project.generic_string(), "--exec", commands.generic_string(), "--ai-port", "0",
-          "--keep-going",
-          "--log-level", "warn",
+          "--headless", "--project", project.generic_string(), "--trust-project", "--exec", commands.generic_string(),
+          "--ai-port", "0", "--keep-going", "--log-level", "warn",
         });
         CHECK(keepGoing.exitCode == 1);
         CHECK(keepGoing.standardOutput.find("\"id\":2,\"ok\":true") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_process --export with a relative directory exports into the "
+      "working directory [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "project";
+        const std::filesystem::path workingDirectory = directory.path() / "started_here";
+        write_project(project);
+        std::filesystem::create_directories(workingDirectory);
+        // project.export reads a relative directory against the project root; a path typed on a command line is
+        // relative to where the command was typed, and --export must keep meaning that.
+        const core::process_result result = run_editor(
+          {
+            "--headless", "--project", path_argument(project), "--trust-project", "--export", "exported",
+            "--ai-port", "0", "--log-level", "warn",
+          },
+          600.0,
+          workingDirectory
+        );
+        CHECK_FALSE(result.timedOut);
+        CHECK_MESSAGE(result.exitCode == 0, result.standardOutput << result.standardError);
+        CHECK(std::filesystem::is_regular_file(workingDirectory / "exported" / "project.json"));
+        CHECK_FALSE(std::filesystem::exists(project / "exported"));
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_process a headless run does not open a project nobody answered "
+      "for and exits 2 [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "downloaded";
+        write_project(project);
+        const std::filesystem::path commands = directory.path() / "state.json";
+        write_text(commands, R"([{"cmd":"editor.state"}])");
+        // No --log-level: a started engine would announce itself on standard error, and it leaves its asset cache
+        // under .conjure/ in the project.
+        constexpr std::string_view ENGINE_RUNNING = " running (";
+        std::vector<std::string> arguments = {"--headless", "--project", path_argument(project), "--ai-port", "0"};
+        SUBCASE("--exec") {
+            arguments.emplace_back("--exec");
+            arguments.push_back(path_argument(commands));
+        }
+        SUBCASE("--export") {
+            arguments.emplace_back("--export");
+            arguments.push_back(path_argument(directory.path() / "exported"));
+        }
+        SUBCASE("a server on standard input and output") {
+            arguments.emplace_back("--ai-stdio");
+        }
+        const core::process_result result = run_editor(arguments, 120.0);
+        CHECK_FALSE(result.timedOut);
+        // 04_editor.md 3.11: a startup or project failure is 2, not the 3 of a bad argument.
+        CHECK_MESSAGE(result.exitCode == 2, result.standardOutput << result.standardError);
+        CHECK(result.standardError.find("PROJECT_NOT_TRUSTED") != std::string::npos);
+        CHECK(result.standardError.find("--trust-project") != std::string::npos);
+        CHECK(result.standardError.find("'conjure_editor --help'") == std::string::npos);
+        CHECK(result.standardError.find(ENGINE_RUNNING) == std::string::npos);
+        CHECK(result.standardOutput.empty());
+        CHECK_FALSE(std::filesystem::exists(project / ".conjure"));
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "exported"));
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_process project.trust is remembered in the trust store for later "
+      "runs and project.revoke_trust ends that [process]") {
+        const std::string executable = CONJURE_EDITOR_EXECUTABLE;
+        REQUIRE_MESSAGE(!executable.empty(), "the conjure_editor executable path was not configured");
+        testing::temp_directory directory = {};
+        if (!editor_test::owner_only_files_available(directory.path())) {
+            return;
+        }
+        const std::filesystem::path project = directory.path() / "project";
+        write_project(project);
+        const std::string store = path_argument(directory.path() / "state" / "trusted_projects.json");
+        const std::string projectArgument = path_argument(project);
+        const std::filesystem::path state = directory.path() / "state.json";
+        write_text(state, R"([{"cmd":"project.trust_state"}])");
+        const std::vector<std::string> open = {
+            "--headless", "--project", projectArgument, "--exec", path_argument(state), "--ai-port", "0",
+            "--log-level", "warn", std::string(TRUST_STORE_FLAG), store,
+        };
+
+        // Not answered yet: the store does not even exist.
+        CHECK(run_editor(open).exitCode == 2);
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "state"));
+
+        // A run without a project gives the answer: the explicit command, never the opening itself.
+        const std::filesystem::path trust = directory.path() / "trust.json";
+        write_text(trust, std::format(R"([{{"cmd":"project.trust","args":{{"path":"{}"}}}}])", projectArgument));
+        const core::process_result trusted = run_editor({
+          "--headless", "--exec", path_argument(trust), "--ai-port", "0", "--log-level", "warn",
+          std::string(TRUST_STORE_FLAG), store,
+        });
+        CHECK_MESSAGE(trusted.exitCode == 0, trusted.standardOutput << trusted.standardError);
+        CHECK(trusted.standardOutput.find("\"state\":\"remembered\"") != std::string::npos);
+        const std::filesystem::path storeFile = directory.path() / "state" / "trusted_projects.json";
+        REQUIRE(std::filesystem::is_regular_file(storeFile));
+        const core::result<bool> ownerOnly = core::vfs::is_private_file(storeFile);
+        CONJURE_REQUIRE_OK(ownerOnly);
+        CHECK(ownerOnly.value());
+        // The answer lies outside the project: nothing was written into its folder.
+        CHECK_FALSE(std::filesystem::exists(project / ".conjure"));
+
+        // The same command line that was refused now opens the project and reports the remembered answer.
+        const core::process_result opened = run_editor(open);
+        CHECK_MESSAGE(opened.exitCode == 0, opened.standardOutput << opened.standardError);
+        CHECK(opened.standardOutput.find("\"state\":\"remembered\"") != std::string::npos);
+
+        const std::filesystem::path revoke = directory.path() / "revoke.json";
+        write_text(
+          revoke,
+          std::format(R"([{{"cmd":"project.revoke_trust","args":{{"path":"{}"}}}}])", projectArgument)
+        );
+        const core::process_result revoked = run_editor({
+          "--headless", "--exec", path_argument(revoke), "--ai-port", "0", "--log-level", "warn",
+          std::string(TRUST_STORE_FLAG), store,
+        });
+        CHECK_MESSAGE(revoked.exitCode == 0, revoked.standardOutput << revoked.standardError);
+        CHECK(revoked.standardOutput.find("\"revoked\":true") != std::string::npos);
+        const core::process_result refused = run_editor(open);
+        CHECK_MESSAGE(refused.exitCode == 2, refused.standardOutput << refused.standardError);
+        CHECK(refused.standardError.find("PROJECT_NOT_TRUSTED") != std::string::npos);
     }
 }

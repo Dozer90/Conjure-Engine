@@ -2,6 +2,7 @@
 
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/editor_command.h"
+#include "conjure/editor/protocol/access_token.h"
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 
@@ -18,8 +19,9 @@
 #include <string_view>
 #include <vector>
 
-// The one execution path (docs/design/04_editor.md D4, D6, 3.3, 3.4): schema validation, preconditions, the
-// handler, undo recording, revision bump and events, for every source of commands. While playing the undo stack is
+// The one execution path (docs/design/04_editor.md D4, D6, 3.3, 3.4): the scope of the client's token (D25),
+// schema validation, preconditions, the handler, undo recording, revision bump, events and the audit record
+// (D26), for every source of commands. While playing the undo stack is
 // frozen: a scene edit is executed and not recorded, an ON_DISK command's inverse goes to the play controller,
 // which makes one undo entry of them at play.stop (D9, D21). Asynchronous handlers park
 // their request and answer through async_reply; resolve_completed() hands the finished responses back once per
@@ -80,7 +82,12 @@ namespace conjure::editor {
         public:
             /// <summary>
             /// Validates and executes one request. Returns the response, or nullopt when the command is
-            /// asynchronous and will answer through resolve_completed() later.
+            /// asynchronous and will answer through resolve_completed() later. A known command the client's
+            /// token does not open (required_access(flags) above what protocol_server::access_of_client
+            /// reports) answers UNAUTHORISED with details {required, granted} before its arguments are
+            /// validated; the client stays connected. Every request of a transport client, refused ones and
+            /// unknown commands included, is handed to protocol_server::record_command once it was
+            /// dispatched; so is every child of an editor.batch.
             /// </summary>
             [[nodiscard]] std::optional<protocol_response> dispatch(const protocol_request &request);
 
@@ -197,6 +204,12 @@ namespace conjure::editor {
               command_outcome &outcome
             );
             void keep_play_edits(batch_state &batch);
+            [[nodiscard]] access_level access_of_client(u32 clientId) const noexcept;
+            void audit(
+              const protocol_request &request,
+              const std::optional<protocol_response> &response,
+              bool batchChild
+            ) const;
             [[nodiscard]] f64 now_seconds() const noexcept;
     };
 }

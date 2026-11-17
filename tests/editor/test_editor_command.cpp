@@ -55,6 +55,34 @@ TEST_SUITE("editor/editor_command") {
         CHECK(command_flag_name(command_flags::ON_DISK | command_flags::MUTATES).empty());
     }
 
+    TEST_CASE("command_flag_names - read_only is the wire name of READ_ONLY and comes after on_disk") {
+        CHECK(command_flag_name(command_flags::READ_ONLY) == "read_only");
+        const core::json::document names = command_flag_names(
+          command_flags::READ_ONLY | command_flags::REQUIRES_SCENE | command_flags::ASYNC
+        );
+        REQUIRE(names.root().size() == 3);
+        CHECK(names.root()[0].as_string() == "requires_scene");
+        CHECK(names.root()[1].as_string() == "async");
+        CHECK(names.root()[2].as_string() == "read_only");
+    }
+
+    TEST_CASE("required_access - a read_only command asks for inspect access, every other one for full control") {
+        static_assert(required_access(command_flags::READ_ONLY) == access_level::INSPECT);
+        static_assert(required_access(command_flags::NONE) == access_level::FULL_CONTROL);
+        CHECK(required_access(command_flags::READ_ONLY | command_flags::REQUIRES_SCENE) == access_level::INSPECT);
+        CHECK(required_access(command_flags::READ_ONLY | command_flags::ASYNC) == access_level::INSPECT);
+        // No other flag opens a command, alone or together: not being a mutation is not being harmless.
+        const command_flags others = command_flags::MUTATES | command_flags::REQUIRES_PROJECT |
+          command_flags::REQUIRES_SCENE | command_flags::EDITING_ONLY | command_flags::PLAYING_ONLY |
+          command_flags::ASYNC | command_flags::UI_ONLY | command_flags::NOT_IN_BATCH | command_flags::NO_UNDO |
+          command_flags::ON_DISK;
+        CHECK(required_access(others) == access_level::FULL_CONTROL);
+        for (u32 bit = 0; bit < 10; ++bit) {
+            CAPTURE(bit);
+            CHECK(required_access(static_cast<command_flags>(1u << bit)) == access_level::FULL_CONTROL);
+        }
+    }
+
     TEST_CASE("has_command_flag - reads a descriptor's flags") {
         command_descriptor descriptor = {};
         descriptor.flags = command_flags::ASYNC | command_flags::REQUIRES_PROJECT;

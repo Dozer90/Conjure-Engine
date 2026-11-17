@@ -8,11 +8,14 @@
 #include "editor/core/commands/command_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/uuid.h"
 #include "conjure/editor/editor_error.h"
+#include "conjure/engine/project.h"
 
 #include <array>
 #include <cstddef>
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <string>
@@ -282,5 +285,43 @@ TEST_SUITE("editor/command_support") {
         CHECK_FALSE(is_safe_tool_argument("a;rm"));
         CHECK_FALSE(is_safe_tool_argument("../x"));
         CHECK_FALSE(is_safe_tool_argument("$(cmd)"));
+    }
+
+    TEST_CASE("project_relative_path - a relative path joins the project root, an absolute or empty one stays") {
+        editor_test::headless_editor editor = {};
+        const editor_context &context = editor.context();
+        const std::filesystem::path root = context.project()->root_directory();
+        REQUIRE(root.is_absolute());
+        CHECK(project_relative_path(context, std::string_view("out/build")) == root / "out" / "build");
+        CHECK(project_relative_path(context, std::filesystem::path("shot.png")) == root / "shot.png");
+        // Lexical: ".." is kept, so the result may lie outside the project.
+        CHECK(project_relative_path(context, std::string_view("../sibling")) == root / ".." / "sibling");
+        CHECK(project_relative_path(context, std::string_view("")).empty());
+        CHECK(project_relative_path(context, std::filesystem::path()).empty());
+
+        const std::filesystem::path absolute = root / "elsewhere" / "file.json";
+        CHECK(project_relative_path(context, absolute) == absolute);
+        CHECK(project_relative_path(context, std::string_view(absolute.generic_string())) == absolute);
+
+        // A path that starts with a separator: absolute on POSIX; on Windows it names no drive, so it is not
+        // absolute there and lands on the project's drive.
+        const std::filesystem::path rooted = project_relative_path(context, std::string_view("/rooted/x"));
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            CHECK(rooted == root.root_name() / std::filesystem::path("/rooted/x"));
+            CHECK(rooted.is_absolute());
+        } else {
+            CHECK(rooted == std::filesystem::path("/rooted/x"));
+        }
+    }
+
+    TEST_CASE("project_relative_path - without a project a relative path stays as given") {
+        editor_test::headless_editor_options options = {};
+        options.withProject = false;
+        options.withScene = false;
+        editor_test::headless_editor editor(options);
+        REQUIRE(editor.context().project() == nullptr);
+        const std::filesystem::path given = project_relative_path(editor.context(), std::string_view("out/build"));
+        CHECK(given == std::filesystem::path("out/build"));
+        CHECK(project_relative_path(editor.context(), std::string_view("")).empty());
     }
 }

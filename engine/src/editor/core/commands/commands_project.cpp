@@ -1,6 +1,8 @@
 #include "editor/core/commands/command_support.h"
 
 #include "conjure/editor/log_category.h"
+#include "conjure/editor/project_trust.h"
+#include "conjure/editor/protocol/protocol_server.h"
 
 #include "conjure/core/clock.h"
 #include "conjure/core/string_utils.h"
@@ -18,7 +20,9 @@
 #include <utility>
 
 // project.* (docs/design/04_editor.md 4.4): create, open (an engine restart between frames), save, info,
-// scene listing, settings and the export pipeline.
+// scene listing, settings, the export pipeline, and the three commands of project trust (decision D27): trust,
+// revoke_trust and trust_state. project.open opens a project only after somebody answered for it; the gate is
+// editor_application::request_open_project, and what is recorded lives in project_trust.
 
 namespace conjure::editor::support {
 
@@ -46,6 +50,51 @@ namespace conjure::editor::support {
             });
         }
 
+        /// <summary>
+        /// The project in a folder, with the errors project.open answers. The engine reports PROJECT_NOT_FOUND
+        /// for a missing project.json (PATH_NOT_FOUND here), for one that exists but cannot be opened and for a
+        /// 'root' that is a file, not a folder: the last two are IO_ERROR like every other path that exists and
+        /// cannot be used.
+        /// </summary>
+        [[nodiscard]] core::result<engine::project> load_project(const std::filesystem::path &root) {
+            core::result<engine::project> project = engine::project::load(root);
+            if (project.has_value()) {
+                return project;
+            }
+            const bool notFound = project.get_error().is(engine::engine_error::PROJECT_NOT_FOUND);
+            const std::filesystem::path file = root / std::filesystem::path(engine::PROJECT_FILE_NAME);
+            std::error_code ignored = {};
+            if (notFound && std::filesystem::exists(file, ignored)) {
+                return unusable_path(file, "not a readable project file");
+            }
+            const bool isFolder = std::filesystem::is_directory(root, ignored);
+            if (notFound && !isFolder && std::filesystem::exists(root, ignored)) {
+                return unusable_path(root, "not a directory");
+            }
+            return wrap(project.get_error());
+        }
+
+        /// <summary>
+        /// Who answers a trust question through a command: the transport of a protocol client, "editor" for the
+        /// editor's own requests (the window, --exec, a file run by editor.exec_file).
+        /// </summary>
+        [[nodiscard]] std::string_view trust_origin(editor_context &context, u32 clientId) {
+            const protocol_server *server = context.server();
+            const client_state *client = server == nullptr ? nullptr : server->client(clientId);
+            return client == nullptr ? std::string_view("editor") : to_string(client->kind);
+        }
+
+        /// <summary>
+        /// {path, state, trusted}: the text the project is remembered under and what is known about it.
+        /// </summary>
+        [[nodiscard]] core::json::document describe_trust(std::string_view key, trust_state state) {
+            return core::json::object({
+              {"path", key},
+              {"state", to_string(state)},
+              {"trusted", state != trust_state::UNTRUSTED},
+            });
+        }
+
         core::result<command_outcome> project_create(command_invocation &invocation) {
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             CONJURE_TRY_ASSIGN(const std::string_view name, require_string(invocation.args, "name"));
@@ -57,7 +106,12 @@ namespace conjure::editor::support {
             if (std::filesystem::exists(root / "project.json", ignored)) {
                 return invalid_args(std::format("'{}' already holds a project.json", root.generic_string()));
             }
-            std::filesystem::create_directories(root, ignored);
+            // Fresh only when this call made the folder, under the account that runs the editor. An empty folder
+            // that was already there is not: its owner, or anyone it lets write, can add a module.json later.
+            // Asking create_directories, not looking first, leaves no moment for someone to make it in between.
+            const std::filesystem::path folder = root.has_filename() ? root : root.parent_path();
+            std::error_code createFailure = {};
+            const bool freshFolder = std::filesystem::create_directories(folder, createFailure) && !createFailure;
             std::filesystem::create_directories(root / "assets" / "scenes", ignored);
             std::filesystem::create_directories(root / "assets" / "prefabs", ignored);
             std::filesystem::create_directories(root / "scripts", ignored);
@@ -78,9 +132,28 @@ namespace conjure::editor::support {
             if (!saved.has_value()) {
                 return io_error(std::format("cannot write project.json: {}", saved.get_error().message()));
             }
+            // A project the editor wrote into a folder it made holds nothing but what the editor put there, so it
+            // is trusted without a question (decision D27). One created in a folder that was already there, empty
+            // or not, is not: what is or will be in it is somebody else's.
+            trust_state trusted = trust_state::UNTRUSTED;
+            project_trust *trust = invocation.context.trust();
+            if (freshFolder && trust != nullptr) {
+                const core::result<trust_state> recorded = trust->trust(root, true, "created");
+                if (recorded.has_value()) {
+                    trusted = recorded.value();
+                } else {
+                    CONJURE_LOG_WARN(
+                      LOG_EDITOR,
+                      "project.create: the new project '{}' could not be recorded as trusted: {}",
+                      root.generic_string(),
+                      recorded.get_error().message()
+                    );
+                }
+            }
             command_outcome outcome = {};
             outcome.label = std::format("Create project '{}'", name);
             outcome.result = describe_project(project.value());
+            outcome.result.set("trust", to_string(trusted));
             return outcome;
         }
 
@@ -88,23 +161,7 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
             const std::filesystem::path root = std::filesystem::path(std::string(pathText));
-            core::result<engine::project> project = engine::project::load(root);
-            if (!project.has_value()) {
-                // The engine answers PROJECT_NOT_FOUND for a missing project.json (PATH_NOT_FOUND here), for one
-                // that exists but cannot be opened and for a 'path' that is a file, not a folder: the last two are
-                // IO_ERROR like every other path that exists and cannot be used.
-                const bool notFound = project.get_error().is(engine::engine_error::PROJECT_NOT_FOUND);
-                const std::filesystem::path file = root / std::filesystem::path(engine::PROJECT_FILE_NAME);
-                std::error_code ignored = {};
-                if (notFound && std::filesystem::exists(file, ignored)) {
-                    return unusable_path(file, "not a readable project file");
-                }
-                const bool isFolder = std::filesystem::is_directory(root, ignored);
-                if (notFound && !isFolder && std::filesystem::exists(root, ignored)) {
-                    return unusable_path(root, "not a directory");
-                }
-                return wrap(project.get_error());
-            }
+            CONJURE_TRY_ASSIGN(const engine::project project, load_project(root));
             if (context.host() == nullptr) {
                 return not_available("project.open: this session has no process host to restart the engine");
             }
@@ -116,11 +173,117 @@ namespace conjure::editor::support {
             }
             const core::result<void> requested = context.host()->request_open_project(root);
             if (!requested.has_value()) {
+                if (requested.get_error().is(protocol_error_code::PROJECT_NOT_TRUSTED)) {
+                    // Nobody answered for the project (decision D27). The client is told what to send, and where
+                    // a window is open the person at it is asked as well; a refusal is never an answer.
+                    const core::result<std::string> key = project_trust::project_key(root);
+                    const bool asked = context.raise_trust_prompt(root);
+                    invocation.errorDetails = core::json::object({
+                      {"path", key.has_value() ? std::string_view(key.value()) : std::string_view(pathText)},
+                      {"state", to_string(trust_state::UNTRUSTED)},
+                      {"prompt", asked},
+                    });
+                    CONJURE_LOG_INFO(
+                      LOG_EDITOR,
+                      "project.open: '{}' is not trusted; client {} was refused{}",
+                      root.generic_string(),
+                      invocation.clientId,
+                      asked ? " and the editor window asks" : ""
+                    );
+                }
                 return wrap(requested.get_error());
             }
             command_outcome outcome = {};
-            outcome.result = describe_project(project.value());
+            outcome.result = describe_project(project);
             outcome.result.set("pending", true);
+            return outcome;
+        }
+
+        core::result<command_outcome> project_trust_grant(command_invocation &invocation) {
+            editor_context &context = invocation.context;
+            CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
+            project_trust *trust = context.trust();
+            if (trust == nullptr) {
+                return not_available("project.trust: this session keeps no project trust");
+            }
+            const std::filesystem::path root = std::filesystem::path(std::string(pathText));
+            // A project is trusted, not a folder that may become one: the same checks as project.open.
+            CONJURE_TRY(load_project(root));
+            const bool remember = bool_or(invocation.args, "remember", true);
+            const std::string_view origin = trust_origin(context, invocation.clientId);
+            const core::result<trust_state> state = trust->trust(root, remember, origin);
+            if (!state.has_value()) {
+                return wrap(state.get_error());
+            }
+            const core::result<std::string> key = project_trust::project_key(root);
+            if (!key.has_value()) {
+                return wrap(key.get_error());
+            }
+            context.close_trust_prompt_for(root);
+            CONJURE_LOG_INFO(
+              LOG_EDITOR,
+              "project trust: '{}' is trusted ({}), answered by client {} ({})",
+              key.value(),
+              to_string(state.value()),
+              invocation.clientId,
+              origin
+            );
+            command_outcome outcome = {};
+            outcome.result = describe_trust(key.value(), state.value());
+            outcome.result.set("remembered", state.value() == trust_state::REMEMBERED);
+            return outcome;
+        }
+
+        core::result<command_outcome> project_revoke_trust(command_invocation &invocation) {
+            editor_context &context = invocation.context;
+            CONJURE_TRY_ASSIGN(const std::string_view pathText, require_string(invocation.args, "path"));
+            project_trust *trust = context.trust();
+            if (trust == nullptr) {
+                return not_available("project.revoke_trust: this session keeps no project trust");
+            }
+            // The folder may be gone by now, so nothing is loaded: an answer can be taken back for any path.
+            const std::filesystem::path root = std::filesystem::path(std::string(pathText));
+            const core::result<std::string> key = project_trust::project_key(root);
+            if (!key.has_value()) {
+                return wrap(key.get_error());
+            }
+            const core::result<bool> revoked = trust->revoke(root);
+            if (!revoked.has_value()) {
+                return wrap(revoked.get_error());
+            }
+            if (revoked.value()) {
+                CONJURE_LOG_INFO(
+                  LOG_EDITOR,
+                  "project trust: '{}' is no longer trusted, revoked by client {} ({})",
+                  key.value(),
+                  invocation.clientId,
+                  trust_origin(context, invocation.clientId)
+                );
+            }
+            command_outcome outcome = {};
+            outcome.result = describe_trust(key.value(), trust->state_of(root));
+            outcome.result.set("revoked", revoked.value());
+            return outcome;
+        }
+
+        core::result<command_outcome> project_trust_state(command_invocation &invocation) {
+            editor_context &context = invocation.context;
+            project_trust *trust = context.trust();
+            if (trust == nullptr) {
+                return not_available("project.trust_state: this session keeps no project trust");
+            }
+            const std::string_view pathText = string_or(invocation.args, "path", "");
+            if (pathText.empty() && !context.has_project()) {
+                return invalid_args("args.path: no project is open, so the request must name one");
+            }
+            const std::filesystem::path root =
+              pathText.empty() ? context.project()->root_directory() : std::filesystem::path(std::string(pathText));
+            const core::result<std::string> key = project_trust::project_key(root);
+            if (!key.has_value()) {
+                return wrap(key.get_error());
+            }
+            command_outcome outcome = {};
+            outcome.result = describe_trust(key.value(), trust->state_of(root));
             return outcome;
         }
 
@@ -202,9 +365,11 @@ namespace conjure::editor::support {
                 return invalid_args("args.directory: an output directory is required");
             }
             engine::export_settings settings = {};
-            settings.outputDirectory = std::filesystem::path(std::string(directoryText));
+            // Both folders follow the rule of every path argument: relative means relative to the project root,
+            // not to wherever the editor was started (code sweep F187).
+            settings.outputDirectory = project_relative_path(context, directoryText);
             const std::string_view distribution = string_or(invocation.args, "distributionDirectory", "");
-            settings.distributionDirectory = std::filesystem::path(std::string(distribution));
+            settings.distributionDirectory = project_relative_path(context, distribution);
             settings.copyRuntime = bool_or(invocation.args, "copyRuntime", !distribution.empty());
             settings.copyShaders = settings.copyRuntime;
             if (settings.copyRuntime && !distribution.empty()) {
@@ -291,7 +456,9 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "project.create",
-            "Creates a project directory with project.json, assets/ and scripts/.",
+            "Creates a project directory with project.json, assets/ and scripts/. A project created in a folder "
+            "that did not exist is trusted (result.trust); one created in an existing folder, even an empty one, "
+            "is not, see project.trust.",
             R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},)"
             R"("required":["path","name"]})",
             ANY_OBJECT_SCHEMA.data(),
@@ -303,11 +470,58 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "project.open",
-            "Opens a project: the engine restarts over it at the next frame boundary.",
+            "Opens a project: the engine restarts over it at the next frame boundary. Opening runs the project's "
+            "scripts and native modules, so a project nobody answered for on this machine is refused with "
+            "PROJECT_NOT_TRUSTED (details {path, state, prompt}); send project.trust first.",
             R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
             ANY_OBJECT_SCHEMA.data(),
             command_flags::NOT_IN_BATCH,
             &project_open
+          )
+        );
+        add_command(
+          registry,
+          make_command(
+            "project.trust",
+            "Answers yes for a project: its scripts and native modules may run with the rights of the user who "
+            "runs the editor, and project.open then opens it. project.open never answers by itself. With remember "
+            "(the default) the answer is kept in the per-user trust store of this machine, outside the project; "
+            "otherwise, or when there is no store or it cannot be written, it holds until the editor exits (state "
+            "says which). The path must hold a project.",
+            R"({"type":"object","properties":{"path":{"type":"string"},"remember":{"type":"boolean"}},)"
+            R"("required":["path"]})",
+            R"({"type":"object","properties":{"path":{"type":"string"},)"
+            R"("state":{"type":"string","enum":["session","remembered"]},"trusted":{"type":"boolean"},)"
+            R"("remembered":{"type":"boolean"}}})",
+            command_flags::NOT_IN_BATCH,
+            &project_trust_grant
+          )
+        );
+        add_command(
+          registry,
+          make_command(
+            "project.revoke_trust",
+            "Takes the answer for a project back, for the session and in the trust store. The folder need not "
+            "exist any more. A project that is open stays open; it is asked about the next time it is opened.",
+            R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+            R"({"type":"object","properties":{"path":{"type":"string"},)"
+            R"("state":{"type":"string","enum":["untrusted","session","remembered"]},"trusted":{"type":"boolean"},)"
+            R"("revoked":{"type":"boolean"}}})",
+            command_flags::NOT_IN_BATCH,
+            &project_revoke_trust
+          )
+        );
+        add_command(
+          registry,
+          make_command(
+            "project.trust_state",
+            "Whether a project is trusted: untrusted, session (until the editor exits) or remembered (in the "
+            "trust store). Without path, or with an empty one, the open project. Changes nothing and asks nobody.",
+            R"({"type":"object","properties":{"path":{"type":"string"}}})",
+            R"({"type":"object","properties":{"path":{"type":"string"},)"
+            R"("state":{"type":"string","enum":["untrusted","session","remembered"]},"trusted":{"type":"boolean"}}})",
+            command_flags::READ_ONLY,
+            &project_trust_state
           )
         );
         add_command(
@@ -328,7 +542,7 @@ namespace conjure::editor::support {
             "The open project's description.",
             R"({"type":"object"})",
             ANY_OBJECT_SCHEMA.data(),
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &project_info
           )
         );
@@ -339,7 +553,7 @@ namespace conjure::editor::support {
             "Every .scene.json under assets://.",
             R"({"type":"object"})",
             R"({"type":"object","properties":{"scenes":{"type":"array"},"count":{"type":"integer"}}})",
-            command_flags::REQUIRES_PROJECT,
+            command_flags::REQUIRES_PROJECT | command_flags::READ_ONLY,
             &project_list_scenes
           )
         );
@@ -361,7 +575,8 @@ namespace conjure::editor::support {
             "project.export",
             "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied "
             "runtime executable, null when the runtime was not copied. An export is always a Distribution export: "
-            "distributionDirectory names the Distribution build whose runtime is copied.",
+            "distributionDirectory names the Distribution build whose runtime is copied. Relative directories are "
+            "relative to the project root.",
             R"({"type":"object","properties":{"directory":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",

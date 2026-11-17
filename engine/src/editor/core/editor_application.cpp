@@ -18,10 +18,13 @@
     #include "conjure/bindings/bindings_subsystem.h"
 #endif
 
+#include <filesystem>
 #include <format>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -48,6 +51,35 @@ namespace conjure::editor {
                     mApplication->headless_tick();
                 }
         };
+
+        /// <summary>
+        /// The absolute form of a command-line path, resolved against the working directory, as text for a
+        /// request; the path as given when the working directory cannot be read.
+        /// </summary>
+        [[nodiscard]] std::string working_directory_path(const std::filesystem::path &path) {
+            std::error_code failure = {};
+            const std::filesystem::path absolute = std::filesystem::absolute(path, failure);
+            if (failure) {
+                return path.generic_string();
+            }
+            return absolute.generic_string();
+        }
+
+        /// <summary>
+        /// The refusal of a project nobody answered for (decision D27): it names the project and the three
+        /// explicit ways to answer.
+        /// </summary>
+        [[nodiscard]] core::error not_trusted(const std::filesystem::path &projectPath) {
+            return make_editor_error(
+              protocol_error_code::PROJECT_NOT_TRUSTED,
+              std::format(
+                "the project '{}' is not trusted on this machine. Opening a project runs its scripts and native "
+                "modules with your rights, so the editor opens one only after an explicit answer: the "
+                "project.trust command, --trust-project for one run, or the question the editor window asks",
+                projectPath.generic_string()
+              )
+            );
+        }
     }
 
     editor_application::editor_application() = default;
@@ -137,8 +169,9 @@ namespace conjure::editor {
         mExecRequests.clear();
         // Fail fast (decision D22): everything that can be wrong without an engine is checked before one starts.
         // The arguments and the project come first, so a bad flag or a missing project is still what is reported
-        // when the command file is unusable as well.
-        CONJURE_TRY_ASSIGN(engine::application_desc desc, make_engine_desc(options, options.projectPath));
+        // when the command file is unusable as well. Only checked here: the description the engine starts
+        // from is made further down, from the project the trust check lets through.
+        CONJURE_TRY(make_engine_desc(options, options.projectPath));
         if (!options.execFile.empty() && options.exportDirectory.empty()) {
             core::result<std::vector<protocol_request>> requests = headless_runner::load_command_file(options.execFile);
             if (!requests.has_value()) {
@@ -147,10 +180,24 @@ namespace conjure::editor {
             }
             mExecRequests = std::move(requests).value();
         }
-        CONJURE_TRY(boot_engine(std::move(desc)));
+        // The last check that needs no engine (decision D27): starting the engine over a project loads the
+        // project's native modules and its game assembly, so nothing of it may start before somebody answered.
+        mTrust.set_store_file(options.trustStoreFile);
+        CONJURE_TRY_ASSIGN(startup_plan plan, plan_startup(options, mTrust));
+        mOptions.projectPath = plan.desc.project.has_value() ? options.projectPath : std::filesystem::path();
+        CONJURE_TRY(boot_engine(std::move(plan.desc)));
+        mContext->set_trust(&mTrust);
+        mContext->set_trust_prompt_enabled(can_ask_about_trust(options));
+        if (mContext->raise_trust_prompt(plan.unanswered)) {
+            CONJURE_LOG_WARN(
+              LOG_EDITOR,
+              "project trust: '{}' was not opened because nobody answered for it on this machine; the editor "
+              "window asks, and project.trust followed by project.open opens it",
+              plan.unanswered.generic_string()
+            );
+        }
         mServer = std::make_unique<protocol_server>(mContext->events());
         mContext->set_server(mServer.get());
-        mContext->set_token(options.aiToken);
         mContext->dispatcher().set_async_timeout_seconds(options.timeoutSeconds);
         const std::filesystem::path projectRoot =
           mContext->project() != nullptr ? mContext->project()->root_directory() : std::filesystem::path();
@@ -252,6 +299,7 @@ namespace conjure::editor {
 
     core::result<void> editor_application::request_open_project(const std::filesystem::path &directory) {
         CONJURE_TRY(engine::project::load(directory));
+        CONJURE_TRY(require_trusted(directory));
         mPendingProject = directory;
         return core::result<void>::success();
     }
@@ -272,6 +320,50 @@ namespace conjure::editor {
           {"code", "STARTUP_SCENE_FAILED"},
           {"message", std::string_view(failure->message())},
         });
+    }
+
+    bool editor_application::can_ask_about_trust(const editor_options &options) noexcept {
+        return !options.headless && options.execFile.empty() && options.exportDirectory.empty();
+    }
+
+    core::result<startup_project> editor_application::resolve_startup_project(
+      const editor_options &options,
+      project_trust &trust
+    ) {
+        startup_project startup = {};
+        if (options.projectPath.empty()) {
+            return startup;
+        }
+        if (options.trustProject) {
+            CONJURE_TRY(trust.trust(options.projectPath, false, "command line"));
+        }
+        if (trust.is_trusted(options.projectPath)) {
+            startup.open = options.projectPath;
+            return startup;
+        }
+        if (!can_ask_about_trust(options)) {
+            return not_trusted(options.projectPath);
+        }
+        // Somebody sits at a window: the editor starts without the project and asks there.
+        startup.unanswered = options.projectPath;
+        return startup;
+    }
+
+    core::result<startup_plan> editor_application::plan_startup(const editor_options &options, project_trust &trust) {
+        CONJURE_TRY_ASSIGN(const startup_project startup, resolve_startup_project(options, trust));
+        startup_plan plan = {};
+        // Over startup.open and nothing else, so a project nobody answered for has none of its modules or
+        // scripts loaded, whatever --project named.
+        CONJURE_TRY_ASSIGN(plan.desc, make_engine_desc(options, startup.open));
+        plan.unanswered = startup.unanswered;
+        return plan;
+    }
+
+    core::result<void> editor_application::require_trusted(const std::filesystem::path &projectPath) const {
+        if (mTrust.is_trusted(projectPath)) {
+            return core::result<void>::success();
+        }
+        return not_trusted(projectPath);
     }
 
     core::result<void> editor_application::start_engine(const std::filesystem::path &projectPath) {
@@ -312,6 +404,13 @@ namespace conjure::editor {
     core::result<void> editor_application::apply_pending_project_open() {
         const std::filesystem::path next = *mPendingProject;
         mPendingProject.reset();
+        // Asked again, before anything of the running engine is touched: the answer may have been revoked since
+        // the request was accepted (project.revoke_trust in the same frame, another editor of this user).
+        const core::result<void> trusted = require_trusted(next);
+        if (!trusted.has_value()) {
+            CONJURE_LOG_WARN(LOG_EDITOR, "project.open dropped: {}", trusted.get_error().message());
+            return core::result<void>::success();
+        }
         const std::filesystem::path previous = mOptions.projectPath;
         CONJURE_LOG_INFO(LOG_EDITOR, "opening project '{}'", next.generic_string());
         if (mContext != nullptr && !mContext->play().is_editing()) {
@@ -329,18 +428,31 @@ namespace conjure::editor {
               next.generic_string(),
               started.get_error().to_string()
             );
-            started = start_engine(previous);
+            // Back to the project that was open, asked again like any other opening: its answer may have been
+            // revoked while it was open, and starting it loads its modules and game assembly once more.
+            std::filesystem::path fallback = previous;
+            if (!fallback.empty() && !require_trusted(fallback).has_value()) {
+                CONJURE_LOG_WARN(
+                  LOG_EDITOR,
+                  "the previous project '{}' is no longer trusted; the editor goes on without a project",
+                  fallback.generic_string()
+                );
+                fallback.clear();
+            }
+            started = start_engine(fallback);
             if (!started.has_value()) {
                 request_quit(static_cast<int>(engine::exit_code::INIT_FAILURE));
                 return started;
             }
+            mOptions.projectPath = fallback;
         } else {
             mOptions.projectPath = next;
         }
         old.reset();
         if (mServer != nullptr && mContext != nullptr) {
-            // <project>/.conjure/ai_port follows the open project: the previous project's file is removed and the
-            // new one names the port.
+            // The session files under <project>/.conjure (ai_port and the two token files) and the audit log
+            // follow the open project: the previous project's session files are removed, the new ones name the
+            // port and the tokens, and later commands are recorded in the new project.
             mServer->set_project_root(
               mContext->project() != nullptr ? mContext->project()->root_directory() : std::filesystem::path()
             );
@@ -366,9 +478,11 @@ namespace conjure::editor {
         protocol_request request = {};
         request.id = make_id(0);
         request.command = "project.export";
-        request.args = core::json::object({{"directory", mOptions.exportDirectory.generic_string()}});
+        // A path on the command line is relative to the working directory, as in every shell; project.export
+        // would read a relative one against the project root (04_editor.md D24), so both go in absolute.
+        request.args = core::json::object({{"directory", working_directory_path(mOptions.exportDirectory)}});
         if (!mOptions.exportDistribution.empty()) {
-            request.args.set("distributionDirectory", mOptions.exportDistribution.generic_string());
+            request.args.set("distributionDirectory", working_directory_path(mOptions.exportDistribution));
         }
         std::optional<protocol_response> captured = std::nullopt;
         const u32 clientId = mContext->events().register_client({});

@@ -102,6 +102,16 @@ namespace conjure::editor {
                 );
             }
         }
+        const bool readOnly = has_flag(descriptor.flags, command_flags::READ_ONLY);
+        if (readOnly && has_flag(descriptor.flags, command_flags::MUTATES)) {
+            return make_editor_error(
+              protocol_error_code::INVALID_ARGS,
+              std::format(
+                "command '{}': the read_only flag excludes mutates (it opens the command to inspect-only clients)",
+                descriptor.name
+              )
+            );
+        }
         if (has_flag(descriptor.flags, command_flags::ASYNC)) {
             descriptor.flags |= command_flags::NOT_IN_BATCH;
         }

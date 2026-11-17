@@ -59,6 +59,26 @@ namespace conjure::editor::support {
     /// </summary>
     [[nodiscard]] core::error read_failure(std::string_view path, const core::error &failure);
 
+    /// <summary>
+    /// The on-disk path an argument names (docs/design/04_editor.md D24, code sweep F187). An absolute path is
+    /// taken as it is. A relative one is joined to the root of the open project, never left to the editor's
+    /// working directory, which a protocol client neither chose nor knows. Two cases stay as given: an empty
+    /// text, so each command keeps its own answer for it, and any path while no project is open, which the
+    /// operating system then resolves against the working directory. The join is lexical: nothing is looked
+    /// up, ".." is kept, and the result may lie outside the project (a client has the user's reach, D24). On
+    /// Windows a path that starts with a separator but names no drive is not absolute and lands on the
+    /// project's drive.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path project_relative_path(
+      const editor_context &context,
+      std::filesystem::path path
+    );
+
+    /// <summary>
+    /// project_relative_path for the text of a string argument.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path project_relative_path(const editor_context &context, std::string_view text);
+
     /*-----------------------------------------------------------------------*/
     // Arguments
 

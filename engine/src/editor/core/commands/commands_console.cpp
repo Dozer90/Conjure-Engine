@@ -60,7 +60,7 @@ namespace conjure::editor::support {
             R"("minLevel":{"type":"string","enum":["trace","debug","info","warn","error","fatal"]},)"
             R"("category":{"type":"string"},"limit":{"type":"integer","minimum":1}}})",
             R"({"type":"object","properties":{"entries":{"type":"array"},"lastSeq":{"type":"integer"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &console_read
           )
         );

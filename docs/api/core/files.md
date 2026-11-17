@@ -16,6 +16,7 @@ the whole area (`conjure::core::vfs`); it pulls in `conjure/core/vfs/file_system
 | Read a whole text or binary file | `files.read_text_file(path)`, `files.read_file(path)` |
 | Write a file (and its parent directories) | `files.write_text_file(path, text)`, `files.write_file(path, bytes)` |
 | Save so that a crash or a power cut cannot ruin the file | `files.write_file_atomic(path, bytes)` |
+| Keep a secret other accounts of the machine must not read | `vfs::write_private_file(path, bytes)` on an on-disk path: a new file created owner-only (mode 0600; on Windows an access control list naming the process user alone) replaces `path`; `UNSUPPORTED` on FAT and exFAT; not flushed. `vfs::is_private_file(path)` checks an existing file |
 | Check a name the user typed before creating it | `vfs::path_utils::is_portable_name(name)` |
 | Check or describe an entry | `files.exists(path)`, `files.stat(path)` |
 | List a directory | `files.enumerate(dir, flags, callback)` |
@@ -332,6 +333,7 @@ file system. `file::read_at()` is safe from several threads on one handle.
 | `result<usize> file::read_at(u64 offset, span<std::byte> out)` / `u64 file::size() const` | positional read |
 | `native_file_system(std::filesystem::path root, bool readOnly = false)` | a directory on disk |
 | `const path &native_file_system::root() const` / `result<path> to_native(string_view) const` | map back to disk paths; an escape is `PERMISSION_DENIED` |
+| `result<void> write_private_file(const std::filesystem::path &, span<const std::byte>)` / `result<bool> is_private_file(const std::filesystem::path &)` | a file only the process user may open (`conjure/core/vfs/native_file_system.h`); privileged accounts still read it |
 | `memory_file_system()` / `void set_read_only(bool)` / `u64 write_counter() const` | in-memory tree |
 | `result<void> mount_table::mount(string_view scheme, shared_ptr<file_system>)` / `unmount(scheme)` | bind or unbind a scheme |
 | `file_system *mount_table::find_mount(string_view scheme) const` / `vector<string> schemes() const` | inspect mounts |

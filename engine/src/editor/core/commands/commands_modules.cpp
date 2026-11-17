@@ -207,8 +207,10 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(modules::module_manager *manager, require_modules(context));
             CONJURE_TRY_ASSIGN(const std::string_view directoryText, require_string(invocation.args, "directory"));
-            std::filesystem::path directory = std::filesystem::path(std::string(directoryText));
-            if (!directory.is_absolute() && context.project() != nullptr) {
+            std::filesystem::path directory = project_relative_path(context, directoryText);
+            if (directory.empty() && context.project() != nullptr) {
+                // An empty directory has always named the project root for this command; the shared rule leaves
+                // an empty text alone, so it is spelled out here.
                 directory = context.project()->root_directory() / directory;
             }
             std::error_code ignored = {};
@@ -510,7 +512,10 @@ namespace conjure::editor::support {
             std::error_code ignored = {};
             std::vector<std::string> arguments = {};
             // Everything handed to the child comes from the project (preset) or passes a conservative character
-            // set: a localhost protocol client must not be able to run arbitrary programs or inject options.
+            // set, so no value can be read by cmake as an option of its own ("--target x" smuggled into a
+            // configuration name). The checks are about well-formed arguments, not about confining the client:
+            // an authorised client has the reach of the user who runs the editor (04_editor.md D24), and a
+            // project may build whatever its CMake files say.
             const std::string_view configuration = string_or(
               invocation.args,
               "config",
@@ -578,7 +583,7 @@ namespace conjure::editor::support {
             std::string(EMPTY_SCHEMA),
             R"({"type":"object","properties":{"modules":{"type":"array"},"loadOrder":{"type":"array"},)"
             R"("pending":{"type":"integer"},"count":{"type":"integer"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &module_list
           )
         );

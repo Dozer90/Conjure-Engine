@@ -17,8 +17,9 @@
 
 // The docking workspace (docs/design/04_editor.md 4.2, D12): the full-window dockspace with a pass-through
 // central node (the scene renders underneath), the main menu bar, the global shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+S,
-// F5, Shift+F5, handled here so they work whichever panels are open), the Save Scene As dialog, the panel
-// instances and the layout file <project>/.conjure/editor_layout.ini.
+// F5, Shift+F5, handled here so they work whichever panels are open), the Save Scene As dialog, the project trust
+// question (decision D27: "Do you trust the authors of this project?", shown while the context's trust_prompt()
+// names a project), the panel instances and the layout file <project>/.conjure/editor_layout.ini.
 
 namespace conjure::editor::ui {
 
@@ -43,6 +44,7 @@ namespace conjure::editor::ui {
             std::filesystem::path mLayoutFile = {};
             std::string mSaveAsPath = "";
             std::string mSaveAsError = "";
+            std::string mTrustPromptError = "";         // why the last "Trust and Open" recorded no answer
             u32 mFramesDrawn = 0;
             bool mLayoutLoaded = false;
             bool mShowDemo = false;
@@ -168,10 +170,29 @@ namespace conjure::editor::ui {
                 return mSaveAsError;
             }
 
+            /// <summary>
+            /// Answers the question the context's trust_prompt() asks; false, and nothing happens, when it asks
+            /// none. With 'trust' (the "Trust and Open" button) the project is trusted through project.trust
+            /// and then opened through project.open, the same two requests a protocol client sends: true when
+            /// both were accepted. A project.trust that fails leaves the question open and its error in
+            /// trust_prompt_error(); a project.open that fails afterwards (playing, say) is logged like any
+            /// menu command, and the project stays trusted. Without 'trust' ("Don't Open") the question is
+            /// closed, nothing is recorded and the editor stays as it is: true.
+            /// </summary>
+            bool answer_trust_prompt(editor_context &context, bool trust);
+
+            /// <summary>
+            /// The error of the last "Trust and Open" whose project.trust failed ("" otherwise).
+            /// </summary>
+            [[nodiscard]] const std::string &trust_prompt_error() const noexcept {
+                return mTrustPromptError;
+            }
+
         private:
             void draw_menu_bar(editor_context &context);
             void handle_global_shortcuts(editor_context &context);
             void draw_save_as_modal(editor_context &context);
+            void draw_trust_prompt(editor_context &context);
             void load_layout_once();
     };
 }

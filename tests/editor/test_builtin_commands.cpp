@@ -1,5 +1,7 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
@@ -8,10 +10,14 @@
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/system_phase.h"
 #include "conjure/editor/builtin_commands.h"
+#include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/console_buffer.h"
+#include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_command.h"
+#include "conjure/editor/editor_context.h"
 #include "conjure/editor/editor_error.h"
+#include "conjure/editor/editor_options.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/engine/engine_context.h"
 
@@ -33,7 +39,7 @@ namespace {
         "history.undo", "history.redo", "history.list", "history.clear",
         "console.read", "console.clear",
         "project.create", "project.open", "project.save", "project.info", "project.list_scenes", "project.set_settings",
-        "project.export",
+        "project.export", "project.trust", "project.revoke_trust", "project.trust_state",
         "scene.new", "scene.open", "scene.save", "scene.save_as", "scene.close", "scene.info", "scene.query",
         "scene.get_hierarchy", "scene.set_settings",
         "entity.create", "entity.create_many", "entity.destroy", "entity.destroy_many", "entity.restore",
@@ -303,4 +309,35 @@ TEST_SUITE("editor/builtin_commands") {
             CHECK(systems[index]["ms"].as_f64(-1.0) >= 0.0);
         }
     }
+
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    TEST_CASE("regression - code sweep F612 profiler.frame_stats reports what the renderer's frame left out") {
+        testing::log_capture logs = {};
+        // The editor's own headless start has no renderer; --offscreen gives it one (on the null device where
+        // the build refuses a real device without a window).
+        editor_options options = {};
+        options.headless = true;
+        options.offscreen = true;
+        options.aiPort = u16{0};
+        options.engineArguments = {"--log-level", "warn"};
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        REQUIRE(application.context().renderer() != nullptr);
+        CONJURE_REQUIRE_OK(application.pump_frame());
+        command_request request = {};
+        request.name = "profiler.frame_stats";
+        const core::result<core::json::document> stats = application.context().dispatcher().execute(request);
+        CONJURE_REQUIRE_OK(stats);
+        const core::json::value counters = stats.value().root()["renderer"];
+        REQUIRE(counters.is_object());
+        // A log line says when a clamp starts; only these counters follow it while it lasts.
+        CHECK(counters["viewsRendered"].is_number());
+        for (const std::string_view counter : {"viewsSkipped", "lightsDropped", "spritesDropped"}) {
+            CAPTURE(counter);
+            CHECK(counters[counter].is_number());
+            CHECK(counters[counter].as_i64(-1) == 0);
+        }
+        application.shutdown();
+    }
+#endif
 }

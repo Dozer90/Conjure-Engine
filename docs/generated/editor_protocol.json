@@ -144,7 +144,7 @@
         },
         {
             "name": "asset.import",
-            "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. importer names the importer to use instead of the one chosen by extension (a .glb as \"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
+            "summary": "Imports a source file (copied under assets:// when outside) and cooks it; options merge into the .meta settings. source is an asset path or a file on disk; a relative one that is no asset is looked up under the project root. importer names the importer to use instead of the one chosen by extension (a .glb as \"conjure.physics.collision_mesh_importer\"); switching resets the settings to that importer's defaults. Undo removes a copied file; importing a file already inside the project records nothing.",
             "flags": [
                 "mutates",
                 "requires_project",
@@ -181,7 +181,8 @@
             "name": "asset.info",
             "summary": "One asset's record, dependencies, sub-assets and importer settings.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -204,7 +205,8 @@
             "name": "asset.list",
             "summary": "Every asset record, optionally filtered by path substring and type name.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -383,7 +385,8 @@
             "name": "component.get",
             "summary": "Reads a property (or a whole component) by reflection path.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -422,7 +425,8 @@
             "name": "component.list",
             "summary": "The editable component types an entity carries.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -599,7 +603,9 @@
         {
             "name": "console.read",
             "summary": "Log lines after a sequence number, filtered by level and category.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -741,7 +747,7 @@
         },
         {
             "name": "editor.exec_file",
-            "summary": "Runs a command file (JSON array or NDJSON) and answers with the execution summary.",
+            "summary": "Runs a command file (JSON array or NDJSON; a relative path is relative to the project root) and answers with the execution summary.",
             "flags": [
                 "async",
                 "not_in_batch"
@@ -813,7 +819,9 @@
         {
             "name": "editor.schema",
             "summary": "The whole command catalogue with argument and result schemas, or one command's descriptor.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -831,7 +839,9 @@
         {
             "name": "editor.state",
             "summary": "Project, scene, play state, revision, selection and transport facts.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -846,7 +856,8 @@
             "summary": "Answers once the engine ran the given number of frames.",
             "flags": [
                 "async",
-                "not_in_batch"
+                "not_in_batch",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -871,7 +882,8 @@
             "name": "entity.bounds",
             "summary": "The world bounds of an entity's subtree (a 1 m box around every entity of the subtree when nothing has render bounds).",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -1127,7 +1139,8 @@
             "name": "entity.find",
             "summary": "Entities matching every given filter (name, tag, layer, component), in hierarchy order.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -1169,7 +1182,8 @@
             "name": "entity.get",
             "summary": "Everything about an entity: identity, parent, children, enabled state and components as JSON.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -1456,7 +1470,9 @@
         {
             "name": "history.list",
             "summary": "The undo entries (newest last) and the cursor.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -1700,7 +1716,9 @@
         {
             "name": "module.list",
             "summary": "Every registered module with its state, version, last error, dependencies and command count.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -1817,7 +1835,8 @@
             "name": "physics.overlap_sphere",
             "summary": "The entities whose bodies overlap a sphere.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -1872,7 +1891,8 @@
             "name": "physics.raycast",
             "summary": "Casts a ray against the physics bodies: the closest hit, or every hit sorted by distance with all:true.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2060,7 +2080,9 @@
         {
             "name": "play.state",
             "summary": "The play state, engine frame and the clocks of the play session: simulation frames, simulated time and fixed steps.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -2378,7 +2400,9 @@
         {
             "name": "profiler.frame_stats",
             "summary": "Frame timings: the latest CPU frame, the average over the last n frames, per-system ({name, phase, ms}) and per-phase milliseconds, the GPU time when the device reports it, fixed steps, renderer counters and the entity count. simulationTime and fixedStepIndex are the engine's clocks (engine_time.time and fixedStepIndex) since the engine started, which project.open restarts; they are not the play session's clocks play.state reports.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -2413,6 +2437,10 @@
                     "entityCount": {
                         "type": "integer"
                     },
+                    "renderer": {
+                        "type": "object",
+                        "description": "the last frame's renderer counters, in a session with a renderer: viewsRendered, viewsSkipped, passesExecuted, drawCalls, dispatches, instancesDrawn, instancesCulled, trianglesDrawn, lightsRendered, lightsDropped and spritesDropped; viewsSkipped, lightsDropped and spritesDropped count what the frame left out, every frame, while the log warns once when that starts"
+                    },
                     "simulationTime": {
                         "type": "number",
                         "description": "the engine's scaled seconds since it started, which project.open restarts"
@@ -2427,7 +2455,7 @@
         },
         {
             "name": "project.create",
-            "summary": "Creates a project directory with project.json, assets/ and scripts/.",
+            "summary": "Creates a project directory with project.json, assets/ and scripts/. A project created in a folder that did not exist is trusted (result.trust); one created in an existing folder, even an empty one, is not, see project.trust.",
             "flags": [
                 "mutates",
                 "not_in_batch",
@@ -2456,7 +2484,7 @@
         },
         {
             "name": "project.export",
-            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied.",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied. Relative directories are relative to the project root.",
             "flags": [
                 "requires_project",
                 "async",
@@ -2521,7 +2549,8 @@
             "name": "project.info",
             "summary": "The open project's description.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2536,7 +2565,8 @@
             "name": "project.list_scenes",
             "summary": "Every .scene.json under assets://.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2556,7 +2586,7 @@
         },
         {
             "name": "project.open",
-            "summary": "Opens a project: the engine restarts over it at the next frame boundary.",
+            "summary": "Opens a project: the engine restarts over it at the next frame boundary. Opening runs the project's scripts and native modules, so a project nobody answered for on this machine is refused with PROJECT_NOT_TRUSTED (details {path, state, prompt}); send project.trust first.",
             "flags": [
                 "not_in_batch"
             ],
@@ -2575,6 +2605,47 @@
             "result": {
                 "type": "object",
                 "additionalProperties": true
+            }
+        },
+        {
+            "name": "project.revoke_trust",
+            "summary": "Takes the answer for a project back, for the session and in the trust store. The folder need not exist any more. A project that is open stays open; it is asked about the next time it is opened.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "untrusted",
+                            "session",
+                            "remembered"
+                        ]
+                    },
+                    "trusted": {
+                        "type": "boolean"
+                    },
+                    "revoked": {
+                        "type": "boolean"
+                    }
+                }
             }
         },
         {
@@ -2628,10 +2699,89 @@
             }
         },
         {
+            "name": "project.trust",
+            "summary": "Answers yes for a project: its scripts and native modules may run with the rights of the user who runs the editor, and project.open then opens it. project.open never answers by itself. With remember (the default) the answer is kept in the per-user trust store of this machine, outside the project; otherwise, or when there is no store or it cannot be written, it holds until the editor exits (state says which). The path must hold a project.",
+            "flags": [
+                "not_in_batch"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "remember": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "path"
+                ]
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "session",
+                            "remembered"
+                        ]
+                    },
+                    "trusted": {
+                        "type": "boolean"
+                    },
+                    "remembered": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
+            "name": "project.trust_state",
+            "summary": "Whether a project is trusted: untrusted, session (until the editor exits) or remembered (in the trust store). Without path, or with an empty one, the open project. Changes nothing and asks nobody.",
+            "flags": [
+                "read_only"
+            ],
+            "owner": "editor",
+            "args": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                }
+            },
+            "result": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "untrusted",
+                            "session",
+                            "remembered"
+                        ]
+                    },
+                    "trusted": {
+                        "type": "boolean"
+                    }
+                }
+            }
+        },
+        {
             "name": "reflection.asset_types",
             "summary": "The registered asset types with the importers and extensions seen in the project and their settings schema.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2652,7 +2802,9 @@
         {
             "name": "reflection.components",
             "summary": "Every component type with its module, flags, aliases and reflected fields (type, default, attributes).",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -2683,7 +2835,9 @@
         {
             "name": "reflection.type",
             "summary": "The field tree of a component (name, alias or suffix), a reflected struct or an enumeration.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -2730,7 +2884,8 @@
             "name": "scene.get_hierarchy",
             "summary": "The scene tree as nested {guid, name, children} nodes.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2761,7 +2916,8 @@
             "name": "scene.info",
             "summary": "Path, name, entity count, structure version, dirty flag and settings of the open scene.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -2845,7 +3001,8 @@
             "name": "scene.query",
             "summary": "Entities carrying every 'with' type and none of the 'without' types, with the asked field values.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -3153,7 +3310,8 @@
             "name": "script.list",
             "summary": "The script sources of the project (className as namespace.Class read from the source, with the runtime's reflected fields) and the classes the runtime knows.",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -3178,7 +3336,8 @@
             "name": "script.read",
             "summary": "Reads a script source (path relative to <project>/scripts).",
             "flags": [
-                "requires_project"
+                "requires_project",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -3206,7 +3365,7 @@
         },
         {
             "name": "script.reload",
-            "summary": "Reloads the game assembly (hot reload) through the script runtime.",
+            "summary": "Reloads the game assembly (hot reload) through the script runtime; a relative assembly path is relative to the project root.",
             "flags": [
                 "requires_project"
             ],
@@ -3311,7 +3470,8 @@
             "name": "selection.get",
             "summary": "The selected entities.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -3391,8 +3551,10 @@
         },
         {
             "name": "session.hello",
-            "summary": "Handshake: reports the protocol and engine versions, the schema hash and the client id.",
-            "flags": [],
+            "summary": "Handshake: reports the protocol and engine versions, the schema hash, the client id and the access the token grants. The first request of a TCP client, with a token the editor wrote under <project>/.conjure: ai_token opens every command (access full_control), ai_token_inspect the commands flagged read_only (access inspect). A later hello with the other token changes the access.",
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -3422,6 +3584,13 @@
                     },
                     "headless": {
                         "type": "boolean"
+                    },
+                    "access": {
+                        "type": "string",
+                        "enum": [
+                            "inspect",
+                            "full_control"
+                        ]
                     }
                 }
             }
@@ -3429,7 +3598,9 @@
         {
             "name": "session.ping",
             "summary": "The current frame and scene revision.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -3449,7 +3620,9 @@
         {
             "name": "session.subscribe",
             "summary": "Replaces the client's event subscriptions and, optionally, the minimum level of log events.",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object",
@@ -3553,7 +3726,9 @@
         {
             "name": "view.get_camera",
             "summary": "The editor camera (fov in degrees).",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -3598,7 +3773,9 @@
         {
             "name": "view.mode",
             "summary": "The viewport projection mode (3d or 2d).",
-            "flags": [],
+            "flags": [
+                "read_only"
+            ],
             "owner": "editor",
             "args": {
                 "type": "object"
@@ -3619,7 +3796,8 @@
             "name": "view.pick",
             "summary": "Picks the entity under a normalised viewport position (x, y with the editor camera) or along a world ray; mode mesh (triangles), bounds or physics.",
             "flags": [
-                "requires_scene"
+                "requires_scene",
+                "read_only"
             ],
             "owner": "editor",
             "args": {
@@ -3687,7 +3865,7 @@
         },
         {
             "name": "view.screenshot",
-            "summary": "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG.",
+            "summary": "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG (a relative path is relative to the project root).",
             "flags": [
                 "async",
                 "not_in_batch"
@@ -3889,7 +4067,8 @@
         "TIMEOUT",
         "CANCELLED",
         "UNAUTHORISED",
+        "PROJECT_NOT_TRUSTED",
         "INTERNAL"
     ],
-    "schemaHash": "cd288d52a53a2651"
+    "schemaHash": "39ed2d60d8094f31"
 }

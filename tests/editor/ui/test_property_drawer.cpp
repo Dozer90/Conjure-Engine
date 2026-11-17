@@ -246,6 +246,43 @@ TEST_SUITE("editor/ui/property_drawer") {
         CHECK(std::abs(glm::dot(result, expected)) > 0.9999f);
     }
 
+    TEST_CASE("regression - code sweep F213 property_drawer_registry cached Euler angles follow a rotation changed "
+              "from outside by a hundredth of a degree") {
+        property_drawer_registry registry = {};
+        imgui_frame_scope scope{};
+        property_draw_context context = {};
+        context.label = "rotation";
+        core::json::document rotation = core::json::array({0.0f, 0.0f, 0.0f, 1.0f});
+        const std::function<void()> draw = [&]() {
+            (void) registry.draw(core::reflect::field_kind::QUAT, context, rotation);
+        };
+        // Yaw 100 degrees is cached as typed; its decomposition would show (180, 80, 180).
+        type_into(scope, []() { ImGui::SetKeyboardFocusHere(1); }, draw, "100");
+        REQUIRE(count_of(shown_text(scope, draw), "100.0 deg") == 1);
+        const math::quat typed = math::quat(
+          rotation.root()[3].as_f32(),
+          rotation.root()[0].as_f32(),
+          rotation.root()[1].as_f32(),
+          rotation.root()[2].as_f32()
+        );
+        const auto store = [&rotation](const math::quat &value) {
+            rotation = core::json::array({value.x, value.y, value.z, value.w});
+        };
+        SUBCASE("a change of 0.01 degrees is a new rotation: the angles are decomposed again") {
+            // Inside the cosine tolerance the check used before (0.16 degrees), which kept the stale angles.
+            store(typed * glm::angleAxis(glm::radians(0.01f), math::vec3(1.0f, 0.0f, 0.0f)));
+            CHECK(count_of(shown_text(scope, draw), "100.0 deg") == 0);
+        }
+        SUBCASE("float rounding of the stored value keeps the angles as typed") {
+            store(math::quat(typed.w, typed.x + 2.0e-6f, typed.y - 2.0e-6f, typed.z));
+            CHECK(count_of(shown_text(scope, draw), "100.0 deg") == 1);
+        }
+        SUBCASE("the same rotation as -q keeps the angles as typed") {
+            store(-typed);
+            CHECK(count_of(shown_text(scope, draw), "100.0 deg") == 1);
+        }
+    }
+
     TEST_CASE("property_drawer_registry - typing into an unranged u64 field writes the typed value") {
         property_drawer_registry registry = {};
         imgui_frame_scope scope{};

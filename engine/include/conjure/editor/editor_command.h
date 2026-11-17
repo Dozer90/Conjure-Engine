@@ -2,6 +2,7 @@
 
 #include "conjure/editor/command_desc.h"
 #include "conjure/editor/editor_error.h"
+#include "conjure/editor/protocol/access_token.h"
 
 #include "conjure/core/api.h"
 #include "conjure/core/json/document.h"
@@ -116,6 +117,15 @@ namespace conjure::editor {
     /// </summary>
     [[nodiscard]] inline bool has_command_flag(const command_descriptor &descriptor, command_flags flag) noexcept {
         return has_flag(descriptor.flags, flag);
+    }
+
+    /// <summary>
+    /// What a client must have been granted to run a command with these flags (decision D25 of 04_editor.md):
+    /// INSPECT for a READ_ONLY command, FULL_CONTROL for every other one. The flags are the whole rule: no
+    /// command is decided by its name, so a command added later needs full control until it is flagged.
+    /// </summary>
+    [[nodiscard]] constexpr access_level required_access(command_flags flags) noexcept {
+        return has_flag(flags, command_flags::READ_ONLY) ? access_level::INSPECT : access_level::FULL_CONTROL;
     }
 
     /// <summary>

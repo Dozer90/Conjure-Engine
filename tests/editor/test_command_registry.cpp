@@ -88,6 +88,39 @@ TEST_SUITE("editor/command_registry") {
         CHECK(registry.size() == 1);
     }
 
+    TEST_CASE("command_registry - read_only is refused on a command that mutates") {
+        command_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.add(make("thing.get", command_flags::READ_ONLY | command_flags::REQUIRES_SCENE)));
+        REQUIRE(registry.find("thing.get") != nullptr);
+        CHECK(has_command_flag(*registry.find("thing.get"), command_flags::READ_ONLY));
+        // The flag opens the command to inspect-only clients: a mutation cannot carry it, undoable or not.
+        const core::result<void> mutating = registry.add(
+          make("thing.set", command_flags::READ_ONLY | command_flags::MUTATES)
+        );
+        CONJURE_CHECK_ERROR(mutating, protocol_error_code::INVALID_ARGS);
+        if (!mutating.has_value()) {
+            CHECK(mutating.get_error().message().find("read_only") != std::string::npos);
+            CHECK(mutating.get_error().message().find("thing.set") != std::string::npos);
+        }
+        CONJURE_CHECK_ERROR(
+          registry.add(make("thing.save", command_flags::READ_ONLY | command_flags::MUTATES | command_flags::NO_UNDO)),
+          protocol_error_code::INVALID_ARGS
+        );
+        CONJURE_CHECK_ERROR(
+          registry.add(make("thing.write", command_flags::READ_ONLY | command_flags::MUTATES | command_flags::ON_DISK)),
+          protocol_error_code::INVALID_ARGS
+        );
+        CHECK(registry.size() == 1);
+    }
+
+    TEST_CASE("command_registry - describe lists read_only among a command's flags") {
+        command_registry registry = {};
+        CONJURE_REQUIRE_OK(registry.add(make("thing.get", command_flags::READ_ONLY)));
+        const core::json::document described = registry.describe(*registry.find("thing.get"));
+        REQUIRE(described.root()["flags"].size() == 1);
+        CHECK(described.root()["flags"][0].as_string() == "read_only");
+    }
+
     TEST_CASE("command_registry - remove_owned_by drops a module's commands only") {
         command_registry registry = {};
         CONJURE_REQUIRE_OK(registry.add(make("core.keep")));

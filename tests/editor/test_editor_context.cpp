@@ -14,6 +14,7 @@
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/project.h"
 #include "conjure/scene/scene_manager.h"
 
 #include <filesystem>
@@ -368,6 +369,102 @@ TEST_SUITE("editor/editor_context") {
         CHECK(state.root().contains("port"));
         CHECK(state.root().contains("frame"));
         CHECK(state.root()["revision"].as_u64() == editor.context().revision());
+        // No project is being asked about.
+        REQUIRE(state.root().contains("trustPrompt"));
+        CHECK(state.root()["trustPrompt"].is_null());
+    }
+
+    TEST_CASE("editor_context - the trust prompt is raised only where a window can ask, and closes for its project") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        const std::filesystem::path asked = editor.project_directory() / "asked";
+        const std::filesystem::path other = editor.project_directory() / "other";
+        // The application hands its project_trust to the context and leaves prompts off for a headless session.
+        CHECK(context.trust() == &editor.application().trust());
+        CHECK_FALSE(context.trust_prompt_enabled());
+        CHECK_FALSE(context.raise_trust_prompt(asked));
+        CHECK_FALSE(context.trust_prompt().has_value());
+
+        context.set_trust_prompt_enabled(true);
+        CHECK(context.trust_prompt_enabled());
+        // No project, no question.
+        CHECK_FALSE(context.raise_trust_prompt({}));
+        CHECK_FALSE(context.trust_prompt().has_value());
+        // The question names the folder an answer records: the project key, resolved by the file system. Compared
+        // as keys, not with the spelling given: on macOS the scratch folder lies behind a link (/var is
+        // /private/var), and on Windows a short 8.3 name in it is resolved to its long form.
+        const std::string askedKey = editor_test::project_key_of(asked);
+        const auto promptKey = [&context]() {
+            REQUIRE(context.trust_prompt().has_value());
+            return editor_test::project_key_of(*context.trust_prompt());
+        };
+        REQUIRE(context.raise_trust_prompt(asked));
+        CHECK(promptKey() == askedKey);
+        CHECK(context.describe_state().root()["trustPrompt"].as_string() == context.trust_prompt()->generic_string());
+
+        SUBCASE("a later question replaces it") {
+            REQUIRE(context.raise_trust_prompt(other));
+            CHECK(promptKey() == editor_test::project_key_of(other));
+        }
+        SUBCASE("it closes for its own project, whatever the spelling, and for no other") {
+            context.close_trust_prompt_for(other);
+            CHECK(context.trust_prompt().has_value());
+            context.close_trust_prompt_for(asked / "sub" / "..");
+            CHECK_FALSE(context.trust_prompt().has_value());
+            // Closing when nothing is asked is harmless.
+            context.close_trust_prompt_for(asked);
+            CHECK_FALSE(context.trust_prompt().has_value());
+        }
+        SUBCASE("it can be dismissed unanswered") {
+            context.dismiss_trust_prompt();
+            CHECK_FALSE(context.trust_prompt().has_value());
+            CHECK(context.describe_state().root()["trustPrompt"].is_null());
+            CHECK_FALSE(editor.application().trust().is_trusted(asked));
+        }
+        SUBCASE("it survives an engine restart over another project and closes when its own project opens") {
+            editor_test::write_project(asked, "asked");
+            editor_test::write_project(other, "other");
+            editor.trust_project(other);
+            (void) editor.ok("project.open", core::json::object({{"path", other.generic_string()}}));
+            editor.pump(1);
+            REQUIRE(context.project()->description().name == "other");
+            CHECK(promptKey() == askedKey);
+            editor.trust_project(asked);
+            (void) editor.ok("project.open", core::json::object({{"path", asked.generic_string()}}));
+            editor.pump(1);
+            REQUIRE(context.project()->description().name == "asked");
+            CHECK_FALSE(context.trust_prompt().has_value());
+        }
+        SUBCASE("turning prompts off keeps a question that is already there") {
+            context.set_trust_prompt_enabled(false);
+            CHECK(context.trust_prompt().has_value());
+            CHECK_FALSE(context.raise_trust_prompt(other));
+            CHECK(promptKey() == askedKey);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F187 editor_context the trust question shows the folder an answer records, not "
+              "the spelling it was given") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        context.set_trust_prompt_enabled(true);
+        std::filesystem::path spelling = {};
+        SUBCASE("a spelling with a detour") {
+            spelling = editor.project_directory() / "asked" / "sub" / "..";
+        }
+        SUBCASE("a spelling relative to the working directory") {
+            spelling = "conjure_f187_relative_project";
+        }
+        CAPTURE(spelling.generic_string());
+        // project.trust records the key; the window shows the question's text and editor.state reports it, so all
+        // three must be the same folder, written out in full.
+        const std::string key = editor_test::project_key_of(spelling);
+        REQUIRE(context.raise_trust_prompt(spelling));
+        REQUIRE(context.trust_prompt().has_value());
+        const std::u8string shown = context.trust_prompt()->generic_u8string();
+        CHECK(std::string(shown.begin(), shown.end()) == key);
+        CHECK(context.trust_prompt()->is_absolute());
+        CHECK(context.describe_state().root()["trustPrompt"].as_string() == context.trust_prompt()->generic_string());
     }
 
     TEST_CASE("editor_context - frame tasks tick until they finish") {
@@ -597,5 +694,53 @@ TEST_SUITE("editor/editor_context") {
         CHECK(editor.fail("entity.create", core::json::object({{"name", "x"}})) == protocol_error_code::SCENE_NOT_OPEN);
         const core::json::document state = editor.ok("editor.state");
         CHECK(state.root()["project"].is_null());
+    }
+
+    TEST_CASE("regression - code sweep F187 editor.exec_file reads a relative path against the project root") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path root = editor.context().project()->root_directory();
+        std::filesystem::create_directories(root / "commands");
+        {
+            std::ofstream output(root / "commands" / "nested.json", std::ios::binary | std::ios::trunc);
+            REQUIRE(output.is_open());
+            output << R"([{"cmd":"entity.create","args":{"name":"from a relative file"}}])";
+        }
+        const core::json::document summary = editor.ok(
+          "editor.exec_file",
+          core::json::object({{"path", "commands/nested.json"}})
+        );
+        CHECK(summary.root()["succeeded"].as_u64() == 1);
+        CHECK(editor.scene().world().entity_count() == 1);
+
+        // A relative path that names nothing is looked for in the project, and the answer says where.
+        const protocol_response missing = editor.send(
+          "editor.exec_file",
+          core::json::object({{"path", "commands/none.json"}})
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        const std::string expected = (root / "commands" / "none.json").generic_string();
+        CHECK_MESSAGE(missing.errorMessage.find(expected) != std::string::npos, missing.errorMessage);
+        // An empty path is not turned into the project root: it names nothing, as before.
+        const protocol_error_code emptyPath = editor.fail("editor.exec_file", core::json::object({{"path", ""}}));
+        CHECK(emptyPath == protocol_error_code::PATH_NOT_FOUND);
+    }
+
+    TEST_CASE("editor.exec_file - without a project a relative path is left to the working directory") {
+        editor_test::headless_editor_options options = {};
+        options.withProject = false;
+        options.withScene = false;
+        editor_test::headless_editor editor(options);
+        const protocol_response missing = editor.send(
+          "editor.exec_file",
+          core::json::object({{"path", "conjure_f187_no_such_folder/none.json"}})
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        // The path is quoted as given: nothing was put in front of it.
+        CHECK_MESSAGE(
+          missing.errorMessage.find("'conjure_f187_no_such_folder/none.json'") != std::string::npos,
+          missing.errorMessage
+        );
     }
 }

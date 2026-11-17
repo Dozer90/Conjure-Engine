@@ -641,6 +641,52 @@ TEST_SUITE("editor/commands_asset_prefab") {
         CHECK(missing.errorMessage.find("no such file") != std::string::npos);
     }
 
+    TEST_CASE("regression - code sweep F187 asset.import reads a relative source against the project root") {
+        editor_test::headless_editor editor = {};
+        const std::filesystem::path root = editor.context().project()->root_directory();
+        (void) editor_test::write_tiny_png(root / "incoming" / "relative.png");
+        // Not an asset path (nothing is at assets://incoming/relative.png), so a file outside the assets root:
+        // the one under the project root, never one in the editor's working directory.
+        const core::json::document imported = editor.ok(
+          "asset.import",
+          core::json::object({{"source", "incoming/relative.png"}})
+        );
+        CHECK(imported.root()["path"].as_string() == "assets://relative.png");
+        CHECK(imported.root()["copied"].as_bool(false));
+        CHECK(std::filesystem::is_regular_file(root / "assets" / "relative.png"));
+
+        // A relative source that names nothing is looked for in the project, and the answer says where.
+        const protocol_response missing = editor.send(
+          "asset.import",
+          core::json::object({{"source", "incoming/none.png"}})
+        );
+        REQUIRE_FALSE(missing.ok);
+        CHECK(missing.errorCode == protocol_error_code::PATH_NOT_FOUND);
+        const std::string expected = (root / "incoming" / "none.png").generic_string();
+        CHECK_MESSAGE(missing.errorMessage.find(expected) != std::string::npos, missing.errorMessage);
+        CHECK_FALSE(std::filesystem::exists(root / "assets" / "none.png"));
+
+        // An asset path still comes first: a source that names an asset is that asset, not a file to copy.
+        const core::json::document again = editor.ok(
+          "asset.import",
+          core::json::object({{"source", "relative.png"}})
+        );
+        CHECK(again.root()["uuid"].as_string() == imported.root()["uuid"].as_string());
+        CHECK_FALSE(again.root()["copied"].as_bool(true));
+    }
+
+    TEST_CASE("asset.import - without a project there is nothing to import into and no file is read") {
+        editor_test::headless_editor_options options = {};
+        options.withProject = false;
+        options.withScene = false;
+        editor_test::headless_editor editor(options);
+        const protocol_error_code refused = editor.fail(
+          "asset.import",
+          core::json::object({{"source", "conjure_f187_no_such_folder/none.png"}})
+        );
+        CHECK(refused == protocol_error_code::PROJECT_NOT_OPEN);
+    }
+
     TEST_CASE("regression - asset.import of an absolute path inside the assets directory registers the file in place") {
         editor_test::headless_editor editor = {};
         const std::filesystem::path file = editor_test::write_tiny_png(

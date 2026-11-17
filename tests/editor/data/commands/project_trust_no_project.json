@@ -1,0 +1,15 @@
+{
+  "setup": [],
+  "request": {
+    "cmd": "project.trust",
+    "args": {
+      "path": "${project}/nowhere"
+    }
+  },
+  "expect": {
+    "ok": false,
+    "error": {
+      "code": "PATH_NOT_FOUND"
+    }
+  }
+}

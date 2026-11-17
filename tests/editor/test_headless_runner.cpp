@@ -537,6 +537,7 @@ TEST_SUITE("editor/headless_runner") {
             stream << "{\n  \"schema_version\": 1,\n  \"name\": \"broken\",\n  \"assets_root\": \"assets\",\n"
               "  \"startup_scene\": \"scenes/gone.scene.json\"\n}\n";
         }
+        editor.trust_project(broken);
         const core::result<std::vector<protocol_request>> requests = headless_runner::parse_command_file(
           R"([{"id":"open","cmd":"project.open","args":{"path":"${project}/broken"}},)"
           R"({"id":"info","cmd":"project.info"}])"

@@ -22,6 +22,7 @@ namespace conjure::editor::support {
         core::result<command_outcome> view_screenshot(command_invocation &invocation) {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(screenshot_request request, screenshot_service::parse_request(invocation.args));
+            request.path = project_relative_path(context, std::move(request.path));
             if (!context.screenshots().available()) {
                 if (context.offscreen()) {
                     return not_available(
@@ -253,7 +254,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "view.screenshot",
-            "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG.",
+            "Renders width x height pixels through the chosen camera after waitFrames frames and writes a PNG (a "
+            "relative path is relative to the project root).",
             R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer","minimum":1},)"
             R"("height":{"type":"integer","minimum":1},"camera":{"type":"string"},"format":{"type":"string"},)"
             R"("waitFrames":{"type":"integer","minimum":0}},"required":["path"]})",
@@ -282,7 +284,7 @@ namespace conjure::editor::support {
             "The editor camera (fov in degrees).",
             std::string(EMPTY_SCHEMA),
             cameraSchema,
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &view_get_camera
           )
         );
@@ -314,7 +316,7 @@ namespace conjure::editor::support {
             R"({"type":"object","properties":{"hit":{"type":"boolean"},"guid":{"type":"string"},)"
             R"("point":{"type":"array"},)"
             R"("normal":{"type":"array"},"distance":{"type":"number"}},"additionalProperties":true})",
-            command_flags::REQUIRES_SCENE,
+            command_flags::REQUIRES_SCENE | command_flags::READ_ONLY,
             &view_pick
           )
         );
@@ -325,7 +327,7 @@ namespace conjure::editor::support {
             "The viewport projection mode (3d or 2d).",
             std::string(EMPTY_SCHEMA),
             R"({"type":"object","properties":{"mode":{"type":"string"},"orthographic":{"type":"boolean"}}})",
-            command_flags::NONE,
+            command_flags::READ_ONLY,
             &view_mode
           )
         );

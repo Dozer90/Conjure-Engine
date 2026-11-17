@@ -1,0 +1,18 @@
+{
+  "_comment": "Takes back the session answer of the scratch project, which stays open.",
+  "setup": [],
+  "request": {
+    "cmd": "project.revoke_trust",
+    "args": {
+      "path": "${project}"
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "state": "untrusted",
+      "trusted": false,
+      "revoked": true
+    }
+  }
+}
