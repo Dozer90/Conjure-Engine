@@ -26,9 +26,12 @@
 // script_runtime over the .NET host (or the null host for tests and tools) and registers script_component;
 // the bindings subsystem fills the native table at step 16; step 17 runs initialize (handshake) and
 // load_game_assembly. A missing runtime is SCRIPT_RUNTIME_NOT_FOUND when scripting.required, otherwise a WARN
-// and a null context pointer. Every frame (step 5) the subsystem writes the conjure_frame_block from
-// engine_time and the input snapshot. Before a scene unloads it runs destroy_all(true) so OnDestroy sees
-// live entities (R29); physics contact events become collision events for scripting.collision_dispatch.
+// and a null context pointer. With scripting.enabled == false nothing is constructed and one INFO line says so;
+// when it is the headless default that holds back a project with a game assembly, the line names --scripting
+// (D12).
+// Every frame (step 5) the subsystem writes the conjure_frame_block from engine_time and the input snapshot.
+// Before a scene unloads it runs destroy_all(true) so OnDestroy sees live entities (R29); physics contact
+// events become collision events for scripting.collision_dispatch.
 
 namespace conjure::engine {
 
@@ -65,6 +68,20 @@ namespace conjure::engine {
             [[nodiscard]] u32 frame_blocks_written() const noexcept {
                 return mFrameBlocksWritten;
             }
+
+            /// <summary>
+            /// True when scripting is off although the loaded project has scripts to run (it enables scripting
+            /// and names a game assembly) and the run is headless outside the editor: the case --scripting
+            /// exists for (06 D12). False without a project, when the project itself disables scripting, when
+            /// it names no game assembly (a project.json without a "scripting" section enables scripting by
+            /// default and has no script to hold back), for a windowed run, and for the editor, whose headless
+            /// mode chooses its own scripting host. A headless run started with --no-scripting on a scripted
+            /// project is true as well: the configuration does not record which flag was given.
+            /// </summary>
+            [[nodiscard]] static bool headless_holds_scripts_back(
+              const engine_config &config,
+              const project *loaded
+            ) noexcept;
 
             /// <summary>
             /// Copies engine_time and an input snapshot into the managed frame block (the body of begin_frame).

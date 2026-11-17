@@ -24,6 +24,7 @@
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_manager.h"
 #include "conjure/scene/scene_serializer.h"
+#include "engine/scripting_request.h"
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
     #include "conjure/physics/collision_mesh_asset.h"
@@ -40,6 +41,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -47,7 +49,8 @@
 
 // The headless application (docs/design/06_engine_loop.md 7, 10 "test_application_headless", D8): null
 // backends everywhere, run() with a frame budget, the context pointers, the null-device render path and a
-// project booted from a temp directory with its startup scene.
+// project booted from a temp directory with its startup scene. Also what a build without the scripting module
+// says when a configuration asks it for scripts (D12).
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -473,6 +476,78 @@ TEST_SUITE("engine/application_headless") {
         REQUIRE(runtime.context().modules != nullptr);
         CHECK_FALSE(runtime.context().modules->desc().shadowCopyBinaries);
         runtime.shutdown();
+    }
+
+    TEST_CASE("application_headless - asks_for_missing_scripting_module names the requests for scripts") {
+        // A windowed run enables scripting by default; without a game assembly there is no script to miss.
+        engine_config windowed = engine_config::defaults();
+        REQUIRE(windowed.scripting.enabled);
+        CHECK_FALSE(names_game_scripts(windowed.scripting));
+        CHECK_FALSE(asks_for_missing_scripting_module(windowed));
+        windowed.scripting.gameAssembly = "Scripts/bin/Game.dll";
+        CHECK(names_game_scripts(windowed.scripting));
+        CHECK(asks_for_missing_scripting_module(windowed));
+        windowed.scripting.enabled = false;
+        CHECK_FALSE(names_game_scripts(windowed.scripting));
+        CHECK_FALSE(asks_for_missing_scripting_module(windowed));
+
+        // A headless run has scripting off; enabled there, somebody asked for it (--scripting), assembly or not.
+        engine_config headless = engine_config::headless_defaults();
+        REQUIRE_FALSE(headless.scripting.enabled);
+        CHECK_FALSE(asks_for_missing_scripting_module(headless));
+        headless.scripting.gameAssembly = "Scripts/bin/Game.dll";
+        CHECK_FALSE(asks_for_missing_scripting_module(headless));
+        headless.scripting.gameAssembly.clear();
+        headless.scripting.enabled = true;
+        CHECK(asks_for_missing_scripting_module(headless));
+
+        // The editor enables scripting for its headless sessions itself; only a game assembly is a request.
+        engine_config editorHeadless = headless;
+        editorHeadless.editor = true;
+        CHECK_FALSE(asks_for_missing_scripting_module(editorHeadless));
+        editorHeadless.scripting.gameAssembly = "Scripts/bin/Game.dll";
+        CHECK(asks_for_missing_scripting_module(editorHeadless));
+    }
+
+    TEST_CASE("regression - code sweep F075 a build without the scripting module warns that --scripting runs no "
+      "script") {
+        if (engine_test::scripting_module_built()) {
+            // tests/engine/test_scripting_subsystem.cpp covers --scripting where the subsystem exists.
+            MESSAGE("this build has the scripting module: the warning of a build without it cannot be seen here");
+            return;
+        }
+        constexpr std::string_view MISSING_MODULE = "this build has no scripting module";
+        log_capture logs = {};
+        temp_directory directory("engine_scripting_without_module");
+        const project scripted = engine_test::write_project(
+          directory.path(),
+          "scripted",
+          {},
+          R"("scripting": {"enabled": true, "assembly": "Scripts/bin/Game.dll"}, )"
+          R"("modules": {"engine_plugins": false})"
+        );
+        REQUIRE(names_game_scripts(scripted.description().scripting));
+        const std::string projectArgument = directory.path().string();
+        std::vector<std::string_view> arguments = {"--project", projectArgument, "--headless", "--jobs", "0"};
+        bool expectWarning = false;
+
+        SUBCASE("--headless --scripting boots without scripts and says so") {
+            arguments.emplace_back("--scripting");
+            expectWarning = true;
+        }
+        SUBCASE("plain --headless runs no script in any build and says nothing") {}
+
+        core::result<application_desc> desc =
+          application_desc::from_command_line(std::span<const std::string_view>(arguments), engine_config::defaults());
+        CONJURE_REQUIRE_OK(desc);
+        CHECK(desc.value().config.scripting.enabled == expectWarning);
+        application app(std::move(desc).value());
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK(app.context().scripting == nullptr);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        app.shutdown();
+        CHECK(logs.contains(core::log_level::WARN, MISSING_MODULE) == expectWarning);
+        CHECK_FALSE(logs.contains(core::log_level::INFO, MISSING_MODULE));
     }
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS

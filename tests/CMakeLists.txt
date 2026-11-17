@@ -120,6 +120,13 @@ else()
     message(STATUS "tests: Python 3 not found, the style, docs and tool self-test entries are not registered")
 endif()
 
+# The licence notices export step 5 ships (06_engine_loop.md D15): the notices.* entries probe what a configure
+# writes and refuses and how the file is placed next to an executable, notices.up_to_date holds the tracked
+# THIRD_PARTY_NOTICES.md to the licence files this tree fetched, and notices.tool is the self-test of the tool that
+# writes it (cmake/ConjureNotices.cmake). They belong to every tree with tests, whichever modules it builds; the
+# two Python entries are left out without an interpreter.
+conjure_add_third_party_notices_tests()
+
 # The ABI identity script (cmake/ConjureSharedLibrary.cmake, script mode) over a header list naming a path with a
 # non-ASCII character, as a checkout under a user directory with an accented name produces: the entry fails when
 # the list is read back truncated at that character. The probe directory is "Jos" followed by U+00E9, spelled as

@@ -249,7 +249,7 @@ namespace {
         return core::result<void>::success();
     }
 
-    [[nodiscard]] core::result<void> read_audio(const value &root, audio_settings &settings) {
+    [[nodiscard]] core::result<void> read_audio(const value &root, audio_config &settings) {
         CONJURE_TRY_ASSIGN(const value section, read_object(root, "audio"));
         if (!section.is_valid()) {
             return core::result<void>::success();
@@ -265,7 +265,7 @@ namespace {
             settings.backend = parsed.value();
         }
         CONJURE_TRY(read_u32(section, "sample_rate", settings.sampleRate));
-        CONJURE_TRY(read_string(section, "device", settings.device));
+        CONJURE_TRY(read_string(section, "device", settings.deviceName));
         CONJURE_TRY(read_f32(section, "master_gain", settings.masterGain));
         CONJURE_TRY(read_f32(section, "doppler_factor", settings.dopplerFactor));
         CONJURE_TRY(read_f32(section, "speed_of_sound", settings.speedOfSound));
@@ -531,7 +531,7 @@ core::json::document project::to_json() const {
     audio.set("enabled", desc.audio.enabled);
     audio.set("backend", to_string(desc.audio.backend));
     audio.set("sample_rate", desc.audio.sampleRate);
-    audio.set("device", desc.audio.device);
+    audio.set("device", desc.audio.deviceName);
     audio.set("master_gain", number(desc.audio.masterGain));
     audio.set("doppler_factor", number(desc.audio.dopplerFactor));
     audio.set("speed_of_sound", number(desc.audio.speedOfSound));
@@ -604,7 +604,7 @@ void project::apply_to(engine_config &config) const {
     config.scripting.exportMode = desc.scripting.exportMode;
     config.scripting.exportDebugSymbols = desc.scripting.exportDebugSymbols;
     config.audio.sampleRate = desc.audio.sampleRate;
-    config.audio.device = desc.audio.device;
+    config.audio.deviceName = desc.audio.deviceName;
     config.audio.masterGain = desc.audio.masterGain;
     config.audio.dopplerFactor = desc.audio.dopplerFactor;
     config.audio.speedOfSound = desc.audio.speedOfSound;
@@ -617,8 +617,9 @@ void project::apply_to(engine_config &config) const {
     config.window.vsync = desc.window.vsync;
 
     if (!headless) {
-        // Headless keeps its null devices, its window size, its disabled scripting and its disabled asset hot
-        // reload (D8; the watcher's stat passes would run on job threads during a headless frame).
+        // Headless keeps its null devices, its window size, its disabled scripting (--scripting turns it on
+        // after this merge, D12) and its disabled asset hot reload (D8; the watcher's stat passes would run on
+        // job threads during a headless frame).
         config.window.width = desc.window.width;
         config.window.height = desc.window.height;
         config.rendering.enabled = desc.rendering.enabled;

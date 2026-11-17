@@ -8,11 +8,16 @@
 #                                     exit 0 (with the build's runtime, with the copy the export placed into the
 #                                     folder, and without --project from that copy), a development project boots
 #                                     directly, the flags reach the configuration, a non-ASCII project path
-#                                     survives, --help -> 0
+#                                     survives, --help -> 0; a scripted project boots headless without a script
+#                                     runtime, and with --scripting it starts one (the [dotnet] case runs C#);
+#                                     a Windows Distribution build ships the Visual C++ runtime DLLs it copied;
+#                                     every build wrote its licence notices next to the runtime and ships them
 #   test_missing_project.cpp          the 5.2 project file: missing, broken or too-new project.json and project
 #                                     settings that do not validate -> 2, named on stderr and in --log-file
 #   test_exit_codes.cpp               bad arguments -> 3 (with the usage text or the help hint on stderr), a
 #                                     failed startup -> 1 (named in --log-file as well)
+#   runtime.msvc_runtime_folder_rules the probe of runtime/cmake/ConjureMsvcRuntime.cmake: which Visual C++
+#                                     redistributable folder a Distribution build ships (every platform)
 #   runtime.check_distribution_symbols_tool
 #                                     the self-test of tools/check_distribution_symbols.py (always registered)
 #   runtime.distribution_symbols      tools/check_distribution_symbols.py over the Distribution conjure_runtime
@@ -30,6 +35,17 @@ if(NOT TARGET conjure_runtime OR NOT TARGET conjure::engine)
     return()
 endif()
 
+# The scripted project of the --scripting cases is authored through the script runtime on the null host.
+set(CONJURE_RUNTIME_TEST_DEPS
+    conjure::assets
+    conjure::ecs
+    conjure::engine
+    conjure::scene
+)
+if(TARGET conjure::scripting)
+    list(APPEND CONJURE_RUNTIME_TEST_DEPS conjure::scripting)
+endif()
+
 conjure_add_test_module(runtime
     SOURCES
         runtime_test_support.cpp
@@ -38,10 +54,7 @@ conjure_add_test_module(runtime
         test_missing_project.cpp
         test_runtime_boot.cpp
     DEPS
-        conjure::assets
-        conjure::ecs
-        conjure::engine
-        conjure::scene
+        ${CONJURE_RUNTIME_TEST_DEPS}
     LABELS process
     TIMEOUT 300
 )
@@ -53,6 +66,51 @@ target_include_directories(conjure_runtime_tests PRIVATE "${CMAKE_CURRENT_SOURCE
 target_compile_definitions(conjure_runtime_tests PRIVATE
     CONJURE_RUNTIME_EXECUTABLE="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_runtime>>"
     CONJURE_RUNTIME_BIN_DIR="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE_DIR:conjure_runtime>>"
+)
+
+# The Visual C++ runtime DLLs an MSVC Distribution build copies next to conjure_runtime (runtime/CMakeLists.txt,
+# 06_engine_loop.md 3.6 step 5): the case that looks for them runs in the configuration that copies them and
+# reports that it has nothing to check in every other one.
+get_target_property(runtimeCrtLibraries conjure_runtime CONJURE_MSVC_CRT_LIBRARIES)
+if(runtimeCrtLibraries)
+    target_compile_definitions(conjure_runtime_tests PRIVATE
+        CONJURE_RUNTIME_TEST_HAS_MSVC_CRT=$<IF:$<CONFIG:Distribution>,1,0>
+    )
+else()
+    target_compile_definitions(conjure_runtime_tests PRIVATE CONJURE_RUNTIME_TEST_HAS_MSVC_CRT=0)
+endif()
+
+# The [dotnet] case runs Conjure.TestScripts on the real CLR inside conjure_runtime, which loads the managed SDK
+# from "managed" next to itself. It is compiled only where the build can run it (CONJURE_RUNTIME_TEST_HAS_DOTNET=1:
+# the scripting module, the managed SDK and the test scripts), the way tests/integration lists its [dotnet] files
+# and tests/editor compiles its own: a build without them (the sanitizer leg, -DCONJURE_WITH_SCRIPTING=OFF) has no
+# entry that could only exit 77, which tools/ctest_check_skips.py refuses for [dotnet] on CI. Where it is compiled
+# it is guarded by precondition::DOTNET_RUNTIME (probe in runtime_test_support.cpp) and skipped only on a machine
+# without a .NET runtime.
+if(TARGET conjure::scripting AND TARGET conjure_managed_sdk AND TARGET conjure_managed_test_scripts_v1)
+    add_dependencies(conjure_runtime_tests conjure_managed_sdk conjure_managed_test_scripts_v1)
+    target_compile_definitions(conjure_runtime_tests PRIVATE
+        CONJURE_RUNTIME_TEST_HAS_DOTNET=1
+        CONJURE_RUNTIME_TEST_SCRIPTS_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_TEST_SCRIPTS_DIR}>"
+    )
+else()
+    target_compile_definitions(conjure_runtime_tests PRIVATE CONJURE_RUNTIME_TEST_HAS_DOTNET=0)
+endif()
+
+#------------------------------------------------------------------------------
+# Which Visual C++ redistributable folder a Distribution build ships (runtime/cmake/ConjureMsvcRuntime.cmake)
+#------------------------------------------------------------------------------
+# The rule is path and version handling, so its probe runs on every platform over fake folders in a scratch
+# directory of this tree: a folder older than the compiler's toolset or without a readable version is refused,
+# the fallback candidate is taken when the first one is refused, and nothing is the answer when none passes
+# (06_engine_loop.md D14). No compiler and no Visual Studio are involved. The label is "build", not "process":
+# the entry spawns nothing but CMake and belongs to the default test run.
+add_test(NAME runtime.msvc_runtime_folder_rules
+    COMMAND "${CMAKE_COMMAND}" "-DPROBE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/msvc_runtime_probe"
+        -P "${PROJECT_SOURCE_DIR}/runtime/cmake/ConjureMsvcRuntimeProbe.cmake"
+)
+set_tests_properties(runtime.msvc_runtime_folder_rules PROPERTIES
+    LABELS "runtime;build" TIMEOUT 120 PASS_REGULAR_EXPRESSION "msvc runtime probe: passed"
 )
 
 #------------------------------------------------------------------------------

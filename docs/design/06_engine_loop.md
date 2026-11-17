@@ -107,6 +107,142 @@ Classes use `mCamelCase` members. Plain aggregate structs (`engine_time`, settin
 `camelCase` fields with no prefix, following "camelCase for variables, `m` prefix for members" in `CODE_STYLE.cpp`
 and the brief. Stated here so review does not churn on it.
 
+### D12. A headless run executes scripts only when `--scripting` asks for it (code sweep F075).
+
+`headless_defaults()` and `--headless` leave `scripting.enabled` false, and `project::apply_to` does not copy the
+project's `scripting.enabled` into a headless configuration, so `conjure_runtime --project <dir> --headless` boots a
+scripted project on a machine without .NET and without the game assembly: the smoke test of an export and every
+headless CI boot keep working as they did. The command line opts in with `--scripting`, which sets
+`scripting.enabled = true` in `apply_command_line`. That runs after `project.json`, so the flag wins as D9 requires,
+over the headless default and over a project whose `scripting.enabled` is false alike. `--headless --scripting` runs
+the project's C# and, with `scripting.required` at its default of true, fails the start with
+`SCRIPT_RUNTIME_NOT_FOUND` where no .NET runtime is found. `--scripting` together with `--no-scripting` is
+`BAD_ARGUMENTS` in either order, in the runtime and in the editor, which forwards both flags to the same parser.
+When scripting stays off in a headless run of a project that has scripts to run, the scripting subsystem's INFO
+line says that a headless run leaves the project's scripts off unless `--scripting` is given. A project has scripts
+to run when it enables scripting and names a game assembly, the one place its C# comes from: a `project.json`
+without a `scripting` section enables scripting by default, has nothing to hold back and gets the plain `disabled
+by configuration` line. The hint is the same when `--no-scripting` was passed as well, because the configuration
+does not record which flag was given. The editor keeps its own rule for a headless session (the null script host
+unless `--dotnet`, off with `--no-scripting`, `04_editor.md`), which it applies after the merge, so `--scripting`
+changes nothing there; in a windowed editor it turns scripting on for a project that disables it. A build
+configured without `CONJURE_WITH_SCRIPTING` has no scripting subsystem and cannot keep the request; it does not
+pass over it in silence either: `application::start_subsystems` logs one WARN (`this build has no scripting
+module`) when scripting is enabled and the run is a headless one outside the editor, where only `--scripting` or a
+caller's own configuration enables it, or the configuration names a game assembly (`engine/scripting_request.h`).
+The run goes on without scripts, as a scripted project always has in such a build.
+
+### D13. The two sections that feed a module's settings are named `*_config` (code sweep F626).
+
+`engine_config::physics` is an `engine::physics_config` and `engine_config::audio` an `engine::audio_config`; the
+other nine sections keep `*_settings`. The two were called `physics_settings` and `audio_settings`, the names of
+`physics::physics_settings` and `audio::audio_settings`, which have other fields: a file that used both namespaces
+could not name either without qualification. `audio_config::deviceName` (formerly `device`) now carries the name of
+the field it is copied into. The members `engine_config::physics` / `::audio` and every `project.json` key,
+`"device"` included, are unchanged.
+
+### D14. A Windows export carries the Visual C++ runtime DLLs next to the game (code sweep F790).
+
+An MSVC build links the dynamic runtime (`/MD`), so `conjure_runtime` and `conjure_shared` import
+`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` and `msvcp140_atomic_wait.dll`. Rather than tell players
+to install the Microsoft Visual C++ Redistributable, the game ships the libraries next to its executable, which
+Microsoft permits. Two halves keep the promise of 3.6 that the exported folder runs standalone:
+
+- **Build** (`runtime/CMakeLists.txt`): a Distribution build with MSVC copies every `vcruntime140*.dll` and
+  `msvcp140*.dll` of the toolchain's redistributable folder next to `conjure_runtime` after it links.
+  `include(InstallRequiredSystemLibraries)` locates the folder. A CMake older than the compiler can answer with the
+  folder of another, older Visual Studio installation (3.31 does for a v145 compiler when Visual Studio 2022 is
+  installed beside it), and a library next to the executable is loaded in preference to an installed one, so the
+  folder's version must not be lower than that of the folder named by the compiler's own environment
+  (`VCToolsRedistDir`), or than the toolset's `14.<minor>` when that variable is unset; otherwise the environment's
+  folder is taken. vcvars pairs it with the active toolset and Visual Studio versions the redistributable apart
+  from the tools, so its minor may be lower than the toolset's: it is taken without that comparison, as long as
+  its path shows a version. When neither passes, nothing is copied and the configure warns. Debug and
+  Development copy nothing (developer builds run where Visual Studio installed the runtime, and the debug
+  runtime of a Debug build must not be redistributed), and neither does a build against the static runtime. The
+  copy runs when `conjure_runtime` links. The rule lives in `runtime/cmake/ConjureMsvcRuntime.cmake`, and the
+  CTest entry `runtime.msvc_runtime_folder_rules` holds it to fake folders on every platform: an older answer and
+  one without a readable version are refused, the environment's folder 14.40 is taken for toolset 14.41, the
+  fallback is taken when the first answer is refused, and nothing is the answer when none passes.
+- **Export** (step 5): every `vcruntime140*.dll` and `msvcp140*.dll` directly in `distributionDirectory` is
+  copied, names compared without regard to ASCII case, in byte order of the names. The debug runtime carries the
+  same two prefixes with a `d` directly after the `140` or at the end of the name (`vcruntime140d.dll`,
+  `msvcp140_1d.dll`, `msvcp140d_atomic_wait.dll`); it must not be redistributed, so such a file stays in the
+  distribution directory and one warning in `export_report::warnings` names every one left behind. A pipeline
+  built with MSVC against the DLL runtime whose distribution directory holds no library to copy exports with a
+  warning that the game needs the redistributable; one built against the static runtime imports no such library
+  and says nothing. The pipeline knows its own build only, so a distribution directory produced by another build
+  is judged by the build that exports it.
+
+Limits, stated where the files are listed (`docs/api/engine/export-and-diagnostics.md`): the Universal CRT is
+part of Windows 10 and later and is not copied; `concrt140.dll`, `vccorlib140.dll` and the OpenMP runtime are
+not copied, so a native game module that imports one ships it itself; app-local copies are not serviced by
+Windows Update, so a fixed runtime reaches players only with a new export; the export never removes a file from
+the output folder, so libraries of an earlier export stay until the folder is emptied. Each export grows by about
+1.3 MB (eight files with the 14.51 toolset; the four the engine imports are 0.9 MB of it, and the other four are
+there for a native game module that uses them).
+
+### D15. Conjure is Apache-2.0, and its binaries carry their licence notices (code sweep F200).
+
+**The engine's own licence** (the owner's decision). Conjure is licensed under the Apache License, Version 2.0.
+`LICENSE` at the repository root is the licence text and `NOTICE` names the copyright holders as "the Conjure
+contributors": there is no individual holder, because Conjure is meant as a learning tool that others can use and
+extend. The README says the same instead of "All rights reserved".
+
+**Third-party software** is registered once, next to its pin in `third_party/CMakeLists.txt`, with
+`conjure_third_party_notice()` (`cmake/ConjureNotices.cmake`): name, pin, licence, source, the licence files of the
+fetched source and a scope. `RUNTIME` is linked into `conjure_shared` or `conjure_runtime` or placed next to them;
+`EDITOR` is linked into `conjure_shared` and `conjure_editor` in a tree that builds the editor (Dear ImGui lives in
+`conjure_shared`, R9); `BUILD` is a build or test tool and reaches no binary that ships. The notices sit outside the
+option blocks, so every tree knows the whole list. A configure fails when a notice names another version than the
+`GIT_TAG` beside it, when a licence file of software the tree uses does not exist, and when a `FetchContent_Declare`
+of that file has no notice naming it as `FETCH`. From the registrations come two files:
+
+- **`THIRD_PARTY_NOTICES.md`** (tracked, repository root): every notice with its licence text, for all platforms and
+  options. `tools/third_party_notices.py` writes it from the manifest a configure leaves in
+  `<build>/notices/third_party_notices.json`; no licence text is typed by hand. No single tree fetches everything
+  (Direct3D 12 headers on Windows, Vulkan headers and glslang where the Vulkan backend is built), so the tool
+  rewrites the sections of what the tree uses and keeps the others as they are, and refuses when a kept section
+  was written for another pin, licence or note than the tree registers. The CTest entry `notices.up_to_date` runs
+  the tool with `--check` in every tree, `notices.tool` is its self-test.
+- **`THIRD_PARTY_NOTICES.txt`** (written by every configure into `<build>/notices/`): Conjure's `NOTICE` and
+  `LICENSE`, then the entries this tree links, `RUNTIME` and, where the editor is built, `EDITOR`. A Distribution
+  build therefore names no editor library, and a Debug or Development build, whose `conjure_shared` holds Dear
+  ImGui and ImGuizmo, names both. `conjure_ship_third_party_notices(conjure_runtime)` copies the file next to the
+  executable as a declared build output in every configuration (`runtime/CMakeLists.txt`).
+
+**Export** (step 5): whenever the step copies the runtime it copies `THIRD_PARTY_NOTICES.txt`
+(`export_pipeline::NOTICES_FILE_NAME`) from the distribution directory, byte for byte. A distribution directory
+without the file (one assembled by hand, or a folder of that name) is exported with a warning in
+`export_report::warnings`: the game works, and the report says that it carries no notices. A folder in the output
+where the file belongs is `EXPORT_FAILED`, as for every file of the step.
+
+Three entries are not built from a pinned licence file. **.NET** is found on the build machine, not pinned: the
+tracked document names it without text, and the runtime notices take `LICENSE.txt` and `ThirdPartyNotices.txt` from
+the root of the installation whose host pack is linked (on Windows that licence is Microsoft's terms for the .NET
+binaries, elsewhere the MIT text); when the files are not there the configure warns and the entry names the source
+only. The **Visual C++ runtime** DLLs of D14 are Microsoft's files under the Visual Studio terms: the entry says so
+and prints no text. The two **tonemap fits** the shaders follow (`engine/shaders/shared/tonemap.hlsli`: Stephen
+Hill's ACES fit from Baking Lab, Benjamin Wrensch's minimal AgX) are not fetched; their MIT texts are kept in
+`third_party/licenses/` and the shader's comments name source and licence. Two pinned sources carry code under a
+copyright line of its own: `cgltf.h` embeds jsmn (Serge A. Zaitsev), whose MIT text, copied from the comment in
+`cgltf.h`, is kept as `third_party/licenses/jsmn.txt` and printed with the cgltf entry; Dear ImGui embeds the
+ProggyClean font (Tristan Grimmer, MIT), which the entry's note names.
+
+Limits. The runtime notices list what the engine build links, not what a game adds (native modules, NuGet
+packages, assets): those are the game's to list. The .NET text is the one of the machine that built the engine,
+also when another machine exports, or publishes a self-contained game with its own .NET installation. The file is
+written with the line ends of the platform that builds it. An export that copies no runtime (`copyRuntime` false, or
+no distribution directory) copies no notices and warns about none, since it places no engine binary in the folder.
+A game maker who assembles the folder by hand has to copy the file too.
+
+Held by: `tests/engine/test_export.cpp` (the copy byte for byte, the warning, the failure on a folder in the
+output), `tests/runtime/test_runtime_boot.cpp` and `tests/integration/test_export_roundtrip.cpp` (the file next to
+the built runtime names what the build links and travels with a real export), and the CTest entries `notices.*`
+registered by `conjure_add_third_party_notices_tests()`: configure probes for what a tree with and without the
+editor writes and for everything the module refuses (`cmake/ConjureNoticesProbe.cmake`), a probe that
+builds the shipped file, deletes it and builds again, `notices.up_to_date` and `notices.tool`.
+
 ---
 
 ## 2. Data model
@@ -185,8 +321,8 @@ Enums: `rhi_backend_choice : uint8_t { AUTO, D3D12, VULKAN, NULL_DEVICE }`,
 | `time_settings` | `float fixedDeltaSeconds = 1/60`, `float maxFrameDeltaSeconds = 0.1f`, `uint32_t maxFixedStepsPerFrame = 8`, `float timeScale = 1`, `float forcedFrameDeltaSeconds = 0` (> 0 replaces the wall clock), `bool interpolatePhysics = true` |
 | `pacing_settings` | `uint32_t targetHz = 0` (0 = unpaced; used only when no vsync present happened), `bool sleepWhenUnfocused = true` |
 | `rendering_settings` | `bool enabled = true`, `rhi_backend_choice backend = AUTO`, `bool gpuValidation = false` (forced on in Debug by `defaults()`) |
-| `physics_settings` | `bool enabled = true`, `math::vec3 gravity = (0, -9.81, 0)`, `uint32_t maxBodies = 65536`. Engine-side summary only: `physics_subsystem` builds the full `physics::physics_settings` with `physics::physics_settings::from_json(project.physics, project.extensions["physics_layers"])`, so every field of `14_physics.md` 2.1 is authorable under `"physics"` (snake_case) without the engine naming it (R53) |
-| `audio_settings` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000`, `std::string device = ""` (empty = default), `float masterGain = 1`, `float dopplerFactor = 0`, `float speedOfSound = 343`, `std::vector<audio_group_setting> groups` (`{ std::string name; std::string parent; float gain; }`); mapped one-to-one onto `audio::audio_settings` by `audio_subsystem` (`12_audio.md` 4.4, 8; `NULL_DEVICE` -> `audio_backend_kind::NULL_BACKEND`) (R52) |
+| `physics_config` | `bool enabled = true`, `math::vec3 gravity = (0, -9.81, 0)`, `uint32_t maxBodies = 65536`. Engine-side summary only (D13): `physics_subsystem` builds the full `physics::physics_settings` with `physics::physics_settings::from_json(project.physics, project.extensions["physics_layers"])`, so every field of `14_physics.md` 2.1 is authorable under `"physics"` (snake_case) without the engine naming it (R53) |
+| `audio_config` | `bool enabled = true`, `audio_backend_choice backend = AUTO`, `uint32_t sampleRate = 48000`, `std::string deviceName = ""` (empty = default; the `project.json` key is `device`), `float masterGain = 1`, `float dopplerFactor = 0`, `float speedOfSound = 343`, `std::vector<audio_group_setting> groups` (`{ std::string name; std::string parent; float gain; }`); mapped one-to-one onto `audio::audio_settings` by `audio_subsystem` (`12_audio.md` 4.4, 8; `NULL_DEVICE` -> `audio_backend_kind::NULL_BACKEND`) (R52) |
 | `assets_settings` | `bool hotReload = true` (polling file watcher + `hot_reload_controller`; ignored in Distribution and by cooked projects, off in `headless_defaults()` so a headless frame stays allocation-free, 09 item 15a) |
 | `scripting_settings` | `bool enabled = true`, `bool required = true` (false: missing runtime warns and disables), `std::filesystem::path gameAssembly` (relative to project root), `bool hotReload = true` (ignored in Distribution), `script_export_mode exportMode = FRAMEWORK_DEPENDENT` (`FRAMEWORK_DEPENDENT`, `SELF_CONTAINED`), `bool exportDebugSymbols = false` (R39) |
 | `modules_settings` | `std::vector<std::filesystem::path> searchPaths = {"modules"}`, `bool enginePlugins = true` (also discover `<engine>/plugins`), `std::vector<std::string> required = {}` (manifest names that must load) (R20) |
@@ -206,8 +342,8 @@ struct engine_config {
     time_settings time = {};
     pacing_settings pacing = {};
     rendering_settings rendering = {};
-    physics_settings physics = {};
-    audio_settings audio = {};
+    physics_config physics = {};
+    audio_config audio = {};
     scripting_settings scripting = {};
     jobs_settings jobs = {};
     memory_settings memory = {};
@@ -221,7 +357,8 @@ struct engine_config {
 `headless_defaults()`: `headless = true`, `window.width = 1280`, `window.height = 720` (the `null` window size area
 H assumes, R33), `rendering.enabled = false`, `rendering.backend = NULL_DEVICE`,
 `audio.backend = NULL_DEVICE`, `scripting.enabled = false`, `time.forcedFrameDeltaSeconds = 1/60`,
-`jobs.workerCount = 2`. Tests opt individual subsystems back in.
+`jobs.workerCount = 2`. Tests opt individual subsystems back in; on the command line `--scripting` does that for
+scripting (D12).
 
 `validate()` rejects (`engine_error::INVALID_CONFIG`, message names the field): `fixedDeltaSeconds <= 0`;
 `maxFrameDeltaSeconds < fixedDeltaSeconds`; `maxFixedStepsPerFrame == 0`; zero window size when not headless;
@@ -452,11 +589,13 @@ struct application_desc {
 ```
 
 Recognised flags: `--project <dir>`, `--scene <asset path>`, `--headless`, `--frames <n>`,
-`--rhi d3d12|vulkan|null`, `--audio miniaudio|null|off`, `--no-physics`, `--no-scripting`, `--no-render`,
-`--width <n>`, `--height <n>`, `--fullscreen`, `--no-vsync`, `--fixed-hz <n>`, `--fixed-frame-delta <seconds>`,
-`--target-hz <n>`, `--time-scale <f>`, `--jobs <n>`, `--log-level <level>`, `--log-file <path>`, `--help`.
-`--headless` applies `headless_defaults()` *before* the project and remaining flags. Bad numeric values return
-`BAD_ARGUMENTS`.
+`--rhi d3d12|vulkan|null`, `--audio miniaudio|null|off`, `--no-physics`, `--scripting`, `--no-scripting`,
+`--no-render`, `--width <n>`, `--height <n>`, `--fullscreen`, `--no-vsync`, `--fixed-hz <n>`,
+`--fixed-frame-delta <seconds>`, `--target-hz <n>`, `--time-scale <f>`, `--jobs <n>`, `--log-level <level>`,
+`--log-file <path>`, `--help`.
+`--headless` applies `headless_defaults()` *before* the project and remaining flags. `--scripting` sets
+`scripting.enabled = true` with the remaining flags, which is how a headless run executes scripts (D12);
+`--scripting` with `--no-scripting` returns `BAD_ARGUMENTS`. Bad numeric values return `BAD_ARGUMENTS`.
 
 ### 2.12 Errors and exit codes (`engine_error.h`, `exit_code.h`)
 
@@ -621,7 +760,8 @@ Idempotent; called by the destructor if the owner forgot. Each step is guarded b
 One owner for `conjure_editor --export <dir>` and the editor's `project.export` command:
 `export_pipeline::run(const export_settings &settings, progress_fn progress) -> core::result<export_report>`,
 synchronous, main thread, outside a frame (the editor runs it from `editor_application::run` before frames, or
-pumps `progress` into protocol events when invoked as a command). Steps, each all-or-nothing and logged:
+pumps `progress` into protocol events when invoked as a command). Steps, each logged; the first that fails ends
+the export with `EXPORT_FAILED` and the steps before it keep their output:
 
 1. If the project has a native game module (`<project>/module.json` with a `binary`), build it in Distribution
    through `core::process` (CMake preset named in `project.json` `extensions.build`), else skip.
@@ -632,12 +772,21 @@ pumps `progress` into protocol events when invoked as a command). Steps, each al
    `<dir>/managed` (`03_scripting.md` 3.11).
 4. `modules::module_manager::export_layout(<dir>, build_config::DISTRIBUTION)` (`07_modules.md` 3.7).
 5. Copy the Distribution `conjure_runtime` executable, the `conjure_shared` library and `shaders/` (index.json
-   + blobs) next to it; on MSVC also `nethost.dll`, which `conjure_shared` imports (the output of
-   `conjure_scripting_nethost`, `engine/src/scripting/CMakeLists.txt`).
+   + blobs) next to it; from an MSVC build also `nethost.dll`, which `conjure_shared` imports (the output of
+   `conjure_scripting_nethost`, `engine/src/scripting/CMakeLists.txt`), and the Visual C++ runtime DLLs the
+   Distribution build placed next to the runtime: every `vcruntime140*.dll` and `msvcp140*.dll` that is not of
+   the debug runtime (with the 14.51 toolset `vcruntime140.dll`, `vcruntime140_1.dll`, `vcruntime140_threads.dll`,
+   `msvcp140.dll`, `msvcp140_1.dll`, `msvcp140_2.dll`, `msvcp140_atomic_wait.dll` and `msvcp140_codecvt_ids.dll`;
+   D14). With them goes `THIRD_PARTY_NOTICES.txt`, the licence notices the build wrote next to the runtime (D15).
+   The step copies file by file: a copy that fails is `EXPORT_FAILED` and leaves the files copied before it.
 6. Write `<dir>/project.json` with `"cooked": true` and `cooked_root = "cooked"`.
 
-The exported folder runs standalone (`conjure_runtime --project <dir>`); `tests/integration/test_export_roundtrip.cpp`
-exports `tests/assets/projects/minimal` and boots the result headless for 60 frames through `application`.
+The exported folder runs standalone (`conjure_runtime --project <dir>`); on Windows without the Microsoft Visual
+C++ Redistributable when the distribution directory held the runtime DLLs of step 5, and with a warning in the
+report when it did not (D14). It carries the licence notices of the engine binaries in it when the distribution
+directory held `THIRD_PARTY_NOTICES.txt`, as the bin folder of every build does, and the report warns when it did
+not (D15). `tests/integration/test_export_roundtrip.cpp` exports `tests/assets/projects/minimal` and boots the
+result headless for 60 frames through `application`.
 
 ---
 
@@ -810,7 +959,7 @@ Rules enforced or documented by the engine:
 | Spiral of death | leftover dropped, `droppedFixedTime` set, counter incremented, `WARN` at most once per second |
 | Frame arena overflow | heap fallback, `overflowCount++`, `WARN` once per second with high-water mark; never fatal |
 | Script exception in a frame | caught on the managed side, surfaced as `scripting::script_error` ECS event; loop continues |
-| Missing .NET runtime | `SCRIPT_RUNTIME_NOT_FOUND` when `scripting.required` (runtime), else `WARN` and disabled (editor) |
+| Missing .NET runtime | `SCRIPT_RUNTIME_NOT_FOUND` when `scripting.required` (runtime), else `WARN` and disabled (editor). A headless `conjure_runtime` reaches the check only with `--scripting` (D12) |
 | Required module missing | fatal (`MODULE_LOAD_FAILED`); optional module: `WARN` and continue |
 | Audio device failure | fall back to `null`, `WARN`; Development builds also show it in the debug overlay |
 | Startup scene missing | fatal in runtime, `WARN` + empty world in editor |
@@ -830,12 +979,15 @@ Rules enforced or documented by the engine:
   graph on the `null` device; `render_frame` records into null command lists and returns success, so extraction
   cost is measurable headless.
 - `null` audio keeps logical source/listener state so `is_playing`, volume and 3D parameters are assertable.
-- Physics and scripting are fully functional headless. Scripting tests are skipped (not failed) on
+- Physics and scripting are fully functional headless. Physics is on by default; scripting is off by default
+  (`headless_defaults()`, `--headless`), so a headless boot needs no .NET runtime: tests set `scripting.enabled`
+  and the command line passes `--scripting` (D12). Scripting tests are skipped (not failed) on
   `SCRIPT_RUNTIME_NOT_FOUND`; the official CI matrix installs .NET 8 and fails if the skip occurs there.
 - Determinism: `forcedFrameDeltaSeconds > 0` or an injected `core::manual_clock` makes the whole `engine_time`
   sequence identical across runs; `workerCount` does not affect results because systems are data-parallel over
   disjoint chunks and structural changes are applied in command-buffer order.
-- Servers: `--headless --audio off --fixed-frame-delta 0` (real clock); the pacer ticks at `1 / fixedDeltaSeconds`
+- Servers: `--headless --scripting --audio off --fixed-frame-delta 0` (real clock, the game's scripts running;
+  without `--scripting` the server simulates but executes no C#, D12); the pacer ticks at `1 / fixedDeltaSeconds`
   by default or `--target-hz`. `--frames 0` runs until `request_quit`.
 - The editor's `--headless --exec commands.json` runs the same `application`; the command server layer calls
   `step_frame()` between commands.

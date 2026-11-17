@@ -43,7 +43,7 @@ backends.
 |---|---|
 | `conjure/engine/application.h` | `application`, `application_state`, `simulation_mode` |
 | `conjure/engine/application_desc.h` | `application_desc` and its `from_command_line` / `from_options` merge |
-| `conjure/engine/engine_config.h` | `engine_config` and the settings structs (`window_settings`, `time_settings`, `rendering_settings`, `physics_settings`, `audio_settings`, `scripting_settings`, `modules_settings`, `jobs_settings`, `memory_settings`), the backend choice enumerations, `AUTO_WORKER_COUNT`, `resolve_worker_count()` |
+| `conjure/engine/engine_config.h` | `engine_config` and its section structs (`window_settings`, `time_settings`, `rendering_settings`, `physics_config`, `audio_config`, `scripting_settings`, `modules_settings`, `jobs_settings`, `memory_settings`), the backend choice enumerations, `AUTO_WORKER_COUNT`, `resolve_worker_count()` |
 | `conjure/engine/command_line.h` | `command_line_options`, `parse_command_line()`, `apply_command_line()`, `command_line_help()` |
 | `conjure/engine/project.h` | `project`, `project_description`, `project_module_entry`, `PROJECT_SCHEMA_VERSION` |
 | `conjure/engine/engine_context.h` | `engine_context`, the service table |

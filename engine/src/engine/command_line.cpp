@@ -17,11 +17,12 @@ namespace {
       "Conjure engine options:\n"
       "  --project <dir>                directory containing project.json\n"
       "  --scene <asset path>           startup scene (relative to the assets root, or assets://...)\n"
-      "  --headless                     null window, null device, null audio, forced frame delta\n"
+      "  --headless                     null window, null device, null audio, no scripting, forced frame delta\n"
       "  --frames <n>                   quit after n frames (0 = run until quit)\n"
       "  --rhi d3d12|vulkan|null        graphics backend\n"
       "  --audio miniaudio|null|off     audio backend (off disables audio)\n"
       "  --no-physics                   disable the physics subsystem\n"
+      "  --scripting                    enable the scripting subsystem (wins over project.json and --headless)\n"
       "  --no-scripting                 disable the scripting subsystem\n"
       "  --no-render                    disable rendering (no device, no renderer)\n"
       "  --width <n> --height <n>       window size in logical pixels\n"
@@ -132,6 +133,8 @@ core::result<command_line_options> conjure::engine::parse_command_line(std::span
             }
         } else if (token == "--no-physics") {
             options.noPhysics = true;
+        } else if (token == "--scripting") {
+            options.scripting = true;
         } else if (token == "--no-scripting") {
             options.noScripting = true;
         } else if (token == "--no-render") {
@@ -189,6 +192,9 @@ core::result<command_line_options> conjure::engine::parse_command_line(std::span
             collectingUnknown = isFlag;
         }
     }
+    if (options.scripting && options.noScripting) {
+        return bad_argument("--scripting", "cannot be combined with --no-scripting");
+    }
     return options;
 }
 
@@ -211,6 +217,9 @@ void conjure::engine::apply_command_line(const command_line_options &options, en
     }
     if (options.noPhysics) {
         config.physics.enabled = false;
+    }
+    if (options.scripting) {
+        config.scripting.enabled = true;
     }
     if (options.noScripting) {
         config.scripting.enabled = false;

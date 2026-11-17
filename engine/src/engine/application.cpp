@@ -23,6 +23,8 @@
 #endif
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
     #include "engine/subsystems/scripting_subsystem.h"
+#else
+    #include "engine/scripting_request.h"
 #endif
 
 #include "conjure/engine/engine_error.h"
@@ -462,6 +464,16 @@ core::result<void> application::start_subsystems() {
 #endif
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
     mSubsystems.push_back(std::make_unique<scripting_subsystem>(services));
+#else
+    // No subsystem exists to answer for scripting, so the one line a run needs is logged here: asked for
+    // scripts (--scripting, or a project with a game assembly), this build runs none (06 D12).
+    if (asks_for_missing_scripting_module(mDesc.config)) {
+        CONJURE_LOG_WARN(
+          LOG_ENGINE,
+          "scripting: enabled in the configuration, but this build has no scripting module "
+          "(CONJURE_WITH_SCRIPTING=OFF); no C# script runs"
+        );
+    }
 #endif
     mSubsystems.push_back(std::make_unique<modules_subsystem>(services));
     const usize modulesIndex = mSubsystems.size() - 1;

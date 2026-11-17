@@ -96,8 +96,8 @@ the main-thread queue, `subsystems.begin_frame` and `layers.on_frame_begin`, `FR
 | `assets_subsystem` | importer registry, `asset_manager`, `asset_database` (development) or `pack_reader` (cooked), the file watcher and `hot_reload_controller` when `assets_settings::hotReload` is set (off in `headless_defaults()`: the watcher's stat pass allocates on a job thread) | `begin_frame` (manager begin + update + hot reload), `end_frame` (R23) |
 | `ecs_subsystem` | `component_registry`, `world`, `scheduler` | nothing per frame; the scheduler runs the phases |
 | `scene_subsystem` | `scene_manager`, the layer table from `project.json` | registers the four scene systems, loads the startup scene, `time.interpolatePhysics` -> `transform_system::set_interpolation_enabled` |
-| `audio_subsystem` | `audio_engine` (`audio_settings` mapped one to one, `NULL_DEVICE` -> null backend) | registers the audio components and `engine.audio_sync` (SYNC) / `engine.audio_finish_one_shots` (FRAME_END) (R7, R50); owns the component voices through an `entity -> voice_id` record and releases each when it ends, is replaced by a `PLAY` or loses its component (a `REMOVED` observer on `audio_source`), and resets a component whose handle names a voice its entity does not own (code sweep F144) |
-| `physics_subsystem` | `physics_world` from `physics_settings::from_json(project.physics, extensions.physics_layers)` | attaches the world, registers the physics systems and asset types, forwards `RELOADED`, and after a scene unload (`on_before_unload`) runs `collect_shapes()` at the next `end_frame` |
+| `audio_subsystem` | `audio_engine` (`engine::audio_config` mapped field by field onto `audio::audio_settings`, `NULL_DEVICE` -> null backend) | registers the audio components and `engine.audio_sync` (SYNC) / `engine.audio_finish_one_shots` (FRAME_END) (R7, R50); owns the component voices through an `entity -> voice_id` record and releases each when it ends, is replaced by a `PLAY` or loses its component (a `REMOVED` observer on `audio_source`), and resets a component whose handle names a voice its entity does not own (code sweep F144) |
+| `physics_subsystem` | `physics_world` from `physics::physics_settings::from_json(project.physics, extensions.physics_layers)`; `engine::physics_config` supplies `enabled`, and `gravity` / `maxBodies` when the section does not name them | attaches the world, registers the physics systems and asset types, forwards `RELOADED`, and after a scene unload (`on_before_unload`) runs `collect_shapes()` at the next `end_frame` |
 | `renderer_subsystem` | `renderer`, `debug_draw` | registers the renderer components and `engine.render_sync` / `engine.render_extract`, drives `upload_*` / `release_*` from asset events (R10), converts `model_asset` to prefabs |
 | `scripting_subsystem` | `script_runtime` over the .NET host or the null host, `hot_reload_controller` | `initialize` + `load_game_assembly` in `post_startup` (after the bindings filled the table, R27), the six scripting systems, `destroy_all` on `on_before_unload` (R29) |
 | `modules_subsystem` | `module_manager` with the three consumers, the manifest-only static modules (R18), the project's manifests and search paths | `apply_pending` per frame; `allowSharedLibraries` for a windowed host or a headless host with a project; an `EDITOR` host with a project shadow-copies binaries into `<project>/.conjure/module_cache` (07 D9); the folder is shared and numbered from 1, so on Windows only one editor per project can load a native game module (a second editor's copy over the locked binary is `BINARY_COPY_FAILED`) |
@@ -135,25 +135,60 @@ use-after-free. Services a module entry may require: `engine::engine_context`, `
 `engine_config` is merged by `application_desc::from_command_line` in the fixed order defaults, `--headless`
 (`headless_defaults()` before everything else), `project.json` (`project::apply_to`, which leaves headless, frame count,
 jobs, memory, pacing and log settings alone, and under `headless` also the null backends, the window size, the disabled
-scripting and the disabled asset hot reload), the flags, `validate()`. `project` parses schema version 1 with snake_case
-keys, keeps unknown top-level keys in `extensions` (never over a member `extensions` already has), writes every float as
-the shortest decimal that reads back as the same `f32`, converts `fixed_hz` to a delta, stores the raw `physics` section
-for `physics_settings::from_json` (R53) and resolves relative paths against the root; `module_manifests()` lists the
-game module and every `<search path>/*/module.json`. `--jobs <n|auto>` maps to `jobs_settings::workerCount` (0 = inline,
-`AUTO_WORKER_COUNT` otherwise); unknown flags are returned in `unrecognisedArguments` for the executable. A value token
-starting with `--` is a missing value, the last `--audio` wins, and `--rhi <real backend>` with `--headless` only warns
-(a headless run renders on the null device).
+scripting and the disabled asset hot reload), the flags, `validate()`. Scripting is the one headless default a flag
+brings back: `--scripting` sets `scripting.enabled` after the project, so `--headless --scripting` runs C# (and fails
+with `SCRIPT_RUNTIME_NOT_FOUND` without .NET while `scripting.required` is true), a plain `--headless` boot needs no
+.NET, and `--scripting` with `--no-scripting` is `BAD_ARGUMENTS` (06 D12). When a headless run leaves a scripted
+project's scripts off, `scripting_subsystem` logs an INFO line that names the flag
+(`scripting_subsystem::headless_holds_scripts_back`; scripted means scripting enabled and a game assembly named, so
+a `project.json` without a `scripting` section gets the plain line). A build without `CONJURE_WITH_SCRIPTING` logs
+a WARN instead of starting a subsystem it does not have (`asks_for_missing_scripting_module`,
+`engine/src/engine/scripting_request.h`). The sections of `engine_config` are `*_settings` structs except
+`physics_config` and `audio_config`, named apart from `physics::physics_settings` and `audio::audio_settings`, which
+they feed (06 D13).
+
+`project` parses schema version 1 with snake_case keys, keeps unknown top-level keys in `extensions` (never over a
+member `extensions` already has), writes every float as the shortest decimal that reads back as the same `f32`,
+converts `fixed_hz` to a delta, stores the raw `physics` section for `physics::physics_settings::from_json` (R53) and
+resolves relative paths against the root; `module_manifests()` lists the game module and every
+`<search path>/*/module.json`. `--jobs <n|auto>` maps to `jobs_settings::workerCount` (0 = inline, `AUTO_WORKER_COUNT`
+otherwise); unknown flags are returned in `unrecognisedArguments` for the executable. A value token starting with `--`
+is a missing value, the last `--audio` wins, and `--rhi <real backend>` with `--headless` only warns (a headless run
+renders on the null device).
 
 ## 7. Export pipeline
 
 `export_pipeline::run` (R21) performs the six steps of 06 3.6 through the context's project, database, module manager
 and jobs: the native game module in Distribution through CMake, `asset_cooker::cook` into `cooked/content.cpak` +
 `manifest.json`, `dotnet publish` / `dotnet build` into `managed/`, `module_manager::export_layout`, the copy of the
-Distribution `conjure_runtime`, `conjure_shared` (and `nethost` on MSVC) and `shaders/`, and `project.json` with
-`cooked: true`. Each step is all-or-nothing; `EXPORT_FAILED` names the step. The output may not be the project directory
-itself (step 6 would replace the source `project.json`) nor lie inside the assets root (the next scan would import it):
-both are `BAD_ARGUMENTS`. The editor's `--export` and `project.export` call it;
-`tests/integration/test_export_roundtrip.cpp` and `tests/runtime/test_runtime_process.cpp` prove the round trip.
+Distribution `conjure_runtime`, `conjure_shared` and `shaders/` (with the licence notices, and from an MSVC build
+also `nethost.dll` and the Visual C++ runtime DLLs, both below), and `project.json` with `cooked: true`.
+`EXPORT_FAILED` names the step; the steps before it keep their output, and step 5 copies file by file
+(`std::filesystem::copy_file`, so a folder where a file belongs is an error), keeping the files copied before the one
+that failed. The output may not be the project directory itself (step 6 would replace the source `project.json`) nor
+lie inside the assets root (the next scan would import it): both are `BAD_ARGUMENTS`. The editor's `--export` and
+`project.export` call it; `tests/integration/test_export_roundtrip.cpp` and `tests/runtime/test_runtime_boot.cpp`
+prove the round trip.
+
+Step 5 also ships the Visual C++ runtime (06 D14): `copy_msvc_runtime_libraries` in `export_pipeline.cpp` copies every
+`vcruntime140*.dll` and `msvcp140*.dll` that lies directly in the distribution directory (regular files only, no
+subfolders), matching the names on their native characters without regard to ASCII case and listing them in
+`export_report::copiedFiles` in byte order. The files get there through `runtime/CMakeLists.txt`, which copies the
+toolchain's redistributable ones next to `conjure_runtime` in an MSVC Distribution build (🛠 Handbook:
+[Runtime](runtime.md) section 4). The debug runtime (a `d` directly after the `140` or at the end of the name) is
+not copied: it must not be redistributed, so it stays behind and one warning names it. The copy runs on every
+platform, so `tests/engine/test_export.cpp` covers it with fake DLLs everywhere; only the warning for a directory
+without a library to copy is limited to a pipeline built against Microsoft's standard library and its DLL runtime
+(`CONJURE_PLATFORM_WINDOWS && CONJURE_STDLIB_MSVC` and the `ABI_RUNTIME_DYNAMIC_CRT` bit of
+`modules::ABI_SIGNATURE_RUNTIME_FLAGS`; a static-runtime build imports none).
+
+Step 5 ships the licence notices too (06 D15): `THIRD_PARTY_NOTICES.txt` (`export_pipeline::NOTICES_FILE_NAME`) is
+copied from the distribution directory after the runtime libraries, byte for byte. The build writes it there
+(`cmake/ConjureNotices.cmake`, 🛠 Handbook: [Runtime](runtime.md) section 4). A directory without the file, or with a
+folder of that name, is exported with one warning in `export_report::warnings`; an export that copies no runtime says
+nothing, because it places no engine binary in the folder. `tests/engine/test_export.cpp` holds the copy, the
+warning and the failure on a folder in the output; `notices.up_to_date` and `notices.tool` are registered in
+`tests/engine/CMakeLists.txt` (🛠 Handbook: [Getting started](../getting-started.md) section 11).
 
 ## 8. Threading model
 

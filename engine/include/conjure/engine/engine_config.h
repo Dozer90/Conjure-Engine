@@ -12,10 +12,14 @@
 #include <string>
 #include <vector>
 
-// The engine configuration (docs/design/06_engine_loop.md 2.3, D8, D9): plain settings structs with
+// The engine configuration (docs/design/06_engine_loop.md 2.3, D8, D9): plain section structs with
 // camelCase fields (R31) merged from defaults(), project.json and the command line by
 // application_desc::from_command_line and validated once. headless_defaults() is what every test and
 // server starts from: null platform / rhi / audio backends, rendering off, a forced frame delta.
+//
+// Nine sections are named *_settings. The two that feed a module's own settings struct are named *_config
+// (06 D13, code sweep F626) so that engine::physics_config and engine::audio_config never share a name with
+// physics::physics_settings and audio::audio_settings, which have other fields.
 
 namespace conjure::engine {
 
@@ -86,15 +90,17 @@ namespace conjure::engine {
     };
 
     /// <summary>
-    /// Engine-side summary only (R53): physics_subsystem builds the full physics::physics_settings with
-    /// physics_settings::from_json over the raw project.json "physics" section.
+    /// The "physics" section of the engine configuration: an engine-side summary only (R53).
+    /// physics_subsystem builds the full physics::physics_settings with physics::physics_settings::from_json
+    /// over the raw project.json "physics" section and takes gravity and maxBodies from here only when
+    /// that section does not name them.
     /// </summary>
-    struct physics_settings {
+    struct physics_config {
         bool enabled = true;
         math::vec3 gravity = math::vec3(0.0f, -9.81f, 0.0f);
         u32 maxBodies = 65536;
 
-        [[nodiscard]] bool operator==(const physics_settings &) const = default;
+        [[nodiscard]] bool operator==(const physics_config &) const = default;
     };
 
     struct audio_group_setting {
@@ -105,17 +111,23 @@ namespace conjure::engine {
         [[nodiscard]] bool operator==(const audio_group_setting &) const = default;
     };
 
-    struct audio_settings {
+    /// <summary>
+    /// The "audio" section of the engine configuration (R52). audio_subsystem maps it field by field onto
+    /// audio::audio_settings: backend through audio_backend_choice (NULL_DEVICE and every headless run pick
+    /// the null backend), groups by name; `enabled` is the engine's own switch and has no counterpart there.
+    /// deviceName is the project.json key "device".
+    /// </summary>
+    struct audio_config {
         bool enabled = true;
         audio_backend_choice backend = audio_backend_choice::AUTO;
         u32 sampleRate = 48000;
-        std::string device = {};                // empty = default device
+        std::string deviceName = {};            // empty = default device
         f32 masterGain = 1.0f;
         f32 dopplerFactor = 0.0f;
-        f32 speedOfSound = 343.0f;
+        f32 speedOfSound = 343.0f;              // audio::DEFAULT_SPEED_OF_SOUND (this header builds without audio)
         std::vector<audio_group_setting> groups = {};
 
-        [[nodiscard]] bool operator==(const audio_settings &) const = default;
+        [[nodiscard]] bool operator==(const audio_config &) const = default;
     };
 
     /// <summary>
@@ -188,8 +200,8 @@ namespace conjure::engine {
         time_settings time = {};
         pacing_settings pacing = {};
         rendering_settings rendering = {};
-        physics_settings physics = {};
-        audio_settings audio = {};
+        physics_config physics = {};
+        audio_config audio = {};
         assets_settings assets = {};
         scripting_settings scripting = {};
         modules_settings modules = {};
@@ -205,7 +217,7 @@ namespace conjure::engine {
         /// headless = true, a 1280 x 720 null window (R33), rendering disabled on the null device, the
         /// null audio backend, scripting disabled, asset hot reload off (no file watcher stat passes on the
         /// job threads), a forced 1/60 frame delta and two job workers. Tests opt individual subsystems
-        /// back in.
+        /// back in; on the command line --scripting does that for scripting.
         /// </summary>
         [[nodiscard]] static engine_config headless_defaults();
 

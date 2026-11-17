@@ -18,10 +18,14 @@
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/vfs/native_file_system.h"
+#include "conjure/modules/module_abi.h"
 #include "conjure/modules/module_manager.h"
 #include "conjure/modules/module_manifest.h"
 
+#include <algorithm>
+#include <array>
 #include <format>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -32,6 +36,16 @@ namespace {
 
     constexpr std::string_view COOKED_DIRECTORY = "cooked";
     constexpr std::string_view MANAGED_DIRECTORY = "managed";
+
+    // The Visual C++ runtime libraries an MSVC build of the runtime imports: vcruntime140*.dll and msvcp140*.dll.
+    // A Windows Distribution build places the toolchain's redistributable copies next to conjure_runtime
+    // (runtime/CMakeLists.txt) and step 5 ships them with the game (06 3.6, code sweep F790).
+    constexpr std::array<std::string_view, 2> MSVC_RUNTIME_PREFIXES = {"vcruntime140", "msvcp140"};
+    constexpr std::string_view MSVC_RUNTIME_EXTENSION = ".dll";
+    // The debug runtime carries the same two prefixes and a 'd' that either follows the "140" (vcruntime140d.dll,
+    // msvcp140d_atomic_wait.dll) or ends the name (vcruntime140_1d.dll, msvcp140_2d.dll, vcruntime140_threadsd.dll).
+    // Microsoft does not allow it to be redistributed, so step 5 leaves it behind and says so (06 D14).
+    constexpr char MSVC_DEBUG_RUNTIME_MARK = 'd';
 
     [[nodiscard]] core::error export_error(std::string_view step, std::string_view detail) {
         return make_error(engine_error::EXPORT_FAILED, std::format("export step '{}' failed: {}", step, detail));
@@ -109,12 +123,167 @@ namespace {
     ) {
         std::error_code error = {};
         std::filesystem::create_directories(destination.parent_path(), error);
-        std::filesystem::copy(source, destination, std::filesystem::copy_options::overwrite_existing, error);
+        // copy_file, not copy: a source that is a folder, or a folder where the file belongs, is an error here
+        // instead of a copy that does nothing or lands one level too deep.
+        std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
         if (error) {
             return export_error(step, std::format("copying '{}': {}", source.generic_string(), error.message()));
         }
         copied.push_back(destination.lexically_relative(outputDirectory).generic_string());
         return core::result<void>::success();
+    }
+
+    /// <summary>
+    /// True when 'name' reads 'prefix', anything, 'suffix' (both lower-case ASCII), with ASCII letters compared
+    /// without case as a Windows volume does. It reads the native characters of a file name, so a name the
+    /// active code page cannot express is compared like any other and never converted.
+    /// </summary>
+    [[nodiscard]] bool has_affixes_ignoring_case(
+      std::basic_string_view<std::filesystem::path::value_type> name,
+      std::string_view prefix,
+      std::string_view suffix
+    ) {
+        using native_char = std::filesystem::path::value_type;
+        if (name.size() < prefix.size() + suffix.size()) {
+            return false;
+        }
+        const auto same = [](native_char found, char expected) {
+            const bool upper = found >= static_cast<native_char>('A') && found <= static_cast<native_char>('Z');
+            const native_char lowered = upper ? static_cast<native_char>(found + ('a' - 'A')) : found;
+            return lowered == static_cast<native_char>(expected);
+        };
+        for (usize index = 0; index < prefix.size(); ++index) {
+            if (!same(name[index], prefix[index])) {
+                return false;
+            }
+        }
+        const usize suffixStart = name.size() - suffix.size();
+        for (usize index = 0; index < suffix.size(); ++index) {
+            if (!same(name[suffixStart + index], suffix[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// What a file name is to step 5: no Visual C++ runtime library, one that ships with the game, or one of
+    /// the debug runtime, which does not.
+    /// </summary>
+    enum class msvc_library_kind : u8 {
+        NONE,
+        REDISTRIBUTABLE,
+        DEBUG_RUNTIME
+    };
+
+    [[nodiscard]] msvc_library_kind msvc_library_kind_of(const std::filesystem::path &fileName) {
+        using native_char = std::filesystem::path::value_type;
+        const std::basic_string_view<native_char> name = fileName.native();
+        const auto marksDebug = [](native_char found) {
+            const char upperMark = static_cast<char>(MSVC_DEBUG_RUNTIME_MARK - ('a' - 'A'));
+            return found == static_cast<native_char>(MSVC_DEBUG_RUNTIME_MARK)
+              || found == static_cast<native_char>(upperMark);
+        };
+        for (const std::string_view prefix : MSVC_RUNTIME_PREFIXES) {
+            if (!has_affixes_ignoring_case(name, prefix, MSVC_RUNTIME_EXTENSION)) {
+                continue;
+            }
+            // What stands between the prefix and the extension: "" and "_1" ship, "d" and "_1d" do not.
+            const std::basic_string_view<native_char> variant =
+              name.substr(prefix.size(), name.size() - prefix.size() - MSVC_RUNTIME_EXTENSION.size());
+            const bool debug = !variant.empty() && (marksDebug(variant.front()) || marksDebug(variant.back()));
+            return debug ? msvc_library_kind::DEBUG_RUNTIME : msvc_library_kind::REDISTRIBUTABLE;
+        }
+        return msvc_library_kind::NONE;
+    }
+
+    /// <summary>
+    /// True for a runtime that imports the Visual C++ runtime DLLs: one built against Microsoft's C++ standard
+    /// library and its DLL runtime (/MD, the default). For every other build, one against the static runtime
+    /// among them, a distribution directory without the DLLs is complete.
+    /// </summary>
+    [[nodiscard]] bool runtime_imports_msvc_libraries() {
+#if CONJURE_PLATFORM_WINDOWS && CONJURE_STDLIB_MSVC
+        return (modules::ABI_SIGNATURE_RUNTIME_FLAGS & modules::ABI_RUNTIME_DYNAMIC_CRT) != 0;
+#else
+        return false;
+#endif
+    }
+
+    /// <summary>
+    /// What copy_msvc_runtime_libraries did: how many libraries it copied, and the debug runtime libraries it
+    /// left behind, in name order.
+    /// </summary>
+    struct msvc_runtime_copy {
+        usize copiedCount = 0;
+        std::vector<std::string> debugLibraries = {};
+    };
+
+    /// <summary>
+    /// Copies every vcruntime140*.dll and msvcp140*.dll that lies directly in 'source' (subfolders are not
+    /// searched, and a folder of such a name is not a library) next to the exported runtime, in name order,
+    /// except those of the debug runtime, which must not be redistributed and are returned by name instead. A
+    /// distribution directory of another platform holds none, which is no error; one that cannot be listed, or
+    /// a library that cannot be copied, is EXPORT_FAILED.
+    /// </summary>
+    [[nodiscard]] core::result<msvc_runtime_copy> copy_msvc_runtime_libraries(
+      std::string_view step,
+      const std::filesystem::path &source,
+      std::vector<std::string> &copied,
+      const std::filesystem::path &outputDirectory
+    ) {
+        std::error_code error = {};
+        std::vector<std::filesystem::path> names = {};
+        std::vector<std::filesystem::path> debugNames = {};
+        // The explicit iterator: the range-for increments with the throwing operator++ (CONVENTIONS 3).
+        std::filesystem::directory_iterator walker(source, error);
+        const std::filesystem::directory_iterator end = {};
+        while (!error && walker != end) {
+            std::error_code status = {};
+            const std::filesystem::path name = walker->path().filename();
+            const msvc_library_kind kind = msvc_library_kind_of(name);
+            if (kind != msvc_library_kind::NONE && walker->is_regular_file(status)) {
+                if (kind == msvc_library_kind::DEBUG_RUNTIME) {
+                    debugNames.push_back(name);
+                } else {
+                    names.push_back(name);
+                }
+            }
+            walker.increment(error);
+        }
+        if (error) {
+            return export_error(step, std::format("reading '{}': {}", source.generic_string(), error.message()));
+        }
+        // A directory lists its files in the file system's order; in the byte order of their names the report
+        // reads the same everywhere.
+        const auto byName = [](const std::filesystem::path &left, const std::filesystem::path &right) {
+            return left.native() < right.native();
+        };
+        std::sort(names.begin(), names.end(), byName);
+        std::sort(debugNames.begin(), debugNames.end(), byName);
+        for (const std::filesystem::path &name : names) {
+            CONJURE_TRY(copy_into(step, source / name, outputDirectory / name, copied, outputDirectory));
+        }
+        msvc_runtime_copy outcome = {};
+        outcome.copiedCount = names.size();
+        for (const std::filesystem::path &name : debugNames) {
+            outcome.debugLibraries.push_back(name.generic_string());
+        }
+        return outcome;
+    }
+
+    /// <summary>
+    /// The names in one line, separated by ", ".
+    /// </summary>
+    [[nodiscard]] std::string joined_names(const std::vector<std::string> &names) {
+        std::string text = {};
+        for (const std::string &name : names) {
+            if (!text.empty()) {
+                text += ", ";
+            }
+            text += name;
+        }
+        return text;
     }
 
     /// <summary>
@@ -427,6 +596,39 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             CONJURE_TRY(copy_into(step, source / sharedName, output / sharedName, copied, output));
             if (std::filesystem::is_regular_file(source / "nethost.dll", fsError)) {
                 CONJURE_TRY(copy_into(step, source / "nethost.dll", output / "nethost.dll", copied, output));
+            }
+            CONJURE_TRY_ASSIGN(
+              const msvc_runtime_copy runtimeLibraries,
+              copy_msvc_runtime_libraries(step, source, copied, output)
+            );
+            if (!runtimeLibraries.debugLibraries.empty()) {
+                report.warnings.push_back(
+                  std::format(
+                    "the distribution directory holds the debug Visual C++ runtime ({}); Microsoft does not allow "
+                    "it to be redistributed, so it was not copied",
+                    joined_names(runtimeLibraries.debugLibraries)
+                  )
+                );
+            }
+            if (runtimeLibraries.copiedCount == 0 && runtime_imports_msvc_libraries()) {
+                report.warnings.emplace_back(
+                  "the distribution directory holds no Visual C++ runtime DLL (vcruntime140*.dll, msvcp140*.dll); "
+                  "the exported game starts only where the Microsoft Visual C++ Redistributable is installed"
+                );
+            }
+            // The licence notices of the engine and of what is linked into it travel with the binaries (06 D15).
+            const std::string noticesName(NOTICES_FILE_NAME);
+            if (std::filesystem::is_regular_file(source / noticesName, fsError)) {
+                CONJURE_TRY(copy_into(step, source / noticesName, output / noticesName, copied, output));
+            } else {
+                report.warnings.push_back(
+                  std::format(
+                    "the distribution directory holds no {}; the exported game carries the engine and the "
+                    "third-party software linked into it without their licence notices (building conjure_runtime "
+                    "writes the file next to it)",
+                    NOTICES_FILE_NAME
+                  )
+                );
             }
             if (settings.copyShaders) {
                 if (std::filesystem::is_directory(source / "shaders", fsError)) {

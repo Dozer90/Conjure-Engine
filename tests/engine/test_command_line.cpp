@@ -61,6 +61,86 @@ TEST_SUITE("engine/command_line") {
         CHECK(parsed.value().noRender);
     }
 
+    TEST_CASE("command_line - --scripting is parsed and turns scripting on over a configuration that has it off") {
+        const core::result<command_line_options> parsed = parse({"--headless", "--scripting"});
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value().headless);
+        CHECK(parsed.value().scripting);
+        CHECK_FALSE(parsed.value().noScripting);
+        CHECK(parsed.value().unrecognisedArguments.empty());
+
+        // Only scripting.enabled changes: every other headless default stays.
+        engine_config config = engine_config::headless_defaults();
+        REQUIRE_FALSE(config.scripting.enabled);
+        apply_command_line(parsed.value(), config);
+        engine_config expected = engine_config::headless_defaults();
+        expected.scripting.enabled = true;
+        CHECK(config == expected);
+
+        // Without the flag the configuration keeps what it had, on or off.
+        const core::result<command_line_options> absent = parse({"--frames", "1"});
+        CONJURE_REQUIRE_OK(absent);
+        CHECK_FALSE(absent.value().scripting);
+        engine_config off = engine_config::headless_defaults();
+        apply_command_line(absent.value(), off);
+        CHECK_FALSE(off.scripting.enabled);
+        engine_config on = engine_config::defaults();
+        apply_command_line(absent.value(), on);
+        CHECK(on.scripting.enabled);
+    }
+
+    TEST_CASE("command_line - --scripting with --no-scripting is BAD_ARGUMENTS in either order") {
+        struct ordering {
+            std::string_view first = "";
+            std::string_view second = "";
+        };
+        constexpr std::array<ordering, 2> ORDERINGS = {{
+          {"--scripting", "--no-scripting"},
+          {"--no-scripting", "--scripting"},
+        }};
+        for (const ordering &order : ORDERINGS) {
+            CAPTURE(order.first);
+            const core::result<command_line_options> parsed = parse({order.first, "--headless", order.second});
+            CONJURE_CHECK_ERROR(parsed, engine_error::BAD_ARGUMENTS);
+            if (!parsed.has_value()) {
+                const std::string &message = parsed.get_error().message();
+                CHECK_MESSAGE(message.find("--scripting") != std::string::npos, message);
+                CHECK_MESSAGE(message.find("--no-scripting") != std::string::npos, message);
+            }
+        }
+
+        // Each flag alone, and each one repeated, is fine.
+        CONJURE_CHECK_OK(parse({"--scripting", "--scripting"}));
+        CONJURE_CHECK_OK(parse({"--no-scripting", "--no-scripting"}));
+    }
+
+    TEST_CASE("command_line - options filled by hand with scripting and noScripting end with scripting off") {
+        // parse_command_line never returns the pair; apply_command_line still has one answer for it, the same
+        // the editor gives when its own --no-scripting meets a forwarded --scripting.
+        command_line_options options = {};
+        options.scripting = true;
+        options.noScripting = true;
+        engine_config config = engine_config::defaults();
+        apply_command_line(options, config);
+        CHECK_FALSE(config.scripting.enabled);
+    }
+
+    TEST_CASE("command_line - the help text has one line for --scripting and one for --no-scripting") {
+        const std::string_view help = command_line_help();
+        for (const std::string_view flag : {"--scripting", "--no-scripting"}) {
+            CAPTURE(flag);
+            const std::string line = std::format("\n  {} ", flag);
+            const usize first = help.find(line);
+            REQUIRE(first != std::string_view::npos);
+            CHECK(help.find(line, first + 1) == std::string_view::npos);
+        }
+        // The --headless line says what the opt-in is for.
+        const usize headlessLine = help.find("\n  --headless ");
+        REQUIRE(headlessLine != std::string_view::npos);
+        const usize headlessEnd = help.find('\n', headlessLine + 1);
+        CHECK(help.substr(headlessLine, headlessEnd - headlessLine).find("no scripting") != std::string_view::npos);
+    }
+
     TEST_CASE("command_line - window flags") {
         const core::result<command_line_options> parsed =
           parse({"--width", "640", "--height", "480", "--fullscreen", "--no-vsync"});

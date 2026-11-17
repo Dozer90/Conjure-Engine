@@ -23,7 +23,7 @@
 
 // Startup step 11 (docs/design/06_engine_loop.md 3.4, 09 R50/R52): the audio engine (miniaudio or null; a
 // device failure falls back to null with a WARN inside the engine) mapped one-to-one from
-// engine::audio_settings, the audio component types registered into the ECS (even when audio is disabled, so
+// engine::audio_config, the audio component types registered into the ECS (even when audio is disabled, so
 // scenes with sources still load) and the clip asset type. Owns two systems:
 //   engine.audio_sync (SYNC, MAIN_THREAD | RUNS_WHILE_PAUSED): consumes playbackRequest, starts playOnStart
 //     sources once, mirrors authored fields and world positions into the voices, writes isPlaying and the

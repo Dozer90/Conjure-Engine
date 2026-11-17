@@ -1,6 +1,7 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
 
 #include "conjure/core/math.h"
@@ -8,9 +9,11 @@
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
+#include "conjure/engine/project.h"
 #include "conjure/platform/input_state.h"
 #include "conjure/platform/key.h"
 #include "conjure/scripting/native_api.h"
@@ -23,12 +26,18 @@
     #include "conjure/physics/contact_events.h"
 #endif
 
+#include <filesystem>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-// scripting_subsystem (docs/design/06_engine_loop.md 3.4 steps 14 and 17, R27, R29): the runtime over the
+// scripting_subsystem (docs/design/06_engine_loop.md 3.4 steps 14 and 17, D12, R27, R29): the runtime over the
 // null host, the frame block written every frame from engine_time and the input snapshot, the contact to
-// collision conversion, and the error paths of a missing runtime.
+// collision conversion, the error paths of a missing runtime, and the headless opt-in: a headless run of a
+// scripted project starts the runtime only with --scripting and says so when it does not.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -52,6 +61,22 @@ namespace {
         config.scripting.useNullHost = true;
         config.scripting.hotReload = false;
         return config;
+    }
+
+    constexpr std::string_view HEADLESS_HINT = "unless --scripting is given";
+    constexpr std::string_view PLAIN_DISABLED = "scripting: disabled by configuration";
+
+    /// <summary>
+    /// The descriptor conjure_runtime would build for the arguments, over a base that picks the null script
+    /// host (the merge never touches useNullHost), so the cases run where no .NET runtime is installed.
+    /// </summary>
+    [[nodiscard]] application_desc null_host_desc(const std::vector<std::string_view> &arguments) {
+        engine_config base = engine_config::defaults();
+        base.scripting.useNullHost = true;
+        core::result<application_desc> desc =
+          application_desc::from_command_line(std::span<const std::string_view>(arguments), base);
+        CONJURE_REQUIRE_OK(desc);
+        return std::move(desc).value();
     }
 }
 
@@ -109,6 +134,129 @@ TEST_SUITE("engine/scripting_subsystem") {
         CHECK(lenient.context().scripting != nullptr);
         CHECK(logs.contains(core::log_level::WARN, "Missing.dll"));
         lenient.shutdown();
+    }
+
+    TEST_CASE("scripting_subsystem - headless_holds_scripts_back names only a headless run of a scripted project") {
+        // A scripted project enables scripting and names the game assembly its scripts come from.
+        const auto parsed = [](std::string_view scriptingMember) {
+            std::string text = R"({"schema_version": 1, "name": "probe")";
+            text += scriptingMember;
+            text += "}";
+            core::result<project> loaded = project::parse(text, std::filesystem::path("."));
+            CONJURE_REQUIRE_OK(loaded);
+            return std::move(loaded).value();
+        };
+        const project scripted = parsed(R"(, "scripting": {"enabled": true, "assembly": "Scripts/bin/Game.dll"})");
+        const project scriptedByDefault = parsed(R"(, "scripting": {"assembly": "Scripts/bin/Game.dll"})");
+        const project unscripted = parsed(R"(, "scripting": {"enabled": false, "assembly": "Scripts/bin/Game.dll"})");
+        // Neighbours with no script to hold back: scripting enabled without an assembly, and a project.json
+        // without a "scripting" section, which enables scripting by default.
+        const project enabledOnly = parsed(R"(, "scripting": {"enabled": true})");
+        const project bare = parsed("");
+        REQUIRE(bare.description().scripting.enabled);
+        REQUIRE(bare.description().scripting.gameAssembly.empty());
+
+        const engine_config headless = engine_config::headless_defaults();
+        REQUIRE_FALSE(headless.scripting.enabled);
+        CHECK(scripting_subsystem::headless_holds_scripts_back(headless, &scripted));
+        CHECK(scripting_subsystem::headless_holds_scripts_back(headless, &scriptedByDefault));
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(headless, &unscripted));
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(headless, &enabledOnly));
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(headless, &bare));
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(headless, nullptr));
+
+        engine_config optedIn = headless;
+        optedIn.scripting.enabled = true;
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(optedIn, &scripted));
+
+        engine_config windowed = engine_config::defaults();
+        windowed.scripting.enabled = false;
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(windowed, &scripted));
+
+        // The editor's headless mode picks its own script host, so a disabled one there was asked for.
+        engine_config editorHeadless = headless;
+        editorHeadless.editor = true;
+        CHECK_FALSE(scripting_subsystem::headless_holds_scripts_back(editorHeadless, &scripted));
+    }
+
+    TEST_CASE("regression - code sweep F075 a headless run of a scripted project starts the runtime with --scripting") {
+        // The whole path of `conjure_runtime --project <dir> --headless [--scripting]` short of the process: the
+        // merge, then the application. Without the flag in the merge no headless run ever had a script runtime.
+        log_capture logs = {};
+        temp_directory directory("engine_headless_scripting");
+        // The scripted project names a game assembly; the null host loads any file that exists under that name.
+        const project scripted = engine_test::write_project(
+          directory.path() / "scripted",
+          "scripted",
+          {},
+          R"("scripting": {"enabled": true, "assembly": "Scripts/bin/Game.dll", "hot_reload": false}, )"
+          R"("modules": {"engine_plugins": false})"
+        );
+        CONJURE_REQUIRE_OK(directory.write_text("scripted/Scripts/bin/Game.dll", "stand-in assembly"));
+        REQUIRE(scripted.description().scripting.enabled);
+        const project unscripted = engine_test::write_project(
+          directory.path() / "unscripted",
+          "unscripted",
+          {},
+          R"("scripting": {"enabled": false}, "modules": {"engine_plugins": false})"
+        );
+        REQUIRE_FALSE(unscripted.description().scripting.enabled);
+        // No "scripting" section at all: scripting is enabled by default and there is no script to run.
+        const project bare =
+          engine_test::write_project(directory.path() / "bare", "bare", {}, R"("modules": {"engine_plugins": false})");
+        REQUIRE(bare.description().scripting.enabled);
+        const std::string scriptedArgument = (directory.path() / "scripted").string();
+        const std::string unscriptedArgument = (directory.path() / "unscripted").string();
+        const std::string bareArgument = (directory.path() / "bare").string();
+
+        SUBCASE("--headless --scripting constructs the runtime and writes its frame block") {
+            application app(
+              null_host_desc({"--project", scriptedArgument, "--headless", "--scripting", "--jobs", "0"})
+            );
+            CONJURE_REQUIRE_OK(app.initialise());
+            REQUIRE(app.context().scripting != nullptr);
+            CHECK(app.context().scripting->status() == scripting::script_host_status::READY);
+            CHECK(app.context().scripting->mode() == scripting::script_mode::PLAY);
+            scripting_subsystem *subsystem = find_scripting_subsystem(app);
+            REQUIRE(subsystem != nullptr);
+            CONJURE_REQUIRE_OK(app.step_frame());
+            CHECK(subsystem->frame_blocks_written() == 1);
+            app.shutdown();
+            CHECK_FALSE(logs.contains(HEADLESS_HINT));
+            CHECK_FALSE(logs.contains(PLAIN_DISABLED));
+        }
+        SUBCASE("plain --headless starts without it and the INFO line names the flag") {
+            application app(null_host_desc({"--project", scriptedArgument, "--headless", "--jobs", "0"}));
+            CONJURE_REQUIRE_OK(app.initialise());
+            CHECK(app.context().scripting == nullptr);
+            CONJURE_REQUIRE_OK(app.step_frame());
+            app.shutdown();
+            CHECK(logs.contains(core::log_level::INFO, HEADLESS_HINT));
+            CHECK_FALSE(logs.contains(PLAIN_DISABLED));
+        }
+        SUBCASE("a project that disables scripting gets the plain line, and --scripting still wins over it") {
+            application off(null_host_desc({"--project", unscriptedArgument, "--headless", "--jobs", "0"}));
+            CONJURE_REQUIRE_OK(off.initialise());
+            CHECK(off.context().scripting == nullptr);
+            off.shutdown();
+            CHECK(logs.contains(core::log_level::INFO, PLAIN_DISABLED));
+            CHECK_FALSE(logs.contains(HEADLESS_HINT));
+
+            application on(
+              null_host_desc({"--project", unscriptedArgument, "--headless", "--scripting", "--jobs", "0"})
+            );
+            CONJURE_REQUIRE_OK(on.initialise());
+            CHECK(on.context().scripting != nullptr);
+            on.shutdown();
+        }
+        SUBCASE("a project without a scripting section has no script to hold back and gets the plain line") {
+            application app(null_host_desc({"--project", bareArgument, "--headless", "--jobs", "0"}));
+            CONJURE_REQUIRE_OK(app.initialise());
+            CHECK(app.context().scripting == nullptr);
+            app.shutdown();
+            CHECK(logs.contains(core::log_level::INFO, PLAIN_DISABLED));
+            CHECK_FALSE(logs.contains(HEADLESS_HINT));
+        }
     }
 
     TEST_CASE("scripting_subsystem - write_frame_block copies time and input") {

@@ -11,6 +11,7 @@
 #include "conjure/engine/engine_error.h"
 
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -93,6 +94,92 @@ TEST_SUITE("engine/application_desc") {
           application_desc::from_command_line(std::span<const std::string_view>(interactive), base);
         CONJURE_REQUIRE_OK(windowed);
         CHECK(windowed.value().config.assets.hotReload);
+    }
+
+    TEST_CASE("regression - code sweep F075 --headless --scripting turns scripting on over the headless default") {
+        // Before the flag existed nothing on the command line could bring scripting back: --headless copied
+        // scripting.enabled = false, project::apply_to skipped the project's value under headless, and the only
+        // scripting flag was --no-scripting, so a headless server or smoke test never ran a script.
+        log_capture logs = {};
+        temp_directory directory("engine_desc_headless_scripting");
+        const project scripted = engine_test::write_project(
+          directory.path() / "scripted",
+          "scripted",
+          "start.scene.json",
+          R"("scripting": { "enabled": true, "assembly": "Scripts/bin/Game.dll" })"
+        );
+        REQUIRE(scripted.description().scripting.enabled);
+        const project unscripted = engine_test::write_project(
+          directory.path() / "unscripted",
+          "unscripted",
+          "start.scene.json",
+          R"("scripting": { "enabled": false })"
+        );
+        REQUIRE_FALSE(unscripted.description().scripting.enabled);
+        const std::string scriptedArgument = (directory.path() / "scripted").string();
+        const std::string unscriptedArgument = (directory.path() / "unscripted").string();
+
+        SUBCASE("plain --headless keeps scripting off whatever the project says") {
+            const core::result<application_desc> desc = from_arguments({"--project", scriptedArgument, "--headless"});
+            CONJURE_REQUIRE_OK(desc);
+            CHECK(desc.value().config.headless);
+            CHECK_FALSE(desc.value().config.scripting.enabled);
+        }
+        SUBCASE("--headless --scripting enables it and changes no other headless default") {
+            const core::result<application_desc> plain = from_arguments({"--project", scriptedArgument, "--headless"});
+            CONJURE_REQUIRE_OK(plain);
+            const core::result<application_desc> desc =
+              from_arguments({"--project", scriptedArgument, "--headless", "--scripting"});
+            CONJURE_REQUIRE_OK(desc);
+            const engine_config &config = desc.value().config;
+            CHECK(config.scripting.enabled);
+            CHECK(config.scripting.required);
+            CHECK(config.scripting.gameAssembly.generic_string() == "Scripts/bin/Game.dll");
+            CHECK(config.rendering.backend == rhi_backend_choice::NULL_DEVICE);
+            CHECK(config.audio.backend == audio_backend_choice::NULL_DEVICE);
+            engine_config expected = plain.value().config;
+            expected.scripting.enabled = true;
+            CHECK(config == expected);
+        }
+        SUBCASE("the position of the flag does not matter") {
+            const core::result<application_desc> desc =
+              from_arguments({"--scripting", "--headless", "--project", scriptedArgument});
+            CONJURE_REQUIRE_OK(desc);
+            CHECK(desc.value().config.headless);
+            CHECK(desc.value().config.scripting.enabled);
+        }
+        SUBCASE("--headless --scripting without a project") {
+            const core::result<application_desc> desc = from_arguments({"--headless", "--scripting"});
+            CONJURE_REQUIRE_OK(desc);
+            CHECK(desc.value().config.scripting.enabled);
+        }
+        SUBCASE("the flag wins over a project that disables scripting, headless or windowed") {
+            const core::result<application_desc> windowedOff = from_arguments({"--project", unscriptedArgument});
+            CONJURE_REQUIRE_OK(windowedOff);
+            CHECK_FALSE(windowedOff.value().config.scripting.enabled);
+            const core::result<application_desc> windowed =
+              from_arguments({"--project", unscriptedArgument, "--scripting"});
+            CONJURE_REQUIRE_OK(windowed);
+            CHECK_FALSE(windowed.value().config.headless);
+            CHECK(windowed.value().config.scripting.enabled);
+            const core::result<application_desc> headless =
+              from_arguments({"--project", unscriptedArgument, "--headless", "--scripting"});
+            CONJURE_REQUIRE_OK(headless);
+            CHECK(headless.value().config.scripting.enabled);
+        }
+        SUBCASE("--no-scripting still wins over a project that enables scripting") {
+            const core::result<application_desc> desc =
+              from_arguments({"--project", scriptedArgument, "--no-scripting"});
+            CONJURE_REQUIRE_OK(desc);
+            CHECK_FALSE(desc.value().config.scripting.enabled);
+        }
+        SUBCASE("both flags are refused before the project is loaded") {
+            const std::string missing = (directory.path() / "nowhere").string();
+            CONJURE_CHECK_ERROR(
+              from_arguments({"--project", missing, "--scripting", "--no-scripting"}),
+              engine_error::BAD_ARGUMENTS
+            );
+        }
     }
 
     TEST_CASE("application_desc - the command line wins over project.json which wins over defaults") {

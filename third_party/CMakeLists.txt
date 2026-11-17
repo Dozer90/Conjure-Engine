@@ -6,8 +6,16 @@
 #
 # Dependencies are declared SYSTEM so their headers do not trigger our warnings, and
 # EXCLUDE_FROM_ALL so only the parts the engine links are built.
+#
+# Every dependency also has a conjure_third_party_notice() beside its declaration (cmake/ConjureNotices.cmake,
+# docs/design/06_engine_loop.md D15): its name, pin, licence and licence files. The notices are registered
+# outside the option blocks, so every tree knows the whole list and a tree that does not fetch a dependency
+# says so. VERSION repeats the GIT_TAG and the configure fails when the two differ. After a pin or a notice
+# changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir <tree>
+# (docs/handbook/getting-started.md 11).
 
 include(FetchContent)
+include(ConjureNotices)
 set(FETCHCONTENT_QUIET OFF)
 
 # Several pinned dependencies still declare cmake_minimum_required < 3.5, which CMake 4 rejects
@@ -22,6 +30,31 @@ set(BUILD_SHARED_LIBS OFF)
 #------------------------------------------------------------------------------
 # Header-only / single-file libraries with no upstream CMake support
 #------------------------------------------------------------------------------
+set(cgltfLinked FALSE)
+if(CONJURE_WITH_RENDERER OR CONJURE_WITH_PHYSICS)
+    set(cgltfLinked TRUE)
+endif()
+conjure_third_party_notice(stb
+    NAME "stb" VERSION d14d46f6b44456eb88beac58cba833a4135d4c89 LICENSE_ID "MIT OR Unlicense" SCOPE RUNTIME
+    URL "https://github.com/nothings/stb"
+    NOTE "stb_image and stb_image_write."
+    FETCH stb LICENSE_FILES LICENSE
+)
+# cgltf.h carries jsmn, whose licence asks for its own copyright line in every copy: licenses/jsmn.txt is the
+# text of the comment in cgltf.h. The path is absolute because FETCH reads relative ones in the cgltf sources.
+conjure_third_party_notice(cgltf
+    NAME "cgltf" VERSION v1.14 LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/jkuhlmann/cgltf"
+    NOTE "cgltf.h embeds the jsmn JSON tokenizer (https://github.com/zserge/jsmn), MIT, Copyright (c) 2010 Serge \
+A. Zaitsev."
+    FETCH cgltf USED ${cgltfLinked} LICENSE_FILES LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/licenses/jsmn.txt"
+)
+conjure_third_party_notice(miniaudio
+    NAME "miniaudio" VERSION 0.11.22 LICENSE_ID "Unlicense OR MIT-0" SCOPE RUNTIME
+    URL "https://github.com/mackron/miniaudio"
+    NOTE "Compiled together with the stb_vorbis decoder of its extras folder, which is under the licence of stb."
+    FETCH miniaudio LICENSE_FILES LICENSE
+)
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG        d14d46f6b44456eb88beac58cba833a4135d4c89
@@ -67,6 +100,11 @@ endif()
 #------------------------------------------------------------------------------
 # glm
 #------------------------------------------------------------------------------
+conjure_third_party_notice(glm
+    NAME "GLM" VERSION 1.0.1 LICENSE_ID "MIT OR Happy Bunny License" SCOPE RUNTIME
+    URL "https://github.com/g-truc/glm"
+    FETCH glm LICENSE_FILES copying.txt
+)
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG        1.0.1
@@ -94,6 +132,11 @@ target_compile_definitions(conjure_thirdparty_glm INTERFACE
 #------------------------------------------------------------------------------
 # yyjson
 #------------------------------------------------------------------------------
+conjure_third_party_notice(yyjson
+    NAME "yyjson" VERSION 0.10.0 LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/ibireme/yyjson"
+    FETCH yyjson LICENSE_FILES LICENSE
+)
 FetchContent_Declare(yyjson
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
@@ -113,6 +156,11 @@ set_target_properties(yyjson PROPERTIES FOLDER "ThirdParty")
 #------------------------------------------------------------------------------
 # doctest
 #------------------------------------------------------------------------------
+conjure_third_party_notice(doctest
+    NAME "doctest" VERSION v2.4.11 LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/doctest/doctest"
+    FETCH doctest LICENSE_FILES LICENSE.txt
+)
 if(CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS)
     FetchContent_Declare(doctest
         GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -140,6 +188,11 @@ endif()
 # GLFW (needs X11/Wayland development packages on Linux, so only when the glfw window backend
 # is wanted; CONJURE_PLATFORM_GLFW=OFF yields a null-only platform library for servers)
 #------------------------------------------------------------------------------
+conjure_third_party_notice(glfw
+    NAME "GLFW" VERSION 3.4 LICENSE_ID "Zlib" SCOPE RUNTIME
+    URL "https://github.com/glfw/glfw"
+    FETCH glfw LICENSE_FILES LICENSE.md
+)
 if(CONJURE_PLATFORM_GLFW)
 FetchContent_Declare(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -165,6 +218,11 @@ endif()
 #------------------------------------------------------------------------------
 # NVRHI (graphics API abstraction)
 #------------------------------------------------------------------------------
+conjure_third_party_notice(nvrhi
+    NAME "NVRHI" VERSION bf0bbd9b666a7297492beb1999a4ddc0dfded143 LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/NVIDIA-RTX/NVRHI"
+    FETCH nvrhi LICENSE_FILES LICENSE.txt
+)
 if(CONJURE_WITH_RENDERER)
     FetchContent_Declare(nvrhi
         GIT_REPOSITORY https://github.com/NVIDIA-RTX/NVRHI.git
@@ -201,9 +259,51 @@ if(CONJURE_WITH_RENDERER)
     endforeach()
 endif()
 
+# NVRHI fetches the API headers of the backends it builds, at the tags its own cache variables name: a tree
+# without a backend knows neither the headers nor their pin. Registered after NVRHI for that reason.
+conjure_third_party_notice(directx_headers
+    NAME "DirectX-Headers" VERSION "${NVRHI_DIRECTX_HEADERS_GIT_TAG}" LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/microsoft/DirectX-Headers"
+    NOTE "The Direct3D 12 headers the D3D12 backend of NVRHI is compiled against."
+    FETCH directx_headers LICENSE_FILES LICENSE
+)
+conjure_third_party_notice(vulkan_headers
+    NAME "Vulkan-Headers" VERSION "${NVRHI_VULKAN_HEADERS_GIT_TAG}" LICENSE_ID "Apache-2.0 OR MIT" SCOPE RUNTIME
+    URL "https://github.com/KhronosGroup/Vulkan-Headers"
+    NOTE "The Vulkan headers the Vulkan backend of NVRHI is compiled against."
+    FETCH vulkan_headers LICENSE_FILES LICENSE.md LICENSES/Apache-2.0.txt LICENSES/MIT.txt
+)
+
+# Shader code that follows published implementations (engine/shaders/shared/tonemap.hlsli). Nothing is fetched:
+# the licence texts are kept in licenses/, each the MIT text under the copyright line its source carries.
+set(shadersBuilt FALSE)
+if(CONJURE_WITH_RENDERER)
+    set(shadersBuilt TRUE)
+endif()
+conjure_third_party_notice(aces_fit
+    NAME "ACES filmic fit (Baking Lab)" LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/TheRealMJP/BakingLab"
+    NOTE "tonemap_aces of the engine's tonemap shader follows ACES.hlsl of Baking Lab by MJP and David Neubelt, a \
+fit of the ACES reference transforms written by Stephen Hill."
+    USED ${shadersBuilt} LICENSE_FILES licenses/bakinglab_aces.txt
+)
+conjure_third_party_notice(agx_minimal
+    NAME "Minimal AgX" LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://iolite-engine.com/blog_posts/minimal_agx_implementation"
+    NOTE "tonemap_agx of the engine's tonemap shader follows Benjamin Wrensch's minimal implementation of Troy \
+Sobotka's AgX (https://github.com/sobotka/AgX), where its constants come from."
+    USED ${shadersBuilt} LICENSE_FILES licenses/minimal_agx.txt
+)
+
 #------------------------------------------------------------------------------
 # glslang (HLSL -> SPIR-V for the Vulkan backend)
 #------------------------------------------------------------------------------
+conjure_third_party_notice(glslang
+    NAME "glslang" VERSION 15.1.0 LICENSE_ID "BSD-3-Clause and others (see the text)" SCOPE BUILD
+    URL "https://github.com/KhronosGroup/glslang"
+    NOTE "The compiler that turns the engine's HLSL into SPIR-V while the engine is built. Only its output ships."
+    FETCH glslang LICENSE_FILES LICENSE.txt
+)
 if(CONJURE_WITH_RENDERER AND CONJURE_RHI_VULKAN)
     FetchContent_Declare(glslang
         GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
@@ -227,6 +327,11 @@ endif()
 #------------------------------------------------------------------------------
 # Jolt Physics
 #------------------------------------------------------------------------------
+conjure_third_party_notice(jolt
+    NAME "Jolt Physics" VERSION v5.3.0 LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/jrouwe/JoltPhysics"
+    FETCH JoltPhysics LICENSE_FILES LICENSE
+)
 if(CONJURE_WITH_PHYSICS)
     FetchContent_Declare(JoltPhysics
         GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
@@ -325,6 +430,18 @@ endif()
 #------------------------------------------------------------------------------
 # Dear ImGui (docking) + ImGuizmo - editor only
 #------------------------------------------------------------------------------
+conjure_third_party_notice(imgui
+    NAME "Dear ImGui" VERSION v1.91.9b-docking LICENSE_ID "MIT" SCOPE EDITOR
+    URL "https://github.com/ocornut/imgui"
+    NOTE "Embeds the ProggyClean font, Copyright (c) 2004, 2005 Tristan Grimmer, under the MIT licence \
+(http://www.proggyfonts.net)."
+    FETCH imgui LICENSE_FILES LICENSE.txt
+)
+conjure_third_party_notice(imguizmo
+    NAME "ImGuizmo" VERSION 105e4fde45e4e74aae8973d98750820ef7aca7e2 LICENSE_ID "MIT" SCOPE EDITOR
+    URL "https://github.com/CedricGuillemet/ImGuizmo"
+    FETCH imguizmo LICENSE_FILES LICENSE
+)
 if(CONJURE_BUILD_EDITOR)
     FetchContent_Declare(imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -376,5 +493,47 @@ if(CONJURE_WITH_SCRIPTING)
     add_library(conjure::thirdparty::nethost ALIAS conjure_thirdparty_nethost)
     target_link_libraries(conjure_thirdparty_nethost INTERFACE NetHost::NetHost)
 endif()
+
+# .NET is found on the build machine (cmake/FindNetHost.cmake), not pinned, so its licence text cannot be part of
+# the tracked notices: the runtime notices take LICENSE.txt and ThirdPartyNotices.txt from the root of the
+# installation whose host pack is linked, six folders above the pack's native directory
+# (<root>/packs/Microsoft.NETCore.App.Host.<rid>/<version>/runtimes/<rid>/native). On Windows that licence file
+# is Microsoft's terms for the .NET binaries, elsewhere the MIT text.
+set(dotnetLinked FALSE)
+set(dotnetLicenceFiles "")
+set(dotnetVersion "")
+if(CONJURE_WITH_SCRIPTING AND NetHost_FOUND)
+    set(dotnetLinked TRUE)
+    set(dotnetVersion "${NetHost_VERSION}")
+    cmake_path(SET dotnetRoot NORMALIZE "${NetHost_INCLUDE_DIR}/../../../../../..")
+    set(dotnetLicenceFiles "${dotnetRoot}/LICENSE.txt" "${dotnetRoot}/ThirdPartyNotices.txt")
+endif()
+conjure_third_party_notice(dotnet
+    NAME ".NET" LICENSE_ID "MIT, binaries under the terms of the installation" SCOPE RUNTIME
+    URL "https://github.com/dotnet/runtime"
+    NOTE "The .NET hosting library (nethost) that starts the script runtime, and in a self-contained export the \
+.NET runtime under managed/. .NET is taken from the machine that builds the engine and exports the game, not \
+pinned. Its source is under the MIT licence, and the licence file of the installation states the terms of its \
+binaries, which on Windows are Microsoft's."
+    USED ${dotnetLinked} HOST_PROVIDED HOST_VERSION "${dotnetVersion}" HOST_FILES ${dotnetLicenceFiles}
+)
+
+# The Visual C++ runtime DLLs an MSVC Distribution build places next to conjure_runtime (runtime/CMakeLists.txt,
+# 06_engine_loop.md D14). They are Microsoft's files under Microsoft's terms: there is no licence text to print.
+set(msvcRuntimeImported FALSE)
+conjure_abi_runtime_facts(noticesDynamicCrt noticesAsan noticesUbsan)
+if(MSVC AND noticesDynamicCrt)
+    set(msvcRuntimeImported TRUE)
+endif()
+conjure_third_party_notice(msvc_runtime
+    NAME "Microsoft Visual C++ Runtime" LICENSE_ID "Microsoft Software License Terms" SCOPE RUNTIME
+    URL "https://visualstudio.microsoft.com/license-terms/"
+    NOTE "vcruntime140*.dll and msvcp140*.dll, where a Distribution build placed them next to the runtime. They \
+are Microsoft's files, unchanged, and are covered by the licence terms of Visual Studio, which name them among \
+the files that may be distributed with a program, not by an open-source licence."
+    USED ${msvcRuntimeImported}
+)
+
+conjure_write_third_party_notices()
 
 set(BUILD_SHARED_LIBS "${CONJURE_SAVED_BUILD_SHARED_LIBS}")

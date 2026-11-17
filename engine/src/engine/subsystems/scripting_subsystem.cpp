@@ -3,6 +3,7 @@
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
 
 #include "engine/module_consumers/scripting_module_consumer.h"
+#include "engine/scripting_request.h"
 
 #include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
@@ -50,7 +51,17 @@ core::result<void> scripting_subsystem::startup(engine_context &context) {
     mFrameBlocksWritten = 0;
 
     if (!config.scripting.enabled) {
-        CONJURE_LOG_INFO(LOG_ENGINE, "scripting: disabled by configuration");
+        if (headless_holds_scripts_back(config, context.project)) {
+            // The one case where "disabled" surprises: the project has scripts to run (it names a game assembly)
+            // and the headless defaults hold them back (06 D12). Naming the flag saves a server or a smoke
+            // test a silent run.
+            CONJURE_LOG_INFO(
+              LOG_ENGINE,
+              "scripting: disabled; a headless run leaves the project's scripts off unless --scripting is given"
+            );
+        } else {
+            CONJURE_LOG_INFO(LOG_ENGINE, "scripting: disabled by configuration");
+        }
         return core::result<void>::success();
     }
 
@@ -205,6 +216,13 @@ void scripting_subsystem::shutdown(engine_context &context) {
     mServices->scripting.reset();
     mCollisions.clear();
     mInitialised = false;
+}
+
+bool scripting_subsystem::headless_holds_scripts_back(const engine_config &config, const project *loaded) noexcept {
+    if (config.scripting.enabled || !config.headless || config.editor || loaded == nullptr) {
+        return false;
+    }
+    return names_game_scripts(loaded->description().scripting);
 }
 
 void scripting_subsystem::write_frame_block(

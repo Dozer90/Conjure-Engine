@@ -45,7 +45,9 @@ every AI agent (and human) working in the repository. Read it fully before touch
 8. **Review before commit.** Run the checklist in `code-review-checklist`. Commits must build
    and pass tests on their own.
 9. **No globbing in CMake, no new third-party dependencies** without updating
-   `third_party/CMakeLists.txt` with a pinned tag or commit and a `conjure::thirdparty::` alias.
+   `third_party/CMakeLists.txt` with a pinned tag or commit and a `conjure::thirdparty::` alias, and its
+   licence notice (`conjure_third_party_notice()` beside the pin, without which the configure fails, then
+   `python tools/third_party_notices.py --build-dir <tree>`; CTest `notices.up_to_date` fails until then).
 10. **Platform code stays behind backends.** No `#ifdef _WIN32` outside `platform_detect.h` and
     backend implementation files. Everything must build on Windows, Linux and macOS.
 

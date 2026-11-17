@@ -33,6 +33,8 @@ core::result<application_desc> application_desc::from_options(
     // Precedence (D9): defaults < --headless defaults < project.json < the remaining flags. Headless
     // comes first so a project's window size or audio backend does not drag a headless run back to real
     // devices; the project then sets what the engine_config::headless guard lets through (project::apply_to).
+    // Scripting is one of the things the guard holds back, so a headless run executes scripts only when
+    // --scripting, one of the remaining flags, turns it on again (D12).
     desc.config = baseConfig;
     if (options.headless) {
         const engine_config headless = engine_config::headless_defaults();

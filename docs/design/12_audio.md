@@ -719,7 +719,7 @@ with `MA_NO_ENGINE`, `MA_NO_NODE_GRAPH`, `MA_NO_GENERATION` **plus `stb_vorbis`*
 warnings stay suppressed. Only `miniaudio_backend.cpp` and `decoder_impl.cpp` include `miniaudio.h`.
 
 **Offers to `engine` (wave 4, `audio_subsystem`, R7).**
-- Startup step 11: map `engine::audio_settings` (`enabled`, `backend`, `sampleRate`, `device`, `masterGain`,
+- Startup step 11: map `engine::audio_config` (`enabled`, `backend`, `sampleRate`, `deviceName`, `masterGain`,
   `dopplerFactor`, `speedOfSound`, `groups[] { name, parent, gain }`; `project.json` `"audio"` keys in snake_case,
   `06_engine_loop.md` 2.3/2.10, R52) to `audio::audio_settings` with `jobs = &context.jobs`; construct `audio_engine`;
   call `audio::register_asset_types(assets.types(), importers)`; register `audio_source` (field `handle` `TRANSIENT`)

@@ -37,7 +37,8 @@ check and its tests. The design is `06_engine_loop.md` 4.2 and 2.12, `ARCHITECTU
 5. `application_desc::from_options(options, engine_config::defaults())`: the whole merge of defaults < `--headless`
    < `project.json` < flags, validated once (06 D9). A project error exits 2; an `INVALID_CONFIG` exits 2 when the
    project's own settings fail the same validation without any flag (the merge of `--project` and the `--headless`
-   mode alone), else 3 with the help hint.
+   mode alone), else 3 with the help hint. `--headless` leaves scripting off whatever the project says and
+   `--scripting`, one of the flags, turns it on again (06 D12): the runtime adds nothing to that rule.
 6. `application app(desc)`; `add_subsystem(bindings::scripting_bindings_subsystem)` when the bindings module is
    built (`CONJURE_RUNTIME_WITH_BINDINGS`, startup step 16); `layers().push_layer(game_layer)` (quits on the
    window's close event).
@@ -91,6 +92,33 @@ fetched. The Windows backend adds `user32` (`MessageBoxW`), `shell32` (`CommandL
 (`$ORIGIN` / `@loader_path`) because `export_pipeline` step 5 places `conjure_shared` next to it. The target is
 skipped when `conjure::shared` or `conjure::engine` is missing.
 
+An MSVC Distribution build also places the Visual C++ runtime next to the executable (06 D14): a `POST_BUILD`
+step of `conjure_runtime` copies every `vcruntime140*.dll` and `msvcp140*.dll` of the toolchain's redistributable
+folder into `bin/`, where export step 5 picks them up, so an exported game does not need the Microsoft Visual
+C++ Redistributable. `conjure_msvc_find_crt_libraries()` (`runtime/cmake/ConjureMsvcRuntime.cmake`, probed on every
+platform by the CTest entry `runtime.msvc_runtime_folder_rules`) asks `InstallRequiredSystemLibraries` for the
+folder and accepts it only when its version (`.../Redist/MSVC/<major>.<minor>.<build>/<arch>/Microsoft.VC<n>.CRT`)
+is not lower than that of the folder under `VCToolsRedistDir`, which `vcvars` and `tools/build.py` set, or than
+the compiler's toolset (`14.<minor>` for `MSVC_VERSION` `19<minor>`) without one: CMake 3.31 answers a v145
+compiler with the VC143 folder of a Visual Studio 2022 installed beside it, and an older library next to the
+executable would be loaded in preference to the installed one. The fallback is the `VCToolsRedistDir` folder,
+taken without comparing it with the toolset (Visual Studio versions the redistributable apart from the tools, so
+its minor can be lower) as long as its path shows a version. When no folder passes, the configure prints a CMake
+warning, nothing is copied and exports from that build warn in turn. Debug and Development copy nothing, the
+Universal CRT is left to Windows, and `concrt140.dll` and `vccorlib140.dll` are not copied (nothing in the engine
+imports them). The step runs when `conjure_runtime` links, so a library deleted from `bin/` by hand comes back
+with the next link of the executable, not with the next build. The target property `CONJURE_MSVC_CRT_LIBRARIES`
+lists the files for `tests/runtime`.
+
+Every build, in every configuration, places `THIRD_PARTY_NOTICES.txt` next to the executable (06 D15):
+`conjure_ship_third_party_notices(conjure_runtime)` declares the copy as a build output the target depends on, so
+the file is there after `conjure_runtime` was built and returns with the next build when it was deleted. Its
+content is written at configure time by `conjure_write_third_party_notices()` from the notices registered in
+`third_party/CMakeLists.txt`: Conjure's `NOTICE` and `LICENSE`, then every `RUNTIME` entry the tree uses and, in a
+tree that builds the editor, the `EDITOR` entries, because that tree's `conjure_shared` holds Dear ImGui and
+ImGuizmo. A Distribution tree names neither. Export step 5 copies the file with the runtime (🛠 Handbook:
+[Getting started](../getting-started.md) section 11 for the tracked `THIRD_PARTY_NOTICES.md` and how to regenerate it).
+
 ## 5. Distribution stripping check
 
 `tools/check_distribution_symbols.py` lists the symbols of the Distribution `conjure_runtime` (symbol table and
@@ -115,7 +143,9 @@ python tools/check_distribution_symbols.py --build-dir build/windows-msvc-dist
 
 `tests/runtime/` (`conjure_runtime_tests`, labels `unit;runtime;process`) spawns the built executable through
 `core::process`; `runtime_test_support.{h,cpp}` generates a tiny project (one authored startup scene, one data
-blob) into a `temp_directory` and exports it with `engine::export_pipeline`. Every case spawns a process, so the
+blob) into a `temp_directory` and exports it with `engine::export_pipeline`, and a scripted variant whose scene
+carries one `Conjure.TestScripts.DestroyProbe` (authored through the script runtime on the null host, so it needs
+the scripting module but no .NET). Every case spawns a process, so the
 module carries the `process` label of 08_testing.md 6.3 item 8: the default presets skip it and CI runs
 `-L "downloaded|process"` in its own step (🛠 Handbook: [Continuous integration](../ci.md)). The files follow
 08_testing.md 5.2:
@@ -123,11 +153,28 @@ module carries the `process` label of 08_testing.md 6.3 item 8: the default pres
 - `test_runtime_boot.cpp`: the exported folder boots headless for 60 frames with exit 0, with the build's runtime
   and with the copy the pipeline placed into the folder; that copy also runs without `--project` (and in
   Distribution leaves the default log file next to the project); a development project boots directly;
-  `--log-level`, `--width` / `--height` (the platform subsystem's window line echoes the size) and
-  `--jobs 0|auto|abc|300` reach the configuration or are refused with the right code on standard error; a project
-  path outside the active code page loads; `--help` -> 0 with every option line on the piped standard output and
-  no information box (a box would block the child until the case times out; the box itself needs a desktop and is
-  not automated).
+  `--log-level`, `--width` / `--height` (the platform subsystem's window line echoes the size) and `--jobs
+  0|auto|abc|300` reach the configuration or are refused with the right code on standard error; a project path
+  outside the active code page loads; `--help` -> 0 with every option line on the piped standard output and no
+  information box (a box would block the child until the case times out; the box itself needs a desktop and is not
+  automated). The `--scripting` cases (06 D12): a scripted project whose game assembly is missing boots with plain
+  `--headless` and logs the `--scripting` hint; with `--headless --scripting` the same project fails the start in
+  the scripting subsystem with exit 1 (which of `SCRIPT_RUNTIME_NOT_FOUND`, `SCRIPT_RUNTIME_INIT_FAILED` or
+  `SCRIPT_ASSEMBLY_LOAD_FAILED` depends on what the machine has; with the child's `DOTNET_ROOT` pointed at an empty
+  directory it is `SCRIPT_RUNTIME_NOT_FOUND`, the start on a machine without .NET, and a host that finds a runtime
+  all the same makes that subcase report a `MESSAGE` and return), and `--scripting --no-scripting` exits 3; the
+  `[dotnet]` case runs the probe on the real CLR and finds its `OnDestroy` line on the output. That case is compiled
+  only in a build with the scripting module, the managed SDK and the test scripts
+  (`CONJURE_RUNTIME_TEST_HAS_DOTNET`), so a build without them has no entry to skip; where it is compiled it is
+  skipped only without `precondition::DOTNET_RUNTIME` (no .NET runtime installed, or `managed/` missing next to the
+  runtime). The two others report a `MESSAGE` and return in a build without the scripting module. The F790 case
+  holds an MSVC Distribution build to 06 D14: the build's `bin/` holds `vcruntime140.dll` and `msvcp140.dll`, the
+  exported folder holds every `vcruntime140*.dll` and `msvcp140*.dll` of `bin/` at full size, and the exported
+  runtime boots; in every other build it reports a `MESSAGE` and returns (the copy itself is covered on all
+  platforms by `tests/engine/test_export.cpp`). The F200 case holds every build to 06 D15: `THIRD_PARTY_NOTICES.txt`
+  lies next to the runtime, opens with Conjure's notice and licence, carries the licence text of yyjson (linked by
+  every build), names Jolt and Dear ImGui exactly when the build links them and never doctest, and an export with
+  the runtime carries the same bytes while one without it carries no file.
 - `test_missing_project.cpp`: missing, malformed, invalid and too-new `project.json` -> 2 named on standard error
   without the help hint; a project whose own settings do not validate -> 2; `--log-file` names a missing project.
 - `test_exit_codes.cpp`: bad arguments -> 3 with `conjure_runtime:` plus the usage text or the help hint on

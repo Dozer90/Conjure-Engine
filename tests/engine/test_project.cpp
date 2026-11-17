@@ -81,7 +81,7 @@ TEST_SUITE("engine/project") {
         CHECK(desc.rendering.gpuValidation);
         CHECK(desc.audio.backend == audio_backend_choice::MINIAUDIO);
         CHECK(desc.audio.sampleRate == 44100);
-        CHECK(desc.audio.device == "Speakers");
+        CHECK(desc.audio.deviceName == "Speakers");
         REQUIRE(desc.audio.groups.size() == 2);
         CHECK(desc.audio.groups[1].parent == "music");
         CHECK_FALSE(desc.assets.hotReload);
@@ -165,6 +165,30 @@ TEST_SUITE("engine/project") {
         CHECK(written.root()["cooked"].as_bool() == false);
         CHECK(written.root()["assets"]["hot_reload"].as_bool() == false);
         CHECK_FALSE(logs.contains(core::log_level::WARN, "'assets'"));
+    }
+
+    TEST_CASE("project - the audio device is the key \"device\" in the file and deviceName in the section") {
+        // The section was renamed (code sweep F626); the file format was not.
+        core::result<project> parsed = project::parse(FULL_PROJECT, std::filesystem::path("."));
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value().description().audio.deviceName == "Speakers");
+
+        parsed.value().description().audio.deviceName = "Headset";
+        const core::json::document written = parsed.value().to_json();
+        CHECK(written.root()["audio"]["device"].as_string() == "Headset");
+        CHECK_FALSE(written.root()["audio"]["device_name"].is_valid());
+        CHECK_FALSE(written.root()["audio"]["deviceName"].is_valid());
+
+        engine_config config = engine_config::defaults();
+        parsed.value().apply_to(config);
+        CHECK(config.audio.deviceName == "Headset");
+
+        // A wrong type is refused under the name the file uses.
+        const core::result<project> wrong = project::parse(
+          R"({"schema_version": 1, "name": "wrong", "audio": {"device": 7}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_CHECK_ERROR(wrong, engine_error::PROJECT_INVALID);
     }
 
     TEST_CASE("project - the assets section defaults to hot reload on and rejects a non-boolean") {

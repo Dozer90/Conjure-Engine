@@ -187,7 +187,7 @@ audio::audio_settings audio_subsystem::make_audio_settings(const engine_config &
     audio::audio_settings settings = {};
     settings.backend = to_backend_kind(config.audio.backend, config.headless);
     settings.sampleRate = config.audio.sampleRate;
-    settings.deviceName = config.audio.device;
+    settings.deviceName = config.audio.deviceName;
     settings.masterGain = config.audio.masterGain;
     settings.dopplerFactor = config.audio.dopplerFactor;
     settings.speedOfSound = config.audio.speedOfSound;

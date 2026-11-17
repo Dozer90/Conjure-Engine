@@ -100,10 +100,9 @@ The option table is in [Getting started](getting-started.md#7-build-options). Th
 
 ## 4. Module helpers
 
-`cmake/ConjureModule.cmake` declares the three target kinds. Libraries link `conjure::platform_defines`
-publicly (so the `CONJURE_*` macros reach consumers) and `conjure::warnings` / `conjure::sanitizers`
-privately; executables (`conjure_add_executable`, and `conjure_add_test_executable` in
-`cmake/ConjureTesting.cmake`) link all three privately.
+`cmake/ConjureModule.cmake` declares the three target kinds. Libraries link `conjure::platform_defines` publicly (so the
+`CONJURE_*` macros reach consumers) and `conjure::warnings` / `conjure::sanitizers` privately; executables
+(`conjure_add_executable`, and `conjure_add_test_executable` in `cmake/ConjureTesting.cmake`) link all three privately.
 
 ### 4.1 `conjure_add_module`
 
@@ -128,9 +127,8 @@ section 4.4); and a `source_group(TREE engine)` for IDEs. Unknown arguments and 
 ### 4.2 `conjure_add_core_area`
 
 Same arguments and behaviour as `conjure_add_module`, but the target is `conjure_core_<area>` with alias
-`conjure::core_<area>`, `FOLDER "Engine/core"` and `CONJURE_MODULE_NAME="core"`. Areas list the other areas
-they use in `PUBLIC_DEPS` (`conjure::core_foundation` at least); nothing is implied. The real declaration of
-the math area:
+`conjure::core_<area>`, `FOLDER "Engine/core"` and `CONJURE_MODULE_NAME="core"`. Areas list the other areas they use in
+`PUBLIC_DEPS` (`conjure::core_foundation` at least); nothing is implied. The real declaration of the math area:
 
 ```cmake
 conjure_add_core_area(math
@@ -162,9 +160,11 @@ is what other modules depend on. `tests/core/CMakeLists.txt` adds one test direc
 conjure_add_executable(<name> [WIN32_GUI] SOURCES <files...> DEPS <targets...> DEFINES <defs...> FOLDER <folder>)
 ```
 
-An `add_executable` with the shared interface targets, `FOLDER` defaulting to `Executables`, and the
-Distribution-only GUI subsystem described in section 2. `tests/core/system/CMakeLists.txt` uses it for the
-`conjure_process_child` helper.
+An `add_executable` with the shared interface targets, `FOLDER` defaulting to `Executables`, and the Distribution-only
+GUI subsystem described in section 2. `tests/core/system/CMakeLists.txt` uses it for the `conjure_process_child` helper.
+An MSVC Distribution build copies the toolchain's `vcruntime140*.dll` and `msvcp140*.dll` next to `conjure_runtime`
+after it links (`runtime/cmake/ConjureMsvcRuntime.cmake` takes a redistributable folder not older than the compiler's
+toolset); export step 5 ships them (06 D14).
 
 > [!WARNING]
 > `PUBLIC_DEPS` becomes part of every consumer's include path and link line. A third-party target listed
@@ -218,16 +218,17 @@ the plugins it loads share one engine copy. `tests/modules/` is the suite that n
 ### 4.6 Shaders
 
 `cmake/ConjureShaders.cmake` provides `conjure_add_shaders(TARGET <name> OUTPUT_DIR <dir> SHADERS <entries...>
-[INCLUDE_DIRS ...] [DEPENDENCIES ...])`, where each entry is `source;entry;stage;defines`. It compiles every
-permutation to DXIL with `dxc` (`CONJURE_RHI_D3D12`) and to SPIR-V with glslang or `dxc -spirv`
-(`CONJURE_RHI_VULKAN`, chosen by `CONJURE_SPIRV_COMPILER`), and `cmake/ConjureShaderIndex.cmake` writes
-`<OUTPUT_DIR>/index.json` at build time for `rhi::shader_library`. `engine/shaders/CMakeLists.txt` declares the
-engine's own list as the target `conjure_shaders` into `${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders`
-(`build/<preset>/bin/shaders`, next to the executables, where the engine looks by default); the list holds the RHI
-fullscreen-triangle pair and every renderer pass shader (`engine/src/renderer/assets/shader_asset.cpp` lists the same
-permutations), and `conjure_renderer` and the test executables that render (rhi, renderer, engine, editor, integration,
-benchmarks) depend on it. Compiler lookup, depfiles and the index format are in
-[RHI module](modules/rhi.md#5-shader-pipeline); the user-facing side is 📘 API: [Shaders](../api/rhi/shaders.md).
+[INCLUDE_DIRS ...] [DEPENDENCIES ...])`, where each entry is `source;entry;stage;defines`. It compiles every permutation
+to DXIL with `dxc` (`CONJURE_RHI_D3D12`) and to SPIR-V with glslang or `dxc -spirv` (`CONJURE_RHI_VULKAN`, chosen by
+`CONJURE_SPIRV_COMPILER`), and `cmake/ConjureShaderIndex.cmake` writes `<OUTPUT_DIR>/index.json` at build time for
+`rhi::shader_library`. `engine/shaders/CMakeLists.txt` declares the engine's own list as the target `conjure_shaders`
+into `${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders` (`build/<preset>/bin/shaders`, next to the executables, where the
+engine looks by default); the list holds the RHI fullscreen-triangle pair and every renderer pass shader (the table in
+`engine/src/renderer/assets/shader_asset.cpp` is the list the renderer loads: a new permutation goes into both, and
+`test_shader_asset` fails when they disagree, see [Renderer module](modules/renderer.md#1-shape-of-the-module)), and
+`conjure_renderer` and the test executables that render (rhi, renderer, engine, editor, integration, benchmarks) depend
+on it. Compiler lookup, depfiles and the index format are in [RHI module](modules/rhi.md#5-shader-pipeline); the
+user-facing side is 📘 API: [Shaders](../api/rhi/shaders.md).
 
 ## 5. Warnings as errors
 
@@ -322,13 +323,13 @@ CMake 4; `FETCHCONTENT_UPDATES_DISCONNECTED ON` stops re-fetching on every confi
 | `conjure::thirdparty::imgui` | ocornut/imgui + CedricGuillemet/ImGuizmo | `v1.91.9b-docking`, commit `105e4fde` | `CONJURE_BUILD_EDITOR` | one static library from the listed `.cpp` files, GLFW backend, `IMGUI_DEFINE_MATH_OPERATORS`, obsolete functions disabled |
 | `conjure::thirdparty::nethost` | .NET SDK host pack | found, not fetched | `CONJURE_WITH_SCRIPTING` | `cmake/FindNetHost.cmake` picks the newest pack of the lowest major >= 8 and defines `NETHOST_USE_AS_STATIC` |
 
-Adding a dependency (`AGENTS.md` rule 9): declare it here with a pinned `GIT_TAG`, `SYSTEM` and
-`EXCLUDE_FROM_ALL`, turn off its tests, docs and install, create the `conjure::thirdparty::<name>` alias,
-give it `FOLDER "ThirdParty"`, list it in `PRIVATE_DEPS` of the consuming module, and extend
-`THIRD_PARTY_INCLUDE_ROOTS` in `tools/check_style.py` so the include-order rule requires angle brackets for the
-new headers (and `THIRD_PARTY_FLAT_HEADER_PREFIXES` for headers included without a directory, so they are
-grouped as third-party rather than standard library). The public-header rule needs no entry: it accepts only
-Conjure and C++ standard library headers and rejects every other include on its own.
+Adding a dependency (`AGENTS.md` rule 9): declare it here with a pinned `GIT_TAG`, `SYSTEM` and `EXCLUDE_FROM_ALL`, turn
+off its tests, docs and install, create the `conjure::thirdparty::<name>` alias, give it `FOLDER "ThirdParty"`, add its
+`conjure_third_party_notice()` beside the pin ([Getting started](getting-started.md) section 11), list it in
+`PRIVATE_DEPS` of the consuming module, and extend `THIRD_PARTY_INCLUDE_ROOTS` in `tools/check_style.py` so the
+include-order rule requires angle brackets for the new headers (and `THIRD_PARTY_FLAT_HEADER_PREFIXES` for headers
+included without a directory, so they are grouped as third-party rather than standard library). The public-header rule
+needs no entry: it accepts only Conjure and C++ standard library headers and rejects every other include on its own.
 
 > [!NOTE]
 > The design records (`docs/design/00_brief.md`, `02_renderer.md`, `11_platform.md`, `14_physics.md`) name the
@@ -339,12 +340,11 @@ Conjure and C++ standard library headers and rejects every other include on its 
 
 ## 9. Generated build info
 
-`engine/src/core/CMakeLists.txt` runs `configure_file(... @ONLY)` on
-`engine/src/core/foundation/build_info.h.in`, writing `${PROJECT_BINARY_DIR}/generated/include/conjure/core/build_info.h`.
-The directory is a public include directory of every module and of the `conjure::core` umbrella, so the
-header is included as `conjure/core/build_info.h`. It defines the macros `CONJURE_VERSION_MAJOR`,
-`CONJURE_VERSION_MINOR`, `CONJURE_VERSION_PATCH`, `CONJURE_VERSION_STRING`, `CONJURE_ENGINE_NAME` and the
-constants in `namespace conjure::core::build_info`:
+`engine/src/core/CMakeLists.txt` runs `configure_file(... @ONLY)` on `engine/src/core/foundation/build_info.h.in`,
+writing `${PROJECT_BINARY_DIR}/generated/include/conjure/core/build_info.h`. The directory is a public include directory
+of every module and of the `conjure::core` umbrella, so the header is included as `conjure/core/build_info.h`. It
+defines the macros `CONJURE_VERSION_MAJOR`, `CONJURE_VERSION_MINOR`, `CONJURE_VERSION_PATCH`, `CONJURE_VERSION_STRING`,
+`CONJURE_ENGINE_NAME` and the constants in `namespace conjure::core::build_info`:
 
 ```cpp
 #include "conjure/core/build_info.h"

@@ -52,6 +52,11 @@ namespace engine_test {
     void enable_null_rendering(conjure::engine::engine_config &config);
 
     /// <summary>
+    /// True when this build has the scripting module, so that the application owns a scripting subsystem.
+    /// </summary>
+    [[nodiscard]] bool scripting_module_built() noexcept;
+
+    /// <summary>
     /// An application descriptor over a configuration (no project, no clock override).
     /// </summary>
     [[nodiscard]] conjure::engine::application_desc make_desc(const conjure::engine::engine_config &config);

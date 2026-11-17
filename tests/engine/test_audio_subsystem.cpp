@@ -177,7 +177,7 @@ TEST_SUITE("engine/audio_subsystem") {
         engine_config config = engine_config::defaults();
         config.audio.backend = audio_backend_choice::MINIAUDIO;
         config.audio.sampleRate = 44100;
-        config.audio.device = "Speakers";
+        config.audio.deviceName = "Speakers";
         config.audio.masterGain = 0.5f;
         config.audio.dopplerFactor = 1.0f;
         config.audio.speedOfSound = 340.0f;

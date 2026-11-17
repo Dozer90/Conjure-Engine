@@ -27,10 +27,10 @@
 #include <vector>
 
 // docs/design/08_testing.md 6.1 test_export_roundtrip (R21, ARCHITECTURE.md 8): the in-repo project
-// tests/assets/projects/minimal is exported into a temp directory through engine::export_pipeline, the built
-// conjure_runtime runs the result as a process with --headless --frames 60 and exits 0, and the exported folder
-// loads headless into the same world the development project does: the same number of entities carrying each
-// registered component type.
+// tests/assets/projects/minimal is exported into a temp directory through engine::export_pipeline (the build's
+// licence notices travel with the runtime), the built conjure_runtime runs the result as a process with
+// --headless --frames 60 and exits 0, and the exported folder loads headless into the same world the development
+// project does: the same number of entities carrying each registered component type.
 
 using namespace conjure;
 using namespace conjure::testing;
@@ -149,6 +149,20 @@ TEST_SUITE("integration/export_roundtrip") {
         const std::filesystem::path exportedRuntime =
           outputDirectory / integration_test::runtime_executable().filename();
         REQUIRE(std::filesystem::is_regular_file(exportedRuntime));
+        // The licence notices the build wrote next to the runtime travel with it (06_engine_loop.md D15): the
+        // same bytes, named in the report, and no warning that they are missing.
+        const std::string noticesName(engine::export_pipeline::NOTICES_FILE_NAME);
+        REQUIRE(std::filesystem::is_regular_file(outputDirectory / noticesName));
+        const std::string builtNotices =
+          integration_test::read_file(integration_test::runtime_bin_directory() / noticesName);
+        CHECK(builtNotices.find("the Conjure contributors") != std::string::npos);
+        CHECK(integration_test::read_file(outputDirectory / noticesName) == builtNotices);
+        const std::vector<std::string> &copied = report.copiedFiles;
+        CHECK(std::find(copied.begin(), copied.end(), noticesName) != copied.end());
+        const auto namesNotices = [&noticesName](const std::string &warning) {
+            return warning.find(noticesName) != std::string::npos;
+        };
+        CHECK(std::none_of(report.warnings.begin(), report.warnings.end(), namesNotices));
         const std::string exportedProject = integration_test::read_file(outputDirectory / "project.json");
         CHECK(exportedProject.find("\"cooked\": true") != std::string::npos);
 

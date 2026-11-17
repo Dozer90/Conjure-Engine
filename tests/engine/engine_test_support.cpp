@@ -48,6 +48,14 @@ void engine_test::enable_null_rendering(engine_config &config) {
     config.rendering.gpuValidation = false;
 }
 
+bool engine_test::scripting_module_built() noexcept {
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+    return true;
+#else
+    return false;
+#endif
+}
+
 application_desc engine_test::make_desc(const engine_config &config) {
     application_desc desc = {};
     desc.config = config;

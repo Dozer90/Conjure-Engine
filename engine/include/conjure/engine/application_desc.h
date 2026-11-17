@@ -32,7 +32,8 @@ namespace conjure::engine {
         /// directory), then the command-line overrides, then validate(). Fails with BAD_ARGUMENTS, the
         /// project errors or INVALID_CONFIG; a desc with showHelp set is returned without loading anything.
         /// A real --rhi backend together with --headless logs a WARN: a headless run renders on the null
-        /// device only, so the flag has no effect.
+        /// device only, so the flag has no effect. --headless leaves scripting.enabled false whatever the
+        /// project says; --scripting, applied with the remaining flags, sets it to true.
         /// </summary>
         [[nodiscard]] static core::result<application_desc> from_command_line(
           std::span<const std::string_view> arguments,

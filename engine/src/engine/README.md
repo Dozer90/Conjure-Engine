@@ -38,6 +38,28 @@ cache (`.conjure/cache`) then lives under that root.
 `--scene` / `startupSceneOverride` is relative to the assets root unless it is already scheme-qualified
 (`assets://scenes/x.scene.json`), which is used as given.
 
+Scripting in a headless run is opt-in (06 D12, code sweep F075). `headless_defaults()` has `scripting.enabled`
+false, `application_desc::from_options` copies that with the other headless defaults when `--headless` is given and
+`project::apply_to` does not copy the project's value under `headless`, so `conjure_runtime --headless` boots a
+scripted project without .NET. `--scripting` (`command_line_options::scripting`) sets `scripting.enabled = true`
+in `apply_command_line`, after the project, so it wins over both; `noScripting` is applied after it, and
+`parse_command_line` refuses the two flags together. `scripting_subsystem::startup` logs one INFO line when
+scripting is off; `headless_holds_scripts_back(config, project)` picks the wording that names `--scripting` for a
+headless, non-editor run of a project that has scripts to run: one that enables scripting and names a game
+assembly (`names_game_scripts`, `scripting_request.h`). A `project.json` without a `scripting` section enables
+scripting by default and gets the plain line. The configuration does not record which flag was given, so
+`--headless --no-scripting` on a scripted project gets the hint too. A build without `CONJURE_WITH_SCRIPTING` has
+no scripting subsystem, so `application::start_subsystems` speaks for it: one WARN (`this build has no scripting
+module`) when `asks_for_missing_scripting_module(config)` is true, which is scripting enabled together with a
+headless run outside the editor (`--scripting`) or a game assembly. `scripting_request.{h,cpp}` is compiled in
+every build, so both predicates are tested everywhere; the WARN itself only where the module is absent.
+
+`engine_config::physics` and `engine_config::audio` are `physics_config` and `audio_config` (06 D13, code sweep
+F626), not `*_settings` like the other nine sections: `physics_subsystem` and `audio_subsystem` turn them into
+`physics::physics_settings` and `audio::audio_settings`, and the engine sections no longer share those names.
+`audio_config::speedOfSound` repeats `audio::DEFAULT_SPEED_OF_SOUND` as a literal because `engine_config.h` also
+builds without the audio module; `tests/engine/test_engine_config.cpp` holds the two together.
+
 The polling file watcher and the `assets::hot_reload_controller` exist only when `assets_settings::hotReload`
 is set (`engine_config::assets`, the project's `"assets": { "hot_reload": ... }` section; always off in
 Distribution and for cooked projects). `headless_defaults()` turns it off, `application_desc::from_options`
@@ -70,7 +92,27 @@ game module (open with the 07 D9 owner: a folder per editor instance). The scrip
 `export_pipeline::run` refuses (`BAD_ARGUMENTS`) the project directory itself and any folder inside the assets
 root as output, ships only `index.json` and the `.dxil` / `.spv` blobs of `shaders/` (subfolders included, `.d`
 depfiles left out), and builds its dotnet command lines in `export_commands.{h,cpp}` (symbols stripped unless
-`scripting.exportDebugSymbols`, no bootstrap apphost for a framework-dependent export).
+`scripting.exportDebugSymbols`, no bootstrap apphost for a framework-dependent export). Step 5 copies file by file
+with `std::filesystem::copy_file`: a folder where a file belongs, or a source that is a folder, is
+`EXPORT_FAILED`, and the files copied before it stay. It also ships the Visual C++ runtime of a Windows game (06
+D14, code sweep F790): `copy_msvc_runtime_libraries` copies every `vcruntime140*.dll` and `msvcp140*.dll` directly
+in the distribution directory (an MSVC Distribution build places them there, `runtime/CMakeLists.txt`), names
+matched on their native characters without regard to ASCII case and reported in byte order. The debug runtime is
+the exception (`msvc_library_kind_of`: a `d` directly after the `140` or at the end of the name, as in
+`vcruntime140d.dll` and `msvcp140_1d.dll`): it must not be redistributed, stays behind and is named in one
+warning. The copy runs on every platform; a directory without a library to copy is complete everywhere except for
+a pipeline built against Microsoft's standard library and its DLL runtime (`CONJURE_ABI_RUNTIME_DYNAMIC_CRT`
+through `modules::ABI_SIGNATURE_RUNTIME_FLAGS`; a static-runtime build imports none), where the report gains a
+warning that the game needs the Microsoft Visual C++ Redistributable. Nothing is ever removed from the output
+folder, so libraries of an earlier export stay.
+
+Step 5 also ships the licence notices (06 D15, code sweep F200): `THIRD_PARTY_NOTICES.txt`
+(`export_pipeline::NOTICES_FILE_NAME`), which every build writes next to `conjure_runtime` with Conjure's own
+notice and licence and the licence text of what that build links (`cmake/ConjureNotices.cmake`,
+`runtime/CMakeLists.txt`). The file is copied byte for byte after the runtime libraries. A distribution directory
+without it (or with a folder of that name) is exported with one warning in the report; an export that copies no
+runtime neither copies nor warns. The file names the engine's software only: what a game adds is the game's to
+list.
 
 ## Allocation-free frames
 

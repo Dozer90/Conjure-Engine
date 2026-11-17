@@ -71,6 +71,8 @@ set(CONJURE_ENGINE_SOURCES
     main_thread_queue.cpp
     main_thread_queue.h
     project.cpp
+    scripting_request.cpp
+    scripting_request.h
     module_consumers/assets_module_consumer.cpp
     module_consumers/assets_module_consumer.h
     module_consumers/ecs_module_consumer.cpp

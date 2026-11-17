@@ -14,6 +14,7 @@ in `conjure/engine/engine_context.h` and the outcomes in `conjure/engine/exit_co
 |---|---|
 | The desktop defaults (window, real backends) | `engine_config::defaults()` |
 | Run without a window, device or audio (tests, servers) | `engine_config::headless_defaults()` |
+| Run the game's C# scripts in a headless run | `--headless --scripting`, or `config.scripting.enabled = true` |
 | Parse `--project`, `--headless`, `--frames`, `--jobs` ... and merge everything | `application_desc::from_command_line(arguments, baseConfig)` |
 | Load and query a project file | `project::load(directory)`, `description()`, `assets_directory()`, `module_manifests()` |
 | Start, step, run, stop | `application::initialise()`, `step_frame()`, `run()`, `shutdown()` |
@@ -63,18 +64,23 @@ combination once (`INVALID_CONFIG` names the field). The merge order is fixed: d
 | `pacing` | `targetHz` (0 = unpaced), `sleepWhenUnfocused` |
 | `rendering` | `enabled`, `backend` (`AUTO`, `D3D12`, `VULKAN`, `NULL_DEVICE`), `gpuValidation`, `shaderDirectory` |
 | `physics` | `enabled`, `gravity`, `maxBodies`; the rest of the physics settings come from the project's `"physics"` section |
-| `audio` | `enabled`, `backend` (`AUTO`, `MINIAUDIO`, `NULL_DEVICE`), `sampleRate`, `device`, `masterGain`, `dopplerFactor`, `speedOfSound`, `groups` |
+| `audio` | `enabled`, `backend` (`AUTO`, `MINIAUDIO`, `NULL_DEVICE`), `sampleRate`, `deviceName` (the `project.json` key `device`), `masterGain`, `dopplerFactor`, `speedOfSound`, `groups` |
 | `assets` | `hotReload`: the file watcher that re-imports changed sources while a development project runs (on by default, off in `headless_defaults()`, ignored in Distribution and by cooked projects) |
 | `scripting` | `enabled`, `required`, `gameAssembly`, `managedDirectory`, `hotReload`, `exportMode`, `exportDebugSymbols`, `useNullHost` |
 | `modules` | `searchPaths`, `enginePlugins`, `required` |
 | `jobs` | `workerCount`: `AUTO_WORKER_COUNT` (default) resolves to `hardware_concurrency - 1` clamped to `[1, 16]`; `0` runs every job on the calling thread |
 | `memory` | `frameArenaBytes`, `frameThreadBlockBytes` |
 
+The section types are named after their member (`window_settings`, `time_settings` and so on) with two
+exceptions: `physics` is a `physics_config` and `audio` an `audio_config`. Those two feed a module's own settings
+struct (`physics::physics_settings`, `audio::audio_settings`), and the different name keeps the engine section and
+the module struct apart in a file that uses both namespaces.
+
 `headless_defaults()` sets a 1280 x 720 null window, rendering off on the null device, the null audio backend,
 scripting off, asset hot reload off, a forced 1/60 frame delta and two workers; `--headless` applies the same
 fields over the base configuration, and a project cannot switch the devices, scripting or hot reload back on
 under it (a project whose `max_frame_delta_seconds` is below 1/60 lowers the forced delta to that clamp). Tests
-opt subsystems back in field by field.
+opt subsystems back in field by field, and the command line opts scripting back in with `--scripting`.
 
 > [!IMPORTANT]
 > `validate()` rejects rendering on a real backend while `headless` is true. Headless rendering means the null
@@ -84,9 +90,9 @@ opt subsystems back in field by field.
 ## The command line
 
 `parse_command_line()` understands `--project <dir>`, `--scene <path>`, `--headless`, `--frames <n>`, `--rhi
-auto|d3d12|vulkan|null`, `--audio auto|miniaudio|null|off`, `--no-physics`, `--no-scripting`, `--no-render`,
-`--width`, `--height`, `--fullscreen`, `--no-vsync`, `--fixed-hz`, `--fixed-frame-delta`, `--target-hz`,
-`--time-scale`, `--jobs <n|auto>`, `--log-level`, `--log-file` and `--help`. Anything else lands in
+auto|d3d12|vulkan|null`, `--audio auto|miniaudio|null|off`, `--no-physics`, `--scripting`, `--no-scripting`,
+`--no-render`, `--width`, `--height`, `--fullscreen`, `--no-vsync`, `--fixed-hz`, `--fixed-frame-delta`,
+`--target-hz`, `--time-scale`, `--jobs <n|auto>`, `--log-level`, `--log-file` and `--help`. Anything else lands in
 `unrecognisedArguments` for the executable (the editor reads `--exec` and `--export` from there; the runtime
 refuses unknown options). `command_line_help()` is the text the executables print.
 
@@ -94,6 +100,25 @@ A flag that takes a value never takes another flag as it: `--scene --no-physics`
 a scene named `--no-physics`. When `--audio` is given several times the last one wins, so `--audio off --audio null`
 runs on the null backend. `--rhi d3d12` or `--rhi vulkan` together with `--headless` logs a warning and has no effect: a
 headless run renders on the null device only.
+
+`--headless` leaves scripting off whatever `project.json` says, so a smoke test or a CI boot of a scripted game needs
+neither a .NET runtime nor the game assembly. `--scripting` turns scripting on: it is applied after the project, so it
+wins over the headless default and over a project whose `scripting.enabled` is `false`. `--headless --scripting` runs
+the project's C# scripts, which is what a dedicated server wants. `--scripting` together with `--no-scripting` is
+`BAD_ARGUMENTS`, in either order.
+
+> [!IMPORTANT]
+> With `--scripting` the start can fail where a plain `--headless` run would not: `scripting.required` is `true` by
+> default, so a machine without a .NET runtime answers `SCRIPT_RUNTIME_NOT_FOUND` and a missing game assembly
+> `SCRIPT_ASSEMBLY_LOAD_FAILED`. An engine build configured without `CONJURE_WITH_SCRIPTING` has no scripting
+> subsystem: the flag is accepted and the run goes on without scripts; the engine logs a warning that the build has
+> no scripting module for a headless run outside the editor and for any run whose configuration names a game
+> assembly.
+
+When a headless run leaves the scripts of a project off, the engine log says so once at startup (`scripting: disabled;
+a headless run leaves the project's scripts off unless --scripting is given`). The line is for a project that has
+scripts to run, one that enables scripting and names a game assembly (`"scripting": { "assembly": ... }`); a project
+without one, a `project.json` without a `scripting` section included, gets `scripting: disabled by configuration`.
 
 ## project.json
 
@@ -104,8 +129,8 @@ Unknown top-level keys are kept in `extensions` and written back by `save()`; wh
 the same name, that member is kept and the top-level key is dropped with a warning. Schema 1 reserves `"assets"`, so a
 file that used that key for its own data is parsed as the section and its unknown members are dropped on `save()` like
 those of every other section. `apply_to(config)` copies the sections into a configuration without touching the headless,
-frame-count, jobs and log settings, so a headless test keeps its null backends (and its disabled asset hot reload) while
-reading the project's scenes and physics layers.
+frame-count, jobs and log settings, so a headless test keeps its null backends (and its disabled scripting and asset hot
+reload) while reading the project's scenes and physics layers.
 
 ```cpp
 core::result<engine::project> loaded = engine::project::load("C:/games/rolling_course");

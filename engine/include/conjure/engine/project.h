@@ -46,9 +46,9 @@ namespace conjure::engine {
         modules_settings modules = {};
         window_settings window = {};
         time_settings time = {};
-        physics_settings physics = {};
+        physics_config physics = {};
         rendering_settings rendering = {};
-        audio_settings audio = {};
+        audio_config audio = {};
         assets_settings assets = {};                // the "assets" section: hot_reload
         scripting_settings scripting = {};
         std::vector<std::string> layers = {};       // scene layer names, index order (at most 32)
@@ -129,9 +129,10 @@ namespace conjure::engine {
             /// <summary>
             /// Copies the settings sections, the module settings and startupScene (as startupSceneOverride
             /// when the config has none) into a config; headless, editor, maxFrames, jobs, memory, pacing,
-            /// log settings and projectPath are untouched. Rendering/audio "enabled", assets.hotReload and the
-            /// window size are copied only when the config is not headless, so headless_defaults() survive a
-            /// project.
+            /// log settings and projectPath are untouched. rendering.enabled, the rendering and audio
+            /// backends, assets.hotReload, scripting.enabled and the window size are copied only when the
+            /// config is not headless, so headless_defaults() survive a project (the command line turns
+            /// scripting back on with --scripting); audio.enabled is copied either way.
             /// </summary>
             void apply_to(engine_config &config) const;
 

@@ -7,6 +7,9 @@
 #define CONJURE_TONEMAP_HLSLI
 
 // ACES filmic approximation (Stephen Hill's fit of the RRT + ODT).
+// Source: ACES.hlsl of Baking Lab by MJP and David Neubelt, https://github.com/TheRealMJP/BakingLab
+// Licence: MIT, Copyright (c) 2016 MJP; the text is in THIRD_PARTY_NOTICES.md under "ACES filmic
+// fit (Baking Lab)".
 float3 tonemap_aces(float3 colour) {
     float3x3 inputMatrix = float3x3(
       0.59719, 0.35458, 0.04823,
@@ -35,6 +38,11 @@ float3 tonemap_reinhard_extended(float3 colour, float whitePoint) {
 // AgX (Troy Sobotka) with the sigmoid approximation by Benjamin Wrensch; look 0 = default,
 // 1 = golden, 2 = punchy. The inset / outset literals are in the column order of the reference
 // GLSL, so they are applied as mul(vector, matrix).
+// Source: Benjamin Wrensch, "Minimal AgX Implementation",
+// https://iolite-engine.com/blog_posts/minimal_agx_implementation; its constants come from Troy
+// Sobotka's AgX, https://github.com/sobotka/AgX
+// Licence: MIT, Copyright (c) 2024 Missing Deadlines (Benjamin Wrensch); the text is in
+// THIRD_PARTY_NOTICES.md under "Minimal AgX".
 float3 agx_default_contrast(float3 x) {
     float3 x2 = x * x;
     float3 x4 = x2 * x2;

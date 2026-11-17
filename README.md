@@ -32,9 +32,13 @@ The executables land in `build/<preset>/bin` (`.exe` on Windows):
 
 ```bash
 build/<preset>/bin/conjure_editor --project <project dir>                               # the editor
-build/<preset>/bin/conjure_editor --project <project dir> --headless --export <out dir>  # export a game
+build/<preset>/bin/conjure_editor --project <project dir> --trust-project --headless --export <out dir>  # export a game
 build/<preset>/bin/conjure_runtime --project <out dir>                                  # run the exported game
 ```
+
+The editor opens a project only after you answered for it: the window asks the first time, and a headless run
+such as the export above needs `--trust-project` unless the project was trusted before
+([docs/api/editor/headless-and-commands.md](docs/api/editor/headless-and-commands.md#project-trust)).
 
 To try the editor on a ready-made project, copy `tests/assets/projects/minimal` into `build/` (ignored by git)
 first, as CI does: the editor writes `.meta` sidecars and a `.conjure/` folder into the project it opens, and
@@ -60,4 +64,12 @@ editor from an agent.
 
 ## License
 
-Copyright (c) 2026. All rights reserved.
+Conjure is licensed under the [Apache License, Version 2.0](LICENSE). The copyright holders are the Conjure
+contributors ([NOTICE](NOTICE)): the engine is meant as a learning tool that others can use and extend.
+
+It builds on third-party software under other licences. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists
+every dependency with its licence, and the licence text of each pinned one. A build writes Conjure's notice and
+the notices of what it links into `THIRD_PARTY_NOTICES.txt` next to `conjure_runtime`, and an export that copies
+the runtime copies that file into the game folder with it (the export report warns when the folder it copies from
+has none), so a game made with Conjure carries the notices its engine binaries need. What the game adds on its
+own (native modules, NuGet packages, assets) is the game's to list.

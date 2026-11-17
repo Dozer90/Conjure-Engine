@@ -6,12 +6,21 @@
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 
+#if defined(CONJURE_WITH_AUDIO) && CONJURE_WITH_AUDIO
+    #include "conjure/audio/audio_engine.h"
+    #include "conjure/audio/audio_types.h"
+#endif
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    #include "conjure/physics/physics_settings.h"
+#endif
+
 #include <array>
 #include <limits>
 #include <string>
+#include <type_traits>
 
-// engine_config.h (docs/design/06_engine_loop.md 2.3, D8, D9): defaults, headless defaults, every validate()
-// rule and the worker-count resolution.
+// engine_config.h (docs/design/06_engine_loop.md 2.3, D8, D9, D13): defaults, headless defaults, every
+// validate() rule, the worker-count resolution and the names of the two sections that feed a module's settings.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -51,6 +60,44 @@ TEST_SUITE("engine/engine_config") {
         config.assets.hotReload = true;
         CONJURE_CHECK_OK(config.validate());
         CHECK(config != engine_config::headless_defaults());
+    }
+
+    TEST_CASE("regression - code sweep F626 the physics and audio sections share no name with the module settings") {
+        static_assert(std::is_same_v<decltype(engine_config::physics), physics_config>);
+        static_assert(std::is_same_v<decltype(engine_config::audio), audio_config>);
+        const engine_config config = engine_config::defaults();
+        CHECK(config.audio.deviceName.empty());
+
+#if defined(CONJURE_WITH_AUDIO) && CONJURE_WITH_AUDIO
+        {
+            // A file that pulls in both namespaces names the module struct without qualification. While the
+            // engine section was called audio_settings too, the name was ambiguous and this block did not
+            // compile; the field the subsystem copies is deviceName on both sides.
+            using namespace conjure::audio;
+            static_assert(std::is_same_v<audio_settings, conjure::audio::audio_settings>);
+            static_assert(std::is_same_v<decltype(audio_config::deviceName), decltype(audio_settings::deviceName)>);
+            const audio_settings moduleDefaults = {};
+            CHECK(config.audio.sampleRate == moduleDefaults.sampleRate);
+            CHECK(config.audio.masterGain == moduleDefaults.masterGain);
+            CHECK(config.audio.dopplerFactor == moduleDefaults.dopplerFactor);
+            // engine_config.h builds without the audio module, so it repeats the constant as a literal.
+            CHECK(config.audio.speedOfSound == DEFAULT_SPEED_OF_SOUND);
+        }
+#else
+        MESSAGE("built without the audio module: the audio_settings half of the name check does not apply");
+#endif
+
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+        {
+            using namespace conjure::physics;
+            static_assert(std::is_same_v<physics_settings, conjure::physics::physics_settings>);
+            const physics_settings moduleDefaults = {};
+            CHECK(config.physics.gravity == moduleDefaults.gravity);
+            CHECK(config.physics.maxBodies == moduleDefaults.maxBodies);
+        }
+#else
+        MESSAGE("built without the physics module: the physics_settings half of the name check does not apply");
+#endif
     }
 
     TEST_CASE("engine_config - validate rejects a non-positive fixed delta") {
