@@ -154,8 +154,10 @@ TEST_SUITE("scripting/dotnet_script_host") {
         CHECK(kinds->find_field("Names")->elementKind == script_field_kind::STRING);
         CHECK(kinds->find_field("Links")->elementKind == script_field_kind::ENTITY);
         CHECK(kinds->find_field("Hidden")->meta.root()["hidden"].as_bool() == true);
-        CHECK(kinds->find_field("Texture")->meta.root()["assetType"].as_string() == "TextureAsset");
+        // TestScripts.TextureAsset is a plain class, not an IAssetType tag: the reference is untyped.
+        CHECK_FALSE(kinds->find_field("Texture")->meta.root().contains("assetType"));
         CHECK(kinds->find_field("Current")->meta.root()["enumNames"].size() == 3);
+        CHECK(kinds->find_field("Current")->meta.root()["enumValues"].size() == 3);
     }
 
     TEST_CASE(

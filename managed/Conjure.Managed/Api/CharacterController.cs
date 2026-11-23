@@ -8,7 +8,8 @@ namespace Conjure;
 /// <summary>
 /// The character controller facade of an entity (docs/design/15_bindings.md 2.5): the desired velocity and
 /// the step's ground report through physics_character_*, which need a physics.character_controller on the
-/// entity (ConjureNativeException(ComponentMissing) otherwise). IsGrounded never throws (B11).
+/// entity (ConjureNativeException(ComponentMissing) otherwise; Data goes through Entity.GetComponent /
+/// SetComponent and throws InvalidOperationException instead). IsGrounded never throws (B11).
 /// </summary>
 public readonly struct CharacterController
 {
@@ -76,7 +77,9 @@ public readonly struct CharacterController
     }
 
     /// <summary>
-    /// The character_controller component itself; the setter writes it back through component_set.
+    /// The character_controller component itself; the setter writes it back through component_set. Both throw
+    /// EntityNotAliveException for a dead entity and InvalidOperationException when the entity has no character
+    /// controller (Entity.GetComponent / SetComponent).
     /// </summary>
     public CharacterControllerData Data
     {

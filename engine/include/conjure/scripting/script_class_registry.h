@@ -26,7 +26,8 @@ namespace conjure::scripting {
         script_field_kind kind = script_field_kind::INT32;
         script_field_kind elementKind = script_field_kind::INT32;       // LIST only
         core::json::document defaultValue = {};
-        core::json::document meta = {};                 // tooltip, min, max, enumNames, assetType, hidden
+        // tooltip, min, max, enumNames, enumValues (the int32 per name), enumFlags, assetType (registered name), hidden
+        core::json::document meta = {};
     };
 
     struct CONJURE_API script_class_info {

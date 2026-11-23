@@ -271,7 +271,8 @@ namespace conjure::scripting {
             /// Adds a script_component when missing, appends an entry with the given JSON fields (an object;
             /// invalid = defaults) and, in PLAY mode, queues its creation for the next flush. An invalid id
             /// when the entity is dead, the world detached or the entity already carries
-            /// MAX_SCRIPTS_PER_ENTITY scripts.
+            /// MAX_SCRIPTS_PER_ENTITY scripts, and (with a WARN) when the entity has no script_component yet
+            /// while the world is locked for iteration: adding that component is a structural change.
             /// </summary>
             [[nodiscard]] script_entry_id add_script(
               ecs::entity entity,

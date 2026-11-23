@@ -39,6 +39,7 @@ namespace {
     constexpr std::string_view FORGETFUL = "Conjure.TestScripts.ForgetfulQuery";
     constexpr std::string_view DEFERRED_CREATOR = "Conjure.TestScripts.DeferredCreator";
     constexpr std::string_view SCORE_USER = "Conjure.TestScripts.ScoreUser";
+    constexpr std::string_view UNGUARDED_SCORE_USER = "Conjure.TestScripts.UnguardedScoreUser";
     constexpr std::string_view FLAGS_USER = "Conjure.TestScripts.FlagsMirrorUser";
     constexpr std::string_view TOGGLE_USER = "Conjure.TestScripts.ToggleUser";
     constexpr std::string_view WRONG_COLUMN_USER = "Conjure.TestScripts.WrongColumnUser";
@@ -183,6 +184,41 @@ TEST_SUITE("scripting/dod_query") {
         fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
         CHECK(fixture.field_i64(user, "LastValue") == 4);
         CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F631: an unguarded AddComponent in OnCreate throws on hot reload and the guard "
+      "disables the instance [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        logs.allow_errors();                                            // the reload's OnCreate throws on purpose
+        dotnet_fixture fixture = {};
+        const ecs::component_id scoreId = fixture.registry.find(core::string_id("Conjure.TestScripts.Score"));
+        REQUIRE(scoreId.is_valid());
+        const ecs::entity entity = fixture.create_entity();
+        const script_entry_id user = fixture.add_script(entity, UNGUARDED_SCORE_USER);
+        REQUIRE(fixture.world.has_raw(entity, scoreId));                // the first OnCreate added it
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        REQUIRE(fixture.field_i64(user, "Updates") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+
+        // The reload runs OnCreate again on the entity that kept its Score: the add throws.
+        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly(test_scripts_assembly("v2")));
+        CHECK(logs.contains(core::log_level::ERR, "UnguardedScoreUser.Create threw"));
+        CHECK(logs.contains(core::log_level::ERR, "already has Score"));
+        CHECK(logs.contains(core::log_level::WARN, "OnCreate of 'Conjure.TestScripts.UnguardedScoreUser'"));
+        CHECK(logs.contains(core::log_level::WARN, "every callback of the instance is disabled"));
+
+        // Every callback of the new instance is off, and the Score the entity kept is untouched.
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        CHECK(fixture.field_i64(user, "Updates") == 1);
+        const void *raw = std::as_const(fixture.world).get_raw(entity, scoreId);
+        REQUIRE(raw != nullptr);
+        i32 value = 0;
+        std::memcpy(&value, raw, sizeof(value));
+        CHECK(value == 10);
     }
 
     TEST_CASE(

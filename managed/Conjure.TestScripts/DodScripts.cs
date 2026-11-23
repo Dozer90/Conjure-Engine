@@ -183,6 +183,11 @@ public sealed class ToggleUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
+        // A hot reload runs OnCreate again on the entity that kept its Toggle: AddComponent would throw.
+        if (HasComponent<Toggle>())
+        {
+            return;
+        }
         AddComponent(new Toggle { On = true, Level = 2, Mask = 0x0101, Weight = 1.5f });
     }
 
@@ -210,6 +215,11 @@ public sealed class ScoreUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
+        // A hot reload runs OnCreate again on the entity that kept its Score: AddComponent would throw.
+        if (HasComponent<Score>())
+        {
+            return;
+        }
         AddComponent(new Score { Value = 1, Bonus = 0.5f });
     }
 
@@ -222,6 +232,25 @@ public sealed class ScoreUser : ScriptBehaviour
         SetComponent(in score);
         LastValue = score.Value;
         LastBonus = score.Bonus;
+    }
+}
+
+/// <summary>
+/// ScoreUser without the HasComponent guard (code sweep F631): a hot reload runs OnCreate again on the entity
+/// that kept its Score, the add throws, and the fault guard disables every callback of the new instance.
+/// </summary>
+public sealed class UnguardedScoreUser : ScriptBehaviour
+{
+    public int Updates;
+
+    protected override void OnCreate()
+    {
+        AddComponent(new Score { Value = 10, Bonus = 0.0f });
+    }
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        ++Updates;
     }
 }
 
@@ -326,6 +355,11 @@ public sealed class SquadUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
+        // A hot reload runs OnCreate again on the entity that kept its Squad: AddComponent would throw.
+        if (HasComponent<Squad>())
+        {
+            return;
+        }
         AddComponent(new Squad { Size = 4, Team = Mode.Jump });
     }
 

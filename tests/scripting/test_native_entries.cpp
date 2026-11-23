@@ -19,6 +19,7 @@
 #include "conjure/scripting/scripting_error.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <stop_token>
@@ -34,6 +35,16 @@ using namespace conjure;
 using namespace conjure::scripting;
 using namespace conjure::testing;
 using namespace scripting_test;
+
+namespace {
+
+    /// <summary>
+    /// A tag component: no column, so get_raw has nothing to hand out.
+    /// </summary>
+    struct entries_tag {};
+}
+
+CONJURE_COMPONENT(entries_tag, "test.scripting.entries_tag");
 
 namespace {
 
@@ -214,6 +225,49 @@ TEST_SUITE("scripting/native_entries") {
         CHECK(api.component_has(entity.to_u64(), 60000) == 0);
         CHECK(api.component_get(entity.to_u64(), typeId, nullptr) == 0);
         CHECK(api.component_add(999, typeId, &initial) == 0);
+    }
+
+    TEST_CASE("regression - sweep-2026-11-12 F631: component_get and component_set answer for a held tag") {
+        // C# SetComponent and GetComponent now throw when these entries fail, so a tag the entity holds must not
+        // read as missing only because it has no column.
+        log_capture logs = {};
+        entries_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.registry.register_component<entries_tag>());
+        const u32 tagId = fixture.registry.id_of<entries_tag>().value;
+        const conjure_native_api &api = fixture.api();
+        const ecs::entity entity = fixture.create_entity();
+        std::array<std::byte, 4> scratch = {};
+
+        SUBCASE("absent: both fail") {
+            CHECK(api.component_get(entity.to_u64(), tagId, scratch.data()) == 0);
+            CHECK(api.component_set(entity.to_u64(), tagId, scratch.data()) == 0);
+        }
+        SUBCASE("held: both succeed and write nothing") {
+            REQUIRE(api.component_add(entity.to_u64(), tagId, nullptr) == 1);
+            scratch.fill(std::byte{0x5A});
+            CHECK(api.component_get(entity.to_u64(), tagId, scratch.data()) == 1);
+            CHECK(scratch[0] == std::byte{0x5A});                         // zero bytes copied
+            CHECK(api.component_set(entity.to_u64(), tagId, scratch.data()) == 1);
+            CHECK(fixture.world.has_raw(entity, fixture.registry.id_of<entries_tag>()));
+        }
+        SUBCASE("removed: both fail again") {
+            REQUIRE(api.component_add(entity.to_u64(), tagId, nullptr) == 1);
+            REQUIRE(api.component_remove(entity.to_u64(), tagId) == 1);
+            CHECK(api.component_get(entity.to_u64(), tagId, scratch.data()) == 0);
+            CHECK(api.component_set(entity.to_u64(), tagId, scratch.data()) == 0);
+        }
+        SUBCASE("dead entity: both fail") {
+            REQUIRE(api.component_add(entity.to_u64(), tagId, nullptr) == 1);
+            CONJURE_REQUIRE_OK(fixture.world.destroy_entity(entity));
+            CHECK(api.component_get(entity.to_u64(), tagId, scratch.data()) == 0);
+            CHECK(api.component_set(entity.to_u64(), tagId, scratch.data()) == 0);
+        }
+        SUBCASE("null pointers are still refused") {
+            REQUIRE(api.component_add(entity.to_u64(), tagId, nullptr) == 1);
+            CHECK(api.component_get(entity.to_u64(), tagId, nullptr) == 0);
+            CHECK(api.component_set(entity.to_u64(), tagId, nullptr) == 0);
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("native entries - query scopes expose chunk columns inside a phase and defer structural requests") {

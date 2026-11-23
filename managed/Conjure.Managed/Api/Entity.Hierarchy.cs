@@ -12,9 +12,16 @@ namespace Conjure;
 public readonly partial struct Entity
 {
     /// <summary>
-    /// Renames the entity (scene.name; the getter is Name).
+    /// Renames the entity; the Name property's setter does the same and is the one to use.
     /// </summary>
-    public unsafe void SetName(string name)
+    [Obsolete("Set the Name property instead.")]
+    public void SetName(string name) => Name = name;
+
+    /// <summary>
+    /// The Name setter: scene.name through entity_set_name ("" or null clears it); EntityNotAliveException for a
+    /// dead entity.
+    /// </summary>
+    private unsafe void WriteName(string? name)
     {
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->EntitySetName, NativeFunction.EntitySetName);

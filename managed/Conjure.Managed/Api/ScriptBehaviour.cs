@@ -65,14 +65,32 @@ public abstract class ScriptBehaviour
     /// </summary>
     public ushort DisabledCallbacks => DisabledMask;
 
+    /// <summary>
+    /// Entity.GetComponent: a copy of the component; EntityNotAliveException for a dead entity,
+    /// InvalidOperationException when the entity lacks it.
+    /// </summary>
     public T GetComponent<T>() where T : unmanaged => EntityValue.GetComponent<T>();
 
+    /// <summary>
+    /// Entity.HasComponent: true when the entity carries a T, false for a dead entity.
+    /// </summary>
     public bool HasComponent<T>() where T : unmanaged => EntityValue.HasComponent<T>();
 
+    /// <summary>
+    /// Entity.AddComponent: EntityNotAliveException for a dead entity, InvalidOperationException when the entity
+    /// already has it (deferred inside a ComponentQuery scope, where it cannot fail at the call).
+    /// </summary>
     public void AddComponent<T>(in T value) where T : unmanaged => EntityValue.AddComponent(in value);
 
+    /// <summary>
+    /// Entity.SetComponent: EntityNotAliveException for a dead entity, InvalidOperationException when the entity
+    /// lacks it.
+    /// </summary>
     public void SetComponent<T>(in T value) where T : unmanaged => EntityValue.SetComponent(in value);
 
+    /// <summary>
+    /// Entity.RemoveComponent: true when removed, false when there was nothing to remove.
+    /// </summary>
     public bool RemoveComponent<T>() where T : unmanaged => EntityValue.RemoveComponent<T>();
 
     /// <summary>
@@ -81,10 +99,19 @@ public abstract class ScriptBehaviour
     public T? GetScript<T>() where T : ScriptBehaviour => EntityValue.GetScript<T>();
 
     /// <summary>
-    /// Destroys the entity (OnDestroy runs with the entity still alive, at the end of the phase).
+    /// Destroys the entity (OnDestroy runs with the entity still alive, at the end of the phase); does nothing
+    /// when the entity is already dead (Entity.Destroy returns false for that).
     /// </summary>
     public void Destroy() => EntityValue.Destroy();
 
+    /// <summary>
+    /// Runs once when the instance is created, and again on the new instance after every hot reload of the game
+    /// assembly (OnStart does not run again). The entity can already carry the component when OnCreate runs:
+    /// after a hot reload (it kept its components), on a copy made by Entity.Duplicate, or on a prefab or scene
+    /// instance authored with it. So an AddComponent here checks HasComponent first: adding one the entity
+    /// already has throws, and an exception in OnCreate disables every callback of the instance until the next
+    /// reload.
+    /// </summary>
     protected virtual void OnCreate()
     {
     }

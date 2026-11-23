@@ -9,8 +9,10 @@ namespace Conjure;
 /// The transform facade of an entity (docs/design/15_bindings.md 2.5): the local pose through
 /// transform_get_local / set_local, the world pose through transform_get_world / set_world (composed up the
 /// parent chain by native) and the hierarchy edits of transform_set_parent_ex. Position, Rotation and Scale
-/// are two native calls each (a get and a set); batch edits through Local. Every getter and setter throws
-/// EntityNotAliveException on a dead entity (3.4).
+/// are two native calls each (a get and a set); batch edits through Local. Forward, Right and Up are the
+/// local axes in parent space, WorldForward, WorldRight and WorldUp the same axes in world space. Every pose
+/// getter and setter, the axes and SetParent throw EntityNotAliveException on a dead entity (3.4); Parent,
+/// ChildCount and GetChildren answer Null / 0 (B11).
 /// </summary>
 public readonly struct Transform
 {
@@ -129,19 +131,40 @@ public readonly struct Transform
     }
 
     /// <summary>
-    /// The local -Z axis in parent space (the engine is right-handed, Y up, -Z forward).
+    /// The local -Z axis in parent space, from the local Rotation (the engine is right-handed, Y up, -Z forward).
+    /// For a child of a rotated parent it is not the world direction; that is WorldForward.
     /// </summary>
     public Vector3 Forward => Vector3.Transform(-Vector3.UnitZ, Rotation);
 
     /// <summary>
-    /// The local +X axis in parent space.
+    /// The local +X axis in parent space, from the local Rotation; WorldRight is the world direction.
     /// </summary>
     public Vector3 Right => Vector3.Transform(Vector3.UnitX, Rotation);
 
     /// <summary>
-    /// The local +Y axis in parent space.
+    /// The local +Y axis in parent space, from the local Rotation; WorldUp is the world direction.
     /// </summary>
     public Vector3 Up => Vector3.Transform(Vector3.UnitY, Rotation);
+
+    /// <summary>
+    /// The local -Z axis in world space: the -Z basis vector of WorldMatrix, normalised, so every rotation up
+    /// the parent chain counts. It is the direction LookAt aims, except that a negative world scale on Z
+    /// mirrors it; a zero world scale on Z gives Vector3.Zero (only an exact zero: a tiny scale still gives a
+    /// unit axis). Throws EntityNotAliveException for a dead entity.
+    /// </summary>
+    public Vector3 WorldForward => WorldAxis(-Vector3.UnitZ);
+
+    /// <summary>
+    /// The local +X axis in world space (WorldMatrix, normalised; mirrored by a negative world scale on X,
+    /// Vector3.Zero only for an exactly zero one). Throws EntityNotAliveException for a dead entity.
+    /// </summary>
+    public Vector3 WorldRight => WorldAxis(Vector3.UnitX);
+
+    /// <summary>
+    /// The local +Y axis in world space (WorldMatrix, normalised; mirrored by a negative world scale on Y,
+    /// Vector3.Zero only for an exactly zero one). Throws EntityNotAliveException for a dead entity.
+    /// </summary>
+    public Vector3 WorldUp => WorldAxis(Vector3.UnitY);
 
     /// <summary>
     /// The parent entity, or Entity.Null for a root (and for a dead entity).
@@ -221,7 +244,8 @@ public readonly struct Transform
 
     /// <summary>
     /// Rotates the entity in world space so its forward axis points at 'target' (no-op when the target is
-    /// the entity's own position).
+    /// the entity's own position): WorldForward then points at 'target' unless a negative world scale on Z
+    /// mirrors it (see WorldForward); Forward does so only for a root.
     /// </summary>
     public void LookAt(Vector3 target, Vector3? up = null)
     {
@@ -239,6 +263,24 @@ public readonly struct Transform
         Matrix4x4 basis = Matrix4x4.CreateWorld(Vector3.Zero, direction, upHint);
         world.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(basis));
         World = world;
+    }
+
+    /// <summary>
+    /// 'localAxis' carried into world space by WorldMatrix (one native call) and normalised; Vector3.Zero only
+    /// when the world scale collapses that axis to exactly zero. The axis is divided by its largest component
+    /// before normalising, so a tiny scale (whose squared length would underflow) still gives a unit axis. The
+    /// matrix is column-major natively, so as a System.Numerics (row-vector) Matrix4x4 TransformNormal applies
+    /// it the right way round.
+    /// </summary>
+    private Vector3 WorldAxis(Vector3 localAxis)
+    {
+        Vector3 axis = Vector3.TransformNormal(localAxis, WorldMatrix);
+        float largest = MathF.Max(MathF.Abs(axis.X), MathF.Max(MathF.Abs(axis.Y), MathF.Abs(axis.Z)));
+        if (largest == 0.0f)
+        {
+            return Vector3.Zero;
+        }
+        return Vector3.Normalize(axis / largest);
     }
 }
 

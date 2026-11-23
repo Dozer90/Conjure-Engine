@@ -8,8 +8,9 @@ namespace Conjure;
 /// <summary>
 /// The rigid body facade of an entity (docs/design/15_bindings.md 2.5): velocities, forces and kinematic
 /// moves through the physics_* entries, which need a physics.rigid_body on the entity
-/// (ConjureNativeException(ComponentMissing) otherwise) and a physics world (NotSupportedException when
-/// physics is off). A request the entity's kind of body cannot take is an ArgumentException (native
+/// (ConjureNativeException(ComponentMissing) otherwise; Data goes through Entity.GetComponent / SetComponent
+/// and throws InvalidOperationException instead) and a physics world (NotSupportedException when physics is
+/// off). A request the entity's kind of body cannot take is an ArgumentException (native
 /// WRONG_BODY_KIND): a force or torque on a body that is not dynamic, a velocity on a static body,
 /// MoveKinematic on anything but a kinematic body that does not follow its transform, and all of these on an
 /// entity that also carries a character controller. The kind is the one the rigid_body component describes
@@ -156,7 +157,8 @@ public readonly struct Rigidbody
 
     /// <summary>
     /// The rigid_body component itself (mass, damping, flags, runtime velocities); the setter writes it back
-    /// through component_set.
+    /// through component_set. Both throw EntityNotAliveException for a dead entity and
+    /// InvalidOperationException when the entity has no rigid body (Entity.GetComponent / SetComponent).
     /// </summary>
     public RigidBodyData Data
     {

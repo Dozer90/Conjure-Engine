@@ -8,9 +8,9 @@ namespace Conjure;
 /// The audio source facade of an entity (docs/design/15_bindings.md 2.5, B8): playback commands land in
 /// audio.audio_source.playbackRequest and the engine's audio sync system applies them at the end of the
 /// frame; IsPlaying is what the engine wrote back last frame and never throws (B11). Volume, Pitch and Loop
-/// edit the component through component_get / component_set (InvalidOperationException without one): one
-/// component_get and one component_set each, with no asset bind once the clip is bound; edit many sources
-/// through a ComponentQuery span.
+/// edit the component through component_get / component_set (InvalidOperationException without one,
+/// EntityNotAliveException for a dead entity): one component_get and one component_set each, with no asset bind
+/// once the clip is bound; edit many sources through a ComponentQuery span.
 /// </summary>
 public readonly struct AudioSource
 {
@@ -118,6 +118,8 @@ public readonly struct AudioSource
 
     /// <summary>
     /// The audio_source component itself; the setter writes it back through component_set (binding the clip).
+    /// Both throw EntityNotAliveException for a dead entity and InvalidOperationException when the entity has no
+    /// audio source (Entity.GetComponent / SetComponent).
     /// </summary>
     public AudioSourceData Data
     {
@@ -141,6 +143,10 @@ public readonly struct AudioSource
         // (asset_ref_bind) would have nothing to do.
         NativeApi* api = NativeBridge.RequireApi();
         AudioSourceData copy = data;
-        api->ComponentSet(Entity.Id, ComponentType<AudioSourceData>.RequireId(), &copy);
+        if (api->ComponentSet(Entity.Id, ComponentType<AudioSourceData>.RequireId(), &copy) != 0)
+        {
+            return;
+        }
+        throw Entity.ComponentFailure<AudioSourceData>(NativeFunction.ComponentSet);
     }
 }

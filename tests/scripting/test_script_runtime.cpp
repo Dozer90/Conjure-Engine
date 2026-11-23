@@ -138,6 +138,28 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(fixture.null_host().slot_class(0) == hash_of(PLAYER));
     }
 
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F631: add_script on a locked world refuses a first script without asserting"
+    ) {
+        log_capture logs = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity fresh = fixture.create_entity();
+        const ecs::entity holder = fixture.create_entity();
+        REQUIRE(fixture.runtime.add_script(holder, hash_of(PLAYER), {}).is_valid());
+        {
+            const ecs::iteration_scope lock = fixture.world.lock_iteration();
+            // No script_component yet: adding one is structural, so the call is refused (an assert before).
+            CHECK_FALSE(fixture.runtime.add_script(fresh, hash_of(PLAYER), {}).is_valid());
+            CHECK(logs.contains(core::log_level::WARN, "the world is locked for iteration"));
+            CHECK_FALSE(fixture.world.has<script_component>(fresh));
+            // The holder's set exists: a further script only joins it.
+            CHECK(fixture.runtime.add_script(holder, hash_of(ENEMY), {}).is_valid());
+        }
+        CHECK(fixture.runtime.add_script(fresh, hash_of(PLAYER), {}).is_valid());
+        CHECK(logs.count(core::log_level::WARN) == 1);
+    }
+
     TEST_CASE("script_runtime - OnCreate happens before the first phase and the start flag follows the phases") {
         loaded_fixture fixture = {};
         fixture.runtime.set_mode(script_mode::PLAY);

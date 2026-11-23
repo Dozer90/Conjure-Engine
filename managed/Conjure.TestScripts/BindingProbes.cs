@@ -279,7 +279,8 @@ public sealed class BindingMirrorProbe : ScriptBehaviour
         LocalTransformRead = HasComponent<LocalTransform>() && GetComponent<LocalTransform>().Scale == Vector3.One ? 1 : 0;
         RigidBodyData body = RigidBodyData.Default;
         body.MotionType = MotionType.Static;
-        RigidBodyAdded = Entity.AddComponent(in body) && HasComponent<RigidBodyData>() ? 1 : 0;
+        Entity.AddComponent(in body);
+        RigidBodyAdded = HasComponent<RigidBodyData>() ? 1 : 0;
     }
 
     private void Check<T>() where T : unmanaged
@@ -318,7 +319,8 @@ public sealed class BindingAssetBindProbe : ScriptBehaviour
             source.Volume = 0.5f;
             source.Loop = true;
             source.PlayOnStart = false;
-            Added = Entity.AddComponent(in source) ? 1 : 0;
+            Entity.AddComponent(in source);
+            Added = HasComponent<AudioSourceData>() ? 1 : 0;
             VolumeReadPercent = (int)MathF.Round(Entity.AudioSource.Volume * 100.0f);
         }
         catch (Exception exception)
@@ -632,5 +634,298 @@ public sealed class BindingAssetMismatchProbe : ScriptBehaviour
         {
             Errors += exception.GetType().Name + ": " + exception.Message + "\n";
         }
+    }
+}
+
+/// <summary>
+/// A script with no callbacks: EntityFailureProbe fills an entity's script set with it.
+/// </summary>
+public sealed class BindingIdleScript : ScriptBehaviour
+{
+}
+
+/// <summary>
+/// Drives every failure of the Entity component and script calls (code sweep F631): a dead entity throws
+/// EntityNotAliveException, a present or missing component InvalidOperationException, RemoveComponent and
+/// Destroy answer false, and a query scope defers an add instead of failing it (the flush then applies it like
+/// a set) while an AddScript that needs a structural change is refused.
+/// </summary>
+public sealed class EntityFailureProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public string AddDead = "";
+    public string SetDead = "";
+    public string GetDead = "";
+    public string AddScriptDead = "";
+    public string DataGetDead = "";
+    public string DataSetDead = "";
+    public string DeadMessage = "";
+    public int RemoveDead = -1;
+    public int DestroyDead = -1;
+    public string AddFirst = "";
+    public string AddPresent = "";
+    public string PresentMessage = "";
+    public string SetPresent = "";
+    public string SetMissing = "";
+    public string GetMissing = "";
+    public string MissingMessage = "";
+    public string WrapperAddPresent = "";
+    public string WrapperSetMissing = "";
+    public string DataSetMissing = "";
+    public int RemovePresent = -1;
+    public int RemoveMissing = -1;
+    public int DestroyAlive = -1;
+    public string ScriptsUpToMax = "";
+    public string ScriptPastMax = "";
+    public string ScopeAddPresent = "";
+    public string ScopeAddReserved = "";
+    public string ScopeAddScriptFresh = "";
+    public string ScopeAddScriptHolder = "";
+    public int ScopeLayerAfter = -1;
+    public int ScopeReservedAlive = -1;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            ProbeDead();
+            ProbeAlive();
+            ProbeScope();
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private void ProbeDead()
+    {
+        Entity dead = ProbeSupport.Dead;
+        AddDead = ProbeSupport.Catch(() => dead.AddComponent(new Layer { Index = 1 }));
+        SetDead = ProbeSupport.Catch(() => dead.SetComponent(new Layer { Index = 1 }));
+        GetDead = ProbeSupport.Catch(() => { _ = dead.GetComponent<Layer>(); });
+        AddScriptDead = ProbeSupport.Catch(() => dead.AddScript<BindingIdleScript>());
+        DataGetDead = ProbeSupport.Catch(() => { _ = dead.AudioSource.Data; });
+        DataSetDead = ProbeSupport.Catch(() =>
+        {
+            AudioSource source = dead.AudioSource;
+            source.Data = AudioSourceData.Default;
+        });
+        try
+        {
+            dead.SetComponent(new Layer { Index = 1 });
+        }
+        catch (EntityNotAliveException exception)
+        {
+            DeadMessage = exception.Message;
+        }
+        RemoveDead = dead.RemoveComponent<Layer>() ? 1 : 0;
+        DestroyDead = dead.Destroy() ? 1 : 0;
+    }
+
+    private void ProbeAlive()
+    {
+        Entity target = Conjure.Entity.Create("failure_target");
+        AddFirst = ProbeSupport.Catch(() => target.AddComponent(new Layer { Index = 2 }));
+        AddPresent = ProbeSupport.Catch(() => target.AddComponent(new Layer { Index = 3 }));
+        try
+        {
+            target.AddComponent(new Layer { Index = 3 });
+        }
+        catch (InvalidOperationException exception)
+        {
+            PresentMessage = exception.Message;
+        }
+        SetPresent = ProbeSupport.Catch(() => target.SetComponent(new Layer { Index = 4 }));
+        SetMissing = ProbeSupport.Catch(() => target.SetComponent(new AudioListenerData { Gain = 1.0f }));
+        GetMissing = ProbeSupport.Catch(() => { _ = target.GetComponent<AudioListenerData>(); });
+        try
+        {
+            target.SetComponent(new AudioListenerData { Gain = 1.0f });
+        }
+        catch (InvalidOperationException exception)
+        {
+            MissingMessage = exception.Message;
+        }
+        WrapperAddPresent = ProbeSupport.Catch(() => AddComponent(GetComponent<LocalTransform>()));
+        WrapperSetMissing = ProbeSupport.Catch(() => SetComponent(new AudioListenerData { Gain = 1.0f }));
+        DataSetMissing = ProbeSupport.Catch(() =>
+        {
+            AudioSource source = target.AudioSource;
+            source.Data = AudioSourceData.Default;
+        });
+        RemovePresent = target.RemoveComponent<Layer>() ? 1 : 0;
+        RemoveMissing = target.RemoveComponent<Layer>() ? 1 : 0;
+
+        Entity scripted = Conjure.Entity.Create("failure_scripted");
+        ScriptsUpToMax = ProbeSupport.Catch(() =>
+        {
+            for (int index = 0; index < 8; ++index)
+            {
+                scripted.AddScript<BindingIdleScript>();
+            }
+        });
+        ScriptPastMax = ProbeSupport.Catch(() => scripted.AddScript<BindingIdleScript>());
+
+        Entity doomed = Conjure.Entity.Create("failure_doomed");
+        DestroyAlive = doomed.Destroy() ? 1 : 0;
+    }
+
+    private void ProbeScope()
+    {
+        Entity target = Conjure.Entity.Create("scope_target");
+        target.AddComponent(new Layer { Index = 5 });
+        Entity fresh = Conjure.Entity.Create("scope_fresh");
+        Entity holder = Conjure.Entity.Create("scope_holder");
+        holder.AddScript<BindingIdleScript>();
+        Entity reserved = Conjure.Entity.Null;
+        using (ComponentQuery query = ComponentQuery.Begin<LocalTransform>())
+        {
+            // Deferred to the scope end: the call cannot see that the entity already has a Layer.
+            ScopeAddPresent = ProbeSupport.Catch(() => target.AddComponent(new Layer { Index = 6 }));
+            // A reserved entity is not alive until the scope closes, so the add is refused at the call.
+            reserved = Conjure.Entity.Create("scope_reserved");
+            Entity reservedCopy = reserved;
+            ScopeAddReserved = ProbeSupport.Catch(() => reservedCopy.AddComponent(new Layer { Index = 7 }));
+            // A first script needs the script component, a structural change the locked world refuses; a further
+            // script only joins the set the entity already has.
+            ScopeAddScriptFresh = ProbeSupport.Catch(() => fresh.AddScript<BindingIdleScript>());
+            ScopeAddScriptHolder = ProbeSupport.Catch(() => holder.AddScript<BindingIdleScript>());
+        }
+        ScopeLayerAfter = target.GetComponent<Layer>().Index;
+        ScopeReservedAlive = reserved.IsAlive ? 1 : 0;
+    }
+}
+
+/// <summary>
+/// The Name property's setter and the obsolete SetName forward (code sweep F631).
+/// </summary>
+public sealed class EntityNameProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public string AfterSet = "";
+    public int FoundByNewName = -1;
+    public string AfterForward = "";
+    public int ClearedByEmpty = -1;
+    public int ClearedByNull = -1;
+    public string DeadSetter = "";
+    public string DeadGetter = "unset";
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Entity target = Conjure.Entity.Create("before");
+            target.Name = "renamed";
+            AfterSet = target.Name;
+            FoundByNewName = Conjure.Entity.Find("renamed") == target ? 1 : 0;
+#pragma warning disable CS0618 // SetName is the obsolete forward under test.
+            target.SetName("forwarded");
+#pragma warning restore CS0618
+            AfterForward = target.Name;
+            target.Name = "";
+            ClearedByEmpty = target.Name.Length == 0 ? 1 : 0;
+            target.Name = "again";
+            target.Name = null;
+            ClearedByNull = target.Name.Length == 0 ? 1 : 0;
+            Entity dead = ProbeSupport.Dead;
+            DeadSetter = ProbeSupport.Catch(() => dead.Name = "ghost");
+            DeadGetter = dead.Name;
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// Forward / Right / Up stay in parent space while WorldForward / WorldRight / WorldUp follow the parent chain
+/// (code sweep F631). The probe's entity is the parent, turned 90 degrees about +Y and scaled by 2; its child
+/// starts at identity. Axes are recorded as "x,y,z" in thousandths.
+/// </summary>
+public sealed class WorldAxisProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public string Forward = "";
+    public string WorldForward = "";
+    public string WorldRight = "";
+    public string WorldUp = "";
+    public string MirroredForward = "";
+    public string CollapsedForward = "";
+    public string CollapsedRight = "";
+    public string TinyForward = "";
+    public string FaintForward = "";
+    public string LookAtWorldForward = "";
+    public string LookAtForward = "";
+    public string DeadAxis = "";
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Transform parent = Transform;
+            parent.Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI * 0.5f);
+            parent.Scale = new Vector3(2.0f, 2.0f, 2.0f);
+            Span<Entity> children = stackalloc Entity[1];
+            Conjure.Entity.CreateMany(1, children, Entity);
+            Transform child = children[0].Transform;
+
+            Forward = Axis(child.Forward);
+            WorldForward = Axis(child.WorldForward);
+            WorldRight = Axis(child.WorldRight);
+            WorldUp = Axis(child.WorldUp);
+
+            child.Scale = new Vector3(1.0f, 1.0f, -1.0f);
+            MirroredForward = Axis(child.WorldForward);
+            child.Scale = new Vector3(1.0f, 1.0f, 0.0f);
+            CollapsedForward = Axis(child.WorldForward);
+            CollapsedRight = Axis(child.WorldRight);
+            child.Scale = new Vector3(1.0f, 1.0f, 1e-7f);
+            TinyForward = Axis(child.WorldForward);
+            child.Scale = new Vector3(1.0f, 1.0f, 1e-23f);   // its squared length underflows to zero
+            FaintForward = Axis(child.WorldForward);
+            child.Scale = Vector3.One;
+
+            Vector3 origin = child.World.Position;
+            child.LookAt(origin + new Vector3(3.0f, 0.0f, 4.0f));
+            LookAtWorldForward = Axis(child.WorldForward);
+            LookAtForward = Axis(child.Forward);
+
+            Entity dead = ProbeSupport.Dead;
+            DeadAxis = ProbeSupport.Catch(() => { _ = dead.Transform.WorldForward; });
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private static string Axis(Vector3 value)
+    {
+        return Thousandths(value.X) + "," + Thousandths(value.Y) + "," + Thousandths(value.Z);
+    }
+
+    private static int Thousandths(float value)
+    {
+        return (int)MathF.Round(value * 1000.0f);
     }
 }

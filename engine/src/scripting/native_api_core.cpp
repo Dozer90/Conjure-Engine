@@ -501,7 +501,12 @@ namespace {
         if (!id.is_valid()) {
             return 0;
         }
-        const void *data = world.get_raw(ecs::entity::from_u64(entity), id);
+        const ecs::entity target = ecs::entity::from_u64(entity);
+        if (world.registry().info(id).is_tag()) {
+            // A tag has no column to read (get_raw answers nullptr): held is all there is to report.
+            return world.has_raw(target, id) ? 1 : 0;
+        }
+        const void *data = world.get_raw(target, id);
         if (data == nullptr) {
             return 0;
         }
@@ -519,7 +524,12 @@ namespace {
         if (!id.is_valid()) {
             return 0;
         }
-        void *target = world.get_raw(ecs::entity::from_u64(entity), id, true);
+        const ecs::entity owner = ecs::entity::from_u64(entity);
+        if (world.registry().info(id).is_tag()) {
+            // Nothing to write into a tag: setting one the entity holds succeeds, as C# SetComponent expects.
+            return world.has_raw(owner, id) ? 1 : 0;
+        }
+        void *target = world.get_raw(owner, id, true);
         if (target == nullptr) {
             return 0;
         }

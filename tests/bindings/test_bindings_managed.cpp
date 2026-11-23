@@ -22,6 +22,7 @@
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_manager.h"
 #include "conjure/scripting/script_class_registry.h"
+#include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_runtime.h"
 #include "engine/subsystems/audio_components.h"
 
@@ -63,6 +64,9 @@ namespace {
     constexpr std::string_view ASSET_MISMATCH_PROBE = "Conjure.TestScripts.BindingAssetMismatchProbe";
     constexpr std::string_view PUBLIC_TYPES_PROBE = "Conjure.TestScripts.PublicTypesProbe";
     constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
+    constexpr std::string_view ENTITY_FAILURE_PROBE = "Conjure.TestScripts.EntityFailureProbe";
+    constexpr std::string_view ENTITY_NAME_PROBE = "Conjure.TestScripts.EntityNameProbe";
+    constexpr std::string_view WORLD_AXIS_PROBE = "Conjure.TestScripts.WorldAxisProbe";
     constexpr std::string_view CLIP_PATH = "assets://audio/tone.wav";
     constexpr std::string_view OTHER_PREFAB_PATH = "assets://prefabs/other.prefab";
 
@@ -640,6 +644,143 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(source->clip.id() == prefab);
         CHECK_FALSE(source->clip.is_bound());
         CHECK(logs.contains(core::log_level::WARN, "is not of the field's asset type"));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F631: Entity component and script calls report failure by exception [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), ENTITY_FAILURE_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        SUBCASE("dead entity: the mutators and GetComponent throw EntityNotAliveException") {
+            CHECK(fixture.field_string(probe, "AddDead") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "SetDead") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "GetDead") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "AddScriptDead") == "EntityNotAliveException");
+        }
+        SUBCASE("dead entity: the facade Data getter and setter throw like the facade's other members") {
+            CHECK(fixture.field_string(probe, "DataGetDead") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "DataSetDead") == "EntityNotAliveException");
+        }
+        SUBCASE("dead entity: the message names the entry and the entity") {
+            const std::string message = fixture.field_string(probe, "DeadMessage");
+            CHECK(message.starts_with("component_set: entity "));
+            CHECK(message.ends_with(" is not alive"));
+        }
+        SUBCASE("dead entity: RemoveComponent and Destroy answer false instead") {
+            CHECK(fixture.field_i64(probe, "RemoveDead") == 0);
+            CHECK(fixture.field_i64(probe, "DestroyDead") == 0);
+        }
+        SUBCASE("a present component: AddComponent throws InvalidOperationException") {
+            CHECK(fixture.field_string(probe, "AddFirst") == "none");
+            CHECK(fixture.field_string(probe, "AddPresent") == "InvalidOperationException");
+            const std::string message = fixture.field_string(probe, "PresentMessage");
+            CHECK(message.starts_with("component_add: entity "));
+            CHECK(message.ends_with(" already has Layer"));
+        }
+        SUBCASE("a missing component: SetComponent and GetComponent throw InvalidOperationException") {
+            CHECK(fixture.field_string(probe, "SetPresent") == "none");
+            CHECK(fixture.field_string(probe, "SetMissing") == "InvalidOperationException");
+            CHECK(fixture.field_string(probe, "GetMissing") == "InvalidOperationException");
+            // The message pins that the throw is Entity's own, not ComponentType's for an unregistered type.
+            const std::string message = fixture.field_string(probe, "MissingMessage");
+            CHECK(message.starts_with("component_set: entity "));
+            CHECK(message.ends_with(" has no AudioListenerData"));
+        }
+        SUBCASE("the ScriptBehaviour wrappers and the facade Data setter report the failure") {
+            CHECK(fixture.field_string(probe, "WrapperAddPresent") == "InvalidOperationException");
+            CHECK(fixture.field_string(probe, "WrapperSetMissing") == "InvalidOperationException");
+            CHECK(fixture.field_string(probe, "DataSetMissing") == "InvalidOperationException");
+        }
+        SUBCASE("RemoveComponent and Destroy answer whether there was something to do") {
+            CHECK(fixture.field_i64(probe, "RemovePresent") == 1);
+            CHECK(fixture.field_i64(probe, "RemoveMissing") == 0);
+            CHECK(fixture.field_i64(probe, "DestroyAlive") == 1);
+        }
+        SUBCASE("AddScript past MAX_SCRIPTS_PER_ENTITY") {
+            static_assert(scripting::MAX_SCRIPTS_PER_ENTITY == 8, "EntityFailureProbe adds exactly this many");
+            CHECK(fixture.field_string(probe, "ScriptsUpToMax") == "none");
+            CHECK(fixture.field_string(probe, "ScriptPastMax") == "InvalidOperationException");
+            CHECK(logs.contains(core::log_level::WARN, "already carries 8 scripts"));
+        }
+        SUBCASE("inside a query scope an add to a live entity is deferred and the flush applies it like a set") {
+            // The call cannot see that the entity already has a Layer; command_buffer::add then overwrites it.
+            CHECK(fixture.field_string(probe, "ScopeAddPresent") == "none");
+            CHECK(fixture.field_i64(probe, "ScopeLayerAfter") == 6);
+            CHECK(fixture.runtime().open_query_scope_count() == 0);
+        }
+        SUBCASE("inside a query scope an entity Create reserved refuses the add, and is alive once the scope closes") {
+            CHECK(fixture.field_string(probe, "ScopeAddReserved") == "EntityNotAliveException");
+            CHECK(fixture.field_i64(probe, "ScopeReservedAlive") == 1);
+        }
+        SUBCASE("inside a query scope a first AddScript is refused, a further one joins the set") {
+            // The first script needs the script component, which the locked world cannot add: add_script keeps
+            // its WARN, the only reason its C++ callers get, and the managed caller gets the exception as well.
+            CHECK(fixture.field_string(probe, "ScopeAddScriptFresh") == "InvalidOperationException");
+            CHECK(logs.contains(core::log_level::WARN, "add_script: no script_component"));
+            CHECK(fixture.field_string(probe, "ScopeAddScriptHolder") == "none");
+        }
+        // The two WARNs are the refused AddScripts' (past the maximum, and a first script in a locked scope).
+        CHECK(logs.count(core::log_level::WARN) == 2);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "bindings_managed - Entity.Name sets, clears and keeps SetName as a forward [dotnet]" * doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        reset_call_counters();
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), ENTITY_NAME_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_string(probe, "AfterSet") == "renamed");
+        CHECK(fixture.field_i64(probe, "FoundByNewName") == 1);
+        CHECK(fixture.field_string(probe, "AfterForward") == "forwarded");
+        CHECK(fixture.field_i64(probe, "ClearedByEmpty") == 1);
+        CHECK(fixture.field_i64(probe, "ClearedByNull") == 1);
+        CHECK(fixture.field_string(probe, "DeadSetter") == "EntityNotAliveException");
+        CHECK(fixture.field_string(probe, "DeadGetter").empty());           // a getter never throws for it
+        CHECK(call_count(native_function_id::entity_set_name) >= 5);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - sweep-2026-11-12 F631: Transform world axes follow the parent chain while Forward stays local "
+      "[dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), WORLD_AXIS_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        SUBCASE("a child at identity under a parent turned 90 degrees about +Y and scaled by 2") {
+            CHECK(fixture.field_string(probe, "Forward") == "0,0,-1000");        // parent space
+            CHECK(fixture.field_string(probe, "WorldForward") == "-1000,0,0");   // unit length despite the scale
+            CHECK(fixture.field_string(probe, "WorldRight") == "0,0,-1000");
+            CHECK(fixture.field_string(probe, "WorldUp") == "0,1000,0");
+        }
+        SUBCASE("a negative scale mirrors the axis, a zero scale collapses it to zero") {
+            CHECK(fixture.field_string(probe, "MirroredForward") == "1000,0,0");
+            CHECK(fixture.field_string(probe, "CollapsedForward") == "0,0,0");
+            CHECK(fixture.field_string(probe, "CollapsedRight") == "0,0,-1000");
+        }
+        SUBCASE("a tiny but nonzero scale still gives a unit axis") {
+            CHECK(fixture.field_string(probe, "TinyForward") == "-1000,0,0");
+            CHECK(fixture.field_string(probe, "FaintForward") == "-1000,0,0");
+        }
+        SUBCASE("after LookAt the world axis points at the target, the local one does not") {
+            CHECK(fixture.field_string(probe, "LookAtWorldForward") == "600,0,800");
+            CHECK(fixture.field_string(probe, "LookAtForward") == "-800,0,600");
+        }
+        SUBCASE("a dead entity throws") {
+            CHECK(fixture.field_string(probe, "DeadAxis") == "EntityNotAliveException");
+        }
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

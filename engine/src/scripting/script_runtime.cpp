@@ -427,6 +427,17 @@ script_entry_id script_runtime::add_script(ecs::entity entity, u64 classHash, co
     }
     script_component *component = mWorld->get<script_component>(entity);
     if (component == nullptr) {
+        if (mWorld->is_locked()) {
+            // A first script needs the script_component, a structural change the iteration lock (a managed
+            // ComponentQuery scope) refuses; asking the world anyway would trip its check_structural assert.
+            CONJURE_LOG_WARN(
+              LOG_SCRIPTING,
+              "add_script: no script_component on {}: the world is locked for iteration; add the first script "
+              "after the scope closes",
+              entity
+            );
+            return {};
+        }
         core::result<script_component *> added = mWorld->add<script_component>(entity);
         if (!added.has_value()) {
             CONJURE_LOG_WARN(LOG_SCRIPTING, "add_script: no script_component on {}: {}", entity, added.get_error());

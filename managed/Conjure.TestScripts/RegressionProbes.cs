@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Conjure;
 using Conjure.Components;
 
@@ -146,6 +148,52 @@ public sealed class NonFiniteDefaults : ScriptBehaviour
 
     [Range(0.0, double.PositiveInfinity)]
     public float Reach = 1.0f;
+}
+
+/// <summary>
+/// A sparse enum with a negative constant and an alias: enumValues must carry the values, not the positions.
+/// </summary>
+public enum SparseCode
+{
+    Negative = -5,
+    Ten = 10,
+    Hundred = 100,
+    Tenfold = 10,
+}
+
+[Flags]
+public enum TerrainMask : byte
+{
+    None = 0,
+    Ground = 1,
+    Water = 2,
+    Air = 4,
+}
+
+/// <summary>
+/// An asset type tag whose TypeName throws: the field meta leaves its assetType out instead of failing the
+/// catalog of the whole assembly.
+/// </summary>
+public readonly struct ThrowingAssetTag : IAssetType
+{
+    public string TypeName => throw new InvalidOperationException("no registered name");
+}
+
+/// <summary>
+/// The field meta of enums and asset references (sweep F673): enumValues beside enumNames, enumFlags for a
+/// [Flags] enum, and assetType as the registered asset type name, left out for an untyped reference.
+/// </summary>
+public sealed class FieldMetaProbe : ScriptBehaviour
+{
+    public AssetRef<AudioClipAsset> Clip;
+    public List<AssetRef<PrefabAsset>> Prefabs = new List<AssetRef<PrefabAsset>>();
+    public AssetRef<TextureAsset> Untyped;
+    public AssetRef<ThrowingAssetTag> Broken;
+    public SparseCode Code = SparseCode.Hundred;
+    public TerrainMask Terrain = TerrainMask.Ground | TerrainMask.Air;
+    public HighUnsigned Unsigned = HighUnsigned.High;
+    public List<SparseCode> Codes = new List<SparseCode>();
+    public int Plain = 1;
 }
 
 /// <summary>

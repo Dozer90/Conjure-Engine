@@ -156,8 +156,11 @@ struct conjure_script_class_desc {
 };
 
 /// <summary>
-/// One serialised field of a script class. meta_json is {"tooltip","min","max","enumNames","assetType",
-/// "hidden"}; default_json is the canonical JSON of the default value.
+/// One serialised field of a script class. meta_json is {"tooltip","min","max","enumNames","enumValues",
+/// "enumFlags","assetType","hidden"}, each key present only when it applies: enumValues runs parallel to
+/// enumNames with the int32 the ENUM payload carries for each name, enumFlags is true for a [Flags] enum, and
+/// assetType is the registered asset type name of the AssetRef tag ("conjure.audio.clip"), absent for an
+/// untyped reference. default_json is the canonical JSON of the default value.
 /// </summary>
 struct conjure_script_field_desc {
     uint64_t hash;

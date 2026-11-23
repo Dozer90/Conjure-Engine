@@ -191,8 +191,13 @@ public sealed class FieldAccessor
     }
 
     /// <summary>
-    /// {"tooltip","min","max","enumNames","assetType","hidden"} from the attributes (3.7). A [Range] bound
-    /// that is not finite is left out: the slider is open on that side.
+    /// {"tooltip","min","max","enumNames","enumValues","enumFlags","assetType","hidden"} from the attributes and
+    /// the field type (3.7); a key with nothing to say is left out. A [Range] bound that is not finite is left out:
+    /// the slider is open on that side. An enum field (or a list of enums) gets enumNames and the parallel
+    /// enumValues, the int32 the blob carries for each name (a uint enum's 0xFFFFFFFF is -1), and enumFlags: true
+    /// when the enum is [Flags]. An asset field (or a list of them) gets assetType, the registered asset type name of
+    /// the AssetRef tag (AssetTypeId&lt;T&gt;.TypeName, for example "conjure.audio.clip"), left out for a tag that
+    /// is not an IAssetType (an untyped reference).
     /// </summary>
     public string MetaJson()
     {
@@ -230,9 +235,9 @@ public sealed class FieldAccessor
         Type enumType = Kind == ScriptFieldKind.Enum ? Field.FieldType : ElementKind == ScriptFieldKind.Enum ? ElementType : typeof(void);
         if (enumType.IsEnum)
         {
+            string[] names = Enum.GetNames(enumType);
             Separator();
             builder.Append("\"enumNames\":[");
-            string[] names = Enum.GetNames(enumType);
             for (int index = 0; index < names.Length; ++index)
             {
                 if (index > 0)
@@ -241,14 +246,30 @@ public sealed class FieldAccessor
                 }
                 JsonText.AppendString(builder, names[index]);
             }
+            builder.Append("],\"enumValues\":[");
+            for (int index = 0; index < names.Length; ++index)
+            {
+                if (index > 0)
+                {
+                    builder.Append(',');
+                }
+                builder.Append(EnumBlobValue(enumType, names[index]).ToString(CultureInfo.InvariantCulture));
+            }
             builder.Append(']');
+            if (enumType.IsDefined(typeof(FlagsAttribute), false))
+            {
+                builder.Append(",\"enumFlags\":true");
+            }
         }
         Type assetType = Kind == ScriptFieldKind.Asset ? Field.FieldType : ElementKind == ScriptFieldKind.Asset ? ElementType : typeof(void);
-        if (assetType.IsGenericType)
+        string assetTypeName = assetType.IsGenericType
+            ? RegisteredAssetTypeName(assetType.GetGenericArguments()[0])
+            : "";
+        if (assetTypeName.Length > 0)
         {
             Separator();
             builder.Append("\"assetType\":");
-            JsonText.AppendString(builder, assetType.GetGenericArguments()[0].Name);
+            JsonText.AppendString(builder, assetTypeName);
         }
         if (Field.GetCustomAttribute<HideInInspectorAttribute>() != null)
         {
@@ -257,6 +278,53 @@ public sealed class FieldAccessor
         }
         builder.Append('}');
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// The int32 the ENUM payload carries for the constant 'name' of 'enumType' (FieldPayload.Encode): the raw
+    /// constant, so an alias names the same value as its original. 64-bit enums never get here (TryClassifyScalar).
+    /// </summary>
+    private static int EnumBlobValue(Type enumType, string name)
+    {
+        FieldInfo? constant = enumType.GetField(name, BindingFlags.Public | BindingFlags.Static);
+        object? raw = constant?.GetRawConstantValue();
+        if (raw == null)
+        {
+            return 0;
+        }
+        return unchecked((int)Convert.ToInt64(raw, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// AssetTypeId&lt;tag&gt;.TypeName, the registered asset type name of an AssetRef tag; "" for a tag that is
+    /// not an IAssetType, and for one whose TypeName threw (logged at INFO with the field, like the other fields the
+    /// catalog cannot describe fully; the reference itself stays serialised).
+    /// </summary>
+    private string RegisteredAssetTypeName(Type tag)
+    {
+        FieldInfo? typeName = typeof(AssetTypeId<>).MakeGenericType(tag)
+            .GetField(nameof(AssetTypeId<object>.TypeName), BindingFlags.Public | BindingFlags.Static);
+        try
+        {
+            return typeName?.GetValue(null) as string ?? "";
+        }
+        catch (Exception exception)
+            when (exception is TypeInitializationException || exception is TargetInvocationException)
+        {
+            // The type initializer's failure reaches here wrapped more than once: the innermost exception is the
+            // one TypeName threw.
+            Exception cause = exception;
+            while (cause.InnerException != null)
+            {
+                cause = cause.InnerException;
+            }
+            string reason = cause.Message;
+            NativeBridge.Log(
+                LogLevel.Info,
+                (Field.DeclaringType?.FullName ?? "") + "." + Field.Name + ": asset type tag " + tag.FullName
+                    + " threw from TypeName (" + reason + "); its assetType is left out of the field meta");
+            return "";
+        }
     }
 
     /// <summary>
