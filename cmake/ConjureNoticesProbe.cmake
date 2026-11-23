@@ -3,9 +3,12 @@
 #
 #   Project mode: a throwaway project (LANGUAGES NONE, version 1.2.3) includes this file with PROBE_CASE naming what
 #   to register. It writes its own fixture files (NOTICE, LICENSE, a stand-in dependency that FetchContent takes
-#   from a local folder, licence files of every shape the module reads), registers notices and either checks the
-#   two files conjure_write_third_party_notices() produced ("runtime_tree", "editor_tree", "ship") or stops on the
-#   FATAL_ERROR the case is about (every other case; its CTest entry passes on the text of that error).
+#   from a local folder, licence files of every shape the module reads, files of declarations for
+#   conjure_check_third_party_pins() and stand-ins of NVRHI's CMakeLists.txt for conjure_check_nvrhi_header_pins() of
+#   third_party/nvrhi_checks.cmake), registers notices and either checks the two files
+#   conjure_write_third_party_notices() produced and the declarations the pin checks accept ("runtime_tree",
+#   "editor_tree", "ship") or stops on the FATAL_ERROR the case is about (every other case; its CTest entry passes on
+#   the text of that error).
 #
 #   Script mode (cmake -DPROBE_SOURCE=... -DPROBE_BINARY=... -DPROBE_GENERATOR=... -P this file): the "ship" case
 #   end to end. It configures the probe, builds the target the notices are shipped next to, and checks that the
@@ -100,25 +103,153 @@ file(WRITE "${fixtures}/host/LICENSE.txt" "HOST LICENCE OF THIS MACHINE\n")
 file(WRITE "${fixtures}/panels/LICENSE.txt" "PANELS LICENCE TEXT\n")
 file(WRITE "${fixtures}/tester/LICENSE.txt" "TESTER LICENCE TEXT\n")
 
-# The stand-in dependency: declared like a pinned one, taken from the fixture folder instead of the network. A
-# second one is declared and never made available, like a dependency of a backend this tree does not build.
-FetchContent_Declare(probe_dependency
-    GIT_REPOSITORY https://example.invalid/probe_dependency.git
-    GIT_TAG        v1.0
+# The stand-in dependency: declared like a pinned one (the archive of a commit, its SHA-256 and the release tag as
+# the comment beside the name), taken from the fixture folder instead of the network. A second one is declared by its
+# commit alone and never made available, like a dependency of a backend this tree does not build. It is spelled as
+# CMake reads it too, in lower case with a blank before the '(', with a ')' in the comment on its first line: the pin
+# check, the VERSION check (archive_mismatch) and the declaration scan of the notices (declaration_without_notice)
+# each find it. An older declaration of each is kept above it as a comment, which no check may read as its pin (the
+# VERSION check of the runtime_tree and editor_tree cases would compare the commit 8888...).
+set(probeAbsentCommit 9999999999999999999999999999999999999999)
+# FetchContent_Declare(probe_dependency  # tag v0.9
+FetchContent_Declare(probe_dependency  # tag v1.0
+    URL      https://example.invalid/probe/dependency/archive/1111111111111111111111111111111111111111.tar.gz
+    URL_HASH SHA256=1111111111111111111111111111111111111111111111111111111111111111
 )
-FetchContent_Declare(probe_absent
-    GIT_REPOSITORY https://example.invalid/probe_absent.git
-    GIT_TAG        v9
+# fetchcontent_declare (probe_absent URL https://example.invalid/8888888888888888888888888888888888888888.tar.gz
+fetchcontent_declare (probe_absent  # pinned by its commit alone (no release tag)
+    URL      https://example.invalid/probe/absent/archive/9999999999999999999999999999999999999999.tar.gz
+    URL_HASH SHA256=9999999999999999999999999999999999999999999999999999999999999999
 )
 set(FETCHCONTENT_SOURCE_DIR_PROBE_DEPENDENCY "${fixtures}/dependency")
 FetchContent_MakeAvailable(probe_dependency)
 
+# Files of declarations for conjure_check_third_party_pins(), which reads them and runs none. The commands are spelled
+# through variables here, so that neither that check nor the declaration scan of the notices, both of which read
+# this file too, takes the text of a fixture for a call of the probe.
+set(declare "FetchContent_Declare")
+set(declareLowerCase "fetchcontent_declare")
+set(populate "FetchContent_Populate")
+set(externalProject "ExternalProject_Add")
+set(language "cmake_language")
+string(REPEAT "a" 64 hashA)
+string(REPEAT "B" 64 hashUpper)
+string(REPEAT "c" 63 hashShort)
+string(REPEAT "d" 32 hashMd5)
+set(archive "https://example.invalid/probe/pinned/archive/2222222222222222222222222222222222222222.tar.gz")
+file(WRITE "${fixtures}/pins/empty.cmake" "# Declares nothing.\n")
+# Every form the check accepts: a declaration commented out whole (by git, which would fail), comments after the
+# arguments that name options the check refuses, upper-case hex digits, two declarations in a file, a ';' between
+# arguments, a URL list of two mirrors and the hash on the line of the URL, a declaration in lower case with a blank
+# before the '(', FetchContent_Populate(<name>) of a declared name (with blanks around it), a function whose name
+# only ends in a command the check reads, a quoted URL and hash, and bracket comments (one spanning lines and holding
+# a ')' and a closing bracket of another level, one inside a declaration) that name options the check refuses.
+file(WRITE "${fixtures}/pins/accepted.cmake"
+    "# ${declare}(probe_commented GIT_REPOSITORY https://example.invalid/commented.git GIT_TAG main)\n"
+    "${declare}(probe_first  # tag v1.0\n"
+    "    URL      ${archive}  # was GIT_TAG v1.0, before code sweep F772\n"
+    "    URL_HASH SHA256=${hashA}  # DOWNLOAD_COMMAND is not an argument here\n"
+    "    SOURCE_SUBDIR cmake_not_used\n"
+    ")\n"
+    "${declare}(probe_second;URL ${archive} https://mirror.invalid/second.tar.gz URL_HASH SHA256=${hashUpper})\n"
+    "${declareLowerCase} (probe_third URL ${archive} URL_HASH SHA256=${hashA})\n"
+    "${populate}(probe_first)\n"
+    "${populate} ( probe_second )\n"
+    "conjure_${declare}(probe_wrapped GIT_REPOSITORY https://example.invalid/wrapped.git)\n"
+    "${declare}(probe_quoted_hash URL \"${archive}\" URL_HASH \"SHA256=${hashA}\")\n"
+    "#[=[ ${declare}(probe_bracketed GIT_REPOSITORY https://example.invalid/bracketed.git\n"
+    "    GIT_TAG main) ]] is no end ]=]\n"
+    "${declare}(probe_fourth #[==[ GIT_TAG v1.0 ]==] URL ${archive} URL_HASH SHA256=${hashA})\n"
+)
+# One fixture for each refusal.
+file(WRITE "${fixtures}/pins/git.cmake"
+    "${declare}(probe_git\n"
+    "    GIT_REPOSITORY https://example.invalid/probe_git.git\n"
+    "    GIT_TAG        v1.0\n"
+    ")\n"
+)
+file(WRITE "${fixtures}/pins/git_beside_hash.cmake"
+    "${declare}(probe_mixed URL ${archive} URL_HASH SHA256=${hashA} GIT_SHALLOW TRUE)\n")
+file(WRITE "${fixtures}/pins/download_command.cmake"
+    "${declare}(probe_command URL ${archive} URL_HASH SHA256=${hashA}\n    DOWNLOAD_COMMAND curl -O ${archive})\n")
+file(WRITE "${fixtures}/pins/no_url.cmake" "${declare}(probe_no_url URL_HASH SHA256=${hashA})\n")
+file(WRITE "${fixtures}/pins/no_hash.cmake" "${declare}(probe_unhashed\n    URL ${archive}\n)\n")
+file(WRITE "${fixtures}/pins/md5_hash.cmake" "${declare}(probe_md5 URL ${archive} URL_HASH MD5=${hashMd5})\n")
+file(WRITE "${fixtures}/pins/short_hash.cmake" "${declare}(probe_short URL ${archive} URL_HASH SHA256=${hashShort})\n")
+file(WRITE "${fixtures}/pins/lower_case.cmake"
+    "${declareLowerCase} (probe_lower GIT_REPOSITORY https://example.invalid/lower.git GIT_TAG v1.0)\n")
+file(WRITE "${fixtures}/pins/populate.cmake"
+    "${populate}(probe_populate\n    URL ${archive}\n    URL_HASH SHA256=${hashA}\n)\n")
+file(WRITE "${fixtures}/pins/external_project.cmake"
+    "${externalProject}(probe_external URL ${archive} URL_HASH SHA256=${hashA})\n")
+# CMake reads a quoted keyword as the keyword, and the arguments after a bracket comment on its line.
+file(WRITE "${fixtures}/pins/quoted_keyword.cmake" "${declare}(probe_quoted URL ${archive} URL_HASH SHA256=${hashA}"
+    " \"GIT_REPOSITORY\" https://example.invalid/quoted.git \"GIT_TAG\" main)\n")
+file(WRITE "${fixtures}/pins/bracket_comment.cmake"
+    "${declare}(probe_bracket #[[pinned]] GIT_REPOSITORY https://example.invalid/bracket.git"
+    " URL ${archive} URL_HASH SHA256=${hashA})\n")
+# A "#[[" inside a line comment opens no bracket comment: the declaration on the next line is read.
+file(WRITE "${fixtures}/pins/bracket_in_line_comment.cmake"
+    "# the old pin: #[[\n${declare}(probe_after GIT_REPOSITORY https://example.invalid/after.git GIT_TAG v1.0)\n"
+    "# ]]\n")
+file(WRITE "${fixtures}/pins/cmake_language.cmake"
+    "${language}(CALL ${declare} probe_language GIT_REPOSITORY https://example.invalid/language.git)\n")
+
+# Stand-ins for NVRHI's CMakeLists.txt for conjure_check_nvrhi_header_pins() (third_party/nvrhi_checks.cmake): the
+# tags as NVRHI sets them (the second spelled in upper case with blanks, as CMake accepts it) with the declarations
+# NVRHI makes (one in lower case, and an unknown one commented out), a Vulkan tag other than the pinned one, a file
+# that no longer sets the DirectX tag, and one that declares a dependency the check does not know.
+include("${CMAKE_CURRENT_LIST_DIR}/../third_party/nvrhi_checks.cmake")
+set(nvrhiDirectxTag "v1.717.0-preview")
+set(nvrhiVulkanTag "v1.4.352")
+set(nvrhiVulkanLine "    set(NVRHI_VULKAN_HEADERS_GIT_TAG \"${nvrhiVulkanTag}\" CACHE STRING \"Vulkan-Headers tag\")\n")
+set(nvrhiDirectxLine
+    "    SET( NVRHI_DIRECTX_HEADERS_GIT_TAG \"${nvrhiDirectxTag}\" CACHE STRING \"DirectX-Headers git tag\")\n")
+set(nvrhiDeclarations
+    "        ${declare}(\n            vulkan_headers\n            GIT_REPOSITORY https://example.invalid/vk.git)\n"
+    "        ${declare}(directx_headers GIT_REPOSITORY https://example.invalid/dx.git)\n"
+    "    # ${declare}(nvapi GIT_REPOSITORY https://example.invalid/nvapi.git)\n"
+    "        ${declareLowerCase} (rtxmu GIT_REPOSITORY https://example.invalid/rtxmu.git)\n")
+file(WRITE "${fixtures}/nvrhi/matching/CMakeLists.txt" "${nvrhiVulkanLine}" "${nvrhiDirectxLine}"
+    ${nvrhiDeclarations})
+file(WRITE "${fixtures}/nvrhi/unknown_dependency/CMakeLists.txt" "${nvrhiVulkanLine}" "${nvrhiDirectxLine}"
+    ${nvrhiDeclarations} "    ${declare}(nvapi GIT_REPOSITORY https://example.invalid/nvapi.git)\n")
+file(WRITE "${fixtures}/nvrhi/differing/CMakeLists.txt"
+    "    set(NVRHI_VULKAN_HEADERS_GIT_TAG \"v1.4.353\" CACHE STRING \"Vulkan-Headers git tag\")\n"
+    "    set(NVRHI_DIRECTX_HEADERS_GIT_TAG \"${nvrhiDirectxTag}\" CACHE STRING \"DirectX-Headers git tag\")\n")
+file(WRITE "${fixtures}/nvrhi/unset/CMakeLists.txt" "${nvrhiVulkanLine}"
+    "    set(NVRHI_DIRECTX_HEADERS_GIT_REPOSITORY \"https://example.invalid/directx.git\" CACHE STRING \"\")\n")
+
 #------------------------------------------------------------------------------
 # Project mode: the cases that stop the configure
 #------------------------------------------------------------------------------
+set(refusedPinFixtures
+    git git_beside_hash download_command no_url no_hash md5_hash short_hash lower_case populate external_project
+    quoted_keyword bracket_comment bracket_in_line_comment cmake_language)
+string(REGEX REPLACE "^pins_" "" refusedPins "${PROBE_CASE}")
 if(PROBE_CASE STREQUAL "pin_mismatch")
     conjure_third_party_notice(alpha NAME "Alpha" VERSION v2.0 LICENSE_ID "MIT" SCOPE RUNTIME
         FETCH probe_dependency LICENSE_FILES LICENSE)
+elseif(PROBE_CASE STREQUAL "archive_mismatch")
+    # Without a tag comment the pin is the commit the archive is named after, not a release name.
+    conjure_third_party_notice(absent NAME "Absent" VERSION v9 LICENSE_ID "MIT" SCOPE RUNTIME
+        FETCH probe_absent LICENSE_FILES LICENSE)
+elseif(PROBE_CASE MATCHES "^pins_" AND refusedPins IN_LIST refusedPinFixtures)
+    conjure_check_third_party_pins("${fixtures}/pins/empty.cmake" "${fixtures}/pins/${refusedPins}.cmake")
+elseif(PROBE_CASE MATCHES "^pins_nvrhi_(differing|unset|unknown_dependency)$")
+    conjure_check_nvrhi_header_pins("${fixtures}/nvrhi/${CMAKE_MATCH_1}/CMakeLists.txt" "${nvrhiDirectxTag}"
+        "${nvrhiVulkanTag}")
+elseif(PROBE_CASE STREQUAL "pins_nvrhi_rtxmu_enabled")
+    set(NVRHI_WITH_RTXMU ON)
+    conjure_check_nvrhi_header_pins("${fixtures}/nvrhi/matching/CMakeLists.txt" "${nvrhiDirectxTag}"
+        "${nvrhiVulkanTag}")
+elseif(PROBE_CASE STREQUAL "pins_nvrhi_missing_file")
+    conjure_check_nvrhi_header_pins("${fixtures}/nvrhi/not_there/CMakeLists.txt" "${nvrhiDirectxTag}"
+        "${nvrhiVulkanTag}")
+elseif(PROBE_CASE STREQUAL "pins_missing_file")
+    conjure_check_third_party_pins("${fixtures}/pins/not_there.cmake")
+elseif(PROBE_CASE STREQUAL "pins_no_files")
+    conjure_check_third_party_pins()
 elseif(PROBE_CASE STREQUAL "missing_licence_file")
     conjure_third_party_notice(alpha NAME "Alpha" VERSION v1.0 LICENSE_ID "MIT" SCOPE RUNTIME
         FETCH probe_dependency LICENSE_FILES COPYING)
@@ -141,7 +272,7 @@ elseif(PROBE_CASE STREQUAL "written_twice")
     # Both declared dependencies are named, so the first call passes.
     conjure_third_party_notice(alpha NAME "Alpha" VERSION v1.0 LICENSE_ID "MIT" SCOPE RUNTIME
         FETCH probe_dependency LICENSE_FILES LICENSE)
-    conjure_third_party_notice(absent NAME "Absent" VERSION v9 LICENSE_ID "MIT" SCOPE RUNTIME
+    conjure_third_party_notice(absent NAME "Absent" VERSION ${probeAbsentCommit} LICENSE_ID "MIT" SCOPE RUNTIME
         FETCH probe_absent LICENSE_FILES LICENSE)
     conjure_write_third_party_notices()
     conjure_write_third_party_notices()
@@ -161,6 +292,12 @@ endif()
 #------------------------------------------------------------------------------
 # Project mode: a complete registration, and what the configure wrote from it
 #------------------------------------------------------------------------------
+# The probe's own declarations pin as the engine's must, and every form of the accepted fixture passes, beside a
+# file that declares nothing. NVRHI's stand-in that names the pinned header tags passes too.
+conjure_check_third_party_pins("${CMAKE_CURRENT_LIST_FILE}" "${fixtures}/pins/accepted.cmake"
+    "${fixtures}/pins/empty.cmake")
+conjure_check_nvrhi_header_pins("${fixtures}/nvrhi/matching/CMakeLists.txt" "${nvrhiDirectxTag}" "${nvrhiVulkanTag}")
+
 set(CONJURE_BUILD_EDITOR OFF)
 if(PROBE_CASE STREQUAL "editor_tree")
     set(CONJURE_BUILD_EDITOR ON)
@@ -180,7 +317,7 @@ it runs past the width of the rules around the entry."
     FETCH probe_dependency LICENSE_FILES LICENSE docs/EXTRA.txt
 )
 conjure_third_party_notice(absent
-    NAME "Absent" VERSION v9 LICENSE_ID "MIT" SCOPE RUNTIME
+    NAME "Absent" VERSION ${probeAbsentCommit} LICENSE_ID "MIT" SCOPE RUNTIME
     FETCH probe_absent LICENSE_FILES LICENSE
 )
 conjure_third_party_notice(unlinked
@@ -356,7 +493,7 @@ probe_expect_manifest(alpha files "docs/EXTRA.txt" 1 label)
 probe_expect_manifest(alpha files "${fixtures}/dependency/docs/EXTRA.txt" 1 path)
 probe_expect_manifest(absent used OFF)
 probe_expect_manifest(absent shipped OFF)
-probe_expect_manifest(absent version "v9")
+probe_expect_manifest(absent version "${probeAbsentCommit}")
 probe_expect_manifest(unlinked used OFF)
 probe_expect_manifest(tester used ON)
 probe_expect_manifest(tester shipped OFF)

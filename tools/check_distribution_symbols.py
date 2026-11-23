@@ -31,7 +31,8 @@ Modes:
                                           A --config that disagrees with a single-config directory's
                                           CMAKE_BUILD_TYPE is a usage error.
     --binary <file> [...]                 checks the named binaries, whatever build produced them
-    --self-test                           runs the matcher and the cache parser over embedded tool output
+    --self-test                           runs the matcher and the cache parser over embedded tool output, and
+                                          the lookup of the binaries over a fake build directory
 
 Options: --tool <dumpbin|llvm-nm|nm, a path or a program name looked up on PATH> (default: searched on PATH;
 dumpbin on Windows),
@@ -56,12 +57,15 @@ or directly:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import pathlib
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -71,6 +75,7 @@ EXIT_FINDINGS = 1
 EXIT_USAGE = 2
 EXIT_SKIPPED = 77
 
+PROGRAM = "check_distribution_symbols"
 DISTRIBUTION_CONFIG = "Distribution"
 RUNTIME_NAMES = ("conjure_runtime.exe", "conjure_runtime")
 SHARED_LIBRARY_NAMES = ("conjure_shared.dll", "libconjure_shared.so", "libconjure_shared.dylib")
@@ -291,6 +296,66 @@ def check_binaries(binaries: list[pathlib.Path], tool_argument: str | None, max_
     return EXIT_CLEAN
 
 
+def read_build_cache(build_dir: pathlib.Path, program: str) -> dict[str, str] | None:
+    """The CMakeCache.txt entries of a build directory; None, after a usage message prefixed with <program>, when it
+    is no directory or holds no cache. Shared with tools/check_distribution_paths.py."""
+    if not build_dir.is_dir():
+        print(f"{program}: {build_dir} is not a directory", file=sys.stderr)
+        return None
+    cache = read_cache(build_dir)
+    if not cache:
+        print(f"{program}: {build_dir} has no CMakeCache.txt (not a configured build directory)", file=sys.stderr)
+        return None
+    return cache
+
+
+def resolve_distribution_binaries(
+  build_dir: pathlib.Path,
+  cache: dict[str, str],
+  config_argument: str | None,
+  any_config: bool,
+  with_shared: bool,
+  program: str,
+) -> tuple[int, list[pathlib.Path]]:
+    """The binaries a check of a Distribution build directory reads: bin/conjure_runtime and, with <with_shared>,
+    the conjure_shared library next to it (in bin/<config>/ under a multi-config generator). Returns EXIT_CLEAN and
+    the binaries, or after a message prefixed with <program> EXIT_USAGE (disagreeing or missing --config, missing
+    binary) or EXIT_SKIPPED (not a Distribution build, unless <any_config>) and no binaries. Shared with
+    tools/check_distribution_paths.py."""
+    configuration, multi_config = build_configuration(cache, config_argument)
+    if configuration is None:
+        print(
+            f"{program}: --config {config_argument} disagrees with "
+            f"CMAKE_BUILD_TYPE={cache.get('CMAKE_BUILD_TYPE', '')} of the single-config build directory {build_dir}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE, []
+    if multi_config and not configuration:
+        print(f"{program}: a multi-config build directory needs --config <name>", file=sys.stderr)
+        return EXIT_USAGE, []
+    if configuration != DISTRIBUTION_CONFIG and not any_config:
+        print(
+            f"{program}: {build_dir} is a '{configuration or 'unknown'}' build, not a "
+            f"{DISTRIBUTION_CONFIG} one; the check runs on Distribution binaries only (pass --any-config to force)"
+        )
+        return EXIT_SKIPPED, []
+
+    bin_dir = build_dir / "bin"
+    if multi_config and (bin_dir / configuration).is_dir():
+        bin_dir = bin_dir / configuration
+    runtime, shared = find_binaries(bin_dir, with_shared)
+    if runtime is None:
+        print(f"{program}: no conjure_runtime executable in {bin_dir} (is the build complete?)", file=sys.stderr)
+        return EXIT_USAGE, []
+    binaries = [runtime]
+    if with_shared:
+        if shared is None:
+            print(f"{program}: no conjure_shared library in {bin_dir} (pass --no-shared to skip it)", file=sys.stderr)
+            return EXIT_USAGE, []
+        binaries.append(shared)
+    return EXIT_CLEAN, binaries
+
+
 def run_build_dir(
   build_dir_argument: str,
   config_argument: str | None,
@@ -300,48 +365,12 @@ def run_build_dir(
   max_findings: int,
 ) -> int:
     build_dir = pathlib.Path(build_dir_argument)
-    if not build_dir.is_dir():
-        print(f"check_distribution_symbols: {build_dir} is not a directory", file=sys.stderr)
+    cache = read_build_cache(build_dir, PROGRAM)
+    if cache is None:
         return EXIT_USAGE
-    cache = read_cache(build_dir)
-    if not cache:
-        print(f"check_distribution_symbols: {build_dir} has no CMakeCache.txt (not a configured build directory)",
-              file=sys.stderr)
-        return EXIT_USAGE
-
-    configuration, multi_config = build_configuration(cache, config_argument)
-    if configuration is None:
-        print(
-            f"check_distribution_symbols: --config {config_argument} disagrees with "
-            f"CMAKE_BUILD_TYPE={cache.get('CMAKE_BUILD_TYPE', '')} of the single-config build directory {build_dir}",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
-    if multi_config and not configuration:
-        print("check_distribution_symbols: a multi-config build directory needs --config <name>", file=sys.stderr)
-        return EXIT_USAGE
-    if configuration != DISTRIBUTION_CONFIG and not any_config:
-        print(
-            f"check_distribution_symbols: {build_dir} is a '{configuration or 'unknown'}' build, not a "
-            f"{DISTRIBUTION_CONFIG} one; the check runs on Distribution binaries only (pass --any-config to force)"
-        )
-        return EXIT_SKIPPED
-
-    bin_dir = build_dir / "bin"
-    if multi_config and (bin_dir / configuration).is_dir():
-        bin_dir = bin_dir / configuration
-    runtime, shared = find_binaries(bin_dir, with_shared)
-    if runtime is None:
-        print(f"check_distribution_symbols: no conjure_runtime executable in {bin_dir} (is the build complete?)",
-              file=sys.stderr)
-        return EXIT_USAGE
-    binaries = [runtime]
-    if with_shared:
-        if shared is None:
-            print(f"check_distribution_symbols: no conjure_shared library in {bin_dir} (pass --no-shared to skip it)",
-                  file=sys.stderr)
-            return EXIT_USAGE
-        binaries.append(shared)
+    code, binaries = resolve_distribution_binaries(build_dir, cache, config_argument, any_config, with_shared, PROGRAM)
+    if code != EXIT_CLEAN:
+        return code
     return check_binaries(binaries, tool_argument, max_findings)
 
 
@@ -561,6 +590,32 @@ def run_self_test() -> int:
            build_configuration(multi, "Distribution") == ("Distribution", True),
            str(build_configuration(multi, "Distribution")))
 
+    # The lookup of the binaries both Distribution checks share, over a fake build directory.
+    with tempfile.TemporaryDirectory(prefix="distribution_symbols_") as directory:
+        build_dir = pathlib.Path(directory)
+        (build_dir / "CMakeCache.txt").write_text(SELF_TEST_SINGLE_CONFIG_CACHE, encoding="utf-8")
+        (build_dir / "bin").mkdir()
+        (build_dir / "bin" / "conjure_runtime").write_bytes(b"\x00")
+        messages = io.StringIO()
+        with contextlib.redirect_stdout(messages), contextlib.redirect_stderr(messages):
+            cache = read_build_cache(build_dir, PROGRAM)
+            missing_shared = resolve_distribution_binaries(build_dir, cache or {}, None, False, True, PROGRAM)
+            (build_dir / "bin" / "libconjure_shared.so").write_bytes(b"\x00")
+            found = resolve_distribution_binaries(build_dir, cache or {}, None, False, True, PROGRAM)
+            skipped = resolve_distribution_binaries(build_dir, {"CMAKE_BUILD_TYPE": "Debug"}, None, False, True,
+                                                    PROGRAM)
+            no_cache = read_build_cache(build_dir / "bin", PROGRAM)
+        bin_dir = build_dir / "bin"
+        expect("the shared lookup finds the runtime and the shared library of a Distribution build directory",
+               found == (EXIT_CLEAN, [bin_dir / "conjure_runtime", bin_dir / "libconjure_shared.so"]), str(found))
+        expect("the shared lookup reports a missing shared library as a usage error, named by the caller",
+               missing_shared == (EXIT_USAGE, [])
+               and f"{PROGRAM}: no conjure_shared library in" in messages.getvalue(), messages.getvalue())
+        expect("the shared lookup skips a build directory that is not Distribution", skipped == (EXIT_SKIPPED, []),
+               str(skipped))
+        expect("the shared cache reader refuses a directory without CMakeCache.txt",
+               no_cache is None and "has no CMakeCache.txt" in messages.getvalue(), messages.getvalue())
+
     print(f"check_distribution_symbols: self-test {cases} case(s), {failures} failure(s)")
     return EXIT_FINDINGS if failures else EXIT_CLEAN
 
@@ -585,7 +640,9 @@ def main(argv: list[str]) -> int:
                         help="check a build directory even when it is not a Distribution build")
     parser.add_argument("--max-findings", type=int, default=DEFAULT_MAX_FINDINGS,
                         help=f"findings printed per binary (default: {DEFAULT_MAX_FINDINGS})")
-    parser.add_argument("--self-test", action="store_true", help="run the matcher over embedded tool output")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the matcher over embedded tool output and the binary lookup over a fake build "
+                             "directory")
     args = parser.parse_args(argv)
 
     if args.max_findings < 1:

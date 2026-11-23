@@ -1,6 +1,7 @@
-# Warning configuration shared by every Conjure target.
+# Warning configuration shared by every Conjure target, and the Distribution path options that every target of the
+# tree is compiled with (see the last section).
 #
-# Third-party code is never built with these flags: fetched dependencies are declared with
+# Third-party code is never built with the warning flags: fetched dependencies are declared with
 # SYSTEM so their headers are treated as external, and their own targets keep their own
 # warning settings.
 
@@ -80,3 +81,22 @@ if(WIN32)
         _CRT_SECURE_NO_WARNINGS
     )
 endif()
+
+#------------------------------------------------------------------------------
+# Source paths in Distribution binaries (code sweep F613)
+#------------------------------------------------------------------------------
+# Distribution compiles every C, C++ and Objective-C source of the tree with the options of
+# cmake/ConjureDistributionPaths.cmake, which remove the source and build directories from the paths __FILE__ and
+# std::source_location embed; Debug and Development keep absolute paths. They are added with add_compile_options to
+# the directory that includes this file (the root CMakeLists.txt, before third_party/), not to
+# conjure::platform_defines, so they reach every target of this tree, third-party code included. A target that
+# replaces its directory's compile options loses them. In a project that adds Conjure with add_subdirectory(), the
+# roots are its top-level directories (CMAKE_SOURCE_DIR and CMAKE_BINARY_DIR are the parent's) and Conjure's own
+# (PROJECT_SOURCE_DIR and PROJECT_BINARY_DIR, where they lie outside the parent's), mapped for Conjure's targets only:
+# the parent's own targets get none of the options unless it adds them itself. tools/check_distribution_paths.py
+# proves the result on the built Distribution binaries, and the case "regression - code sweep F613 ..." of
+# tests/core/foundation/test_log.cpp on a test compiled with them.
+include(ConjureDistributionPaths)
+conjure_distribution_path_options(_conjureDistributionPathOptions)
+add_compile_options(${_conjureDistributionPathOptions})
+unset(_conjureDistributionPathOptions)

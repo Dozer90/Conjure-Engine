@@ -18,17 +18,24 @@
 #                                     failed startup -> 1 (named in --log-file as well)
 #   runtime.msvc_runtime_folder_rules the probe of runtime/cmake/ConjureMsvcRuntime.cmake: which Visual C++
 #                                     redistributable folder a Distribution build ships (every platform)
+#   runtime.distribution_path_options the probe of cmake/ConjureDistributionPaths.cmake (code sweep F613): the
+#                                     compile options that keep the checkout out of a Distribution binary, for
+#                                     every compiler family and root layout (every platform)
 #   runtime.check_distribution_symbols_tool
 #                                     the self-test of tools/check_distribution_symbols.py (always registered)
+#   runtime.check_distribution_paths_tool
+#                                     the self-test tools/tests/test_check_distribution_paths.py (always registered)
 #   runtime.distribution_symbols      tools/check_distribution_symbols.py over the Distribution conjure_runtime
 #                                     and conjure_shared
+#   runtime.distribution_paths        tools/check_distribution_paths.py over the same two binaries: neither names
+#                                     the source or build directory of the tree (code sweep F613)
 #
 # Every case spawns the executable, so the module carries the label "process" (08_testing.md 6.3 item 8,
 # docs/handbook/ci.md): the default test presets skip it and CI runs it explicitly after the build:
 #   ctest --test-dir build/<preset> -L process --output-on-failure
-# The directory runtime.distribution_symbols checks is CONJURE_DISTRIBUTION_BUILD_DIR when set (a Debug build
-# can then verify a Distribution build next to it), else this build directory when it is a Distribution one
-# (or a multi-config build, where the tool reports 77 = skipped unless ctest runs -C Distribution).
+# The directory runtime.distribution_symbols and runtime.distribution_paths check is CONJURE_DISTRIBUTION_BUILD_DIR
+# when set (a Debug build can then verify a Distribution build next to it), else this build directory when it is a
+# Distribution one (or a multi-config build, where the tools report 77 = skipped unless ctest runs -C Distribution).
 
 if(NOT TARGET conjure_runtime OR NOT TARGET conjure::engine)
     message(STATUS "tests/runtime: conjure_runtime is not built, runtime tests skipped")
@@ -114,11 +121,24 @@ set_tests_properties(runtime.msvc_runtime_folder_rules PROPERTIES
 )
 
 #------------------------------------------------------------------------------
-# Distribution stripping (tools/check_distribution_symbols.py)
+# Source paths in Distribution binaries (cmake/ConjureDistributionPaths.cmake, code sweep F613)
+#------------------------------------------------------------------------------
+# The options are string handling, so their probe runs in script mode on every platform, with the CMake that
+# configured this tree, over stand-in roots and compiler ids. Label "build", as the probe above.
+add_test(NAME runtime.distribution_path_options
+    COMMAND "${CMAKE_COMMAND}" -P "${PROJECT_SOURCE_DIR}/cmake/ConjureDistributionPathsProbe.cmake"
+)
+set_tests_properties(runtime.distribution_path_options PROPERTIES
+    LABELS "runtime;build" TIMEOUT 120 PASS_REGULAR_EXPRESSION "distribution paths probe: passed"
+)
+
+#------------------------------------------------------------------------------
+# Distribution stripping and source paths (tools/check_distribution_symbols.py, tools/check_distribution_paths.py)
 #------------------------------------------------------------------------------
 set(CONJURE_DISTRIBUTION_BUILD_DIR "" CACHE PATH
-    "A built Distribution build directory whose conjure_runtime and conjure_shared the test \
-runtime.distribution_symbols checks (empty: this directory when it is a Distribution build)")
+    "A built Distribution build directory whose conjure_runtime and conjure_shared the tests \
+runtime.distribution_symbols and runtime.distribution_paths check (empty: this directory when it is a \
+Distribution build)")
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
@@ -129,6 +149,15 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set_tests_properties(runtime.check_distribution_symbols_tool PROPERTIES LABELS "runtime;tools" TIMEOUT 120)
+
+    # Its case of the options probe runs the CMake of this tree (CONJURE_CMAKE_COMMAND), not one found on PATH.
+    add_test(NAME runtime.check_distribution_paths_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_check_distribution_paths.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(runtime.check_distribution_paths_tool PROPERTIES
+        LABELS "runtime;tools" TIMEOUT 120 ENVIRONMENT "CONJURE_CMAKE_COMMAND=${CMAKE_COMMAND}"
+    )
 
     # The symbol-listing tool of the toolchain that linked the binaries: dumpbin sits beside the MSVC
     # linker, GCC and Clang toolchains provide nm (CMAKE_NM). Without either the script searches PATH.
@@ -159,10 +188,21 @@ if(Python3_Interpreter_FOUND)
         set_tests_properties(runtime.distribution_symbols PROPERTIES
             LABELS "runtime;process" TIMEOUT 300 SKIP_RETURN_CODE 77
         )
+
+        # It reads the bytes of the binaries itself, so it takes no symbol-listing tool.
+        add_test(NAME runtime.distribution_paths
+            COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/check_distribution_paths.py"
+                ${distributionArguments}
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        )
+        set_tests_properties(runtime.distribution_paths PROPERTIES
+            LABELS "runtime;process" TIMEOUT 300 SKIP_RETURN_CODE 77
+        )
     else()
         message(STATUS "tests/runtime: not a Distribution build and CONJURE_DISTRIBUTION_BUILD_DIR is empty; "
-                       "runtime.distribution_symbols not registered")
+                       "runtime.distribution_symbols and runtime.distribution_paths not registered")
     endif()
 else()
-    message(STATUS "tests/runtime: Python 3 not found, the check_distribution_symbols tests are not registered")
+    message(STATUS "tests/runtime: Python 3 not found, the check_distribution_symbols and "
+                   "check_distribution_paths tests are not registered")
 endif()

@@ -15,8 +15,9 @@ backend is built), so the document is merged:
   - a notice the tree uses gets its section written anew from the licence files;
   - a notice the tree knows but does not use keeps the section the document already has, byte for byte. It is an
     error when the document has none, or when its section was written for another name, pin, licence, scope,
-    source or note than the tree registers (a pin the tree does not know, as for headers NVRHI would fetch, is
-    not compared): run the tool on a tree that fetches the software;
+    source or note than the tree registers (a notice registered without a pin, as for software the build machine
+    provides instead of a download, .NET and the Visual C++ runtime, is not compared on its version): run the tool on
+    a tree that fetches the software;
   - a section whose notice is no longer registered is dropped.
 
 The licence text of software that is found on the build machine instead of pinned (.NET) is never part of the
@@ -226,8 +227,9 @@ def load_manifest(path: pathlib.Path) -> dict:
 
 
 def same_notice(tracked: dict, registered: dict) -> bool:
-    """True when a tracked section was written for the notice a tree registers. The tree does not know the pin of
-    software another dependency would fetch for it, so an empty registered version matches any."""
+    """True when a tracked section was written for the notice a tree registers. A notice registered without a
+    version (software that is not pinned: what the build machine provides, such as .NET and the Visual C++ runtime,
+    or code kept in the tree) matches a tracked section of any version."""
     for key in METADATA_KEYS:
         if key == "version" and not registered["version"]:
             continue

@@ -221,6 +221,12 @@ jobs:
           fi
           build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
           python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
+      # Neither the source nor the build directory may appear in the Distribution runtime or conjure_shared, in a
+      # string, debug information or a PDB reference (code sweep F613, cmake/ConjureDistributionPaths.cmake). Runs
+      # whenever the Distribution build succeeded, so a red export does not hide it.
+      - name: Distribution path check
+        if: ${{ !cancelled() && steps.build-dist.outcome == 'success' }}
+        run: python tools/check_distribution_paths.py --build-dir build/${{ matrix.dist-preset }}
       # The whole unit suite in the shipping configuration (08_testing.md D16, code sweep F332): asserts and
       # TRACE/DEBUG logging are compiled out here and in no other job, so code that leans on an assert's side
       # effect fails only in this run. The test executables are part of the Distribution build above; the preset

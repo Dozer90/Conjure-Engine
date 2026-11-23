@@ -187,6 +187,12 @@ jobs:
       - name: Style
         run: python tools/check_style.py --tests-mirror-headers
 
+      # Distribution binaries must not name the checkout that built them (code sweep F613). The check itself needs
+      # a Distribution build and runs in nightly.yml; its tests run here on every change, with the probe of the
+      # compile options (cmake/ConjureDistributionPathsProbe.cmake, through the runner image's cmake).
+      - name: Distribution path check tests
+        run: python -I tools/tests/test_check_distribution_paths.py
+
       - name: Export annotations
         run: |
           python tools/check_exports.py

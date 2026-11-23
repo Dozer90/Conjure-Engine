@@ -16,12 +16,20 @@
 # output (runtime/CMakeLists.txt does for conjure_runtime), and export step 5 copies the file from there into a
 # game whenever it copies the runtime (engine/src/engine/export_pipeline.cpp).
 #
+# conjure_check_third_party_pins(<file>...) keeps the pins the notices name verifiable (code sweep F772): it fails the
+# configure when a FetchContent_Declare() in one of the files fetches anything but an archive checked by SHA-256, or
+# when one of them fetches with ExternalProject_Add() or the direct form of FetchContent_Populate(), which the notices
+# do not see. third_party/CMakeLists.txt runs it on itself and the files it includes before it makes the first
+# dependency available.
+#
 #   conjure_third_party_notice(<id>
 #       NAME       <display name>
 #       LICENSE_ID <SPDX expression, or a short name for terms SPDX does not list>
 #       SCOPE      <RUNTIME | EDITOR | BUILD>
-#       [VERSION <pin>]                 the GIT_TAG of the dependency; checked against the FetchContent_Declare of
-#                                       <FETCH> when that call is in the file that registers the notice
+#       [VERSION <pin>]                 the pin of the dependency: the tag the comment "# tag <name>" on the line
+#                                       of its FetchContent_Declare names, or without one the name of the archive
+#                                       its URL downloads (the commit); checked against the FetchContent_Declare
+#                                       of <FETCH> when that call is in the file that registers the notice
 #       [URL     <where the software comes from>]
 #       [NOTE    <one or more sentences printed with the entry>]
 #       [FETCH   <FetchContent name>]   LICENSE_FILES are relative to its source directory, and the notice is used
@@ -164,23 +172,196 @@ function(_conjure_notice_json_string outVariable text)
     set(${outVariable} "${text}" PARENT_SCOPE)
 endfunction()
 
-# Fails the configure when the notice names a VERSION other than the GIT_TAG its dependency is declared with. Only
-# a FetchContent_Declare in the file that registered the notice can be compared; a dependency another dependency
-# declares (NVRHI fetches the Vulkan and DirectX headers) passes its pin as VERSION directly, and one pinned by URL
-# and URL_HASH (third_party/jxl.cmake) has no GIT_TAG to compare, so its notices read the variables its URLs read.
+# Sets <outVariable> to the regular expression of a call of <command>: CMake compares command names without regard
+# to case and allows blanks before the '(' (fetchcontent_declare (x ...) declares x), so the pattern does too. It
+# holds no group of its own, and it does not check what precedes the name; callers put "(^|[^A-Za-z0-9_])" first.
+function(_conjure_notice_command_pattern outVariable command)
+    string(TOUPPER "${command}" upper)
+    string(TOLOWER "${command}" lower)
+    string(LENGTH "${command}" length)
+    math(EXPR last "${length} - 1")
+    set(pattern "")
+    foreach(index RANGE ${last})
+        string(SUBSTRING "${upper}" ${index} 1 upperCharacter)
+        string(SUBSTRING "${lower}" ${index} 1 lowerCharacter)
+        if(upperCharacter STREQUAL lowerCharacter)
+            string(APPEND pattern "${upperCharacter}")
+        else()
+            string(APPEND pattern "[${upperCharacter}${lowerCharacter}]")
+        endif()
+    endforeach()
+    set(${outVariable} "${pattern}[ \t]*\\(" PARENT_SCOPE)
+endfunction()
+
+# Fails the configure when the notice names a VERSION other than the pin its dependency is declared with: the tag
+# that the comment "# tag <name>" on the FetchContent_Declare line names, or without one the name of the archive its
+# URL downloads (<commit> for a GitHub archive/<commit>.tar.gz). Only a FetchContent_Declare in the file that
+# registered the notice can be compared, and only a URL written out: one built from variables (third_party/jxl.cmake)
+# is not, so those notices read the variables the URLs read. Comments are no declarations and hold no arguments: an
+# older declaration kept as a comment is not compared, and a ')' in a comment does not end the declaration. Whether
+# the tag still points at the commit of the URL cannot be checked without the network; the SHA-256 of the archive
+# (conjure_check_third_party_pins) holds the content to that commit whatever the tag does later.
 function(_conjure_notice_check_pin id fetch version listFile)
+    _conjure_notice_command_pattern(declarePattern FetchContent_Declare)
     file(READ "${listFile}" listText)
-    string(REGEX MATCH
-        "FetchContent_Declare\\(${fetch}[ \t\r\n]+[^)]*GIT_TAG[ \t]+([^ \t\r\n)]+)" declaration "${listText}")
+    string(REGEX REPLACE "(^|\n)[ \t]*#[^\n]*" "\\1" listText "${listText}")
+    string(REGEX REPLACE "(^|[ \t\r\n])#[^\n]*" "\\1" code "${listText}")
+    string(REGEX MATCH "(^|[^A-Za-z0-9_])${declarePattern}[ \t\r\n]*${fetch}[ \t\r\n)][^)]*" declaration "${code}")
     if(NOT declaration)
         return()
     endif()
-    if(NOT CMAKE_MATCH_1 STREQUAL version)
+    set(pinKind "tag")
+    set(pin "")
+    if(listText MATCHES "(^|\n)[ \t]*${declarePattern}[ \t]*${fetch}[ \t]+#[ \t]*tag[ \t]+([^ \t\r\n]+)")
+        set(pin "${CMAKE_MATCH_2}")
+    elseif(declaration MATCHES "[ \t\r\n]URL[ \t\r\n]+([^ \t\r\n]+)")
+        set(pinKind "archive")
+        string(REGEX REPLACE "^.*/" "" pin "${CMAKE_MATCH_1}")
+        string(REGEX REPLACE "[.](tar[.]gz|tar[.]bz2|tar[.]xz|tgz|zip)$" "" pin "${pin}")
+    endif()
+    if(pin STREQUAL "" OR pin MATCHES "[$]")
+        return()
+    endif()
+    if(NOT pin STREQUAL version)
         message(FATAL_ERROR
-            "conjure_third_party_notice(${id}): VERSION '${version}' is not the GIT_TAG '${CMAKE_MATCH_1}' that "
+            "conjure_third_party_notice(${id}): VERSION '${version}' is not the ${pinKind} '${pin}' that "
             "${listFile} declares for ${fetch}. Change the VERSION with the pin, then regenerate "
             "THIRD_PARTY_NOTICES.md (python tools/third_party_notices.py --build-dir <build tree>).")
     endif()
+endfunction()
+
+# Sets <outVariable> to <text> with its comments replaced by a blank: a bracket comment ("#[[ ... ]]", "#[=[ ... ]=]"
+# and so on, which may span lines and be followed by more arguments on its line) up to its closing bracket, and any
+# other comment up to the end of its line. A '#' starts a comment at the start of the text or after a blank only: one
+# inside a word (a URL fragment) does not, and neither does one inside a quoted argument after a blank, which is read
+# as a comment too. Read from left to right, so that a "#[[" inside a line comment opens nothing.
+function(_conjure_notice_strip_comments outVariable text)
+    set(kept "")
+    while(TRUE)
+        string(REGEX MATCH "(^|[ \t\r\n])#" found "${text}")
+        if(found STREQUAL "")
+            break()
+        endif()
+        # The leftmost match is the first place its text occurs.
+        string(FIND "${text}" "${found}" foundAt)
+        string(LENGTH "${found}" foundLength)
+        math(EXPR hashAt "${foundAt} + ${foundLength} - 1")
+        string(SUBSTRING "${text}" 0 ${hashAt} before)
+        string(SUBSTRING "${text}" ${hashAt} -1 comment)
+        string(APPEND kept "${before} ")
+        if(comment MATCHES "^#\\[(=*)\\[")
+            string(LENGTH "${CMAKE_MATCH_0}" openingLength)
+            set(closing "]${CMAKE_MATCH_1}]")
+            string(SUBSTRING "${comment}" ${openingLength} -1 body)
+            string(FIND "${body}" "${closing}" closingAt)
+            if(closingAt EQUAL -1)
+                # CMake refuses an unterminated bracket comment; nothing after it is read.
+                set(text "")
+            else()
+                string(LENGTH "${closing}" closingLength)
+                math(EXPR afterAt "${closingAt} + ${closingLength}")
+                string(SUBSTRING "${body}" ${afterAt} -1 text)
+            endif()
+        else()
+            string(FIND "${comment}" "\n" lineEnd)
+            if(lineEnd EQUAL -1)
+                set(text "")
+            else()
+                string(SUBSTRING "${comment}" ${lineEnd} -1 text)
+            endif()
+        endif()
+    endwhile()
+    set(${outVariable} "${kept}${text}" PARENT_SCOPE)
+endfunction()
+
+# Fails the configure when a file fetches a dependency other than through a FetchContent_Declare() that pins it to
+# an archive checked by SHA-256 (code sweep F772). Each declaration names a URL and URL_HASH SHA256=<64 hex digits>,
+# and none fetches from a version control system (a GIT_, SVN_, HG_ or CVS_ option, whose tags can move) or
+# downloads with a DOWNLOAD_COMMAND of its own, which no hash checks. ExternalProject_Add() and the direct form of
+# FetchContent_Populate() (a name followed by download options) are refused whatever they name: the notices see
+# only FetchContent_Declare(). cmake_language() is refused in every form: CALL, EVAL and DEFER run commands this
+# check cannot read. The check holds the bytes of the archive, not the form of its URL: a release-tag archive with
+# its hash passes as a commit archive does. Command names are matched without regard to case, as CMake reads them,
+# and a quoted argument as the unquoted one ("GIT_TAG" is GIT_TAG). Comments are not read
+# (_conjure_notice_strip_comments): a commented-out declaration is none, a bracket comment hides no argument after
+# it, and the "# tag <name>" comment beside a pin is no pin. A call is read up to its first ')', so its arguments
+# hold none. Downloads written as other commands (file(DOWNLOAD), execute_process) are not looked for. Call it before
+# the first dependency is made available, so that nothing unchecked is downloaded.
+function(conjure_check_third_party_pins)
+    if(ARGC EQUAL 0)
+        message(FATAL_ERROR "conjure_check_third_party_pins: name the files that declare dependencies")
+    endif()
+    string(REPEAT "[0-9a-fA-F]" 64 sha256Pattern)
+    set(boundary "(^|[^A-Za-z0-9_])")
+    _conjure_notice_command_pattern(declarePattern FetchContent_Declare)
+    _conjure_notice_command_pattern(populatePattern FetchContent_Populate)
+    _conjure_notice_command_pattern(externalPattern ExternalProject_Add)
+    _conjure_notice_command_pattern(languagePattern cmake_language)
+    foreach(listFile IN LISTS ARGN)
+        if(NOT EXISTS "${listFile}" OR IS_DIRECTORY "${listFile}")
+            message(FATAL_ERROR "conjure_check_third_party_pins: '${listFile}' is not a file")
+        endif()
+        file(READ "${listFile}" listText)
+        _conjure_notice_strip_comments(listText "${listText}")
+        # A ';' would split the lists of calls below; CMake reads it as a separator of arguments anyway. A quote
+        # only groups an argument, which the checks below read the same way unquoted.
+        string(REPLACE ";" " " listText "${listText}")
+        string(REPLACE "\"" " " listText "${listText}")
+
+        if(listText MATCHES "${boundary}${languagePattern}")
+            message(FATAL_ERROR
+                "third-party pins: ${listFile} calls cmake_language(), which can run a download command that "
+                "neither this check nor the licence notices read. Call FetchContent_Declare() directly, pinned to "
+                "an archive and its SHA-256 (third_party/CMakeLists.txt says how).")
+        endif()
+
+        string(REGEX MATCHALL "${boundary}(${populatePattern}|${externalPattern})[^)]*" others "${listText}")
+        foreach(other IN LISTS others)
+            string(REGEX REPLACE "^[^A-Za-z_]?[A-Za-z_]+[ \t]*\\([ \t\r\n]*" "" arguments "${other}")
+            string(REGEX MATCH "^[^ \t\r\n]*" name "${arguments}")
+            # Cut by length: a REGEX REPLACE anchored at '^' matches again at the start of what it leaves.
+            string(LENGTH "${name}" nameLength)
+            string(SUBSTRING "${arguments}" ${nameLength} -1 arguments)
+            string(STRIP "${arguments}" arguments)
+            if(other MATCHES "${externalPattern}")
+                set(command "ExternalProject_Add")
+            elseif(NOT arguments STREQUAL "")
+                set(command "the direct form of FetchContent_Populate")
+            else()
+                # FetchContent_Populate(<name>) populates a declaration, which is checked on its own.
+                continue()
+            endif()
+            message(FATAL_ERROR
+                "third-party pins: ${listFile} fetches ${name} with ${command}, which neither this check nor the "
+                "licence notices read. Declare it with FetchContent_Declare(), pinned to an archive and its SHA-256 "
+                "(third_party/CMakeLists.txt says how), and make it available with FetchContent_MakeAvailable().")
+        endforeach()
+
+        string(REGEX MATCHALL "${boundary}${declarePattern}[^)]*" declarations "${listText}")
+        foreach(declaration IN LISTS declarations)
+            string(REGEX REPLACE "^[^A-Za-z_]?[A-Za-z_]+[ \t]*\\([ \t\r\n]*" "" arguments "${declaration}")
+            string(REGEX MATCH "^[^ \t\r\n]*" name "${arguments}")
+            string(LENGTH "${name}" nameLength)
+            string(SUBSTRING "${arguments}" ${nameLength} -1 arguments)
+            set(problem "")
+            if(arguments MATCHES "[ \t\r\n]((GIT|SVN|HG|CVS)_[A-Z_]+|DOWNLOAD_COMMAND)([ \t\r\n]|$)")
+                set(problem "it downloads with ${CMAKE_MATCH_1}, which no hash checks")
+            elseif(NOT arguments MATCHES "[ \t\r\n]URL[ \t\r\n]+[^ \t\r\n]")
+                set(problem "it names no URL")
+            elseif(NOT arguments MATCHES "[ \t\r\n]URL_HASH[ \t\r\n]+SHA256=${sha256Pattern}([ \t\r\n]|$)")
+                set(problem "it names no URL_HASH SHA256=<64 hex digits>")
+            endif()
+            if(problem STREQUAL "")
+                continue()
+            endif()
+            message(FATAL_ERROR
+                "third-party pins: ${listFile} declares ${name} without pinning it to a hashed archive: ${problem}. "
+                "Name an archive as URL, for a GitHub dependency the archive of the pinned commit "
+                "(https://github.com/<owner>/<repo>/archive/<commit>.tar.gz), and its SHA-256 as URL_HASH "
+                "SHA256=<hash>, with the release tag as the comment \"# tag <name>\" on the FetchContent_Declare line "
+                "(third_party/CMakeLists.txt says how).")
+        endforeach()
+    endforeach()
 endfunction()
 
 # Resolves one registered notice against this configuration: whether the tree uses it, and the licence files that
@@ -395,7 +576,8 @@ function(conjure_write_third_party_notices)
 
     # Every dependency the calling file pins needs a notice that names it as FETCH: one declared without would
     # pass every other check while its licence never reaches the notices. Names are compared as FetchContent
-    # does, without regard to case; whole-line comments are not declarations. Only the calling file is scanned, not
+    # does, and the command name as CMake reads it, without regard to case; whole-line comments are not
+    # declarations. Only the calling file is scanned, not
     # a file it includes: third_party/jxl.cmake declares libjxl and, inside libjxl's tree, libjxl_highway,
     # libjxl_brotli and libjxl_skcms, whose notices all name FETCH libjxl (a clone declares none of the three), so a
     # scan of it would have to accept those three names; tests/third_party checks that its four notices ship.
@@ -409,9 +591,11 @@ function(conjure_write_third_party_notices)
     endforeach()
     file(READ "${CMAKE_CURRENT_LIST_FILE}" declaringText)
     string(REGEX REPLACE "(^|\n)[ \t]*#[^\n]*" "\\1" declaringText "${declaringText}")
-    string(REGEX MATCHALL "FetchContent_Declare\\([ \t\r\n]*[A-Za-z0-9_.+-]+" declarations "${declaringText}")
+    _conjure_notice_command_pattern(declarePattern FetchContent_Declare)
+    string(REGEX MATCHALL "(^|[^A-Za-z0-9_])${declarePattern}[ \t\r\n]*[A-Za-z0-9_.+-]+" declarations
+        "${declaringText}")
     foreach(declaration IN LISTS declarations)
-        string(REGEX REPLACE "^FetchContent_Declare\\([ \t\r\n]*" "" declared "${declaration}")
+        string(REGEX REPLACE "^[^A-Za-z_]?[A-Za-z_]+[ \t]*\\([ \t\r\n]*" "" declared "${declaration}")
         string(TOLOWER "${declared}" declaredKey)
         if(NOT declaredKey IN_LIST fetchNames)
             message(FATAL_ERROR
@@ -511,7 +695,10 @@ endfunction()
 # Registers the CTest entries of the notices (call it from a directory below tests/, where testing is enabled):
 #
 #   notices.configure_*, notices.*_fails_configure   what conjure_write_third_party_notices() writes for a tree
-#       with and without the editor, and every registration this file refuses (cmake/ConjureNoticesProbe.cmake)
+#       with and without the editor, every registration this file refuses, and every declaration that
+#       conjure_check_third_party_pins() accepts (in the configure_* entries) or refuses, and the NVRHI header tags
+#       that conjure_check_nvrhi_header_pins() (third_party/nvrhi_checks.cmake) accepts or refuses
+#       (cmake/ConjureNoticesProbe.cmake)
 #   notices.ship_places_and_restores_the_file         conjure_ship_third_party_notices() through a real build of
 #       the probe: the file appears, returns after it was deleted and follows a changed configure
 #   notices.up_to_date     the tracked THIRD_PARTY_NOTICES.md against the licence files this tree fetched (a
@@ -528,7 +715,51 @@ function(conjure_add_third_party_notices_tests)
     _conjure_notice_add_probe(configure_runtime_tree runtime_tree "notices probe: runtime_tree passed")
     _conjure_notice_add_probe(configure_editor_tree editor_tree "notices probe: editor_tree passed")
     _conjure_notice_add_probe(pin_mismatch_fails_configure pin_mismatch
-        "VERSION.*'v2[.]0'.*is.*not.*the.*GIT_TAG.*'v1[.]0'")
+        "VERSION.*'v2[.]0'.*is.*not.*the.*tag.*'v1[.]0'.*declares.*for.*probe_dependency")
+    _conjure_notice_add_probe(archive_mismatch_fails_configure archive_mismatch
+        "VERSION.*'v9'.*is.*not.*the.*archive.*'9999999999999999999999999999999999999999'.*declares.*for.*probe_absent")
+    _conjure_notice_add_probe(regression_f772_git_pin_fails_configure pins_git
+        "declares.*probe_git.*without.*pinning.*it.*to.*a.*hashed.*archive:.*downloads.*with.*GIT_REPOSITORY")
+    _conjure_notice_add_probe(pins_git_option_beside_hash_fails_configure pins_git_beside_hash
+        "declares.*probe_mixed.*without.*pinning.*it.*downloads.*with.*GIT_SHALLOW")
+    _conjure_notice_add_probe(pins_download_command_fails_configure pins_download_command
+        "declares.*probe_command.*without.*pinning.*it.*downloads.*with.*DOWNLOAD_COMMAND")
+    _conjure_notice_add_probe(pins_declaration_without_url_fails_configure pins_no_url
+        "declares.*probe_no_url.*without.*pinning.*it.*names.*no.*URL[.]")
+    _conjure_notice_add_probe(pins_declaration_without_hash_fails_configure pins_no_hash
+        "declares.*probe_unhashed.*without.*pinning.*it.*names.*no.*URL_HASH.*SHA256=<64.*hex.*digits>")
+    _conjure_notice_add_probe(pins_md5_hash_fails_configure pins_md5_hash
+        "declares.*probe_md5.*without.*pinning.*it.*names.*no.*URL_HASH.*SHA256=<64.*hex.*digits>")
+    _conjure_notice_add_probe(pins_short_hash_fails_configure pins_short_hash
+        "declares.*probe_short.*without.*pinning.*it.*names.*no.*URL_HASH.*SHA256=<64.*hex.*digits>")
+    _conjure_notice_add_probe(pins_lower_case_declaration_fails_configure pins_lower_case
+        "declares.*probe_lower.*without.*pinning.*it.*downloads.*with.*GIT_REPOSITORY")
+    _conjure_notice_add_probe(pins_direct_populate_fails_configure pins_populate
+        "fetches.*probe_populate.*with.*the.*direct.*form.*of.*FetchContent_Populate,.*which.*neither")
+    _conjure_notice_add_probe(pins_external_project_fails_configure pins_external_project
+        "fetches.*probe_external.*with.*ExternalProject_Add,.*which.*neither")
+    _conjure_notice_add_probe(pins_quoted_keyword_fails_configure pins_quoted_keyword
+        "declares.*probe_quoted.*without.*pinning.*it.*downloads.*with.*GIT_REPOSITORY")
+    _conjure_notice_add_probe(pins_option_after_bracket_comment_fails_configure pins_bracket_comment
+        "declares.*probe_bracket.*without.*pinning.*it.*downloads.*with.*GIT_REPOSITORY")
+    _conjure_notice_add_probe(pins_bracket_in_line_comment_hides_nothing_fails_configure pins_bracket_in_line_comment
+        "declares.*probe_after.*without.*pinning.*it.*downloads.*with.*GIT_REPOSITORY")
+    _conjure_notice_add_probe(pins_cmake_language_fails_configure pins_cmake_language
+        "cmake_language.cmake.*calls.*cmake_language\\(\\),.*which.*can.*run.*a.*download.*command")
+    _conjure_notice_add_probe(pins_nvrhi_header_tag_differs_fails_configure pins_nvrhi_differing
+        "NVRHI.*asks.*for.*the.*vulkan.*headers.*at.*v1[.]4[.]353,.*and.*vulkan_headers.*is.*pinned.*at.*v1[.]4[.]352")
+    _conjure_notice_add_probe(pins_nvrhi_header_tag_unset_fails_configure pins_nvrhi_unset
+        "NVRHI.*no.*longer.*sets.*NVRHI_DIRECTX_HEADERS_GIT_TAG")
+    _conjure_notice_add_probe(pins_nvrhi_unknown_dependency_fails_configure pins_nvrhi_unknown_dependency
+        "NVRHI.*declares.*the.*dependency.*nvapi,.*which.*it.*would.*fetch.*from.*git")
+    _conjure_notice_add_probe(pins_nvrhi_rtxmu_enabled_fails_configure pins_nvrhi_rtxmu_enabled
+        "NVRHI_WITH_RTXMU.*is.*on,.*so.*the.*pinned.*NVRHI.*fetches.*rtxmu")
+    _conjure_notice_add_probe(pins_nvrhi_missing_file_fails_configure pins_nvrhi_missing_file
+        "third_party:.*'.*nvrhi/not_there/CMakeLists[.]txt'.*is.*not.*NVRHI's.*CMakeLists[.]txt")
+    _conjure_notice_add_probe(pins_missing_file_fails_configure pins_missing_file
+        "conjure_check_third_party_pins:.*'.*not_there[.]cmake'.*is.*not.*a.*file")
+    _conjure_notice_add_probe(pins_without_files_fail_configure pins_no_files
+        "conjure_check_third_party_pins:.*name.*the.*files.*that.*declare.*dependencies")
     _conjure_notice_add_probe(missing_licence_file_fails_configure missing_licence_file
         "licence.*file.*dependency/COPYING'.*of.*Alpha.*does.*not.*exist")
     _conjure_notice_add_probe(notice_registered_twice_fails_configure registered_twice

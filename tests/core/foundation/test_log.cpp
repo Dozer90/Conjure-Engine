@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -65,6 +66,42 @@ TEST_SUITE("core/log") {
         CHECK(std::string_view(received.file) == __FILE__);
         CHECK(received.threadId == std::this_thread::get_id());
         CHECK(received.timestamp != std::chrono::system_clock::time_point{});
+    }
+
+    TEST_CASE("regression - code sweep F613 Distribution builds embed no absolute source path, other builds keep it") {
+        // __FILE__ and std::source_location expand to the path the compiler was given, which CMake makes absolute,
+        // so every shipped binary named the checkout of the machine that built it. Distribution compiles with the
+        // options of cmake/ConjureDistributionPaths.cmake, which cut the source and build directories off; Debug
+        // and Development keep the absolute path, so a log record or failure there stays clickable in an IDE.
+        testing::log_capture quiet = {};
+        std::string recordFile = {};
+        auto sink = std::make_shared<callback_log_sink>([&recordFile](const log_message &message) {
+            recordFile = std::string(message.file);
+        });
+        log::add_sink(sink);
+        CONJURE_LOG_WARN(LOG_TEST, "where am I");
+        log::remove_sink(sink);
+
+        const std::filesystem::path macroFile(__FILE__);
+        const std::filesystem::path locationFile(std::source_location::current().file_name());
+        const std::filesystem::path loggedFile(recordFile);
+        CAPTURE(macroFile.string());
+        CAPTURE(locationFile.string());
+        CAPTURE(loggedFile.string());
+#if CONJURE_DISTRIBUTION
+        // This file lies in the source directory, so what remains is its path in the repository.
+        constexpr std::string_view IN_REPOSITORY = "tests/core/foundation/test_log.cpp";
+        CHECK_FALSE(macroFile.has_root_path());
+        CHECK_FALSE(locationFile.has_root_path());
+        CHECK_FALSE(loggedFile.has_root_path());
+        CHECK(macroFile.generic_string() == IN_REPOSITORY);
+        CHECK(locationFile.generic_string() == IN_REPOSITORY);
+        CHECK(loggedFile.generic_string() == IN_REPOSITORY);
+#else
+        CHECK(macroFile.is_absolute());
+        CHECK(locationFile.is_absolute());
+        CHECK(loggedFile.is_absolute());
+#endif
     }
 
     TEST_CASE("log - category level filters messages") {

@@ -1,9 +1,23 @@
 # Third-party dependencies.
 #
-# Every dependency is declared here, or in a file this one includes (jxl.cmake), exactly once, pinned to a
-# tag or commit or to an archive URL with its SHA-256, and exposed to the
-# engine through a conjure::thirdparty::<name> target. Engine code never references the raw
-# upstream targets so that a dependency can be swapped or vendored in one place.
+# Every dependency is declared here, or in a file this one includes (jxl.cmake), exactly once, pinned to an archive
+# verified by its SHA-256, and exposed to the engine through a conjure::thirdparty::<name> target. Engine code never
+# references the raw upstream targets so that a dependency can be swapped or vendored in one place.
+#
+# Pins (code sweep F772): the declarations here name the archive of one commit, URL
+# https://github.com/<owner>/<repo>/archive/<commit>.tar.gz with URL_HASH SHA256=<hash of that file>; the release tag,
+# where the commit has one, is the comment "# tag <name>" on the line of FetchContent_Declare. jxl.cmake names the
+# archive of libjxl's release tag (refs/tags/v<version>.tar.gz), whose bytes its hash holds just the same. A tag can be
+# moved and a clone checks nothing, an archive is checked before it is unpacked: conjure_check_third_party_pins()
+# (cmake/ConjureNotices.cmake) fails the configure, before anything is downloaded, when a declaration in this file or
+# in a file it includes names no URL with URL_HASH SHA256=<64 hex digits>, or fetches from a version control system,
+# with a DOWNLOAD_COMMAND, with ExternalProject_Add() or with the direct form of FetchContent_Populate(). It checks
+# the hash, not the form of the URL. To bump a pin, take the commit the new tag points to (git ls-remote <repository>
+# refs/tags/<tag>^{}, or refs/tags/<tag> for a lightweight tag), put it in the URL and the tag in the comment and the
+# notice's VERSION, and record the hash of the archive: cmake -E sha256sum on the downloaded file, or the actual hash
+# the configure prints when the old one no longer matches. GitHub generates these archives; should their bytes change
+# again (they did once, early 2023, and were reverted), the configure stops on the hash instead of building something
+# else.
 #
 # Dependencies are declared SYSTEM so their headers do not trigger our warnings, and
 # EXCLUDE_FROM_ALL so only the parts the engine links are built.
@@ -11,14 +25,20 @@
 # Every dependency also has a conjure_third_party_notice() beside its declaration (cmake/ConjureNotices.cmake,
 # docs/design/06_engine_loop.md D15): its name, pin, licence and licence files. The notices are registered
 # outside the option blocks, so every tree knows the whole list and a tree that does not fetch a dependency
-# says so. VERSION repeats the GIT_TAG and the configure fails when the two differ; a dependency pinned by URL and
-# URL_HASH (jxl.cmake) has no GIT_TAG to compare, so its notices read the variables its URLs read. After a pin or a
-# notice changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir
+# says so. VERSION repeats the tag of the comment, or the commit of the URL where there is no tag, and the configure
+# fails when the two differ; jxl.cmake builds its URLs from variables, which its notices read as well. After a pin or
+# a notice changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir
 # <tree> (docs/handbook/getting-started.md 11).
 
 include(FetchContent)
 include(ConjureNotices)
+include("${CMAKE_CURRENT_SOURCE_DIR}/nvrhi_checks.cmake")
 set(FETCHCONTENT_QUIET OFF)
+
+# This file and the files it includes, itself or through jxl.cmake (named, as CMake globs nothing here, AGENTS.md 9:
+# an included file that is added is added to this list too).
+conjure_check_third_party_pins("${CMAKE_CURRENT_LIST_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/jxl.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/jxl_checks.cmake" "${CMAKE_CURRENT_SOURCE_DIR}/nvrhi_checks.cmake")
 
 # Several pinned dependencies still declare cmake_minimum_required < 3.5, which CMake 4 rejects
 # outright. This directory-scoped setting keeps them configurable (ignored by CMake < 3.31).
@@ -58,22 +78,19 @@ conjure_third_party_notice(miniaudio
     FETCH miniaudio LICENSE_FILES LICENSE
 )
 FetchContent_Declare(stb
-    GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG        d14d46f6b44456eb88beac58cba833a4135d4c89
-    GIT_SHALLOW    FALSE
+    URL      https://github.com/nothings/stb/archive/d14d46f6b44456eb88beac58cba833a4135d4c89.tar.gz
+    URL_HASH SHA256=1b59a668a789a28a8fd4e01ff1413eec7eaeb28688bafdc66ec7068f4e7095e1
     SYSTEM
 )
-FetchContent_Declare(cgltf
-    GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
-    GIT_TAG        v1.14
-    GIT_SHALLOW    TRUE
+FetchContent_Declare(cgltf  # tag v1.14
+    URL      https://github.com/jkuhlmann/cgltf/archive/52c23814dbb60c2fbb54750ddf41d342d432a498.tar.gz
+    URL_HASH SHA256=b0d9edddaf691d903449c8a8e2c72ad564abe314531fbb49fb589b6289563eec
     SYSTEM
 )
-FetchContent_Declare(miniaudio
-    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-    GIT_TAG        0.11.22
-    GIT_SHALLOW    TRUE
-    SOURCE_SUBDIR  cmake_not_used     # we compile the single file ourselves; skip upstream CMake
+FetchContent_Declare(miniaudio  # tag 0.11.22
+    URL      https://github.com/mackron/miniaudio/archive/350784a9467a79d0fa65802132668e5afbcf3777.tar.gz
+    URL_HASH SHA256=28ab6d0d39c32a46d57b52d104046e8b3637bfc51d8bab07ec5ae5415dc8ee52
+    SOURCE_SUBDIR cmake_not_used     # we compile the single file ourselves; skip upstream CMake
     SYSTEM
 )
 FetchContent_MakeAvailable(stb cgltf)
@@ -107,10 +124,9 @@ conjure_third_party_notice(glm
     URL "https://github.com/g-truc/glm"
     FETCH glm LICENSE_FILES copying.txt
 )
-FetchContent_Declare(glm
-    GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG        1.0.1
-    GIT_SHALLOW    TRUE
+FetchContent_Declare(glm  # tag 1.0.1
+    URL      https://github.com/g-truc/glm/archive/0af55ccecd98d4e5a8d1fad7de25ba429d60e863.tar.gz
+    URL_HASH SHA256=e7f187d83523f505eb38dd25d297ea6c0d4ed856d733e808f18253f5a8fa88a0
     SYSTEM
     EXCLUDE_FROM_ALL
 )
@@ -139,10 +155,9 @@ conjure_third_party_notice(yyjson
     URL "https://github.com/ibireme/yyjson"
     FETCH yyjson LICENSE_FILES LICENSE
 )
-FetchContent_Declare(yyjson
-    GIT_REPOSITORY https://github.com/ibireme/yyjson.git
-    GIT_TAG        0.10.0
-    GIT_SHALLOW    TRUE
+FetchContent_Declare(yyjson  # tag 0.10.0
+    URL      https://github.com/ibireme/yyjson/archive/9ddba001a4ea88e93b46932e5c5b87b222e19a5f.tar.gz
+    URL_HASH SHA256=72ecea1847001e9a625e8ec979bfc65b34499277ef96f7d082cda3415bb38c53
     SYSTEM
     EXCLUDE_FROM_ALL
 )
@@ -170,10 +185,9 @@ conjure_third_party_notice(doctest
     FETCH doctest LICENSE_FILES LICENSE.txt
 )
 if(CONJURE_BUILD_TESTS OR CONJURE_BUILD_BENCHMARKS)
-    FetchContent_Declare(doctest
-        GIT_REPOSITORY https://github.com/doctest/doctest.git
-        GIT_TAG        v2.4.11
-        GIT_SHALLOW    TRUE
+    FetchContent_Declare(doctest  # tag v2.4.11
+        URL      https://github.com/doctest/doctest/archive/ae7a13539fb71f270b87eb2e874fbac80bc8dda2.tar.gz
+        URL_HASH SHA256=3882bb436ee458653e0562bf799af21a085bd6c64325a837b77d7edd867144dc
         SYSTEM
         EXCLUDE_FROM_ALL
     )
@@ -202,10 +216,9 @@ conjure_third_party_notice(glfw
     FETCH glfw LICENSE_FILES LICENSE.md
 )
 if(CONJURE_PLATFORM_GLFW)
-FetchContent_Declare(glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
-    GIT_SHALLOW    TRUE
+FetchContent_Declare(glfw  # tag 3.4
+    URL      https://github.com/glfw/glfw/archive/7b6aead9fb88b3623e3b3725ebb42670cbe4c579.tar.gz
+    URL_HASH SHA256=169d49096e339caabbc12e1762273c5cb9130a535a282ba46cf5c14ab6e55694
     SYSTEM
     EXCLUDE_FROM_ALL
 )
@@ -226,16 +239,48 @@ endif()
 #------------------------------------------------------------------------------
 # NVRHI (graphics API abstraction)
 #------------------------------------------------------------------------------
+# NVRHI fetches the API headers of the backends it builds, from git at the tags its own CMakeLists.txt names.
+# FetchContent keeps the first declaration of a name, so both are declared here before NVRHI, pinned like every other
+# dependency, and NVRHI's own declarations of them change nothing. NVRHI was written against those tags: the check
+# after it was made available (conjure_check_nvrhi_header_pins, nvrhi_checks.cmake) stops the configure when the
+# pinned NVRHI names others than the two below, declares a dependency this file does not pin, or would fetch rtxmu
+# (NVRHI_WITH_RTXMU on).
+set(directxHeadersTag v1.717.0-preview)
+set(vulkanHeadersTag v1.4.352)
 conjure_third_party_notice(nvrhi
     NAME "NVRHI" VERSION bf0bbd9b666a7297492beb1999a4ddc0dfded143 LICENSE_ID "MIT" SCOPE RUNTIME
     URL "https://github.com/NVIDIA-RTX/NVRHI"
     FETCH nvrhi LICENSE_FILES LICENSE.txt
 )
+conjure_third_party_notice(directx_headers
+    NAME "DirectX-Headers" VERSION ${directxHeadersTag} LICENSE_ID "MIT" SCOPE RUNTIME
+    URL "https://github.com/microsoft/DirectX-Headers"
+    NOTE "The Direct3D 12 headers the D3D12 backend of NVRHI is compiled against."
+    FETCH directx_headers LICENSE_FILES LICENSE
+)
+conjure_third_party_notice(vulkan_headers
+    NAME "Vulkan-Headers" VERSION ${vulkanHeadersTag} LICENSE_ID "Apache-2.0 OR MIT" SCOPE RUNTIME
+    URL "https://github.com/KhronosGroup/Vulkan-Headers"
+    NOTE "The Vulkan headers the Vulkan backend of NVRHI is compiled against."
+    FETCH vulkan_headers LICENSE_FILES LICENSE.md LICENSES/Apache-2.0.txt LICENSES/MIT.txt
+)
 if(CONJURE_WITH_RENDERER)
+    # Declared in every renderer tree; NVRHI makes available the ones of the backends it builds.
+    FetchContent_Declare(directx_headers  # tag v1.717.0-preview
+        URL      https://github.com/microsoft/DirectX-Headers/archive/d873b344dc540898868697245f100c2a67fe68d9.tar.gz
+        URL_HASH SHA256=b94c898c2917c8d28d3d8e6b6f068d75ef04eb50044c148d1cfab5016e6e991a
+        SYSTEM
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_Declare(vulkan_headers  # tag v1.4.352
+        URL      https://github.com/KhronosGroup/Vulkan-Headers/archive/015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9.tar.gz
+        URL_HASH SHA256=666700236101d288dea8bb080c6f8039467cb1d29ea1e1aae6f93a819f4f9029
+        SYSTEM
+        EXCLUDE_FROM_ALL
+    )
     FetchContent_Declare(nvrhi
-        GIT_REPOSITORY https://github.com/NVIDIA-RTX/NVRHI.git
-        GIT_TAG        bf0bbd9b666a7297492beb1999a4ddc0dfded143
-        GIT_SHALLOW    FALSE
+        URL      https://github.com/NVIDIA-RTX/NVRHI/archive/bf0bbd9b666a7297492beb1999a4ddc0dfded143.tar.gz
+        URL_HASH SHA256=059ce649063d7bfe8fd7cb2f4cdd05a606f5526f7060237f9e37ecf75bc5f9e2
         SYSTEM
         EXCLUDE_FROM_ALL
     )
@@ -250,6 +295,8 @@ if(CONJURE_WITH_RENDERER)
     set(NVRHI_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
     set(NVRHI_WITH_VALIDATION ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(nvrhi)
+
+    conjure_check_nvrhi_header_pins("${nvrhi_SOURCE_DIR}/CMakeLists.txt" "${directxHeadersTag}" "${vulkanHeadersTag}")
 
     add_library(conjure_thirdparty_nvrhi INTERFACE)
     add_library(conjure::thirdparty::nvrhi ALIAS conjure_thirdparty_nvrhi)
@@ -266,21 +313,6 @@ if(CONJURE_WITH_RENDERER)
         endif()
     endforeach()
 endif()
-
-# NVRHI fetches the API headers of the backends it builds, at the tags its own cache variables name: a tree
-# without a backend knows neither the headers nor their pin. Registered after NVRHI for that reason.
-conjure_third_party_notice(directx_headers
-    NAME "DirectX-Headers" VERSION "${NVRHI_DIRECTX_HEADERS_GIT_TAG}" LICENSE_ID "MIT" SCOPE RUNTIME
-    URL "https://github.com/microsoft/DirectX-Headers"
-    NOTE "The Direct3D 12 headers the D3D12 backend of NVRHI is compiled against."
-    FETCH directx_headers LICENSE_FILES LICENSE
-)
-conjure_third_party_notice(vulkan_headers
-    NAME "Vulkan-Headers" VERSION "${NVRHI_VULKAN_HEADERS_GIT_TAG}" LICENSE_ID "Apache-2.0 OR MIT" SCOPE RUNTIME
-    URL "https://github.com/KhronosGroup/Vulkan-Headers"
-    NOTE "The Vulkan headers the Vulkan backend of NVRHI is compiled against."
-    FETCH vulkan_headers LICENSE_FILES LICENSE.md LICENSES/Apache-2.0.txt LICENSES/MIT.txt
-)
 
 # Shader code that follows published implementations (engine/shaders/shared/tonemap.hlsli). Nothing is fetched:
 # the licence texts are kept in licenses/, each the MIT text under the copyright line its source carries.
@@ -313,10 +345,9 @@ conjure_third_party_notice(glslang
     FETCH glslang LICENSE_FILES LICENSE.txt
 )
 if(CONJURE_WITH_RENDERER AND CONJURE_RHI_VULKAN)
-    FetchContent_Declare(glslang
-        GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
-        GIT_TAG        15.1.0
-        GIT_SHALLOW    TRUE
+    FetchContent_Declare(glslang  # tag 15.1.0
+        URL      https://github.com/KhronosGroup/glslang/archive/1062752a891c95b2bfeed9e356562d88f9df84ac.tar.gz
+        URL_HASH SHA256=46a05bba7675a3ab1912a0908183b9eee8daa06bb8047943bac54a6f0de2cfce
         SYSTEM
         EXCLUDE_FROM_ALL
     )
@@ -341,11 +372,10 @@ conjure_third_party_notice(jolt
     FETCH JoltPhysics LICENSE_FILES LICENSE
 )
 if(CONJURE_WITH_PHYSICS)
-    FetchContent_Declare(JoltPhysics
-        GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
-        GIT_TAG        v5.3.0
-        GIT_SHALLOW    TRUE
-        SOURCE_SUBDIR  Build
+    FetchContent_Declare(JoltPhysics  # tag v5.3.0
+        URL      https://github.com/jrouwe/JoltPhysics/archive/0373ec0dd762e4bc2f6acdb08371ee84fa23c6db.tar.gz
+        URL_HASH SHA256=834644d7e9dffee9be0220748015667649d3361611b01c7e6839a5eb58e89711
+        SOURCE_SUBDIR Build
         SYSTEM
         EXCLUDE_FROM_ALL
     )
@@ -361,7 +391,18 @@ if(CONJURE_WITH_PHYSICS)
     # docs/design/14_physics.md P16, ARCHITECTURE.md 9: cross-platform bit equality is opt-in; the engine's
     # own physics objects get the matching floating-point options in engine/src/physics/CMakeLists.txt.
     set(CROSS_PLATFORM_DETERMINISTIC ${CONJURE_PHYSICS_CROSS_PLATFORM_DETERMINISTIC} CACHE BOOL "" FORCE)
-    set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
+    # Jolt's GENERATE_DEBUG_SYMBOLS appends its debug-information flag to every configuration. With GCC and Clang
+    # that is -g, which Debug and Development already carry (CMAKE_CXX_FLAGS_DEBUG, and Development derives from
+    # RelWithDebInfo), so the option would only add DWARF to Distribution, and DWARF names the build machine's
+    # absolute paths, which the Distribution path options of cmake/ConjureDistributionPaths.cmake do not reach
+    # (code sweep F613; tools/check_distribution_paths.py). With MSVC it is /Zi, Jolt's only source of debug
+    # information (its CMake policies predate CMAKE_MSVC_DEBUG_INFORMATION_FORMAT), and nothing of it reaches a
+    # Distribution binary, which links without /DEBUG and so carries no PDB path.
+    if(MSVC)
+        set(GENERATE_DEBUG_SYMBOLS ON CACHE BOOL "" FORCE)
+    else()
+        set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "" FORCE)
+    endif()
     set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE ON CACHE BOOL "" FORCE)
     set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
     set(ENABLE_OBJECT_STREAM ON CACHE BOOL "" FORCE)
@@ -451,17 +492,15 @@ conjure_third_party_notice(imguizmo
     FETCH imguizmo LICENSE_FILES LICENSE
 )
 if(CONJURE_BUILD_EDITOR)
-    FetchContent_Declare(imgui
-        GIT_REPOSITORY https://github.com/ocornut/imgui.git
-        GIT_TAG        v1.91.9b-docking
-        GIT_SHALLOW    TRUE
+    FetchContent_Declare(imgui  # tag v1.91.9b-docking
+        URL      https://github.com/ocornut/imgui/archive/4806a1924ff6181180bf5e4b8b79ab4394118875.tar.gz
+        URL_HASH SHA256=cc35a88df717dff3c488e43b4b148dcfe968bd3ff6798f60751b106eb9bcee48
         SYSTEM
     )
     FetchContent_Declare(imguizmo
-        GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
-        GIT_TAG        105e4fde45e4e74aae8973d98750820ef7aca7e2
-        GIT_SHALLOW    FALSE
-        SOURCE_SUBDIR  cmake_not_used     # only ImGuizmo.cpp is wanted; skip upstream CMake
+        URL      https://github.com/CedricGuillemet/ImGuizmo/archive/105e4fde45e4e74aae8973d98750820ef7aca7e2.tar.gz
+        URL_HASH SHA256=d625a9f3207f15b7a5b7706269747676f17b7e4df00f898ced9480e5063d493a
+        SOURCE_SUBDIR cmake_not_used     # only ImGuizmo.cpp is wanted; skip upstream CMake
         SYSTEM
     )
     FetchContent_MakeAvailable(imgui imguizmo)
