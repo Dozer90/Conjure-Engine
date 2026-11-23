@@ -195,7 +195,16 @@ namespace conjure::modules {
             /// Writes &lt;out&gt;/modules/&lt;name&gt;/ (manifest without editorOnly, the
             /// bin/&lt;platform&gt;-&lt;arch&gt;-&lt;config&gt;/ directory and the managed assemblies) for every
             /// LOADED module that is not an engine module, not editor-only and not static.
-            /// BINARY_NOT_FOUND names the missing configuration; EXPORT_FAILED any copy error.
+            /// The bin directory is copied entry by entry with its subfolders, following links, and leaves
+            /// out every file or folder named *.lib, *.exp, *.ilk, *.a, *.pdb or *.dSYM (ASCII case ignored):
+            /// dependent libraries and data files ship, link and debug by-products and native symbols do not.
+            /// Files already in the output are overwritten. Other files of an earlier export stay, except that
+            /// such by-products anywhere under the output bin directory are removed first (links there are not
+            /// followed), unless that directory is the module's own bin directory or holds it.
+            /// BINARY_NOT_FOUND names the missing configuration; EXPORT_FAILED any create, write, list, resolve,
+            /// remove or copy error, an entry that is neither a file nor a folder (a broken link), a link back to a
+            /// folder being copied and a missing managed assembly. A failure leaves the files copied before it
+            /// in place.
             /// </summary>
             [[nodiscard]] core::result<void> export_layout(
               const std::filesystem::path &outputDirectory,

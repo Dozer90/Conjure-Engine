@@ -12,13 +12,18 @@
 #include "conjure/core/jobs/main_thread.h"
 #include "conjure/core/log.h"
 #include "conjure/core/string_id.h"
+#include "conjure/core/string_utils.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <format>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -44,6 +49,254 @@ namespace {
             text.append(registry.is_valid(id) ? registry.manifest(id).name : to_string(id));
         }
         return text;
+    }
+
+    /*-----------------------------------------------------------------------*/
+    // export_layout: the binary folder
+
+    // Link and debug by-products that ConjureModule.cmake writes next to a module's binary: import
+    // and static libraries, export files, incremental-link state and native symbols (.pdb files and
+    // .dSYM bundles). A shipped game loads none of them. Lower case: matched ignoring ASCII case.
+    constexpr std::array<std::string_view, 6> EXPORT_SKIPPED_EXTENSIONS = {
+        ".lib", ".exp", ".ilk", ".a", ".pdb", ".dsym",
+    };
+
+    // The native spelling is compared, so no conversion of the name can fail. The comparison ignores
+    // ASCII case on every platform (module_alpha.PDB stays out on Linux too); a character outside
+    // ASCII never matches.
+    bool extension_matches(const std::filesystem::path::string_type &extension, std::string_view expected) noexcept {
+        using code_unit = std::make_unsigned_t<std::filesystem::path::value_type>;
+        if (extension.size() != expected.size()) {
+            return false;
+        }
+        for (usize index = 0; index < expected.size(); ++index) {
+            const code_unit unit = static_cast<code_unit>(extension[index]);
+            if (unit > 0x7F) {
+                return false;
+            }
+            if (str::to_lower(static_cast<char>(unit)) != expected[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Matched by name whatever the entry is: a .dSYM is a bundle folder, the others are files.
+    bool is_export_by_product(const std::filesystem::path &entry) {
+        const std::filesystem::path extension = entry.extension();
+        for (const std::string_view skipped : EXPORT_SKIPPED_EXTENSIONS) {
+            if (extension_matches(extension.native(), skipped)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    result<void> copy_binary_folder(
+      std::string_view moduleName,
+      const std::filesystem::path &source,
+      const std::filesystem::path &target,
+      std::vector<std::filesystem::path> &openFolders
+    );
+
+    // Copies the entries of 'source' into the existing folder 'target', leaving out the by-products.
+    // Links are followed: a linked file ships as a file, a linked folder as a folder, since the shipped
+    // game cannot rely on a link target outside its own tree. Existing files in 'target' are
+    // overwritten; files of an earlier export that are not in 'source' stay.
+    result<void> copy_binary_entries(
+      std::string_view moduleName,
+      const std::filesystem::path &source,
+      const std::filesystem::path &target,
+      std::vector<std::filesystem::path> &openFolders
+    ) {
+        std::error_code failure = {};
+        std::filesystem::directory_iterator iterator(source, failure);
+        const std::filesystem::directory_iterator end = {};
+        for (; !failure && iterator != end; iterator.increment(failure)) {
+            const std::filesystem::directory_entry &entry = *iterator;
+            if (is_export_by_product(entry.path())) {
+                continue;
+            }
+
+            const std::filesystem::path destination = target / entry.path().filename();
+            std::error_code statusFailure = {};
+            const std::filesystem::file_status status = entry.status(statusFailure);
+            if (std::filesystem::is_directory(status)) {
+                CONJURE_TRY(copy_binary_folder(moduleName, entry.path(), destination, openFolders));
+                continue;
+            }
+            if (!std::filesystem::is_regular_file(status)) {
+                // A broken link, a device, a pipe or a socket: the game could not use it, and skipping
+                // it silently would hide a broken build output.
+                return make_module_error(
+                  module_error::EXPORT_FAILED,
+                  "module '{}': cannot copy '{}': {}",
+                  moduleName,
+                  entry.path().generic_string(),
+                  statusFailure ? statusFailure.message() : std::string("it is neither a file nor a folder")
+                );
+            }
+
+            std::error_code copyFailure = {};
+            std::filesystem::copy_file(
+              entry.path(), destination, std::filesystem::copy_options::overwrite_existing, copyFailure);
+            if (copyFailure) {
+                return make_module_error(
+                  module_error::EXPORT_FAILED,
+                  "module '{}': cannot copy '{}' to '{}': {}",
+                  moduleName,
+                  entry.path().generic_string(),
+                  destination.generic_string(),
+                  copyFailure.message()
+                );
+            }
+        }
+        if (failure) {
+            // A listing that fails halfway must not pass for a complete copy.
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot list '{}': {}",
+              moduleName,
+              source.generic_string(),
+              failure.message()
+            );
+        }
+        return {};
+    }
+
+    // 'openFolders' holds the canonical paths of the folders being copied, so a link back to one of
+    // them is EXPORT_FAILED instead of a copy that recurses until the path is too long.
+    result<void> copy_binary_folder(
+      std::string_view moduleName,
+      const std::filesystem::path &source,
+      const std::filesystem::path &target,
+      std::vector<std::filesystem::path> &openFolders
+    ) {
+        std::error_code failure = {};
+        const std::filesystem::path canonicalSource = std::filesystem::canonical(source, failure);
+        if (failure) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot resolve '{}': {}",
+              moduleName,
+              source.generic_string(),
+              failure.message()
+            );
+        }
+        if (std::find(openFolders.begin(), openFolders.end(), canonicalSource) != openFolders.end()) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': '{}' links back to '{}', a folder that contains it",
+              moduleName,
+              source.generic_string(),
+              canonicalSource.generic_string()
+            );
+        }
+        std::filesystem::create_directories(target, failure);
+        if (failure) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot create '{}': {}",
+              moduleName,
+              target.generic_string(),
+              failure.message()
+            );
+        }
+
+        openFolders.push_back(canonicalSource);
+        const result<void> copied = copy_binary_entries(moduleName, source, target, openFolders);
+        openFolders.pop_back();
+        return copied;
+    }
+
+    // Removes every by-product under 'folder', at any depth, without following links: a linked entry is
+    // removed as a link and a linked folder is not entered.
+    result<void> remove_by_products(std::string_view moduleName, const std::filesystem::path &folder) {
+        // Collected first and removed after the listing, so no entry disappears under the iterator.
+        std::vector<std::filesystem::path> byProducts = {};
+        std::vector<std::filesystem::path> subfolders = {};
+        std::error_code failure = {};
+        std::filesystem::directory_iterator iterator(folder, failure);
+        const std::filesystem::directory_iterator end = {};
+        for (; !failure && iterator != end; iterator.increment(failure)) {
+            const std::filesystem::directory_entry &entry = *iterator;
+            if (is_export_by_product(entry.path())) {
+                byProducts.push_back(entry.path());
+                continue;
+            }
+            std::error_code statusFailure = {};
+            if (std::filesystem::is_directory(entry.symlink_status(statusFailure))) {
+                subfolders.push_back(entry.path());
+            }
+        }
+        if (failure) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot list '{}': {}",
+              moduleName,
+              folder.generic_string(),
+              failure.message()
+            );
+        }
+
+        for (const std::filesystem::path &byProduct : byProducts) {
+            std::filesystem::remove_all(byProduct, failure);
+            if (failure) {
+                return make_module_error(
+                  module_error::EXPORT_FAILED,
+                  "module '{}': cannot remove '{}' left by an earlier export: {}",
+                  moduleName,
+                  byProduct.generic_string(),
+                  failure.message()
+                );
+            }
+        }
+        for (const std::filesystem::path &subfolder : subfolders) {
+            CONJURE_TRY(remove_by_products(moduleName, subfolder));
+        }
+        return {};
+    }
+
+    // An earlier export into the same output folder, made before the by-products were left out, put
+    // them in 'target'; they would still ship. Nothing is removed when 'target' is 'source' or holds it
+    // (an output folder overlapping the module root), so a module's own symbols are never lost.
+    result<void> remove_stale_by_products(
+      std::string_view moduleName,
+      const std::filesystem::path &source,
+      const std::filesystem::path &target
+    ) {
+        std::error_code failure = {};
+        if (!std::filesystem::is_directory(target, failure)) {
+            return {};      // a first export; a file in the way is reported when the folder is created
+        }
+        const std::filesystem::path canonicalSource = std::filesystem::canonical(source, failure);
+        if (failure) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot resolve '{}': {}",
+              moduleName,
+              source.generic_string(),
+              failure.message()
+            );
+        }
+        const std::filesystem::path canonicalTarget = std::filesystem::canonical(target, failure);
+        if (failure) {
+            return make_module_error(
+              module_error::EXPORT_FAILED,
+              "module '{}': cannot resolve '{}': {}",
+              moduleName,
+              target.generic_string(),
+              failure.message()
+            );
+        }
+        // Compared element by element: target holds source when all of target's elements start source's.
+        const bool targetHoldsSource = std::mismatch(
+          canonicalTarget.begin(), canonicalTarget.end(), canonicalSource.begin(), canonicalSource.end()
+        ).first == canonicalTarget.end();
+        if (targetHoldsSource) {
+            return {};
+        }
+        return remove_by_products(moduleName, target);
     }
 }
 
@@ -481,21 +734,12 @@ result<void> module_manager::export_layout(
                   to_string(targetConfig)
                 );
             }
+            // Entry by entry rather than one recursive copy: the link and debug by-products of the
+            // module build (EXPORT_SKIPPED_EXTENSIONS) stay behind, everything else ships.
             const std::filesystem::path targetBin = module_binary_directory(targetRoot, triplet);
-            std::filesystem::create_directories(targetBin, failure);
-            const std::filesystem::copy_options options =
-              std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive;
-            std::filesystem::copy(sourceBin, targetBin, options, failure);
-            if (failure) {
-                return make_module_error(
-                  module_error::EXPORT_FAILED,
-                  "module '{}': cannot copy '{}' to '{}': {}",
-                  manifest.name,
-                  sourceBin.generic_string(),
-                  targetBin.generic_string(),
-                  failure.message()
-                );
-            }
+            CONJURE_TRY(remove_stale_by_products(manifest.name, sourceBin, targetBin));
+            std::vector<std::filesystem::path> openFolders = {};
+            CONJURE_TRY(copy_binary_folder(manifest.name, sourceBin, targetBin, openFolders));
         }
 
         // The registration set holds the manifest's assemblies plus those the entry added through
@@ -512,6 +756,15 @@ result<void> module_manager::export_layout(
                 );
             }
             std::filesystem::create_directories(target.parent_path(), failure);
+            if (failure) {
+                return make_module_error(
+                  module_error::EXPORT_FAILED,
+                  "module '{}': cannot create '{}': {}",
+                  manifest.name,
+                  target.parent_path().generic_string(),
+                  failure.message()
+                );
+            }
             std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, failure);
             if (failure) {
                 return make_module_error(

@@ -68,12 +68,7 @@ namespace {
     /// test processes that load the shared fixture binary at the same time. Returns the manifest.
     /// </summary>
     std::filesystem::path private_alpha(const conjure::testing::temp_directory &directory) {
-        const std::filesystem::path target = directory.path() / "module_alpha";
-        std::error_code failure = {};
-        const std::filesystem::copy_options options = std::filesystem::copy_options::recursive;
-        std::filesystem::copy(fixture_directory("module_alpha"), target, options, failure);
-        REQUIRE_FALSE(static_cast<bool>(failure));
-        return target / MODULE_MANIFEST_FILE_NAME;
+        return copy_fixture(directory, "module_alpha") / MODULE_MANIFEST_FILE_NAME;
     }
 }
 

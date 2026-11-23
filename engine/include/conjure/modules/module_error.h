@@ -47,7 +47,7 @@ namespace conjure::modules {
         INVALID_ID,                 // the id never referred to a module
         STALE_ID,                   // the id's generation is behind the record
         FAULTED,                    // the record is FAULTED and accepts no further operation
-        EXPORT_FAILED,              // export_layout could not write or copy a file
+        EXPORT_FAILED,              // export_layout could not produce the layout (see export_layout)
         COUNT
     };
 

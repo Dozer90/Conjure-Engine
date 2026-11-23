@@ -1,5 +1,9 @@
 #pragma once
 
+#include "conjure/testing/doctest.h"
+
+#include "conjure/testing/temp_directory.h"
+
 #include "conjure/modules/module_manager.h"
 #include "conjure/modules/module_manifest.h"
 #include "conjure/modules/module_types.h"
@@ -9,6 +13,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 // The fixture plugins built by tests/modules/CMakeLists.txt live under CONJURE_TEST_MODULE_DIR/<name>/
 // with a copy of their module.json and the binary at bin/<platform>-<arch>-<config>/.
@@ -25,6 +30,25 @@ namespace conjure::modules::testing {
 
     inline std::filesystem::path fixture_manifest(std::string_view name) {
         return fixture_directory(name) / MODULE_MANIFEST_FILE_NAME;
+    }
+
+    /// <summary>
+    /// A private copy of a fixture's tree, so a test can add files to it or lock its binary without touching
+    /// the fixture other test processes load. The copy is directory/&lt;relativeRoot&gt;/, directory/&lt;name&gt;/
+    /// when relativeRoot is empty. Returns the copy's root.
+    /// </summary>
+    inline std::filesystem::path copy_fixture(
+      const conjure::testing::temp_directory &directory,
+      std::string_view name,
+      std::string_view relativeRoot = {}
+    ) {
+        const std::filesystem::path root = directory.path() / std::string(relativeRoot.empty() ? name : relativeRoot);
+        std::error_code failure = {};
+        std::filesystem::create_directories(root.parent_path(), failure);
+        REQUIRE_FALSE(static_cast<bool>(failure));
+        std::filesystem::copy(fixture_directory(name), root, std::filesystem::copy_options::recursive, failure);
+        REQUIRE_FALSE(static_cast<bool>(failure));
+        return root;
     }
 
     /// <summary>
