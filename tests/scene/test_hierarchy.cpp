@@ -11,6 +11,7 @@
 
 using namespace conjure;
 using namespace scene_test;
+using scene::reparent_mode;
 using scene::scene_error;
 
 namespace {
@@ -132,7 +133,7 @@ TEST_SUITE("scene/hierarchy") {
         CHECK(target.tree().subtree_height(chain[0]) == 0);
     }
 
-    TEST_CASE("hierarchy - keepWorld preserves world transform within epsilon") {
+    TEST_CASE("hierarchy - KEEP_WORLD preserves world transform within epsilon") {
         scene_fixture fixture = {};
         scene::scene &target = fixture.active();
         const ecs::entity parentA = fixture.create("a");
@@ -150,28 +151,28 @@ TEST_SUITE("scene/hierarchy") {
         CONJURE_REQUIRE_OK(target.set_local_transform(child, childLocal));
 
         const math::transform before = target.world_transform_of(child).value();
-        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, true));
+        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_APPROX(target.world_transform_of(child).value(), before);
-        CONJURE_REQUIRE_OK(target.set_parent(child, parentB, true));
+        CONJURE_REQUIRE_OK(target.set_parent(child, parentB, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_APPROX(target.world_transform_of(child).value(), before);
-        CONJURE_REQUIRE_OK(target.set_parent(child, ecs::NULL_ENTITY, true));
+        CONJURE_REQUIRE_OK(target.set_parent(child, ecs::NULL_ENTITY, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_APPROX(target.world_transform_of(child).value(), before);
         CONJURE_CHECK_APPROX(target.local_transform_of(child).value(), before);
 
         // The propagated matrix agrees with the fresh walk.
-        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, true));
+        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, reparent_mode::KEEP_WORLD));
         fixture.step();
         CONJURE_CHECK_APPROX(fixture.world_matrix(child), before.to_matrix());
     }
 
-    TEST_CASE("hierarchy - keepWorld false keeps local") {
+    TEST_CASE("hierarchy - KEEP_LOCAL keeps the local transform") {
         scene_fixture fixture = {};
         scene::scene &target = fixture.active();
         const ecs::entity parentA = fixture.create("a");
         const ecs::entity child = fixture.create("child");
         CONJURE_REQUIRE_OK(target.set_local_transform(parentA, at(10.0f, 0.0f, 0.0f)));
         CONJURE_REQUIRE_OK(target.set_local_transform(child, at(1.0f, 2.0f, 3.0f)));
-        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, false));
+        CONJURE_REQUIRE_OK(target.set_parent(child, parentA, reparent_mode::KEEP_LOCAL));
         CONJURE_CHECK_APPROX(target.local_transform_of(child).value().position, math::vec3(1.0f, 2.0f, 3.0f));
         CONJURE_CHECK_APPROX(target.world_transform_of(child).value().position, math::vec3(11.0f, 2.0f, 3.0f));
         fixture.step();
@@ -192,7 +193,7 @@ TEST_SUITE("scene/hierarchy") {
 
         // Insert at the front: the others shift.
         const ecs::entity front = fixture.create("front");
-        CONJURE_REQUIRE_OK(target.set_parent(front, root, true, 0));
+        CONJURE_REQUIRE_OK(target.set_parent(front, root, reparent_mode::KEEP_WORLD, 0));
         const std::span<const ecs::entity> list = tree.children_of(root);
         REQUIRE(list.size() == 4);
         CHECK(list[0] == front);
@@ -272,13 +273,13 @@ TEST_SUITE("scene/hierarchy") {
         const ecs::entity first = fixture.create("first");
         const ecs::entity second = fixture.create("second");
         const ecs::entity child = fixture.create("child", first);
-        CONJURE_REQUIRE_OK(target.set_parent(child, ecs::NULL_ENTITY, true, 1));
+        CONJURE_REQUIRE_OK(target.set_parent(child, ecs::NULL_ENTITY, reparent_mode::KEEP_WORLD, 1));
         REQUIRE(target.roots().size() == 3);
         CHECK(target.roots()[0].entity == first);
         CHECK(target.roots()[1].entity == child);
         CHECK(target.roots()[2].entity == second);
         CHECK(target.roots()[1].owner == scene::SCENE_ID_AUTHORED);
-        CONJURE_REQUIRE_OK(target.set_parent(second, ecs::NULL_ENTITY, true, 0));
+        CONJURE_REQUIRE_OK(target.set_parent(second, ecs::NULL_ENTITY, reparent_mode::KEEP_WORLD, 0));
         CHECK(target.roots()[0].entity == second);
         CHECK(target.roots()[1].entity == first);
         CHECK(target.roots()[2].entity == child);
@@ -340,15 +341,15 @@ TEST_SUITE("scene/hierarchy") {
         fixture.step();
         CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(leaf)), math::vec3(101.0f, 0.0f, 0.0f));
 
-        // keepWorld through a transformless parent still preserves the world pose.
+        // KEEP_WORLD through a transformless parent still preserves the world pose.
         const ecs::entity other = fixture.create("other");
-        CONJURE_REQUIRE_OK(target.set_parent(leaf, other, true));
+        CONJURE_REQUIRE_OK(target.set_parent(leaf, other, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_APPROX(target.world_transform_of(leaf).value().position, math::vec3(101.0f, 0.0f, 0.0f));
-        CONJURE_REQUIRE_OK(target.set_parent(leaf, middle, true));
+        CONJURE_REQUIRE_OK(target.set_parent(leaf, middle, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_APPROX(target.local_transform_of(leaf).value().position, math::vec3(1.0f, 0.0f, 0.0f));
 
-        // A transformless entity ignores keepWorld and set_world_transform refuses it.
-        CONJURE_CHECK_OK(target.set_parent(middle, other, true));
+        // A transformless entity ignores the reparent mode and set_world_transform refuses it.
+        CONJURE_CHECK_OK(target.set_parent(middle, other, reparent_mode::KEEP_WORLD));
         CONJURE_CHECK_ERROR(target.set_world_transform(middle, math::transform{}), scene_error::NO_TRANSFORM);
         CONJURE_CHECK_ERROR(target.set_local_transform(middle, scene::local_transform{}), scene_error::NO_TRANSFORM);
         CONJURE_CHECK_ERROR(target.set_local_transform(middle, math::transform{}), scene_error::NO_TRANSFORM);

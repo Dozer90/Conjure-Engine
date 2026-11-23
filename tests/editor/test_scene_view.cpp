@@ -281,7 +281,7 @@ TEST_SUITE("editor/scene_view") {
         REQUIRE(instance != nullptr);
         {
             // Declared after the application so it is destroyed first, as editor_application does it.
-            editor_context context(application, nullptr, true, true);
+            editor_context context(application, nullptr, editor_display_mode::HEADLESS_OFFSCREEN);
             // On the null device the context installs no backend (there are no pixels); the backend itself
             // works there and reads back zeros, which is enough to follow its frames.
             CHECK_FALSE(context.screenshots().available());

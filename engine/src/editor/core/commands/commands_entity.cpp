@@ -470,7 +470,9 @@ namespace conjure::editor::support {
             const ecs::entity previousParent = scene.tree().parent_of(entity);
             const u32 previousIndex = tree_position(scene, entity);
             const std::optional<math::transform> previousLocal = scene.local_transform_of(entity);
-            const core::result<void> moved = scene.set_parent(entity, parent, keepWorld, index);
+            const scene::reparent_mode mode =
+              keepWorld ? scene::reparent_mode::KEEP_WORLD : scene::reparent_mode::KEEP_LOCAL;
+            const core::result<void> moved = scene.set_parent(entity, parent, mode, index);
             if (!moved.has_value()) {
                 return wrap(moved.get_error());
             }

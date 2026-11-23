@@ -5,6 +5,7 @@
 #include "conjure/editor/console_buffer.h"
 #include "conjure/editor/editor_camera.h"
 #include "conjure/editor/editor_module_consumer.h"
+#include "conjure/editor/editor_options.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/project_trust.h"
@@ -112,6 +113,25 @@ namespace conjure::editor {
             [[nodiscard]] virtual bool tick(editor_context &context) = 0;
     };
 
+    /// <summary>
+    /// How the editor session presents itself, fixed for the context's lifetime (headless() and offscreen() read
+    /// it back). One enum instead of two bools, so an off-screen session with a window cannot be expressed.
+    /// </summary>
+    enum class editor_display_mode : u8 {
+        WINDOWED,                 // a window with its panels (no --headless)
+        HEADLESS,                 // no window and no viewport (--headless)
+        HEADLESS_OFFSCREEN        // no window; view commands render off-screen when a device exists (--offscreen)
+    };
+
+    /// <summary>
+    /// The display mode of a session started with 'options': HEADLESS_OFFSCREEN for headless with offscreen,
+    /// HEADLESS for headless alone, WINDOWED otherwise. Offscreen without headless is WINDOWED: parse_editor_options
+    /// refuses --offscreen without --headless, and options built in code that carry it get a window, as
+    /// editor_application::make_engine_desc and the editor's layer setup treat them. editor_application builds its
+    /// context with this mode.
+    /// </summary>
+    [[nodiscard]] CONJURE_API editor_display_mode display_mode_for(const editor_options &options) noexcept;
+
     class CONJURE_API editor_context {
         public:
             /// <summary>
@@ -173,8 +193,7 @@ namespace conjure::editor {
             usize mRequestsPerFrame = protocol_server::DEFAULT_REQUESTS_PER_FRAME;
             bool mSceneOpen = false;
             bool mSceneDirty = false;
-            bool mHeadless = true;
-            bool mOffscreen = false;
+            editor_display_mode mDisplayMode = editor_display_mode::HEADLESS;
             bool mConsumerInstalled = false;
             bool mTrustPromptEnabled = false;           // a window is there to ask in (set by the application)
 
@@ -182,9 +201,10 @@ namespace conjure::editor {
             /// <summary>
             /// Binds to an initialised application. The built-in commands are registered, the console sink
             /// installed and the engine put into the EDITING mode (PAUSED). 'host' may be null in tests
-            /// (editor.quit and project.open then answer NOT_AVAILABLE).
+            /// (editor.quit and project.open then answer NOT_AVAILABLE). 'displayMode' is kept for the
+            /// context's lifetime, across rebind.
             /// </summary>
-            editor_context(engine::application &engine, editor_host *host, bool headless, bool offscreen);
+            editor_context(engine::application &engine, editor_host *host, editor_display_mode displayMode);
             ~editor_context();
 
             editor_context(const editor_context &) = delete;
@@ -451,12 +471,25 @@ namespace conjure::editor {
             /// </summary>
             u64 bump_revision();
 
-            [[nodiscard]] bool headless() const noexcept {
-                return mHeadless;
+            /// <summary>
+            /// The display mode given to the constructor.
+            /// </summary>
+            [[nodiscard]] editor_display_mode display_mode() const noexcept {
+                return mDisplayMode;
             }
 
+            /// <summary>
+            /// True for HEADLESS and HEADLESS_OFFSCREEN: the session has no window.
+            /// </summary>
+            [[nodiscard]] bool headless() const noexcept {
+                return mDisplayMode != editor_display_mode::WINDOWED;
+            }
+
+            /// <summary>
+            /// True for HEADLESS_OFFSCREEN only: view commands are meant to render off-screen.
+            /// </summary>
             [[nodiscard]] bool offscreen() const noexcept {
-                return mOffscreen;
+                return mDisplayMode == editor_display_mode::HEADLESS_OFFSCREEN;
             }
 
             [[nodiscard]] view_mode current_view_mode() const noexcept {

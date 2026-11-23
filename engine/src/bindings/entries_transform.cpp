@@ -91,7 +91,9 @@ namespace {
             queue_fixup(fixup);
             return 0;
         }
-        const core::result<void> moved = target.set_parent(entity, parent, keepWorld, position);
+        const scene::reparent_mode mode =
+          keepWorld ? scene::reparent_mode::KEEP_WORLD : scene::reparent_mode::KEEP_LOCAL;
+        const core::result<void> moved = target.set_parent(entity, parent, mode, position);
         if (!moved.has_value()) {
             return fail_entry(id, moved.get_error());
         }

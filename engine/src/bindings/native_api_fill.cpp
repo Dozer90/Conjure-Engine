@@ -459,13 +459,16 @@ u32 conjure::bindings::detail::apply_pending_fixups() noexcept {
         }
         core::result<void> outcome = core::result<void>::success();
         switch (fixup.operation) {
-            case scene_fixup::kind::ATTACH:
+            case scene_fixup::kind::ATTACH: {
+                const scene::reparent_mode mode =
+                  fixup.keepWorld ? scene::reparent_mode::KEEP_WORLD : scene::reparent_mode::KEEP_LOCAL;
                 if (!fixup.parent.is_null() && !world.is_alive(fixup.parent)) {
-                    outcome = active.set_parent(fixup.entity, ecs::NULL_ENTITY, fixup.keepWorld, fixup.index);
+                    outcome = active.set_parent(fixup.entity, ecs::NULL_ENTITY, mode, fixup.index);
                 } else {
-                    outcome = active.set_parent(fixup.entity, fixup.parent, fixup.keepWorld, fixup.index);
+                    outcome = active.set_parent(fixup.entity, fixup.parent, mode, fixup.index);
                 }
                 break;
+            }
             case scene_fixup::kind::SET_ENABLED:
                 outcome = active.set_enabled(fixup.entity, fixup.enabled);
                 break;

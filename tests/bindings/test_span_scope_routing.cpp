@@ -1,6 +1,7 @@
 #include "conjure/testing/doctest.h"
 
 #include "conjure/testing/allocation_scope.h"
+#include "conjure/testing/approx.h"
 #include "conjure/testing/log_capture.h"
 #include "bindings_test_support.h"
 
@@ -343,6 +344,57 @@ TEST_SUITE("bindings/span_scope_routing") {
         CHECK(fixture.base.active().tree().parent_of(parent).is_null());
         CHECK(logs.count(core::log_level::WARN) == warningsBefore + 1);
         CHECK(logs.contains(core::log_level::WARN, "deferred scene fixup"));
+        CONJURE_CHECK_OK(fixture.base.active().validate());
+    }
+
+    TEST_CASE("span routing - a deferred reparent keeps the world or the local pose as asked") {
+        routing_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const auto placeAt = [&](ecs::entity entity, f32 x) {
+            conjure_transform local = {};
+            REQUIRE(api.transform_get_local(entity.to_u64(), &local) == 0);
+            local.position.x = x;
+            REQUIRE(api.transform_set_local(entity.to_u64(), &local) == 0);
+        };
+        const auto localX = [&](ecs::entity entity) {
+            conjure_transform local = {};
+            REQUIRE(api.transform_get_local(entity.to_u64(), &local) == 0);
+            return local.position.x;
+        };
+        // A live new parent at x 10; two roots at x 1 move under it.
+        const ecs::entity parent = fixture.base.create("parent");
+        const ecs::entity keepsWorld = fixture.base.create("keeps_world");
+        const ecs::entity keepsLocal = fixture.base.create("keeps_local");
+        placeAt(parent, 10.0f);
+        placeAt(keepsWorld, 1.0f);
+        placeAt(keepsLocal, 1.0f);
+        // A parent destroyed before the flush sends the child to the root: two children of a holder at x 10,
+        // local x 1 (world x 11), ask for it.
+        const ecs::entity holder = fixture.base.create("holder");
+        const ecs::entity doomed = fixture.base.create("doomed");
+        const ecs::entity orphanKeepsWorld = fixture.base.create("orphan_keeps_world", holder);
+        const ecs::entity orphanKeepsLocal = fixture.base.create("orphan_keeps_local", holder);
+        placeAt(holder, 10.0f);
+        placeAt(orphanKeepsWorld, 1.0f);
+        placeAt(orphanKeepsLocal, 1.0f);
+        fixture.inside_scope([&](conjure_query_scope &) {
+            CHECK(api.transform_set_parent_ex(keepsWorld.to_u64(), parent.to_u64(), 1, -1) == 0);
+            CHECK(api.transform_set_parent_ex(keepsLocal.to_u64(), parent.to_u64(), 0, -1) == 0);
+            CHECK(api.transform_set_parent_ex(orphanKeepsWorld.to_u64(), doomed.to_u64(), 1, -1) == 0);
+            CHECK(api.transform_set_parent_ex(orphanKeepsLocal.to_u64(), doomed.to_u64(), 0, -1) == 0);
+            CHECK(api.entity_destroy(doomed.to_u64()) == 1);                // deferred: dead at the flush
+            CHECK(bindings::detail::pending_fixup_count() == 4);
+        });
+        CHECK(bindings::detail::pending_fixup_count() == 0);
+        REQUIRE_FALSE(fixture.base.world.is_alive(doomed));
+        CHECK(fixture.base.active().tree().parent_of(keepsWorld) == parent);
+        CHECK(fixture.base.active().tree().parent_of(keepsLocal) == parent);
+        CONJURE_CHECK_APPROX(localX(keepsWorld), -9.0f);                     // keepWorld 1: world x stays 1
+        CONJURE_CHECK_APPROX(localX(keepsLocal), 1.0f);                      // keepWorld 0: local x stays 1
+        CHECK(fixture.base.active().tree().parent_of(orphanKeepsWorld).is_null());
+        CHECK(fixture.base.active().tree().parent_of(orphanKeepsLocal).is_null());
+        CONJURE_CHECK_APPROX(localX(orphanKeepsWorld), 11.0f);               // the root: local = the old world
+        CONJURE_CHECK_APPROX(localX(orphanKeepsLocal), 1.0f);
         CONJURE_CHECK_OK(fixture.base.active().validate());
     }
 

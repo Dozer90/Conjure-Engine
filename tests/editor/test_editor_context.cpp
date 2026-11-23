@@ -1,5 +1,7 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "editor_test_support.h"
 
 #include "conjure/core/json/document.h"
@@ -7,7 +9,10 @@
 #include "conjure/core/vfs/memory_file_system.h"
 #include "conjure/editor/builtin_commands.h"
 #include "conjure/editor/command_dispatcher.h"
+#include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_context.h"
+#include "conjure/editor/editor_error.h"
+#include "conjure/editor/editor_options.h"
 #include "conjure/editor/event_broadcaster.h"
 #include "conjure/editor/log_category.h"
 #include "conjure/editor/play_controller.h"
@@ -26,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -130,10 +136,122 @@ TEST_SUITE("editor/editor_context") {
 
         // Declared after the application so it is destroyed first; the engine shuts down while the context's module
         // consumer is still alive, as editor_application::shutdown does it.
-        editor_context context(application, nullptr, true, false);
+        editor_context context(application, nullptr, editor_display_mode::HEADLESS);
         CHECK(context.has_scene());
         CHECK(context.scene_path() == "scenes/first.scene.json");
         CHECK_FALSE(context.scene_dirty());
+        application.shutdown();
+    }
+
+    TEST_CASE("editor_context - the display mode decides headless, offscreen and the viewport commands") {
+        engine::application_desc desc = {};
+        desc.config = engine::engine_config::headless_defaults();
+        desc.config.scripting.enabled = false;
+        engine::application application(std::move(desc));
+        CONJURE_REQUIRE_OK(application.initialise());
+        editor_display_mode mode = editor_display_mode::HEADLESS;
+        bool headless = true;
+        bool offscreen = false;
+        SUBCASE("WINDOWED") {
+            mode = editor_display_mode::WINDOWED;
+            headless = false;
+        }
+        SUBCASE("HEADLESS") {
+            mode = editor_display_mode::HEADLESS;
+        }
+        SUBCASE("HEADLESS_OFFSCREEN") {
+            mode = editor_display_mode::HEADLESS_OFFSCREEN;
+            offscreen = true;
+        }
+        // Declared after the application so it is destroyed first; the engine shuts down while the context's module
+        // consumer is still alive, as editor_application::shutdown does it.
+        editor_context context(application, nullptr, mode);
+        const editor_display_mode reported = context.display_mode();
+        const bool reportedHeadless = context.headless();
+        const bool reportedOffscreen = context.offscreen();
+        const core::json::document state = context.describe_state();
+
+        // view.debug_draw needs a viewport: a window or an off-screen target, not a bare headless session.
+        protocol_request request = {};
+        request.id = make_id(1);
+        request.command = "view.debug_draw";
+        request.args = core::json::object({{"bounds", true}});
+        const std::optional<protocol_response> response = context.dispatcher().dispatch(request);
+        const bool boundsDrawn = context.debug_draw().bounds;
+        application.shutdown();
+
+        CHECK(reported == mode);
+        CHECK(reportedHeadless == headless);
+        CHECK(reportedOffscreen == offscreen);
+        CHECK(state.root()["headless"].as_bool() == headless);
+        CHECK(state.root()["offscreen"].as_bool() == offscreen);
+        REQUIRE(response.has_value());
+        CHECK(response->ok == (mode != editor_display_mode::HEADLESS));
+        CHECK(boundsDrawn == (mode != editor_display_mode::HEADLESS));
+        if (mode == editor_display_mode::HEADLESS) {
+            CHECK(response->errorCode == protocol_error_code::NOT_AVAILABLE);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F634 the editor_context constructor takes a display mode, not two bools") {
+        // (engine, host, true, true) and (engine, host, false, true) both compiled: the second asked for an
+        // off-screen target with a window. Only the three display modes can be written now.
+        CHECK(std::is_constructible_v<editor_context, engine::application &, editor_host *, editor_display_mode>);
+        CHECK_FALSE(std::is_constructible_v<editor_context, engine::application &, editor_host *, bool, bool>);
+        CHECK_FALSE(std::is_constructible_v<editor_context, engine::application &, editor_host *, bool>);
+        CHECK_FALSE(std::is_constructible_v<editor_context, engine::application &, editor_host *, int>);
+    }
+
+    TEST_CASE("display_mode_for - the headless and offscreen options pick the display mode") {
+        editor_options options = {};
+        editor_display_mode expected = editor_display_mode::WINDOWED;
+        SUBCASE("neither is WINDOWED") {
+            expected = editor_display_mode::WINDOWED;
+        }
+        SUBCASE("headless alone is HEADLESS") {
+            options.headless = true;
+            expected = editor_display_mode::HEADLESS;
+        }
+        SUBCASE("headless with offscreen is HEADLESS_OFFSCREEN") {
+            options.headless = true;
+            options.offscreen = true;
+            expected = editor_display_mode::HEADLESS_OFFSCREEN;
+        }
+        SUBCASE("offscreen without headless is WINDOWED") {
+            // parse_editor_options refuses this pair; options built in code get a window, as make_engine_desc does.
+            options.offscreen = true;
+            expected = editor_display_mode::WINDOWED;
+        }
+        CHECK(display_mode_for(options) == expected);
+    }
+
+    TEST_CASE("editor_context - editor_application builds the context in the display mode of its options") {
+        // A WINDOWED start needs a real window, so only the two headless modes are started here; display_mode_for
+        // above covers the options that give WINDOWED.
+        testing::log_capture logs = {};
+        editor_options options = {};
+        options.headless = true;
+        options.aiPort = u16{0};
+        options.engineArguments = {"--log-level", "warn"};
+        editor_display_mode expected = editor_display_mode::HEADLESS;
+        SUBCASE("headless") {
+            expected = editor_display_mode::HEADLESS;
+        }
+        SUBCASE("headless with offscreen") {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+            options.offscreen = true;
+            expected = editor_display_mode::HEADLESS_OFFSCREEN;
+#else
+            MESSAGE("an --offscreen start needs the renderer, which this build leaves out");
+            return;
+#endif
+        }
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        const editor_context &context = application.context();
+        CHECK(context.display_mode() == expected);
+        CHECK(context.headless());
+        CHECK(context.offscreen() == (expected == editor_display_mode::HEADLESS_OFFSCREEN));
         application.shutdown();
     }
 

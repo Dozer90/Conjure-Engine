@@ -66,13 +66,26 @@ namespace conjure::editor {
 
     /*===========================================================================*/
     /*===========================================================================*/
+    // display_mode_for
+
+    editor_display_mode display_mode_for(const editor_options &options) noexcept {
+        if (!options.headless) {
+            return editor_display_mode::WINDOWED;
+        }
+        if (options.offscreen) {
+            return editor_display_mode::HEADLESS_OFFSCREEN;
+        }
+        return editor_display_mode::HEADLESS;
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
     // editor_context
 
-    editor_context::editor_context(engine::application &engine, editor_host *host, bool headless, bool offscreen) :
+    editor_context::editor_context(engine::application &engine, editor_host *host, editor_display_mode displayMode) :
         mEngine(&engine),
         mHost(host),
-        mHeadless(headless),
-        mOffscreen(offscreen) {
+        mDisplayMode(displayMode) {
         mConsole.install_sink();
         register_builtin_commands(mRegistry);
         mDispatcher = std::make_unique<command_dispatcher>(*this, mRegistry, mUndo);
@@ -452,8 +465,8 @@ namespace conjure::editor {
             guids.push_back(guid.to_string());
         }
         state.set("selection", guids);
-        state.set("headless", mHeadless);
-        state.set("offscreen", mOffscreen);
+        state.set("headless", headless());
+        state.set("offscreen", offscreen());
         state.set("port", mServer == nullptr ? u32{0} : u32{mServer->bound_port()});
         state.set("clients", mServer == nullptr ? usize{0} : mServer->client_count());
         state.set("frame", frame_index());

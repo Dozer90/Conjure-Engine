@@ -149,7 +149,11 @@ core::result<instantiate_report> scene::create_entities(
     return instantiate_archive(archive, count, options, out);
 }
 
-core::result<ecs::entity> scene::duplicate_subtree(ecs::entity root, ecs::entity parentEntity, u32 index) {
+core::result<ecs::entity> scene::duplicate_subtree(
+  ecs::entity root,
+  std::optional<ecs::entity> parentEntity,
+  u32 index
+) {
     if (!mWorld->is_alive(root)) {
         return not_alive("duplicate_subtree", root);
     }
@@ -157,7 +161,9 @@ core::result<ecs::entity> scene::duplicate_subtree(ecs::entity root, ecs::entity
     const std::shared_ptr<const ecs::entity_archive> archive =
       std::make_shared<const ecs::entity_archive>(std::move(captured));
     instantiate_options options = {};
-    options.parent = parentEntity.is_null() ? mTree.parent_of(root) : parentEntity;
+    // No parent keeps the source's place; an explicit NULL_ENTITY is the scene root (capture_subtree
+    // dropped the root's parent component, so the copy does not follow it back to the source's parent).
+    options.parent = parentEntity.has_value() ? *parentEntity : mTree.parent_of(root);
     options.index = index;
     options.guids = guid_policy::REGENERATE_ALL;
     if (options.parent.is_null()) {
@@ -219,11 +225,11 @@ bool scene::contains(ecs::entity target) const noexcept {
 /*===========================================================================*/
 // Hierarchy
 
-core::result<void> scene::set_parent(ecs::entity child, ecs::entity newParent, bool keepWorld, u32 index) {
+core::result<void> scene::set_parent(ecs::entity child, ecs::entity newParent, reparent_mode mode, u32 index) {
     CONJURE_TRY(check_reparent(child, newParent));
     operation_scope operation(*this);
 
-    if (keepWorld && mWorld->has_raw(child, mIds.localTransform)) {
+    if (mode == reparent_mode::KEEP_WORLD && mWorld->has_raw(child, mIds.localTransform)) {
         const math::transform childWorld = compute_world_transform(*this, child);
         const math::transform parentWorld =
           newParent.is_null() ? math::transform{} : compute_world_transform(*this, newParent);
@@ -274,7 +280,7 @@ core::result<void> scene::deferred_set_parent(
   ecs::command_buffer &commands,
   ecs::entity child,
   ecs::entity newParent,
-  bool keepWorld,
+  reparent_mode mode,
   u32 index
 ) {
     CONJURE_TRY(check_reparent(child, newParent));
@@ -290,7 +296,7 @@ core::result<void> scene::deferred_set_parent(
     const bool liveHasParent = mWorld->has_raw(child, mIds.parent);
     const bool hasParent = pending != nullptr ? !pending->intendedParent.is_null() : liveHasParent;
 
-    if (keepWorld && mWorld->has_raw(child, mIds.localTransform)) {
+    if (mode == reparent_mode::KEEP_WORLD && mWorld->has_raw(child, mIds.localTransform)) {
         const math::transform childWorld = compute_world_transform(*this, child);
         const math::transform parentWorld =
           newParent.is_null() ? math::transform{} : compute_world_transform(*this, newParent);

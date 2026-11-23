@@ -501,8 +501,8 @@ TEST_SUITE("scene/transform_propagation") {
         fixture.step(3);
         CHECK(system.last_stats().worldRecomputed == 0);
 
-        // Same depth, no local change (keepWorld false): only the dirty tag marks the move.
-        CONJURE_REQUIRE_OK(target.set_parent(child, right, false));
+        // Same depth, no local change (KEEP_LOCAL): only the dirty tag marks the move.
+        CONJURE_REQUIRE_OK(target.set_parent(child, right, scene::reparent_mode::KEEP_LOCAL));
         CHECK(fixture.world.has<scene::transform_dirty>(child));
         fixture.step_transform();
         CHECK_FALSE(fixture.world.has<scene::transform_dirty>(child));

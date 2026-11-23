@@ -387,7 +387,7 @@ namespace conjure::editor {
         engine->layers().push_layer(std::make_unique<editor_tick_layer>(*this));
         CONJURE_TRY(engine->initialise());
         if (mContext == nullptr) {
-            mContext = std::make_unique<editor_context>(*engine, this, mOptions.headless, mOptions.offscreen);
+            mContext = std::make_unique<editor_context>(*engine, this, display_mode_for(mOptions));
         } else {
             mContext->rebind(*engine);
         }

@@ -23,7 +23,28 @@
 
 using namespace conjure;
 using namespace scene_test;
+using scene::reparent_mode;
 using scene::scene_error;
+
+namespace {
+
+    /// <summary>
+    /// True when scene::set_parent accepts a value of 'Mode' as its third argument.
+    /// </summary>
+    template <typename Mode>
+    constexpr bool SET_PARENT_TAKES = requires(scene::scene &target, ecs::entity entity, Mode mode) {
+        target.set_parent(entity, entity, mode);
+    };
+
+    /// <summary>
+    /// True when scene::deferred_set_parent accepts a value of 'Mode' as its fourth argument.
+    /// </summary>
+    template <typename Mode>
+    constexpr bool DEFERRED_SET_PARENT_TAKES =
+      requires(scene::scene &target, ecs::command_buffer &commands, ecs::entity entity, Mode mode) {
+          target.deferred_set_parent(commands, entity, entity, mode);
+      };
+}
 
 TEST_SUITE("scene/scene") {
 
@@ -242,8 +263,10 @@ TEST_SUITE("scene/scene") {
         {
             // Recorded while the world is locked, like a script inside a DOD query scope.
             const ecs::iteration_scope lock = fixture.world.lock_iteration();
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, true, 0));
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, child, ecs::NULL_ENTITY, false));
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, reparent_mode::KEEP_WORLD, 0));
+            CONJURE_REQUIRE_OK(
+              target.deferred_set_parent(commands, child, ecs::NULL_ENTITY, reparent_mode::KEEP_LOCAL)
+            );
             CONJURE_CHECK_ERROR(target.deferred_set_parent(commands, root, root), scene_error::SELF_PARENT);
             CONJURE_CHECK_ERROR(target.deferred_set_parent(commands, root, child), scene_error::HIERARCHY_CYCLE);
         }
@@ -261,6 +284,79 @@ TEST_SUITE("scene/scene") {
         CONJURE_CHECK_OK(target.validate());
     }
 
+    TEST_CASE("scene - reparent_mode picks the transform a reparent keeps") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity holder = fixture.create("holder");
+        const ecs::entity mover = fixture.create("mover");
+        CONJURE_REQUIRE_OK(target.set_local_transform(holder, at(10.0f, 0.0f, 0.0f)));
+        CONJURE_REQUIRE_OK(target.set_local_transform(mover, at(1.0f, 2.0f, 3.0f)));
+        const math::vec3 start(1.0f, 2.0f, 3.0f);
+        const math::vec3 followed(11.0f, 2.0f, 3.0f);
+        const math::vec3 compensated(-9.0f, 2.0f, 3.0f);
+        ecs::command_buffer commands(fixture.world);
+
+        SUBCASE("set_parent without a mode keeps the world pose") {
+            CONJURE_REQUIRE_OK(target.set_parent(mover, holder));
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, compensated);
+            CONJURE_CHECK_APPROX(target.world_transform_of(mover).value().position, start);
+        }
+        SUBCASE("set_parent KEEP_WORLD keeps the world pose at an explicit index") {
+            CONJURE_REQUIRE_OK(target.set_parent(mover, holder, reparent_mode::KEEP_WORLD, 0));
+            CHECK(target.tree().sibling_index(mover) == 0);
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, compensated);
+            CONJURE_CHECK_APPROX(target.world_transform_of(mover).value().position, start);
+        }
+        SUBCASE("set_parent KEEP_LOCAL keeps the local pose") {
+            CONJURE_REQUIRE_OK(target.set_parent(mover, holder, reparent_mode::KEEP_LOCAL));
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, start);
+            CONJURE_CHECK_APPROX(target.world_transform_of(mover).value().position, followed);
+        }
+        SUBCASE("deferred_set_parent without a mode keeps the world pose") {
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, mover, holder));
+            CHECK(fixture.world.flush(commands).applied >= 1);
+            fixture.step();
+            CHECK(target.tree().parent_of(mover) == holder);
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, compensated);
+            CONJURE_CHECK_APPROX(target.world_transform_of(mover).value().position, start);
+        }
+        SUBCASE("deferred_set_parent KEEP_LOCAL keeps the local pose") {
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, mover, holder, reparent_mode::KEEP_LOCAL));
+            CHECK(fixture.world.flush(commands).applied >= 1);
+            fixture.step();
+            CHECK(target.tree().parent_of(mover) == holder);
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, start);
+            CONJURE_CHECK_APPROX(target.world_transform_of(mover).value().position, followed);
+        }
+        SUBCASE("a refused reparent leaves the pose alone in either mode") {
+            reparent_mode mode = reparent_mode::KEEP_WORLD;
+            SUBCASE("KEEP_WORLD") {
+                mode = reparent_mode::KEEP_WORLD;
+            }
+            SUBCASE("KEEP_LOCAL") {
+                mode = reparent_mode::KEEP_LOCAL;
+            }
+            CONJURE_CHECK_ERROR(target.set_parent(mover, mover, mode), scene_error::SELF_PARENT);
+            CONJURE_CHECK_ERROR(target.deferred_set_parent(commands, mover, mover, mode), scene_error::SELF_PARENT);
+            CHECK(commands.empty());
+            CHECK(target.tree().parent_of(mover).is_null());
+            CONJURE_CHECK_APPROX(target.local_transform_of(mover).value().position, start);
+        }
+        CONJURE_CHECK_OK(target.validate());
+    }
+
+    TEST_CASE("regression - code sweep F634 an integer cannot bind to the reparent mode") {
+        // set_parent(child, parent, 2) used to compile as keepWorld = true with the index left at APPEND_CHILD.
+        CHECK(SET_PARENT_TAKES<reparent_mode>);
+        CHECK_FALSE(SET_PARENT_TAKES<bool>);
+        CHECK_FALSE(SET_PARENT_TAKES<int>);
+        CHECK_FALSE(SET_PARENT_TAKES<u32>);
+        CHECK(DEFERRED_SET_PARENT_TAKES<reparent_mode>);
+        CHECK_FALSE(DEFERRED_SET_PARENT_TAKES<bool>);
+        CHECK_FALSE(DEFERRED_SET_PARENT_TAKES<int>);
+        CHECK_FALSE(DEFERRED_SET_PARENT_TAKES<u32>);
+    }
+
     TEST_CASE("regression - deferred_set_parent repair waits for the buffer flush") {
         scene_fixture fixture = {};
         scene::scene &target = fixture.active();
@@ -270,8 +366,8 @@ TEST_SUITE("scene/scene") {
         const ecs::entity child = fixture.create("child", root);
         testing::log_capture logs = {};
         ecs::command_buffer commands(fixture.world);
-        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, false, 0));
-        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, child, other, false));
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, reparent_mode::KEEP_LOCAL, 0));
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, child, other, reparent_mode::KEEP_LOCAL));
         CHECK(target.pending_repair_count() == 2);
 
         // The buffer was recorded after TRANSFORM: the repair pass runs before the flush and must not
@@ -301,8 +397,8 @@ TEST_SUITE("scene/scene") {
 
         SUBCASE("a later call for the same child replaces the intent") {
             ecs::command_buffer again(fixture.world);
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(again, loose, ecs::NULL_ENTITY, false));
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(again, loose, other, false, 0));
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(again, loose, ecs::NULL_ENTITY, reparent_mode::KEEP_LOCAL));
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(again, loose, other, reparent_mode::KEEP_LOCAL, 0));
             CHECK(target.pending_repair_count() == 1);
             CHECK(fixture.world.flush(again).applied >= 1);
             fixture.step();
@@ -338,8 +434,8 @@ TEST_SUITE("scene/scene") {
         }
         SUBCASE("two deferred_set_parent calls on one chain in one buffer") {
             ecs::command_buffer commands(fixture.world);
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, child, root, false, 0));
-            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, root, other, false, 0));
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, child, root, reparent_mode::KEEP_LOCAL, 0));
+            CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, root, other, reparent_mode::KEEP_LOCAL, 0));
             CHECK(fixture.world.flush(commands).applied >= 2);
             fixture.step();
             CHECK(logs.count(core::log_level::WARN) == 0);
@@ -707,7 +803,7 @@ TEST_SUITE("scene/scene") {
         const ecs::entity leaf = fixture.create("leaf", source);
         const ecs::entity sibling = fixture.create("sibling", root);
         CONJURE_REQUIRE_OK(target.set_local_transform(leaf, at(0.0f, 1.0f, 0.0f)));
-        const core::result<ecs::entity> copy = target.duplicate_subtree(source, ecs::NULL_ENTITY, 1);
+        const core::result<ecs::entity> copy = target.duplicate_subtree(source, std::nullopt, 1);
         CONJURE_REQUIRE_OK(copy);
         CHECK(target.tree().parent_of(copy.value()) == root);
         REQUIRE(target.tree().children_of(root).size() == 3);
@@ -726,6 +822,105 @@ TEST_SUITE("scene/scene") {
         CHECK(target.root_owner(rootCopy.value()) == scene::SCENE_ID_AUTHORED);
         CHECK(target.tree().subtree_size(rootCopy.value()) == target.tree().subtree_size(root));
         CONJURE_CHECK_ERROR(target.duplicate_subtree(ecs::entity{900, 1}), scene_error::INVALID_ENTITY);
+        fixture.step();
+    }
+
+    TEST_CASE("regression - code sweep F362 duplicate_subtree with a null parent makes a root copy") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const scene::scene_id owner = scene::scene_id{3, 5};
+        const ecs::entity first = fixture.create("first");
+        const ecs::entity holder = fixture.create("holder");
+        const ecs::entity source = fixture.create("source", holder);
+        const ecs::entity leaf = fixture.create("leaf", source);
+        CONJURE_REQUIRE_OK(target.set_root_owner(holder, owner));
+        CONJURE_REQUIRE_OK(target.set_local_transform(holder, at(10.0f, 0.0f, 0.0f)));
+        CONJURE_REQUIRE_OK(target.set_local_transform(source, at(0.0f, 2.0f, 0.0f)));
+
+        SUBCASE("appended") {
+            const core::result<ecs::entity> copy = target.duplicate_subtree(source, ecs::NULL_ENTITY);
+            CONJURE_REQUIRE_OK(copy);
+            CHECK(target.tree().parent_of(copy.value()).is_null());
+            CHECK_FALSE(fixture.world.has<scene::parent>(copy.value()));
+            REQUIRE(target.roots().size() == 3);
+            CHECK(target.roots()[2].entity == copy.value());
+            // A root copy keeps the loaded scene asset that owns the source's tree, as set_parent does.
+            CHECK(target.root_owner(copy.value()) == owner);
+            REQUIRE(target.tree().children_of(copy.value()).size() == 1);
+            CHECK(target.name_of(target.tree().children_of(copy.value())[0]) == target.name_of(leaf));
+            CHECK(target.tree().parent_of(source) == holder);
+            CHECK(target.tree().children_of(holder).size() == 1);
+            // The local transform is copied as it is, so the root copy sits at its local offset.
+            fixture.step();
+            CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(copy.value())), math::vec3(0.0f, 2.0f, 0.0f));
+            CONJURE_CHECK_APPROX(translation_of(fixture.world_matrix(source)), math::vec3(10.0f, 2.0f, 0.0f));
+        }
+        SUBCASE("at a root index") {
+            const core::result<ecs::entity> copy = target.duplicate_subtree(source, ecs::NULL_ENTITY, 1);
+            CONJURE_REQUIRE_OK(copy);
+            REQUIRE(target.roots().size() == 3);
+            CHECK(target.roots()[0].entity == first);
+            CHECK(target.roots()[1].entity == copy.value());
+            CHECK(target.roots()[2].entity == holder);
+            CHECK(target.root_owner(copy.value()) == owner);
+        }
+        SUBCASE("of a root source") {
+            const core::result<ecs::entity> copy = target.duplicate_subtree(holder, ecs::NULL_ENTITY, 0);
+            CONJURE_REQUIRE_OK(copy);
+            REQUIRE(target.roots().size() == 3);
+            CHECK(target.roots()[0].entity == copy.value());
+            CHECK(target.root_owner(copy.value()) == owner);
+            CHECK(target.tree().subtree_size(copy.value()) == target.tree().subtree_size(holder));
+        }
+        fixture.step();
+    }
+
+    TEST_CASE("scene - duplicate_subtree places the copy under an explicit parent") {
+        scene_fixture fixture = {};
+        scene::scene &target = fixture.active();
+        const ecs::entity source = fixture.create("source");
+        const ecs::entity leaf = fixture.create("leaf", source);
+        const ecs::entity other = fixture.create("other");
+        const ecs::entity existing = fixture.create("existing", other);
+
+        SUBCASE("another entity at a sibling index") {
+            const core::result<ecs::entity> copy = target.duplicate_subtree(source, other, 0);
+            CONJURE_REQUIRE_OK(copy);
+            CHECK(target.tree().parent_of(copy.value()) == other);
+            REQUIRE(target.tree().children_of(other).size() == 2);
+            CHECK(target.tree().children_of(other)[0] == copy.value());
+            CHECK(target.tree().children_of(other)[1] == existing);
+            CHECK(target.tree().depth_of(target.tree().children_of(copy.value())[0]) == 2);
+            CHECK(target.roots().size() == 2);
+        }
+        SUBCASE("an entity inside the source subtree") {
+            // The subtree is captured before anything is created, so the copy does not include itself.
+            const core::result<ecs::entity> copy = target.duplicate_subtree(source, leaf);
+            CONJURE_REQUIRE_OK(copy);
+            CHECK(target.tree().parent_of(copy.value()) == leaf);
+            CHECK(target.tree().subtree_size(copy.value()) == 2);
+            CHECK(target.tree().subtree_size(source) == 4);
+        }
+        SUBCASE("a dead parent creates nothing") {
+            const u32 entities = fixture.world.entity_count();
+            const u64 version = target.structure_version();
+            CONJURE_CHECK_ERROR(target.duplicate_subtree(source, ecs::entity{900, 1}), scene_error::INVALID_ENTITY);
+            CHECK(fixture.world.entity_count() == entities);
+            CHECK(target.structure_version() == version);
+            CHECK(target.roots().size() == 2);
+        }
+        SUBCASE("a parent too deep for the subtree creates nothing") {
+            ecs::entity deepest = other;
+            for (u32 depth = 1; depth < scene::MAX_HIERARCHY_DEPTH - 1; ++depth) {
+                deepest = fixture.create("chain", deepest);
+            }
+            REQUIRE(target.tree().depth_of(deepest) == scene::MAX_HIERARCHY_DEPTH - 2);
+            const u32 entities = fixture.world.entity_count();
+            // The source fits at depth 31, its leaf would sit at depth 32.
+            CONJURE_CHECK_ERROR(target.duplicate_subtree(source, deepest), scene_error::HIERARCHY_TOO_DEEP);
+            CHECK(fixture.world.entity_count() == entities);
+            CONJURE_CHECK_OK(target.duplicate_subtree(leaf, deepest));
+        }
         fixture.step();
     }
 
@@ -846,7 +1041,7 @@ TEST_SUITE("scene/scene") {
         const core::result<ecs::entity> deferred = fixture.world.create_entity();
         CONJURE_REQUIRE_OK(deferred);
         ecs::command_buffer commands(fixture.world);
-        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, deferred.value(), root, false));
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, deferred.value(), root, reparent_mode::KEEP_LOCAL));
         CHECK(fixture.world.flush(commands).applied >= 1);
 
         // A loaded entry without components.
@@ -890,7 +1085,7 @@ TEST_SUITE("scene/scene") {
         const ecs::entity root = fixture.create("root");
         const ecs::entity loose = fixture.create("loose");
         ecs::command_buffer commands(fixture.world);
-        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, false, 0));
+        CONJURE_REQUIRE_OK(target.deferred_set_parent(commands, loose, root, reparent_mode::KEEP_LOCAL, 0));
 
         // The buffer stays unflushed, so every pass puts the waiting entry back; after two warm-up passes
         // that costs no allocation.

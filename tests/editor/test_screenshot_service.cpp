@@ -351,7 +351,7 @@ TEST_SUITE("editor/screenshot_service") {
         CONJURE_REQUIRE_OK(application.initialise());
         // Declared after the application so it is destroyed first; the engine shuts down while the context's module
         // consumer is still alive, as editor_application::shutdown does it.
-        editor_context context(application, nullptr, true, true);
+        editor_context context(application, nullptr, editor_display_mode::HEADLESS_OFFSCREEN);
         CHECK(context.offscreen());
         CHECK_FALSE(context.screenshots().available());
         protocol_request request = {};

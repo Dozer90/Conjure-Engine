@@ -86,6 +86,15 @@ namespace conjure::scene {
     };
 
     /// <summary>
+    /// Which transform a reparent preserves (scene::set_parent, scene::deferred_set_parent). An enum rather than a
+    /// bool so a sibling index cannot bind to the mode by mistake.
+    /// </summary>
+    enum class reparent_mode : u8 {
+        KEEP_WORLD,               // the local transform is recomputed so the world pose stays where it is
+        KEEP_LOCAL                // the local transform is kept: the world pose follows the new parent
+    };
+
+    /// <summary>
     /// Placement and guid handling of an archive instantiation.
     /// </summary>
     struct instantiate_options {
@@ -271,12 +280,17 @@ namespace conjure::scene {
             );
 
             /// <summary>
-            /// Copies a subtree (fresh guids, scripts deep-copied by their own ops) under 'parent' (the
-            /// root's own parent when null) at 'index' and returns the new root.
+            /// Copies a subtree (fresh guids, scripts deep-copied by their own ops) and returns the new root.
+            /// Without 'parent' the copy lands under the source root's own parent (a root copy for a root
+            /// source); NULL_ENTITY makes it a scene root; any other entity becomes its parent. 'index' is
+            /// the sibling position (the root position for a root copy). A root copy belongs to the loaded
+            /// scene asset that owns the source's tree. INVALID_ENTITY for a dead source or a dead parent,
+            /// HIERARCHY_TOO_DEEP when the copy would pass depth 31, BAD_FORMAT for a layer index of 32 or
+            /// more in the subtree; on an error nothing is created.
             /// </summary>
             [[nodiscard]] core::result<ecs::entity> duplicate_subtree(
               ecs::entity root,
-              ecs::entity parent = ecs::NULL_ENTITY,
+              std::optional<ecs::entity> parent = std::nullopt,
               u32 index = APPEND_CHILD
             );
 
@@ -314,14 +328,15 @@ namespace conjure::scene {
             // Hierarchy
 
             /// <summary>
-            /// Reparents 'child' under 'newParent' (null = root) at 'index'. keepWorld preserves the
-            /// world transform (ignored for a transformless child). SELF_PARENT, HIERARCHY_CYCLE,
+            /// Reparents 'child' under 'newParent' (null = root) at 'index'. KEEP_WORLD recomputes the
+            /// local transform so the world transform stays put, KEEP_LOCAL keeps the local transform
+            /// (the mode is ignored for a transformless child). SELF_PARENT, HIERARCHY_CYCLE,
             /// HIERARCHY_TOO_DEEP and INVALID_ENTITY leave everything unchanged.
             /// </summary>
             [[nodiscard]] core::result<void> set_parent(
               ecs::entity child,
               ecs::entity newParent,
-              bool keepWorld = true,
+              reparent_mode mode = reparent_mode::KEEP_WORLD,
               u32 index = APPEND_CHILD
             );
 
@@ -329,13 +344,14 @@ namespace conjure::scene {
             /// The same contract recorded into a command buffer while the world is locked (R55): the
             /// parent change is applied at the flush, children and depth tags are repaired by the first
             /// scene.apply_hierarchy_changes that runs after that flush, without a WARN. The repair entry
-            /// waits (pending_repair_count) while the buffer is still unflushed.
+            /// waits (pending_repair_count) while the buffer is still unflushed. A KEEP_WORLD local transform
+            /// is computed from the live poses at the time of this call.
             /// </summary>
             [[nodiscard]] core::result<void> deferred_set_parent(
               ecs::command_buffer &commands,
               ecs::entity child,
               ecs::entity newParent,
-              bool keepWorld = true,
+              reparent_mode mode = reparent_mode::KEEP_WORLD,
               u32 index = APPEND_CHILD
             );
 
