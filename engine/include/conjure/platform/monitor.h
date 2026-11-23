@@ -24,6 +24,9 @@ namespace conjure::platform {
         bool isPrimary = false;
         math::ivec2 position = math::ivec2(0);      // virtual desktop, logical coordinates
         video_mode currentMode = {};                // pixels
+        // The OS UI scale (DPI / 96 on Windows, 2 on a Retina display). window::content_scale() is the
+        // framebuffer / window ratio instead; the null backend makes the two equal. A change made while the
+        // window is on another monitor can show late (window::monitors()).
         math::vec2 contentScale = math::vec2(1.0f);
         math::urect workArea = {};                  // logical coordinates, excludes task bars
 

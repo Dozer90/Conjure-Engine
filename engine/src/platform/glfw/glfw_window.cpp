@@ -243,6 +243,8 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
         mWindowedSize = window_size();
     }
     mMinimised = glfwGetWindowAttrib(mWindow, GLFW_ICONIFIED) == GLFW_TRUE;
+    // The scale at creation is the window's starting point, not a change: no event announces it.
+    mContentScale.start(current_sizes());
 
     if (!desc.gamepadMappings.empty()) {
         const std::string mappings(desc.gamepadMappings);
@@ -340,6 +342,9 @@ std::span<const event> glfw_window::pump_events() {
         rebuild_monitors();
     }
 
+    // Before the resize, which stays last in the batch (P10).
+    announce_content_scale();
+
     if (mPendingResize.has_value()) {
         framebuffer_resized_event resized = {};
         resized.width = mPendingResize->x;
@@ -388,10 +393,8 @@ math::uvec2 glfw_window::window_size() const noexcept {
 
 math::vec2 glfw_window::content_scale() const noexcept {
     assert_main_thread("content_scale");
-    float xScale = 1.0f;
-    float yScale = 1.0f;
-    glfwGetWindowContentScale(mWindow, &xScale, &yScale);
-    return math::vec2(xScale, yScale);
+    // Live like the two sizes, so a setter's change is visible before the pump announces it.
+    return detail::framebuffer_content_scale(current_sizes(), mContentScale.scale());
 }
 
 bool glfw_window::is_minimised() const noexcept {
@@ -835,6 +838,25 @@ void glfw_window::rebuild_monitors() {
     }
 }
 
+detail::scaled_sizes glfw_window::current_sizes() const noexcept {
+    detail::scaled_sizes sizes = {};
+    sizes.framebuffer = framebuffer_size();
+    sizes.window = window_size();
+    return sizes;
+}
+
+void glfw_window::announce_content_scale() {
+    // From the sizes the last size callback recorded: no size query here, so a pump without a resize costs
+    // the X server no round trip.
+    const std::optional<math::vec2> scale = mContentScale.announce();
+    if (!scale.has_value()) {
+        return;
+    }
+    content_scale_changed_event changed = {};
+    changed.scale = *scale;
+    mPending.push_back(event(changed));
+}
+
 math::ivec2 glfw_window::centred_on_work_area(int width, int height) const noexcept {
     // Asked while the window still covers its monitor. GLFW places the content area there and adds the
     // decorations around it, so a window smaller than the work area keeps its title bar on screen.
@@ -980,7 +1002,13 @@ void glfw_window::on_drop(GLFWwindow *window, int count, const char **paths) {
 
 void glfw_window::on_window_size(GLFWwindow *window, int width, int height) {
     glfw_window *self = self_of(window);
-    if (self == nullptr || self->mFullscreen || width <= 0 || height <= 0) {
+    if (self == nullptr) {
+        return;
+    }
+    // Every size change records the sizes: a window minimised between two pumps reports 0 x 0 at the next
+    // one, and content_scale() must still hold the ratio of the sizes it had just before.
+    self->mContentScale.record(self->current_sizes());
+    if (self->mFullscreen || width <= 0 || height <= 0) {
         return;     // only a confirmed windowed size is worth restoring; 0 x 0 is the iconified window
     }
     self->mWindowedSize = math::uvec2(clamp_dimension(width), clamp_dimension(height));
@@ -991,18 +1019,24 @@ void glfw_window::on_framebuffer_size(GLFWwindow *window, int width, int height)
     if (self == nullptr) {
         return;
     }
+    self->mContentScale.record(self->current_sizes());
     // Only the last size of the pump is delivered (P10).
     self->mPendingResize = math::uvec2(clamp_dimension(width), clamp_dimension(height));
 }
 
-void glfw_window::on_content_scale(GLFWwindow *window, float xScale, float yScale) {
+void glfw_window::on_content_scale(GLFWwindow *window, float, float) {
     glfw_window *self = self_of(window);
     if (self == nullptr) {
         return;
     }
-    content_scale_changed_event value = {};
-    value.scale = math::vec2(xScale, yScale);
-    self->mPending.push_back(event(value));
+    // GLFW's window content scale is the OS UI scale (DPI / 96 on Windows), not window::content_scale(): the
+    // window moved to a monitor with another UI scale, or the user changed a monitor's scale. Only the second
+    // makes monitors() stale, and GLFW gives no other notice of it, so the next pump rebuilds the list either way.
+    // The OS reports this only for the window's own monitor: a scale change on another monitor raises no
+    // callback, and that monitor's contentScale stays stale until something rebuilds the list (a monitor
+    // connecting or disconnecting, or this callback again). A ratio this changes arrives through the size
+    // callbacks and the pump.
+    self->mMonitorsDirty = true;
 }
 
 void glfw_window::on_focus(GLFWwindow *window, int focused) {

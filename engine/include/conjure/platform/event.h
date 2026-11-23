@@ -74,8 +74,16 @@ namespace conjure::platform {
         u32 height = 0;
     };
 
+    // window::content_scale() changed since the scale last announced, more than a fractional scale's rounding of
+    // the framebuffer: with window_flags::SCALE_FRAMEBUFFER, a macOS window went between a Retina and a standard
+    // display, or a Wayland window got a new output scale (it moved to another output, the output changed its
+    // scale, or the compositor sent the first scale just after creation, since GLFW starts a Wayland window at
+    // 1). Without that flag no OS scales the framebuffer, so none announces a scale. Windows and X11 keep the
+    // framebuffer as large as the window, so a DPI change there announces no scale; with SCALE_TO_MONITOR,
+    // Windows resizes the window instead (a framebuffer_resized_event). The null backend queues one per
+    // simulate_content_scale call.
     struct content_scale_changed_event {
-        math::vec2 scale = math::vec2(1.0f);
+        math::vec2 scale = math::vec2(1.0f);    // the new content_scale(), framebuffer / window per axis
     };
 
     struct focus_event {

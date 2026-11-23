@@ -24,6 +24,8 @@ set(CONJURE_PLATFORM_PUBLIC_HEADERS
 )
 
 set(CONJURE_PLATFORM_SOURCES
+    content_scale.cpp
+    content_scale.h
     enum_names.cpp
     event.cpp
     input.cpp

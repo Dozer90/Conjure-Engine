@@ -22,6 +22,17 @@ using namespace conjure::core;
 using namespace conjure::platform;
 using namespace conjure::platform::test_support;
 
+namespace {
+    // framebuffer_size() / window_size() per axis, as the window reports them now (both have an area here).
+    math::vec2 size_ratio(const window &target) {
+        const math::uvec2 framebuffer = target.framebuffer_size();
+        const math::uvec2 logical = target.window_size();
+        const f64 scaleX = static_cast<f64>(framebuffer.x) / static_cast<f64>(logical.x);
+        const f64 scaleY = static_cast<f64>(framebuffer.y) / static_cast<f64>(logical.y);
+        return math::vec2(static_cast<f32>(scaleX), static_cast<f32>(scaleY));
+    }
+}
+
 TEST_SUITE("platform/window") {
 
     TEST_CASE("window_desc - defaults are the engine's default window") {
@@ -146,6 +157,61 @@ TEST_SUITE("platform/window") {
         const result<void> tallResult = validate_window_icon(tall);
         CONJURE_CHECK_ERROR(tallResult, error_code::INVALID_ARGUMENT);
         CHECK(tallResult.get_error().message().find("16 x 257") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F015 [window] glfw content_scale is the framebuffer to window ratio") {
+        // The glfw backend returned GLFW's window content scale, the OS UI scale (DPI / 96 on Windows and X11, where
+        // the framebuffer is as large as the window), so content_scale() broke framebuffer / window on any display
+        // not at 100 %, and its event fired on DPI changes that left the ratio alone.
+        CONJURE_TEST_REQUIRE(testing::precondition::REAL_WINDOW);
+        if (!is_backend_compiled(backend_kind::GLFW)) {
+            MESSAGE("glfw backend not compiled (CONJURE_PLATFORM_GLFW=OFF); no real window to check");
+            return;
+        }
+        testing::log_capture logs = {};
+        window_desc desc = {};
+        desc.backend = backend_kind::GLFW;
+        desc.title = "Content scale";
+        desc.width = 640;
+        desc.height = 360;
+        desc.flags = window_flags::DEFAULT & ~window_flags::VISIBLE;    // keeps focus on the developer's terminal
+        result<std::unique_ptr<window>> created = create_window(desc);
+        REQUIRE_MESSAGE(created.has_value(), testing::describe_error(created));
+        window &target = *created.value();
+        static_cast<void>(target.pump_events());
+
+        REQUIRE(target.framebuffer_size().x > 0);
+        REQUIRE(target.framebuffer_size().y > 0);
+        const math::vec2 initial = target.content_scale();
+        CHECK(initial == size_ratio(target));
+
+        // Resizing keeps the ratio (a fractional scale only rounds differently), so no pump announces a scale.
+        const std::array<math::uvec2, 3> sizes = {math::uvec2(800, 600), math::uvec2(641, 361), math::uvec2(640, 360)};
+        for (usize index = 0; index < sizes.size(); ++index) {
+            CAPTURE(index);
+            target.set_size(sizes[index]);
+            usize scaleEvents = 0;
+            for (const event &value : target.pump_events()) {
+                if (event_as<content_scale_changed_event>(value) != nullptr) {
+                    ++scaleEvents;
+                }
+            }
+            CHECK(scaleEvents == 0);
+            CHECK(target.content_scale() == size_ratio(target));
+        }
+
+        // The OS scale stays on the monitors. The window is on one of them and the API cannot say which, so only
+        // a host where every monitor's OS scale differs from the ratio tells content_scale() from the OS scale.
+        bool distinguishable = !target.monitors().empty();
+        for (const monitor_info &monitor : target.monitors()) {
+            if (monitor.contentScale == initial) {
+                distinguishable = false;
+            }
+        }
+        if (!distinguishable) {
+            MESSAGE("a monitor here has the window's framebuffer ratio as its OS scale (a display at 100 %, or Retina "
+                    "on macOS), so this host may not tell content_scale() from the OS scale");
+        }
     }
 
     TEST_CASE("create_window - rejects an invalid description with INVALID_DESC and creates nothing") {

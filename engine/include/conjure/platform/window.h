@@ -109,7 +109,11 @@ namespace conjure::platform {
             /// <summary>
             /// Processes OS events and returns this frame's batch; the span is valid until the next
             /// call. Several framebuffer size changes in one pump are coalesced into one
-            /// framebuffer_resized_event at the end of the batch (P10).
+            /// framebuffer_resized_event at the end of the batch (P10). A content_scale_changed_event comes
+            /// before it when a real window's framebuffer to window ratio changed since the scale last announced
+            /// (before any, the ratio the window was created with, or 1 when it had no size then): a framebuffer
+            /// that a fractional scale only rounds differently is no change. The null backend queues one per
+            /// simulate_content_scale call.
             /// </summary>
             [[nodiscard]] virtual std::span<const event> pump_events() = 0;
 
@@ -134,7 +138,12 @@ namespace conjure::platform {
             [[nodiscard]] virtual math::uvec2 window_size() const noexcept = 0;
 
             /// <summary>
-            /// framebuffer_size() / window_size() per axis.
+            /// framebuffer_size() / window_size() per axis: 1 on Windows and X11, where the framebuffer is as
+            /// large as the window, and, with window_flags::SCALE_FRAMEBUFFER (part of DEFAULT), the backing
+            /// scale on a macOS Retina display or a scaled Wayland output; 1 there too without that flag. While
+            /// either size has a zero axis (minimised) the last ratio the window had is kept, 1 if it never had
+            /// a size. It is not the OS UI scale a monitor is set to; monitors()[i].contentScale reports that.
+            /// The null backend reports window_desc::nullContentScale, then what simulate_content_scale set.
             /// </summary>
             [[nodiscard]] virtual math::vec2 content_scale() const noexcept = 0;
 
@@ -190,7 +199,10 @@ namespace conjure::platform {
             [[nodiscard]] virtual core::result<void> set_fullscreen(bool fullscreen, u32 monitorIndex = 0) = 0;
 
             /// <summary>
-            /// The connected monitors, primary first; refreshed by pump_events().
+            /// The connected monitors, primary first; refreshed by pump_events(). A real window rebuilds the list
+            /// after a monitor connects or disconnects or the OS reports a new UI scale for the window; a scale
+            /// change on a monitor the window is not on raises no such report, so that monitor's contentScale
+            /// stays stale until the next rebuild.
             /// </summary>
             [[nodiscard]] virtual std::span<const monitor_info> monitors() const noexcept = 0;
 

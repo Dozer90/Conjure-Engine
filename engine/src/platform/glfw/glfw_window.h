@@ -3,6 +3,7 @@
 #include "conjure/platform/event.h"
 #include "conjure/platform/monitor.h"
 #include "conjure/platform/window.h"
+#include "platform/content_scale.h"
 
 #include "conjure/core/math.h"
 #include "conjure/core/result.h"
@@ -20,6 +21,8 @@
 
 // The real window (docs/design/11_platform.md 3.3, 3.4): a GLFWwindow whose callbacks append to a
 // pending event vector, a gamepad poll that diffs against the previous frame, and resize coalescing.
+// content_scale() is the framebuffer / window ratio the null backend also reports, never GLFW's window
+// content scale (the OS UI scale, which monitors() carries): the pump announces a changed ratio itself.
 // pump_events swaps the pending vector into the delivered one, exactly like the null backend: GLFW
 // raises resize, focus and iconify callbacks synchronously inside setters on Win32 and Cocoa, so a
 // pending buffer that is never cleared at pump start is the only way those events survive until the
@@ -60,6 +63,7 @@ namespace conjure::platform::glfw {
             std::vector<drop_range> mPendingDropRanges = {};
             std::vector<drop_range> mDeliveredDropRanges = {};
             std::optional<math::uvec2> mPendingResize = std::nullopt;   // coalesced framebuffer size (P10)
+            detail::content_scale_tracker mContentScale = {};   // recorded by the size callbacks, announced by the pump
             bool mMinimised = false;
             bool mFullscreen = false;
             bool mPositionSupported = true;         // false on Wayland: clients never learn where they are
@@ -147,6 +151,8 @@ namespace conjure::platform::glfw {
             void scan_joysticks();
             void poll_gamepads();
             void rebuild_monitors();
+            [[nodiscard]] detail::scaled_sizes current_sizes() const noexcept;
+            void announce_content_scale();
             [[nodiscard]] math::ivec2 centred_on_work_area(int width, int height) const noexcept;
             void patch_drop_spans() noexcept;
             void warn_feature_unavailable(optional_feature feature, std::string_view what);

@@ -1,5 +1,6 @@
 # conjure_platform_tests: one file per public header plus the topic files docs/design/11_platform.md
-# section 10 names. Everything runs headless on the null backend; the glfw half of the conformance
+# section 10 names, and test_content_scale.cpp over the private content_scale.h of the glfw backend's
+# scale rules. Everything runs headless on the null backend; the glfw half of the conformance
 # suite is tagged [window] and skips (exit 77) without CONJURE_TEST_WINDOW=1.
 
 if(NOT TARGET conjure::platform)
@@ -13,6 +14,7 @@ conjure_add_test_module(platform
         test_backend_conformance.cpp
         test_backend_selection.cpp
         test_button_action.cpp
+        test_content_scale.cpp
         test_event.cpp
         test_gamepad.cpp
         test_input.cpp
