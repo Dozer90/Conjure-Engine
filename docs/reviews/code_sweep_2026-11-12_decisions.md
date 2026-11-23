@@ -64,9 +64,16 @@ the pages these changes made stale are owed rather than updated:
 | `de68641` scene | F362, F634 |
 | `cd8845d` scripting | F631 (the Tag setter waits for the owner), F673 |
 
-Still to do: 8 decisions of effort M and 18 of effort L. The next round holds five of effort M (F613, F623, F624,
-F772, F776) and F778 (.NET 10); F130, F195 and F353 are documentation only and wait until the code is complete;
-F194 (audio fixtures) waits for an audio encoder on the build host.
+Six more followed on 2026-11-24, among them F778 (.NET 10), the first of effort L:
+
+| Commit | Decisions |
+|---|---|
+| `30b3e5c` build | F772, F613 |
+| `4134778` engine | F624, F623 |
+| `54395a9` scripting | F778, F776 |
+
+Still to do: 3 decisions of effort M and 17 of effort L. F130, F195 and F353 (effort M) are documentation only and
+wait until the code is complete; F194 (audio fixtures) waits for an audio encoder on the build host.
 
 ## Tests and CI
 
