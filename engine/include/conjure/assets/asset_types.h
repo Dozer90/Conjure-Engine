@@ -7,7 +7,6 @@
 #include "conjure/core/types.h"
 #include "conjure/core/uuid.h"
 
-#include <chrono>
 #include <concepts>
 #include <string_view>
 
@@ -124,9 +123,9 @@ namespace conjure::assets {
     inline constexpr u32 DEFAULT_MAX_JOBS_IN_FLIGHT = 8;
 
     /// <summary>
-    /// Default interval of the polling file watcher.
+    /// Default interval of the polling file watcher, in seconds.
     /// </summary>
-    inline constexpr std::chrono::milliseconds DEFAULT_WATCH_INTERVAL(500);
+    inline constexpr f64 DEFAULT_WATCH_INTERVAL_SECONDS = 0.5;
 
     /// <summary>
     /// Format versions written into blobs, packs and .meta files. Bumping one invalidates every

@@ -4,6 +4,7 @@
 
 #include "conjure/assets/asset_cooker.h"
 #include "conjure/assets/asset_pack.h"
+#include "conjure/assets/binary_asset.h"
 #include "conjure/core/json/document.h"
 
 #include <algorithm>
@@ -204,6 +205,35 @@ TEST_SUITE("assets/asset_cooker") {
         CHECK(reader.toc().size() == 3);
         CHECK(reader.find(fixture.top) != nullptr);
         CHECK(reader.find(fixture.alone) == nullptr);
+    }
+
+    TEST_CASE("regression - code sweep F311 an includeAll cook leaves a glTF-style .bin buffer out of the pack") {
+        // The shape of a .gltf with an external buffer: robot.ta reads robot.bin as a side file. With the binary
+        // importer registered, a .bin it claimed was imported again and packed as a binary asset of its own; now
+        // no importer claims it, so the cook skips it like any other NO_IMPORTER stray and still succeeds.
+        cook_fixture fixture(0, false);
+        CONJURE_REQUIRE_OK(register_binary_asset_type(fixture.pipeline.manager->types(), &fixture.pipeline.importers));
+        CONJURE_REQUIRE_OK(fixture.pipeline.fileSystem->write_file("assets/models/robot.bin", bytes_of("buffer")));
+        fixture.pipeline.write_source("models/robot.ta", "side robot.bin\nrobot");
+        fixture.scan();
+        cook_settings settings = fixture.settings_for({});
+        settings.includeAll = true;
+        core::result<cook_report> report = fixture.cooker.cook(settings);
+        CONJURE_REQUIRE_OK(report);
+
+        const asset_id robot = fixture.pipeline.id_of("models/robot.ta");
+        const asset_id buffer = fixture.pipeline.id_of("models/robot.bin");
+        REQUIRE(fixture.pipeline.database->find(buffer).has_value());
+        CHECK(fixture.pipeline.database->find(buffer)->status == asset_record_status::NO_IMPORTER);
+        CHECK(report.value().failures.empty());
+        const std::vector<std::string> expectedWarnings = {
+          "'assets://models/robot.bin' skipped: record is NO_IMPORTER"
+        };
+        CHECK(report.value().warnings == expectedWarnings);
+        CHECK(report.value().assetCount == 5);
+        pack_reader reader = fixture.open_pack();
+        CHECK(reader.find(robot) != nullptr);
+        CHECK(reader.find(buffer) == nullptr);
     }
 
     TEST_CASE("asset_cooker - includeAll still fails on a stray that roots or alwaysInclude name") {

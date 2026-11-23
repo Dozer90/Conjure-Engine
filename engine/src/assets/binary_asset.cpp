@@ -8,7 +8,10 @@ using namespace conjure;
 using namespace conjure::assets;
 
 namespace {
-    constexpr std::array<std::string_view, 4> EXTENSIONS = {".bin", ".dat", ".bytes", ".raw"};
+    // Not ".bin": glTF names its external buffers .bin, and those are side files of the .gltf that reads them, so
+    // claiming it would import every buffer a second time as a binary_asset with a cooked blob of its own (and
+    // pack it into exports). Unclaimed, a .bin is a NO_IMPORTER record.
+    constexpr std::array<std::string_view, 3> EXTENSIONS = {".dat", ".bytes", ".raw"};
 }
 
 /*===========================================================================*/

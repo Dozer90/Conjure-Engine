@@ -214,7 +214,7 @@ namespace runtime_test {
 
     void write_tiny_project(const std::filesystem::path &projectDir) {
         write_file(projectDir / "project.json", project_text(START_SCENE));
-        write_file(projectDir / "assets" / "data" / "notes.bin", "gold:10;potion:2");
+        write_file(projectDir / "assets" / "data" / "notes.bytes", "gold:10;potion:2");
         author_start_scene(projectDir / "assets");
     }
 
@@ -339,7 +339,7 @@ namespace runtime_test {
         settings.copyShaders = false;
         settings.distributionDirectory = runtime_bin_dir();
         // The cook closure is the startup scene; the data blob is unreferenced and rides along explicitly.
-        settings.alwaysInclude = {"assets://data/notes.bin"};
+        settings.alwaysInclude = {"assets://data/notes.bytes"};
         const core::result<export_report> ran = pipeline.run(settings);
         CONJURE_REQUIRE_OK(ran);
         CHECK(ran.value().assetCount >= 2);

@@ -81,7 +81,8 @@ namespace conjure::assets {
 
             core::vfs::file_system *mFileSystem = nullptr;
             core::jobs::job_system *mJobs = nullptr;
-            std::chrono::milliseconds mInterval = DEFAULT_WATCH_INTERVAL;
+            f64 mIntervalSeconds = DEFAULT_WATCH_INTERVAL_SECONDS;
+            std::chrono::steady_clock::duration mInterval = {};            // mIntervalSeconds on the clock
             std::vector<std::string> mRoots = {};
 
             core::flat_hash_map<std::string, file_state> mSnapshot = {};   // last reported state
@@ -99,10 +100,15 @@ namespace conjure::assets {
             bool mHasBaseline = false;                                      // mSnapshot holds a baseline
 
         public:
+            /// <summary>
+            /// Watches through fileSystem and runs its passes on jobs. intervalSeconds is the least time between
+            /// two passes poll() starts; with 0 every poll() starts one once the previous pass has finished. NaN
+            /// and negative values count as 0, values above 1e9 seconds (infinity included) as 1e9.
+            /// </summary>
             polling_file_watcher(
               core::vfs::file_system &fileSystem,
               core::jobs::job_system &jobs,
-              std::chrono::milliseconds interval = DEFAULT_WATCH_INTERVAL
+              f64 intervalSeconds = DEFAULT_WATCH_INTERVAL_SECONDS
             );
             ~polling_file_watcher() override;
 
@@ -117,8 +123,11 @@ namespace conjure::assets {
             /// </summary>
             [[nodiscard]] core::result<void> scan_now();
 
-            [[nodiscard]] std::chrono::milliseconds interval() const noexcept {
-                return mInterval;
+            /// <summary>
+            /// The interval between passes in seconds, as the constructor clamped it.
+            /// </summary>
+            [[nodiscard]] f64 interval_seconds() const noexcept {
+                return mIntervalSeconds;
             }
 
             [[nodiscard]] usize tracked_file_count() const noexcept {

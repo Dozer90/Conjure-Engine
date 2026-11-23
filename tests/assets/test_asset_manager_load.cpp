@@ -3,10 +3,14 @@
 #include "assets_test_support.h"
 
 #include "conjure/assets/asset_manager.h"
+#include "conjure/core/jobs/dedicated_thread.h"
 
-#include <chrono>
+#include <algorithm>
+#include <limits>
 #include <memory>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -58,6 +62,22 @@ namespace {
             return total;
         }
     };
+
+    /// <summary>
+    /// A manager with desc's timing settings on the fixture's job system, with the test types and a
+    /// source of its own holding the test blobs 1 to blobCount.
+    /// </summary>
+    std::unique_ptr<asset_manager> make_timed_manager(load_fixture &fixture, asset_manager_desc desc, u64 blobCount) {
+        desc.jobs = &fixture.pipeline.jobs;
+        auto source = std::make_unique<memory_asset_source>();
+        for (u64 index = 1; index <= blobCount; ++index) {
+            source->add(make_test_blob(test_id(index), "n" + std::to_string(index)));
+        }
+        desc.source = std::move(source);
+        auto manager = std::make_unique<asset_manager>(std::move(desc));
+        register_test_types(manager->types());
+        return manager;
+    }
 }
 
 TEST_SUITE("assets/asset_manager_load") {
@@ -108,29 +128,47 @@ TEST_SUITE("assets/asset_manager_load") {
         CHECK(fixture.manager().stats().loaded == 1);
     }
 
-    TEST_CASE("load - a zero finalise budget finalises exactly one slot per update") {
+    TEST_CASE("load - the finalise budget decides how many ready slots one update finalises") {
+        f64 budgetSeconds = 0.0;
+        u64 loadedPerUpdate = 1;
+        SUBCASE("a budget of 0 finalises one") {
+            budgetSeconds = 0.0;
+        }
+        SUBCASE("a negative budget counts as 0") {
+            budgetSeconds = -1.0;
+        }
+        SUBCASE("negative infinity counts as 0") {
+            budgetSeconds = -std::numeric_limits<f64>::infinity();
+        }
+        SUBCASE("NaN counts as 0") {
+            budgetSeconds = std::numeric_limits<f64>::quiet_NaN();
+        }
+        SUBCASE("infinity is held at the longest duration and finalises all") {
+            budgetSeconds = std::numeric_limits<f64>::infinity();
+            loadedPerUpdate = 3;
+        }
+        SUBCASE("a budget beyond the longest duration is held there") {
+            budgetSeconds = 1.0e15;
+            loadedPerUpdate = 3;
+        }
+        CAPTURE(budgetSeconds);
+        CAPTURE(loadedPerUpdate);
+
         load_fixture fixture = {};
         asset_manager_desc desc = {};
-        desc.jobs = &fixture.pipeline.jobs;
-        desc.finaliseBudget = std::chrono::microseconds(0);
-        auto source = std::make_unique<memory_asset_source>();
-        for (u64 index = 1; index <= 3; ++index) {
-            source->add(make_test_blob(test_id(index), "n" + std::to_string(index)));
-        }
-        desc.source = std::move(source);
-        asset_manager manager(std::move(desc));
-        register_test_types(manager.types());
-
+        desc.finaliseBudgetSeconds = budgetSeconds;
+        const std::unique_ptr<asset_manager> manager = make_timed_manager(fixture, std::move(desc), 3);
         std::vector<asset_handle> handles = {};
         for (u64 index = 1; index <= 3; ++index) {
-            handles.push_back(manager.load(test_id(index)));
+            handles.push_back(manager->load(test_id(index)));
         }
-        manager.update();   // dispatch (inline jobs complete) + drain + one finalise
-        CHECK(manager.stats().loaded == 1);
-        manager.update();
-        CHECK(manager.stats().loaded == 2);
-        manager.update();
-        CHECK(manager.stats().loaded == 3);
+
+        // Each update dispatches (inline jobs complete), drains and finalises up to the budget.
+        for (u64 update = 1; update <= 3; ++update) {
+            CAPTURE(update);
+            manager->update();
+            CHECK(manager->stats().loaded == std::min<u64>(3, update * loadedPerUpdate));
+        }
         handles.clear();
     }
 
@@ -138,7 +176,7 @@ TEST_SUITE("assets/asset_manager_load") {
         load_fixture fixture = {};
         asset_manager_desc desc = {};
         desc.jobs = &fixture.pipeline.jobs;
-        desc.finaliseBudget = std::chrono::microseconds(0);
+        desc.finaliseBudgetSeconds = 0.0;
         auto source = std::make_unique<memory_asset_source>();
         for (u64 index = 1; index <= 4; ++index) {
             source->add(make_test_blob(test_id(index), "p"));
@@ -168,7 +206,7 @@ TEST_SUITE("assets/asset_manager_load") {
         load_fixture fixture = {};
         asset_manager_desc desc = {};
         desc.jobs = &fixture.pipeline.jobs;
-        desc.finaliseBudget = std::chrono::microseconds(0);
+        desc.finaliseBudgetSeconds = 0.0;
         auto source = std::make_unique<memory_asset_source>();
         source->add(make_test_blob(test_id(1), "a"));
         source->add(make_test_blob(test_id(2), "b"));
@@ -254,24 +292,68 @@ TEST_SUITE("assets/asset_manager_load") {
     }
 
     TEST_CASE("load_blocking - times out when the job owning the slot does not finish [parallel]") {
+        f64 timeoutSeconds = 0.0;
+        SUBCASE("a timeout of 0") {
+            timeoutSeconds = 0.0;
+        }
+        SUBCASE("a negative timeout counts as 0") {
+            timeoutSeconds = -1.0;
+        }
+        SUBCASE("negative infinity counts as 0") {
+            timeoutSeconds = -std::numeric_limits<f64>::infinity();
+        }
+        SUBCASE("NaN counts as 0") {
+            timeoutSeconds = std::numeric_limits<f64>::quiet_NaN();
+        }
+        CAPTURE(timeoutSeconds);
+
         load_fixture fixture(4);
         asset_manager_desc desc = {};
-        desc.jobs = &fixture.pipeline.jobs;
-        desc.blockingTimeout = std::chrono::milliseconds(0);
-        auto source = std::make_unique<memory_asset_source>();
-        source->add(make_test_blob(test_id(1), "slow"));
-        desc.source = std::move(source);
-        asset_manager manager(std::move(desc));
-        register_test_types(manager.types());
+        desc.blockingTimeoutSeconds = timeoutSeconds;
+        const std::unique_ptr<asset_manager> manager = make_timed_manager(fixture, std::move(desc), 1);
 
         controls().blockLoadCpu = true;
-        asset_handle handle = manager.load(test_id(1));
-        manager.update();
+        asset_handle handle = manager->load(test_id(1));
+        manager->update();
         REQUIRE(handle.state() == asset_state::LOADING);
-        CONJURE_CHECK_ERROR(manager.load_blocking(test_id(1)), asset_error_code::TIMEOUT);
+        CONJURE_CHECK_ERROR(manager->load_blocking(test_id(1)), asset_error_code::TIMEOUT);
         CHECK(handle.state() == asset_state::LOADING);
         controls().blockLoadCpu = false;
-        manager.flush();
+        manager->flush();
+        CHECK(handle.state() == asset_state::LOADED);
+        handle.reset();
+    }
+
+    TEST_CASE("load_blocking - an infinite timeout waits for the job owning the slot [parallel]") {
+        // The conversion that holds infinity at 1e9 s is pinned exactly by test_durations.cpp; this case
+        // shows that load_blocking waits on the converted timeout instead of timing out at once.
+        load_fixture fixture(4);
+        asset_manager_desc desc = {};
+        desc.blockingTimeoutSeconds = std::numeric_limits<f64>::infinity();
+        const std::unique_ptr<asset_manager> manager = make_timed_manager(fixture, std::move(desc), 1);
+
+        controls().blockLoadCpu = true;
+        asset_handle handle = manager->load(test_id(1));
+        manager->update();
+        REQUIRE(handle.state() == asset_state::LOADING);
+
+        // The job is released once load_blocking has logged its in-frame WARN, which it does right
+        // before it sets its deadline and waits. This depends on that order in
+        // asset_manager.cpp (state::load_blocking): were the WARN moved after the wait or removed,
+        // the job would never be released and the case would hang until the CTest timeout.
+        conjure::testing::log_capture logs = {};
+        manager->begin_frame(1);
+        core::jobs::dedicated_thread release("release-load", [&logs](std::stop_token stop) {
+            while (!stop.stop_requested() && !logs.contains(core::log_level::WARN, "is a hitch")) {
+                std::this_thread::yield();
+            }
+            controls().blockLoadCpu = false;
+        });
+        const core::result<asset_handle> loaded = manager->load_blocking(test_id(1));
+        release.request_stop();
+        release.join();
+        manager->end_frame();
+        CONJURE_REQUIRE_OK(loaded);
         CHECK(handle.state() == asset_state::LOADED);
         handle.reset();
     }
@@ -280,7 +362,7 @@ TEST_SUITE("assets/asset_manager_load") {
         load_fixture fixture(4);
         asset_manager_desc desc = {};
         desc.jobs = &fixture.pipeline.jobs;
-        desc.blockingTimeout = std::chrono::milliseconds(0);
+        desc.blockingTimeoutSeconds = 0.0;
         auto source = std::make_unique<memory_asset_source>();
         source->add(make_test_blob(test_id(1), "dependent", {test_id(2)}));
         source->add(make_test_blob(test_id(2), "dependency"));
@@ -545,7 +627,7 @@ TEST_SUITE("assets/asset_manager_load") {
         logs.allow_errors();
         asset_manager_desc desc = {};
         desc.jobs = &fixture.pipeline.jobs;
-        desc.finaliseBudget = std::chrono::microseconds(0);
+        desc.finaliseBudgetSeconds = 0.0;
         auto source = std::make_unique<memory_asset_source>();
         source->add(make_test_blob(test_id(1), "a"));
         source->add(make_test_blob(test_id(2), "b"));

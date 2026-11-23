@@ -48,6 +48,7 @@ conjure_add_module(assets
         cooked_blob.cpp
         database_snapshot.cpp
         database_snapshot.h
+        durations.h
         file_watcher.cpp
         fnv1a.h
         hot_reload.cpp

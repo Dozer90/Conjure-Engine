@@ -3,6 +3,7 @@
 #include "conjure/assets/log_category.h"
 #include "assets/asset_slot_table.h"
 #include "assets/completion_queue.h"
+#include "assets/durations.h"
 #include "assets/load_pipeline.h"
 
 #include "conjure/core/assert.h"
@@ -133,8 +134,8 @@ namespace {
 struct asset_manager::state {
     core::jobs::job_system *jobs = nullptr;
     u32 maxJobsInFlight = DEFAULT_MAX_JOBS_IN_FLIGHT;
-    std::chrono::microseconds finaliseBudget = std::chrono::microseconds(2000);
-    std::chrono::milliseconds blockingTimeout = std::chrono::milliseconds(30000);
+    std::chrono::steady_clock::duration finaliseBudget = {};    // asset_manager_desc::finaliseBudgetSeconds
+    std::chrono::steady_clock::duration blockingTimeout = {};   // asset_manager_desc::blockingTimeoutSeconds
 
     asset_type_registry types = {};
     mutable std::shared_mutex sourcesMutex = {};
@@ -1006,8 +1007,8 @@ asset_manager::asset_manager(asset_manager_desc desc) :
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_manager must be created on the main thread");
     mState->jobs = desc.jobs;
     mState->maxJobsInFlight = std::max<u32>(1, desc.maxJobsInFlight);
-    mState->finaliseBudget = desc.finaliseBudget;
-    mState->blockingTimeout = desc.blockingTimeout;
+    mState->finaliseBudget = detail::to_steady_duration(desc.finaliseBudgetSeconds);
+    mState->blockingTimeout = detail::to_steady_duration(desc.blockingTimeoutSeconds);
     if (desc.source != nullptr) {
         mState->sources.push_back(std::move(desc.source));
     }

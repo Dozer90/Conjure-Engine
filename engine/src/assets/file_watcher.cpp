@@ -1,5 +1,6 @@
 #include "conjure/assets/file_watcher.h"
 #include "conjure/assets/log_category.h"
+#include "assets/durations.h"
 #include "assets/path_filters.h"
 
 #include "conjure/core/assert.h"
@@ -33,11 +34,12 @@ file_watcher::~file_watcher() {}
 polling_file_watcher::polling_file_watcher(
   core::vfs::file_system &fileSystem,
   core::jobs::job_system &jobs,
-  std::chrono::milliseconds interval
+  f64 intervalSeconds
 ) :
     mFileSystem(&fileSystem),
     mJobs(&jobs),
-    mInterval(interval) {}
+    mIntervalSeconds(detail::clamp_duration_seconds(intervalSeconds)),
+    mInterval(detail::to_steady_duration(mIntervalSeconds)) {}
 
 polling_file_watcher::~polling_file_watcher() {
     if (mPass.valid()) {

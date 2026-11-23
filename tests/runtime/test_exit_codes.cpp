@@ -79,7 +79,7 @@ TEST_SUITE("runtime/exit_codes") {
 
         SUBCASE("the startup scene does not exist") {
             write_file(projectDir / "project.json", project_text("scenes/missing.scene.json"));
-            write_file(projectDir / "assets" / "data" / "notes.bin", "x");
+            write_file(projectDir / "assets" / "data" / "notes.bytes", "x");
             const core::process_result result = run_runtime({"--project", project, "--headless", "--frames", "1"});
             const std::string output = all_output(result);
             INFO(output);
@@ -112,7 +112,7 @@ TEST_SUITE("runtime/exit_codes") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path logFile = directory.path() / "logs" / "start.log";
         write_file(projectDir / "project.json", project_text("scenes/missing.scene.json"));
-        write_file(projectDir / "assets" / "data" / "notes.bin", "x");
+        write_file(projectDir / "assets" / "data" / "notes.bytes", "x");
 
         const core::process_result result = run_runtime(
           {"--project", path_argument(projectDir), "--headless", "--frames", "1", "--log-file", path_argument(logFile)}

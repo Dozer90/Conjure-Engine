@@ -275,7 +275,7 @@ TEST_SUITE("bindings/bindings_subsystem") {
         scripting_bindings_subsystem *bindings = find_bindings(*app);
         REQUIRE(bindings != nullptr);
         const assets::asset_id blob = test_uuid(7);
-        add_binary_source(*app, blob, "assets://data/held.bin");
+        add_binary_source(*app, blob, "assets://data/held.bytes");
         conjure_native_api &api = app->context().scripting->native_api();
         const conjure_uuid id = marshal::from_uuid(blob);
         CHECK(api.asset_load(&id, 0, 1) == 0);

@@ -365,7 +365,7 @@ TEST_SUITE("runtime/runtime_boot") {
         temp_directory directory("runtime_flags");
         const std::filesystem::path projectDir = directory.path() / "project";
         write_file(projectDir / "project.json", project_text({}));
-        write_file(projectDir / "assets" / "data" / "notes.bin", "x");
+        write_file(projectDir / "assets" / "data" / "notes.bytes", "x");
         const std::string project = path_argument(projectDir);
 
         SUBCASE("warn silences the INFO lines") {

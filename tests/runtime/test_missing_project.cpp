@@ -117,7 +117,7 @@ TEST_SUITE("runtime/missing_project") {
         }
         SUBCASE("the same project with a flag that fixes it runs") {
             write_file(projectDir / "project.json", project_text({}, "\"window\": { \"width\": 0, \"height\": 0 }"));
-            write_file(projectDir / "assets" / "data" / "notes.bin", "x");
+            write_file(projectDir / "assets" / "data" / "notes.bytes", "x");
             const core::process_result result =
               run_runtime({"--project", project, "--headless", "--frames", "1"});
             INFO(all_output(result));

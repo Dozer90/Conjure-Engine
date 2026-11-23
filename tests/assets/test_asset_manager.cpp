@@ -40,6 +40,15 @@ TEST_SUITE("assets/asset_manager") {
         CHECK(fixture.manager->types().size() == 3);
     }
 
+    TEST_CASE("asset_manager_desc - the timing settings default to 2 ms of finalising and a 30 s blocking wait") {
+        const asset_manager_desc desc = {};
+        CHECK(desc.finaliseBudgetSeconds == 0.002);
+        CHECK(desc.blockingTimeoutSeconds == 30.0);
+        CHECK(desc.maxJobsInFlight == DEFAULT_MAX_JOBS_IN_FLIGHT);
+        CHECK(desc.jobs == nullptr);
+        CHECK(desc.source == nullptr);
+    }
+
     TEST_CASE("asset_manager - bind creates a slot, never loads and agrees with bind_slot and make_handle") {
         pipeline_fixture fixture = {};
         fixture.manager->swap_source(source_with({{test_id(1), "one"}}));

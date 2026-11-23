@@ -11,7 +11,6 @@
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -27,14 +26,18 @@
 namespace conjure::assets {
 
     /// <summary>
-    /// Construction parameters.
+    /// Construction parameters. update() stops finalising once finaliseBudgetSeconds have passed since
+    /// it began finalising (dispatch and drain are not counted); it checks after each slot, so it
+    /// finalises at least one ready slot and can overrun the budget by the slot in progress.
+    /// blockingTimeoutSeconds is how long load_blocking waits for a job that already owns a slot. For
+    /// both, NaN and negative values count as 0 and values above 1e9 seconds (infinity included) as 1e9.
     /// </summary>
     struct asset_manager_desc {
         core::jobs::job_system *jobs = nullptr;                      // required; 0 workers = inline
         std::unique_ptr<asset_source> source = nullptr;              // the primary blob provider
         u32 maxJobsInFlight = DEFAULT_MAX_JOBS_IN_FLIGHT;
-        std::chrono::microseconds finaliseBudget = std::chrono::microseconds(2000);   // per update()
-        std::chrono::milliseconds blockingTimeout = std::chrono::milliseconds(30000); // load_blocking
+        f64 finaliseBudgetSeconds = 0.002;                           // per update()
+        f64 blockingTimeoutSeconds = 30.0;                           // load_blocking
     };
 
     /// <summary>
@@ -233,7 +236,7 @@ namespace conjure::assets {
             /// <summary>
             /// Main thread. Runs the whole pipeline inline, dependencies first, and returns the
             /// LOADED handle or the failure (the slot is then FAILED). Waits for an in-flight job
-            /// up to blockingTimeout (TIMEOUT; the slot then stays with the async pipeline, which
+            /// up to blockingTimeoutSeconds (TIMEOUT; the slot then stays with the async pipeline, which
             /// finishes it on a later update()). Inside a frame it logs one WARN per frame (R23).
             /// </summary>
             [[nodiscard]] core::result<asset_handle> load_blocking(const asset_id &id);

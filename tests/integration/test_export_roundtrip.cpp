@@ -81,7 +81,7 @@ namespace {
         settings.publishManaged = false;         // and no scripts
         settings.copyRuntime = true;
         settings.copyShaders = false;            // the runtime below runs headless on the null device
-        settings.alwaysInclude = {"assets://data/notes.bin"};
+        settings.alwaysInclude = {"assets://data/notes.bytes"};
         core::result<engine::export_report> ran = pipeline.run(settings);
         CONJURE_REQUIRE_OK(ran);
         app.shutdown();

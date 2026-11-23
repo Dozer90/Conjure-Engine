@@ -33,7 +33,11 @@ CONJURE_DECLARE_ASSET_TYPE(conjure::assets::binary_asset, "conjure.assets.binary
 namespace conjure::assets {
 
     /// <summary>
-    /// Imports .bin / .dat / .bytes / .raw files verbatim.
+    /// Imports .dat / .bytes / .raw files verbatim; raw data files use .bytes. It does not claim .bin, the
+    /// extension of glTF's external buffers, which are side files of the .gltf that reads them. So a .bin file
+    /// whose .meta names no importer is recorded NO_IMPORTER when no other registered importer claims .bin: it
+    /// gets a meta and a browser row, but no import and no blob. A .meta that names this importer (one written
+    /// while it still claimed .bin, or set through asset_database::set_importer) still imports the file.
     /// </summary>
     class CONJURE_API binary_importer final : public asset_importer {
         public:

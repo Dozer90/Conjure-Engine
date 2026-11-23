@@ -143,8 +143,8 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "exported");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "gold:10;potion:2"));
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/more.bin", "a second blob"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "gold:10;potion:2"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/more.bytes", "a second blob"));
 
         export_report report = {};
         {
@@ -159,7 +159,7 @@ TEST_SUITE("engine/export") {
             settings.buildNativeModule = false;
             settings.publishManaged = false;
             settings.copyRuntime = false;
-            settings.alwaysInclude = {"assets://data/more.bin", "assets://data/absent.bin"};
+            settings.alwaysInclude = {"assets://data/more.bytes", "assets://data/absent.bytes"};
             std::vector<std::string> announced = {};
             const progress_fn progress = [&announced](std::string_view step, f32 fraction) {
                 announced.emplace_back(step);
@@ -185,7 +185,7 @@ TEST_SUITE("engine/export") {
         CHECK(std::find(copied.begin(), copied.end(), "cooked/content.cpak") != copied.end());
         CHECK(std::find(copied.begin(), copied.end(), "project.json") != copied.end());
         CHECK(std::any_of(report.warnings.begin(), report.warnings.end(), [](const std::string &warning) {
-            return warning.find("absent.bin") != std::string::npos;
+            return warning.find("absent.bytes") != std::string::npos;
         }));
         CHECK(std::filesystem::is_regular_file(outputDir / "cooked" / "content.cpak"));
         CHECK(std::filesystem::is_regular_file(outputDir / "cooked" / "manifest.json"));
@@ -202,8 +202,8 @@ TEST_SUITE("engine/export") {
         CONJURE_REQUIRE_OK(cooked.initialise());
         CHECK(cooked.context().assetDatabase == nullptr);
         REQUIRE(cooked.context().assets != nullptr);
-        CHECK(cooked.context().assets->find("assets://data/notes.bin").has_value());
-        CHECK(cooked.context().assets->find("assets://data/more.bin").has_value());
+        CHECK(cooked.context().assets->find("assets://data/notes.bytes").has_value());
+        CHECK(cooked.context().assets->find("assets://data/more.bytes").has_value());
         CHECK(cooked.context().filesystem->exists("cooked://content.cpak"));
         CHECK(cooked.run() == 0);
         CHECK(cooked.time().frameIndex == 60);
@@ -214,7 +214,7 @@ TEST_SUITE("engine/export") {
         temp_directory directory("engine_export_into_project");
         const std::filesystem::path projectDir = directory.path() / "project";
         project loaded = engine_test::write_project(projectDir, "inside");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         application app(project_desc(loaded, 0));
         CONJURE_REQUIRE_OK(app.initialise());
         export_pipeline pipeline(app.context());
@@ -251,7 +251,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "shaded");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
 
         // A distribution folder as the Distribution build lays it out, with a module's shader set in a subfolder.
         const std::string runtimeName = runtime_name();
@@ -295,7 +295,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "runtime_libraries");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
 
         // Fake libraries, each with its own text, in the byte order of their names, which is the order the
@@ -367,7 +367,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "debug_runtime");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
 
         // Every library of the debug runtime a toolset ships under the two prefixes, in the byte order of the
@@ -445,7 +445,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "notices");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
         const std::string noticesName(export_pipeline::NOTICES_FILE_NAME);
         CHECK(noticesName == "THIRD_PARTY_NOTICES.txt");
@@ -486,7 +486,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "no_notices");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
         const std::string noticesName(export_pipeline::NOTICES_FILE_NAME);
 
@@ -514,7 +514,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "no_runtime_libraries");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
         // The Concurrency Runtime is no substitute: it is not one of the libraries step 5 ships.
         CONJURE_REQUIRE_OK(directory.write_text("dist/concrt140.dll", "not shipped"));
@@ -561,7 +561,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "copy_failure");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         write_distribution(directory);
         CONJURE_REQUIRE_OK(directory.write_text("dist/vcruntime140.dll", "library"));
         const std::string noticesName(export_pipeline::NOTICES_FILE_NAME);
@@ -670,7 +670,7 @@ TEST_SUITE("engine/export") {
         const std::filesystem::path projectDir = directory.path() / "project";
         const std::filesystem::path outputDir = directory.path() / "out";
         project loaded = engine_test::write_project(projectDir, "once");
-        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bin", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
         {
             application app(project_desc(loaded, 0));
             CONJURE_REQUIRE_OK(app.initialise());

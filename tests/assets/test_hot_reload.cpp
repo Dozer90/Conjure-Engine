@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <memory>
 #include <optional>
 #include <span>
@@ -89,7 +88,7 @@ namespace {
 
         reload_fixture() :
             pipeline(0, asset_type_flags::NONE),
-            watcher(*pipeline.fileSystem, pipeline.jobs, std::chrono::milliseconds(0)),
+            watcher(*pipeline.fileSystem, pipeline.jobs, 0.0),
             controller(*pipeline.database, *pipeline.manager, watcher, pipeline.jobs) {
             pipeline.write_source("texture.ta", "pixels v1");
             pipeline.write_source("material.ta", "dep-path texture.ta\nshiny");
@@ -169,7 +168,7 @@ TEST_SUITE("assets/hot_reload") {
 
     TEST_CASE("hot_reload - a flagged type is reloaded once, after its changed dependency") {
         pipeline_fixture pipeline(0, asset_type_flags::RELOAD_WITH_DEPENDENCIES);
-        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, std::chrono::milliseconds(0));
+        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, 0.0);
         hot_reload_controller controller(*pipeline.database, *pipeline.manager, watcher, pipeline.jobs);
         pipeline.write_source("texture.ta", "pixels v1");
         pipeline.write_source("material.ta", "dep-path texture.ta\nshiny");
@@ -357,7 +356,7 @@ TEST_SUITE("assets/hot_reload") {
 
     TEST_CASE("regression - a source changed while its slot is LOADING is reloaded once the load finishes [parallel]") {
         pipeline_fixture pipeline(4, asset_type_flags::NONE);
-        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, std::chrono::milliseconds(0));
+        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, 0.0);
         hot_reload_controller controller(*pipeline.database, *pipeline.manager, watcher, pipeline.jobs);
         pipeline.write_source("slow.ta", "v1");
         pipeline.scan_and_import();
@@ -428,7 +427,7 @@ TEST_SUITE("assets/hot_reload") {
 
     TEST_CASE("hot_reload - a -> b -> c flagged chain reloads each exactly once, in order") {
         pipeline_fixture pipeline(0, asset_type_flags::RELOAD_WITH_DEPENDENCIES);
-        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, std::chrono::milliseconds(0));
+        polling_file_watcher watcher(*pipeline.fileSystem, pipeline.jobs, 0.0);
         hot_reload_controller controller(*pipeline.database, *pipeline.manager, watcher, pipeline.jobs);
         pipeline.write_source("a.ta", "a1");
         pipeline.write_source("b.ta", "dep-path a.ta\nb");

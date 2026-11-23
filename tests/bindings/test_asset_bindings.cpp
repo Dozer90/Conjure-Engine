@@ -25,7 +25,7 @@ using namespace bindings_test;
 
 namespace {
 
-    constexpr std::string_view BLOB_PATH = "assets://data/blob.bin";
+    constexpr std::string_view BLOB_PATH = "assets://data/blob.bytes";
 
     struct asset_fixture {
         bare_fixture base = {};
@@ -197,7 +197,7 @@ TEST_SUITE("bindings/asset_bindings") {
         conjure_uuid found = {};
         CHECK(api.asset_find(path.data, path.length, &found) == 0);
         CHECK(marshal::to_uuid(found) == fixture.blob);
-        const utf8_argument missing = utf8("assets://data/missing.bin");
+        const utf8_argument missing = utf8("assets://data/missing.bytes");
         CHECK(api.asset_find(missing.data, missing.length, &found) == to_status(bindings_error::NOT_FOUND));
         CHECK(api.asset_find(nullptr, 4, &found) == to_status(bindings_error::INVALID_ARGUMENT));
         CHECK(api.asset_find(path.data, path.length, nullptr) == to_status(bindings_error::INVALID_ARGUMENT));

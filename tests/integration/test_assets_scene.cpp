@@ -73,9 +73,9 @@ TEST_SUITE("integration/assets_scene") {
         pipeline.open();
 
         // The referenced asset first: its uuid is minted by the scan.
-        pipeline.write_source("data/loot.bin", LOOT_BYTES);
+        pipeline.write_source("data/loot.bytes", LOOT_BYTES);
         pipeline.scan_and_import();
-        const assets::asset_id lootId = pipeline.id_of("data/loot.bin");
+        const assets::asset_id lootId = pipeline.id_of("data/loot.bytes");
 
         // Author the scene in a scratch world and save it into the assets mount.
         {
@@ -167,11 +167,11 @@ TEST_SUITE("integration/assets_scene") {
         CONJURE_REQUIRE_OK(assets::register_binary_asset_type(pipeline.manager->types(), &pipeline.importers));
         CONJURE_REQUIRE_OK(scene::register_asset_types(pipeline.manager->types(), pipeline.importers, registry));
         pipeline.open();
-        pipeline.write_source("data/loot.bin", LOOT_BYTES);
-        pipeline.write_source("data/other.bin", "arrow:30");
+        pipeline.write_source("data/loot.bytes", LOOT_BYTES);
+        pipeline.write_source("data/other.bytes", "arrow:30");
         pipeline.scan_and_import();
-        const assets::asset_id lootId = pipeline.id_of("data/loot.bin");
-        const assets::asset_id otherId = pipeline.id_of("data/other.bin");
+        const assets::asset_id lootId = pipeline.id_of("data/loot.bytes");
+        const assets::asset_id otherId = pipeline.id_of("data/other.bytes");
         REQUIRE(lootId != otherId);
 
         // The scene on disk carries the uuid alone.

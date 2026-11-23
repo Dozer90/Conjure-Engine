@@ -23,6 +23,7 @@ conjure_add_test_module(assets
         test_assets_error.cpp
         test_binary_asset.cpp
         test_cooked_blob.cpp
+        test_durations.cpp
         test_export_roundtrip.cpp
         test_file_watcher.cpp
         test_hot_reload.cpp
