@@ -1,30 +1,25 @@
 # Windows and events
+<!-- doc-template:wiki -->
+[API](../index.md) → [Platform](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Platform module](../../handbook/modules/platform.md)
-
+<!-- doc-content:purpose:start -->
 How to create the game's window, pump its events once per frame and react to them. Include
 `conjure/platform/window.h` for the window, its description and `create_window()`; it pulls in
 `conjure/platform/event.h` (the event types), `conjure/platform/backend.h` (which backend sits behind the
 window), `conjure/platform/monitor.h` and `conjure/platform/native_handle.h`. `conjure/platform/null_backend.h`
 adds the virtual window tests drive. Everything is in `namespace conjure::platform`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Open the game's window | fill a `window_desc`, then `create_window(desc)` |
-| Run headless (tests, servers) | `desc.backend = backend_kind::NULL_BACKEND` |
-| Process this frame's events | `for (const event &value : target.pump_events())` |
-| Look inside an event | `event_as<key_event>(value)` (`nullptr` when it is something else) |
-| Know when the player closed the window | `should_close()`, or a `close_event` in the batch |
-| Size a swapchain or viewport | `framebuffer_size()` (pixels); `window_size()` is logical, `content_scale()` the ratio |
-| Go fullscreen | `set_fullscreen(true, monitorIndex)`; `monitors()` lists the choices |
-| Hide or lock the mouse cursor | `set_cursor_mode(cursor_mode::HIDDEN)` / `DISABLED` |
-| Copy and paste text | `set_clipboard_text(text)` / `clipboard_text()` |
-| Give the window your game's icon | `set_icon(images)` with RGBA8 `core::image`s (16, 32 and 48 px at least) |
-| Feed events to a null window in a test | `created->as_null()->push_event(...)`, `simulate_resize(...)`, ... |
+| Name | Windows and events |
+| Module | Platform |
+| `#include` | `conjure/platform/backend.h`, `conjure/platform/event.h`, `conjure/platform/monitor.h`, `conjure/platform/native_handle.h`, `conjure/platform/null_backend.h`, `conjure/platform/window.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/platform.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/platform/window.h"
@@ -55,7 +50,33 @@ core::result<void> run_until_closed() {
     return core::result<void>::success();
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Open the game's window | fill a `window_desc`, then `create_window(desc)` |
+| Run headless (tests, servers) | `desc.backend = backend_kind::NULL_BACKEND` |
+| Process this frame's events | `for (const event &value : target.pump_events())` |
+| Look inside an event | `event_as<key_event>(value)` (`nullptr` when it is something else) |
+| Know when the player closed the window | `should_close()`, or a `close_event` in the batch |
+| Size a swapchain or viewport | `framebuffer_size()` (pixels); `window_size()` is logical, `content_scale()` the ratio |
+| Go fullscreen | `set_fullscreen(true, monitorIndex)`; `monitors()` lists the choices |
+| Hide or lock the mouse cursor | `set_cursor_mode(cursor_mode::HIDDEN)` / `DISABLED` |
+| Copy and paste text | `set_clipboard_text(text)` / `clipboard_text()` |
+| Give the window your game's icon | `set_icon(images)` with RGBA8 `core::image`s (16, 32 and 48 px at least) |
+| Feed events to a null window in a test | `created->as_null()->push_event(...)`, `simulate_resize(...)`,... |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Describing the window: `window_desc`
 
 `window_desc` is a plain struct with sensible defaults; set only what you need.
@@ -231,7 +252,7 @@ desktop file instead.
 > [!TIP]
 > On Windows, an executable that carries an icon resource named `GLFW_ICON` shows it from the first frame,
 > before any code runs, and Explorer uses it for the file. The editor does both; see
-> 🛠 Handbook: [Logo and application icon](../../handbook/brand.md).
+> 🛠 Handbook: [Branding and Application Icons](../../handbook/project-reference/branding-and-application-icons.md).
 
 ## Native handle and Vulkan helpers
 
@@ -289,8 +310,12 @@ The null window reports `is_focused() == true`, `is_visible()` from `window_flag
 `set_*` calls update state so the getters round-trip. It contains no clock, random state or OS query, so the same
 sequence of controls produces the same events on every machine. `cursor_position()` and `raw_mouse_motion()` read
 back what `set_cursor_position()` and `set_raw_mouse_motion()` stored.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -317,13 +342,22 @@ back what `set_cursor_position()` and `set_raw_mouse_motion()` stored.
 | `bool is_input_event(const event &)` / `std::optional<input_event> to_input_event(const event &)` / `event to_event(const input_event &)` | variant conversions |
 | `std::string_view event_name(const event &)` / `std::string to_string(const event &)` | diagnostics |
 | `std::string_view to_string(cursor_mode)` / `std::optional<cursor_mode> parse_cursor_mode(std::string_view)` | cursor mode names |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Input](input.md): turning the event batch into the per-frame snapshot
 - 📘 API: [Platform overview](index.md): the two backends and the error codes
 - 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>` and `CONJURE_TRY_ASSIGN`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Logo and application icon](../../handbook/brand.md): how the editor builds and sets its icon
-- 🛠 Handbook: [Platform module](../../handbook/modules/platform.md): GLFW lifetime, event double buffering, resize
+- 🛠 Handbook: [Branding and Application Icons](../../handbook/project-reference/branding-and-application-icons.md): how the editor builds and sets its icon
+- 🛠 Handbook: [Platform module](../../handbook/engine/platform.md): GLFW lifetime, event double buffering, resize
   coalescing, the gamepad poll
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

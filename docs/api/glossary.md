@@ -1,7 +1,8 @@
 # Glossary
+<!-- doc-template:wiki-index -->
+[API](index.md)
 
-📘 **Public API wiki**
-
+<!-- doc-content:purpose:start -->
 Every term the wiki uses without explaining it in place, one line each, with the page that explains it. Terms are
 alphabetical; engine type names are in code spans.
 
@@ -48,7 +49,7 @@ alphabetical; engine type names are in code spans.
 | Entity | A small id (index and generation) that components are attached to; it carries no data of its own | [Entities and components](ecs/entities-and-components.md) |
 | Entity archive / prefab | A typed in-memory copy of a group of entities that can be instantiated into a world again and serialised to JSON | [Archives and serialisation](ecs/archives-and-serialization.md) |
 | `error` | A recoverable failure: category, code and message; carried by `result<T>` instead of being thrown | [Errors and results](core/errors-and-results.md) |
-| `error_code` | The generic error enumeration any system may use (`NOT_FOUND`, `INVALID_ARGUMENT`, `IO_FAILURE`, ...) | [Errors and results](core/errors-and-results.md) |
+| `error_code` | The generic error enumeration any system may use (`NOT_FOUND`, `INVALID_ARGUMENT`, `IO_FAILURE`,...) | [Errors and results](core/errors-and-results.md) |
 | Extension point / descriptor | A `string_id` name (`EXTENSION_POINT`) under which a module registers plain data records with `register_extension`; the consuming subsystem defines the record type | [Writing a module](modules/writing-a-module.md) |
 | Extension record (assets) | `importer_extension_desc` / `asset_type_extension_desc`: how a plugin module offers importers and asset types | [Cooking, caches and packs](assets/cooking-and-packs.md) |
 | Fallback (assets) | The placeholder payload of an asset type, returned while an asset is loading or after it failed | [Referencing and loading assets](assets/referencing-and-loading.md) |
@@ -74,7 +75,7 @@ alphabetical; engine type names are in code spans.
 | Mix group / effective gain | A named bus voices play through; a voice's effective gain is its own gain times every group on the path to the master | [Playing sounds](audio/playing-sounds.md#mix-groups) |
 | Mixer block | The fixed number of frames the mixer renders per callback step (`MIX_BLOCK_FRAMES`, 256) | [Playing sounds](audio/playing-sounds.md) |
 | Modifiers (input) | `key_modifier_flags`: Shift, Control, Alt and Super state carried with key and mouse events | [Input](platform/input.md) |
-| Module | Two meanings: an engine module is a library built into the engine (core, ecs, renderer, ...); a plugin or game module is a package (`module.json`, native library, C# assemblies, content) the engine loads at start-up | [Modules and plugins](modules/index.md) |
+| Module | Two meanings: an engine module is a library built into the engine (core, ecs, renderer,...); a plugin or game module is a package (`module.json`, native library, C# assemblies, content) the engine loads at start-up | [Modules and plugins](modules/index.md) |
 | `module_id` / stale id | The handle a loaded module gets; after an unload the id stops matching, like a stale `slot_key` | [Loading and managing modules](modules/loading-and-managing.md) |
 | Null backend (audio) | A backend with no device and a virtual clock, driven by `update()` and `end_frame()`; what tests and servers use | [Clips and decoding](audio/clips-and-decoding.md#backends) |
 | Null backend (platform) | A virtual window driven by `push_event` / `simulate_*`, so window and input code runs in tests | [Windows and events](platform/windows-and-events.md) |
@@ -85,7 +86,7 @@ alphabetical; engine type names are in code spans.
 | Owner thread (ECS) | The thread a world belongs to; structural changes are allowed only there and only outside iteration | [Command buffers and observers](ecs/command-buffers-and-observers.md) |
 | Pack / `content.cpak` / `manifest.json` | The exported game's content: one pack file with its manifest, read by the runtime instead of the cache | [Cooking, caches and packs](assets/cooking-and-packs.md) |
 | Payload / publish | The loaded object behind an asset and the atomic pointer swap that makes a new one visible to every reference | [Referencing and loading assets](assets/referencing-and-loading.md) |
-| Phase / stage | A phase is one step of the frame (`FRAME_BEGIN` ... `FRAME_END`); within a phase the scheduler packs systems that do not conflict into stages that run in parallel | [Queries, views and systems](ecs/queries-views-and-systems.md) |
+| Phase / stage | A phase is one step of the frame (`FRAME_BEGIN`... `FRAME_END`); within a phase the scheduler packs systems that do not conflict into stages that run in parallel | [Queries, views and systems](ecs/queries-views-and-systems.md) |
 | Pool allocator | Fixed-size blocks carved from slabs, freed individually; for many objects of one type | [Memory](core/memory.md) |
 | Priming | `voice_state::PRIMING`: a voice that has started but is waiting for its first streamed chunk or for a stolen slot to fade out | [Playing sounds](audio/playing-sounds.md) |
 | Probe run | In an open-addressing hash table, the consecutive occupied slots a lookup walks from a key's home bucket | [Containers](core/containers.md) |
@@ -127,6 +128,10 @@ alphabetical; engine type names are in code spans.
 | Version (ECS) | The world's monotonic counter stamped on a chunk column when it is written; what `changed<T>` compares against | [Queries, views and systems](ecs/queries-views-and-systems.md) |
 | Voice | One playing instance of a clip, addressed by a `voice_id` | [Playing sounds](audio/playing-sounds.md) |
 | Voice stealing / priority | When every voice is busy, the lowest-priority voice is faded out and reused for the new sound | [Playing sounds](audio/playing-sounds.md) |
-| Wave | A stage of the engine's development plan; wave 1 is core, wave 2 adds ECS, platform, RHI, assets, audio and modules, wave 3 adds scene, rendering, physics and scripting, later waves the engine loop, bindings and the editor | [Public API wiki](index.md) |
 | Windowed fullscreen | A borderless window covering the monitor at the desktop resolution, switched without a mode change | [Windows and events](platform/windows-and-events.md) |
 | `world_hash` | A deterministic hash of a whole world, used to prove two runs produced the same state | [Command buffers and observers](ecs/command-buffers-and-observers.md) |
+<!-- doc-content:purpose:end -->
+
+<!-- doc-content:body:start -->
+
+<!-- doc-content:body:end -->

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 160" role="img"
+ aria-labelledby="graph-title graph-description">
+<title id="graph-title">Runtime module dependencies</title>
+<desc id="graph-description">Arrows run from dependency to consumer. Direct dependencies are grouped in alphabetical Public and Private columns. Solid edges are public; dashed edges are private. Each access group shares one incoming arrow. Consumers, when present, appear directly below the selected module without repeated headings.</desc>
+<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
+<path d="M0,0 L8,4 L0,8 Z" fill="#8c8c8c"/></marker>
+<mask id="node-runtime" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="160" style="mask-type:luminance"><rect width="576" height="160" fill="white"/>
+</mask>
+</defs>
+<a href="../../handbook/engine/runtime.html" target="_top">
+<rect x="176" y="52" width="224" height="56" rx="15" fill="#171717" stroke="#009dff" stroke-width="3" mask="url(#node-runtime)"/>
+<text x="288" y="86" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">runtime</text>
+</a>
+</svg>

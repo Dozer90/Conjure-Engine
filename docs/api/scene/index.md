@@ -1,14 +1,17 @@
 # Scenes, hierarchy and prefabs
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
-
+<!-- doc-content:purpose:start -->
 The scene module is where a game's level lives: a tree of entities with names, tags, layers and stable ids,
 local and world transforms that the engine keeps in step every frame, `.scene.json` files that load and save
 byte-for-byte, prefabs that stamp out copies, and snapshots for play and stop. Everything on these pages lives in
 `namespace conjure::scene` and sits on top of the ECS: a scene is one `ecs::world` plus the bookkeeping that
 makes it a hierarchy. There is no scene graph object to walk; the hierarchy is data in components, and the
 `scene` class is the facade that keeps that data consistent.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. A `scene` wraps one `ecs::world`. You create entities through it (`create_entity(name, parent)`), reparent
@@ -98,4 +101,12 @@ engine does both at start-up; a tool or a test does them by hand, as above.
 ## See also
 
 - 📘 API: [Entities, components and systems](../ecs/index.md), [Archives and serialisation](../ecs/archives-and-serialization.md), [Referencing and loading assets](../assets/referencing-and-loading.md)
-- 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
+- 🛠 Handbook: [Scene module](../../handbook/engine/scene.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/scene/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+| `conjure/scene/scene_error.h` | Declares `scene_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

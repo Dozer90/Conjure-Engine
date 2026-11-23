@@ -1,24 +1,24 @@
 # Shaders
+<!-- doc-template:wiki -->
+[API](../index.md) → [RHI](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md)
-
+<!-- doc-content:purpose:start -->
 Compile HLSL at build time and load the compiled blobs at run time. The CMake function `conjure_add_shaders()`
 turns a list of `source;entry;stage;defines` entries into DXIL and SPIR-V blobs plus an `index.json`;
 `shader_library` in `conjure/rhi/shader_library.h` opens that index for a device and hands out the blob for a
 `(name, entry, defines)` key. Everything is in `namespace conjure::rhi`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Compile your module's HLSL as part of the build | `conjure_add_shaders(TARGET ... OUTPUT_DIR ... SHADERS ...)` in your `CMakeLists.txt` |
-| Open the compiled shaders for a device | `shader_library::open(device, shaderDirectory)` |
-| Get a blob to create an NVRHI shader from | `library.get({"name", "entry", "DEFINE=1"})` |
-| Check a permutation exists without touching disk | `library.contains(key)` |
-| Pick up recompiled shaders while running | `library.reload()` |
-| Name a stage in text | `to_string(shader_stage)`, `parse_shader_stage("pixel")` |
+| Name | Shaders |
+| Module | RHI |
+| `#include` | `conjure/rhi/shader_library.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/rhi.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/rhi/device.h"
@@ -56,7 +56,28 @@ class pass_shaders {
 With the engine's own shaders built, `pixel("fullscreen_triangle")` returns the pixel shader of
 `engine/shaders/fullscreen_triangle.hlsl` as a `shader_blob { bytes, stage }` whose `stage` is
 `shader_stage::PIXEL`.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Compile your module's HLSL as part of the build | `conjure_add_shaders(TARGET ... OUTPUT_DIR ... SHADERS ...)` in your `CMakeLists.txt` |
+| Open the compiled shaders for a device | `shader_library::open(device, shaderDirectory)` |
+| Get a blob to create an NVRHI shader from | `library.get({"name", "entry", "DEFINE=1"})` |
+| Check a permutation exists without touching disk | `library.contains(key)` |
+| Pick up recompiled shaders while running | `library.reload()` |
+| Name a stage in text | `to_string(shader_stage)`, `parse_shader_stage("pixel")` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Building shaders with CMake
 
 `conjure_add_shaders()` lives in `cmake/ConjureShaders.cmake` and is already included when the renderer is
@@ -187,8 +208,12 @@ them after a successful reload.
 
 > [!NOTE]
 > Every `shader_library` call belongs to the render thread, like the device it was opened on.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -203,11 +228,20 @@ them after a successful reload.
 | `usize entry_count()` / `usize loaded_blob_count()` | sizes |
 | `graphics_backend backend()` / `const std::filesystem::path &directory()` | what was opened |
 | `conjure_add_shaders(TARGET OUTPUT_DIR [SOURCE_DIR] [INCLUDE_DIRS] [DEPENDENCIES] SHADERS ...)` | CMake: compile and index |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Devices and swapchains](devices-and-swapchains.md) for the device a library is opened on
 - 📘 API: [RHI overview](index.md)
 - 📘 API: [Files and the virtual file system](../core/files.md) for `std::filesystem::path` conventions
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md) for the compiler flags, depfiles and `sourceHash`
+- 🛠 Handbook: [RHI module](../../handbook/engine/rhi.md) for the compiler flags, depfiles and `sourceHash`
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

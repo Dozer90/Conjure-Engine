@@ -1,28 +1,25 @@
 # Queries, views and systems
+<!-- doc-template:wiki -->
+[API](../index.md) → [ECS](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md)
-
+<!-- doc-content:purpose:start -->
 How to iterate entities and how to turn that iteration into a system the engine runs every frame. Headers:
 `conjure/ecs/view.h` (typed iteration), `conjure/ecs/query.h` and `conjure/ecs/chunk_view.h` (untyped,
 chunk-by-chunk access), `conjure/ecs/system.h` (`system_desc`, `system_context`, `make_system`),
 `conjure/ecs/system_phase.h` (the frame phases and `frame_info`) and `conjure/ecs/scheduler.h`. Everything is in
 `namespace conjure::ecs`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Visit every entity with components A and B | `world.view<const A, B>().for_each([](entity, const A &, B &) {...})` |
-| Make a component optional | `maybe<C>` in the list; the callback receives `C *` (null when absent) |
-| Require a tag, exclude a component | `.with<Tag>()`, `.without<T>()` |
-| Visit only chunks written since a version | `.changed<T>(sinceVersion)` |
-| Process a whole column at once | `.for_each_chunk([](chunk_view &chunk) {...})` and `chunk.get<T>()` |
-| Count | `.entity_count()` |
-| Run the iteration every frame | wrap it in a system: `make_system<const A, B>(name, phase, run)` and `scheduler.add_system(...)` |
-| Spread one system over worker threads | `context.parallel_for_chunks(query, fn)` or `view.parallel_for_each_chunk(context, fn)` |
-| Order two systems | `desc.after.push_back(name)` / `desc.before.push_back(name)` |
+| Name | Queries, views and systems |
+| Module | ECS |
+| `#include` | `conjure/ecs/chunk_view.h`, `conjure/ecs/query.h`, `conjure/ecs/scheduler.h`, `conjure/ecs/system.h`, `conjure/ecs/system_phase.h`, `conjure/ecs/view.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/ecs.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/ecs/view.h"
@@ -52,7 +49,31 @@ void regenerate_players(world &game) {
 
 `position`, `velocity`, `health` and `player_tag` are the component types defined on 📘 API:
 [Entities, components and systems](index.md) and [Entities and components](entities-and-components.md).
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Visit every entity with components A and B | `world.view<const A, B>().for_each([](entity, const A &, B &) {...})` |
+| Make a component optional | `maybe<C>` in the list; the callback receives `C *` (null when absent) |
+| Require a tag, exclude a component | `.with<Tag>()`, `.without<T>()` |
+| Visit only chunks written since a version | `.changed<T>(sinceVersion)` |
+| Process a whole column at once | `.for_each_chunk([](chunk_view &chunk) {...})` and `chunk.get<T>()` |
+| Count | `.entity_count()` |
+| Run the iteration every frame | wrap it in a system: `make_system<const A, B>(name, phase, run)` and `scheduler.add_system(...)` |
+| Spread one system over worker threads | `context.parallel_for_chunks(query, fn)` or `view.parallel_for_each_chunk(context, fn)` |
+| Order two systems | `desc.after.push_back(name)` / `desc.before.push_back(name)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Views
 
 `view<Pack...>` is a typed iterator over every entity holding the required components of its pack. The pack also
@@ -293,8 +314,12 @@ system bumped the world version during the run. Writes a system makes through `c
 moved on meanwhile; write through the context's views to stay invisible to yourself. `changed<T>(since)` visits a chunk when its stamp is greater than
 `since`: never a false negative, at most one chunk of false positives per real write. In a system, use
 `context.since_version()`; outside one, remember `world.version()` from the previous pass.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -312,12 +337,21 @@ moved on meanwhile; write through the context's views to stay invisible to yours
 | `result<system_id> add_system(system_desc)` / `result<void> remove_system(id)` / `set_enabled(id, bool)` / `result<void> finalise()` | registration |
 | `void run_phase(system_phase, const frame_info &)` / `run_phase_filtered(phase, frame, system_flags required)` | running |
 | `span<const stage_info> stages(phase)` / `span<const system_timing> last_timings(phase)` / `const system_desc *system(id)` / `system_id find_system(phase, string_id name)` / `u32 system_count()` | inspection |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Command buffers and observers](command-buffers-and-observers.md) for `context.commands()` and the iteration lock
 - 📘 API: [Entities and components](entities-and-components.md) for defining the types a view names
 - 📘 API: [Jobs and threading](../core/jobs.md) for the `job_system` a scheduler runs on
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) for stage packing and grain sizing;
-  [Data-oriented design](../../handbook/data-oriented-design.md) for why chunks
+- 🛠 Handbook: [ECS module](../../handbook/engine/ecs.md) for stage packing and grain sizing;
+  [Data-oriented design](../../handbook/architecture-and-design/data-oriented-design.md) for why chunks
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

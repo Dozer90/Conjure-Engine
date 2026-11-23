@@ -1,29 +1,25 @@
 # Logging and assertions
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Two tools for two kinds of problem. **Logging** (`conjure/core/log.h`) reports what the program is doing, through
 named categories with adjustable levels, to any number of sinks. **Assertions** (`conjure/core/assert.h`) catch
 programmer errors (a precondition that can never be false in a correct program) and stop in the debugger. Runtime
 failures that a correct program must expect (a missing file, bad input) are neither: they are
 [results](errors-and-results.md).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Print a message from your system | `CONJURE_LOG_INFO(LOG_GAME, "spawned {} enemies", count)` |
-| Give your system its own channel | `CONJURE_DECLARE_LOG_CATEGORY(LOG_GAME);` in a header, `CONJURE_DEFINE_LOG_CATEGORY(LOG_GAME, "game");` in one `.cpp` |
-| Hide chatter from one channel | `LOG_GAME.set_level(log_level::WARN)` or `log::set_category_level("game", log_level::WARN)` |
-| Hide everything below a level | `log::set_global_level(log_level::INFO)` |
-| Write the log to a file | `log::add_sink(std::make_shared<file_log_sink>(path))` |
-| Show messages in your own UI | `callback_log_sink` with a lambda |
-| Check an invariant | `CONJURE_ASSERT(index < size, "index {} out of range", index)` |
-| Check a call that must also run in shipping builds | `CONJURE_VERIFY(device.close())` |
-| Mark code that must never execute | `CONJURE_UNREACHABLE()` |
-| Catch assertion failures yourself | `set_assert_handler(&my_handler)` |
+| Name | Logging and assertions |
+| Module | Core |
+| `#include` | `conjure/core/assert.h`, `conjure/core/log.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 // game/log_category.h
@@ -51,13 +47,38 @@ void load_level(std::string_view name, int enemyCount) {
     }
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Print a message from your system | `CONJURE_LOG_INFO(LOG_GAME, "spawned {} enemies", count)` |
+| Give your system its own channel | `CONJURE_DECLARE_LOG_CATEGORY(LOG_GAME);` in a header, `CONJURE_DEFINE_LOG_CATEGORY(LOG_GAME, "game");` in one `.cpp` |
+| Hide chatter from one channel | `LOG_GAME.set_level(log_level::WARN)` or `log::set_category_level("game", log_level::WARN)` |
+| Hide everything below a level | `log::set_global_level(log_level::INFO)` |
+| Write the log to a file | `log::add_sink(std::make_shared<file_log_sink>(path))` |
+| Show messages in your own UI | `callback_log_sink` with a lambda |
+| Check an invariant | `CONJURE_ASSERT(index < size, "index {} out of range", index)` |
+| Check a call that must also run in shipping builds | `CONJURE_VERIFY(device.close())` |
+| Mark code that must never execute | `CONJURE_UNREACHABLE()` |
+| Catch assertion failures yourself | `set_assert_handler(&my_handler)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Categories
 
 A `log_category` is a named channel with its own minimum level. Categories are global objects that register
 themselves on construction, so tools can list and adjust them at runtime (`log::categories()`,
 `log::find_category("game")`, `log::set_category_level("game", level)`). The engine's own messages use `LOG_CORE`
-and one category per module (`"renderer"`, `"ecs"`, ...); your game declares its own the same way.
+and one category per module (`"renderer"`, `"ecs"`,...); your game declares its own the same way.
 
 > [!IMPORTANT]
 > Declare a category once in a header (`CONJURE_DECLARE_LOG_CATEGORY(NAME);`) and define it in exactly one source
@@ -232,8 +253,12 @@ void run_without_breaking() {
 > Some failures are fatal whatever the handler returns: `CONJURE_UNREACHABLE()`, `result::value()` on an error
 > result and the containers' `at()` on a missing element all terminate after reporting, because there is nothing
 > valid to continue with.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -258,9 +283,18 @@ void run_without_breaking() {
 | `CONJURE_UNREACHABLE()` | impossible path |
 | `assert_handler set_assert_handler(assert_handler)` / `current_assert_handler()` / `default_assert_handler(info)` | handler control |
 | `struct assert_info { expression, file, line, function, message }` / `enum class assert_action { BREAK, CONTINUE, ABORT }` | handler types |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Errors and results](errors-and-results.md): the third tool, for failures a correct program must expect
 - 📘 API: [Data types](data-types.md): `CONJURE_ASSERTS_ENABLED` and the build configurations
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

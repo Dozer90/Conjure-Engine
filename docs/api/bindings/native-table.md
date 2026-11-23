@@ -1,15 +1,30 @@
 # The native table
+<!-- doc-template:wiki -->
+[API](../index.md) → [Bindings](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Bindings module](../../handbook/modules/bindings.md)
-
+<!-- doc-content:purpose:start -->
 The native half of the bindings: how the 106 bindings-owned entries of the scripting table are filled, counted
 and marshalled. Headers: `conjure/bindings/bindings.h` (umbrella), `conjure/bindings/bindings_subsystem.h`,
 `conjure/bindings/native_api_entries.h`, `conjure/bindings/call_counters.h`, `conjure/bindings/marshal.h` and
 `conjure/bindings/bindings_error.h` with its `conjure/bindings/bindings_error.inl` status list. A game never
 includes these; executables, plugins and tests do.
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | The native table |
+| Module | Bindings |
+| `#include` | `conjure/bindings/bindings.h`, `conjure/bindings/bindings_error.h`, `conjure/bindings/bindings_subsystem.h`, `conjure/bindings/call_counters.h`, `conjure/bindings/marshal.h`, `conjure/bindings/native_api_entries.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/bindings.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | Give an application a complete table before the game assembly loads | `app.add_subsystem(std::make_unique<scripting_bindings_subsystem>())` before `initialise()` |
@@ -18,14 +33,22 @@ includes these; executables, plugins and tests do.
 | Count calls per entry (tests, the feature-test scene) | `call_counters()`, `call_count(id)`, `reset_call_counters()`, `native_entry_descriptors()` |
 | Read the last failure a script hit | `last_error_code()`, `last_error_message()`, `clear_last_error()` |
 | Convert between ABI records and engine types | `marshal.h`: `to_entity` / `from_entity`, `to_uuid` / `from_uuid`, `to_quat` / `from_quat`, `to_transform` / `from_transform`, `read_utf8`, `write_utf8` |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The subsystem
 
 `scripting_bindings_subsystem` is an `engine_subsystem` the runtime and the editor add before `initialise()`.
 Its `startup` (step 16) builds a `binding_context` from the `engine_context` (world, components, scenes, physics,
 audio, assets, input, window, checks, stats) and fills every bindings-owned slot of the runtime's table
 (`debugDraw` stays null: the engine does not publish its `renderer::debug_draw` yet, so `Diagnostics.Draw.*` is a
-silent success; `09_cross_area_resolutions.md` section 4 item 15(e)); `post_startup` wraps the table in counting
+silent success; (e)); `post_startup` wraps the table in counting
 thunks (outside Distribution); `begin_frame` re-wraps after a runtime that was re-initialised and applies the
 deferred scene fix-ups; `shutdown` releases the assets scripts asked for (`script_residency`). Without the
 subsystem the bindings-owned slots stay null. The scripting handshake checks only scripting's core entries, and
@@ -101,8 +124,12 @@ conversions (`quat_storage_is_xyzw()` pins the x, y, z, w storage the mirrors re
 `write_utf8` for strings with the count protocol, `write_entities` for entity arrays, `rgba_to_color` and
 `structural_guard`, which decides whether a structural request is applied now or deferred into the runtime's
 command buffer because a query scope holds the world locked.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -116,9 +143,18 @@ command buffer because a query scope holds the world locked.
 | `span<const native_entry_descriptor> native_entry_descriptors()` / `function_name(id)` / `find_function(name)` | the entry list |
 | `bindings_error last_error_code()` / `string_view last_error_message()` / `void clear_last_error()` | the status protocol |
 | `bindings_error map_error(const core::error &)` / `string_view bindings_error_name(bindings_error)` | engine errors to statuses |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [The C# API](csharp-api.md), [Hosting, the native API and hot reload](../scripting/hosting-and-hot-reload.md)
 - 📘 API: [The frame, layers and time](../engine/frame-layers-and-time.md) (subsystems)
-- 🛠 Handbook: [Bindings module](../../handbook/modules/bindings.md)
+- 🛠 Handbook: [Bindings module](../../handbook/engine/bindings.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

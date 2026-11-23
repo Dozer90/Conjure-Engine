@@ -1,27 +1,24 @@
 # Input
+<!-- doc-template:wiki -->
+[API](../index.md) → [Platform](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Platform module](../../handbook/modules/platform.md)
-
+<!-- doc-content:purpose:start -->
 How to ask "is the jump key down this frame" and get the same answer on every platform and in every test. Include
 `conjure/platform/input.h` for the `input` accumulator; it brings in `conjure/platform/input_state.h` (the snapshot
 you query) and the enumerations `conjure/platform/key.h`, `conjure/platform/mouse_button.h`,
 `conjure/platform/gamepad.h` and `conjure/platform/button_action.h`. Everything is in `namespace conjure::platform`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| React once when a key goes down | `snapshot().is_key_pressed(key::SPACE)` |
-| Act every frame while a key is held | `snapshot().is_key_down(key::W)` |
-| React once when a key comes up | `snapshot().is_key_released(key::E)` |
-| Move a first-person camera | `snapshot().mouseDelta` with `cursor_mode::DISABLED` |
-| Read a stick or trigger | `snapshot().gamepad(0).axis(gamepad_axis::LEFT_X)` |
-| Read typed text for a console or name field | `snapshot().text()` |
-| Know whether Shift or Ctrl is held | `has_flag(snapshot().modifiers, key_modifier_flags::SHIFT)` |
-| Drive input from a test or a script | `input.inject(event)` |
-| Print or parse a key name | `to_string(key::F5)`, `parse_key("f5")` |
+| Name | Input |
+| Module | Platform |
+| `#include` | `conjure/platform/button_action.h`, `conjure/platform/gamepad.h`, `conjure/platform/input.h`, `conjure/platform/input_state.h`, `conjure/platform/key.h`, `conjure/platform/mouse_button.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/platform.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/platform/input.h"
@@ -51,7 +48,31 @@ void run_frame(window &target, input &accumulator, player &hero) {
     hero.position.x += state.gamepad(0).axis(gamepad_axis::LEFT_X);     // [-1, 1]; 0 when not connected
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| React once when a key goes down | `snapshot().is_key_pressed(key::SPACE)` |
+| Act every frame while a key is held | `snapshot().is_key_down(key::W)` |
+| React once when a key comes up | `snapshot().is_key_released(key::E)` |
+| Move a first-person camera | `snapshot().mouseDelta` with `cursor_mode::DISABLED` |
+| Read a stick or trigger | `snapshot().gamepad(0).axis(gamepad_axis::LEFT_X)` |
+| Read typed text for a console or name field | `snapshot().text()` |
+| Know whether Shift or Ctrl is held | `has_flag(snapshot().modifiers, key_modifier_flags::SHIFT)` |
+| Drive input from a test or a script | `input.inject(event)` |
+| Print or parse a key name | `to_string(key::F5)`, `parse_key("f5")` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Pressed, released, down and held
 
 The snapshot keeps two kinds of fact for every key and button. **Levels** describe a state and persist across
@@ -188,7 +209,7 @@ void press_through_the_window(window &created, input &accumulator) {
 }
 ```
 
-`inject` accepts an `input_event`, any one of its concrete structs (`key_event`, `mouse_move_event`, ...), or an
+`inject` accepts an `input_event`, any one of its concrete structs (`key_event`, `mouse_move_event`,...), or an
 `event` (window alternatives are ignored). Going through `null_backend::push_event()` and `pump_events()` also
 exercises window events such as focus loss and resizes (see
 [The null backend](windows-and-events.md#the-null-backend)). The module's conformance tests feed the same event list
@@ -209,8 +230,12 @@ and each `gamepad_state::buttonsDown/Pressed/Released` are `u32` masks with bit 
 snapshots with `==` compares every field. The scripting layer copies this struct into the C# frame block as is, so
 its layout is fixed. `stats()` returns `input_stats`: `eventsApplied`, `eventsInjected`, `textCodepointsDropped` and
 `ignoredTransitions`, for a diagnostics overlay.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -229,12 +254,21 @@ its layout is fixed. `stats()` returns `input_stats`: `eventsApplied`, `eventsIn
 | `button_action`: `RELEASE`, `PRESS`, `REPEAT` with `to_string` / `parse_button_action` | what happened to a key or button |
 | `key`, `key_modifier_flags`, `mouse_button`, `gamepad_button`, `gamepad_axis` with `to_string` / `parse_*` / `is_valid_*` | the enumerations |
 | `KEY_COUNT` (512), `MOUSE_BUTTON_COUNT` (8), `MAX_GAMEPADS` (4), `GAMEPAD_BUTTON_COUNT` (15), `GAMEPAD_AXIS_COUNT` (6), `MAX_TEXT_CODEPOINTS_PER_FRAME` (16) | the limits |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Windows and events](windows-and-events.md): where the events come from, cursor modes, the null backend
 - 📘 API: [Platform overview](index.md)
 - 📘 API: [Data types](../core/data-types.md) for flag enumerations and `has_flag()`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Platform module](../../handbook/modules/platform.md): the state machine in full and how the
+- 🛠 Handbook: [Platform module](../../handbook/engine/platform.md): the state machine in full and how the
   scripting frame block copies the snapshot
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

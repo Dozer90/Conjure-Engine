@@ -6,11 +6,11 @@ runtime. Its documentation comes in two sets written for two different readers. 
 | | 📘 Public API wiki | 🛠 Engineering handbook |
 |---|---|---|
 | **For** | people making games with Conjure: designers, gameplay programmers, C# scripters, AI agents driving the editor | people working in the engine source: engine programmers, module authors, contributors |
-| **Style** | task-oriented pages, short examples, tips and gotchas in coloured boxes | Confluence-style chapters with a table of contents, covering the whole codebase |
+| **Style** | task-oriented pages, short examples, tips and gotchas in coloured boxes | Contributor chapters and scoped module/header pages covering the codebase |
 | **Start here** | [Public API wiki](api/index.md) | [Engineering handbook](handbook/index.md) |
 
-Every page opens with its badge (📘 or 🛠) so you always know which set you are reading, and links that jump
-to the other set are labelled `📘 API:` or `🛠 Handbook:`.
+Navigation tabs, breadcrumbs, and sibling links identify the document set. Older pages may also carry a
+badge (📘 or 🛠); new pages use the four page shapes described in the [documentation guide](handbook/contributing/writing-documentation.md).
 
 > [!TIP]
 > Use the search box at the top of this site; it indexes both sets. On GitHub, the same pages live under

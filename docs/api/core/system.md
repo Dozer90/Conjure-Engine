@@ -1,26 +1,24 @@
 # Processes, libraries and images
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Three small operating-system services, all in `conjure::core`: run external tools with
 `conjure/core/process.h`, load plugins and modules at runtime with `conjure/core/dynamic_library.h`, and
 load, inspect and save PNG images with `conjure/core/image.h`. Nothing here needs a window, a GPU or a
 shell.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Run a tool and collect its output | `process::run(desc)` |
-| Run a tool while the editor keeps drawing | `process::start(desc)`, `is_running()`, `read_output()`, `wait()` |
-| Stop a tool and everything it spawned | `process.kill()` or `process_desc::timeoutSeconds` |
-| Load a plugin and call into it | `dynamic_library::load(path)`, `symbol_as<Fn>(name)` |
-| Name a library file portably | `dynamic_library::decorate_name("conjure_foo")` |
-| Load or save a PNG | `image::load_file(path)`, `image.save_png(path)` |
-| Work with pixels | `image.pixel(x, y)`, `set_pixel()`, `fill()`, `pixels()` |
-| Compare a screenshot with a golden image | `image.compare(other)` |
+| Name | Processes, libraries and images |
+| Module | Core |
+| `#include` | `conjure/core/dynamic_library.h`, `conjure/core/image.h`, `conjure/core/process.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/process.h"
@@ -42,7 +40,30 @@ result<bool> build_scripts(const std::filesystem::path &projectRoot) {
     return built.exitCode == 0;                           // a non-zero exit code is not an error
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Run a tool and collect its output | `process::run(desc)` |
+| Run a tool while the editor keeps drawing | `process::start(desc)`, `is_running()`, `read_output()`, `wait()` |
+| Stop a tool and everything it spawned | `process.kill()` or `process_desc::timeoutSeconds` |
+| Load a plugin and call into it | `dynamic_library::load(path)`, `symbol_as<Fn>(name)` |
+| Name a library file portably | `dynamic_library::decorate_name("conjure_foo")` |
+| Load or save a PNG | `image::load_file(path)`, `image.save_png(path)` |
+| Work with pixels | `image.pixel(x, y)`, `set_pixel()`, `fill()`, `pixels()` |
+| Compare a screenshot with a golden image | `image.compare(other)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Child processes
 
 ### Describing the launch
@@ -228,11 +249,15 @@ result<bool> matches_golden(const image &actual, const std::filesystem::path &go
 > This is the small image type core needs for icons, screenshots and golden-image tests. Textures and
 > their formats belong to the renderer; do not build a texture pipeline on `image`.
 
-`compare()` returns the mean absolute byte difference normalised to `0.0` (identical) .. `1.0`; images of
+`compare()` returns the mean absolute byte difference normalised to `0.0` (identical).. `1.0`; images of
 different dimensions compare as `1.0`, two empty images as `0.0`. `operator==` requires equal dimensions
 and identical bytes. `pixels()` exposes the raw bytes; pixel `(x, y)` starts at `(y * width + x) * 4`.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -256,10 +281,19 @@ and identical bytes. `pixels()` exposes the raw bytes; pixel `(x, y)` starts at 
 | `result<std::vector<std::byte>> image::encode_png() const` / `result<void> save_png(const path &) const` | encode |
 | `void image::flip_vertical()` / `f64 compare(const image &) const` | helpers |
 | `image::BYTES_PER_PIXEL` / `MAX_DIMENSION` / `MAX_ENCODED_BYTES` / `MAX_PIXEL_BYTES` | 4 / 2^24 / INT_MAX / INT_MAX |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Errors and results](errors-and-results.md) for `result<T>`, `CONJURE_TRY_ASSIGN` and the codes above
 - 📘 API: [Files and the virtual file system](files.md) for reading and writing game files
 - 📘 API: [Jobs and threading](jobs.md) when a tool's output should be processed off the main thread
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for the platform backends (job objects, process groups, pipe draining)
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md) for the platform backends (job objects, process groups, pipe draining)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

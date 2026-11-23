@@ -1,7 +1,8 @@
 # Modules and plugins
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Modules module](../../handbook/modules/modules.md)
-
+<!-- doc-content:purpose:start -->
 A Conjure **module** is a package the engine loads at start-up: a `module.json` manifest, optionally a native
 shared library (`.dll`, `.so`, `.dylib`), optionally C# assemblies and content directories. Your game project is
 one module; everything you reuse between projects (a gameplay library, an importer for a custom file format, an
@@ -12,7 +13,9 @@ that load modules use the headers described on [Loading and managing modules](lo
 |---|---|
 | [Writing a module](writing-a-module.md) | the entry point, registering components, systems and other extensions, the manifest, versions, host services, events |
 | [Loading and managing modules](loading-and-managing.md) | `module_manager`, discovery, dependency order, load / unload / reload, the registry, consumers, the ABI check, failure codes |
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## What a module can add
 
 A module does not call into the engine to install things. Its entry function hands the engine **descriptors**
@@ -32,7 +35,7 @@ parallel schedule; nothing on a hot path knows which module something came from.
 
 > [!NOTE]
 > The ECS descriptors exist today. The assets, scripting and editor descriptors, and the subsystems that apply
-> them, arrive with their own modules in later waves; the module system itself does not change when they do.
+> them, arrive with their own modules in; the module system itself does not change when they do.
 
 ## The manifest in one look
 
@@ -88,7 +91,7 @@ found         order         validate, attach        generation of the id advance
 > [!TIP]
 > Test a module without building a shared library: `CONJURE_DECLARE_STATIC_MODULE` compiles the entry into the
 > test executable and `module_manager::add_static_module()` loads it through the very same path. The handbook's
-> [Creating a module](../../handbook/module-system/creating-a-module.md) shows the test host.
+> [Creating a module](../../handbook/extensions/creating-a-module.md) shows the test host.
 
 ## See also
 
@@ -96,5 +99,12 @@ found         order         validate, attach        generation of the id advance
 - 📘 API: [Errors and results](../core/errors-and-results.md) (every failure is a `result<T>` carrying a
   `module_error`), [Time, events and random](../core/time-and-events.md) (the event bus module events travel on)
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Module system](../../handbook/module-system/index.md) (creating, importing and distributing
-  modules), [Modules module](../../handbook/modules/modules.md) (internals)
+- 🛠 Handbook: [Module system](../../handbook/extensions/module-system.md) (creating, importing and distributing
+  modules), [Modules module](../../handbook/engine/modules.md) (internals)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/modules/module_error.h` | Declares `module_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

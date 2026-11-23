@@ -1,32 +1,24 @@
 # Scenes and the hierarchy
+<!-- doc-template:wiki -->
+[API](../index.md) → [Scene](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
-
+<!-- doc-content:purpose:start -->
 How to create entities in a scene, parent them, move them, name them and find them again, what the scene
 components are, and how transforms reach the renderer every frame. Headers: `conjure/scene/scene.h`,
 `conjure/scene/components.h`, `conjure/scene/hierarchy.h`, `conjure/scene/guid_index.h`,
 `conjure/scene/transform_system.h` and `conjure/scene/register.h`. Everything is in `namespace conjure::scene`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Register the scene components once at start-up | `register_components(registry)` |
-| Create an entity with a name, guid and transform | `scene.create_entity(name, parent, index)` |
-| Create many copies of a template subtree | `scene.create_entities(count, templateEntity, parent, out)` |
-| Copy a subtree | `scene.duplicate_subtree(root, parent, index)` |
-| Destroy at the end of the frame / now | `scene.destroy(entity)` / `scene.destroy_now(entity)` |
-| Reparent, keeping the world pose | `scene.set_parent(child, newParent, keepWorld = true, index)` |
-| Reparent from inside a system (world locked) | `scene.deferred_set_parent(commands, child, newParent, ...)` |
-| Reorder among siblings or roots | `scene.set_sibling_index(entity, index)`, `scene.set_root_order(ordered)` |
-| Edit the local transform | `scene.set_local_transform(entity, value)` (a `local_transform`, or the `math::transform` that `local_transform_of` returns), `scene.set_world_transform(entity, value)` |
-| Read a transform | `scene.local_transform_of(entity)`, `scene.world_transform_of(entity)` (fresh walk) or the `world_transform` component (last frame's pass) |
-| Name, tag, layer, enabled | `set_name`, `set_tag`, `set_layer`, `set_enabled`; `name_of`, `tag_of`, `layer_of`, `is_enabled`, `is_active` |
-| Find entities | `scene.find_path("Root/Child")`, `find_by_name`, `find_by_tag`, `find_by_layer`, `find_guid`, `resolve_guid` |
-| Walk the tree | `scene.tree().parent_of(e)`, `children_of(e)`, `depth_of(e)`, `root_of(e)`, `for_each_in_subtree(e, fn)` |
-| Add the four scene systems to a scheduler | `register_systems(scheduler, sceneManager)` |
+| Name | Scenes and the hierarchy |
+| Module | Scene |
+| `#include` | `conjure/scene/components.h`, `conjure/scene/guid_index.h`, `conjure/scene/hierarchy.h`, `conjure/scene/register.h`, `conjure/scene/scene.h`, `conjure/scene/transform_system.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/scene.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/scene/scene.h"
@@ -49,7 +41,36 @@ core::result<void> spawn_crate(scene::scene &level, ecs::entity shelf) {
     return core::result<void>::success();
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Register the scene components once at start-up | `register_components(registry)` |
+| Create an entity with a name, guid and transform | `scene.create_entity(name, parent, index)` |
+| Create many copies of a template subtree | `scene.create_entities(count, templateEntity, parent, out)` |
+| Copy a subtree | `scene.duplicate_subtree(root, parent, index)` |
+| Destroy at the end of the frame / now | `scene.destroy(entity)` / `scene.destroy_now(entity)` |
+| Reparent, keeping the world pose | `scene.set_parent(child, newParent, keepWorld = true, index)` |
+| Reparent from inside a system (world locked) | `scene.deferred_set_parent(commands, child, newParent, ...)` |
+| Reorder among siblings or roots | `scene.set_sibling_index(entity, index)`, `scene.set_root_order(ordered)` |
+| Edit the local transform | `scene.set_local_transform(entity, value)` (a `local_transform`, or the `math::transform` that `local_transform_of` returns), `scene.set_world_transform(entity, value)` |
+| Read a transform | `scene.local_transform_of(entity)`, `scene.world_transform_of(entity)` (fresh walk) or the `world_transform` component (last frame's pass) |
+| Name, tag, layer, enabled | `set_name`, `set_tag`, `set_layer`, `set_enabled`; `name_of`, `tag_of`, `layer_of`, `is_enabled`, `is_active` |
+| Find entities | `scene.find_path("Root/Child")`, `find_by_name`, `find_by_tag`, `find_by_layer`, `find_guid`, `resolve_guid` |
+| Walk the tree | `scene.tree().parent_of(e)`, `children_of(e)`, `depth_of(e)`, `root_of(e)`, `for_each_in_subtree(e, fn)` |
+| Add the four scene systems to a scheduler | `register_systems(scheduler, sceneManager)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The scene components
 
 Every scene component is a plain struct registered under `"conjure.scene.<name>"`. You read and write them like
@@ -160,8 +181,12 @@ entity, computed now.
 > [!WARNING]
 > `world_transform` is last frame's result until the TRANSFORM phase has run. When you need the pose right after
 > editing a local transform, ask `scene.world_transform_of(entity)`, which walks the ancestors fresh.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -186,8 +211,17 @@ entity, computed now.
 | `u64 structure_version() const`, `core::json::document &settings()`, `string_view name()` | state |
 | `result<void> register_components(ecs::component_registry &)` | `register.h` |
 | `result<void> register_systems(ecs::scheduler &, scene_manager &)` | `register.h` |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Scene files, prefabs and snapshots](scene-files-and-prefabs.md), [Queries, views and systems](../ecs/queries-views-and-systems.md), [Math](../core/math.md)
-- 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
+- 🛠 Handbook: [Scene module](../../handbook/engine/scene.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

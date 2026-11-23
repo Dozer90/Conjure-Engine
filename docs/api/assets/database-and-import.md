@@ -1,7 +1,8 @@
 # Database, importers and hot reload
+<!-- doc-template:wiki -->
+[API](../index.md) → [Assets](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Assets module](../../handbook/modules/assets.md)
-
+<!-- doc-content:purpose:start -->
 The editor side of the pipeline: how sources become records with stable uuids, how a module adds a file type
 (an importer that cooks it and a loader that reads the cooked result), and how changed files are picked up
 while the editor runs. Headers: `conjure/assets/asset_database.h`, `conjure/assets/asset_meta.h`,
@@ -9,21 +10,18 @@ while the editor runs. Headers: `conjure/assets/asset_database.h`, `conjure/asse
 `conjure/assets/asset_type_registry.h`, `conjure/assets/binary_asset.h`, `conjure/assets/file_watcher.h` and
 `conjure/assets/hot_reload.h`. Everything is in `namespace conjure::assets`. None of this runs in a shipped
 game; the runtime only reads packs ([Cooking, caches and packs](cooking-and-packs.md)).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Add a file type the engine does not know | derive `asset_importer` and `typed_asset_loader<T, Intermediate>`, declare the type with `CONJURE_DECLARE_ASSET_TYPE` |
-| Register the type and importer | `types.register_type(make_asset_type_desc<T>(loader))`, `importers.register_importer(importer)` |
-| Find out what the project contains | `asset_database::records()`, `find(id)`, `find_by_path(path)`, `asset_path_of(id)` |
-| Re-import what changed | `database.scan()` then `database.import_stale(jobs)` |
-| Change an asset's import settings | `read_meta(id)`, edit `settings`, `write_meta(id, meta)` |
-| Import a file with an importer other than its extension's | `set_importer(id, importerId)`, then `import` |
-| Rename, create or delete an asset from a tool | `move_asset`, `create_asset`, `delete_asset` |
-| Pick up file changes while the editor runs | `polling_file_watcher` plus `hot_reload_controller::update()` each frame |
+| Name | Database, importers and hot reload |
+| Module | Assets |
+| `#include` | `conjure/assets/asset_database.h`, `conjure/assets/asset_importer.h`, `conjure/assets/asset_loader.h`, `conjure/assets/asset_meta.h`, `conjure/assets/asset_payload.h`, `conjure/assets/asset_type_registry.h`, `conjure/assets/binary_asset.h`, `conjure/assets/file_watcher.h`, `conjure/assets/hot_reload.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/assets.md) |
 
-## Quick example: a project database
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example-a-project-database"></a>
 
 Copied from the fixture in `tests/assets/assets_test_support.cpp`. The manager owns the type registry; the
 database reads it to know each type's version.
@@ -65,7 +63,30 @@ core::result<void> open_project(
 > Register every importer before `scan()`: a source whose extension has no importer gets a `.meta` and a uuid
 > (so it is browsable) but its record is `NO_IMPORTER` and it never loads until an importer exists and the
 > source is scanned again.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Add a file type the engine does not know | derive `asset_importer` and `typed_asset_loader<T, Intermediate>`, declare the type with `CONJURE_DECLARE_ASSET_TYPE` |
+| Register the type and importer | `types.register_type(make_asset_type_desc<T>(loader))`, `importers.register_importer(importer)` |
+| Find out what the project contains | `asset_database::records()`, `find(id)`, `find_by_path(path)`, `asset_path_of(id)` |
+| Re-import what changed | `database.scan()` then `database.import_stale(jobs)` |
+| Change an asset's import settings | `read_meta(id)`, edit `settings`, `write_meta(id, meta)` |
+| Import a file with an importer other than its extension's | `set_importer(id, importerId)`, then `import` |
+| Rename, create or delete an asset from a tool | `move_asset`, `create_asset`, `delete_asset` |
+| Pick up file changes while the editor runs | `polling_file_watcher` plus `hot_reload_controller::update()` each frame |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The database
 
 `asset_database` knows every source under its mounts, the uuid and sub-asset uuids of each, the importer and
@@ -333,8 +354,12 @@ once. `last_report()` says what happened (`changesSeen`, `sourcesReimported`, `r
 polling one later. `scan_now()` runs one pass synchronously for tests and tools. A pass that keeps failing (a
 watched root was deleted) logs one WARN, again only when the failure changes, and one INFO when passes succeed
 again.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -349,10 +374,19 @@ again.
 | `binary_asset`, `binary_importer`, `binary_loader`, `register_binary_asset_type` | the built-in type |
 | `polling_file_watcher(fs, jobs, interval)`: `add_root`, `snapshot`, `poll`, `scan_now` | debounced change detection |
 | `hot_reload_controller(database, manager, watcher, jobs)`: `update`, `reloads_this_frame`, `last_report` | re-import and reload |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Assets](index.md), [Referencing and loading](referencing-and-loading.md)
 - 📘 API: [Cooking, caches and packs](cooking-and-packs.md): the blob format importers produce and the cache that stores it
 - 📘 API: [JSON](../core/json.md) for `settings`, [Files and the virtual file system](../core/files.md), [Glossary](../glossary.md)
-- 🛠 Handbook: [Assets module](../../handbook/modules/assets.md): scan and hashing, the watcher job, determinism rules
+- 🛠 Handbook: [Assets module](../../handbook/engine/assets.md): scan and hashing, the watcher job, determinism rules
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,7 +1,8 @@
 # The workspace UI
+<!-- doc-template:wiki -->
+[API](../index.md) → [Editor](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-
+<!-- doc-content:purpose:start -->
 The Dear ImGui side of the editor (`conjure::editor::ui`, library `conjure_editor_ui`): the layer that draws
 (`conjure/editor/ui/editor_layer.h`), the docking workspace (`conjure/editor/ui/editor_workspace.h`), panels
 (`conjure/editor/ui/editor_panel.h` and `conjure/editor/ui/panels/*.h`), the inspector's property drawers
@@ -11,17 +12,39 @@ hierarchy's row cache (`conjure/editor/ui/hierarchy_cache.h`) and the frame scop
 submit `command_request`s through the context's dispatcher: every edit is validated, undoable and announced like a
 protocol request. Selection, camera navigation, the gizmo operation and space, and the debug-draw toggles are UI
 state the panels write directly; they are not commands.
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | The workspace UI |
+| Module | Editor |
+| `#include` | `conjure/editor/ui/editor_icon.h`, `conjure/editor/ui/editor_layer.h`, `conjure/editor/ui/editor_panel.h`, `conjure/editor/ui/editor_workspace.h`, `conjure/editor/ui/gizmo_controller.h`, `conjure/editor/ui/hierarchy_cache.h`, `conjure/editor/ui/imgui_frame_scope.h`, `conjure/editor/ui/panels/*.h`, `conjure/editor/ui/panels/ai_session_panel.h`, `conjure/editor/ui/panels/asset_browser_panel.h`, `conjure/editor/ui/panels/console_panel.h`, `conjure/editor/ui/panels/export_dialog.h`, `conjure/editor/ui/panels/hierarchy_panel.h`, `conjure/editor/ui/panels/history_panel.h`, `conjure/editor/ui/panels/inspector_panel.h`, `conjure/editor/ui/panels/profiler_panel.h`, `conjure/editor/ui/panels/toolbar_panel.h`, `conjure/editor/ui/panels/viewport_panel.h`, `conjure/editor/ui/property_drawer.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/editor/editor.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | Put the editor UI on an application | `create_editor_layer(context)` as the `layer_factory` of `editor_application::initialise` |
 | Add a panel from a module | a `panel_desc { title, draw, userData, openByDefault }` extension record; the workspace lists it in the View menu |
 | Add a panel from C++ (the editor itself) | derive from `editor_panel`, register a `panel_descriptor` in the `panel_registry` |
 | Draw a field kind differently | `property_drawer_registry::set(field_kind, drawer)` |
-| Draw panels in a test without the engine's ImGui layer | `imgui_frame_scope` around `begin_frame()` ... `end_frame()` on the null device |
+| Draw panels in a test without the engine's ImGui layer | `imgui_frame_scope` around `begin_frame()`... `end_frame()` on the null device |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The layer and the workspace
 
 `editor_layer` is pushed after the engine's `imgui_layer` (which owns the one `ImGuiContext`): `on_update`
@@ -142,8 +165,12 @@ can be drawn against the null device in a unit test.
 > [!WARNING]
 > ImGui has one context per process and the engine's `imgui_layer` owns it. Never call `ImGui::CreateContext`
 > or `SetCurrentContext` from a panel or a module; draw inside the frame the engine opened.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -159,10 +186,19 @@ can be drawn against the null device in a unit test.
 | `void hierarchy_cache::rebuild(const scene::scene &, const selection_set &)` / `set_filter` / `set_expanded(const scene::scene &, entity, bool)` / `reveal` / `refresh_labels` / `rows()` | the hierarchy rows |
 | `void hierarchy_panel::begin_rename(editor_context &, ecs::entity)` / `is_renaming()` | inline rename |
 | `imgui_frame_scope::begin_frame()` / `end_frame()` / `set_mouse(const math::vec2 &, bool)` | a frame for tests |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Headless mode and the command model](headless-and-commands.md), [The AI control protocol](ai-protocol.md)
 - 📘 API: [Rendering a frame](../renderer/rendering-a-frame.md) (the ImGui backend), [Writing a module](../modules/writing-a-module.md)
-- 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-- 🛠 Handbook: [Logo and application icon](../../handbook/brand.md)
+- 🛠 Handbook: [Editor module](../../handbook/editor/editor.md)
+- 🛠 Handbook: [Branding and Application Icons](../../handbook/project-reference/branding-and-application-icons.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

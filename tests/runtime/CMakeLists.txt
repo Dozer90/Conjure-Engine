@@ -31,7 +31,8 @@
 #                                     the source or build directory of the tree (code sweep F613)
 #
 # Every case spawns the executable, so the module carries the label "process" (08_testing.md 6.3 item 8,
-# docs/handbook/ci.md): the default test presets skip it and CI runs it explicitly after the build:
+# docs/handbook/development/continuous-integration.md): the default test presets skip it and CI runs it explicitly
+# after the build:
 #   ctest --test-dir build/<preset> -L process --output-on-failure
 # The directory runtime.distribution_symbols and runtime.distribution_paths check is CONJURE_DISTRIBUTION_BUILD_DIR
 # when set (a Debug build can then verify a Distribution build next to it), else this build directory when it is a

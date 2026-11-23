@@ -1,33 +1,24 @@
 # The physics world and queries
+<!-- doc-template:wiki -->
+[API](../index.md) → [Physics](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
-
+<!-- doc-content:purpose:start -->
 How to create and step the `physics_world`, push it around with forces, impulses and teleports, read collision
 events, cast rays and shapes, tune it and draw it. Headers: `conjure/physics/physics_world.h`,
 `conjure/physics/physics_settings.h`, `conjure/physics/queries.h`, `conjure/physics/contact_events.h` and
 `conjure/physics/physics_debug_draw.h`. Everything is in `namespace conjure::physics`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Create the world | `physics_world(settings, jobs)` then `attach(world)`; `detach()` or destruction removes every body and the `scene::interpolated_transform` physics added |
-| Step by hand (tools, tests) | `push_transforms(dt)`, `step(dt)`, `pull_transforms()`, `collect_contact_events()` |
-| Push a body | `add_force`, `add_force_at`, `add_impulse`, `add_impulse_at`, `add_torque`, `add_angular_impulse` |
-| Set a velocity | `set_linear_velocity`, `set_angular_velocity` |
-| Move a body instantly / smoothly | `teleport(entity, pose)` / `move_kinematic(entity, pose)` (kinematic bodies that do not follow their transform) |
-| Sleep and wake | `wake`, `sleep`, `is_sleeping` |
-| Change gravity | `set_gravity(vec3)`, `gravity()` |
-| Move a character | `character_move(entity, velocity)`, `character_ground(entity)` |
-| Read collisions | `contact_events()` after `collect_contact_events()` |
-| Cast a ray | `raycast(ray, maxDistance, filter)`, `raycast_all(ray, maxDistance, out, filter)` |
-| Find what overlaps a volume | `overlap_sphere(center, radius, out, filter)`, `overlap_box(center, halfExtents, rotation, out, filter)` |
-| Sweep a shape | `shape_cast(shape, start, direction, filter)` |
-| Read a body's pose or the world's bounds | `body_pose(entity)`, `bounds()` |
-| Counters | `stats()`, `body_count()`, `active_body_count()` |
-| Draw it | `debug_draw(sink, flags)` with your `physics_debug_draw` implementation |
+| Name | The physics world and queries |
+| Module | Physics |
+| `#include` | `conjure/physics/contact_events.h`, `conjure/physics/physics_debug_draw.h`, `conjure/physics/physics_settings.h`, `conjure/physics/physics_world.h`, `conjure/physics/queries.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/physics.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/physics/physics_world.h"
@@ -51,7 +42,37 @@ void report_hits(const physics::physics_world &physics, ecs::entity player) {
     }
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Create the world | `physics_world(settings, jobs)` then `attach(world)`; `detach()` or destruction removes every body and the `scene::interpolated_transform` physics added |
+| Step by hand (tools, tests) | `push_transforms(dt)`, `step(dt)`, `pull_transforms()`, `collect_contact_events()` |
+| Push a body | `add_force`, `add_force_at`, `add_impulse`, `add_impulse_at`, `add_torque`, `add_angular_impulse` |
+| Set a velocity | `set_linear_velocity`, `set_angular_velocity` |
+| Move a body instantly / smoothly | `teleport(entity, pose)` / `move_kinematic(entity, pose)` (kinematic bodies that do not follow their transform) |
+| Sleep and wake | `wake`, `sleep`, `is_sleeping` |
+| Change gravity | `set_gravity(vec3)`, `gravity()` |
+| Move a character | `character_move(entity, velocity)`, `character_ground(entity)` |
+| Read collisions | `contact_events()` after `collect_contact_events()` |
+| Cast a ray | `raycast(ray, maxDistance, filter)`, `raycast_all(ray, maxDistance, out, filter)` |
+| Find what overlaps a volume | `overlap_sphere(center, radius, out, filter)`, `overlap_box(center, halfExtents, rotation, out, filter)` |
+| Sweep a shape | `shape_cast(shape, start, direction, filter)` |
+| Read a body's pose or the world's bounds | `body_pose(entity)`, `bounds()` |
+| Counters | `stats()`, `body_count()`, `active_body_count()` |
+| Draw it | `debug_draw(sink, flags)` with your `physics_debug_draw` implementation |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Creating and stepping
 
 `physics_world(settings, jobs)` builds the Jolt system from validated `physics_settings` (call `validate()`
@@ -181,8 +202,12 @@ Implement `physics_debug_draw` (`line(from, to, rgba)`, `triangle(a, b, c, rgba)
 `physics_world::debug_draw(sink, flags)` with `physics_debug_draw_flags` (`SHAPES`, `WIREFRAME`,
 `BOUNDING_BOXES`, `CENTER_OF_MASS`, `VELOCITIES`, `SLEEP_STATE`, `CHARACTERS`, `CONTACTS`). Nothing is drawn
 while a step is in progress. The renderer's `debug_draw_buffer` is the natural sink in the engine.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -207,8 +232,17 @@ while a step is in progress. The renderer's `debug_draw_buffer` is the natural s
 | `void debug_draw(physics_debug_draw &, physics_debug_draw_flags) const` | drawing |
 | `result<void> validate() const` | invariants (tests) |
 | `result<void> physics_settings::validate() const`, `static result<physics_settings> physics_settings::from_json(const json::value &physics, const json::value &layers)` | settings |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Bodies, colliders and characters](bodies-and-colliders.md), [Jobs and threading](../core/jobs.md)
-- 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
+- 🛠 Handbook: [Physics module](../../handbook/engine/physics.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,18 +1,21 @@
 # Rendering
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
-
+<!-- doc-content:purpose:start -->
 The renderer draws a frame: physically based 3D with image-based lighting, cascaded and local shadows, ambient
 occlusion and HDR post-processing, plus 2D sprites and debug lines, into the window or into off-screen targets. You
 feed it a `render_scene` (cameras, mesh instances, lights, sprites, settings) and it produces one command list
 per frame on the graphics device. The CPU-side asset types (meshes, textures, materials, models, environments)
 and their importers live here too. Everything on these pages is in `namespace conjure::renderer`.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. Assets are CPU data: a `mesh_asset`, `texture_asset`, `material_asset` or `environment_asset` is a plain
    object the asset pipeline cooks and loads with no GPU in sight. `renderer::upload_*` copies one into GPU
-   memory and hands back a small id (`gpu_mesh_id`, ...); `release_*` drops it again.
+   memory and hands back a small id (`gpu_mesh_id`,...); `release_*` drops it again.
 2. A `render_scene` is what one frame looks like: `views` (a camera, a view matrix and a target), `meshes`
    (`mesh_instance`: a mesh id, material ids and a world matrix), `lights`, `sprites`, the environment and the
    post-processing settings. It holds ids and numbers, never pointers into the world.
@@ -48,7 +51,7 @@ from them every frame. The renderer itself never includes the ECS.
 | `conjure/renderer/sprite_batch.h` | `sprite`, `sprite_space`, `sprite_batcher` |
 | `conjure/renderer/debug_draw.h` | `debug_draw_buffer`, `debug_draw` (timed shapes), `debug_depth` (TESTED / OVERLAY), `debug_vertex`, `pack_debug_colour()` |
 | `conjure/renderer/gpu_ids.h` | `gpu_mesh_id`, `gpu_texture_id`, `gpu_material_id`, `gpu_environment_id`, `render_target_id` |
-| `conjure/renderer/limits.h` | the budgets: `MAX_VIEWS`, `MAX_LIGHTS_PER_VIEW`, `MAX_SHADOW_CASCADES`, `MAX_SPRITES_PER_FRAME`, `MAX_MATERIAL_SLOTS`, ... |
+| `conjure/renderer/limits.h` | the budgets: `MAX_VIEWS`, `MAX_LIGHTS_PER_VIEW`, `MAX_SHADOW_CASCADES`, `MAX_SPRITES_PER_FRAME`, `MAX_MATERIAL_SLOTS`,... |
 | `conjure/renderer/components.h` | the five reflected components and `register_components()` |
 | `conjure/renderer/imgui_renderer.h` | `imgui_renderer` (editor builds: draws `ImDrawData`) |
 | `conjure/renderer/mesh_asset.h` | `mesh_asset`, `mesh_geometry`, `tangent_generation`, `submesh`, the vertex packing helpers, `mesh_loader` |
@@ -107,10 +110,18 @@ core::result<void> draw_one_cube(rhi::device &device, rhi::shader_library &shade
 | View | one camera rendering into one target (or the swapchain), with its own layer mask and flags |
 | Instance | one drawn mesh: `mesh_instance` with a mesh id, up to `MAX_MATERIAL_SLOTS` material ids and a world matrix |
 | Fallback | what a stale or missing id draws: a unit cube, a white texture, a magenta unlit material, a grey environment |
-| Pass | one step of the frame's render graph (`depth_prepass`, `forward_opaque`, `tonemap`, ...); `render_stats::passNames` lists the ones that ran |
+| Pass | one step of the frame's render graph (`depth_prepass`, `forward_opaque`, `tonemap`,...); `render_stats::passNames` lists the ones that ran |
 | Reverse-Z | depth 1 at the near plane and 0 at the far plane, for precision; `camera.h` builds such projections |
 
 ## See also
 
 - 📘 API: [Graphics device layer (RHI)](../rhi/index.md), [Referencing and loading assets](../assets/referencing-and-loading.md), [Math](../core/math.md)
-- 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
+- 🛠 Handbook: [Renderer module](../../handbook/engine/renderer.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/renderer/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+| `conjure/renderer/renderer_error.h` | Declares `renderer_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

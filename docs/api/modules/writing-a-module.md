@@ -1,28 +1,25 @@
 # Writing a module
+<!-- doc-template:wiki -->
+[API](../index.md) → [Modules](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Modules module](../../handbook/modules/modules.md)
-
+<!-- doc-content:purpose:start -->
 How to write the native side of a module: the manifest, the entry point, what you can register and what the host
 gives you in return. Include `conjure/modules/modules.h`; it pulls in `conjure/modules/module_entry.h`,
 `conjure/modules/module_context.h`, `conjure/modules/module_registrar.h` and `conjure/modules/module_service.h`.
 Everything is in `namespace conjure::modules`. The build side (`conjure_add_game_module()`, directory layout) is
-in the handbook's [Creating a module](../../handbook/module-system/creating-a-module.md).
+in the handbook's [Creating a module](../../handbook/extensions/creating-a-module.md).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Declare the module binary's entry | `CONJURE_DECLARE_MODULE(entry_function)` |
-| Compile a module into a host or test instead | `CONJURE_DECLARE_STATIC_MODULE(identifier, manifestJson, &entry)` |
-| Add a component, system, importer, panel... | `context.registrar().register_extension(desc)` |
-| Ship C# code | `"managed"` in the manifest, or `registrar.register_managed_assembly("managed/Game.dll")` |
-| Run code once everything is applied / before it is removed | `registrar.set_lifecycle(module_lifecycle{&on_activated, &on_deactivating})` |
-| Refuse to load with a reason | `registrar.fail("needs the renderer")` |
-| Ask the host for a service | `context.try_service<T>()` or `context.require_service<T>()` |
-| Subscribe to a host event safely | `context.retain(bus.subscribe<E>(&callback))` |
-| Know which host you run in | `context.host()` is `EDITOR`, `RUNTIME` or `TEST` |
+| Name | Writing a module |
+| Module | Modules |
+| `#include` | `conjure/modules/module_context.h`, `conjure/modules/module_entry.h`, `conjure/modules/module_events.h`, `conjure/modules/module_manifest.h`, `conjure/modules/module_registrar.h`, `conjure/modules/module_registration_set.h`, `conjure/modules/module_service.h`, `conjure/modules/module_types.h`, `conjure/modules/module_version.h`, `conjure/modules/modules.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/modules.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 The entry registers a component and a lifecycle callback, then returns `OK`. Only `CONJURE_DECLARE_MODULE` differs
 between a plugin and the game module.
@@ -61,7 +58,31 @@ CONJURE_DECLARE_MODULE(game_entry)
 
 `tests/modules/fixtures/module_alpha/module_alpha.cpp` is the same shape with a system, a retained event
 subscription and a log line through the host logger.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Declare the module binary's entry | `CONJURE_DECLARE_MODULE(entry_function)` |
+| Compile a module into a host or test instead | `CONJURE_DECLARE_STATIC_MODULE(identifier, manifestJson, &entry)` |
+| Add a component, system, importer, panel... | `context.registrar().register_extension(desc)` |
+| Ship C# code | `"managed"` in the manifest, or `registrar.register_managed_assembly("managed/Game.dll")` |
+| Run code once everything is applied / before it is removed | `registrar.set_lifecycle(module_lifecycle{&on_activated, &on_deactivating})` |
+| Refuse to load with a reason | `registrar.fail("needs the renderer")` |
+| Ask the host for a service | `context.try_service<T>()` or `context.require_service<T>()` |
+| Subscribe to a host event safely | `context.retain(bus.subscribe<E>(&callback))` |
+| Know which host you run in | `context.host()` is `EDITOR`, `RUNTIME` or `TEST` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The manifest
 
 `module.json` sits in the module root; `conjure/modules/module_manifest.h` parses it into a `module_manifest`.
@@ -160,7 +181,7 @@ with `ENTRY_FAILED` listing every reason; nothing you registered is applied.
 
 | Call | Effect |
 |---|---|
-| `register_extension(desc)` | appends a trivially copyable descriptor under `DescType::EXTENSION_POINT` (`"ecs.component"`, `"ecs.system"`, `"editor.panel"`, ...) |
+| `register_extension(desc)` | appends a trivially copyable descriptor under `DescType::EXTENSION_POINT` (`"ecs.component"`, `"ecs.system"`, `"editor.panel"`,...) |
 | `register_managed_assembly("managed/X.dll")` | adds a C# assembly path relative to the module root; duplicates are ignored; a path that leaves the root (as for `managed` in the manifest) asserts and rejects the load |
 | `set_lifecycle(module_lifecycle{&on_activated, &on_deactivating})` | installs the callbacks; the last call wins; either may be null |
 | `fail("reason")` | records why the module cannot load; reasons accumulate |
@@ -274,9 +295,13 @@ through its context like any other.
 
 `host_platform()`, `host_architecture()`, `host_build_config()`, `host_feature_flags()` and `host_binary_triplet()`
 are `constexpr` facts about the build your code is in; `to_string()` and the `parse_*()` functions convert to and
-from the manifest spellings (`"windows"`, `"renderer"`, `"plugin"`, ...).
+from the manifest spellings (`"windows"`, `"renderer"`, `"plugin"`,...).
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -296,11 +321,20 @@ from the manifest spellings (`"windows"`, `"renderer"`, `"plugin"`, ...).
 | `bool is_valid_module_name(name)` / `std::string decorate_binary_name(base, platform)` / `path module_binary_path(manifest, root, triplet)` / `path module_binary_directory(root, triplet)` | names and paths |
 | `result<semantic_version> parse_version(text)` / `result<version_range> parse_version_range(text)` / `to_string(...)` / `host_engine_version()` | versions |
 | `bool version_range::contains(semantic_version)` / `bool is_unbounded()` | range tests |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Modules and plugins](index.md) (overview and lifecycle), [Loading and managing modules](loading-and-managing.md)
 - 📘 API: [Errors and results](../core/errors-and-results.md), [Time, events and random](../core/time-and-events.md)
   (`event_bus`, `event_subscription`), [Strings and identifiers](../core/strings-and-identifiers.md) (`string_id`)
-- 🛠 Handbook: [Creating a module](../../handbook/module-system/creating-a-module.md) (CMake, layout, test host),
-  [Modules module](../../handbook/modules/modules.md)
+- 🛠 Handbook: [Creating a module](../../handbook/extensions/creating-a-module.md) (CMake, layout, test host),
+  [Modules module](../../handbook/engine/modules.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

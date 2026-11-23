@@ -1,25 +1,23 @@
 # Data types
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 The small set of types and macros every other Conjure header builds on: fixed-width numbers, flag enumerations,
 128-bit identifiers and the platform macros, plus the way a type forbids copying. Include `conjure/core/types.h` for
 the numbers; the other headers are named in the section that covers them.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| A 32-bit unsigned integer, a byte count, a 32-bit float | `u32`, `usize`, `f32` from `conjure/core/types.h` |
-| Write "64 KiB" without counting zeros | `64 * KIB` (`KIB`, `MIB`, `GIB`) |
-| Combine options with `\|` and test them | `enum class my_flags : u32 { NONE = 0, ... };` + `CONJURE_ENUM_FLAGS(my_flags);` then `has_flag()` |
-| Convert an enumerator to its integer | `to_underlying(value)` |
-| Stop a class from being copied | delete its copy operations yourself: `my_type(const my_type &) = delete;` (there is no base class for it) |
-| A stable identifier for an asset or a prefab | `uuid::generate()`, `uuid::parse()`, `uuid::to_string()` |
-| Know whether asserts are compiled in | `#if CONJURE_ASSERTS_ENABLED` |
-| Silence an unused variable | `CONJURE_UNUSED(value)` |
+| Name | Data types |
+| Module | Core |
+| `#include` | `conjure/core/api.h`, `conjure/core/enum_flags.h`, `conjure/core/platform_detect.h`, `conjure/core/types.h`, `conjure/core/uuid.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/enum_flags.h"
@@ -48,17 +46,40 @@ bool wants_border(const window_desc &desc) {
     return has_flag(desc.flags, window_flags::DECORATED);
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| A 32-bit unsigned integer, a byte count, a 32-bit float | `u32`, `usize`, `f32` from `conjure/core/types.h` |
+| Write "64 KiB" without counting zeros | `64 * KIB` (`KIB`, `MIB`, `GIB`) |
+| Combine options with `\|` and test them | `enum class my_flags : u32 { NONE = 0, ... };` + `CONJURE_ENUM_FLAGS(my_flags);` then `has_flag()` |
+| Convert an enumerator to its integer | `to_underlying(value)` |
+| Stop a class from being copied | delete its copy operations yourself: `my_type(const my_type &) = delete;` (there is no base class for it) |
+| A stable identifier for an asset or a prefab | `uuid::generate()`, `uuid::parse()`, `uuid::to_string()` |
+| Know whether asserts are compiled in | `#if CONJURE_ASSERTS_ENABLED` |
+| Silence an unused variable | `CONJURE_UNUSED(value)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Numbers
 
 `conjure/core/types.h` defines the aliases directly in `namespace conjure`, so they are usable unqualified from
-every module namespace (`conjure::ecs`, `conjure::renderer`, ...). Conjure only supports 64-bit targets; the header
+every module namespace (`conjure::ecs`, `conjure::renderer`,...). Conjure only supports 64-bit targets; the header
 checks this at compile time.
 
 | Alias | Standard type | Notes |
 |---|---|---|
-| `u8`, `u16`, `u32`, `u64` | `std::uint8_t` .. `std::uint64_t` | unsigned, exact width |
-| `i8`, `i16`, `i32`, `i64` | `std::int8_t` .. `std::int64_t` | signed, exact width |
+| `u8`, `u16`, `u32`, `u64` | `std::uint8_t`.. `std::uint64_t` | unsigned, exact width |
+| `i8`, `i16`, `i32`, `i64` | `std::int8_t`.. `std::int64_t` | signed, exact width |
 | `f32`, `f64` | `float`, `double` | 32 and 64 bits, checked |
 | `usize`, `isize` | `std::size_t`, `std::ptrdiff_t` | sizes, counts, indices, pointer differences |
 | `byte` | `std::byte` | raw memory; arithmetic is not allowed on it |
@@ -203,8 +224,12 @@ for static builds) and `CONJURE_PLUGIN_EXPORT` for entry points a plugin exports
 > Game code rarely needs these. Platform differences are hidden behind the engine's backends (windows, files,
 > audio), and the build configuration decides for you whether asserts and `CONJURE_LOG_TRACE`/`DEBUG` exist. Reach
 > for `CONJURE_ASSERTS_ENABLED` only to compile out expensive validation code of your own.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -221,13 +246,22 @@ for static builds) and `CONJURE_PLUGIN_EXPORT` for entry points a plugin exports
 | `std::string uuid::to_string() const` | canonical lower-case text |
 | `bool uuid::is_null() const` / `u64 high() const` / `u64 low() const` / `u64 hash() const` | accessors |
 | `CONJURE_PLATFORM_WINDOWS/MACOS/LINUX/POSIX CONJURE_COMPILER_* CONJURE_ARCH_*` | always 0 or 1 |
-| `CONJURE_PLATFORM_NAME` / `CONJURE_CONFIGURATION_NAME` | string literals (`"Windows"`, `"Debug"`, ...) |
+| `CONJURE_PLATFORM_NAME` / `CONJURE_CONFIGURATION_NAME` | string literals (`"Windows"`, `"Debug"`,...) |
 | `CONJURE_DEBUG CONJURE_DEVELOPMENT CONJURE_DISTRIBUTION` | exactly one is 1 |
 | `CONJURE_ASSERTS_ENABLED CONJURE_DEV_TOOLS_ENABLED` | 0 only in Distribution |
 | `CONJURE_API` / `CONJURE_PLUGIN_EXPORT` | symbol visibility (`conjure/core/api.h`) |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Errors and results](errors-and-results.md), which uses `u16` enumerations as error codes
 - 📘 API: [Strings and identifiers](strings-and-identifiers.md) for `string_id`, the hashed counterpart of `uuid`
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

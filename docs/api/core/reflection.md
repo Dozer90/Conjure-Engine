@@ -1,7 +1,8 @@
 # Reflection
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Describe a plain struct once and the editor inspector, the scene format and the C# layer can all read and
 write it without you writing field-by-field code. Include `conjure/core/reflect/reflect.h`
 (`conjure::core::reflect`); it provides the `CONJURE_REFLECT_*` macros and pulls in
@@ -9,21 +10,18 @@ write it without you writing field-by-field code. Include `conjure/core/reflect/
 editor attributes), `conjure/core/reflect/type_info.h` (struct descriptions),
 `conjure/core/reflect/type_registry.h` (the process-wide registry) and
 `conjure/core/reflect/json_conversion.h` (JSON in and out, field paths).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Make a component or settings struct visible to the editor | `CONJURE_REFLECT_STRUCT(type, "ns.name", CONJURE_FIELD(member), ...)` |
-| Give a field a range, step, tooltip or category | `CONJURE_FIELD(member, .min = 0.0, .max = 1.0, .tooltip = "...")` |
-| Hide a field or make it read-only in the inspector | `CONJURE_FIELD_HIDDEN(member)`, `CONJURE_FIELD_READ_ONLY(member)` |
-| Make an enum editable as a drop-down (or as flags) | `CONJURE_REFLECT_ENUM(...)`, `CONJURE_REFLECT_FLAGS(...)` |
-| Save or load a reflected struct as JSON | `reflect::to_json_document(object)`, `reflect::from_json(object, value)` |
-| Get the description of a type at runtime | `reflect::type_info_of<T>()`, `reflect::registry().find("ns.name")` |
-| Read or write one field by path (inspector edits) | `reflect::resolve_path()`, `get_as_json()`, `set_from_json()` |
-| Describe a type whose layout is only known at runtime | `reflect::build_type_info()` + `registry().register_type()` |
+| Name | Reflection |
+| Module | Core |
+| `#include` | `conjure/core/reflect/field_info.h`, `conjure/core/reflect/json_conversion.h`, `conjure/core/reflect/reflect.h`, `conjure/core/reflect/type_id.h`, `conjure/core/reflect/type_info.h`, `conjure/core/reflect/type_registry.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/reflect/reflect.h"
@@ -54,7 +52,30 @@ CONJURE_REFLECT_STRUCT(game::projectile, "game.projectile",
 That is the whole job for a component. From here on the inspector draws `position`, `speed` and `damage`
 with the right widgets, scenes save and load the struct, and `"game.projectile"` is the name every tool
 and the C# mirror agree on.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Make a component or settings struct visible to the editor | `CONJURE_REFLECT_STRUCT(type, "ns.name", CONJURE_FIELD(member), ...)` |
+| Give a field a range, step, tooltip or category | `CONJURE_FIELD(member, .min = 0.0, .max = 1.0, .tooltip = "...")` |
+| Hide a field or make it read-only in the inspector | `CONJURE_FIELD_HIDDEN(member)`, `CONJURE_FIELD_READ_ONLY(member)` |
+| Make an enum editable as a drop-down (or as flags) | `CONJURE_REFLECT_ENUM(...)`, `CONJURE_REFLECT_FLAGS(...)` |
+| Save or load a reflected struct as JSON | `reflect::to_json_document(object)`, `reflect::from_json(object, value)` |
+| Get the description of a type at runtime | `reflect::type_info_of<T>()`, `reflect::registry().find("ns.name")` |
+| Read or write one field by path (inspector edits) | `reflect::resolve_path()`, `get_as_json()`, `set_from_json()` |
+| Describe a type whose layout is only known at runtime | `reflect::build_type_info()` + `registry().register_type()` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Describing a struct
 
 `CONJURE_REFLECT_STRUCT(type, "registered.name", fields...)` lists the members to expose, in the order the
@@ -77,7 +98,7 @@ from `offsetof`, and every listed member must be of a reflectable type:
 
 | Member type | Kind | Notes |
 |---|---|---|
-| `bool`, `i8`..`i64`, `u8`..`u64`, `f32`, `f64` | scalar | platform integers (`long`, `usize`, ...) reflect as the fixed-width kind of their width |
+| `bool`, `i8`..`i64`, `u8`..`u64`, `f32`, `f64` | scalar | platform integers (`long`, `usize`,...) reflect as the fixed-width kind of their width |
 | `std::string` | `STRING` | any bytes |
 | `string_id`, `uuid` | `STRING_ID`, `UUID` | |
 | `math::vec2/vec3/vec4`, `math::quat`, `math::mat4`, `math::transform` | math | quaternions store `[x, y, z, w]` |
@@ -267,8 +288,12 @@ field of that type.
 > if registrations may happen meanwhile. Subscribe to `on_registered()` / `on_unregistered()` at startup on
 > the main thread, while no registration is in flight. `register_*` / `unregister_*` are safe from any
 > thread; `find*()` never blocks.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -294,11 +319,20 @@ field of that type.
 | `span<const type_info *const> type_registry::types() const` / `enums()` / `type_count()` | list |
 | `event<const type_info &> &type_registry::on_registered()` / `on_unregistered()` | change events |
 | `result<void> type_registry::unregister_type(type_id)` / `unregister_enum(type_id)` | module unload |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [JSON](json.md) for `json::document`, `json::value` and `json::writer`
 - 📘 API: [Math](math.md) for the vector, quaternion and transform types that reflect as fields
 - 📘 API: [Strings and identifiers](strings-and-identifiers.md) for `string_id`
 - 📘 API: [Time, events and random](time-and-events.md) for the `event<>` type behind `on_registered()`
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for layout validation, the lock-free registry and the C# layout hash
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md) for layout validation, the lock-free registry and the C# layout hash
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

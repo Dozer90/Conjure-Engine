@@ -1,13 +1,16 @@
 # Public API wiki
+<!-- doc-template:wiki-index -->
+API
 
-📘 **Public API wiki** · 🛠 Handbook: [Engineering handbook](../handbook/index.md)
-
+<!-- doc-content:purpose:start -->
 Conjure is a data-oriented 2D/3D game engine written in C++20 with a C# scripting layer, an editor that AI agents
 can drive and a standalone runtime for shipping. This wiki is for the people who build games with it: designers,
 gameplay programmers, C# scripters and agents driving the editor. It explains what the engine offers and how to use
 it; it does not explain how the engine is built inside (that is the 🛠 Engineering handbook, which every page links
 to where a sibling exists).
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## What Conjure offers
 
 | Layer | What you get | Where it is documented |
@@ -24,11 +27,9 @@ to where a sibling exists).
 | Physics | rigid bodies and colliders, the character controller, layers, contacts and queries over Jolt | [Physics pages](#physics-pages) |
 | Scripting | the .NET host, the script runtime and components, hot reload and the managed build | [Scripting pages](#scripting-pages) |
 | Engine | the application that owns every module, configuration and `project.json`, the frame, layers, export | [Engine pages](#engine-pages) |
-| C# API | the API as you see it from a script (`Entity`, `Transform`, `Physics`, `Input`, ...) and the native table behind it | [Bindings pages](#bindings-pages) |
+| C# API | the API as you see it from a script (`Entity`, `Transform`, `Physics`, `Input`,...) and the native table behind it | [Bindings pages](#bindings-pages) |
 | Editor and AI protocol | the editor, headless mode, and the command protocol agents use to drive it | [Editor pages](#editor-pages) |
 | Runtime | the standalone `conjure_runtime` executable that runs an exported game | [Runtime page](#runtime-page) |
-
-The pages for waves 1 to 4 below are complete; the sample projects of wave 5 add pages here when they land.
 
 ## How the pages are organised
 
@@ -36,11 +37,14 @@ Pages are organised by **what you want to do**, not by header. One page covers o
 several headers; small things are grouped (the *Data types* page covers `u8` through `f64`, flag enumerations and
 `uuid` together). Every page follows the same shape, so you can skim:
 
-1. a one-paragraph purpose and the header(s) to include,
-2. an **At a glance** table (*You want to...* / *Use*),
-3. a **Quick example** that compiles as written,
-4. concept sections with coloured callouts,
-5. an **API summary** of short signatures, and **See also** links.
+1. a title, API breadcrumb, and short purpose,
+2. metadata naming the module, include path, and handbook counterpart,
+3. **Syntax** with a complete example,
+4. an **At a glance** table, followed by **Variables and Properties** and **Functions**,
+5. relevant coloured callouts and API **See also** links.
+
+Existing topic pages may retain their Quick example and API summary headings; the four reusable templates
+provide the structure for new pages.
 
 The coloured callouts mean the same thing on every page: the legend is on the
 [landing page](../index.md#callout-boxes-used-throughout). In short, a TIP points at the better function, a
@@ -203,9 +207,10 @@ Start with the overview; it gives the mental model in five sentences and a table
 - [Glossary](glossary.md): every term the wiki uses, one line each, with a link to the page that explains it.
 
 > [!NOTE]
-> Most core types live in `namespace conjure::core`. The number aliases (`u32`, `usize`, ...), the size constants
+> Most core types live in `namespace conjure::core`. The number aliases (`u32`, `usize`,...), the size constants
 > (`KIB`, `MIB`, `GIB`, `CACHE_LINE_SIZE`) and the flag helpers (`has_flag`, `has_any_flag`, `with_flag`,
 > `without_flag`, `to_underlying`) live directly in `namespace conjure` so every module can use them unqualified;
 > memory, hashing and string helpers live in `conjure::core::memory`, `conjure::core::hash` and
 > `conjure::core::str`. Each page states the namespace it uses. Examples on these pages open with
 > `using namespace conjure;` and `using namespace conjure::core;` for brevity; in your own headers, qualify.
+<!-- doc-content:body:end -->

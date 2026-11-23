@@ -1,27 +1,24 @@
 # Archives and serialisation
+<!-- doc-template:wiki -->
+[API](../index.md) → [ECS](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md)
-
+<!-- doc-content:purpose:start -->
 How to copy a group of entities out of a world and put copies back in (prefabs, scene files, copy and paste,
 undo, spawning from scripts), how that copy becomes JSON and comes back, and what the archetypes and chunks you
 may meet in tools and profilers are. Headers: `conjure/ecs/entity_archive.h`, `conjure/ecs/serialization.h` and
 `conjure/ecs/archetype.h`. Everything is in `namespace conjure::ecs`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Copy entities out of a world | `entity_archive::capture(world, entities, options)` |
-| Spawn one copy | `world.instantiate(archive)` returns the root entity |
-| Spawn many copies at once | `world.instantiate_batch(archive, roots)` |
-| Spawn from inside a system | `world.instantiate(archive, &context.commands())` or `commands.instantiate(archive)` |
-| Save an archive as JSON | `write_archive_json(archive, writer)` |
-| Load it back | `read_archive_json(value, registry)` |
-| Show or edit one live component as JSON (inspector, AI protocol) | `component_to_json(world, id, componentId, writer)` / `component_from_json(world, id, componentId, value)` |
-| Keep data from modules that are not loaded | nothing: unknown names survive in `unresolved_components` automatically |
-| Look at how entities are stored | `world.archetypes()`, `archetype::mask()`, `layout()`, `entity_count()`, `chunk_count()` |
+| Name | Archives and serialisation |
+| Module | ECS |
+| `#include` | `conjure/ecs/archetype.h`, `conjure/ecs/entity_archive.h`, `conjure/ecs/serialization.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/ecs.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/json/document.h"
@@ -50,7 +47,31 @@ core::result<entity> spawn_prefab(world &game, std::string_view text) {
 ```
 
 `core::json::writer` and `core::json::document` are described on 📘 API: [JSON](../core/json.md).
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Copy entities out of a world | `entity_archive::capture(world, entities, options)` |
+| Spawn one copy | `world.instantiate(archive)` returns the root entity |
+| Spawn many copies at once | `world.instantiate_batch(archive, roots)` |
+| Spawn from inside a system | `world.instantiate(archive, &context.commands())` or `commands.instantiate(archive)` |
+| Save an archive as JSON | `write_archive_json(archive, writer)` |
+| Load it back | `read_archive_json(value, registry)` |
+| Show or edit one live component as JSON (inspector, AI protocol) | `component_to_json(world, id, componentId, writer)` / `component_from_json(world, id, componentId, value)` |
+| Keep data from modules that are not loaded | nothing: unknown names survive in `unresolved_components` automatically |
+| Look at how entities are stored | `world.archetypes()`, `archetype::mask()`, `layout()`, `entity_count()`, `chunk_count()` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Archives: a typed copy of entities
 
 `entity_archive` is an in-memory copy of N entities: for each one its component set and the bytes of every
@@ -179,8 +200,12 @@ set; fewer than `SMALL_CAPACITY_WARNING` (8) rows per chunk logs a `WARN` becaus
 > [!TIP]
 > Many small archetypes are fine; one archetype whose row is thousands of bytes is not. If an entity needs a
 > 4 KiB blob, keep the blob behind an asset or a pool handle and store the handle in the component.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -198,12 +223,21 @@ set; fewer than `SMALL_CAPACITY_WARNING` (8) rows per chunk logs a `WARN` becaus
 | `class entity_remap`: `resolve(entity)`, `remap(entity)`, `target(u32)`, `set(u32, entity)`, `size()`, `index_targets()` | local index to real entity, and back (`remap`); `index_targets()` makes the real-to-local lookups of `remap` a binary search |
 | `span<archetype *const> world::archetypes()`; `archetype::mask()` / `layout()` / `entity_count()` / `chunk_count()` / `chunk_entities(u32)` / `chunk_column(u32, id)` | storage inspection |
 | `struct chunk_layout`; `static result<chunk_layout> compute(const component_mask &, const component_registry &)`; `CHUNK_SIZE`, `CHUNK_ALIGNMENT`, `COLUMN_ALIGNMENT`, `SMALL_CAPACITY_WARNING` | layout |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Entities and components](entities-and-components.md) for reflected `entity` fields and `TRANSIENT`
 - 📘 API: [Command buffers and observers](command-buffers-and-observers.md) for deferred instantiation
 - 📘 API: [JSON](../core/json.md) and [Reflection](../core/reflection.md)
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) for the chunk layout algorithm and the capture and
+- 🛠 Handbook: [ECS module](../../handbook/engine/ecs.md) for the chunk layout algorithm and the capture and
   instantiate internals
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

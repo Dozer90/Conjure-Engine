@@ -1,6 +1,6 @@
-# Pull-request matrix (docs/design/08_testing.md 7.3 and D15, docs/handbook/ci.md): five build-and-test legs
-# with the presets developers use locally plus the style-and-headers job. Expensive and noisy checks (TSan,
-# golden images, benchmarks, the Distribution export) run in nightly.yml.
+# Pull-request matrix (docs/design/08_testing.md 7.3 and D15, docs/handbook/development/continuous-integration.md):
+# five build-and-test legs with the presets developers use locally plus the style-and-headers job. Expensive and
+# noisy checks (TSan, golden images, benchmarks, the Distribution export) run in nightly.yml.
 
 name: CI
 
@@ -207,7 +207,16 @@ jobs:
         run: |
           python tools/check_docs.py
           python tools/tests/test_check_docs.py
+          python tools/tests/test_docs.py
+          python tools/tests/test_regenerate_docs.py
+          python tools/tests/test_docs_policy.py
+          python tools/tests/test_docs_cpp.py
+          python tools/tests/test_docs_engineering.py
+          python tools/tests/test_docs_redirects.py
+          python tools/tests/test_docs_components.py
+          python tools/regenerate_docs.py --check
           python -m pip install -r tools/docs_requirements.txt
+          python tools/tests/test_docs_site.py
           python -m mkdocs build --strict
 
       - name: Cache dependency sources

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{# Keep Material's icons/configuration while replacing packaged asset URLs with editable sources. #}
+{% block styles %}
+  {{ super()
+      | replace(config.extra.editable_assets.main_css, "assets/stylesheets/material-theme.css")
+      | replace(config.extra.editable_assets.palette_css, "assets/stylesheets/material-palette.css") }}
+{% endblock %}
+
+{% block config %}
+  {{ super()
+      | replace(config.extra.editable_assets.search_js, "assets/javascripts/workers/search-worker.js") }}
+{% endblock %}
+
+{% block scripts %}
+  {{ super()
+      | replace(config.extra.editable_assets.main_js, "assets/javascripts/material-theme.js") }}
+{% endblock %}

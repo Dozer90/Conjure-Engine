@@ -1,28 +1,25 @@
 # Renderer assets
+<!-- doc-template:wiki -->
+[API](../index.md) → [Renderer](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
-
+<!-- doc-content:purpose:start -->
 The CPU-side asset types the renderer draws from and the importers that produce them: meshes, textures,
 materials, models (glTF node trees), environments (HDR skies with baked lighting) and the built-in shader programs.
 Headers: `conjure/renderer/mesh_asset.h`, `conjure/renderer/texture_asset.h`, `conjure/renderer/material_asset.h`,
 `conjure/renderer/model_asset.h`, `conjure/renderer/environment_asset.h`, `conjure/renderer/shader_asset.h` and
 `conjure/renderer/gltf_importer.h`. Everything is in `namespace conjure::renderer`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Register the five asset types and four importers | `renderer::register_asset_types(types, importers, jobs)` (the engine does it at start-up) |
-| Build a mesh in code | `mesh_asset::unit_cube()`, `uv_sphere(radius, rings, segments)`, `quad(halfSize)`, `mesh_asset::from_geometry(geometry, name, missingTangents)` |
-| Build a texture in code | `texture_asset::solid_colour(...)`, `checker(...)`, `from_rgba8(...)`, `from_image(image, ...)`, `decode(bytes, ...)` |
-| Read or write JPEG XL | `decode` reads it like any image; `encode_jpeg_xl(image, options)` writes it ([JPEG XL images](jpeg-xl.md)) |
-| Describe a material | fill a `material_desc` and construct `material_asset(desc, name)`; `material_asset::fallback()` is the magenta one |
-| Import a glTF in code | `gltf_importer().import(path, options)` or `import_bytes(bytes, options, reader)` |
-| Read a model's node tree | `model_asset::nodes()`, `meshes()`, `materials()`, `root_nodes()`, `children_of(node)`, `world_transform(node)` |
-| Bake lighting from an HDR | `bake_environment(equirect, options, jobs)` or let the `.hdr` importer do it (a JPEG XL sky too) |
-| Look at a mesh on the CPU (picking) | `mesh_asset::cpu_geometry()` (Debug and Development builds) |
+| Name | Renderer assets |
+| Module | Renderer |
+| `#include` | `conjure/renderer/environment_asset.h`, `conjure/renderer/gltf_importer.h`, `conjure/renderer/material_asset.h`, `conjure/renderer/mesh_asset.h`, `conjure/renderer/model_asset.h`, `conjure/renderer/shader_asset.h`, `conjure/renderer/texture_asset.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/renderer.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/renderer/gltf_importer.h"
@@ -51,7 +48,31 @@ core::result<void> import_and_upload(renderer::renderer &frame, const std::files
 In a game the asset pipeline does this for you: the `.gltf` is imported once into the cache, the model and its
 sub-assets (`#mesh/0`, `#material/0`, `#texture/0`) are loaded through `asset_manager`, and the engine uploads
 them when they become `LOADED`. The example is what a tool without the pipeline does.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Register the five asset types and four importers | `renderer::register_asset_types(types, importers, jobs)` (the engine does it at start-up) |
+| Build a mesh in code | `mesh_asset::unit_cube()`, `uv_sphere(radius, rings, segments)`, `quad(halfSize)`, `mesh_asset::from_geometry(geometry, name, missingTangents)` |
+| Build a texture in code | `texture_asset::solid_colour(...)`, `checker(...)`, `from_rgba8(...)`, `from_image(image, ...)`, `decode(bytes, ...)` |
+| Read or write JPEG XL | `decode` reads it like any image; `encode_jpeg_xl(image, options)` writes it ([JPEG XL images](jpeg-xl.md)) |
+| Describe a material | fill a `material_desc` and construct `material_asset(desc, name)`; `material_asset::fallback()` is the magenta one |
+| Import a glTF in code | `gltf_importer().import(path, options)` or `import_bytes(bytes, options, reader)` |
+| Read a model's node tree | `model_asset::nodes()`, `meshes()`, `materials()`, `root_nodes()`, `children_of(node)`, `world_transform(node)` |
+| Bake lighting from an HDR | `bake_environment(equirect, options, jobs)` or let the `.hdr` importer do it (a JPEG XL sky too) |
+| Look at a mesh on the CPU (picking) | `mesh_asset::cpu_geometry()` (Debug and Development builds) |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The asset types
 
 | Type name | C++ type | Source | Importer | Notes |
@@ -62,7 +83,7 @@ them when they become `LOADED`. The example is what a tool without the pipeline 
 | `conjure.renderer.model` | `model_asset` | `.gltf .glb` (the primary asset) | `gltf_asset_importer` | the node tree; the scene module turns it into a prefab |
 | `conjure.renderer.environment` | `environment_asset` | `.hdr` (a JPEG XL through "import as") | `environment_importer` (`environment_bake_options`) | sky cubemap, prefiltered specular mips, SH9 irradiance, baked on the CPU at import |
 
-Every type has a loader (`mesh_loader`, `texture_loader`, ...) that parses the cooked blob on a job and a fallback
+Every type has a loader (`mesh_loader`, `texture_loader`,...) that parses the cooked blob on a job and a fallback
 the renderer draws for a missing asset; none of them touches the GPU (that is `renderer::upload_*`).
 
 ### Meshes
@@ -222,8 +243,12 @@ with `SHADER_NOT_FOUND`. The ImGui program is in the list in every configuration
 build's renderer created with `renderer_desc::enableImGui` and a swapchain. Game code does not need any of this;
 it is useful for checking a shader directory before starting the renderer (an export, a tool) and it is where
 custom shader programs will enter later.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -238,8 +263,17 @@ custom shader programs will enter later.
 | `result<gltf_import_result> gltf_importer::import(const path &, const gltf_import_options &) const`, `import_bytes(span<const byte>, const gltf_import_options &, const gltf_file_reader &) const` | glTF |
 | `static span<const shader_program_desc> shader_asset::built_in_programs()`, `static result<shader_asset> find_built_in(string_view name, string_view pixelDefines = {}, string_view vertexDefines = {})`, `result<void> validate(rhi::shader_library &) const` | the list of shaders the renderer loads, lookup, check against a library |
 | `static result<void> renderer::register_asset_types(asset_type_registry &, importer_registry &, job_system * = nullptr)` | registration |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Rendering a frame](rendering-a-frame.md), [JPEG XL images](jpeg-xl.md), [Database, importers and hot reload](../assets/database-and-import.md), [Processes, libraries and images](../core/system.md)
-- 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
+- 🛠 Handbook: [Renderer module](../../handbook/engine/renderer.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

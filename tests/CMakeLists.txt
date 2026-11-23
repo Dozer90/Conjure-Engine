@@ -71,18 +71,61 @@ if(Python3_Interpreter_FOUND)
     )
     set_tests_properties(style.check_tool PROPERTIES LABELS "style" TIMEOUT 120)
 
-    # Documentation checks (docs/design/16_documentation.md D9): structure, badges, links and coverage of
-    # the wiki and handbook, plus the checker's own self-test.
+    # Documentation checks (docs/design/16_documentation.md D9): links and anchors, wiki boundaries, alert syntax,
+    # include paths and coverage of the wiki and handbook, the self-tests of the documentation tools (standard
+    # library only, so they run before the documentation toolchain is installed), and the generated pages.
+    # docs.check and docs.generated_up_to_date read every page and public header (about 10 and 35 seconds on a
+    # workstation), so they get room for a slow hosted runner that runs other suites beside them.
     add_test(NAME docs.check
         COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/check_docs.py"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
-    set_tests_properties(docs.check PROPERTIES LABELS "docs" TIMEOUT 120)
+    set_tests_properties(docs.check PROPERTIES LABELS "docs" TIMEOUT 300)
     add_test(NAME docs.check_tool
         COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_check_docs.py"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     set_tests_properties(docs.check_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.driver_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.driver_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.regeneration_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_regenerate_docs.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.regeneration_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.publication_policy_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs_policy.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.publication_policy_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.declaration_inventory_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs_cpp.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.declaration_inventory_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.engineering_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs_engineering.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.engineering_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.redirects_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs_redirects.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.redirects_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.components_tool
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/tests/test_docs_components.py"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.components_tool PROPERTIES LABELS "docs" TIMEOUT 120)
+    add_test(NAME docs.generated_up_to_date
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/regenerate_docs.py" --check
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    )
+    set_tests_properties(docs.generated_up_to_date PROPERTIES LABELS "docs;generated" TIMEOUT 300)
 
     # Self-tests of the build driver's preset resolution, the build-tree pruner (a fake build/ folder), the
     # test-asset downloader (fake transfers, never the network) and the native API generator's table parser.

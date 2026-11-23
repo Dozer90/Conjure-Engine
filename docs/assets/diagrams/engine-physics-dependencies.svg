@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 742" role="img"
+ aria-labelledby="graph-title graph-description">
+<title id="graph-title">Physics module dependencies</title>
+<desc id="graph-description">Arrows run from dependency to consumer. Direct dependencies are grouped in alphabetical Public and Private columns. Solid edges are public; dashed edges are private. Each access group shares one incoming arrow. Consumers, when present, appear directly below the selected module without repeated headings.</desc>
+<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
+<path d="M0,0 L8,4 L0,8 Z" fill="#8c8c8c"/></marker>
+<mask id="node-assets" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="252" cy="110" r="8" fill="black"/>
+</mask>
+<mask id="node-bindings" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-core" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="252" cy="186" r="8" fill="black"/>
+</mask>
+<mask id="node-ecs" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="252" cy="262" r="8" fill="black"/>
+</mask>
+<mask id="node-editor" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-engine" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-physics" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="296" cy="438" r="8" fill="black"/>
+</mask>
+<mask id="node-scene" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="252" cy="338" r="8" fill="black"/>
+</mask>
+<mask id="node-thirdparty::cgltf" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="324" cy="262" r="8" fill="black"/>
+</mask>
+<mask id="node-thirdparty::jolt" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="324" cy="338" r="8" fill="black"/>
+</mask>
+</defs>
+<path data-dependency="assets" data-consumer="physics" d="M252,110 L280,138" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="core" data-consumer="physics" d="M252,186 L280,214" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="ecs" data-consumer="physics" d="M252,262 L280,290" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="scene" data-consumer="physics" d="M252,338 L280,366" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="thirdparty::cgltf" data-consumer="physics" d="M324,262 L296,290" fill="none" stroke="#8c8c8c" stroke-width="2.5" stroke-dasharray="7 5"/>
+<path data-dependency="thirdparty::jolt" data-consumer="physics" d="M324,338 L296,366" fill="none" stroke="#8c8c8c" stroke-width="2.5" stroke-dasharray="7 5"/>
+<path data-dependency="physics" data-consumer="bindings" d="M296,438 L296,502 L304,510 L310.5,510" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<path data-dependency="physics" data-consumer="editor" d="M296,438 L296,578 L304,586 L310.5,586" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<path data-dependency="physics" data-consumer="engine" d="M296,438 L296,654 L304,662 L310.5,662" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<path data-trunk="public" data-consumer="physics" d="M280,138 L280,376.5" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-trunk="private" data-consumer="physics" d="M296,290 L296,376.5" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<text x="144" y="30" text-anchor="middle" fill="#c8c8c8" font-family="Futura Bk BT, sans-serif" font-size="19">Public</text>
+<text x="432" y="30" text-anchor="middle" fill="#c8c8c8" font-family="Futura Bk BT, sans-serif" font-size="19">Private</text>
+<a href="../../handbook/engine/physics.html" target="_top">
+<rect x="176" y="386" width="224" height="56" rx="15" fill="#171717" stroke="#009dff" stroke-width="3" mask="url(#node-physics)"/>
+<text x="288" y="420" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">physics</text>
+</a>
+<a href="../../handbook/engine/assets.html" target="_top">
+<rect x="32" y="62" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-assets)"/>
+<text x="144" y="96" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">assets</text>
+</a>
+<a href="../../handbook/engine/core.html" target="_top">
+<rect x="32" y="138" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-core)"/>
+<text x="144" y="172" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">core</text>
+</a>
+<a href="../../handbook/engine/ecs.html" target="_top">
+<rect x="32" y="214" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-ecs)"/>
+<text x="144" y="248" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">ecs</text>
+</a>
+<a href="../../handbook/engine/scene.html" target="_top">
+<rect x="32" y="290" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-scene)"/>
+<text x="144" y="324" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">scene</text>
+</a>
+<rect x="320" y="214" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-thirdparty::cgltf)"/>
+<text x="432" y="248" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">cgltf</text>
+<rect x="320" y="290" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-thirdparty::jolt)"/>
+<text x="432" y="324" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">jolt</text>
+<a href="../../handbook/engine/bindings.html" target="_top">
+<rect x="320" y="482" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-bindings)"/>
+<text x="432" y="516" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">bindings</text>
+</a>
+<a href="../../handbook/editor/editor.html" target="_top">
+<rect x="320" y="558" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-editor)"/>
+<text x="432" y="592" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">editor</text>
+</a>
+<a href="../../handbook/engine/engine.html" target="_top">
+<rect x="320" y="634" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-engine)"/>
+<text x="432" y="668" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">engine</text>
+</a>
+<circle data-port="assets" data-access="public" cx="252" cy="110" r="4" fill="#8c8c8c"/>
+<circle data-port="core" data-access="public" cx="252" cy="186" r="4" fill="#8c8c8c"/>
+<circle data-port="ecs" data-access="public" cx="252" cy="262" r="4" fill="#8c8c8c"/>
+<circle data-port="physics" data-access="private" cx="296" cy="438" r="4" fill="#8c8c8c"/>
+<circle data-port="scene" data-access="public" cx="252" cy="338" r="4" fill="#8c8c8c"/>
+<circle data-port="thirdparty::cgltf" data-access="private" cx="324" cy="262" r="4" fill="#8c8c8c"/>
+<circle data-port="thirdparty::jolt" data-access="private" cx="324" cy="338" r="4" fill="#8c8c8c"/>
+</svg>

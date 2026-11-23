@@ -1,28 +1,24 @@
 # Time, events and random
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 The small primitives gameplay code uses every frame: clocks and stopwatches (`conjure/core/clock.h`), seeded random
 numbers (`conjure/core/random.h`), multicast events (`conjure/core/event.h`), single-target delegates
 (`conjure/core/delegate.h`) and the engine-wide typed `event_bus` (`conjure/core/event_bus.h`). Everything is in
 `namespace conjure::core`; the random helpers sit one level deeper in `conjure::core::random`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Measure how long something took | `stopwatch` (`elapsed_seconds()`, `restart()`) |
-| Read "now" in seconds | `default_clock().now_seconds()` or an injected `core::clock &` |
-| Drive a simulation step by step (tests, tools) | `manual_clock` with `advance()` |
-| Profile a hot path with minimal overhead | `ticks_now()` and `ticks_to_seconds()` |
-| Roll dice, pick a random item, jitter a value | `random::uniform(random::default_engine(), min, max)` |
-| Replay the same random sequence | `random::seed(value)` or an owned `random::random_engine(seed)` |
-| Let several listeners react when something happens | `event<Args...>` and `subscribe()` |
-| Store one callback without allocating | `delegate<Return(Args...)>` |
-| Broadcast a typed message across modules | `event_bus::publish(my_event{...})` |
-| Report something from a worker thread to the main thread | `event_bus::enqueue(my_event{...})` |
+| Name | Time, events and random |
+| Module | Core |
+| `#include` | `conjure/core/clock.h`, `conjure/core/delegate.h`, `conjure/core/event.h`, `conjure/core/event_bus.h`, `conjure/core/math.h`, `conjure/core/random.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/event.h"
@@ -53,7 +49,32 @@ int spawn_and_count() {
     return spawned;                                 // 3 to 6; the same value on every run with the same seed
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Measure how long something took | `stopwatch` (`elapsed_seconds()`, `restart()`) |
+| Read "now" in seconds | `default_clock().now_seconds()` or an injected `core::clock &` |
+| Drive a simulation step by step (tests, tools) | `manual_clock` with `advance()` |
+| Profile a hot path with minimal overhead | `ticks_now()` and `ticks_to_seconds()` |
+| Roll dice, pick a random item, jitter a value | `random::uniform(random::default_engine(), min, max)` |
+| Replay the same random sequence | `random::seed(value)` or an owned `random::random_engine(seed)` |
+| Let several listeners react when something happens | `event<Args...>` and `subscribe()` |
+| Store one callback without allocating | `delegate<Return(Args...)>` |
+| Broadcast a typed message across modules | `event_bus::publish(my_event{...})` |
+| Report something from a worker thread to the main thread | `event_bus::enqueue(my_event{...})` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Clocks and stopwatches
 
 A `core::clock` is a monotonic time source in seconds (`f64`). Only differences between two readings of the same
@@ -267,8 +288,12 @@ const usize delivered = bus.dispatch_queued();   // main thread; the engine call
 > [!NOTE]
 > Event types are identified by their plain type: `subscribe<const my_event>` or `subscribe<my_event &>` fails to
 > compile. The subscription has the same semantics as for `event<>`: RAII, move-only, inert once the bus is gone.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -296,9 +321,18 @@ const usize delivered = bus.dispatch_queued();   // main thread; the engine call
 | `void event_bus::enqueue(Event)` | Defer to the next dispatch (any thread) |
 | `usize event_bus::dispatch_queued()` | Publish queued events (main thread) |
 | `usize event_bus::queued_count() const`, `void clear_queue()`, `usize subscriber_count<Event>() const` | Queue and subscriber queries |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Jobs and threading](jobs.md) for what may run off the main thread
 - 📘 API: [Math](math.md) for `math::vec3` with `random::unit_vector3`
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md)
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

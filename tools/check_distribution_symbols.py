@@ -43,8 +43,9 @@ Exit code 0 when every binary is clean, 1 when an editor or ImGui symbol was fou
 (missing directory or binary, missing tool, tool failure, disagreeing --config), 77 when the build directory is not a
 Distribution one. Output is one `<binary>: <symbol>` line per finding.
 
-CI (docs/handbook/ci.md): the Distribution leg builds the preset and then runs the CTest entry that
-tests/runtime/CMakeLists.txt registers under the label "process", which the default test presets exclude:
+CI (docs/handbook/development/continuous-integration.md): the Distribution leg builds the preset and then runs the
+CTest entry that tests/runtime/CMakeLists.txt registers under the label "process", which the default test presets
+exclude:
 
     cmake --preset windows-msvc-dist && cmake --build --preset windows-msvc-dist
     ctest --test-dir build/windows-msvc-dist -L process --output-on-failure

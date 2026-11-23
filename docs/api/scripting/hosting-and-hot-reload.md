@@ -1,27 +1,26 @@
 # Hosting, the native API and hot reload
+<!-- doc-template:wiki -->
+[API](../index.md) → [Scripting](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
-
+<!-- doc-content:purpose:start -->
 How the .NET runtime is started (or faked), what the managed directory must contain, what the two ABI tables
 are and how their hash protects you, how a game assembly is reloaded while playing, and how the engine builds
 it. Headers: `conjure/scripting/script_host.h`, `conjure/scripting/dotnet_script_host.h`,
 `conjure/scripting/null_script_host.h`, `conjure/scripting/native_api.h`, `conjure/scripting/native_api_hash.h`,
 `conjure/scripting/hot_reload.h` and `conjure/scripting/managed_build.h`. Everything is in `namespace
 conjure::scripting`; the C ABI records are global `conjure_*` structs.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Make a host | `create_script_host(script_backend::DOTNET)` or `NULL_HOST` |
-| Know whether a .NET runtime exists without starting one | `is_runtime_available()` |
-| Check a managed directory before initialising | `validate_managed_directory(dir)`, `detect_host_mode(dir)` |
-| Fake the managed side in a test | `null_script_host`: `add_fake_class`, `set_create_hook`, `set_phase_hook`, `recorder()` |
-| Reload the game assembly when it changes | `hot_reload_controller(runtime, assemblyPath)`: `request()`, `tick(now)`; or `runtime.reload_game_assembly(path)` directly |
-| Build the C# project from the engine | `managed_build_runner`: `build(request, onComplete)` or `run_blocking(request, dotnet)` |
-| Read the native API's identity | `CONJURE_NATIVE_API_HASH`, `native_entry_descriptors()`, `find_native_entry(name)` |
+| Name | Hosting, the native API and hot reload |
+| Module | Scripting |
+| `#include` | `conjure/scripting/dotnet_script_host.h`, `conjure/scripting/hot_reload.h`, `conjure/scripting/managed_build.h`, `conjure/scripting/native_api.h`, `conjure/scripting/native_api_hash.h`, `conjure/scripting/null_script_host.h`, `conjure/scripting/script_host.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/scripting.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/scripting/hot_reload.h"
@@ -46,7 +45,29 @@ void rebuild_and_reload(scripting::managed_build_runner &builder, scripting::hot
 
 The engine drains `core::jobs::post_to_main_thread` before every frame, which is where `onComplete` runs, and the
 `scripting.frame_begin` system ticks the controller.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Make a host | `create_script_host(script_backend::DOTNET)` or `NULL_HOST` |
+| Know whether a .NET runtime exists without starting one | `is_runtime_available()` |
+| Check a managed directory before initialising | `validate_managed_directory(dir)`, `detect_host_mode(dir)` |
+| Fake the managed side in a test | `null_script_host`: `add_fake_class`, `set_create_hook`, `set_phase_hook`, `recorder()` |
+| Reload the game assembly when it changes | `hot_reload_controller(runtime, assemblyPath)`: `request()`, `tick(now)`; or `runtime.reload_game_assembly(path)` directly |
+| Build the C# project from the engine | `managed_build_runner`: `build(request, onComplete)` or `run_blocking(request, dotnet)` |
+| Read the native API's identity | `CONJURE_NATIVE_API_HASH`, `native_entry_descriptors()`, `find_native_entry(name)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Hosts
 
 `script_host` is the interface: `initialize(config, nativeApi)` starts or attaches the runtime and performs the
@@ -128,8 +149,12 @@ directory, `-p:Name=Value` properties and a timeout; `is_building()`, `wait()` a
 it out, and `run_blocking(request, dotnet)` is the synchronous form tools use. Paths reach `dotnet` (and the game
 assembly path reaches the managed side) as UTF-8 on every platform, so a project under a non-ASCII directory
 builds and loads.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -142,8 +167,17 @@ builds and loads.
 | `hot_reload_controller(script_runtime &, path)`, `void request(bool immediate = false)`, `void tick(f64 nowSeconds)`, `reload_state state() const` | reloads |
 | `managed_build_runner(core::jobs::job_system * = nullptr)`, `void build(const path &project, string_view configuration, function<void(const build_report &)>)`, `void build(const build_request &, ...)`, `static build_report run_blocking(const build_request &, string_view dotnet)` | builds |
 | `span<const native_entry_descriptor> native_entry_descriptors()`, `u64 compute_native_api_hash()`, `i32 find_native_entry(string_view)`, `result<void> validate_native_api(const conjure_native_api &)`, `validate_managed_api(const conjure_managed_api &)` | `native_api.h` |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Scripts, components and the runtime](scripts-and-components.md), [Jobs and threading](../core/jobs.md), [Processes, libraries and images](../core/system.md)
-- 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
+- 🛠 Handbook: [Scripting module](../../handbook/engine/scripting.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

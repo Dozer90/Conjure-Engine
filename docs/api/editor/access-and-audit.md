@@ -1,15 +1,30 @@
 # Access tokens and the audit log
+<!-- doc-template:wiki -->
+[API](../index.md) → [Editor](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-
+<!-- doc-content:purpose:start -->
 Who may drive the editor over the AI control protocol, how much each client may do, and the record of what
 clients did. The tokens are `conjure/editor/protocol/access_token.h`, the record `conjure/editor/protocol/audit_log.h`;
 the server that applies both is `conjure/editor/protocol/protocol_server.h` (📘 [The AI control
 protocol](ai-protocol.md)). Which projects the editor opens at all is project trust
 (📘 [Headless mode and the command model](headless-and-commands.md#project-trust)).
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | Access tokens and the audit log |
+| Module | Editor |
+| `#include` | `conjure/editor/editor_command.h`, `conjure/editor/protocol/access_token.h`, `conjure/editor/protocol/audit_log.h`, `conjure/editor/protocol/protocol_server.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/editor/editor.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Do |
 |---|---|
 | Connect over TCP | read `<project>/.conjure/ai_port` and `ai_token`, connect to `127.0.0.1:<port>`, send `session.hello {"token": "<token>"}` first |
@@ -17,7 +32,15 @@ protocol](ai-protocol.md)). Which projects the editor opens at all is project tr
 | Choose a token yourself | `--ai-token <t>` (full control) or `--ai-inspect-token <t>` (inspect only); either gates every transport |
 | See what clients did | `<project>/.conjure/ai_audit.log`, one JSON line per command |
 | Compare client text with a token in C++ | `constant_time_equals`, `constant_time_starts_at`, `constant_time_contains`, never `==` or `find` |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Who may connect, and what a client may do
 
 The port is a loopback port: every program on the machine can reach it, and so can a web page through the
@@ -143,8 +166,12 @@ without tokens, so `start()` and `add_transport()` generate them when none is se
 whether a transport's clients must present one, `access_of(presented)` what a presented token grants,
 `access_of_client(id)` what a client may do now (`FULL_CONTROL` for the editor's own, in-process clients), and
 `required_access(flags)` in `conjure/editor/editor_command.h` what a command asks for.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -159,8 +186,17 @@ whether a transport's clients must present one, `access_of(presented)` what a pr
 | `void protocol_server::record_command(audit_entry)` / `audit_log &audit()` | the server's side of the log |
 | `result<void> protocol_server::set_token(std::string)` / `set_inspect_token(std::string)` / `bool requires_token(transport_kind)` | an explicit token of either level, who must present one |
 | `access_level access_of(string_view)` / `access_of_client(u32)` / `constexpr access_level required_access(command_flags)` | what a presented token grants, what a client may do, what a command asks for |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [The AI control protocol](ai-protocol.md), [Headless mode and the command model](headless-and-commands.md) (project trust)
-- 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
+- 🛠 Handbook: [Editor module](../../handbook/editor/editor.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

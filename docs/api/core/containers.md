@@ -1,27 +1,25 @@
 # Containers
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Cache-friendly containers that complement the standard library. Each one lives in its own header under
 `conjure/core/containers/`; include just the one you need (the umbrella `conjure/core/containers/containers.h`
 pulls in all of them and is meant for tests and tools). Everything is in `namespace conjure::core` and follows the
 standard container vocabulary (`size()`, `begin()`, `insert()`, `erase()`), so what you know from `std::vector`
 and `std::unordered_map` carries over.
+<!-- doc-content:purpose:end -->
 
-## At a glance
+|---|---|
+| Name | Containers |
+| Module | Core |
+| `#include` | `conjure/core/containers/containers.h`, `conjure/core/containers/detail.h`, `conjure/core/containers/flat_hash_map.h`, `conjure/core/containers/flat_map.h`, `conjure/core/containers/slot_key_format.h`, `conjure/core/containers/slot_map.h`, `conjure/core/containers/small_vector.h`, `conjure/core/containers/stable_vector.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-| You want to... | Use | Header |
-|---|---|---|
-| Hand out handles that detect stale use (particles, GPU resources, requests) | `slot_map<T>` with `slot_key` | `conjure/core/containers/slot_map.h` |
-| Print or parse a `slot_key` | `to_string(key)`, `parse_slot_key(text)`, `std::format("{}", key)` | `conjure/core/containers/slot_key_format.h` |
-| A short list that usually fits in a few elements (children, tags) | `small_vector<T, N>` | `conjure/core/containers/small_vector.h` |
-| A growing array whose elements must never move | `stable_vector<T>` | `conjure/core/containers/stable_vector.h` |
-| A general key -> value map, fast lookups | `flat_hash_map<K, V>` / `flat_hash_set<K>` | `conjure/core/containers/flat_hash_map.h` |
-| A small map, or one that iterates in key order | `flat_map<K, V>` | `conjure/core/containers/flat_map.h` |
+## Syntax
 
-`conjure/core/containers/detail.h` holds shared internals; never include it directly.
-
-## Quick example
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/containers/slot_map.h"
@@ -59,7 +57,30 @@ class particle_system {
         }
 };
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use | Header |
+|---|---|---|
+| Hand out handles that detect stale use (particles, GPU resources, requests) | `slot_map<T>` with `slot_key` | `conjure/core/containers/slot_map.h` |
+| Print or parse a `slot_key` | `to_string(key)`, `parse_slot_key(text)`, `std::format("{}", key)` | `conjure/core/containers/slot_key_format.h` |
+| A short list that usually fits in a few elements (children, tags) | `small_vector<T, N>` | `conjure/core/containers/small_vector.h` |
+| A growing array whose elements must never move | `stable_vector<T>` | `conjure/core/containers/stable_vector.h` |
+| A general key -> value map, fast lookups | `flat_hash_map<K, V>` / `flat_hash_set<K>` | `conjure/core/containers/flat_hash_map.h` |
+| A small map, or one that iterates in key order | `flat_map<K, V>` | `conjure/core/containers/flat_map.h` |
+
+`conjure/core/containers/detail.h` holds shared internals; never include it directly.
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Handles that detect stale use: `slot_map`
 
 A `slot_map<T>` stores elements densely and addresses them through a `slot_key` (a slot index plus a generation).
@@ -262,8 +283,12 @@ none of them is thread-safe for mutation; any number of threads may read concurr
 | `stable_vector` | only destroying that element (`pop_back`, `clear`, destruction) |
 | `flat_hash_map` / `flat_hash_set` | a rehash (insertion past the load threshold), `erase` of an element in the same probe run, `clear` |
 | `flat_map` | `insert`/`erase` before the element, any growth past capacity |
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -281,9 +306,18 @@ none of them is thread-safe for mutation; any number of threads may read concurr
 | `bool erase(const K &)` / `iterator erase(const_iterator)` / `void reserve(usize)` / `void clear()` / `f32 load_factor()` | maintenance |
 | `flat_hash_set<K, Hash, Eq>` | same table, keys only |
 | `flat_map<K, V, Compare = std::less<K>>` | sorted vector map; adds `lower_bound`, `upper_bound`, `entries()`, `rbegin()`/`rend()`, heterogeneous lookup with a transparent `Compare` |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Strings and identifiers](strings-and-identifiers.md): `string_id` as a map key, `bit_vector` for masks
 - 📘 API: [Memory](memory.md) for allocators when a container's allocation pattern is the bottleneck
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

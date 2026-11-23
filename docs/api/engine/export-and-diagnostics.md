@@ -1,14 +1,29 @@
 # Export and diagnostics
+<!-- doc-template:wiki -->
+[API](../index.md) → [Engine](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
-
+<!-- doc-content:purpose:start -->
 Two small services of the engine module: `export_pipeline` in `conjure/engine/export.h` turns a development
 project into a standalone folder the runtime can run, and `check_registry` in
 `conjure/engine/diagnostics/check_registry.h` collects the pass / fail checks a sample or a test scene reports
 about itself (the C# `Diagnostics.Check` writes here).
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | Export and diagnostics |
+| Module | Engine |
+| `#include` | `conjure/engine/diagnostics/check_registry.h`, `conjure/engine/export.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/engine.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | Export a project from code | `export_pipeline pipeline(app.context()); pipeline.run(settings)` |
@@ -17,7 +32,15 @@ about itself (the C# `Diagnostics.Check` writes here).
 | Know what was written | the returned `export_report` |
 | Report a check from engine code | `context.checks->report(name, passed, detail, frame)` |
 | Assert every check passed | `checks.all_passed()`, `failed_count()`, `records()` |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Exporting
 
 `export_pipeline::run(settings, progress)` runs six steps and names each in `export_report::steps` and through
@@ -113,7 +136,7 @@ so shipping the folder as it is covers the engine. The complete list for all pla
 > [!WARNING]
 > A `distributionDirectory` without the file still exports, with a warning in `export_report::warnings` that the
 > game carries no licence notices: point the export at the `bin` folder of a build, which holds it, or copy the
-> file yourself. An export that does not copy the runtime copies no notices either. The .NET entry is the licence
+> file yourself. An export that does not copy the runtime copies no notices either. The.NET entry is the licence
 > of the .NET installation on the machine that built the engine, also when another machine exports the game.
 
 > [!WARNING]
@@ -142,8 +165,12 @@ for (const engine::diagnostics::check_record &record : checks.records()) {
 
 > [!TIP]
 > Report a check once, when the condition is decided, not every frame: the registry keeps every record.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -155,9 +182,18 @@ for (const engine::diagnostics::check_record &record : checks.records()) {
 | `struct export_report { assetCount, packBytes, contentHash, modulesExported, nativeModuleBuilt, managedPublished, steps, copiedFiles, warnings, elapsedSeconds }` | what was done |
 | `void check_registry::report(string_view, bool, string_view, u64)` | one verdict |
 | `vector<check_record> records() const` / `bool all_passed() const` / `u64 failed_count() const` / `usize record_count() const` / `void clear()` | reading the verdicts |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Running the engine](running-the-engine.md), [Cooking, caches and packs](../assets/cooking-and-packs.md), [Loading and managing modules](../modules/loading-and-managing.md)
 - 📘 API: [The editor](../editor/index.md) (`--export`, `project.export`), [The runtime](../runtime/index.md)
-- 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
+- 🛠 Handbook: [Engine module](../../handbook/engine/engine.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

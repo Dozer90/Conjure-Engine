@@ -1,7 +1,8 @@
 # Scripting from C#: the bindings
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Bindings module](../../handbook/modules/bindings.md)
-
+<!-- doc-content:purpose:start -->
 The bindings module is the bridge between a C# script and the engine. The scripting module hosts the .NET
 runtime and owns the core of the native table (logging, entities, components, queries); the bindings fill the
 rest of it: transforms and the hierarchy, scenes and prefabs, physics, audio, input, assets, diagnostics and the
@@ -9,7 +10,9 @@ module registry, and they ship the C# facades (`Transform`, `Rigidbody`, `Prefab
 `Input`, `Diagnostics`, `Modules`) and the `[NativeComponent]` mirrors through which a script reads and writes
 the engine's own components. Native code lives in `namespace conjure::bindings`; the C# side is
 `Conjure.Managed`, namespace `Conjure`.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. A script is a `ScriptBehaviour` subclass in your game assembly. The engine creates it when its entity gets the
@@ -90,4 +93,5 @@ public sealed class Bouncer : ScriptBehaviour
 
 - 📘 API: [Scripting](../scripting/index.md) (the host, the runtime, the script component, hot reload)
 - 📘 API: [Engine: the application and the frame](../engine/index.md), [Scenes, hierarchy and prefabs](../scene/index.md), [Physics](../physics/index.md), [Audio](../audio/index.md)
-- 🛠 Handbook: [Bindings module](../../handbook/modules/bindings.md)
+- 🛠 Handbook: [Bindings module](../../handbook/engine/bindings.md)
+<!-- doc-content:body:end -->

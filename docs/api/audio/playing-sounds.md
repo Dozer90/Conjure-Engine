@@ -1,30 +1,26 @@
 # Playing sounds
+<!-- doc-template:wiki -->
+[API](../index.md) → [Audio](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
-
+<!-- doc-content:purpose:start -->
 `audio_engine` (`conjure/audio/audio_engine.h`) is the one object that plays sounds: it owns the voices, the mix
 groups, the listener and the backend. This page covers it together with the small value types it takes:
 `voice_id` and `play_params` (`conjure/audio/voice.h`), `group_id` and `group_desc` (`conjure/audio/mix_groups.h`),
 `listener_state` and the attenuation maths (`conjure/audio/spatialisation.h`), the shared enumerations and
 constants (`conjure/audio/audio_types.h`) and device descriptions (`conjure/audio/audio_device.h`). Everything is
 in `namespace conjure::audio`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Play a sound once and forget it | `engine.play(clip)`; the voice frees itself when the clip ends |
-| Play music you control later | `play_params p; p.retain = true; p.loop = true;` then `stop()` / `release()` |
-| Change volume, pitch, pan, loop | `set_volume()`, `set_pitch()`, `set_pan()`, `set_loop()` |
-| Pause and continue | `pause()`, `resume()`; `set_paused(true)` for the whole mixer |
-| Jump to a position | `seek(voice, seconds)`, or `play_params::startSeconds` |
-| Know whether it is still playing | `is_playing(voice)`; `voice(voice)` for the full `voice_info` |
-| Volume sliders for Music / Effects / Voice | `create_group()`, `set_group_gain()`, `find_group()` |
-| 3D sound | `play_params::spatial = true`, `set_position()` each frame, `set_listener()` |
-| Apply everything from a component at once | `apply_source(voice, source, group)` or `apply_params(voice, params)` |
-| Pick an output device | `enumerate_devices()`, `select_device(name)`, `audio_settings::deviceName` |
+| Name | Playing sounds |
+| Module | Audio |
+| `#include` | `conjure/audio/audio_device.h`, `conjure/audio/audio_engine.h`, `conjure/audio/audio_types.h`, `conjure/audio/mix_groups.h`, `conjure/audio/spatialisation.h`, `conjure/audio/voice.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/audio.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/audio/audio_engine.h"
@@ -57,7 +53,32 @@ class music_player {
         }
 };
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Play a sound once and forget it | `engine.play(clip)`; the voice frees itself when the clip ends |
+| Play music you control later | `play_params p; p.retain = true; p.loop = true;` then `stop()` / `release()` |
+| Change volume, pitch, pan, loop | `set_volume()`, `set_pitch()`, `set_pan()`, `set_loop()` |
+| Pause and continue | `pause()`, `resume()`; `set_paused(true)` for the whole mixer |
+| Jump to a position | `seek(voice, seconds)`, or `play_params::startSeconds` |
+| Know whether it is still playing | `is_playing(voice)`; `voice(voice)` for the full `voice_info` |
+| Volume sliders for Music / Effects / Voice | `create_group()`, `set_group_gain()`, `find_group()` |
+| 3D sound | `play_params::spatial = true`, `set_position()` each frame, `set_listener()` |
+| Apply everything from a component at once | `apply_source(voice, source, group)` or `apply_params(voice, params)` |
+| Pick an output device | `enumerate_devices()`, `select_device(name)`, `audio_settings::deviceName` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Setting up the engine
 
 Construct one `audio_engine` from an `audio_settings`; the engine's `application` does this for you at startup,
@@ -264,7 +285,7 @@ Distance attenuation uses `d = clamp(distance, minDistance, maxDistance)`:
 | `NONE` | `1`; pan only |
 
 Pan is the listener-right component of the direction to the source (ahead or behind is centre), rendered with
-constant power. With `dopplerFactor > 0` the pitch ratio `((c - v_listener . dir) / (c - v_source . dir)) ^
+constant power. With `dopplerFactor > 0` the pitch ratio `((c - v_listener. dir) / (c - v_source. dir)) ^
 dopplerFactor` is applied, clamped to `[0.5, 2]`. The pure functions `compute_attenuation()`, `compute_pan()`,
 `compute_doppler_ratio()` and `compute_spatial()` are public, so you can preview a curve in a tool.
 
@@ -336,8 +357,12 @@ ring counters, readable from any thread.
 > When the OS takes the device away (headphones unplugged), `stats().deviceState` becomes `LOST`, voices
 > freeze, and the engine retries every `recoveryBackoffSeconds`. After `maxRecoveryAttempts` failures it swaps
 > in the null backend so voices still finish and `is_playing()` stays truthful. Gameplay never hangs on audio.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -357,12 +382,21 @@ ring counters, readable from any thread.
 | `struct voice_id { slot_key key; }` with `is_valid()`, `to_u64()`, `from_u64()`, `null()` | 8-byte voice handle |
 | `struct group_id { u8 index, generation; }`, `MASTER_GROUP`, `struct group_desc { name, parent, parentName, gain }` | group handle and description |
 | `f32 compute_attenuation(attenuation_params, f32 d)` / `compute_pan(listener_state, vec3)` / `compute_doppler_ratio(...)` / `spatial_result compute_spatial(...)` | the spatial maths, callable anywhere |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Audio](index.md) for the components and how the engine syncs them
 - 📘 API: [Clips and decoding](clips-and-decoding.md) for `audio_clip`, import settings and the null backend
 - 📘 API: [Strings and identifiers](../core/strings-and-identifiers.md) for `string_id` group names
 - 📘 API: [Math](../core/math.md) for `math::vec3`
 - 📘 API: [Jobs and threading](../core/jobs.md) for the `job_system` streaming decodes run on
-- 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
+- 🛠 Handbook: [Audio module](../../handbook/engine/audio.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

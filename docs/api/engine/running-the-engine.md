@@ -1,29 +1,25 @@
 # Running the engine
+<!-- doc-template:wiki -->
+[API](../index.md) → [Engine](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
-
+<!-- doc-content:purpose:start -->
 How an `application` comes to life: the configuration in `conjure/engine/engine_config.h`, the command line in
 `conjure/engine/command_line.h`, `project.json` in `conjure/engine/project.h`, the merged descriptor in
 `conjure/engine/application_desc.h`, the application itself in `conjure/engine/application.h`, the service table
 in `conjure/engine/engine_context.h` and the outcomes in `conjure/engine/exit_code.h`,
 `conjure/engine/engine_error.h` and `conjure/engine/engine_version.h`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| The desktop defaults (window, real backends) | `engine_config::defaults()` |
-| Run without a window, device or audio (tests, servers) | `engine_config::headless_defaults()` |
-| Run the game's C# scripts in a headless run | `--headless --scripting`, or `config.scripting.enabled = true` |
-| Parse `--project`, `--headless`, `--frames`, `--jobs` ... and merge everything | `application_desc::from_command_line(arguments, baseConfig)` |
-| Load and query a project file | `project::load(directory)`, `description()`, `assets_directory()`, `module_manifests()` |
-| Start, step, run, stop | `application::initialise()`, `step_frame()`, `run()`, `shutdown()` |
-| Reach the world, the scenes, the assets, the renderer | `application::context()` (an `engine_context`) |
-| Stop from inside a frame | `application::request_quit(exit_code)` |
-| Pause, resume, step the simulation | `set_simulation_mode(PAUSED / RUNNING / STEP_ONCE)`, `step_fixed(n)` |
-| Run jobs inline for a deterministic run | `config.jobs.workerCount = 0` (`AUTO_WORKER_COUNT` picks the machine's count) |
+| Name | Running the engine |
+| Module | Engine |
+| `#include` | `conjure/engine/application.h`, `conjure/engine/application_desc.h`, `conjure/engine/command_line.h`, `conjure/engine/engine_config.h`, `conjure/engine/engine_context.h`, `conjure/engine/engine_error.h`, `conjure/engine/engine_version.h`, `conjure/engine/exit_code.h`, `conjure/engine/project.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/engine.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/engine/application.h"
@@ -50,7 +46,32 @@ int run_game(std::span<const std::string_view> arguments) {
     return app.run();                                              // frames until quit or --frames
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| The desktop defaults (window, real backends) | `engine_config::defaults()` |
+| Run without a window, device or audio (tests, servers) | `engine_config::headless_defaults()` |
+| Run the game's C# scripts in a headless run | `--headless --scripting`, or `config.scripting.enabled = true` |
+| Parse `--project`, `--headless`, `--frames`, `--jobs`... and merge everything | `application_desc::from_command_line(arguments, baseConfig)` |
+| Load and query a project file | `project::load(directory)`, `description()`, `assets_directory()`, `module_manifests()` |
+| Start, step, run, stop | `application::initialise()`, `step_frame()`, `run()`, `shutdown()` |
+| Reach the world, the scenes, the assets, the renderer | `application::context()` (an `engine_context`) |
+| Stop from inside a frame | `application::request_quit(exit_code)` |
+| Pause, resume, step the simulation | `set_simulation_mode(PAUSED / RUNNING / STEP_ONCE)`, `step_fixed(n)` |
+| Run jobs inline for a deterministic run | `config.jobs.workerCount = 0` (`AUTO_WORKER_COUNT` picks the machine's count) |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Configuration
 
 `engine_config` is a plain struct of plain structs; every field has a default and `validate()` checks the
@@ -144,7 +165,7 @@ desc.project = std::move(loaded).value();
 
 ## Startup, frames and shutdown
 
-`initialise()` runs the startup order of the design in one call: the log sinks, the job system, frame memory,
+`initialise()` runs the startup sequence in one call: the log sinks, the job system, frame memory,
 the virtual file system mounts (`project://`, `assets://`, `engine://`, `cooked://`), then one subsystem after
 another, every `post_startup` (the asset scan happens here), every `register_systems` followed by
 `scheduler::finalise()`, the layers' `on_attach` and the startup scene. Afterwards `state()` is `RUNNING`. A
@@ -203,8 +224,12 @@ project errors (`PROJECT_NOT_FOUND`, `PROJECT_PARSE_FAILED`, `PROJECT_INVALID`, 
 `SCRIPT_ASSEMBLY_LOAD_FAILED`, `SCRIPT_RUNTIME_INIT_FAILED`, `MODULE_LOAD_FAILED`, `SCHEDULER_CONFLICT`,
 `LAYER_ATTACH_FAILED`, `STARTUP_SCENE_FAILED`), `ALREADY_INITIALISED`, `NOT_INITIALISED`, `DEVICE_LOST` and
 `EXPORT_FAILED`. `engine_version_string()` and the `ENGINE_VERSION_*` constants identify the build.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -223,9 +248,18 @@ project errors (`PROJECT_NOT_FOUND`, `PROJECT_PARSE_FAILED`, `PROJECT_INVALID`, 
 | `std::filesystem::path engine_directory() const` / `managed_directory() const` | the running executable's directory, where `shaders/`, `managed/` and the plugins are found; and the managed SDK directory the script host uses, always absolute (`scripting.managedDirectory` when set, else `engine_directory() / "managed"`). A tool that builds game scripts passes it to MSBuild as `ConjureManagedDir` |
 | `void post_to_main_thread(std::function<void()>)` | thread-safe hand-off to the main thread before the next frame |
 | `std::string_view to_string(exit_code)` / `engine_error_name(engine_error)` | names for logs |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [The frame, layers and time](frame-layers-and-time.md), [Export and diagnostics](export-and-diagnostics.md)
 - 📘 API: [The runtime](../runtime/index.md) (the executable built from this page), [Modules and plugins](../modules/index.md)
-- 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
+- 🛠 Handbook: [Engine module](../../handbook/engine/engine.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

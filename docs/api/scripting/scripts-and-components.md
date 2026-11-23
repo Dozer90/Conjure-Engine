@@ -1,32 +1,25 @@
 # Scripts, components and the runtime
+<!-- doc-template:wiki -->
+[API](../index.md) → [Scripting](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
-
+<!-- doc-content:purpose:start -->
 How scripts are attached to entities, how their fields are read and written, how the runtime runs them through
 the frame, and what the store and the class registry hold. Headers: `conjure/scripting/script_runtime.h`,
 `conjure/scripting/script_component.h`, `conjure/scripting/script_class_registry.h`,
 `conjure/scripting/script_fields.h` and `conjure/scripting/script_system.h`. Everything is in `namespace
 conjure::scripting`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Register the component type once | `register_script_component(registry)` |
-| Attach a script to an entity | `runtime.add_script(entity, classHash, fieldsJson)` |
-| Remove one | `runtime.remove_script(entity, entryId)` |
-| List an entity's scripts | `runtime.scripts_of(entity)`, `runtime.entry(id)` |
-| Read a script's fields (inspector) | `runtime.collect_entry_fields(id)` |
-| Write one field | `runtime.set_field(id, fieldHash, value)` |
-| Save / load all scripts of an entity as JSON | `runtime.serialize_entity_scripts(entity)` / `deserialize_entity_scripts(entity, value)` |
-| Start and stop play | `runtime.set_mode(script_mode::PLAY)` / `set_mode(script_mode::EDIT)` |
-| Run the phases by hand (tools, tests) | `runtime.run_phase(script_phase::UPDATE, deltaTime)`; `flush_pending()` |
-| Hand contacts to scripts | `runtime.set_collision_source(fn)` or `dispatch_collision_events(events)` |
-| Add the six script systems to the scheduler | `register_script_systems(scheduler, runtime, reloadController)` |
-| Look up a class or a field | `runtime.classes().find(hash)`, `script_class_info::find_field(name)` |
-| Convert fields between JSON and the blob | `json_to_blob(...)`, `blob_to_json(...)`, `field_blob_writer`, `field_blob_reader` |
+| Name | Scripts, components and the runtime |
+| Module | Scripting |
+| `#include` | `conjure/scripting/script_class_registry.h`, `conjure/scripting/script_component.h`, `conjure/scripting/script_fields.h`, `conjure/scripting/script_runtime.h`, `conjure/scripting/script_system.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/scripting.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/scripting/script_runtime.h"
@@ -47,7 +40,35 @@ core::result<void> give_player_script(scripting::script_runtime &runtime, ecs::e
     return runtime.set_field(id, scripting::script_name_hash("hp"), ninety.root());
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Register the component type once | `register_script_component(registry)` |
+| Attach a script to an entity | `runtime.add_script(entity, classHash, fieldsJson)` |
+| Remove one | `runtime.remove_script(entity, entryId)` |
+| List an entity's scripts | `runtime.scripts_of(entity)`, `runtime.entry(id)` |
+| Read a script's fields (inspector) | `runtime.collect_entry_fields(id)` |
+| Write one field | `runtime.set_field(id, fieldHash, value)` |
+| Save / load all scripts of an entity as JSON | `runtime.serialize_entity_scripts(entity)` / `deserialize_entity_scripts(entity, value)` |
+| Start and stop play | `runtime.set_mode(script_mode::PLAY)` / `set_mode(script_mode::EDIT)` |
+| Run the phases by hand (tools, tests) | `runtime.run_phase(script_phase::UPDATE, deltaTime)`; `flush_pending()` |
+| Hand contacts to scripts | `runtime.set_collision_source(fn)` or `dispatch_collision_events(events)` |
+| Add the six script systems to the scheduler | `register_script_systems(scheduler, runtime, reloadController)` |
+| Look up a class or a field | `runtime.classes().find(hash)`, `script_class_info::find_field(name)` |
+| Convert fields between JSON and the blob | `json_to_blob(...)`, `blob_to_json(...)`, `field_blob_writer`, `field_blob_reader` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The component and the store
 
 `script_component {u32 setHandle}` is 4 bytes and points into the runtime's `script_store`. A `script_set` is the
@@ -108,8 +129,8 @@ entity's script set is ignored.
 
 A class's fields are described by `script_field_info {hash, name, kind, elementKind, defaultValue, meta}` with
 `script_field_kind` (`BOOL`, `INT32`, `INT64`, `FLOAT`, `DOUBLE`, `STRING`, `VEC2`, `VEC3`, `VEC4`, `QUAT`, `COLOR`,
-`ENTITY`, `ASSET`, `ENUM`, `LIST`, ...). Fields cross the boundary as the blob of `script_fields.h`:
-`field_blob_writer` (`begin`, `write_int32`, `write_float`, `write_string`, `write_entity`, ..., `finish`) and
+`ENTITY`, `ASSET`, `ENUM`, `LIST`,...). Fields cross the boundary as the blob of `script_fields.h`:
+`field_blob_writer` (`begin`, `write_int32`, `write_float`, `write_string`, `write_entity`,..., `finish`) and
 `field_blob_reader` (`next(field)`, `validate(blob)`) are the primitives, `json_to_blob(class, json, buffer)`
 and `blob_to_json(class, blob)` the conversions, `is_value_compatible` the type check `set_field` performs
 (`INVALID_ARGUMENT` on a mismatch). `remap_entity_fields_json` rewrites `ENTITY` fields (and lists of them)
@@ -135,8 +156,12 @@ per matching chunk (columns in the order asked, `QUERY_MAX_COMPONENTS` at most),
 `ComponentQuery<T>` iterates as `Span<T>`; `end_query_scope(id)` unlocks and flushes `deferred_commands()`, the
 buffer the bindings route structural requests into while the world is locked. A scope is refused with
 `NOT_IN_PHASE` outside `run_phase` and collision dispatch (`current_phase()` reports `COUNT` then).
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -156,8 +181,17 @@ buffer the bindings route structural requests into while the world is locked. A 
 | `static script_runtime *active()` | the one live runtime |
 | `result<void> register_script_systems(ecs::scheduler &, script_runtime &, hot_reload_controller * = nullptr)` | `script_system.h` |
 | `u64 script_name_hash(string_view)` | `script_class_registry.h` |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Hosting, the native API and hot reload](hosting-and-hot-reload.md), [Archives and serialisation](../ecs/archives-and-serialization.md), [JSON](../core/json.md)
-- 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
+- 🛠 Handbook: [Scripting module](../../handbook/engine/scripting.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

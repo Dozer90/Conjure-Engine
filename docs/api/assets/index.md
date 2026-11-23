@@ -1,7 +1,8 @@
 # Assets
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Assets module](../../handbook/modules/assets.md)
-
+<!-- doc-content:purpose:start -->
 The asset pipeline turns the files in your project (textures, models, sounds, scenes, scripts, raw data) into
 things the engine can load quickly and safely, and keeps references to them stable when files move. Include
 `conjure/assets/assets.h` for everything, or just the header of the piece you need; the types live in
@@ -13,7 +14,9 @@ API in detail.
 | [Referencing and loading](referencing-and-loading.md) | `asset_ref<T>`, `asset_handle`, `asset_manager`, the load state machine, load batches, events |
 | [Database, importers and hot reload](database-and-import.md) | `asset_database`, `.meta` sidecars, writing an importer and a loader, registering an asset type, hot reload |
 | [Cooking, caches and packs](cooking-and-packs.md) | the cooked blob format, the cache, `asset_source` backends, `asset_cooker`, packs, plugin extension records |
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## At a glance
 
 | You want to... | Use | Page |
@@ -155,4 +158,11 @@ Errors from this module are `core::error` values in the `"assets"` category (`co
 - 📘 API: [Data types](../core/data-types.md) for `uuid`, [Files and the virtual file system](../core/files.md),
   [Jobs and threading](../core/jobs.md)
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Assets module](../../handbook/modules/assets.md)
+- 🛠 Handbook: [Assets module](../../handbook/engine/assets.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/assets/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+<!-- doc-content:body:end -->

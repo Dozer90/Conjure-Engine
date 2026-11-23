@@ -1,25 +1,25 @@
 # JPEG XL images
+<!-- doc-template:wiki -->
+[API](../index.md) → [Renderer](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [libjxl](../../handbook/libjxl.md)
-
+<!-- doc-content:purpose:start -->
 JPEG XL (ISO/IEC 18181) is a source format for textures and HDR skies: lossless or lossy, 8 to 32 bits per
 channel, with colour profiles, alpha, orientation and animation. Drop a `.jxl` file into the assets folder and the
 texture importer cooks it like a PNG. `conjure/renderer/jpeg_xl.h` adds what has no other home: an encoder for
 screenshots and tools, and the signature check the decoders route by. Everything is in `namespace
 conjure::renderer`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Use a `.jxl` file as a texture | put it in the assets folder: `texture_importer` claims `.jxl` |
-| Decode one in code | `texture_asset::decode(bytes, colourSpace, generateMips, jobs)` or `load_from_file(path, ...)` |
-| Bake an HDR sky from a JPEG XL | name `conjure.renderer.environment` as the file's importer ("import as"); `equirect_image::decode_hdr(bytes, jobs)` in code |
-| Write an image as JPEG XL | `encode_jpeg_xl(image, options, jobs)` |
-| Take an editor screenshot as JPEG XL | `view.screenshot` with a `.jxl` path (📘 API: [Headless mode and the command model](../editor/headless-and-commands.md#picking-screenshots-camera-console)) |
-| Tell a JPEG XL file from other bytes | `is_jpeg_xl(bytes)` |
+| Name | JPEG XL images |
+| Module | Renderer |
+| `#include` | `conjure/renderer/jpeg_xl.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/renderer.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/renderer/jpeg_xl.h"
@@ -35,7 +35,28 @@ core::result<renderer::texture_asset> round_trip(const core::image &image) {
     return renderer::texture_asset::decode(file, renderer::texture_colour_space::SRGB);
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Use a `.jxl` file as a texture | put it in the assets folder: `texture_importer` claims `.jxl` |
+| Decode one in code | `texture_asset::decode(bytes, colourSpace, generateMips, jobs)` or `load_from_file(path, ...)` |
+| Bake an HDR sky from a JPEG XL | name `conjure.renderer.environment` as the file's importer ("import as"); `equirect_image::decode_hdr(bytes, jobs)` in code |
+| Write an image as JPEG XL | `encode_jpeg_xl(image, options, jobs)` |
+| Take an editor screenshot as JPEG XL | `view.screenshot` with a `.jxl` path (📘 API: [Headless mode and the command model](../editor/headless-and-commands.md#picking-screenshots-camera-console)) |
+| Tell a JPEG XL file from other bytes | `is_jpeg_xl(bytes)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## How a JPEG XL file becomes a texture
 
 Every image decoder entry point (`texture_asset::decode`, the texture importer, glTF images and
@@ -45,7 +66,7 @@ JPEG XL. What the JPEG XL decoder does on the way to an RGBA8 texture:
 
 | The file has... | The texture gets... |
 |---|---|
-| A colour profile (sRGB, Display P3, linear, an ICC profile) | `SRGB`: the colours converted to sRGB by the colour management system. `LINEAR`: the samples as the file stores them, unconverted, because a linear texture holds data such as normals |
+| A colour profile (sRGB, Display, linear, an ICC profile) | `SRGB`: the colours converted to sRGB by the colour management system. `LINEAR`: the samples as the file stores them, unconverted, because a linear texture holds data such as normals |
 | PQ or HLG (HDR) | `SRGB`: linear light with 1.0 at 203 nits (reference white, see [HDR skies](#hdr-skies)), clipped at 1 and sRGB-encoded: reference white is white and brighter highlights clip. `LINEAR`: the PQ or HLG signal as stored |
 | 16-bit, half or float samples | 8 bits per channel: decoded to 16 bits and the high byte kept, exactly as a 16-bit PNG. Colour and alpha are judged apart: a 16-bit alpha next to 8-bit colour keeps its high byte too, and that colour, when it is converted, is rounded to the nearest byte |
 | Grey, or grey with alpha | the grey in R, G and B |
@@ -132,7 +153,7 @@ and environment importers get the engine's job system from `register_asset_types
 On another machine the bytes are the same when the file is lossless and comes out in the encoding it stores: an
 sRGB file as an `SRGB` texture, any lossless file as a `LINEAR` texture, a linear-sRGB file (floats or integers) as
 an HDR sky. They are expected to match, without a guarantee, for an 8-bit file with premultiplied alpha that comes out
-that way, and for a lossless file that skcms alone converts between colour spaces (Display P3 to sRGB, an ICC
+that way, and for a lossless file that skcms alone converts between colour spaces (Display to sRGB, an ICC
 profile), as skcms avoids the fused multiply-add that rounds differently between CPUs. libjxl picks its SIMD code for
 the CPU it runs on, so a lossy file, or a lossless one converted with libjxl's own transfer functions (every
 conversion from or to PQ or HLG, whatever the colour space, and between sRGB and linear light in the same colour
@@ -140,8 +161,12 @@ space: an sRGB, PQ or HLG sky, a PQ or HLG `SRGB` texture, a linear-sRGB file as
 one rounding step apart on another machine. A cooked texture or a baked sky made from such a file is then
 consistent on each machine but not byte-identical between them; keep HDR skies lossless and linear when every
 machine must bake the same `.cenv`.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -150,8 +175,17 @@ machine must bake the same `.cenv`.
 | `static result<texture_asset> texture_asset::decode(span<const byte>, texture_colour_space, bool generateMips = true, job_system * = nullptr)` | decode any supported image |
 | `static result<equirect_image> equirect_image::decode_hdr(span<const byte>, job_system * = nullptr)` | decode a `.hdr` or JPEG XL to linear RGB floats |
 | `texture_importer(job_system *jobs)` | the importer decoding on a job system |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Renderer assets](renderer-assets.md), [Database, importers and hot reload](../assets/database-and-import.md)
-- 🛠 Handbook: [libjxl](../../handbook/libjxl.md), [Renderer module](../../handbook/modules/renderer.md)
+- 🛠 Handbook: [JPEG XL](../../handbook/project-reference/third-party-dependencies/jpeg-xl.md), [Renderer module](../../handbook/engine/renderer.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

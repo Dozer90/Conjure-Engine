@@ -1,18 +1,21 @@
 # Graphics device layer (RHI)
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md)
-
+<!-- doc-content:purpose:start -->
 The RHI (render hardware interface) is the thin layer between the engine and the graphics API. It owns one
 graphics **device** per process, the **swapchain** that puts finished frames on a window, and the **shader
 library** that hands compiled shaders to whoever records GPU work. Everything lives in `namespace conjure::rhi`
 under `conjure/rhi/`. The module wraps NVRHI; NVRHI's own types never appear in a public header, so including
 the RHI costs nothing beyond the engine's core headers.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## Who needs it
 
 | You are... | You need the RHI for... | Start with |
 |---|---|---|
-| Making a game in C# or with the renderer's components | nothing: the engine creates the device and swapchain for you | the renderer pages (wave 3) |
+| Making a game in C# or with the renderer's components | nothing: the engine creates the device and swapchain for you | the renderer pages |
 | Writing a renderer or a rendering pass | the device to record into, the swapchain's back buffers, compiled shaders | [Devices and swapchains](devices-and-swapchains.md), then [Shaders](shaders.md) |
 | Writing a module that does its own GPU work (compute particles, a GPU importer) | `device::native_device()` and a `shader_library` for your module's shaders | [Shaders](shaders.md) |
 | Writing tests for any of the above | the null device and its statistics, which run without a GPU | [Devices and swapchains](devices-and-swapchains.md#testing-without-a-gpu) |
@@ -39,7 +42,7 @@ everywhere else in the engine ([Errors and results](../core/errors-and-results.m
 ## When to use the renderer instead
 
 The RHI gives you a device and raw back buffers; it does not draw. If you want meshes, lights, sprites, a
-camera or post-processing, use the renderer (wave 3): it owns the render graph, the GPU copies of assets and
+camera or post-processing, use the renderer: it owns the render graph, the GPU copies of assets and
 the pass shaders, and it talks to the RHI for you. Reach for the RHI directly only when you record NVRHI
 command lists yourself, which means you are inside the engine or writing an engine module. Game code never
 sees `native_device()`.
@@ -61,4 +64,12 @@ sees `native_device()`.
 - 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>`, `CONJURE_TRY` and error categories
 - 📘 API: [Logging and assertions](../core/logging-and-assertions.md); the module logs under `LOG_RHI`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md) for the backends' internals and the shader pipeline
+- 🛠 Handbook: [RHI module](../../handbook/engine/rhi.md) for the backends' internals and the shader pipeline
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/rhi/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+| `conjure/rhi/rhi_error.h` | Declares `rhi_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

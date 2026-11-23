@@ -1,27 +1,25 @@
 # Command buffers and observers
+<!-- doc-template:wiki -->
+[API](../index.md) → [ECS](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md)
-
+<!-- doc-content:purpose:start -->
 How to change the structure of a world from places where direct changes are refused (systems, view callbacks,
 observers, job threads), how to react when a component appears or disappears, what the iteration lock and the
 owner thread mean for you, and how to prove two runs produced the same world. Headers:
 `conjure/ecs/command_buffer.h`, `conjure/ecs/observer.h` and `conjure/ecs/world_hash.h`; the lock lives in
 `conjure/ecs/world.h`. Everything is in `namespace conjure::ecs`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Spawn, destroy, add or remove from inside a system | `context.commands().create_entity()`, `.destroy_entity(id)`, `.add<T>(id, value)`, `.remove<T>(id)` |
-| The same from your own loop or thread | `command_buffer commands(world);` then `world.flush(commands)` on the owner thread |
-| Use a not-yet-created entity in later commands | the `entity` returned by `commands.create_entity()` is real at once |
-| Run code when a component is added or removed | `world.observe(id, component_event::ADDED, fn)` / `REMOVED` |
-| Run code before an entity is destroyed | `world.observe_destroyed(fn)` |
-| Make an observer trigger more changes | enqueue into the `command_buffer &deferred` it receives |
-| Hand a span to code that must not see it move | hold `world.lock_iteration()` while it is in use |
-| Check two worlds (or two runs) are identical | `world_hash(world)` |
+| Name | Command buffers and observers |
+| Module | ECS |
+| `#include` | `conjure/ecs/command_buffer.h`, `conjure/ecs/observer.h`, `conjure/ecs/world.h`, `conjure/ecs/world_hash.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/ecs.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/ecs/command_buffer.h"
@@ -56,7 +54,30 @@ core::result<void> spawn_batch(world &game, u32 count) {
     return core::result<void>::success();
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Spawn, destroy, add or remove from inside a system | `context.commands().create_entity()`, `.destroy_entity(id)`, `.add<T>(id, value)`, `.remove<T>(id)` |
+| The same from your own loop or thread | `command_buffer commands(world);` then `world.flush(commands)` on the owner thread |
+| Use a not-yet-created entity in later commands | the `entity` returned by `commands.create_entity()` is real at once |
+| Run code when a component is added or removed | `world.observe(id, component_event::ADDED, fn)` / `REMOVED` |
+| Run code before an entity is destroyed | `world.observe_destroyed(fn)` |
+| Make an observer trigger more changes | enqueue into the `command_buffer &deferred` it receives |
+| Hand a span to code that must not see it move | hold `world.lock_iteration()` while it is in use |
+| Check two worlds (or two runs) are identical | `world_hash(world)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Why deferred changes exist
 
 A view hands you references into chunk columns. If a callback could destroy an entity or add a component, rows
@@ -227,8 +248,12 @@ slot, so the hash is the same in every process and whether or not references are
 the hash: ids created through command buffers from parallel chunks or from systems that run concurrently are not
 reproducible between runs, so create from `EXCLUSIVE` or `MAIN_THREAD` systems when hashes are compared across
 runs. Call it while no structural change is in flight.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -244,11 +269,20 @@ runs. Call it while no structural change is in flight.
 | `iteration_scope world::lock_iteration()` / `bool is_locked()`; `iteration_scope::release()`, `is_active()` | the lock |
 | `std::thread::id owner_thread()` / `result<void> set_owner_thread(std::thread::id)` | ownership |
 | `u64 world_hash(const world &)` | deterministic state hash |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Queries, views and systems](queries-views-and-systems.md) for `context.commands()` and per-grain buffers
 - 📘 API: [Archives and serialisation](archives-and-serialization.md) for `instantiate` through a buffer
 - 📘 API: [Logging and assertions](../core/logging-and-assertions.md) for what an assert means in each build
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) for the flush plan and the observer drain loop
+- 🛠 Handbook: [ECS module](../../handbook/engine/ecs.md) for the flush plan and the observer drain loop
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 742" role="img"
+ aria-labelledby="graph-title graph-description">
+<title id="graph-title">Ecs module dependencies</title>
+<desc id="graph-description">Arrows run from dependency to consumer. Direct dependencies are grouped in alphabetical Public and Private columns. Solid edges are public; dashed edges are private. Each access group shares one incoming arrow. Consumers, when present, appear directly below the selected module without repeated headings.</desc>
+<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
+<path d="M0,0 L8,4 L0,8 Z" fill="#8c8c8c"/></marker>
+<mask id="node-bindings" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-core" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="252" cy="110" r="8" fill="black"/>
+</mask>
+<mask id="node-ecs" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+<circle cx="280" cy="210" r="8" fill="black"/>
+</mask>
+<mask id="node-editor" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-engine" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-physics" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-scene" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+<mask id="node-scripting" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="742" style="mask-type:luminance"><rect width="576" height="742" fill="white"/>
+</mask>
+</defs>
+<path data-dependency="core" data-consumer="ecs" d="M252,110 L280,138" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="ecs" data-consumer="bindings" d="M280,210 L280,274 L272,282 L265.5,282" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="ecs" data-consumer="editor" d="M280,210 L280,350 L272,358 L265.5,358" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="ecs" data-consumer="engine" d="M280,210 L280,426 L272,434 L265.5,434" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="ecs" data-consumer="physics" d="M280,210 L280,502 L272,510 L265.5,510" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="ecs" data-consumer="scene" d="M280,210 L280,578 L272,586 L265.5,586" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="ecs" data-consumer="scripting" d="M280,210 L280,654 L272,662 L265.5,662" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-trunk="public" data-consumer="ecs" d="M280,138 L280,148.5" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="144" y="30" text-anchor="middle" fill="#c8c8c8" font-family="Futura Bk BT, sans-serif" font-size="19">Public</text>
+<a href="../../handbook/engine/ecs.html" target="_top">
+<rect x="176" y="158" width="224" height="56" rx="15" fill="#171717" stroke="#009dff" stroke-width="3" mask="url(#node-ecs)"/>
+<text x="288" y="192" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">ecs</text>
+</a>
+<a href="../../handbook/engine/core.html" target="_top">
+<rect x="32" y="62" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-core)"/>
+<text x="144" y="96" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">core</text>
+</a>
+<a href="../../handbook/engine/bindings.html" target="_top">
+<rect x="32" y="254" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-bindings)"/>
+<text x="144" y="288" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">bindings</text>
+</a>
+<a href="../../handbook/editor/editor.html" target="_top">
+<rect x="32" y="330" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-editor)"/>
+<text x="144" y="364" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">editor</text>
+</a>
+<a href="../../handbook/engine/engine.html" target="_top">
+<rect x="32" y="406" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-engine)"/>
+<text x="144" y="440" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">engine</text>
+</a>
+<a href="../../handbook/engine/physics.html" target="_top">
+<rect x="32" y="482" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-physics)"/>
+<text x="144" y="516" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">physics</text>
+</a>
+<a href="../../handbook/engine/scene.html" target="_top">
+<rect x="32" y="558" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-scene)"/>
+<text x="144" y="592" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">scene</text>
+</a>
+<a href="../../handbook/engine/scripting.html" target="_top">
+<rect x="32" y="634" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-scripting)"/>
+<text x="144" y="668" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">scripting</text>
+</a>
+<circle data-port="core" data-access="public" cx="252" cy="110" r="4" fill="#8c8c8c"/>
+<circle data-port="ecs" data-access="public" cx="280" cy="210" r="4" fill="#8c8c8c"/>
+</svg>

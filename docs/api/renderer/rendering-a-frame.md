@@ -1,7 +1,8 @@
 # Rendering a frame
+<!-- doc-template:wiki -->
+[API](../index.md) → [Renderer](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
-
+<!-- doc-content:purpose:start -->
 How to create the renderer, describe what a frame contains, render into the window or into a target, read
 pixels back, draw sprites and debug lines, and tune the look. Headers: `conjure/renderer/renderer.h`,
 `conjure/renderer/render_scene.h`, `conjure/renderer/camera.h`, `conjure/renderer/light.h`,
@@ -9,26 +10,18 @@ pixels back, draw sprites and debug lines, and tune the look. Headers: `conjure/
 `conjure/renderer/debug_draw.h`, `conjure/renderer/gpu_ids.h`, `conjure/renderer/limits.h`,
 `conjure/renderer/components.h` and `conjure/renderer/imgui_renderer.h`. Everything is in `namespace
 conjure::renderer`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Create the renderer | `renderer::create(renderer_desc)` with a device, a shader library and (optionally) a swapchain and job system |
-| Put an asset on the GPU / take it off | `upload_mesh(id, mesh)`, `upload_texture`, `upload_material`, `upload_environment`; `release_*(gpuId)` |
-| Find the GPU id of an asset uploaded earlier | `find_mesh(assetId)`, `find_texture`, `find_material`, `find_environment` |
-| Render what the engine extracted | `render_scene &scene = begin_extract(); ... end_extract(); render_frame();` |
-| Render a scene you built yourself | `render(scene)` |
-| Render off-screen | `create_render_target(desc)`, set `render_view::target`, `read_back(target)` for the pixels |
-| Add a view of your own to the engine's frame | `submit_view(view)` every frame it should be drawn (an editor viewport, a screenshot) |
-| React to window events | `resize_swapchain(size)`, `on_device_lost()` |
-| Know what happened | `stats()` (`render_stats`), `frame_count()`, `pending_upload_count()`, `is_lost()` |
-| Draw sprites | push `sprite` values into `render_scene::sprites` (world or screen space) |
-| Draw debug lines | `render_scene::debugDraw.line(...)`, `box`, `sphere`, `frustum`, `axes`, `grid`; `debug_draw` for timed shapes |
-| Project and unproject | `clip_from_view(camera, aspect)`, `frustum_from_clip(clipFromWorld)`, `ray_from_viewport(...)` |
-| Register the renderer's components for the ECS | `register_components(typeRegistry)` |
+| Name | Rendering a frame |
+| Module | Renderer |
+| `#include` | `conjure/renderer/camera.h`, `conjure/renderer/components.h`, `conjure/renderer/debug_draw.h`, `conjure/renderer/gpu_ids.h`, `conjure/renderer/imgui_renderer.h`, `conjure/renderer/light.h`, `conjure/renderer/limits.h`, `conjure/renderer/render_scene.h`, `conjure/renderer/render_settings.h`, `conjure/renderer/render_target.h`, `conjure/renderer/renderer.h`, `conjure/renderer/sprite_batch.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/renderer.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/renderer/render_scene.h"
@@ -63,7 +56,35 @@ void fill_frame(renderer::renderer &frame, renderer::gpu_mesh_id mesh, renderer:
 
 The engine calls `render_frame()` after extraction; the pair of scenes inside the renderer means the frame being
 rendered and the frame being extracted never share a buffer.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Create the renderer | `renderer::create(renderer_desc)` with a device, a shader library and (optionally) a swapchain and job system |
+| Put an asset on the GPU / take it off | `upload_mesh(id, mesh)`, `upload_texture`, `upload_material`, `upload_environment`; `release_*(gpuId)` |
+| Find the GPU id of an asset uploaded earlier | `find_mesh(assetId)`, `find_texture`, `find_material`, `find_environment` |
+| Render what the engine extracted | `render_scene &scene = begin_extract(); ... end_extract(); render_frame();` |
+| Render a scene you built yourself | `render(scene)` |
+| Render off-screen | `create_render_target(desc)`, set `render_view::target`, `read_back(target)` for the pixels |
+| Add a view of your own to the engine's frame | `submit_view(view)` every frame it should be drawn (an editor viewport, a screenshot) |
+| React to window events | `resize_swapchain(size)`, `on_device_lost()` |
+| Know what happened | `stats()` (`render_stats`), `frame_count()`, `pending_upload_count()`, `is_lost()` |
+| Draw sprites | push `sprite` values into `render_scene::sprites` (world or screen space) |
+| Draw debug lines | `render_scene::debugDraw.line(...)`, `box`, `sphere`, `frustum`, `axes`, `grid`; `debug_draw` for timed shapes |
+| Project and unproject | `clip_from_view(camera, aspect)`, `frustum_from_clip(clipFromWorld)`, `ray_from_viewport(...)` |
+| Register the renderer's components for the ECS | `register_components(typeRegistry)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Creating the renderer
 
 `renderer_desc` names the `rhi::device`, the `rhi::shader_library` (the index `conjure_add_shaders` built), an
@@ -220,8 +241,12 @@ numbering, so a game can keep them in step). Sprites carry no mask: every view d
 hands the draw data to `renderer::set_imgui_draw_data(drawData)`, which draws it after the views of the next
 frame into the swapchain. `renderer::imgui()` returns the backend (null in Distribution, without a swapchain or
 when disabled); `register_texture(gpuTextureId)` returns the `ImTextureID` to show an engine texture in a panel.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -243,8 +268,17 @@ when disabled); `register_texture(gpuTextureId)` returns the `ImTextureID` to sh
 | `u16 clamp_shadow_resolution(u16)` | `light.h` |
 | `result<void> register_components(core::reflect::type_registry &)` | `components.h` |
 | `render_view make_camera_view(const camera_component &, const mat4 &worldFromCamera, render_target_id = {})` | `components.h`: the view a camera component at a world matrix renders (rigid inverse of the matrix, the camera's data, layer mask and `NO_POST_PROCESS` unless `postProcess`); what the engine's extraction and the editor's screenshots both use |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Renderer assets](renderer-assets.md), [Devices and swapchains](../rhi/devices-and-swapchains.md), [Shaders](../rhi/shaders.md)
-- 🛠 Handbook: [Renderer module](../../handbook/modules/renderer.md)
+- 🛠 Handbook: [Renderer module](../../handbook/engine/renderer.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

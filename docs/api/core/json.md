@@ -1,31 +1,25 @@
 # JSON
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Read, build and write JSON for configuration, save games, scene text and tool protocols. Include
 `conjure/core/json/json.h` to get the whole area (`conjure::core::json`); it pulls in
 `conjure/core/json/value.h` (read-only views), `conjure/core/json/document.h` (owning, mutable trees) and
 `conjure/core/json/writer.h` (streaming output) and adds the free functions `json::parse()` and
 `json::to_string()`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Parse text | `json::parse(text)` or `json::document::parse(text)` |
-| Parse or write a file | `json::document::parse_file(path)`, `doc.write_file(path, pretty)` |
-| Read a setting with a default | `doc.root()["window"]["width"].as_i64(1280)` |
-| Read a value and know why it failed | `value.to<T>()` (`result<T>`) |
-| Loop over an array or object | `for (json::value item : array)`, `for (auto [key, item] : object.members())` |
-| Build a small tree in one expression | `json::object({{"a", 1}})`, `json::array({1, 2})` |
-| Add, replace or remove members | `doc.set(key, item)`, `doc.push_back(item)`, `doc.erase(key)` |
-| Address a nested value by path | `doc.at_pointer("/a/b/0")`, `doc.set_pointer("/a/b/0", 5)` |
-| Apply a partial update | `doc.merge_patch(patch)` (RFC 7386) |
-| Text for humans | `doc.to_string(true)` (4-space indentation) |
-| Text for hashing, diffing or tests | `doc.to_canonical_string()` (sorted keys, minified) |
-| Write a lot of JSON without building a tree | `json::writer` |
+| Name | JSON |
+| Module | Core |
+| `#include` | `conjure/core/json/document.h`, `conjure/core/json/json.h`, `conjure/core/json/value.h`, `conjure/core/json/writer.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/json/json.h"
@@ -53,7 +47,34 @@ result<window_settings> load_window_settings(std::string_view text) {
 
 A missing `"window"` member is not an error here: indexing a missing key yields an *invalid* value, and
 every accessor on an invalid value returns its fallback.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Parse text | `json::parse(text)` or `json::document::parse(text)` |
+| Parse or write a file | `json::document::parse_file(path)`, `doc.write_file(path, pretty)` |
+| Read a setting with a default | `doc.root()["window"]["width"].as_i64(1280)` |
+| Read a value and know why it failed | `value.to<T>()` (`result<T>`) |
+| Loop over an array or object | `for (json::value item : array)`, `for (auto [key, item] : object.members())` |
+| Build a small tree in one expression | `json::object({{"a", 1}})`, `json::array({1, 2})` |
+| Add, replace or remove members | `doc.set(key, item)`, `doc.push_back(item)`, `doc.erase(key)` |
+| Address a nested value by path | `doc.at_pointer("/a/b/0")`, `doc.set_pointer("/a/b/0", 5)` |
+| Apply a partial update | `doc.merge_patch(patch)` (RFC 7386) |
+| Text for humans | `doc.to_string(true)` (4-space indentation) |
+| Text for hashing, diffing or tests | `doc.to_canonical_string()` (sorted keys, minified) |
+| Write a lot of JSON without building a tree | `json::writer` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Documents own, values view
 
 A `json::document` owns a tree and is the only way to create or change JSON. A `json::value` is a small
@@ -82,7 +103,7 @@ invalid values.
 | `as_f64(fallback)`, `as_f32(fallback)` | any number (the fallback when the magnitude exceeds `f32`) |
 | `as_string(fallback)` | a `std::string_view` into the document, UTF-8, may contain embedded zeros |
 | `size()` | element or member count; 0 for scalars |
-| `type()`, `is_number()`, `is_integer()`, ... | the kind of the value |
+| `type()`, `is_number()`, `is_integer()`,... | the kind of the value |
 
 ```cpp
 usize count_components(const json::document &scene) {
@@ -241,8 +262,12 @@ levels.
 Distinct documents are independent. One document may be **read** from many threads at once
 (`root()`, accessors, iteration, `to_string()`, `at_pointer()`), but mutating it while any other thread
 reads or mutates it is a data race: guard it. A `writer` belongs to one thread.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -267,11 +292,20 @@ reads or mutates it is a data race: guard it. A `writer` belongs to one thread.
 | `void writer::begin_object()/end_object()/begin_array()/end_array()` | structure |
 | `void writer::key(string_view)` / `value(T)` / `write_raw_json(string_view)` | content |
 | `std::string writer::finish()` / `void reset()` / `bool is_complete() const` | output |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Errors and results](errors-and-results.md) for `result<T>`, `CONJURE_TRY` and the generic error codes
 - 📘 API: [Reflection](reflection.md) to convert whole structs to and from JSON without writing field code
 - 📘 API: [Files and the virtual file system](files.md) to load JSON through `project://` and friends
 - 📘 API: [Data types](data-types.md) for `u32`, `i64`, `f32` and the other aliases used here
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for the yyjson wrapper, canonical form and nesting limits
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md) for the yyjson wrapper, canonical form and nesting limits
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

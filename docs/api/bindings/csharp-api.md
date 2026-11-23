@@ -1,14 +1,29 @@
 # The C# API
+<!-- doc-template:wiki -->
+[API](../index.md) → [Bindings](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Bindings module](../../handbook/modules/bindings.md)
-
+<!-- doc-content:purpose:start -->
 What a script sees, by topic. The types live in `Conjure.Managed` (namespace `Conjure`); the native entries
 behind them are declared by `conjure/bindings/native_api_entries.h` and counted by
 `conjure/bindings/call_counters.h`. Your game project references `Conjure.Managed.dll` (the template
 `managed/Conjure.Templates/Game/Game.csproj` does; `ConjureManagedDir` points at the engine's `bin/managed`).
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | The C# API |
+| Module | Bindings |
+| `#include` | `conjure/bindings/call_counters.h`, `conjure/bindings/native_api_entries.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/bindings.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | Create, find, destroy an entity | `Entity.Create(name)`, `Entity.Find(name)`, `Entity.FindByGuid`, `FindByTag`, `FindByLayer`, `entity.Destroy()` |
@@ -25,7 +40,15 @@ behind them are declared by `conjure/bindings/native_api_entries.h` and counted 
 | Report a self-check, read frame statistics | `Diagnostics.Check(name, passed, detail)`, `Diagnostics.Stats`, `Diagnostics.LastError` |
 | See which modules are loaded | `Modules.Registry` (read-only `ModuleInfo` list) |
 | Iterate thousands of components without per-entity calls | `ComponentQuery.Begin<T1, T2>()`, `NextChunk`, `ChunkView.Get<T>(column)` |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Scripts and their lifecycle
 
 A script is a class deriving from `ScriptBehaviour`. The engine instantiates it when its entity gets the
@@ -192,7 +215,7 @@ IsLoaded }`; it is read-only, loading is the editor's and the project's business
 > [!NOTE]
 > `Diagnostics.Draw.Line`, `Box` and `Sphere` validate their arguments and are counted, but draw nothing in an
 > application yet: the engine does not publish its `renderer::debug_draw` to the bindings
-> (`09_cross_area_resolutions.md` section 4 item 15(e)). A hand-built `binding_context` with `debugDraw` set does
+> ((e)). A hand-built `binding_context` with `debugDraw` set does
 > draw. `Diagnostics.Draw.Text` draws nothing in any configuration (no world-space text renderer in v1).
 
 ## Data-oriented scopes
@@ -240,8 +263,12 @@ collects every serialised field, destroys the instances, unloads the old assembl
 the instances with the saved fields (`OnCreate` runs again, `OnStart` does not). A class that vanished keeps its
 field JSON and is disabled with one warning; it comes back when a later build restores it. Private state resets to
 its initialisers. Plugin assemblies share the game load context, so a leaky plugin assembly prevents unloading.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Member (short) | Purpose |
 |---|---|
@@ -254,9 +281,18 @@ its initialisers. Plugin assemblies share the game load context, so a leaky plug
 | `AssetRef<T>`, `AssetId`, `AssetState`, `AssetLoadPriority`, the asset tags, `Prefab`, `Scene` | assets, scenes, prefabs |
 | `Diagnostics`, `FrameStats`, `EnginePhase`, `Modules.Registry`, `ModuleInfo`, `Log`, `Time` | diagnostics and services |
 | `ComponentQuery`, `ChunkView`, `ComponentType<T>` | the DOD escape hatch |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Scripting from C#: the bindings](index.md), [The native table](native-table.md)
 - 📘 API: [Scripts, components and the runtime](../scripting/scripts-and-components.md), [Hosting, the native API and hot reload](../scripting/hosting-and-hot-reload.md)
 - 📘 API: [Bodies, colliders and characters](../physics/bodies-and-colliders.md), [Playing sounds](../audio/playing-sounds.md), [Scene files, prefabs and snapshots](../scene/scene-files-and-prefabs.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

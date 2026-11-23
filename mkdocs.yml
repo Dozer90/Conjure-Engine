@@ -5,9 +5,17 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 strict: true
+use_directory_urls: false
+
+hooks:
+  - tools/docs_site.py
 
 theme:
   name: material
+  custom_dir: tools/docs_theme
+  font: false
+  logo: assets/brand/conjure-docs-logo.svg
+  favicon: assets/brand/conjure-docs-favicon.svg
   features:
     - navigation.tabs
     - navigation.tabs.sticky
@@ -19,23 +27,16 @@ theme:
     - content.code.copy
     - content.action.edit
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: deep purple
-      accent: amber
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: deep purple
-      accent: amber
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+    - scheme: slate
+      primary: custom
+      accent: custom
 
 extra_css:
-  - assets/extra.css
+  - assets/stylesheets/conjure-docs.css
+
+extra_javascript:
+  - assets/javascripts/conjure-docs.js
+  - assets/javascripts/handbook-redirects.js
 
 plugins:
   - search
@@ -48,19 +49,25 @@ markdown_extensions:
   - admonition
   - toc:
       permalink: true
-      toc_depth: 3
-  - pymdownx.superfences
+      toc_depth: 4
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
 
-# Pages not listed in nav are still built and reachable through links. docs/design/ is the design record:
-# it is built so that the handbook's links into it resolve, but it stays out of the navigation and is
-# reached from the handbook's chapters ("Decision records" in particular), never from the wiki.
+# Publish the API and contributor handbook, without internal planning/review inputs.
 exclude_docs: |
   CODE_STYLE.cpp
+  ARCHITECTURE.md
+  CONVENTIONS.md
+  DESIGN_DOC.md
+  design/
+  reviews/
 
 nav:
   - Home: index.md
@@ -142,40 +149,1391 @@ nav:
       - Runtime: api/runtime/index.md
       - Glossary: api/glossary.md
   - Engineering handbook:
-      - handbook/index.md
-      - Getting started: handbook/getting-started.md
-      - Architecture: handbook/architecture.md
-      - Repository layout: handbook/repository-layout.md
-      - Build pipeline: handbook/build-pipeline.md
-      - libjxl (JPEG XL): handbook/libjxl.md
-      - Coding standards: handbook/coding-standards.md
-      - Data-oriented design: handbook/data-oriented-design.md
-      - Testing: handbook/testing.md
-      - Modules:
+      - Engineering Handbook:
+          - handbook/index.md
+          - Getting Started:
+              - handbook/getting-started/index.md
+              - Setup and First Run: handbook/getting-started/setup-and-first-run.md
+              - Repository Tour: handbook/getting-started/repository-tour.md
+          - Architecture and Design:
+              - handbook/architecture-and-design/index.md
+              - Architecture: handbook/architecture-and-design/architecture.md
+              - Data-Oriented Design: handbook/architecture-and-design/data-oriented-design.md
+          - Development:
+              - handbook/development/index.md
+              - Building and Configuration: handbook/development/building-and-configuration.md
+              - Coding Standards: handbook/development/coding-standards.md
+              - Testing and Benchmarks: handbook/development/testing-and-benchmarks.md
+              - Continuous Integration: handbook/development/continuous-integration.md
+          - Extensions:
+              - handbook/extensions/index.md
+              - Module System: handbook/extensions/module-system.md
+              - Creating a Module: handbook/extensions/creating-a-module.md
+              - Importing and Distributing Modules: handbook/extensions/importing-and-distributing-modules.md
+          - Contributing:
+              - handbook/contributing/index.md
+              - Contribution Workflow: handbook/contributing/contribution-workflow.md
+              - Writing Documentation: handbook/contributing/writing-documentation.md
+          - Project Reference:
+              - handbook/project-reference/index.md
+              - Third-Party Dependencies:
+                  - handbook/project-reference/third-party-dependencies/index.md
+                  - JPEG XL: handbook/project-reference/third-party-dependencies/jpeg-xl.md
+              - Branding and Application Icons: handbook/project-reference/branding-and-application-icons.md
+      - Engine:
+          - handbook/engine.md
+          - Assets:
+              - handbook/engine/assets.md
+              # BEGIN GENERATED HEADER NAV
+              - "asset_cache.h":
+                  - handbook/engine/assets/asset-cache.md
+                  - "asset_cache": handbook/engine/assets/asset-cache/asset-cache.md
+                  - "cache_expectation": handbook/engine/assets/asset-cache/cache-expectation.md
+              - "asset_cooker.h":
+                  - handbook/engine/assets/asset-cooker.md
+                  - "asset_cooker": handbook/engine/assets/asset-cooker/asset-cooker.md
+                  - "cook_failure": handbook/engine/assets/asset-cooker/cook-failure.md
+                  - "cook_report": handbook/engine/assets/asset-cooker/cook-report.md
+                  - "cook_settings": handbook/engine/assets/asset-cooker/cook-settings.md
+              - "asset_database.h":
+                  - handbook/engine/assets/asset-database.md
+                  - "asset_database": handbook/engine/assets/asset-database/asset-database.md
+                  - "asset_database::entry": handbook/engine/assets/asset-database/asset-database-entry.md
+                  - "asset_mount": handbook/engine/assets/asset-database/asset-mount.md
+                  - "asset_path_parts": handbook/engine/assets/asset-database/asset-path-parts.md
+                  - "asset_record": handbook/engine/assets/asset-database/asset-record.md
+                  - "import_failure": handbook/engine/assets/asset-database/import-failure.md
+                  - "import_report": handbook/engine/assets/asset-database/import-report.md
+                  - "scan_report": handbook/engine/assets/asset-database/scan-report.md
+              - "asset_extension_desc.h":
+                  - handbook/engine/assets/asset-extension-desc.md
+                  - "asset_type_extension_desc": handbook/engine/assets/asset-extension-desc/asset-type-extension-desc.md
+                  - "importer_extension_desc": handbook/engine/assets/asset-extension-desc/importer-extension-desc.md
+              - "asset_importer.h":
+                  - handbook/engine/assets/asset-importer.md
+                  - "asset_importer": handbook/engine/assets/asset-importer/asset-importer.md
+                  - "import_context": handbook/engine/assets/asset-importer/import-context.md
+                  - "import_output": handbook/engine/assets/asset-importer/import-output.md
+                  - "imported_asset": handbook/engine/assets/asset-importer/imported-asset.md
+                  - "importer_registry": handbook/engine/assets/asset-importer/importer-registry.md
+                  - "sub_asset_table": handbook/engine/assets/asset-importer/sub-asset-table.md
+              - "asset_loader.h":
+                  - handbook/engine/assets/asset-loader.md
+                  - "asset_loader": handbook/engine/assets/asset-loader/asset-loader.md
+                  - "finalise_context": handbook/engine/assets/asset-loader/finalise-context.md
+                  - "load_context": handbook/engine/assets/asset-loader/load-context.md
+                  - "typed_asset_loader": handbook/engine/assets/asset-loader/typed-asset-loader.md
+              - "asset_manager.h":
+                  - handbook/engine/assets/asset-manager.md
+                  - "asset_event": handbook/engine/assets/asset-manager/asset-event.md
+                  - "asset_load_batch": handbook/engine/assets/asset-manager/asset-load-batch.md
+                  - "asset_manager": handbook/engine/assets/asset-manager/asset-manager.md
+                  - "asset_manager_desc": handbook/engine/assets/asset-manager/asset-manager-desc.md
+                  - "asset_manager_stats": handbook/engine/assets/asset-manager/asset-manager-stats.md
+                  - "asset_subscription": handbook/engine/assets/asset-manager/asset-subscription.md
+              - "asset_meta.h":
+                  - handbook/engine/assets/asset-meta.md
+                  - "asset_meta": handbook/engine/assets/asset-meta/asset-meta.md
+                  - "sub_asset_entry": handbook/engine/assets/asset-meta/sub-asset-entry.md
+              - "asset_pack.h":
+                  - handbook/engine/assets/asset-pack.md
+                  - "pack_header": handbook/engine/assets/asset-pack/pack-header.md
+                  - "pack_reader": handbook/engine/assets/asset-pack/pack-reader.md
+                  - "pack_stats": handbook/engine/assets/asset-pack/pack-stats.md
+                  - "pack_toc_entry": handbook/engine/assets/asset-pack/pack-toc-entry.md
+                  - "pack_writer": handbook/engine/assets/asset-pack/pack-writer.md
+                  - "pack_writer::entry": handbook/engine/assets/asset-pack/pack-writer-entry.md
+              - "asset_payload.h": handbook/engine/assets/asset-payload.md
+              - "asset_ref.h":
+                  - handbook/engine/assets/asset-ref.md
+                  - "asset_handle": handbook/engine/assets/asset-ref/asset-handle.md
+                  - "asset_ref": handbook/engine/assets/asset-ref/asset-ref.md
+                  - "conjure::core::reflect::reflect_kind_override<conjure::assets::asset_ref<AssetType>>": handbook/engine/assets/asset-ref/conjure-core-reflect-reflect-kind-override-conjure-assets-asset-ref-assettype.md
+              - "asset_slot.h":
+                  - handbook/engine/assets/asset-slot.md
+                  - "asset_slot": handbook/engine/assets/asset-slot/asset-slot.md
+              - "asset_source.h":
+                  - handbook/engine/assets/asset-source.md
+                  - "asset_source": handbook/engine/assets/asset-source/asset-source.md
+                  - "cache_asset_source": handbook/engine/assets/asset-source/cache-asset-source.md
+                  - "composite_asset_source": handbook/engine/assets/asset-source/composite-asset-source.md
+                  - "memory_asset_source": handbook/engine/assets/asset-source/memory-asset-source.md
+                  - "memory_asset_source::entry": handbook/engine/assets/asset-source/memory-asset-source-entry.md
+                  - "pack_asset_source": handbook/engine/assets/asset-source/pack-asset-source.md
+              - "asset_type_registry.h":
+                  - handbook/engine/assets/asset-type-registry.md
+                  - "asset_type_desc": handbook/engine/assets/asset-type-registry/asset-type-desc.md
+                  - "asset_type_registry": handbook/engine/assets/asset-type-registry/asset-type-registry.md
+                  - "asset_type_registry_hooks": handbook/engine/assets/asset-type-registry/asset-type-registry-hooks.md
+              - "asset_types.h": handbook/engine/assets/asset-types.md
+              - "assets.h": handbook/engine/assets/assets.md
+              - "assets_error.h": handbook/engine/assets/assets-error.md
+              - "binary_asset.h":
+                  - handbook/engine/assets/binary-asset.md
+                  - "binary_asset": handbook/engine/assets/binary-asset/binary-asset.md
+                  - "binary_importer": handbook/engine/assets/binary-asset/binary-importer.md
+                  - "binary_loader": handbook/engine/assets/binary-asset/binary-loader.md
+              - "cooked_blob.h":
+                  - handbook/engine/assets/cooked-blob.md
+                  - "cooked_blob": handbook/engine/assets/cooked-blob/cooked-blob.md
+                  - "cooked_blob_header": handbook/engine/assets/cooked-blob/cooked-blob-header.md
+              - "file_watcher.h":
+                  - handbook/engine/assets/file-watcher.md
+                  - "file_change": handbook/engine/assets/file-watcher/file-change.md
+                  - "file_watcher": handbook/engine/assets/file-watcher/file-watcher.md
+                  - "polling_file_watcher": handbook/engine/assets/file-watcher/polling-file-watcher.md
+                  - "polling_file_watcher::file_state": handbook/engine/assets/file-watcher/polling-file-watcher-file-state.md
+              - "hot_reload.h":
+                  - handbook/engine/assets/hot-reload.md
+                  - "hot_reload_controller": handbook/engine/assets/hot-reload/hot-reload-controller.md
+                  - "hot_reload_report": handbook/engine/assets/hot-reload/hot-reload-report.md
+              - "log_category.h": handbook/engine/assets/log-category.md
+              # END GENERATED HEADER NAV
+          - Audio:
+              - handbook/engine/audio.md
+              # BEGIN GENERATED HEADER NAV
+              - "audio.h": handbook/engine/audio/audio.md
+              - "audio_backend.h":
+                  - handbook/engine/audio/audio-backend.md
+                  - "audio_backend": handbook/engine/audio/audio-backend/audio-backend.md
+              - "audio_device.h":
+                  - handbook/engine/audio/audio-device.md
+                  - "audio_device_info": handbook/engine/audio/audio-device/audio-device-info.md
+                  - "backend_desc": handbook/engine/audio/audio-device/backend-desc.md
+              - "audio_engine.h":
+                  - handbook/engine/audio/audio-engine.md
+                  - "audio_engine": handbook/engine/audio/audio-engine/audio-engine.md
+                  - "audio_engine_stats": handbook/engine/audio/audio-engine/audio-engine-stats.md
+                  - "audio_settings": handbook/engine/audio/audio-engine/audio-settings.md
+                  - "voice_transform": handbook/engine/audio/audio-engine/voice-transform.md
+              - "audio_error.h": handbook/engine/audio/audio-error.md
+              - "audio_types.h":
+                  - handbook/engine/audio/audio-types.md
+                  - "audio_format": handbook/engine/audio/audio-types/audio-format.md
+              - "clip.h":
+                  - handbook/engine/audio/clip.md
+                  - "audio_clip": handbook/engine/audio/clip/audio-clip.md
+                  - "clip_info": handbook/engine/audio/clip/clip-info.md
+                  - "pcm_buffer": handbook/engine/audio/clip/pcm-buffer.md
+              - "clip_asset.h":
+                  - handbook/engine/audio/clip-asset.md
+                  - "audio_clip_importer": handbook/engine/audio/clip-asset/audio-clip-importer.md
+                  - "audio_clip_loader": handbook/engine/audio/clip-asset/audio-clip-loader.md
+                  - "clip_blob_header": handbook/engine/audio/clip-asset/clip-blob-header.md
+                  - "clip_import_settings": handbook/engine/audio/clip-asset/clip-import-settings.md
+              - "components.h":
+                  - handbook/engine/audio/components.md
+                  - "audio_listener": handbook/engine/audio/components/audio-listener.md
+                  - "audio_source": handbook/engine/audio/components/audio-source.md
+                  - "source_handle": handbook/engine/audio/components/source-handle.md
+              - "decoder.h":
+                  - handbook/engine/audio/decoder.md
+                  - "decode_options": handbook/engine/audio/decoder/decode-options.md
+                  - "streaming_decoder": handbook/engine/audio/decoder/streaming-decoder.md
+              - "log_category.h": handbook/engine/audio/log-category.md
+              - "mix_groups.h":
+                  - handbook/engine/audio/mix-groups.md
+                  - "group_desc": handbook/engine/audio/mix-groups/group-desc.md
+                  - "group_id": handbook/engine/audio/mix-groups/group-id.md
+                  - "group_info": handbook/engine/audio/mix-groups/group-info.md
+              - "null_backend.h":
+                  - handbook/engine/audio/null-backend.md
+                  - "null_backend": handbook/engine/audio/null-backend/null-backend.md
+                  - "null_backend_stats": handbook/engine/audio/null-backend/null-backend-stats.md
+                  - "null_group_stats": handbook/engine/audio/null-backend/null-group-stats.md
+                  - "null_voice_stats": handbook/engine/audio/null-backend/null-voice-stats.md
+              - "spatialisation.h":
+                  - handbook/engine/audio/spatialisation.md
+                  - "attenuation_params": handbook/engine/audio/spatialisation/attenuation-params.md
+                  - "listener_state": handbook/engine/audio/spatialisation/listener-state.md
+                  - "spatial_result": handbook/engine/audio/spatialisation/spatial-result.md
+              - "voice.h":
+                  - handbook/engine/audio/voice.md
+                  - "play_params": handbook/engine/audio/voice/play-params.md
+                  - "voice_id": handbook/engine/audio/voice/voice-id.md
+                  - "voice_info": handbook/engine/audio/voice/voice-info.md
+              # END GENERATED HEADER NAV
+          - Bindings:
+              - handbook/engine/bindings.md
+              # BEGIN GENERATED HEADER NAV
+              - "bindings.h": handbook/engine/bindings/bindings.md
+              - "bindings_error.h": handbook/engine/bindings/bindings-error.md
+              - "bindings_subsystem.h":
+                  - handbook/engine/bindings/bindings-subsystem.md
+                  - "script_residency": handbook/engine/bindings/bindings-subsystem/script-residency.md
+                  - "scripting_bindings_subsystem": handbook/engine/bindings/bindings-subsystem/scripting-bindings-subsystem.md
+              - "call_counters.h":
+                  - handbook/engine/bindings/call-counters.md
+                  - "counting_thunk<Id, Ret(Args...)>": handbook/engine/bindings/call-counters/counting-thunk-id-ret-args.md
+                  - "native_entry_descriptor": handbook/engine/bindings/call-counters/native-entry-descriptor.md
+              - "log_category.h": handbook/engine/bindings/log-category.md
+              - "marshal.h":
+                  - handbook/engine/bindings/marshal.md
+                  - "marshal::structural_guard": handbook/engine/bindings/marshal/marshal-structural-guard.md
+              - "native_api_entries.h":
+                  - handbook/engine/bindings/native-api-entries.md
+                  - "binding_context": handbook/engine/bindings/native-api-entries/binding-context.md
+                  - "stubs::stub_thunk<Id, Ret(Args...)>": handbook/engine/bindings/native-api-entries/stubs-stub-thunk-id-ret-args.md
+              # END GENERATED HEADER NAV
           - Core:
-              - handbook/modules/core.md
-              - Foundation to memory: handbook/modules/core/foundation-to-memory.md
-              - Time to reflect: handbook/modules/core/time-to-reflect.md
-          - ECS: handbook/modules/ecs.md
-          - Platform: handbook/modules/platform.md
-          - RHI: handbook/modules/rhi.md
-          - Assets: handbook/modules/assets.md
-          - Audio: handbook/modules/audio.md
-          - Modules: handbook/modules/modules.md
-          - Scene: handbook/modules/scene.md
-          - Renderer: handbook/modules/renderer.md
-          - Physics: handbook/modules/physics.md
-          - Scripting: handbook/modules/scripting.md
-          - Engine: handbook/modules/engine.md
-          - Bindings: handbook/modules/bindings.md
-          - Editor: handbook/modules/editor.md
-          - Runtime: handbook/modules/runtime.md
-      - Module system:
-          - handbook/module-system/index.md
-          - Creating a module: handbook/module-system/creating-a-module.md
-          - Importing and distributing modules: handbook/module-system/importing-and-distributing.md
-      - Continuous integration: handbook/ci.md
-      - Contributing: handbook/contributing.md
-      - Documentation: handbook/documentation.md
-      - Logo and application icon: handbook/brand.md
-      - Decision records: handbook/decision-records.md
+              - handbook/engine/core.md
+              # BEGIN GENERATED HEADER NAV
+              - "aabb.h":
+                  - handbook/engine/core/math/aabb.md
+                  - "aabb": handbook/engine/core/math/aabb/aabb.md
+                  - "std::formatter<conjure::math::aabb>": handbook/engine/core/math/aabb/std-formatter-conjure-math-aabb.md
+              - "allocation_counters.h":
+                  - handbook/engine/core/memory/allocation-counters.md
+                  - "memory::allocation_counters": handbook/engine/core/memory/allocation-counters/memory-allocation-counters.md
+                  - "memory::memory_snapshot": handbook/engine/core/memory/allocation-counters/memory-memory-snapshot.md
+              - "api.h": handbook/engine/core/api.md
+              - "arena.h":
+                  - handbook/engine/core/memory/arena.md
+                  - "memory::arena": handbook/engine/core/memory/arena/memory-arena.md
+              - "assert.h":
+                  - handbook/engine/core/assert.md
+                  - "assert_info": handbook/engine/core/assert/assert-info.md
+              - "bit_vector.h":
+                  - handbook/engine/core/bit-vector.md
+                  - "bit_vector": handbook/engine/core/bit-vector/bit-vector.md
+                  - "bit_vector::set_bit_iterator": handbook/engine/core/bit-vector/bit-vector-set-bit-iterator.md
+                  - "bit_vector::set_bit_range": handbook/engine/core/bit-vector/bit-vector-set-bit-range.md
+              - "clock.h":
+                  - handbook/engine/core/clock.md
+                  - "clock": handbook/engine/core/clock/clock.md
+                  - "manual_clock": handbook/engine/core/clock/manual-clock.md
+                  - "steady_clock": handbook/engine/core/clock/steady-clock.md
+                  - "stopwatch": handbook/engine/core/clock/stopwatch.md
+              - "containers.h": handbook/engine/core/containers/containers.md
+              - "dedicated_thread.h":
+                  - handbook/engine/core/jobs/dedicated-thread.md
+                  - "jobs::dedicated_thread": handbook/engine/core/jobs/dedicated-thread/jobs-dedicated-thread.md
+              - "delegate.h":
+                  - handbook/engine/core/delegate.md
+                  - "delegate<Return(Args...)>": handbook/engine/core/delegate/delegate-return-args.md
+              - "detail.h": handbook/engine/core/containers/detail.md
+              - "document.h":
+                  - handbook/engine/core/json/document.md
+                  - "json::document": handbook/engine/core/json/document/json-document.md
+                  - "json::init_member": handbook/engine/core/json/document/json-init-member.md
+                  - "json::init_value": handbook/engine/core/json/document/json-init-value.md
+              - "dynamic_library.h":
+                  - handbook/engine/core/dynamic-library.md
+                  - "dynamic_library": handbook/engine/core/dynamic-library/dynamic-library.md
+              - "enum_flags.h": handbook/engine/core/enum-flags.md
+              - "error.h":
+                  - handbook/engine/core/error.md
+                  - "error": handbook/engine/core/error/error.md
+                  - "error_category_traits<error_code>": handbook/engine/core/error/error-category-traits-error-code.md
+                  - "std::formatter<conjure::core::error>": handbook/engine/core/error/std-formatter-conjure-core-error.md
+                  - "std::formatter<conjure::core::error_code>": handbook/engine/core/error/std-formatter-conjure-core-error-code.md
+              - "event.h":
+                  - handbook/engine/core/event.md
+                  - "detail::subscription_target": handbook/engine/core/event/detail-subscription-target.md
+                  - "event": handbook/engine/core/event/event.md
+                  - "event::slot": handbook/engine/core/event/event-slot.md
+                  - "event::state": handbook/engine/core/event/event-state.md
+                  - "event_subscription": handbook/engine/core/event/event-subscription.md
+              - "event_bus.h":
+                  - handbook/engine/core/event-bus.md
+                  - "event_bus": handbook/engine/core/event-bus/event-bus.md
+                  - "event_bus::channel": handbook/engine/core/event-bus/event-bus-channel.md
+                  - "event_bus::channel_base": handbook/engine/core/event-bus/event-bus-channel-base.md
+              - "field_info.h":
+                  - handbook/engine/core/reflect/field-info.md
+                  - "reflect::detail::std_array_traits": handbook/engine/core/reflect/field-info/reflect-detail-std-array-traits.md
+                  - "reflect::detail::std_array_traits<std::array<ElementType, N>>": handbook/engine/core/reflect/field-info/reflect-detail-std-array-traits-std-array-elementtype-n.md
+                  - "reflect::enum_info": handbook/engine/core/reflect/field-info/reflect-enum-info.md
+                  - "reflect::field_attributes": handbook/engine/core/reflect/field-info/reflect-field-attributes.md
+                  - "reflect::field_info": handbook/engine/core/reflect/field-info/reflect-field-info.md
+                  - "reflect::reflect_traits<bool>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-bool.md
+                  - "reflect::reflect_traits<f32>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-f32.md
+                  - "reflect::reflect_traits<f64>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-f64.md
+                  - "reflect::reflect_traits<i16>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-i16.md
+                  - "reflect::reflect_traits<i32>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-i32.md
+                  - "reflect::reflect_traits<i64>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-i64.md
+                  - "reflect::reflect_traits<i8>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-i8.md
+                  - "reflect::reflect_traits<math::mat4>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-mat4.md
+                  - "reflect::reflect_traits<math::quat>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-quat.md
+                  - "reflect::reflect_traits<math::transform>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-transform.md
+                  - "reflect::reflect_traits<math::vec2>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-vec2.md
+                  - "reflect::reflect_traits<math::vec3>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-vec3.md
+                  - "reflect::reflect_traits<math::vec4>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-math-vec4.md
+                  - "reflect::reflect_traits<std::string>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-std-string.md
+                  - "reflect::reflect_traits<string_id>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-string-id.md
+                  - "reflect::reflect_traits<T>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-t.md
+                  - "reflect::reflect_traits<u16>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-u16.md
+                  - "reflect::reflect_traits<u32>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-u32.md
+                  - "reflect::reflect_traits<u64>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-u64.md
+                  - "reflect::reflect_traits<u8>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-u8.md
+                  - "reflect::reflect_traits<uuid>": handbook/engine/core/reflect/field-info/reflect-reflect-traits-uuid.md
+                  - "std::formatter<conjure::core::reflect::field_kind>": handbook/engine/core/reflect/field-info/std-formatter-conjure-core-reflect-field-kind.md
+              - "file_system.h":
+                  - handbook/engine/core/vfs/file-system.md
+                  - "vfs::file": handbook/engine/core/vfs/file-system/vfs-file.md
+                  - "vfs::file_stat": handbook/engine/core/vfs/file-system/vfs-file-stat.md
+                  - "vfs::file_system": handbook/engine/core/vfs/file-system/vfs-file-system.md
+              - "flat_hash_map.h":
+                  - handbook/engine/core/containers/flat-hash-map.md
+                  - "detail::hash_table": handbook/engine/core/containers/flat-hash-map/detail-hash-table.md
+                  - "detail::hash_table::basic_iterator": handbook/engine/core/containers/flat-hash-map/detail-hash-table-basic-iterator.md
+                  - "detail::identity_key_of": handbook/engine/core/containers/flat-hash-map/detail-identity-key-of.md
+                  - "detail::pair_key_of": handbook/engine/core/containers/flat-hash-map/detail-pair-key-of.md
+                  - "flat_hash_map": handbook/engine/core/containers/flat-hash-map/flat-hash-map.md
+                  - "flat_hash_set": handbook/engine/core/containers/flat-hash-map/flat-hash-set.md
+              - "flat_map.h":
+                  - handbook/engine/core/containers/flat-map.md
+                  - "flat_map": handbook/engine/core/containers/flat-map/flat-map.md
+              - "frame_allocator.h":
+                  - handbook/engine/core/memory/frame-allocator.md
+                  - "memory::frame_allocator": handbook/engine/core/memory/frame-allocator/memory-frame-allocator.md
+              - "frustum.h":
+                  - handbook/engine/core/math/frustum.md
+                  - "frustum": handbook/engine/core/math/frustum/frustum.md
+              - "glm_types.h":
+                  - handbook/engine/core/math/glm-types.md
+                  - "std::formatter<conjure::math::ivec2>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-ivec2.md
+                  - "std::formatter<conjure::math::ivec3>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-ivec3.md
+                  - "std::formatter<conjure::math::ivec4>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-ivec4.md
+                  - "std::formatter<conjure::math::mat3>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-mat3.md
+                  - "std::formatter<conjure::math::mat4>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-mat4.md
+                  - "std::formatter<conjure::math::quat>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-quat.md
+                  - "std::formatter<conjure::math::uvec2>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-uvec2.md
+                  - "std::formatter<conjure::math::uvec3>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-uvec3.md
+                  - "std::formatter<conjure::math::uvec4>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-uvec4.md
+                  - "std::formatter<conjure::math::vec2>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-vec2.md
+                  - "std::formatter<conjure::math::vec3>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-vec3.md
+                  - "std::formatter<conjure::math::vec4>": handbook/engine/core/math/glm-types/std-formatter-conjure-math-vec4.md
+              - "hash.h": handbook/engine/core/hash.md
+              - "image.h":
+                  - handbook/engine/core/image.md
+                  - "image": handbook/engine/core/image/image.md
+                  - "rgba8": handbook/engine/core/image/rgba8.md
+              - "job_handle.h":
+                  - handbook/engine/core/jobs/job-handle.md
+                  - "jobs::detail::job_counter": handbook/engine/core/jobs/job-handle/jobs-detail-job-counter.md
+                  - "jobs::job_fence": handbook/engine/core/jobs/job-handle/jobs-job-fence.md
+                  - "jobs::job_handle": handbook/engine/core/jobs/job-handle/jobs-job-handle.md
+              - "job_system.h":
+                  - handbook/engine/core/jobs/job-system.md
+                  - "jobs::job_system": handbook/engine/core/jobs/job-system/jobs-job-system.md
+                  - "jobs::job_system_desc": handbook/engine/core/jobs/job-system/jobs-job-system-desc.md
+                  - "jobs::job_system_stats": handbook/engine/core/jobs/job-system/jobs-job-system-stats.md
+              - "jobs.h": handbook/engine/core/jobs/jobs.md
+              - "json.h": handbook/engine/core/json/json.md
+              - "json_conversion.h":
+                  - handbook/engine/core/reflect/json-conversion.md
+                  - "json::json_converter<math::mat4>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-mat4.md
+                  - "json::json_converter<math::quat>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-quat.md
+                  - "json::json_converter<math::transform>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-transform.md
+                  - "json::json_converter<math::vec2>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-vec2.md
+                  - "json::json_converter<math::vec3>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-vec3.md
+                  - "json::json_converter<math::vec4>": handbook/engine/core/reflect/json-conversion/json-json-converter-math-vec4.md
+                  - "json::json_converter<string_id>": handbook/engine/core/reflect/json-conversion/json-json-converter-string-id.md
+                  - "reflect::field_ref": handbook/engine/core/reflect/json-conversion/reflect-field-ref.md
+              - "log.h":
+                  - handbook/engine/core/log.md
+                  - "callback_log_sink": handbook/engine/core/log/callback-log-sink.md
+                  - "console_log_sink": handbook/engine/core/log/console-log-sink.md
+                  - "file_log_sink": handbook/engine/core/log/file-log-sink.md
+                  - "log_category": handbook/engine/core/log/log-category.md
+                  - "log_message": handbook/engine/core/log/log-message.md
+                  - "log_sink": handbook/engine/core/log/log-sink.md
+              - "main_thread.h": handbook/engine/core/jobs/main-thread.md
+              - "math.h": handbook/engine/core/math/math.md
+              - "math.h": handbook/engine/core/math.md
+              - "math_utils.h": handbook/engine/core/math/math-utils.md
+              - "memory.h": handbook/engine/core/memory/memory.md
+              - "memory_file_system.h":
+                  - handbook/engine/core/vfs/memory-file-system.md
+                  - "vfs::memory_file_system": handbook/engine/core/vfs/memory-file-system/vfs-memory-file-system.md
+              - "mount_table.h":
+                  - handbook/engine/core/vfs/mount-table.md
+                  - "vfs::mount_table": handbook/engine/core/vfs/mount-table/vfs-mount-table.md
+                  - "vfs::mount_table::route_target": handbook/engine/core/vfs/mount-table/vfs-mount-table-route-target.md
+              - "native_file_system.h":
+                  - handbook/engine/core/vfs/native-file-system.md
+                  - "vfs::native_file_system": handbook/engine/core/vfs/native-file-system/vfs-native-file-system.md
+              - "parallel_for.h": handbook/engine/core/jobs/parallel-for.md
+              - "path_utils.h": handbook/engine/core/vfs/path-utils.md
+              - "plane.h":
+                  - handbook/engine/core/math/plane.md
+                  - "plane": handbook/engine/core/math/plane/plane.md
+                  - "std::formatter<conjure::math::plane>": handbook/engine/core/math/plane/std-formatter-conjure-math-plane.md
+              - "platform_detect.h": handbook/engine/core/platform-detect.md
+              - "pool_allocator.h":
+                  - handbook/engine/core/memory/pool-allocator.md
+                  - "memory::pool_allocator": handbook/engine/core/memory/pool-allocator/memory-pool-allocator.md
+                  - "memory::pool_allocator::free_block": handbook/engine/core/memory/pool-allocator/memory-pool-allocator-free-block.md
+                  - "memory::pool_allocator::slab": handbook/engine/core/memory/pool-allocator/memory-pool-allocator-slab.md
+              - "process.h":
+                  - handbook/engine/core/process.md
+                  - "process": handbook/engine/core/process/process.md
+                  - "process_desc": handbook/engine/core/process/process-desc.md
+                  - "process_result": handbook/engine/core/process/process-result.md
+              - "radix_sort.h": handbook/engine/core/radix-sort.md
+              - "random.h":
+                  - handbook/engine/core/random.md
+                  - "random::random_engine": handbook/engine/core/random/random-random-engine.md
+              - "ray.h":
+                  - handbook/engine/core/math/ray.md
+                  - "ray": handbook/engine/core/math/ray/ray.md
+              - "rect.h":
+                  - handbook/engine/core/math/rect.md
+                  - "rect": handbook/engine/core/math/rect/rect.md
+                  - "std::formatter<conjure::math::rect>": handbook/engine/core/math/rect/std-formatter-conjure-math-rect.md
+                  - "std::formatter<conjure::math::urect>": handbook/engine/core/math/rect/std-formatter-conjure-math-urect.md
+                  - "urect": handbook/engine/core/math/rect/urect.md
+              - "reflect.h": handbook/engine/core/reflect/reflect.md
+              - "result.h":
+                  - handbook/engine/core/result.md
+                  - "result": handbook/engine/core/result/result.md
+                  - "result<void>": handbook/engine/core/result/result-void.md
+              - "slot_key_format.h":
+                  - handbook/engine/core/containers/slot-key-format.md
+                  - "std::formatter<conjure::core::slot_key>": handbook/engine/core/containers/slot-key-format/std-formatter-conjure-core-slot-key.md
+              - "slot_map.h":
+                  - handbook/engine/core/containers/slot-map.md
+                  - "slot_key": handbook/engine/core/containers/slot-map/slot-key.md
+                  - "slot_map": handbook/engine/core/containers/slot-map/slot-map.md
+                  - "slot_map::slot_entry": handbook/engine/core/containers/slot-map/slot-map-slot-entry.md
+                  - "slot_map_entry": handbook/engine/core/containers/slot-map/slot-map-entry.md
+                  - "std::hash<conjure::core::slot_key>": handbook/engine/core/containers/slot-map/std-hash-conjure-core-slot-key.md
+                  - "std::tuple_element<0, conjure::core::slot_map_entry<Key, T>>": handbook/engine/core/containers/slot-map/std-tuple-element-0-conjure-core-slot-map-entry-key-t.md
+                  - "std::tuple_element<1, conjure::core::slot_map_entry<Key, T>>": handbook/engine/core/containers/slot-map/std-tuple-element-1-conjure-core-slot-map-entry-key-t.md
+                  - "std::tuple_size<conjure::core::slot_map_entry<Key, T>>": handbook/engine/core/containers/slot-map/std-tuple-size-conjure-core-slot-map-entry-key-t.md
+              - "small_vector.h":
+                  - handbook/engine/core/containers/small-vector.md
+                  - "small_vector": handbook/engine/core/containers/small-vector/small-vector.md
+              - "stable_vector.h":
+                  - handbook/engine/core/containers/stable-vector.md
+                  - "stable_vector": handbook/engine/core/containers/stable-vector/stable-vector.md
+                  - "stable_vector::basic_iterator": handbook/engine/core/containers/stable-vector/stable-vector-basic-iterator.md
+              - "string_id.h":
+                  - handbook/engine/core/string-id.md
+                  - "std::formatter<conjure::core::string_id>": handbook/engine/core/string-id/std-formatter-conjure-core-string-id.md
+                  - "std::hash<conjure::core::string_id>": handbook/engine/core/string-id/std-hash-conjure-core-string-id.md
+                  - "string_id": handbook/engine/core/string-id/string-id.md
+              - "string_utils.h": handbook/engine/core/string-utils.md
+              - "tracked_allocation.h": handbook/engine/core/memory/tracked-allocation.md
+              - "transform.h":
+                  - handbook/engine/core/math/transform.md
+                  - "std::formatter<conjure::math::transform>": handbook/engine/core/math/transform/std-formatter-conjure-math-transform.md
+                  - "transform": handbook/engine/core/math/transform/transform.md
+              - "type_id.h":
+                  - handbook/engine/core/reflect/type-id.md
+                  - "reflect::type_id": handbook/engine/core/reflect/type-id/reflect-type-id.md
+                  - "std::formatter<conjure::core::reflect::type_id>": handbook/engine/core/reflect/type-id/std-formatter-conjure-core-reflect-type-id.md
+                  - "std::hash<conjure::core::reflect::type_id>": handbook/engine/core/reflect/type-id/std-hash-conjure-core-reflect-type-id.md
+              - "type_info.h":
+                  - handbook/engine/core/reflect/type-info.md
+                  - "reflect::type_info": handbook/engine/core/reflect/type-info/reflect-type-info.md
+              - "type_registry.h":
+                  - handbook/engine/core/reflect/type-registry.md
+                  - "reflect::type_registry": handbook/engine/core/reflect/type-registry/reflect-type-registry.md
+              - "types.h": handbook/engine/core/types.md
+              - "uuid.h":
+                  - handbook/engine/core/uuid.md
+                  - "std::formatter<conjure::core::uuid>": handbook/engine/core/uuid/std-formatter-conjure-core-uuid.md
+                  - "std::hash<conjure::core::uuid>": handbook/engine/core/uuid/std-hash-conjure-core-uuid.md
+                  - "uuid": handbook/engine/core/uuid/uuid.md
+              - "value.h":
+                  - handbook/engine/core/json/value.md
+                  - "json::detail::value_access": handbook/engine/core/json/value/json-detail-value-access.md
+                  - "json::json_converter<bool>": handbook/engine/core/json/value/json-json-converter-bool.md
+                  - "json::json_converter<f32>": handbook/engine/core/json/value/json-json-converter-f32.md
+                  - "json::json_converter<f64>": handbook/engine/core/json/value/json-json-converter-f64.md
+                  - "json::json_converter<i16>": handbook/engine/core/json/value/json-json-converter-i16.md
+                  - "json::json_converter<i32>": handbook/engine/core/json/value/json-json-converter-i32.md
+                  - "json::json_converter<i64>": handbook/engine/core/json/value/json-json-converter-i64.md
+                  - "json::json_converter<i8>": handbook/engine/core/json/value/json-json-converter-i8.md
+                  - "json::json_converter<std::string>": handbook/engine/core/json/value/json-json-converter-std-string.md
+                  - "json::json_converter<std::vector<T>>": handbook/engine/core/json/value/json-json-converter-std-vector-t.md
+                  - "json::json_converter<u16>": handbook/engine/core/json/value/json-json-converter-u16.md
+                  - "json::json_converter<u32>": handbook/engine/core/json/value/json-json-converter-u32.md
+                  - "json::json_converter<u64>": handbook/engine/core/json/value/json-json-converter-u64.md
+                  - "json::json_converter<u8>": handbook/engine/core/json/value/json-json-converter-u8.md
+                  - "json::json_converter<uuid>": handbook/engine/core/json/value/json-json-converter-uuid.md
+                  - "json::member": handbook/engine/core/json/value/json-member.md
+                  - "json::value": handbook/engine/core/json/value/json-value.md
+                  - "json::value::array_iterator": handbook/engine/core/json/value/json-value-array-iterator.md
+                  - "json::value::object_iterator": handbook/engine/core/json/value/json-value-object-iterator.md
+                  - "json::value::object_range": handbook/engine/core/json/value/json-value-object-range.md
+                  - "std::formatter<conjure::core::json::json_type>": handbook/engine/core/json/value/std-formatter-conjure-core-json-json-type.md
+              - "vfs.h": handbook/engine/core/vfs/vfs.md
+              - "writer.h":
+                  - handbook/engine/core/json/writer.md
+                  - "json::writer": handbook/engine/core/json/writer/json-writer.md
+                  - "json::writer::frame": handbook/engine/core/json/writer/json-writer-frame.md
+              # END GENERATED HEADER NAV
+              - Foundation to memory: handbook/engine/core/foundation-to-memory.md
+              - Time to reflect: handbook/engine/core/time-to-reflect.md
+          - ECS:
+              - handbook/engine/ecs.md
+              # BEGIN GENERATED HEADER NAV
+              - "archetype.h":
+                  - handbook/engine/ecs/archetype.md
+                  - "archetype": handbook/engine/ecs/archetype/archetype.md
+                  - "archetype::archetype_edge": handbook/engine/ecs/archetype/archetype-archetype-edge.md
+                  - "archetype::row_location": handbook/engine/ecs/archetype/archetype-row-location.md
+                  - "chunk_layout": handbook/engine/ecs/archetype/chunk-layout.md
+              - "chunk_view.h":
+                  - handbook/engine/ecs/chunk-view.md
+                  - "chunk_view": handbook/engine/ecs/chunk-view/chunk-view.md
+              - "command_buffer.h":
+                  - handbook/engine/ecs/command-buffer.md
+                  - "command_buffer": handbook/engine/ecs/command-buffer/command-buffer.md
+                  - "command_buffer::instantiate_entry": handbook/engine/ecs/command-buffer/command-buffer-instantiate-entry.md
+                  - "command_buffer::record": handbook/engine/ecs/command-buffer/command-buffer-record.md
+                  - "flush_report": handbook/engine/ecs/command-buffer/flush-report.md
+              - "component.h":
+                  - handbook/engine/ecs/component.md
+                  - "component_id": handbook/engine/ecs/component/component-id.md
+                  - "component_info": handbook/engine/ecs/component/component-info.md
+                  - "component_mask": handbook/engine/ecs/component/component-mask.md
+                  - "component_mask::hasher": handbook/engine/ecs/component/component-mask-hasher.md
+                  - "component_ops": handbook/engine/ecs/component/component-ops.md
+                  - "component_serializer": handbook/engine/ecs/component/component-serializer.md
+                  - "component_type_cache": handbook/engine/ecs/component/component-type-cache.md
+              - "component_registry.h":
+                  - handbook/engine/ecs/component-registry.md
+                  - "component_registry": handbook/engine/ecs/component-registry/component-registry.md
+                  - "dynamic_component_desc": handbook/engine/ecs/component-registry/dynamic-component-desc.md
+                  - "dynamic_field_desc": handbook/engine/ecs/component-registry/dynamic-field-desc.md
+              - "component_type_desc.h":
+                  - handbook/engine/ecs/component-type-desc.md
+                  - "component_type_desc": handbook/engine/ecs/component-type-desc/component-type-desc.md
+                  - "system_extension_desc": handbook/engine/ecs/component-type-desc/system-extension-desc.md
+              - "ecs.h": handbook/engine/ecs/ecs.md
+              - "ecs_error.h": handbook/engine/ecs/ecs-error.md
+              - "entity.h":
+                  - handbook/engine/ecs/entity.md
+                  - "conjure::core::reflect::reflect_kind_override<conjure::ecs::entity>": handbook/engine/ecs/entity/conjure-core-reflect-reflect-kind-override-conjure-ecs-entity.md
+                  - "entity": handbook/engine/ecs/entity/entity.md
+                  - "entity_remap": handbook/engine/ecs/entity/entity-remap.md
+                  - "std::formatter<conjure::ecs::entity>": handbook/engine/ecs/entity/std-formatter-conjure-ecs-entity.md
+                  - "std::hash<conjure::ecs::entity>": handbook/engine/ecs/entity/std-hash-conjure-ecs-entity.md
+              - "entity_archive.h":
+                  - handbook/engine/ecs/entity-archive.md
+                  - "archive_component": handbook/engine/ecs/entity-archive/archive-component.md
+                  - "archive_entry": handbook/engine/ecs/entity-archive/archive-entry.md
+                  - "archive_options": handbook/engine/ecs/entity-archive/archive-options.md
+                  - "entity_archive": handbook/engine/ecs/entity-archive/entity-archive.md
+              - "entity_handle.h":
+                  - handbook/engine/ecs/entity-handle.md
+                  - "component_ref": handbook/engine/ecs/entity-handle/component-ref.md
+                  - "entity_handle": handbook/engine/ecs/entity-handle/entity-handle.md
+              - "log_category.h": handbook/engine/ecs/log-category.md
+              - "observer.h":
+                  - handbook/engine/ecs/observer.md
+                  - "observer_id": handbook/engine/ecs/observer/observer-id.md
+              - "query.h":
+                  - handbook/engine/ecs/query.md
+                  - "query": handbook/engine/ecs/query/query.md
+                  - "query_desc": handbook/engine/ecs/query/query-desc.md
+              - "scheduler.h":
+                  - handbook/engine/ecs/scheduler.md
+                  - "scheduler": handbook/engine/ecs/scheduler/scheduler.md
+                  - "scheduler_desc": handbook/engine/ecs/scheduler/scheduler-desc.md
+                  - "stage_info": handbook/engine/ecs/scheduler/stage-info.md
+                  - "system_id": handbook/engine/ecs/scheduler/system-id.md
+                  - "system_timing": handbook/engine/ecs/scheduler/system-timing.md
+              - "serialization.h":
+                  - handbook/engine/ecs/serialization.md
+                  - "unresolved_component": handbook/engine/ecs/serialization/unresolved-component.md
+                  - "unresolved_components": handbook/engine/ecs/serialization/unresolved-components.md
+              - "system.h":
+                  - handbook/engine/ecs/system.md
+                  - "system_context": handbook/engine/ecs/system/system-context.md
+                  - "system_desc": handbook/engine/ecs/system/system-desc.md
+                  - "system_scratch": handbook/engine/ecs/system/system-scratch.md
+                  - "system_scratch::chunk_ref": handbook/engine/ecs/system/system-scratch-chunk-ref.md
+              - "system_phase.h":
+                  - handbook/engine/ecs/system-phase.md
+                  - "frame_info": handbook/engine/ecs/system-phase/frame-info.md
+              - "view.h":
+                  - handbook/engine/ecs/view.md
+                  - "detail::view_arg_traits": handbook/engine/ecs/view/detail-view-arg-traits.md
+                  - "detail::view_arg_traits<maybe<ComponentType>>": handbook/engine/ecs/view/detail-view-arg-traits-maybe-componenttype.md
+                  - "maybe": handbook/engine/ecs/view/maybe.md
+                  - "view": handbook/engine/ecs/view/view.md
+                  - "view_access": handbook/engine/ecs/view/view-access.md
+              - "world.h":
+                  - handbook/engine/ecs/world.md
+                  - "iteration_scope": handbook/engine/ecs/world/iteration-scope.md
+                  - "world": handbook/engine/ecs/world/world.md
+                  - "world::entity_record": handbook/engine/ecs/world/world-entity-record.md
+                  - "world::flush_entry": handbook/engine/ecs/world/world-flush-entry.md
+                  - "world::flush_slot": handbook/engine/ecs/world/world-flush-slot.md
+                  - "world_desc": handbook/engine/ecs/world/world-desc.md
+                  - "world_stats": handbook/engine/ecs/world/world-stats.md
+              - "world_hash.h": handbook/engine/ecs/world-hash.md
+              # END GENERATED HEADER NAV
+          - Engine:
+              - handbook/engine/engine.md
+              # BEGIN GENERATED HEADER NAV
+              - "application.h":
+                  - handbook/engine/engine/application.md
+                  - "application": handbook/engine/engine/application/application.md
+              - "application_desc.h":
+                  - handbook/engine/engine/application-desc.md
+                  - "application_desc": handbook/engine/engine/application-desc/application-desc.md
+              - "check_registry.h":
+                  - handbook/engine/engine/diagnostics/check-registry.md
+                  - "diagnostics::check_record": handbook/engine/engine/diagnostics/check-registry/diagnostics-check-record.md
+                  - "diagnostics::check_registry": handbook/engine/engine/diagnostics/check-registry/diagnostics-check-registry.md
+              - "command_line.h":
+                  - handbook/engine/engine/command-line.md
+                  - "command_line_options": handbook/engine/engine/command-line/command-line-options.md
+              - "debug_overlay_layer.h":
+                  - handbook/engine/engine/debug-overlay-layer.md
+                  - "debug_overlay_layer": handbook/engine/engine/debug-overlay-layer/debug-overlay-layer.md
+              - "engine_config.h":
+                  - handbook/engine/engine/engine-config.md
+                  - "assets_settings": handbook/engine/engine/engine-config/assets-settings.md
+                  - "audio_config": handbook/engine/engine/engine-config/audio-config.md
+                  - "audio_group_setting": handbook/engine/engine/engine-config/audio-group-setting.md
+                  - "engine_config": handbook/engine/engine/engine-config/engine-config.md
+                  - "jobs_settings": handbook/engine/engine/engine-config/jobs-settings.md
+                  - "memory_settings": handbook/engine/engine/engine-config/memory-settings.md
+                  - "modules_settings": handbook/engine/engine/engine-config/modules-settings.md
+                  - "pacing_settings": handbook/engine/engine/engine-config/pacing-settings.md
+                  - "physics_config": handbook/engine/engine/engine-config/physics-config.md
+                  - "rendering_settings": handbook/engine/engine/engine-config/rendering-settings.md
+                  - "scripting_settings": handbook/engine/engine/engine-config/scripting-settings.md
+                  - "time_settings": handbook/engine/engine/engine-config/time-settings.md
+                  - "window_settings": handbook/engine/engine/engine-config/window-settings.md
+              - "engine_context.h":
+                  - handbook/engine/engine/engine-context.md
+                  - "engine_context": handbook/engine/engine/engine-context/engine-context.md
+              - "engine_error.h": handbook/engine/engine/engine-error.md
+              - "engine_phase.h": handbook/engine/engine/engine-phase.md
+              - "engine_subsystem.h":
+                  - handbook/engine/engine/engine-subsystem.md
+                  - "engine_subsystem": handbook/engine/engine/engine-subsystem/engine-subsystem.md
+              - "engine_time.h":
+                  - handbook/engine/engine/engine-time.md
+                  - "engine_time": handbook/engine/engine/engine-time/engine-time.md
+              - "engine_version.h": handbook/engine/engine/engine-version.md
+              - "exit_code.h": handbook/engine/engine/exit-code.md
+              - "export.h":
+                  - handbook/engine/engine/export.md
+                  - "export_pipeline": handbook/engine/engine/export/export-pipeline.md
+                  - "export_report": handbook/engine/engine/export/export-report.md
+                  - "export_settings": handbook/engine/engine/export/export-settings.md
+              - "fixed_step_clock.h":
+                  - handbook/engine/engine/fixed-step-clock.md
+                  - "fixed_step_clock": handbook/engine/engine/fixed-step-clock/fixed-step-clock.md
+                  - "fixed_step_result": handbook/engine/engine/fixed-step-clock/fixed-step-result.md
+              - "frame_memory.h":
+                  - handbook/engine/engine/frame-memory.md
+                  - "frame_memory": handbook/engine/engine/frame-memory/frame-memory.md
+                  - "frame_memory_stats": handbook/engine/engine/frame-memory/frame-memory-stats.md
+              - "frame_stats.h":
+                  - handbook/engine/engine/frame-stats.md
+                  - "frame_sample": handbook/engine/engine/frame-stats/frame-sample.md
+                  - "frame_stats": handbook/engine/engine/frame-stats/frame-stats.md
+              - "game_layer.h":
+                  - handbook/engine/engine/game-layer.md
+                  - "game_layer": handbook/engine/engine/game-layer/game-layer.md
+              - "imgui_layer.h":
+                  - handbook/engine/engine/imgui-layer.md
+                  - "imgui_layer": handbook/engine/engine/imgui-layer/imgui-layer.md
+                  - "imgui_layer_stats": handbook/engine/engine/imgui-layer/imgui-layer-stats.md
+              - "layer.h":
+                  - handbook/engine/engine/layer.md
+                  - "layer": handbook/engine/engine/layer/layer.md
+              - "layer_stack.h":
+                  - handbook/engine/engine/layer-stack.md
+                  - "layer_stack": handbook/engine/engine/layer-stack/layer-stack.md
+              - "log_category.h": handbook/engine/engine/log-category.md
+              - "project.h":
+                  - handbook/engine/engine/project.md
+                  - "project": handbook/engine/engine/project/project.md
+                  - "project_description": handbook/engine/engine/project/project-description.md
+                  - "project_module_entry": handbook/engine/engine/project/project-module-entry.md
+              # END GENERATED HEADER NAV
+          - Modules:
+              - handbook/engine/modules.md
+              # BEGIN GENERATED HEADER NAV
+              - "module_abi.h":
+                  - handbook/engine/modules/module-abi.md
+                  - "conjure_module_abi_signature": handbook/engine/modules/module-abi/conjure-module-abi-signature.md
+                  - "conjure_module_info": handbook/engine/modules/module-abi/conjure-module-info.md
+              - "module_consumer.h":
+                  - handbook/engine/modules/module-consumer.md
+                  - "module_consumer": handbook/engine/modules/module-consumer/module-consumer.md
+                  - "reload_context": handbook/engine/modules/module-consumer/reload-context.md
+              - "module_context.h":
+                  - handbook/engine/modules/module-context.md
+                  - "module_context": handbook/engine/modules/module-context/module-context.md
+              - "module_entry.h":
+                  - handbook/engine/modules/module-entry.md
+                  - "static_module_desc": handbook/engine/modules/module-entry/static-module-desc.md
+              - "module_error.h": handbook/engine/modules/module-error.md
+              - "module_events.h":
+                  - handbook/engine/modules/module-events.md
+                  - "module_load_failed_event": handbook/engine/modules/module-events/module-load-failed-event.md
+                  - "module_loaded_event": handbook/engine/modules/module-events/module-loaded-event.md
+                  - "module_unloaded_event": handbook/engine/modules/module-events/module-unloaded-event.md
+                  - "module_unloading_event": handbook/engine/modules/module-events/module-unloading-event.md
+              - "module_manager.h":
+                  - handbook/engine/modules/module-manager.md
+                  - "module_manager": handbook/engine/modules/module-manager/module-manager.md
+                  - "module_manager::pending_operation": handbook/engine/modules/module-manager/module-manager-pending-operation.md
+                  - "module_manager_desc": handbook/engine/modules/module-manager/module-manager-desc.md
+              - "module_manifest.h":
+                  - handbook/engine/modules/module-manifest.md
+                  - "module_dependency": handbook/engine/modules/module-manifest/module-dependency.md
+                  - "module_manifest": handbook/engine/modules/module-manifest/module-manifest.md
+              - "module_registrar.h":
+                  - handbook/engine/modules/module-registrar.md
+                  - "module_registrar": handbook/engine/modules/module-registrar/module-registrar.md
+              - "module_registration_set.h":
+                  - handbook/engine/modules/module-registration-set.md
+                  - "extension_record": handbook/engine/modules/module-registration-set/extension-record.md
+                  - "module_lifecycle": handbook/engine/modules/module-registration-set/module-lifecycle.md
+                  - "module_registration_set": handbook/engine/modules/module-registration-set/module-registration-set.md
+              - "module_registry.h":
+                  - handbook/engine/modules/module-registry.md
+                  - "module_registry": handbook/engine/modules/module-registry/module-registry.md
+              - "module_resolver.h":
+                  - handbook/engine/modules/module-resolver.md
+                  - "resolution_failure": handbook/engine/modules/module-resolver/resolution-failure.md
+                  - "resolution_input": handbook/engine/modules/module-resolver/resolution-input.md
+                  - "resolution_result": handbook/engine/modules/module-resolver/resolution-result.md
+              - "module_service.h":
+                  - handbook/engine/modules/module-service.md
+                  - "service_id": handbook/engine/modules/module-service/service-id.md
+                  - "service_table": handbook/engine/modules/module-service/service-table.md
+              - "module_types.h":
+                  - handbook/engine/modules/module-types.md
+                  - "binary_triplet": handbook/engine/modules/module-types/binary-triplet.md
+                  - "module_id": handbook/engine/modules/module-types/module-id.md
+                  - "std::formatter<conjure::modules::binary_triplet>": handbook/engine/modules/module-types/std-formatter-conjure-modules-binary-triplet.md
+                  - "std::formatter<conjure::modules::module_id>": handbook/engine/modules/module-types/std-formatter-conjure-modules-module-id.md
+                  - "std::formatter<conjure::modules::module_state>": handbook/engine/modules/module-types/std-formatter-conjure-modules-module-state.md
+              - "module_version.h":
+                  - handbook/engine/modules/module-version.md
+                  - "semantic_version": handbook/engine/modules/module-version/semantic-version.md
+                  - "std::formatter<conjure::modules::semantic_version>": handbook/engine/modules/module-version/std-formatter-conjure-modules-semantic-version.md
+                  - "std::formatter<conjure::modules::version_range>": handbook/engine/modules/module-version/std-formatter-conjure-modules-version-range.md
+                  - "version_range": handbook/engine/modules/module-version/version-range.md
+              - "modules.h": handbook/engine/modules/modules.md
+              # END GENERATED HEADER NAV
+          - Physics:
+              - handbook/engine/physics.md
+              # BEGIN GENERATED HEADER NAV
+              - "character_controller.h":
+                  - handbook/engine/physics/character-controller.md
+                  - "character_controller": handbook/engine/physics/character-controller/character-controller.md
+              - "collision_mesh_asset.h":
+                  - handbook/engine/physics/collision-mesh-asset.md
+                  - "collision_mesh_asset": handbook/engine/physics/collision-mesh-asset/collision-mesh-asset.md
+              - "components.h":
+                  - handbook/engine/physics/components.md
+                  - "box_collider": handbook/engine/physics/components/box-collider.md
+                  - "capsule_collider": handbook/engine/physics/components/capsule-collider.md
+                  - "convex_collider": handbook/engine/physics/components/convex-collider.md
+                  - "mesh_collider": handbook/engine/physics/components/mesh-collider.md
+                  - "physics_material": handbook/engine/physics/components/physics-material.md
+                  - "rigid_body": handbook/engine/physics/components/rigid-body.md
+                  - "sphere_collider": handbook/engine/physics/components/sphere-collider.md
+              - "contact_events.h":
+                  - handbook/engine/physics/contact-events.md
+                  - "contact_event": handbook/engine/physics/contact-events/contact-event.md
+              - "log_category.h": handbook/engine/physics/log-category.md
+              - "physics.h": handbook/engine/physics/physics.md
+              - "physics_debug_draw.h":
+                  - handbook/engine/physics/physics-debug-draw.md
+                  - "physics_debug_draw": handbook/engine/physics/physics-debug-draw/physics-debug-draw.md
+              - "physics_error.h": handbook/engine/physics/physics-error.md
+              - "physics_layers.h":
+                  - handbook/engine/physics/physics-layers.md
+                  - "physics_layer_mask": handbook/engine/physics/physics-layers/physics-layer-mask.md
+                  - "physics_layer_table": handbook/engine/physics/physics-layers/physics-layer-table.md
+              - "physics_settings.h":
+                  - handbook/engine/physics/physics-settings.md
+                  - "physics_settings": handbook/engine/physics/physics-settings/physics-settings.md
+              - "physics_world.h":
+                  - handbook/engine/physics/physics-world.md
+                  - "physics_stats": handbook/engine/physics/physics-world/physics-stats.md
+                  - "physics_world": handbook/engine/physics/physics-world/physics-world.md
+              - "queries.h":
+                  - handbook/engine/physics/queries.md
+                  - "box_shape_desc": handbook/engine/physics/queries/box-shape-desc.md
+                  - "capsule_shape_desc": handbook/engine/physics/queries/capsule-shape-desc.md
+                  - "query_filter": handbook/engine/physics/queries/query-filter.md
+                  - "raycast_hit": handbook/engine/physics/queries/raycast-hit.md
+                  - "shape_cast_hit": handbook/engine/physics/queries/shape-cast-hit.md
+                  - "sphere_shape_desc": handbook/engine/physics/queries/sphere-shape-desc.md
+              - "register.h": handbook/engine/physics/register.md
+              # END GENERATED HEADER NAV
+          - Platform:
+              - handbook/engine/platform.md
+              # BEGIN GENERATED HEADER NAV
+              - "backend.h": handbook/engine/platform/backend.md
+              - "button_action.h": handbook/engine/platform/button-action.md
+              - "event.h":
+                  - handbook/engine/platform/event.md
+                  - "close_event": handbook/engine/platform/event/close-event.md
+                  - "content_scale_changed_event": handbook/engine/platform/event/content-scale-changed-event.md
+                  - "cursor_enter_event": handbook/engine/platform/event/cursor-enter-event.md
+                  - "drop_files_event": handbook/engine/platform/event/drop-files-event.md
+                  - "focus_event": handbook/engine/platform/event/focus-event.md
+                  - "framebuffer_resized_event": handbook/engine/platform/event/framebuffer-resized-event.md
+                  - "gamepad_axis_event": handbook/engine/platform/event/gamepad-axis-event.md
+                  - "gamepad_button_event": handbook/engine/platform/event/gamepad-button-event.md
+                  - "gamepad_connection_event": handbook/engine/platform/event/gamepad-connection-event.md
+                  - "key_event": handbook/engine/platform/event/key-event.md
+                  - "minimise_event": handbook/engine/platform/event/minimise-event.md
+                  - "mouse_button_event": handbook/engine/platform/event/mouse-button-event.md
+                  - "mouse_move_event": handbook/engine/platform/event/mouse-move-event.md
+                  - "mouse_scroll_event": handbook/engine/platform/event/mouse-scroll-event.md
+                  - "text_event": handbook/engine/platform/event/text-event.md
+              - "gamepad.h": handbook/engine/platform/gamepad.md
+              - "input.h":
+                  - handbook/engine/platform/input.md
+                  - "input": handbook/engine/platform/input/input.md
+                  - "input_stats": handbook/engine/platform/input/input-stats.md
+              - "input_state.h":
+                  - handbook/engine/platform/input-state.md
+                  - "gamepad_state": handbook/engine/platform/input-state/gamepad-state.md
+                  - "input_state": handbook/engine/platform/input-state/input-state.md
+                  - "key_bitset": handbook/engine/platform/input-state/key-bitset.md
+              - "key.h": handbook/engine/platform/key.md
+              - "log_category.h": handbook/engine/platform/log-category.md
+              - "monitor.h":
+                  - handbook/engine/platform/monitor.md
+                  - "monitor_info": handbook/engine/platform/monitor/monitor-info.md
+                  - "video_mode": handbook/engine/platform/monitor/video-mode.md
+              - "mouse_button.h": handbook/engine/platform/mouse-button.md
+              - "native_handle.h":
+                  - handbook/engine/platform/native-handle.md
+                  - "native_window_handle": handbook/engine/platform/native-handle/native-window-handle.md
+              - "null_backend.h":
+                  - handbook/engine/platform/null-backend.md
+                  - "null_backend": handbook/engine/platform/null-backend/null-backend.md
+                  - "null_backend::drop_range": handbook/engine/platform/null-backend/null-backend-drop-range.md
+              - "platform.h": handbook/engine/platform/platform.md
+              - "platform_error.h": handbook/engine/platform/platform-error.md
+              - "window.h":
+                  - handbook/engine/platform/window.md
+                  - "window": handbook/engine/platform/window/window.md
+                  - "window_desc": handbook/engine/platform/window/window-desc.md
+              # END GENERATED HEADER NAV
+          - Renderer:
+              - handbook/engine/renderer.md
+              # BEGIN GENERATED HEADER NAV
+              - "camera.h":
+                  - handbook/engine/renderer/camera.md
+                  - "camera": handbook/engine/renderer/camera/camera.md
+              - "components.h":
+                  - handbook/engine/renderer/components.md
+                  - "camera_component": handbook/engine/renderer/components/camera-component.md
+                  - "environment_component": handbook/engine/renderer/components/environment-component.md
+                  - "light_component": handbook/engine/renderer/components/light-component.md
+                  - "mesh_renderer_component": handbook/engine/renderer/components/mesh-renderer-component.md
+                  - "sprite_component": handbook/engine/renderer/components/sprite-component.md
+              - "debug_draw.h":
+                  - handbook/engine/renderer/debug-draw.md
+                  - "debug_draw": handbook/engine/renderer/debug-draw/debug-draw.md
+                  - "debug_draw::timed_entry": handbook/engine/renderer/debug-draw/debug-draw-timed-entry.md
+                  - "debug_draw_buffer": handbook/engine/renderer/debug-draw/debug-draw-buffer.md
+                  - "debug_vertex": handbook/engine/renderer/debug-draw/debug-vertex.md
+              - "environment_asset.h":
+                  - handbook/engine/renderer/environment-asset.md
+                  - "cubemap_data": handbook/engine/renderer/environment-asset/cubemap-data.md
+                  - "environment_asset": handbook/engine/renderer/environment-asset/environment-asset.md
+                  - "environment_bake_options": handbook/engine/renderer/environment-asset/environment-bake-options.md
+                  - "environment_importer": handbook/engine/renderer/environment-asset/environment-importer.md
+                  - "environment_loader": handbook/engine/renderer/environment-asset/environment-loader.md
+                  - "equirect_image": handbook/engine/renderer/environment-asset/equirect-image.md
+              - "gltf_importer.h":
+                  - handbook/engine/renderer/gltf-importer.md
+                  - "gltf_asset_importer": handbook/engine/renderer/gltf-importer/gltf-asset-importer.md
+                  - "gltf_import_options": handbook/engine/renderer/gltf-importer/gltf-import-options.md
+                  - "gltf_import_result": handbook/engine/renderer/gltf-importer/gltf-import-result.md
+                  - "gltf_importer": handbook/engine/renderer/gltf-importer/gltf-importer.md
+              - "gpu_ids.h":
+                  - handbook/engine/renderer/gpu-ids.md
+                  - "detail::gpu_id": handbook/engine/renderer/gpu-ids/detail-gpu-id.md
+                  - "gpu_environment_tag": handbook/engine/renderer/gpu-ids/gpu-environment-tag.md
+                  - "gpu_material_tag": handbook/engine/renderer/gpu-ids/gpu-material-tag.md
+                  - "gpu_mesh_tag": handbook/engine/renderer/gpu-ids/gpu-mesh-tag.md
+                  - "gpu_texture_tag": handbook/engine/renderer/gpu-ids/gpu-texture-tag.md
+                  - "render_target_tag": handbook/engine/renderer/gpu-ids/render-target-tag.md
+                  - "std::hash<conjure::renderer::detail::gpu_id<Tag>>": handbook/engine/renderer/gpu-ids/std-hash-conjure-renderer-detail-gpu-id-tag.md
+              - "imgui_renderer.h":
+                  - handbook/engine/renderer/imgui-renderer.md
+                  - "imgui_render_stats": handbook/engine/renderer/imgui-renderer/imgui-render-stats.md
+                  - "imgui_renderer": handbook/engine/renderer/imgui-renderer/imgui-renderer.md
+                  - "imgui_renderer::create_tag": handbook/engine/renderer/imgui-renderer/imgui-renderer-create-tag.md
+              - "jpeg_xl.h":
+                  - handbook/engine/renderer/jpeg-xl.md
+                  - "jpeg_xl_encode_options": handbook/engine/renderer/jpeg-xl/jpeg-xl-encode-options.md
+              - "light.h":
+                  - handbook/engine/renderer/light.md
+                  - "light": handbook/engine/renderer/light/light.md
+              - "limits.h": handbook/engine/renderer/limits.md
+              - "log_category.h": handbook/engine/renderer/log-category.md
+              - "material_asset.h":
+                  - handbook/engine/renderer/material-asset.md
+                  - "material_asset": handbook/engine/renderer/material-asset/material-asset.md
+                  - "material_desc": handbook/engine/renderer/material-asset/material-desc.md
+                  - "material_importer": handbook/engine/renderer/material-asset/material-importer.md
+                  - "material_loader": handbook/engine/renderer/material-asset/material-loader.md
+              - "mesh_asset.h":
+                  - handbook/engine/renderer/mesh-asset.md
+                  - "cpu_geometry_view": handbook/engine/renderer/mesh-asset/cpu-geometry-view.md
+                  - "mesh_asset": handbook/engine/renderer/mesh-asset/mesh-asset.md
+                  - "mesh_geometry": handbook/engine/renderer/mesh-asset/mesh-geometry.md
+                  - "mesh_loader": handbook/engine/renderer/mesh-asset/mesh-loader.md
+                  - "mesh_streams": handbook/engine/renderer/mesh-asset/mesh-streams.md
+                  - "packed_vertex_attributes": handbook/engine/renderer/mesh-asset/packed-vertex-attributes.md
+                  - "submesh": handbook/engine/renderer/mesh-asset/submesh.md
+              - "model_asset.h":
+                  - handbook/engine/renderer/model-asset.md
+                  - "model_asset": handbook/engine/renderer/model-asset/model-asset.md
+                  - "model_loader": handbook/engine/renderer/model-asset/model-loader.md
+                  - "model_node": handbook/engine/renderer/model-asset/model-node.md
+              - "render_scene.h":
+                  - handbook/engine/renderer/render-scene.md
+                  - "mesh_instance": handbook/engine/renderer/render-scene/mesh-instance.md
+                  - "render_scene": handbook/engine/renderer/render-scene/render-scene.md
+                  - "render_scene_pair": handbook/engine/renderer/render-scene/render-scene-pair.md
+                  - "render_view": handbook/engine/renderer/render-scene/render-view.md
+              - "render_settings.h":
+                  - handbook/engine/renderer/render-settings.md
+                  - "environment_settings": handbook/engine/renderer/render-settings/environment-settings.md
+                  - "post_process_settings": handbook/engine/renderer/render-settings/post-process-settings.md
+                  - "shadow_settings": handbook/engine/renderer/render-settings/shadow-settings.md
+                  - "ssao_settings": handbook/engine/renderer/render-settings/ssao-settings.md
+              - "render_target.h":
+                  - handbook/engine/renderer/render-target.md
+                  - "render_target": handbook/engine/renderer/render-target/render-target.md
+                  - "render_target_desc": handbook/engine/renderer/render-target/render-target-desc.md
+              - "renderer.h":
+                  - handbook/engine/renderer/renderer.md
+                  - "pass_timing": handbook/engine/renderer/renderer/pass-timing.md
+                  - "render_stats": handbook/engine/renderer/renderer/render-stats.md
+                  - "renderer": handbook/engine/renderer/renderer/renderer.md
+                  - "renderer::create_tag": handbook/engine/renderer/renderer/renderer-create-tag.md
+                  - "renderer_desc": handbook/engine/renderer/renderer/renderer-desc.md
+              - "renderer_error.h": handbook/engine/renderer/renderer-error.md
+              - "shader_asset.h":
+                  - handbook/engine/renderer/shader-asset.md
+                  - "shader_asset": handbook/engine/renderer/shader-asset/shader-asset.md
+                  - "shader_program_desc": handbook/engine/renderer/shader-asset/shader-program-desc.md
+              - "sprite_batch.h":
+                  - handbook/engine/renderer/sprite-batch.md
+                  - "sprite": handbook/engine/renderer/sprite-batch/sprite.md
+                  - "sprite_batcher": handbook/engine/renderer/sprite-batch/sprite-batcher.md
+                  - "sprite_run": handbook/engine/renderer/sprite-batch/sprite-run.md
+                  - "sprite_vertex": handbook/engine/renderer/sprite-batch/sprite-vertex.md
+              - "texture_asset.h":
+                  - handbook/engine/renderer/texture-asset.md
+                  - "texture_asset": handbook/engine/renderer/texture-asset/texture-asset.md
+                  - "texture_import_settings": handbook/engine/renderer/texture-asset/texture-import-settings.md
+                  - "texture_importer": handbook/engine/renderer/texture-asset/texture-importer.md
+                  - "texture_loader": handbook/engine/renderer/texture-asset/texture-loader.md
+                  - "texture_mip": handbook/engine/renderer/texture-asset/texture-mip.md
+              # END GENERATED HEADER NAV
+          - RHI:
+              - handbook/engine/rhi.md
+              # BEGIN GENERATED HEADER NAV
+              - "backend.h":
+                  - handbook/engine/rhi/backend.md
+                  - "device_capabilities": handbook/engine/rhi/backend/device-capabilities.md
+              - "device.h":
+                  - handbook/engine/rhi/device.md
+                  - "device": handbook/engine/rhi/device/device.md
+                  - "device::create_tag": handbook/engine/rhi/device/device-create-tag.md
+                  - "device_desc": handbook/engine/rhi/device/device-desc.md
+              - "log_category.h": handbook/engine/rhi/log-category.md
+              - "native_window.h":
+                  - handbook/engine/rhi/native-window.md
+                  - "native_window": handbook/engine/rhi/native-window/native-window.md
+              - "null_device_stats.h":
+                  - handbook/engine/rhi/null-device-stats.md
+                  - "null_device_stats": handbook/engine/rhi/null-device-stats/null-device-stats.md
+              - "rhi_error.h": handbook/engine/rhi/rhi-error.md
+              - "shader_library.h":
+                  - handbook/engine/rhi/shader-library.md
+                  - "shader_blob": handbook/engine/rhi/shader-library/shader-blob.md
+                  - "shader_key": handbook/engine/rhi/shader-library/shader-key.md
+                  - "shader_library": handbook/engine/rhi/shader-library/shader-library.md
+                  - "shader_library::create_tag": handbook/engine/rhi/shader-library/shader-library-create-tag.md
+              - "swapchain.h":
+                  - handbook/engine/rhi/swapchain.md
+                  - "swapchain": handbook/engine/rhi/swapchain/swapchain.md
+                  - "swapchain::create_tag": handbook/engine/rhi/swapchain/swapchain-create-tag.md
+                  - "swapchain_desc": handbook/engine/rhi/swapchain/swapchain-desc.md
+              - "texture_format.h": handbook/engine/rhi/texture-format.md
+              # END GENERATED HEADER NAV
+          - Runtime: handbook/engine/runtime.md
+          - Scene:
+              - handbook/engine/scene.md
+              # BEGIN GENERATED HEADER NAV
+              - "components.h":
+                  - handbook/engine/scene/components.md
+                  - "children": handbook/engine/scene/components/children.md
+                  - "conjure::ecs::component_name<conjure::scene::depth_tag<Depth>>": handbook/engine/scene/components/conjure-ecs-component-name-conjure-scene-depth-tag-depth.md
+                  - "depth_tag": handbook/engine/scene/components/depth-tag.md
+                  - "detail::depth_tag_name": handbook/engine/scene/components/detail-depth-tag-name.md
+                  - "disabled": handbook/engine/scene/components/disabled.md
+                  - "guid": handbook/engine/scene/components/guid.md
+                  - "inactive": handbook/engine/scene/components/inactive.md
+                  - "interpolated_transform": handbook/engine/scene/components/interpolated-transform.md
+                  - "layer": handbook/engine/scene/components/layer.md
+                  - "local_bounds": handbook/engine/scene/components/local-bounds.md
+                  - "local_transform": handbook/engine/scene/components/local-transform.md
+                  - "name": handbook/engine/scene/components/name.md
+                  - "parent": handbook/engine/scene/components/parent.md
+                  - "prefab_instance": handbook/engine/scene/components/prefab-instance.md
+                  - "prefab_link": handbook/engine/scene/components/prefab-link.md
+                  - "render_world_transform": handbook/engine/scene/components/render-world-transform.md
+                  - "scene_component_ids": handbook/engine/scene/components/scene-component-ids.md
+                  - "tag": handbook/engine/scene/components/tag.md
+                  - "transform_dirty": handbook/engine/scene/components/transform-dirty.md
+                  - "transform_state": handbook/engine/scene/components/transform-state.md
+                  - "world_transform": handbook/engine/scene/components/world-transform.md
+              - "guid_index.h":
+                  - handbook/engine/scene/guid-index.md
+                  - "guid_index": handbook/engine/scene/guid-index/guid-index.md
+              - "hierarchy.h":
+                  - handbook/engine/scene/hierarchy.md
+                  - "hierarchy": handbook/engine/scene/hierarchy/hierarchy.md
+              - "log_category.h": handbook/engine/scene/log-category.md
+              - "prefab.h":
+                  - handbook/engine/scene/prefab.md
+                  - "entity_diff": handbook/engine/scene/prefab/entity-diff.md
+                  - "prefab_asset": handbook/engine/scene/prefab/prefab-asset.md
+                  - "prefab_builder": handbook/engine/scene/prefab/prefab-builder.md
+                  - "prefab_builder::node": handbook/engine/scene/prefab/prefab-builder-node.md
+                  - "prefab_builder::node_component": handbook/engine/scene/prefab/prefab-builder-node-component.md
+                  - "prefab_diff": handbook/engine/scene/prefab/prefab-diff.md
+              - "register.h": handbook/engine/scene/register.md
+              - "scene.h":
+                  - handbook/engine/scene/scene.md
+                  - "instantiate_options": handbook/engine/scene/scene/instantiate-options.md
+                  - "instantiate_report": handbook/engine/scene/scene/instantiate-report.md
+                  - "root_entry": handbook/engine/scene/scene/root-entry.md
+                  - "scene": handbook/engine/scene/scene/scene.md
+                  - "scene::operation_scope": handbook/engine/scene/scene/scene-operation-scope.md
+                  - "scene::repair_entry": handbook/engine/scene/scene/scene-repair-entry.md
+                  - "scene_id": handbook/engine/scene/scene/scene-id.md
+              - "scene_error.h": handbook/engine/scene/scene-error.md
+              - "scene_manager.h":
+                  - handbook/engine/scene/scene-manager.md
+                  - "layer_table": handbook/engine/scene/scene-manager/layer-table.md
+                  - "load_request_id": handbook/engine/scene/scene-manager/load-request-id.md
+                  - "loaded_scene_info": handbook/engine/scene/scene-manager/loaded-scene-info.md
+                  - "scene_manager": handbook/engine/scene/scene-manager/scene-manager.md
+                  - "scene_manager::loaded_record": handbook/engine/scene/scene-manager/scene-manager-loaded-record.md
+                  - "scene_manager::pending_load": handbook/engine/scene/scene-manager/scene-manager-pending-load.md
+              - "scene_serializer.h":
+                  - handbook/engine/scene/scene-serializer.md
+                  - "prefab_document": handbook/engine/scene/scene-serializer/prefab-document.md
+                  - "scene_document": handbook/engine/scene/scene-serializer/scene-document.md
+                  - "scene_serializer": handbook/engine/scene/scene-serializer/scene-serializer.md
+              - "scene_snapshot.h":
+                  - handbook/engine/scene/scene-snapshot.md
+                  - "scene_snapshot": handbook/engine/scene/scene-snapshot/scene-snapshot.md
+              - "transform_system.h":
+                  - handbook/engine/scene/transform-system.md
+                  - "propagation_stats": handbook/engine/scene/transform-system/propagation-stats.md
+                  - "transform_system": handbook/engine/scene/transform-system/transform-system.md
+                  - "transform_system::chunk_tally": handbook/engine/scene/transform-system/transform-system-chunk-tally.md
+                  - "transform_system::level_chunk": handbook/engine/scene/transform-system/transform-system-level-chunk.md
+                  - "transform_system::run_counters": handbook/engine/scene/transform-system/transform-system-run-counters.md
+              # END GENERATED HEADER NAV
+          - Scripting:
+              - handbook/engine/scripting.md
+              # BEGIN GENERATED HEADER NAV
+              - "dotnet_script_host.h":
+                  - handbook/engine/scripting/dotnet-script-host.md
+                  - "dotnet_script_host": handbook/engine/scripting/dotnet-script-host/dotnet-script-host.md
+              - "hot_reload.h":
+                  - handbook/engine/scripting/hot-reload.md
+                  - "hot_reload_controller": handbook/engine/scripting/hot-reload/hot-reload-controller.md
+              - "log_category.h": handbook/engine/scripting/log-category.md
+              - "managed_build.h":
+                  - handbook/engine/scripting/managed-build.md
+                  - "build_diagnostic": handbook/engine/scripting/managed-build/build-diagnostic.md
+                  - "build_report": handbook/engine/scripting/managed-build/build-report.md
+                  - "build_request": handbook/engine/scripting/managed-build/build-request.md
+                  - "managed_build_runner": handbook/engine/scripting/managed-build/managed-build-runner.md
+                  - "managed_build_runner::shared_state": handbook/engine/scripting/managed-build/managed-build-runner-shared-state.md
+              - "native_api.h":
+                  - handbook/engine/scripting/native-api.md
+                  - "conjure_asset_info": handbook/engine/scripting/native-api/conjure-asset-info.md
+                  - "conjure_chunk_view": handbook/engine/scripting/native-api/conjure-chunk-view.md
+                  - "conjure_collision_record": handbook/engine/scripting/native-api/conjure-collision-record.md
+                  - "conjure_create_request": handbook/engine/scripting/native-api/conjure-create-request.md
+                  - "conjure_frame_block": handbook/engine/scripting/native-api/conjure-frame-block.md
+                  - "conjure_frame_stats_block": handbook/engine/scripting/native-api/conjure-frame-stats-block.md
+                  - "conjure_gamepad_state": handbook/engine/scripting/native-api/conjure-gamepad-state.md
+                  - "conjure_input_block": handbook/engine/scripting/native-api/conjure-input-block.md
+                  - "conjure_managed_api": handbook/engine/scripting/native-api/conjure-managed-api.md
+                  - "conjure_managed_component_desc": handbook/engine/scripting/native-api/conjure-managed-component-desc.md
+                  - "conjure_mat4": handbook/engine/scripting/native-api/conjure-mat4.md
+                  - "conjure_module_record": handbook/engine/scripting/native-api/conjure-module-record.md
+                  - "conjure_native_api": handbook/engine/scripting/native-api/conjure-native-api.md
+                  - "conjure_quat_xyzw": handbook/engine/scripting/native-api/conjure-quat-xyzw.md
+                  - "conjure_query_scope": handbook/engine/scripting/native-api/conjure-query-scope.md
+                  - "conjure_ray_query": handbook/engine/scripting/native-api/conjure-ray-query.md
+                  - "conjure_raycast_hit": handbook/engine/scripting/native-api/conjure-raycast-hit.md
+                  - "conjure_script_class_desc": handbook/engine/scripting/native-api/conjure-script-class-desc.md
+                  - "conjure_script_field_desc": handbook/engine/scripting/native-api/conjure-script-field-desc.md
+                  - "conjure_shape_query": handbook/engine/scripting/native-api/conjure-shape-query.md
+                  - "conjure_transform": handbook/engine/scripting/native-api/conjure-transform.md
+                  - "conjure_uuid": handbook/engine/scripting/native-api/conjure-uuid.md
+                  - "conjure_vec2": handbook/engine/scripting/native-api/conjure-vec2.md
+                  - "conjure_vec3": handbook/engine/scripting/native-api/conjure-vec3.md
+                  - "conjure_vec4": handbook/engine/scripting/native-api/conjure-vec4.md
+                  - "native_entry_descriptor": handbook/engine/scripting/native-api/native-entry-descriptor.md
+              - "native_api_hash.h": handbook/engine/scripting/native-api-hash.md
+              - "null_script_host.h":
+                  - handbook/engine/scripting/null-script-host.md
+                  - "null_host_recorder": handbook/engine/scripting/null-script-host/null-host-recorder.md
+                  - "null_host_recorder::apply_record": handbook/engine/scripting/null-script-host/null-host-recorder-apply-record.md
+                  - "null_host_recorder::collision_record": handbook/engine/scripting/null-script-host/null-host-recorder-collision-record.md
+                  - "null_host_recorder::create_record": handbook/engine/scripting/null-script-host/null-host-recorder-create-record.md
+                  - "null_host_recorder::destroy_record": handbook/engine/scripting/null-script-host/null-host-recorder-destroy-record.md
+                  - "null_host_recorder::phase_record": handbook/engine/scripting/null-script-host/null-host-recorder-phase-record.md
+                  - "null_script_host": handbook/engine/scripting/null-script-host/null-script-host.md
+                  - "null_script_host::slot_state": handbook/engine/scripting/null-script-host/null-script-host-slot-state.md
+              - "script_class_registry.h":
+                  - handbook/engine/scripting/script-class-registry.md
+                  - "script_class_info": handbook/engine/scripting/script-class-registry/script-class-info.md
+                  - "script_class_registry": handbook/engine/scripting/script-class-registry/script-class-registry.md
+                  - "script_class_registry::table": handbook/engine/scripting/script-class-registry/script-class-registry-table.md
+                  - "script_field_info": handbook/engine/scripting/script-class-registry/script-field-info.md
+              - "script_component.h":
+                  - handbook/engine/scripting/script-component.md
+                  - "script_component": handbook/engine/scripting/script-component/script-component.md
+                  - "script_entry": handbook/engine/scripting/script-component/script-entry.md
+                  - "script_entry_id": handbook/engine/scripting/script-component/script-entry-id.md
+                  - "script_set": handbook/engine/scripting/script-component/script-set.md
+                  - "script_store": handbook/engine/scripting/script-component/script-store.md
+                  - "script_store::set_slot": handbook/engine/scripting/script-component/script-store-set-slot.md
+              - "script_fields.h":
+                  - handbook/engine/scripting/script-fields.md
+                  - "field_blob_field": handbook/engine/scripting/script-fields/field-blob-field.md
+                  - "field_blob_reader": handbook/engine/scripting/script-fields/field-blob-reader.md
+                  - "field_blob_writer": handbook/engine/scripting/script-fields/field-blob-writer.md
+              - "script_host.h":
+                  - handbook/engine/scripting/script-host.md
+                  - "host_capabilities": handbook/engine/scripting/script-host/host-capabilities.md
+                  - "script_host": handbook/engine/scripting/script-host/script-host.md
+                  - "script_host_config": handbook/engine/scripting/script-host/script-host-config.md
+              - "script_runtime.h":
+                  - handbook/engine/scripting/script-runtime.md
+                  - "collision_event": handbook/engine/scripting/script-runtime/collision-event.md
+                  - "script_runtime": handbook/engine/scripting/script-runtime/script-runtime.md
+                  - "script_runtime::faulted_slot": handbook/engine/scripting/script-runtime/script-runtime-faulted-slot.md
+                  - "script_runtime::pending_create": handbook/engine/scripting/script-runtime/script-runtime-pending-create.md
+                  - "script_runtime::query_scope_state": handbook/engine/scripting/script-runtime/script-runtime-query-scope-state.md
+                  - "script_runtime_config": handbook/engine/scripting/script-runtime/script-runtime-config.md
+                  - "script_runtime_stats": handbook/engine/scripting/script-runtime/script-runtime-stats.md
+              - "script_system.h": handbook/engine/scripting/script-system.md
+              - "scripting.h": handbook/engine/scripting/scripting.md
+              - "scripting_error.h": handbook/engine/scripting/scripting-error.md
+              # END GENERATED HEADER NAV
+      - Editor:
+          - handbook/editor.md
+          - Applications:
+              - handbook/editor/applications.md
+              - "editor_application.h":
+                  - handbook/editor/editor/editor-application.md
+                  - "editor_application": handbook/editor/editor/editor-application/editor-application.md
+                  - "startup_plan": handbook/editor/editor/editor-application/startup-plan.md
+                  - "startup_project": handbook/editor/editor/editor-application/startup-project.md
+              - "editor_context.h":
+                  - handbook/editor/editor/editor-context.md
+                  - "editor_context": handbook/editor/editor/editor-context/editor-context.md
+                  - "editor_context::debug_draw_flags": handbook/editor/editor/editor-context/editor-context-debug-draw-flags.md
+                  - "editor_host": handbook/editor/editor/editor-context/editor-host.md
+                  - "frame_task": handbook/editor/editor/editor-context/frame-task.md
+              - "editor_error.h": handbook/editor/editor/editor-error.md
+              - "editor_module_consumer.h":
+                  - handbook/editor/editor/editor-module-consumer.md
+                  - "editor_module_consumer": handbook/editor/editor/editor-module-consumer/editor-module-consumer.md
+                  - "module_panel_entry": handbook/editor/editor/editor-module-consumer/module-panel-entry.md
+              - "editor_options.h":
+                  - handbook/editor/editor/editor-options.md
+                  - "editor_options": handbook/editor/editor/editor-options/editor-options.md
+              - "headless_runner.h":
+                  - handbook/editor/editor/headless-runner.md
+                  - "exec_summary": handbook/editor/editor/headless-runner/exec-summary.md
+                  - "headless_runner": handbook/editor/editor/headless-runner/headless-runner.md
+              - "log_category.h": handbook/editor/editor/log-category.md
+              - "play_controller.h":
+                  - handbook/editor/editor/play-controller.md
+                  - "play_controller": handbook/editor/editor/play-controller/play-controller.md
+                  - "play_controller::pending_step": handbook/editor/editor/play-controller/play-controller-pending-step.md
+              - "project_trust.h":
+                  - handbook/editor/editor/project-trust.md
+                  - "project_trust": handbook/editor/editor/project-trust/project-trust.md
+                  - "trusted_project": handbook/editor/editor/project-trust/trusted-project.md
+          - Architecture: handbook/editor/editor.md
+          - Commands and Undo:
+              - handbook/editor/commands-and-undo.md
+              - "builtin_commands.h": handbook/editor/editor/builtin-commands.md
+              - "command_desc.h":
+                  - handbook/editor/editor/command-desc.md
+                  - "command_desc": handbook/editor/editor/command-desc/command-desc.md
+              - "command_dispatcher.h":
+                  - handbook/editor/editor/command-dispatcher.md
+                  - "command_dispatcher": handbook/editor/editor/command-dispatcher/command-dispatcher.md
+                  - "command_dispatcher::batch_state": handbook/editor/editor/command-dispatcher/command-dispatcher-batch-state.md
+                  - "command_dispatcher::pending_request": handbook/editor/editor/command-dispatcher/command-dispatcher-pending-request.md
+              - "command_registry.h":
+                  - handbook/editor/editor/command-registry.md
+                  - "command_registry": handbook/editor/editor/command-registry/command-registry.md
+                  - "command_registry::entry": handbook/editor/editor/command-registry/command-registry-entry.md
+              - "editor_command.h":
+                  - handbook/editor/editor/editor-command.md
+                  - "async_reply": handbook/editor/editor/editor-command/async-reply.md
+                  - "command_descriptor": handbook/editor/editor/editor-command/command-descriptor.md
+                  - "command_inverse": handbook/editor/editor/editor-command/command-inverse.md
+                  - "command_invocation": handbook/editor/editor/editor-command/command-invocation.md
+                  - "command_outcome": handbook/editor/editor/editor-command/command-outcome.md
+                  - "command_request": handbook/editor/editor/editor-command/command-request.md
+              - "entity_ref.h":
+                  - handbook/editor/editor/entity-ref.md
+                  - "entity_ref": handbook/editor/editor/entity-ref/entity-ref.md
+              - "reflection_path.h":
+                  - handbook/editor/editor/reflection-path.md
+                  - "field_ref": handbook/editor/editor/reflection-path/field-ref.md
+                  - "path_segment": handbook/editor/editor/reflection-path/path-segment.md
+                  - "reflection_path": handbook/editor/editor/reflection-path/reflection-path.md
+              - "schema_validator.h":
+                  - handbook/editor/editor/schema-validator.md
+                  - "compiled_schema": handbook/editor/editor/schema-validator/compiled-schema.md
+              - "undo_stack.h":
+                  - handbook/editor/editor/undo-stack.md
+                  - "transaction_scope": handbook/editor/editor/undo-stack/transaction-scope.md
+                  - "undo_entry": handbook/editor/editor/undo-stack/undo-entry.md
+                  - "undo_stack": handbook/editor/editor/undo-stack/undo-stack.md
+          - Protocol:
+              - handbook/editor/protocol.md
+              - "access_token.h": handbook/editor/editor/protocol/access-token.md
+              - "audit_log.h":
+                  - handbook/editor/editor/protocol/audit-log.md
+                  - "audit_entry": handbook/editor/editor/protocol/audit-log/audit-entry.md
+                  - "audit_log": handbook/editor/editor/protocol/audit-log/audit-log.md
+              - "event_broadcaster.h":
+                  - handbook/editor/editor/event-broadcaster.md
+                  - "event_broadcaster": handbook/editor/editor/event-broadcaster/event-broadcaster.md
+                  - "event_broadcaster::client": handbook/editor/editor/event-broadcaster/event-broadcaster-client.md
+              - "line_splitter.h":
+                  - handbook/editor/editor/protocol/line-splitter.md
+                  - "line_splitter": handbook/editor/editor/protocol/line-splitter/line-splitter.md
+                  - "line_splitter::framed_line": handbook/editor/editor/protocol/line-splitter/line-splitter-framed-line.md
+              - "loopback_transport.h":
+                  - handbook/editor/editor/protocol/loopback-transport.md
+                  - "loopback_client": handbook/editor/editor/protocol/loopback-transport/loopback-client.md
+                  - "loopback_transport": handbook/editor/editor/protocol/loopback-transport/loopback-transport.md
+              - "protocol_message.h":
+                  - handbook/editor/editor/protocol/protocol-message.md
+                  - "protocol_event": handbook/editor/editor/protocol/protocol-message/protocol-event.md
+                  - "protocol_request": handbook/editor/editor/protocol/protocol-message/protocol-request.md
+                  - "protocol_response": handbook/editor/editor/protocol/protocol-message/protocol-response.md
+              - "protocol_server.h":
+                  - handbook/editor/editor/protocol/protocol-server.md
+                  - "client_state": handbook/editor/editor/protocol/protocol-server/client-state.md
+                  - "protocol_server": handbook/editor/editor/protocol/protocol-server/protocol-server.md
+              - "protocol_transport.h":
+                  - handbook/editor/editor/protocol/protocol-transport.md
+                  - "inbound_line": handbook/editor/editor/protocol/protocol-transport/inbound-line.md
+                  - "protocol_transport": handbook/editor/editor/protocol/protocol-transport/protocol-transport.md
+          - User Interface:
+              - handbook/editor/user-interface.md
+              - "ai_session_panel.h":
+                  - handbook/editor/editor/ui/panels/ai-session-panel.md
+                  - "ui::ai_session_panel": handbook/editor/editor/ui/panels/ai-session-panel/ui-ai-session-panel.md
+              - "asset_browser_panel.h":
+                  - handbook/editor/editor/ui/panels/asset-browser-panel.md
+                  - "ui::asset_browser_panel": handbook/editor/editor/ui/panels/asset-browser-panel/ui-asset-browser-panel.md
+              - "console_buffer.h":
+                  - handbook/editor/editor/console-buffer.md
+                  - "console_buffer": handbook/editor/editor/console-buffer/console-buffer.md
+                  - "console_buffer::entry": handbook/editor/editor/console-buffer/console-buffer-entry.md
+                  - "console_query": handbook/editor/editor/console-buffer/console-query.md
+                  - "console_record": handbook/editor/editor/console-buffer/console-record.md
+              - "console_panel.h":
+                  - handbook/editor/editor/ui/panels/console-panel.md
+                  - "ui::console_panel": handbook/editor/editor/ui/panels/console-panel/ui-console-panel.md
+              - "editor_camera.h":
+                  - handbook/editor/editor/editor-camera.md
+                  - "editor_camera": handbook/editor/editor/editor-camera/editor-camera.md
+              - "editor_icon.h": handbook/editor/editor/ui/editor-icon.md
+              - "editor_layer.h":
+                  - handbook/editor/editor/ui/editor-layer.md
+                  - "ui::editor_layer": handbook/editor/editor/ui/editor-layer/ui-editor-layer.md
+              - "editor_panel.h":
+                  - handbook/editor/editor/ui/editor-panel.md
+                  - "ui::editor_panel": handbook/editor/editor/ui/editor-panel/ui-editor-panel.md
+                  - "ui::panel_descriptor": handbook/editor/editor/ui/editor-panel/ui-panel-descriptor.md
+                  - "ui::panel_registry": handbook/editor/editor/ui/editor-panel/ui-panel-registry.md
+              - "editor_workspace.h":
+                  - handbook/editor/editor/ui/editor-workspace.md
+                  - "ui::editor_workspace": handbook/editor/editor/ui/editor-workspace/ui-editor-workspace.md
+                  - "ui::editor_workspace::panel_instance": handbook/editor/editor/ui/editor-workspace/ui-editor-workspace-panel-instance.md
+                  - "ui::menu_request": handbook/editor/editor/ui/editor-workspace/ui-menu-request.md
+              - "export_dialog.h":
+                  - handbook/editor/editor/ui/panels/export-dialog.md
+                  - "ui::export_dialog": handbook/editor/editor/ui/panels/export-dialog/ui-export-dialog.md
+              - "gizmo_controller.h":
+                  - handbook/editor/editor/ui/gizmo-controller.md
+                  - "ui::gizmo_controller": handbook/editor/editor/ui/gizmo-controller/ui-gizmo-controller.md
+                  - "ui::gizmo_controller::dragged_entity": handbook/editor/editor/ui/gizmo-controller/ui-gizmo-controller-dragged-entity.md
+              - "hierarchy_cache.h":
+                  - handbook/editor/editor/ui/hierarchy-cache.md
+                  - "ui::hierarchy_cache": handbook/editor/editor/ui/hierarchy-cache/ui-hierarchy-cache.md
+                  - "ui::hierarchy_row": handbook/editor/editor/ui/hierarchy-cache/ui-hierarchy-row.md
+              - "hierarchy_panel.h":
+                  - handbook/editor/editor/ui/panels/hierarchy-panel.md
+                  - "ui::hierarchy_panel": handbook/editor/editor/ui/panels/hierarchy-panel/ui-hierarchy-panel.md
+              - "history_panel.h":
+                  - handbook/editor/editor/ui/panels/history-panel.md
+                  - "ui::history_panel": handbook/editor/editor/ui/panels/history-panel/ui-history-panel.md
+              - "imgui_frame_scope.h":
+                  - handbook/editor/editor/ui/imgui-frame-scope.md
+                  - "ui::imgui_frame_scope": handbook/editor/editor/ui/imgui-frame-scope/ui-imgui-frame-scope.md
+              - "inspector_panel.h":
+                  - handbook/editor/editor/ui/panels/inspector-panel.md
+                  - "ui::inspector_panel": handbook/editor/editor/ui/panels/inspector-panel/ui-inspector-panel.md
+              - "panel_desc.h":
+                  - handbook/editor/editor/panel-desc.md
+                  - "panel_desc": handbook/editor/editor/panel-desc/panel-desc.md
+              - "picker.h":
+                  - handbook/editor/editor/picker.md
+                  - "pick_candidate": handbook/editor/editor/picker/pick-candidate.md
+                  - "pick_context": handbook/editor/editor/picker/pick-context.md
+                  - "pick_result": handbook/editor/editor/picker/pick-result.md
+              - "profiler_panel.h":
+                  - handbook/editor/editor/ui/panels/profiler-panel.md
+                  - "ui::profiler_panel": handbook/editor/editor/ui/panels/profiler-panel/ui-profiler-panel.md
+              - "property_drawer.h":
+                  - handbook/editor/editor/ui/property-drawer.md
+                  - "ui::property_draw_context": handbook/editor/editor/ui/property-drawer/ui-property-draw-context.md
+                  - "ui::property_drawer_registry": handbook/editor/editor/ui/property-drawer/ui-property-drawer-registry.md
+              - "screenshot_service.h":
+                  - handbook/editor/editor/screenshot-service.md
+                  - "memory_screenshot_backend": handbook/editor/editor/screenshot-service/memory-screenshot-backend.md
+                  - "screenshot_backend": handbook/editor/editor/screenshot-service/screenshot-backend.md
+                  - "screenshot_request": handbook/editor/editor/screenshot-service/screenshot-request.md
+                  - "screenshot_service": handbook/editor/editor/screenshot-service/screenshot-service.md
+                  - "screenshot_service::pending": handbook/editor/editor/screenshot-service/screenshot-service-pending.md
+              - "selection_set.h":
+                  - handbook/editor/editor/selection-set.md
+                  - "selection_set": handbook/editor/editor/selection-set/selection-set.md
+              - "toolbar_panel.h":
+                  - handbook/editor/editor/ui/panels/toolbar-panel.md
+                  - "ui::toolbar_panel": handbook/editor/editor/ui/panels/toolbar-panel/ui-toolbar-panel.md
+              - "viewport_panel.h":
+                  - handbook/editor/editor/ui/panels/viewport-panel.md
+                  - "ui::viewport_panel": handbook/editor/editor/ui/panels/viewport-panel/ui-viewport-panel.md

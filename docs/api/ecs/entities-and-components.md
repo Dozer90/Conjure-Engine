@@ -1,29 +1,25 @@
 # Entities and components
+<!-- doc-template:wiki -->
+[API](../index.md) → [ECS](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md)
-
+<!-- doc-content:purpose:start -->
 How to define a component type, register it, create entities and attach data to them. Headers:
 `conjure/ecs/entity.h` (the id), `conjure/ecs/component.h` (`CONJURE_COMPONENT`, ids, flags, masks),
 `conjure/ecs/component_registry.h`, `conjure/ecs/world.h` (create, destroy, add, get, remove),
 `conjure/ecs/entity_handle.h` (the object-style facade) and `conjure/ecs/component_type_desc.h` (for module
 authors). Everything is in `namespace conjure::ecs`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Make a struct usable as a component | `CONJURE_REFLECT_STRUCT(T, "game.name", fields...)` then `CONJURE_COMPONENT(T, "game.name")` |
-| Register it | `registry.register_component<T>()` once, before any world uses it |
-| A marker with no data | an empty struct; it becomes a **tag** automatically |
-| Create or destroy an entity | `world.create_entity()`, `world.destroy_entity(id)` |
-| Attach, read, write, replace, detach a component | `world.add<T>(id, value)`, `world.get<T>(id)`, `world.set(id, value)`, `world.remove<T>(id)` |
-| Ask without failing on a stale id | `world.is_alive(id)`, `world.has<T>(id)`, `world.get<T>(id)` (nullptr) |
-| Hold "an entity plus its world" in one object | `world.handle(id)` returns an `entity_handle` |
-| Keep a reference to one component of one entity | `handle.component<T>()` returns a `component_ref<T>` |
-| Work by id instead of type (bindings, tools) | `add_raw`, `get_raw`, `has_raw`, `remove_raw` with a `component_id` |
-| Export component types from a module | `describe_component<T>()` and `component_type_desc` |
+| Name | Entities and components |
+| Module | ECS |
+| `#include` | `conjure/ecs/component.h`, `conjure/ecs/component_registry.h`, `conjure/ecs/component_type_desc.h`, `conjure/ecs/entity.h`, `conjure/ecs/entity_handle.h`, `conjure/ecs/world.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/ecs.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/reflect/reflect.h"
@@ -56,7 +52,32 @@ void apply_damage(world &game, entity target, i32 amount) {
 
 The registry and the world are created once (`component_registry registry = {}; world game(registry);`) and the
 registry must outlive every world built on it.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Make a struct usable as a component | `CONJURE_REFLECT_STRUCT(T, "game.name", fields...)` then `CONJURE_COMPONENT(T, "game.name")` |
+| Register it | `registry.register_component<T>()` once, before any world uses it |
+| A marker with no data | an empty struct; it becomes a **tag** automatically |
+| Create or destroy an entity | `world.create_entity()`, `world.destroy_entity(id)` |
+| Attach, read, write, replace, detach a component | `world.add<T>(id, value)`, `world.get<T>(id)`, `world.set(id, value)`, `world.remove<T>(id)` |
+| Ask without failing on a stale id | `world.is_alive(id)`, `world.has<T>(id)`, `world.get<T>(id)` (nullptr) |
+| Hold "an entity plus its world" in one object | `world.handle(id)` returns an `entity_handle` |
+| Keep a reference to one component of one entity | `handle.component<T>()` returns a `component_ref<T>` |
+| Work by id instead of type (bindings, tools) | `add_raw`, `get_raw`, `has_raw`, `remove_raw` with a `component_id` |
+| Export component types from a module | `describe_component<T>()` and `component_type_desc` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Defining a component type
 
 A component is a plain struct: no virtual functions, no base class, member initialisers for defaults. Two macros
@@ -226,7 +247,7 @@ as arrays of system names, and a plain function pointer `run(system_context &)`.
 that nothing has registered does not fail the load, so a system may name a component of an optional dependency:
 the engine logs one warning per such name and the system gains the access when a component of that name is
 registered ([Queries, views and systems](queries-views-and-systems.md#systems)). Both records are described in
-🛠 Handbook: [Module system](../../handbook/module-system/index.md).
+🛠 Handbook: [Module system](../../handbook/extensions/module-system.md).
 
 Scripts register components without a C++ type through `register_dynamic(dynamic_component_desc)` (name, size,
 alignment 1 to 16, a field list of primitive, math or `entity` kinds, optional default bytes); the result is always
@@ -234,9 +255,13 @@ alignment 1 to 16, a field list of primitive, math or `entity` kinds, optional d
 only when the fields match too: other fields (order, names, types or offsets) at the same size are
 `NAME_CONFLICT`. `redefine_dynamic(id, desc)` changes the layout and fields while keeping the id, and refuses with
 `COMPONENT_IN_USE` while a world still holds an instance. The hot-reload sequence
-is on the 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) page.
+is on the 🛠 Handbook: [ECS module](../../handbook/engine/ecs.md) page.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -258,11 +283,20 @@ is on the 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md) page.
 | `class entity_handle`: `id()`, `is_alive()`, `add<T>()`, `component<T>()`, `has<T>()`, `remove<T>()`, `destroy()` | object-style facade |
 | `class component_ref<T>`: `valid()`, `read()`, `write()`, `set(T)` | re-resolving component reference |
 | `component_type_desc describe_component<T>(flags = {})`; `struct system_extension_desc` | module extension records |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Queries, views and systems](queries-views-and-systems.md) to iterate what you created
 - 📘 API: [Command buffers and observers](command-buffers-and-observers.md) for structural changes from systems
 - 📘 API: [Reflection](../core/reflection.md) for `CONJURE_REFLECT_STRUCT`; [Errors and results](../core/errors-and-results.md) for `result<T>` and `CONJURE_TRY`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [ECS module](../../handbook/modules/ecs.md)
+- 🛠 Handbook: [ECS module](../../handbook/engine/ecs.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

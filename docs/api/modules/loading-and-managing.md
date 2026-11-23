@@ -1,31 +1,25 @@
 # Loading and managing modules
+<!-- doc-template:wiki -->
+[API](../index.md) → [Modules](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Modules module](../../handbook/modules/modules.md)
-
+<!-- doc-content:purpose:start -->
 The host side of the module system: finding manifests, loading modules in dependency order, unloading and
 reloading them, and reading what is loaded. In a game the engine owns the `module_manager` and you only read its
 `module_registry`; you build a manager yourself in a tool, a test host or a custom runtime. Include
 `conjure/modules/module_manager.h`; it brings `conjure/modules/module_registry.h` and
 `conjure/modules/module_consumer.h` with it. Everything is in `namespace conjure::modules`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Create the manager | `module_manager manager(desc, eventBus)` with a `module_manager_desc` |
-| Find every module under a directory | `manager.discover(directory)` |
-| Register one manifest or a built-in module | `manager.add_manifest(path)`, `manager.add_static_module(desc)` |
-| Load everything in order | `manager.load_all()` |
-| Load one module and what it depends on | `manager.load(id)` |
-| Unload, refusing while in use / stripping instances | `manager.unload(id)`, `manager.unload(id, unload_policy::REMOVE_INSTANCES)` |
-| Reload a rebuilt module keeping state | `manager.reload(id, reload_scope::FULL)` |
-| Change modules from inside a frame | `request_load()` / `request_unload()` / `request_reload()`, then `apply_pending()` at frame start |
-| Look a module up, read its state or error | `manager.registry().find(name)`, `state(id)`, `last_error(id)` |
-| Apply module registrations in an engine system | derive from `module_consumer`, `manager.add_consumer(consumer)` |
-| Offer host objects to modules | `manager.provide_service(object)` |
-| Lay out loaded modules for a shipped build | `manager.export_layout(directory, build_config::DISTRIBUTION)` |
+| Name | Loading and managing modules |
+| Module | Modules |
+| `#include` | `conjure/modules/module_abi.h`, `conjure/modules/module_consumer.h`, `conjure/modules/module_manager.h`, `conjure/modules/module_registry.h`, `conjure/modules/module_resolver.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/modules.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/modules/module_manager.h"
@@ -57,7 +51,34 @@ result<void> load_project_modules(module_manager &manager, const std::filesystem
 
 The manager itself is built once by the host: `module_manager_desc desc = {}; desc.host = module_host_kind::RUNTIME;
 module_manager manager(desc, events);`. Destroying it unloads everything in reverse order.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Create the manager | `module_manager manager(desc, eventBus)` with a `module_manager_desc` |
+| Find every module under a directory | `manager.discover(directory)` |
+| Register one manifest or a built-in module | `manager.add_manifest(path)`, `manager.add_static_module(desc)` |
+| Load everything in order | `manager.load_all()` |
+| Load one module and what it depends on | `manager.load(id)` |
+| Unload, refusing while in use / stripping instances | `manager.unload(id)`, `manager.unload(id, unload_policy::REMOVE_INSTANCES)` |
+| Reload a rebuilt module keeping state | `manager.reload(id, reload_scope::FULL)` |
+| Change modules from inside a frame | `request_load()` / `request_unload()` / `request_reload()`, then `apply_pending()` at frame start |
+| Look a module up, read its state or error | `manager.registry().find(name)`, `state(id)`, `last_error(id)` |
+| Apply module registrations in an engine system | derive from `module_consumer`, `manager.add_consumer(consumer)` |
+| Offer host objects to modules | `manager.provide_service(object)` |
+| Lay out loaded modules for a shipped build | `manager.export_layout(directory, build_config::DISTRIBUTION)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Setting up the manager
 
 `module_manager_desc` describes the host:
@@ -137,7 +158,7 @@ the rest of the cascade `UNLOADED` with their snapshots kept; the next successfu
 fix-rebuild-reload loses nothing.
 
 > [!WARNING]
-> Every mutator (`load`, `unload`, `reload`, `apply_pending`, `add_consumer`, ...) runs on the main thread outside a
+> Every mutator (`load`, `unload`, `reload`, `apply_pending`, `add_consumer`,...) runs on the main thread outside a
 > frame and asserts both. From a system, an editor command or any job, use the request functions instead:
 > `request_load(id)`, `request_unload(id, policy)` and `request_reload(id, scope)` enqueue (main thread only),
 > `apply_pending()` performs the queue at the next frame start and `pending_count()` tells how much is waiting.
@@ -176,7 +197,7 @@ and adding one instance with `add_consumer()`. The manager calls, on the main th
 | `can_detach(id, policy)` | before an unload | side-effect free veto: `IN_USE`, `UNLOAD_BLOCKED` |
 | `detach(id, reload)` | in reverse order | remove everything the module registered; `reload` is null for a plain unload, a `reload_context` to fill during a reload |
 | `restore(id, reload)` | after re-attach in a reload | read the blobs back |
-| `live_use_count(id)` | diagnostics and faults | entities with its components, open assets, ... |
+| `live_use_count(id)` | diagnostics and faults | entities with its components, open assets,... |
 | `participates_in_managed_reload()` | `MANAGED_ONLY` | default false; the scripting consumer says true |
 
 `reload_context` is a key-value store of byte blobs: `store(key, bytes)`, `fetch(key)` (empty when missing),
@@ -258,8 +279,12 @@ and `registry().last_error(id)` keeps it.
 
 Everything before the entry is side-effect free apart from a closed handle; a failed entry or validation closes the
 binary and applies nothing; `FAILED` modules may be loaded again after the cause is fixed.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -277,11 +302,20 @@ binary and applies nothing; `FAILED` modules may be loaded again after the cause
 | `class module_consumer` with `name`, `validate`, `attach`, `can_detach`, `detach`, `restore`, `live_use_count`, `participates_in_managed_reload` | the consumer interface |
 | `reload_context::store(key, bytes)` / `span<const byte> fetch(key)` / `bool contains(key)` / `usize size()` | reload snapshots |
 | `const conjure_module_abi_signature &host_abi_signature()` / `result<void> compare_abi(module, host)` / `constexpr make_abi_signature()` / `make_module_info(name)` | the ABI check |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Modules and plugins](index.md), [Writing a module](writing-a-module.md) (the module author's side)
 - 📘 API: [Errors and results](../core/errors-and-results.md), [Time, events and random](../core/time-and-events.md)
   (the event bus), [Jobs and threading](../core/jobs.md) (the main thread)
-- 🛠 Handbook: [Importing and distributing modules](../../handbook/module-system/importing-and-distributing.md),
-  [Modules module](../../handbook/modules/modules.md) (load algorithm, shadow copies, ABI identity)
+- 🛠 Handbook: [Importing and distributing modules](../../handbook/extensions/importing-and-distributing-modules.md),
+  [Modules module](../../handbook/engine/modules.md) (load algorithm, shadow copies, ABI identity)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,25 +1,23 @@
 # Errors and results
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Conjure never throws. A function that can fail at runtime (I/O, parsing, device creation, a lookup that may miss)
 returns `result<T>`: either a value or an `error`. Include `conjure/core/result.h`; it brings in
 `conjure/core/error.h`, which defines `error`, the generic `error_code` enumeration and `make_error`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Return a value or a failure | `result<T>`; return the value, or `make_error(code, "why {}", detail)` |
-| Report success or failure with no value | `status` (an alias for `result<void>`); return `{}` or `status::success()` on success |
-| Check a result | `if (outcome.has_value())` or `if (outcome)` |
-| Read the value | `outcome.value()`, `*outcome`, `outcome->member` (only after checking) |
-| Read the value with a default | `outcome.value_or(fallback)` |
-| Read the failure | `outcome.get_error()`, then `.is(code)`, `.message()`, `.to_string()` |
-| Pass a failure up to your caller | `CONJURE_TRY(expression);` or `CONJURE_TRY_ASSIGN(auto value, expression);` |
-| Define error codes for your own system | an `enum class my_error : u16` plus `CONJURE_DECLARE_ERROR_CATEGORY` |
+| Name | Errors and results |
+| Module | Core |
+| `#include` | `conjure/core/error.h`, `conjure/core/result.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/log.h"
@@ -53,7 +51,30 @@ void report(int numerator, int denominator) {
 
 `LOG_CORE` is the engine's fallback log category; your own systems declare their own (see
 [Logging and assertions](logging-and-assertions.md)).
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Return a value or a failure | `result<T>`; return the value, or `make_error(code, "why {}", detail)` |
+| Report success or failure with no value | `status` (an alias for `result<void>`); return `{}` or `status::success()` on success |
+| Check a result | `if (outcome.has_value())` or `if (outcome)` |
+| Read the value | `outcome.value()`, `*outcome`, `outcome->member` (only after checking) |
+| Read the value with a default | `outcome.value_or(fallback)` |
+| Read the failure | `outcome.get_error()`, then `.is(code)`, `.message()`, `.to_string()` |
+| Pass a failure up to your caller | `CONJURE_TRY(expression);` or `CONJURE_TRY_ASSIGN(auto value, expression);` |
+| Define error codes for your own system | an `enum class my_error : u16` plus `CONJURE_DECLARE_ERROR_CATEGORY` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Returning a result
 
 `result<T>` converts implicitly from a `T` and from an `error`, so a function returns either one directly:
@@ -235,8 +256,12 @@ message)` is the lower-level form `make_error` uses.
 > Expand `CONJURE_DECLARE_ERROR_CATEGORY` outside your own namespace (at global scope is simplest; it specialises a
 > template inside `conjure::core`, so it cannot sit inside `namespace game`), exactly once per enumeration, in a
 > header every user of the enumeration includes.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -248,8 +273,8 @@ message)` is the lower-level form `make_error` uses.
 | `using status = result<void>` | success or error |
 | `static status status::success()` | explicit success |
 | `CONJURE_TRY(expression);` | return the error of `expression` if it failed |
-| `CONJURE_TRY_ASSIGN(declaration, expression);` | ...otherwise bind the value |
-| `enum class error_code : u16` | generic codes, `NONE` .. `CANCELLED` |
+| `CONJURE_TRY_ASSIGN(declaration, expression);` |...otherwise bind the value |
+| `enum class error_code : u16` | generic codes, `NONE`.. `CANCELLED` |
 | `std::string_view to_string(error_code)` | code name |
 | `error()` / `error(error_code)` / `error(error_code, std::string)` | generic errors |
 | `error make_error(E code)` / `make_error(E code, std::string_view)` / `make_error(E code, fmt, args...)` | build an error from any bound enumeration |
@@ -259,9 +284,18 @@ message)` is the lower-level form `make_error` uses.
 | `u32 category() const` / `std::string_view category_name() const` | inspect the category |
 | `const std::string &message() const` / `std::string to_string() const` | text |
 | `CONJURE_DECLARE_ERROR_CATEGORY(enum_type, "name", name_function)` | bind an enumeration to a category |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Logging and assertions](logging-and-assertions.md): errors are for runtime failures, asserts for programmer errors
 - 📘 API: [Data types](data-types.md) for `u16` and the enumeration conventions
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

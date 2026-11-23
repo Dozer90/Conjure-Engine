@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 514" role="img"
+ aria-labelledby="graph-title graph-description">
+<title id="graph-title">Audio module dependencies</title>
+<desc id="graph-description">Arrows run from dependency to consumer. Direct dependencies are grouped in alphabetical Public and Private columns. Solid edges are public; dashed edges are private. Each access group shares one incoming arrow. Consumers, when present, appear directly below the selected module without repeated headings.</desc>
+<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
+<path d="M0,0 L8,4 L0,8 Z" fill="#8c8c8c"/></marker>
+<mask id="node-assets" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+<circle cx="252" cy="110" r="8" fill="black"/>
+</mask>
+<mask id="node-audio" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+<circle cx="296" cy="286" r="8" fill="black"/>
+</mask>
+<mask id="node-bindings" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+</mask>
+<mask id="node-core" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+<circle cx="252" cy="186" r="8" fill="black"/>
+</mask>
+<mask id="node-engine" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+</mask>
+<mask id="node-thirdparty::miniaudio" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="514" style="mask-type:luminance"><rect width="576" height="514" fill="white"/>
+<circle cx="324" cy="186" r="8" fill="black"/>
+</mask>
+</defs>
+<path data-dependency="assets" data-consumer="audio" d="M252,110 L280,138" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="core" data-consumer="audio" d="M252,186 L280,214" fill="none" stroke="#8c8c8c" stroke-width="2.5"/>
+<path data-dependency="thirdparty::miniaudio" data-consumer="audio" d="M324,186 L296,214" fill="none" stroke="#8c8c8c" stroke-width="2.5" stroke-dasharray="7 5"/>
+<path data-dependency="audio" data-consumer="bindings" d="M296,286 L296,350 L304,358 L310.5,358" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<path data-dependency="audio" data-consumer="engine" d="M296,286 L296,426 L304,434 L310.5,434" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<path data-trunk="public" data-consumer="audio" d="M280,138 L280,224.5" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-trunk="private" data-consumer="audio" d="M296,214 L296,224.5" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<text x="144" y="30" text-anchor="middle" fill="#c8c8c8" font-family="Futura Bk BT, sans-serif" font-size="19">Public</text>
+<text x="432" y="30" text-anchor="middle" fill="#c8c8c8" font-family="Futura Bk BT, sans-serif" font-size="19">Private</text>
+<a href="../../handbook/engine/audio.html" target="_top">
+<rect x="176" y="234" width="224" height="56" rx="15" fill="#171717" stroke="#009dff" stroke-width="3" mask="url(#node-audio)"/>
+<text x="288" y="268" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">audio</text>
+</a>
+<a href="../../handbook/engine/assets.html" target="_top">
+<rect x="32" y="62" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-assets)"/>
+<text x="144" y="96" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">assets</text>
+</a>
+<a href="../../handbook/engine/core.html" target="_top">
+<rect x="32" y="138" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-core)"/>
+<text x="144" y="172" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">core</text>
+</a>
+<rect x="320" y="138" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-thirdparty::miniaudio)"/>
+<text x="432" y="172" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">miniaudio</text>
+<a href="../../handbook/engine/bindings.html" target="_top">
+<rect x="320" y="330" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-bindings)"/>
+<text x="432" y="364" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">bindings</text>
+</a>
+<a href="../../handbook/engine/engine.html" target="_top">
+<rect x="320" y="406" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-engine)"/>
+<text x="432" y="440" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">engine</text>
+</a>
+<circle data-port="assets" data-access="public" cx="252" cy="110" r="4" fill="#8c8c8c"/>
+<circle data-port="audio" data-access="private" cx="296" cy="286" r="4" fill="#8c8c8c"/>
+<circle data-port="core" data-access="public" cx="252" cy="186" r="4" fill="#8c8c8c"/>
+<circle data-port="thirdparty::miniaudio" data-access="private" cx="324" cy="186" r="4" fill="#8c8c8c"/>
+</svg>

@@ -1,13 +1,16 @@
 # Physics
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
-
+<!-- doc-content:purpose:start -->
 Rigid bodies, colliders, a character controller, layers, collision events and spatial queries, simulated by
 Jolt Physics behind a small engine-side API. You describe bodies with components on scene entities; the
 `physics_world` creates the Jolt bodies for you, steps them at the fixed rate and writes the results back into
 the entities' transforms. Everything on these pages is in `namespace conjure::physics`; no Jolt type appears in
 any header.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. An entity becomes a body when it carries a `rigid_body` (or a `character_controller`) plus one or more
@@ -17,7 +20,7 @@ any header.
    components, apply queued commands), `step` (Jolt), `pull_transforms` (write poses and velocities back into
    `local_transform` and the components) and `collect_contact_events`. The engine's four systems do this for
    you; a tool or a test calls them by hand.
-3. Every gameplay mutation (`add_force`, `set_linear_velocity`, `teleport`, `wake`, `character_move`, ...) is a
+3. Every gameplay mutation (`add_force`, `set_linear_velocity`, `teleport`, `wake`, `character_move`,...) is a
    queued command applied at the next push, so a frame of gameplay sees one consistent state. A command the
    entity's kind of body cannot take (a force on a static body) is refused at the call with `WRONG_BODY_KIND`.
 4. Contacts come out of `contact_events()` as a span sorted by body pair: one `ENTER`, `STAY` or `EXIT` (or
@@ -98,4 +101,13 @@ core::result<void> drop_a_crate(ecs::world &world, core::jobs::job_system &jobs,
 ## See also
 
 - 📘 API: [Scenes and the hierarchy](../scene/scenes-and-hierarchy.md), [Jobs and threading](../core/jobs.md), [Math](../core/math.md)
-- 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
+- 🛠 Handbook: [Physics module](../../handbook/engine/physics.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/physics/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+| `conjure/physics/physics.h` | Convenience include for the public module APIs; individual headers can be included separately. |
+| `conjure/physics/physics_error.h` | Declares `physics_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

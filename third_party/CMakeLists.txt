@@ -28,7 +28,8 @@
 # says so. VERSION repeats the tag of the comment, or the commit of the URL where there is no tag, and the configure
 # fails when the two differ; jxl.cmake builds its URLs from variables, which its notices read as well. After a pin or
 # a notice changed, regenerate the tracked THIRD_PARTY_NOTICES.md: python tools/third_party_notices.py --build-dir
-# <tree> (docs/handbook/getting-started.md 11).
+# <tree> (docs/handbook/project-reference/third-party-dependencies/index.md, "Licence and third-party
+# notices").
 
 include(FetchContent)
 include(ConjureNotices)
@@ -579,6 +580,80 @@ conjure_third_party_notice(msvc_runtime
 are Microsoft's files, unchanged, and are covered by the licence terms of Visual Studio, which name them among \
 the files that may be distributed with a program, not by an open-source licence."
     USED ${msvcRuntimeImported}
+)
+
+#------------------------------------------------------------------------------
+# Documentation site (docs/assets, tools/docs_theme)
+#------------------------------------------------------------------------------
+# tools/docs_assets.py imports four files of the Material for MkDocs theme pinned in tools/docs_requirements.txt into
+# docs/assets as editable sources (docs/assets/material-version.txt names the version), and the site publishes them
+# with the callout icons. No build fetches them and no binary contains them: they are tracked under their authors'
+# licences, whose texts are kept in docs/assets/licenses/ so that the site publishes them too. The import drops the
+# bundle's focus-visible polyfill (W3C Software and Document License, whose full text would have to ship with it),
+# and the stylesheet uses the :focus-visible pseudo-class instead. A new vendored file needs its notice here first;
+# tools/tests/test_docs_site.py checks that docs/assets holds no other.
+conjure_third_party_notice(mkdocs_material
+    NAME "Material for MkDocs" VERSION 9.6.14 LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/squidfunk/mkdocs-material"
+    NOTE "The theme of the documentation site. docs/assets/stylesheets/material-theme.css and material-palette.css, \
+docs/assets/javascripts/material-theme.js and workers/search-worker.js are reformatted copies of its stylesheets, \
+its bundle (without its focus-visible polyfill) and its search worker, and tools/docs_theme/partials/nav.html and \
+nav-item.html are modified copies of its templates. The bundle and the worker contain the libraries that follow \
+under their own names, and material-theme.css contains the colour variables of material-design-color."
+    LICENSE_FILES ../docs/assets/licenses/mkdocs-material.txt
+)
+conjure_third_party_notice(material_design_color
+    NAME "material-design-color" VERSION 2.3.2 LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/mrmlnc/material-color"
+    NOTE "The colour variables in docs/assets/stylesheets/material-theme.css (material-color.scss in the theme's \
+source map), which keeps no notice of it."
+    LICENSE_FILES ../docs/assets/licenses/material-design-color.txt
+)
+conjure_third_party_notice(lunr
+    NAME "lunr.js" VERSION 2.3.9 LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/olivernn/lunr.js"
+    NOTE "The search index of the documentation site, in docs/assets/javascripts/workers/search-worker.js. Its \
+stemmer includes the Porter stemmer JavaScript code from http://tartarus.org/~martin/PorterStemmer/, as its header \
+says."
+    LICENSE_FILES ../docs/assets/licenses/lunr.txt
+)
+conjure_third_party_notice(rxjs
+    NAME "RxJS" LICENSE_ID "Apache-2.0" SCOPE BUILD
+    URL "https://github.com/ReactiveX/rxjs"
+    NOTE "In docs/assets/javascripts/material-theme.js (Material for MkDocs 9.6.14 depends on rxjs ^7.8.2), which \
+keeps no copyright line of it: Copyright (c) 2015-2018 Google, Inc., Netflix, Inc., Microsoft Corp. and contributors."
+    LICENSE_FILES ../docs/assets/licenses/apache-2.0.txt
+)
+conjure_third_party_notice(clipboard_js
+    NAME "clipboard.js" VERSION v2.0.11 LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/zenorocha/clipboard.js"
+    NOTE "The copy buttons of code blocks, in docs/assets/javascripts/material-theme.js."
+    LICENSE_FILES ../docs/assets/licenses/clipboard-js.txt
+)
+conjure_third_party_notice(escape_html
+    NAME "escape-html" LICENSE_ID "MIT" SCOPE BUILD
+    URL "https://github.com/component/escape-html"
+    NOTE "In docs/assets/javascripts/material-theme.js."
+    LICENSE_FILES ../docs/assets/licenses/escape-html.txt
+)
+conjure_third_party_notice(tslib
+    NAME "tslib" LICENSE_ID "0BSD" SCOPE BUILD
+    URL "https://github.com/microsoft/tslib"
+    NOTE "Runtime helpers of the TypeScript compiler, in docs/assets/javascripts/material-theme.js."
+    LICENSE_FILES ../docs/assets/licenses/tslib.txt
+)
+conjure_third_party_notice(material_design_icons
+    NAME "Material Design Icons (Pictogrammers)" LICENSE_ID "Apache-2.0" SCOPE BUILD
+    URL "https://github.com/Templarian/MaterialDesign"
+    NOTE "docs/assets/icons/callout-caution.svg, callout-note.svg, callout-tip.svg and callout-warning.svg are its \
+icons lightning-bolt-circle, pencil-circle, fire and alert, as Material for MkDocs ships them."
+    LICENSE_FILES ../docs/assets/licenses/material-design-icons.txt ../docs/assets/licenses/apache-2.0.txt
+)
+conjure_third_party_notice(font_awesome
+    NAME "Font Awesome Free" VERSION 6.7.2 LICENSE_ID "CC-BY-4.0 (icons)" SCOPE BUILD
+    URL "https://fontawesome.com/license/free"
+    NOTE "One icon embedded in docs/assets/stylesheets/material-theme.css with its attribution comment."
+    LICENSE_FILES ../docs/assets/licenses/font-awesome-free.txt
 )
 
 conjure_write_third_party_notices()

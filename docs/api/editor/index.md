@@ -1,15 +1,18 @@
 # The editor
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-
+<!-- doc-content:purpose:start -->
 `conjure_editor` is the tool you build games in, and the tool an AI agent drives. Every edit is a command: the
 Dear ImGui panels, the newline-delimited JSON protocol over TCP or stdio, and the headless `--exec` command file
 all send the same `entity.create`, `component.set`, `prefab.instantiate`, `play.start` requests to one
 dispatcher, which validates them, records their inverses for undo and emits events. The editor runs on top of
 the engine's `application` (📘 API: [Engine](../engine/index.md)); headless it runs on the null window, device
-and audio backend with the script runtime on the null host, so every command works without a GPU or .NET.
+and audio backend with the script runtime on the null host, so every command works without a GPU or.NET.
 Native types live in `namespace conjure::editor` (the UI in `conjure::editor::ui`).
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. The editor is `editor_application`: it owns an `engine::application`, an `editor_context` (registry,
@@ -25,7 +28,7 @@ Native types live in `namespace conjure::editor` (the UI in `conjure::editor::ui
    fields as `<component>.<field>.<subfield>` paths over the reflection description.
 5. Everything is discoverable at run time: `editor.schema` dumps the catalogue, `reflection.components` the
    component types, `reflection.asset_types` the importers; the committed dump is
-   `docs/generated/editor_protocol.json` and the agent skill `.claude/skills/editor-ai-control/SKILL.md`.
+   `docs/generated/editor_protocol.json`.
 
 ## Where to go next
 
@@ -91,11 +94,12 @@ with `copyRuntime` set made that choice itself and gets no such warning.
 | inverse | the command that undoes a mutating command; stored by the undo stack |
 | revision | a counter bumped by every mutation; every mutating result carries it |
 | transport | where request lines come from: TCP (`--ai-port`), stdio (`--ai-stdio`), the in-process loopback (tests), or the local UI |
-| headless | `--headless`: null platform, device and audio, the null script host (`--dotnet` keeps the real .NET host, for play tests that run C#); `view.screenshot` answers `NOT_AVAILABLE` |
+| headless | `--headless`: null platform, device and audio, the null script host (`--dotnet` keeps the real.NET host, for play tests that run C#); `view.screenshot` answers `NOT_AVAILABLE` |
 | play state | `editing`, `playing` or `paused`; mutating commands are refused while playing unless flagged otherwise |
 
 ## See also
 
 - 📘 API: [Engine: the application and the frame](../engine/index.md), [Scenes, hierarchy and prefabs](../scene/index.md), [Reflection](../core/reflection.md)
 - 📘 API: [Modules and plugins](../modules/index.md) (modules add commands and panels)
-- 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
+- 🛠 Handbook: [Editor module](../../handbook/editor/editor.md)
+<!-- doc-content:body:end -->

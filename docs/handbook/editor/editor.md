@@ -1,0 +1,402 @@
+---
+kind: application
+---
+
+[Editor](../editor.md)
+
+# Editor Architecture
+<!-- doc-template:application -->
+
+|---|---|
+| Type | Application |
+| Executable | `conjure_editor` |
+| Libraries | `conjure::editor_core`, `conjure::editor_ui` |
+| Namespace | `conjure::editor` |
+| Include Folder Path | `engine/include/conjure/editor` |
+| Source Folder Path | `engine/src/editor` |
+
+<!-- doc-content:purpose:start -->
+The editor is two static libraries and one executable under `engine/src/editor` and `editor/`:
+`conjure_editor_core` (alias `conjure::editor_core`: commands, undo, the newline-delimited JSON protocol over
+TCP, stdio and the loopback, the dispatcher, play mode, picking, screenshots, the headless runner,
+`editor_application`) and `conjure_editor_ui` (alias `conjure::editor_ui`: the Dear ImGui docking workspace, the
+panels, the property drawers, the ImGuizmo gizmos), plus `editor/src/main.cpp`. Both libraries are declared from
+`engine/CMakeLists.txt` (`editor` is the last entry of `CONJURE_ENGINE_MODULES`), join `conjure_shared` and are
+absent from Distribution; `conjure_editor` links `conjure::shared` and nothing else from the engine. Like
+`conjure_runtime`, the executable reads its arguments as UTF-8 (`editor/src/editor_arguments.h`, the Windows
+backend re-reads the wide command line) and on Windows embeds an `activeCodePage` UTF-8 manifest
+(`editor/src/conjure_editor.manifest`), so a project path outside the legacy code page survives; it keeps the
+console subsystem in every configuration it is built in, and its run path is its own directory, where
+`conjure_shared` sits. This chapter
+is for people changing the editor or adding commands and panels.
+
+See `engine/src/editor/README.md` for additional implementation notes.
+<!-- doc-content:purpose:end -->
+
+
+
+
+
+## Breakdown
+
+<!-- doc-content:breakdown:start -->
+### Contents
+
+- [1. Shape of the module](#1-shape-of-the-module)
+- [2. How a command runs](#2-how-a-command-runs)
+- [3. Undo and play mode](#3-undo-and-play-mode)
+- [4. The protocol](#4-the-protocol)
+- [5. Frame integration and headless mode](#5-frame-integration-and-headless-mode)
+- [6. The workspace](#6-the-workspace)
+- [7. Modules](#7-modules)
+- [8. Threading model](#8-threading-model)
+- [9. Extension points](#9-extension-points)
+- [10. Tests](#10-tests)
+- [11. Open items](#11-open-items)
+- [Related](#related)
+
+### Shape of the module
+
+`engine/src/editor/CMakeLists.txt` declares `editor_core` (`PUBLIC_DEPS conjure::core conjure::ecs
+conjure::platform conjure::assets conjure::scene conjure::modules conjure::engine`, private renderer, rhi,
+physics, scripting and, on Windows, `ws2_32`, `shell32`, `ole32` and `uuid`) and `editor_ui` (`PUBLIC_DEPS conjure::editor_core`, private ImGui
+and renderer), guarded by `CONJURE_BUILD_EDITOR` and the ImGui target. `editor_core` never includes ImGui or a
+socket header in a public header. Two file pairs are platform-specific, both chosen by CMake:
+`core/net/socket_win32.cpp` / `socket_posix.cpp` and `core/user_paths_windows.cpp` / `user_paths_posix.cpp` (the
+per-user state folder of section 5.1).
+
+| Area | Files | 📘 Wiki page |
+|---|---|---|
+| process object | `editor_application`, `editor_options`, `headless_runner`, `project_trust`; private `user_paths` | [Headless mode and the command model](../../api/editor/headless-and-commands.md), [The AI control protocol](../../api/editor/ai-protocol.md) |
+| services | `editor_context`, `undo_stack`, `selection_set`, `play_controller`, `picker`, `screenshot_service`, `editor_camera`, `console_buffer`, `event_broadcaster` | [Headless mode and the command model](../../api/editor/headless-and-commands.md) |
+| command model | `command_dispatcher`, `command_registry`, `editor_command`, `builtin_commands`, `schema_validator`, `entity_ref`, `reflection_path`, `core/commands/*` (one file per group), `core/component_access.{h,cpp}` | same |
+| module records | `command_desc`, `panel_desc`, `editor_module_consumer` | same |
+| protocol | `protocol/protocol_message`, `protocol_server`, `protocol_transport`, `loopback_transport`, `line_splitter`, `access_token`, `audit_log`; private `stdio_transport`, `tcp_transport`, `net/socket` | [The AI control protocol](../../api/editor/ai-protocol.md), [Access tokens and the audit log](../../api/editor/access-and-audit.md) |
+| workspace | `ui/editor_layer`, `editor_workspace`, `editor_panel`, `property_drawer`, `gizmo_controller`, `hierarchy_cache`, `imgui_frame_scope`, `ui/panels/*`, private `ui_support` | [The workspace UI](../../api/editor/workspace-ui.md) |
+| `editor_error.h`, `log_category.h` | `protocol_error_code` (22 codes), `LOG_EDITOR` | not user-facing |
+
+### How a command runs
+
+1. A transport yields a line; `protocol_server::poll` parses it (`PARSE_ERROR`, `INVALID_REQUEST`,
+   `MESSAGE_TOO_LARGE` answered at once) and caps requests per frame, carrying the backlog over. `line_splitter`
+   frames the bytes with the 16 MiB limit and reports an oversized line as a marker; the server marks the client
+   `closing` on `MESSAGE_TOO_LARGE`, on a failed token handshake and on a first line that is not a request
+   (section 4.1). After a client's first request a line that is not valid UTF-8 is a `PARSE_ERROR` that keeps
+   the client connected; the robustness tests verify this behavior.
+2. `command_dispatcher::dispatch`: unknown name -> `UNKNOWN_COMMAND` with `didYouMean` (none for a name over 128
+   bytes, whose edit distance would stall the frame; the message quotes at most 128 bytes, cut on a code point
+   boundary); `required_access(flags)` above what the client was granted -> `UNAUTHORISED` (section 4.2); the
+   compiled JSON schema
+   (`schema_validator`: `type`, `properties`, `required`, `additionalProperties`, `enum`, `items`, bounds) ->
+   `INVALID_ARGS` naming the path; `REQUIRES_PROJECT`, `REQUIRES_SCENE`, `EDITING_ONLY`, `PLAYING_ONLY` -> the
+   matching code before the handler runs.
+   Missing files answer one way everywhere: handlers build the error with
+   `support::unusable_path(path, reason)` for a path on disk (`PATH_NOT_FOUND` when nothing is there, `IO_ERROR`
+   when something is but cannot be read) and `support::read_failure(path, error)` for a failed read through the
+   virtual file system; `classify_error` maps core `NOT_FOUND` and engine `PROJECT_NOT_FOUND` to `PATH_NOT_FOUND`.
+   `ASSET_NOT_FOUND` is kept for an asset reference that names no asset. A new command that reads a file uses the
+   two helpers instead of choosing a code itself; one that hands a registered asset to the importer looks at the
+   source first (`asset.reimport`), because an import failure carries no code and would come out as
+   `INVALID_ARGS`.
+3. The handler returns a `command_outcome`: result, inverse (mandatory for `MUTATES` without `NO_UNDO`;
+   `skipRecording` for a run that changed nothing undoable), an optional normalised replay and a label. The
+   dispatcher records undo, bumps the revision, appends `revision` to the result and emits `scene.changed` and
+   `command.executed`. A mutating handler without an inverse is a logged `INTERNAL` error, never an abort.
+4. `ASYNC` handlers park an `async_reply`; `editor_context::tick` resolves completions once per frame and
+   delivers them to the client's sink or transport; at most 8 pending per client (`BUSY`), the
+   `--timeout-seconds` deadline on the engine clock (`TIMEOUT`); `cancel_all` answers everything pending with
+   `CANCELLED` on `project.open` and at shutdown.
+5. `editor.batch` runs children atomically (inverses rolled back on failure) into one undo entry;
+   `editor.begin_transaction` / `end_transaction` group a client's commands.
+
+Entities cross the protocol as guids or hierarchy paths (`entity_ref`); component fields as reflection paths
+(`reflection_path`: alias, unique suffix or registered name, then fields and array indices) read and written
+through `ecs::component_to_json` / `component_from_json` and `component_access` (entity refs as guid
+strings, the alias table `editor.schema` publishes). `component_access::write_component` sends the `layer`
+component through `scene::set_layer`, so the editor never stores an index the scene's captures refuse.
+
+### Undo and play mode
+
+`undo_stack` stores `{label, undo[], redo[], coalesceKey, clientId}`, depth 1024 and 256 MiB of serialised
+arguments (oldest evicted first); `history.undo` dispatches the inverses with recording suppressed. Coalescing
+merges consecutive single-command entries of equal key and client (inspector drags) and, inside an open
+transaction, consecutive records of equal key and command (one gizmo drag is one step). Inverses that restore
+several subtrees (`entity.destroy_many`) are one `editor.batch` whose children run in ascending sibling order.
+Play mode: `play.start` captures a `scene_snapshot`, freezes the stack and runs the engine; `play.stop`
+restores the snapshot byte for byte (guids preserved) and remaps the selection, its primary included (the backup
+names the primary last). While the stack is frozen `command_dispatcher::record_outcome` does not drop what a
+handler returned: a scene edit goes to `play_controller::note_unrecorded_edit` (the restore discards it), an
+`ON_DISK` command's inverse and replay go to `keep_file_edit`, and `play_controller::stop` pushes the kept ones as
+one undo entry, `File changes during play`. A batch run while playing records which child
+was an `ON_DISK` command (`batch_state::fileCommands`) and hands those over once it has succeeded. A new command
+that writes project files gets the flag only when its inverse and replay touch no scene state (`prefab.apply`
+replays as an `asset.restore` while playing for that reason); otherwise it is `EDITING_ONLY`, as `prefab.create`,
+`scene.save` and `scene.save_as` are.
+`play.step` runs exactly `n` fixed steps through `application::step_fixed` and answers once they ran, and a
+`play.stop` before then calls `application::cancel_fixed_steps`, because a forced step runs even while PAUSED. No play session crosses an engine restart: `play.start` answers `BUSY` while a
+`project.open` is pending, and `apply_pending_project_open` stops play before it shuts the old engine down.
+`editor_context::selection_payload` is the one builder of `{guids, primary}` (`primary` null for an empty
+selection): every `selection.changed` carries it through `emit_selection_changed`, the selection's `on_changed`
+handler and `play.stop` alike, and the `selection.*` answers add `entities` and `count` to it.
+
+### The protocol
+
+`protocol_server::start(options, projectRoot)` opens TCP on `first_port()` (nine fallback ports when the port
+was not explicit; the chosen port is written to `<project>/.conjure/ai_port`, and
+`editor_application::apply_pending_project_open` moves the file with `set_project_root` when `project.open`
+switches projects) and stdio with `--ai-stdio`; `add_transport` plugs in a `loopback_transport` for tests. When
+the stdio transport reports its client closed, `stdio_closed()` turns true and a headless stdio-only editor (no
+TCP server) quits with 0. Clients are polled on the main thread
+(`transport_kind::TCP` and `LOOPBACK`). `tcp_transport` serves at most `MAX_CLIENTS` (8) connections: a further
+client is accepted, sent one `BUSY` line with id null (best effort) and closed. A port in a Windows excluded range
+(`WSAEACCES`) counts as busy for the fallback search (`net::is_port_unavailable_error`), and on POSIX every socket
+is close-on-exec so `dotnet` and `cmake` children never inherit the listener. The stdio reader is the one
+`core::jobs::dedicated_thread` of the process, reading 64 KiB chunks through a `line_splitter` whose state is
+shared through a `shared_ptr`, left blocked at exit by design. `event_broadcaster` fans events out with per-client
+subscriptions and a minimum log level; log events are shed under backlog pressure (`events.dropped`).
+
+### 4.1 The gate: tokens and first line
+
+The model: a client that is let in
+with the full-control token has the reach of the user running the editor, so the connection is what is guarded.
+
+| Piece | Where | What it does |
+|---|---|---|
+| the tokens | `protocol_server::mToken`, `mInspectToken`, `ensure_tokens()` | grant `access_level::FULL_CONTROL` and `INSPECT`; generated (`generate_access_token`, 32 bytes of `std::random_device("/dev/urandom")` as 64 hex digits: named, the device is the kernel's on libstdc++, which would otherwise take RDSEED/RDRAND on x86; libc++ takes the name in its urandom, getentropy and arc4random builds; MSVC ignores it and calls `rand_s`) whenever one is needed and missing, that is, when a TCP transport runs or the other one was set explicitly, so a TCP transport never runs ungated; cleared again when nothing needs one |
+| who presents one | `requires_token(kind)` | TCP always; stdio and loopback only when a token was set explicitly (`--ai-token`, `--ai-inspect-token`, `set_token`, `set_inspect_token`: `gates_every_transport()`) |
+| the comparison | `access_of(presented)` -> `constant_time_equals` | the one place a token is checked for equality: both comparisons always run; the guards that look for a token inside client text (`contains_token`, the audit log) use `constant_time_contains` / `constant_time_starts_at` over a bounded text, never a substring search; `""` never matches, not even an empty token. The setters refuse one text for both levels |
+| the handshake | `check_handshake` in `poll()` | a client with `access == NONE` gets in only through `session.hello` with one of the tokens; anything else is `UNAUTHORISED` once, then one INFO line with the client id alone (never the text, which may hold a token) and `disconnect()`; `deliver_event` drops events for such a client |
+| a later hello | `accept_hello(clientId, presented)`, called by the `session.hello` handler | sets the client's access to what the token grants (raise or lower); refuses a wrong token on a gated transport without touching the access; on an ungated transport a known token still applies and any other text is ignored; an id no transport knows is an in-process client and is trusted |
+| the files | `write_session_files`, `write_token_files`, `remove_session_files` | `<project>/.conjure/ai_token` and `ai_token_inspect` first (`core::vfs::write_private_file`: 0600 on POSIX, a protected owner-only ACL on Windows, written beside the target and renamed over it), then `ai_port`; all follow `set_project_root` and go at `stop()` |
+| the first line | `client_state::spoke` in `poll()` | a parse failure before any line of the client parsed is answered and followed by `disconnect()`, on every transport; the line is not logged |
+
+A token must never be logged, sent in an event, quoted in an error or written to the audit log: the
+`UNAUTHORISED` message names the files, the WARN for a token file that could not be written carries the file
+system's reason only, the panel prints `token set` and the files' paths, and `session.hello` checks a client
+name with `protocol_server::contains_token` before logging it. `tests/editor/protocol/test_protocol_server.cpp`,
+`tests/editor/test_command_dispatcher.cpp` and `tests/editor/test_ai_protocol_e2e.cpp` search the log, the
+events, the replies and the audit file for both tokens; keep that check when adding a log line here. The per-OS
+code is not in this module: it is the file system layer's (`engine/src/core/vfs/native_platform_<os>.cpp`).
+
+### 4.2 Scoped tokens and the audit log
+
+**Scope.** `command_flags::READ_ONLY` marks the commands an
+inspect-only client may run, and `required_access(flags)` in `editor_command.h` is the whole rule: `INSPECT`
+with the flag, `FULL_CONTROL` without. `command_dispatcher::dispatch_internal` applies it right after the name
+lookup, so batch children pass the same check and a refused request never reaches schema validation or a
+handler. The granted level is `protocol_server::access_of_client(id)`: `client_state::access` for a transport
+client, `FULL_CONTROL` for an id no transport knows (the UI, `--exec`, an `editor.exec_file` task).
+
+Adding a command: leave `READ_ONLY` off unless the handler changes nothing clients share and neither starts a
+program nor loads code. Not being a mutation is not enough (`editor.quit`, `play.start`, `selection.set`,
+`view.screenshot` are all non-mutating). A command that reads a file must confine the path before it may carry
+the flag, or it reads `.conjure/ai_token` for an inspect-only client; `script.read` is the one such command and
+ends inside `scripts/`. Then add the name to the pinned list in `tests/editor/test_command_catalogue.cpp`,
+whose fixture runner also checks that every `READ_ONLY` command leaves the snapshot, the selection, the camera,
+the play state, the revision and the history as they were.
+
+**Audit.** `command_dispatcher::audit` hands every top-level request, and every child of a batch, to
+`protocol_server::record_command`, which drops the editor's own clients, adds the transport and the access and
+passes both tokens to `audit_log::record` as the secrets to keep out. `audit_log` (public header
+`protocol/audit_log.h`) formats the line, bounds it (`MAX_LINE_BYTES`), opens `<project>/.conjure/ai_audit.log`
+on the first record (through `write_private_file`, replacing a planted symbolic link, and a file already there
+that `is_private_file` refuses, with one WARN), and starts a new file, keeping one previous one, before a line
+would pass `max_file_bytes()`. `protocol_server::flush` flushes it once
+per frame. Undo inverses, redo replays and batch rollbacks go through `dispatch_internal` only and are not
+recorded. A failure to write is one WARN and no more records until the project changes; it never fails a
+command.
+
+Path arguments: `support::project_relative_path(context, text)` is the one place that turns a path argument into
+an on-disk path (relative means relative to the project root). `editor.exec_file`, `project.export`,
+`module.discover`, `script.reload` and `view.screenshot` use it; a new command that takes an on-disk path must
+too. `editor_application::run_export` makes `--export` and `--distribution` absolute against the working
+directory first, because a command line is not a protocol client.
+
+### Frame integration and headless mode
+
+`editor_application` pushes a core layer (`editor-core`) whose `on_update` calls `editor_context::tick`: poll
+transports, cancel disconnected clients' requests, resolve completions, dispatch inbound requests, tick play,
+screenshots and frame tasks (waits, `editor.exec_file`, compiles, module builds, tap releases), forward console
+records as `log` events, flush. The UI layer (`editor-ui`) only draws and is pushed after the engine's
+`imgui_layer`, which owns the one ImGui context. `--headless` runs the null platform, rhi and audio with the
+script runtime on the null host; `view.screenshot` and `view.debug_draw` answer `NOT_AVAILABLE`; `script.compile`
+and `module.build` spawn `dotnet` / `cmake` when present. `--offscreen` asks for a real device without a
+swapchain; the engine configuration refuses it today and the editor falls back to the null device with a warning.
+`--exec` runs a JSON array or NDJSON of requests through `headless_runner` (a leading UTF-8 byte order mark
+skipped, `${project}` expanded per request to the project open at the time, `--keep-going`); an asynchronous
+request is bounded by the dispatcher's `--timeout-seconds` in wall time, not by a frame count, and `editor.quit`
+ends the run with its non-zero exit code. The command file is read and parsed by `editor_application::initialise`
+(`headless_runner::load_command_file`) after `make_engine_desc` checked the arguments and the project and before
+`boot_engine` starts the engine, so an unusable file is `BAD_ARGUMENTS` without an engine start; `run_exec` hands
+the parsed requests to `headless_runner::run`. A startup scene the engine could not load is
+kept by `engine::application::startup_scene_failure()`; `run_requests` writes it as the first output line,
+`warning {code: "STARTUP_SCENE_FAILED", message}`, through `editor_application::startup_scene_warning()`, and
+`apply_pending_project_open` emits the same event to every client after a restart. Neither changes the exit code.
+`editor/src/main.cpp` maps the outcome to the exit code: 0 ok, 1 a
+command (or `--export`) failed, 2 a startup or project failure (a failed `initialise()`, unless the arguments are
+at fault, which includes `PROJECT_NOT_TRUSTED`, or a `project.open` whose restart failed for both projects), 3 bad arguments (a bad editor flag, an
+option neither the editor nor the engine knows, which `make_engine_desc` refuses as `BAD_ARGUMENTS` before the
+merge loads the project, a flag that makes the merged configuration `INVALID_CONFIG` while the project alone
+validates, or an `--exec` file that is missing or does not parse), 4 a lost graphics device; a response stream that fails mid-run (`--out` on a full disk) also ends
+`--exec` with 2. When `editor_options::stdout_carries_protocol()` (`--ai-stdio`, `--exec`
+without `--out`, `--export`), main replaces the console log sink with one that writes every line to standard
+error, so standard output holds protocol lines only. `--export <dir>` sends `project.export {directory}`, plus
+`distributionDirectory` when `--distribution <dir>` names the folder `conjure_runtime`, `conjure_shared`,
+`shaders/` and `THIRD_PARTY_NOTICES.txt` come from, with `nethost.dll` and the Visual C++ runtime DLLs when it
+holds them (the parser refuses `--distribution` without `--export`); without it the reply warns that the
+runtime was not copied. Export step 5 warns for a folder without the notices, for one without the runtime DLLs
+when the runtime imports them (Windows, Microsoft's standard library) and for debug runtime DLLs, which it leaves
+behind.
+
+### 5.1 Project trust
+
+Starting an engine over a project runs the project's code (`modules_subsystem` loads its module manifests, the
+scripting subsystem its game assembly), so `editor_application` does that only for a project somebody answered
+for. The pieces:
+
+| Piece | Where | What it does |
+|---|---|---|
+| the answers | `project_trust` (`conjure/editor/project_trust.h`), owned by `editor_application`, reached by commands through `editor_context::trust()` | session answers in memory; remembered answers in the trust store, read on every question, written through `core::vfs::write_private_file`, believed only while `is_private_file` holds |
+| the key | `project_trust::project_key` | `weakly_canonical(absolute(root))` as UTF-8 with forward slashes; an error (and therefore untrusted) for an empty, unresolvable or non-UTF-8 path |
+| the gate | `editor_application::require_trusted`, called by `initialise`, `request_open_project` and `apply_pending_project_open` | `PROJECT_NOT_TRUSTED`; the last caller drops the restart with a WARN before the running engine is touched |
+| who can be asked | `editor_application::can_ask_about_trust(options)` | a window without `--exec` and `--export`: `initialise` then boots without the project and raises the prompt; every other session fails |
+| the startup decision | `editor_application::resolve_startup_project` -> `plan_startup` | static, no engine: open `--project`, leave it out as `unanswered`, or `PROJECT_NOT_TRUSTED`; `plan_startup` builds the one engine description `initialise` boots from, over the project let through and no other, so the windowed branch is tested headless |
+| the prompt | `editor_context::raise_trust_prompt` / `trust_prompt` / `close_trust_prompt_for`, drawn by `editor_workspace::draw_trust_prompt` | context state that survives `rebind`; closed by `project.trust` for that project, by its opening (`bind_engine`) and by Don't Open |
+| the commands | `commands_project.cpp`: `project.trust`, `project.revoke_trust`, `project.trust_state`, and the trust `project.create` records | the first two are `NOT_IN_BATCH` and need full control, the third is `READ_ONLY`; `load_project` gives `project.trust` the path errors of `project.open` |
+| the store's place | `default_trust_store_file()` over `user_state_directory()` (`core/user_paths_*.cpp`); `posix_user_state_directory` in `core/user_paths.cpp` is the POSIX rule as a plain function, compiled and tested on every host | only `editor/src/main.cpp` calls it; a library user that names no file remembers nothing |
+
+A new way to open a project must go through `require_trusted`, and a new command must not record trust as a
+side effect: `project.create` is the one exception, and only for a folder it made itself. Nothing of an
+untrusted project is read except `project.json`, which is data (`make_engine_desc` parses it to tell a missing
+project from an untrusted one). There is no restricted mode because `modules_subsystem` loads every manifest
+`project::module_manifests()` finds and has no switch for it.
+
+### The workspace
+
+`editor_workspace` is the full-window dockspace with a pass-through central node (the scene renders underneath),
+the menu bar, the panel instances and `<project>/.conjure/editor_layout.ini`. Panels (`editor_panel` subclasses
+in `ui/panels/`) own only UI state and submit commands through the dispatcher: hierarchy (flat rows from
+`hierarchy_cache`, one pre-order walk per structural change, a list clipper so 10,000 entities cost the visible
+rows), inspector (`component.get` per component, `property_drawer_registry` per field kind, `component.set`
+with the drag session as coalesce key; the float drawers read and write the `"inf"` / `"-inf"` / `null` encoding of
+, so a non-finite value is shown as such, survives an edit next to it and is never added by a typed
+`inf`), viewport (the scene through the editor camera as an image, orbit camera,
+`view.pick`, `gizmo_controller` over ImGuizmo dispatching `component.set_many` inside a transaction), asset
+browser (its Delete goes through `request_delete`: the file behind the open scene, which
+`editor_context::is_open_scene` tells by file and not by spelling, raises a modal confirmation and only "Close
+and Delete" sends `asset.delete {closeOpenScene: true}`, disabled while playing or paused, when the command would
+answer `WRONG_PLAY_STATE`), console, history, toolbar,
+profiler, AI session, export dialog (output directory only; an export is always Distribution). The viewport's
+picture comes from a
+`scene_view` (`core/scene_view.h`, private): a render target the size of the panel in framebuffer pixels and the
+editor camera's view, submitted every frame with `renderer::submit_view`; the target's colour texture is
+registered once with `imgui_renderer::register_texture` (its id survives a resize) and drawn under the input
+surface, over an opaque backdrop because the target is transparent where the scene drew nothing. The panel is
+destroyed by `editor_layer::on_detach`, before the renderer goes. `imgui_frame_scope` lets the UI tests draw every panel on the null RHI without the engine's
+layer. `editor_layer::on_attach` also sets the window icon from `ui/editor_icon` (the logo's PNGs, generated into
+`ui/editor_icon_data.cpp`); the [Branding and Application Icons](../project-reference/branding-and-application-icons.md) chapter covers the icon end to end.
+
+### Modules
+
+`editor_module_consumer` attaches the `editor.command` (`command_desc`) and `editor.panel` (`panel_desc`)
+extension points of loaded modules: commands enter the registry with `owner = <module>` and `MUTATES | NO_UNDO`
+(a module command cannot return an inverse), panels enter the workspace through `sync_module_panels`; it vetoes
+unloads while playing and strips both on detach. The engine loads its static modules before the editor exists
+and the module manager refuses a new consumer while anything is loaded, so `editor_context::install_module_consumer`
+unloads, adds the consumer and loads again (section 11).
+
+### Open items
+
+From: off-screen rendering (`--offscreen`, `view.screenshot` with
+pixels) has its renderer view hook (`renderer::submit_view`) but still needs an engine
+configuration that allows a real backend without a window; the scene cameras still draw into the back buffer
+behind the editor's panels until the Scene / Game split of exists; a
+pre-load consumer hook on `modules_subsystem` would remove the unload / load dance of
+`install_module_consumer`; a public `importer_registry` accessor on `asset_database` would replace the importer
+inference of `reflection.asset_types`; `scene::root_index_of` and an id-independent `ecs::world_hash` would
+simplify `entity.restore` and the restore comparisons.
+
+### Related
+
+- README: `engine/src/editor/README.md`
+- 📘 API: [The editor](../../api/editor/index.md)
+- 🛠 Handbook: [Engine module](../engine/engine.md), [Modules module](../engine/modules.md), [Testing and Benchmarks](../development/testing-and-benchmarks.md)
+<!-- doc-content:breakdown:end -->
+
+## Threading Model
+
+<!-- doc-content:threading:start -->
+Main thread only, except the stdio reader thread and the screenshot encode job: a capture is taken on the
+main thread and encoded and written on a `core::jobs` job that posts the completion back (`screenshot_service`);
+without a job system the encode runs inline. A JPEG XL screenshot (a `.jxl` path or `"format": "jxl"`) is encoded
+inside that job by `renderer::encode_jpeg_xl`, which spreads libjxl's work over the same job system (waiting from a
+job is safe) and writes the same bytes with or without workers. Sockets are non-blocking and polled on main.
+<!-- doc-content:threading:end -->
+
+## Extension Points
+
+<!-- doc-content:extensions:start -->
+- Commands: a `command_descriptor` in `core/commands/<group>.cpp` with a JSON schema, flags and a handler
+  returning `command_outcome` (plus a fixture under `tests/editor/data/commands/<name>.json`, D8c); modules add
+  `command_desc` records.
+- Panels: an `editor_panel` subclass registered in `panel_registry`; modules add `panel_desc` records and link
+  `conjure::thirdparty::imgui_interface` (`EDITOR_UI`).
+- Property drawers: `property_drawer_registry::set(kind, drawer)`.
+- Screenshot backends: `screenshot_backend` (`memory_screenshot_backend` for tests, the renderer backend over a
+  `scene_view` and `read_back`): `begin` when the request is accepted, `prepare_frame` on every frame it waits,
+  `frame_rendered` to tell the service a frame was drawn, `capture`, and `abandon` when the engine restarts or
+  shuts down under a waiting request (the renderer may be gone, so nothing may be destroyed through it).
+- Transports: a `protocol_transport` implementation added through `protocol_server::add_transport`.
+<!-- doc-content:extensions:end -->
+
+## Testing
+
+<!-- doc-content:testing:start -->
+`tests/editor/` (`conjure_editor_tests`, label `editor`): one `test_<header>.cpp` per public header of both
+libraries, the command catalogue fixtures under `tests/editor/data/commands/` (`test_command_catalogue.cpp`
+runs the inverse round trip of every mutating command, D8c), `test_batch_command`, the per-area command files,
+`test_protocol_robustness` (the corpus of broken lines), `test_ai_protocol_e2e` (a loopback session),
+`test_headless_runner`, `test_ai_builds_grid_sweeper` (the Grid Sweeper command file, also the integration
+scenario `tests/integration/test_ai_protocol_e2e.cpp`), the UI panels drawn inside `imgui_frame_scope` on the
+null rhi, and `test_editor_process` (label `process`, excluded from the default presets) spawning the real
+`conjure_editor --headless --exec`. A case whose name carries `[slow]` gets the label `slow` from the same side
+file of `tests/editor/CMakeLists.txt`, so only the nightly presets run it. Every undoable fixture must change
+the snapshot (the serialised scene and the project files) before its undo round trip counts; a fixture whose
+effect the snapshot cannot see (an empty folder) says `"expectChange": false` with a `_comment` naming the case
+that checks it instead. `editor_test_support.h` provides `headless_editor` (a headless `editor_application` over a
+scratch project with an in-process client, `send` / `ok` / `fail`, snapshots for the inverse round trips),
+`loopback_session` (a client of that editor on a loopback transport: the one to use when the token handshake,
+the scope of a token or the audit log matter, because the in-process client is the editor's own and always has
+full control), `read_json_lines` (the audit log as parsed records), `write_project` (a project written by hand,
+which the editor does not trust by itself), the fixture file format and the `LOOPBACK_TCP` precondition probe.
+Project trust in tests: `headless_editor` starts with `trustProject` set and no trust store, so nothing a case
+trusts is remembered anywhere; a case that opens a second hand-written project calls
+`headless_editor::trust_project` first (one made with `project.create` in a new folder is trusted already), and
+the process cases pass `--trust-store <scratch file>` so the real executable never reads or writes the store of
+whoever runs the tests. `docs/generated/editor_protocol.json` is the
+`editor.schema` dump; regenerate it with `conjure_editor_tests --conjure-update-golden` when the catalogue
+changes, then refresh.
+
+```
+python tools/build.py --build-dir build/mod_editor --target conjure_editor_tests --test -R editor
+```
+<!-- doc-content:testing:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="1-shape-of-the-module"></a>
+<a id="10-tests"></a>
+<a id="11-open-items"></a>
+<a id="2-how-a-command-runs"></a>
+<a id="3-undo-and-play-mode"></a>
+<a id="4-the-protocol"></a>
+<a id="5-frame-integration-and-headless-mode"></a>
+<a id="6-the-workspace"></a>
+<a id="7-modules"></a>
+<a id="8-threading-model"></a>
+<a id="9-extension-points"></a>
+<a id="dependency-graph"></a>
+<a id="editor"></a>
+<a id="editor-module"></a>
+<a id="headers"></a>
+<a id="kind-module"></a>
+<!-- doc-legacy-anchors:end -->

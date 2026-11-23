@@ -1,27 +1,24 @@
 # Jobs and threading
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 How to run work in parallel in Conjure: the `job_system` worker pool, `parallel_for` over ranges, the main-thread
 task queue and named `dedicated_thread`s. Include the umbrella `conjure/core/jobs/jobs.h` (or the individual headers
 named below); everything lives in `namespace conjure::core::jobs`. This is the only place in the engine that
 creates threads: game and module code never uses `std::thread` directly.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Run one piece of work in the background and wait for it later | `job_system::schedule(job)` then `wait(handle)` (`conjure/core/jobs/job_system.h`) |
-| Process every element of an array in parallel | `parallel_for_each(system, span, body)` (`conjure/core/jobs/parallel_for.h`) |
-| Split a numeric range `[0, count)` across threads | `parallel_for_range(system, count, grain, body)` or `job_system::parallel_for` |
-| Run a batch of jobs and wait for all of them at once | `schedule(std::span<const std::function<void()>>)` |
-| Do something that must happen on the main thread (window, GPU, editor state) from a job | `post_to_main_thread(task)` (`conjure/core/jobs/main_thread.h`) |
-| Check whether you are on the main thread or a worker | `is_main_thread()`, `job_system::thread_index()` |
-| Run a long-lived blocking loop (file watcher, pipe reader, audio streaming) | `dedicated_thread` (`conjure/core/jobs/dedicated_thread.h`) |
-| Poll whether earlier work has finished without blocking | `job_handle::is_complete()` (`conjure/core/jobs/job_handle.h`) |
-| Make a test or tool deterministic | Start the system with `workerCount = 0`: every job runs inline |
+| Name | Jobs and threading |
+| Module | Core |
+| `#include` | `conjure/core/jobs/dedicated_thread.h`, `conjure/core/jobs/job_handle.h`, `conjure/core/jobs/job_system.h`, `conjure/core/jobs/jobs.h`, `conjure/core/jobs/main_thread.h`, `conjure/core/jobs/parallel_for.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/jobs/jobs.h"
@@ -64,7 +61,31 @@ bool simulate(std::vector<f32> &positions, std::span<const f32> velocities, f32 
 
 In a running game you do not create the `job_system`: the engine owns one and hands it to you. The example starts
 its own so it is complete on its own.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Run one piece of work in the background and wait for it later | `job_system::schedule(job)` then `wait(handle)` (`conjure/core/jobs/job_system.h`) |
+| Process every element of an array in parallel | `parallel_for_each(system, span, body)` (`conjure/core/jobs/parallel_for.h`) |
+| Split a numeric range `[0, count)` across threads | `parallel_for_range(system, count, grain, body)` or `job_system::parallel_for` |
+| Run a batch of jobs and wait for all of them at once | `schedule(std::span<const std::function<void()>>)` |
+| Do something that must happen on the main thread (window, GPU, editor state) from a job | `post_to_main_thread(task)` (`conjure/core/jobs/main_thread.h`) |
+| Check whether you are on the main thread or a worker | `is_main_thread()`, `job_system::thread_index()` |
+| Run a long-lived blocking loop (file watcher, pipe reader, audio streaming) | `dedicated_thread` (`conjure/core/jobs/dedicated_thread.h`) |
+| Poll whether earlier work has finished without blocking | `job_handle::is_complete()` (`conjure/core/jobs/job_handle.h`) |
+| Make a test or tool deterministic | Start the system with `workerCount = 0`: every job runs inline |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Which tool when
 
 | Situation | Tool | Why |
@@ -161,8 +182,8 @@ the jobs still run.
 `job_system::thread_index()` is 0 on the main thread and on any thread that is not a worker, and `1..N` on the
 workers. `job_system::current()` returns the system a worker belongs to, or `nullptr` elsewhere. Use the index to
 pick a per-thread scratch buffer without locking (`workerCount + 1` slots). `stats()` returns counters since
-`start()` (scheduled, executed, queue depth, ...) for profiling and tests; `job_system_stats` in
-`conjure/core/jobs/job_system.h` documents each field and 🛠 Handbook: [Core module](../../handbook/modules/core.md)
+`start()` (scheduled, executed, queue depth,...) for profiling and tests; `job_system_stats` in
+`conjure/core/jobs/job_system.h` documents each field and 🛠 Handbook: [Core module](../../handbook/engine/core.md)
 explains how the scheduler uses them.
 
 ## parallel_for
@@ -286,8 +307,12 @@ Main thread only: `event::emit`, `event::subscribe`, `event_bus::publish` / `sub
 `drain_main_thread_queue`, window, input and GPU calls, and anything a module documents as main-thread. Not
 synchronised at all (one thread at a time, your choice which): `arena`, `pool_allocator`, `stopwatch`,
 `manual_clock`, containers.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -311,10 +336,19 @@ synchronised at all (one thread at a time, your choice which): `arena`, `pool_al
 | `void request_stop()`, `bool stop_requested() const`, `bool joinable() const`, `void join()` | Control |
 | `const std::string &name() const`, `std::thread::id get_id() const` | Identity |
 | `MAX_WORKER_COUNT`, `MAX_QUEUED_JOBS`, `JOB_PRIORITY_COUNT` | Limits |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Time, events and random](time-and-events.md) for `event_bus::enqueue` and per-thread random engines
 - 📘 API: [Errors and results](errors-and-results.md) for checking the `result<void>` from `start()`
 - 📘 API: [Memory](memory.md) for which allocators are thread-safe
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md)
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

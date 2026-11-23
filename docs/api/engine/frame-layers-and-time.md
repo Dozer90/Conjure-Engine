@@ -1,15 +1,30 @@
 # The frame, layers and time
+<!-- doc-template:wiki -->
+[API](../index.md) → [Engine](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
-
+<!-- doc-content:purpose:start -->
 What happens inside one `step_frame()` and how your code takes part: layers (`conjure/engine/layer.h`,
 `conjure/engine/layer_stack.h`, `conjure/engine/game_layer.h`, `conjure/engine/imgui_layer.h`,
 `conjure/engine/debug_overlay_layer.h`), subsystems (`conjure/engine/engine_subsystem.h`), time
 (`conjure/engine/engine_time.h`, `conjure/engine/fixed_step_clock.h`, `conjure/engine/engine_phase.h`) and the
 per-frame statistics and scratch memory (`conjure/engine/frame_stats.h`, `conjure/engine/frame_memory.h`).
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | The frame, layers and time |
+| Module | Engine |
+| `#include` | `conjure/engine/debug_overlay_layer.h`, `conjure/engine/engine_phase.h`, `conjure/engine/engine_subsystem.h`, `conjure/engine/engine_time.h`, `conjure/engine/fixed_step_clock.h`, `conjure/engine/frame_memory.h`, `conjure/engine/frame_stats.h`, `conjure/engine/game_layer.h`, `conjure/engine/imgui_layer.h`, `conjure/engine/layer.h`, `conjure/engine/layer_stack.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/engine.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | React to window events, draw ImGui, run code once per frame outside the ECS | derive from `layer`, push it with `application::layers().push_layer()` |
@@ -19,7 +34,15 @@ per-frame statistics and scratch memory (`conjure/engine/frame_stats.h`, `conjur
 | Profile the last frames | `application::stats().latest()`, `history()`, `average_frame_milliseconds(n)` |
 | Allocate scratch memory that dies at the next frame | `context.frameMemory->allocate_span<T>(count)` |
 | Quit when the window closes | push a `game_layer` (the runtime does) |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The frame in order
 
 Every phase is an `ecs::system_phase`; the engine calls `scheduler.run_phase(phase, frame_info)` and the
@@ -128,8 +151,12 @@ frame. Jobs of the scheduler may allocate from it; an overflow falls back to the
 > [!CAUTION]
 > A pointer into frame memory is valid until the next `reset()`, which the engine performs at step 2 of the next
 > frame. Keeping one across frames is a use-after-free.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -141,8 +168,17 @@ frame. Jobs of the scheduler may allocate from it; an overflow falls back to the
 | `bool is_fixed_phase(system_phase)` / `std::string_view to_string(system_phase)` | phase helpers |
 | `const frame_sample &frame_stats::latest()` / `span<const frame_sample> history()` | profiling |
 | `void *frame_memory::allocate(usize, usize)` / `span<T> allocate_span<T>(usize)` / `T *construct<T>(...)` | scratch memory |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Running the engine](running-the-engine.md), [Queries, views and systems](../ecs/queries-views-and-systems.md), [Jobs and threading](../core/jobs.md)
-- 🛠 Handbook: [Engine module](../../handbook/modules/engine.md), [Data-oriented design](../../handbook/data-oriented-design.md)
+- 🛠 Handbook: [Engine module](../../handbook/engine/engine.md), [Data-oriented design](../../handbook/architecture-and-design/data-oriented-design.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,27 +1,25 @@
 # Clips and decoding
+<!-- doc-template:wiki -->
+[API](../index.md) → [Audio](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
-
+<!-- doc-content:purpose:start -->
 A **clip** is the samples of one sound. This page covers the clip types (`conjure/audio/clip.h`), the
 `conjure.audio.clip` asset type with its importer, loader and import settings (`conjure/audio/clip_asset.h`),
 the decoders behind them (`conjure/audio/decoder.h`), and the two backends the engine can run on: the backend
 interface (`conjure/audio/audio_backend.h`) and the headless `null_backend` that tests and servers use
 (`conjure/audio/null_backend.h`). Everything is in `namespace conjure::audio`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Use a sound file in the game | drop a `.wav`, `.ogg`, `.mp3` or `.flac` into the project; it imports as `conjure.audio.clip` |
-| Reference it from code or a component | `assets::asset_ref<audio_clip>` |
-| Keep a long track out of memory | import setting `"storage": "streamed"` (automatic above 10 s) |
-| Make a 3D effect cheaper | import setting `"forceMono": true` |
-| Build a clip from samples you generated | `pcm_buffer`, then `make_pcm_clip()` |
-| Decode a file in a tool | `decode_to_pcm(bytes, options)`; `probe(bytes)` for just the format |
-| Decode incrementally | `streaming_decoder` |
-| Run headless and assert on what was rendered | `audio_backend_kind::NULL_BACKEND`, `null_backend::stats()` and `captured()` |
+| Name | Clips and decoding |
+| Module | Audio |
+| `#include` | `conjure/audio/audio_backend.h`, `conjure/audio/clip.h`, `conjure/audio/clip_asset.h`, `conjure/audio/decoder.h`, `conjure/audio/null_backend.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/audio.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/audio/clip.h"
@@ -43,7 +41,30 @@ core::result<audio_clip> clip_from_file(std::span<const byte> fileBytes) {
     return clip;
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Use a sound file in the game | drop a `.wav`, `.ogg`, `.mp3` or `.flac` into the project; it imports as `conjure.audio.clip` |
+| Reference it from code or a component | `assets::asset_ref<audio_clip>` |
+| Keep a long track out of memory | import setting `"storage": "streamed"` (automatic above 10 s) |
+| Make a 3D effect cheaper | import setting `"forceMono": true` |
+| Build a clip from samples you generated | `pcm_buffer`, then `make_pcm_clip()` |
+| Decode a file in a tool | `decode_to_pcm(bytes, options)`; `probe(bytes)` for just the format |
+| Decode incrementally | `streaming_decoder` |
+| Run headless and assert on what was rendered | `audio_backend_kind::NULL_BACKEND`, `null_backend::stats()` and `captured()` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Clips
 
 | Type | What it holds |
@@ -237,8 +258,12 @@ bool one_shot_ends_on_time() {
 > [!WARNING]
 > `null_backend_instance()` is `nullptr` on the miniaudio backend. Request `NULL_BACKEND` explicitly in tests
 > rather than relying on `AUTO`, which uses the real device on a developer machine.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -256,11 +281,20 @@ bool one_shot_ends_on_time() {
 | `class audio_backend`: `kind()`, `start(backend_desc)`, `stop()`, `state()`, `output_format()`, `enumerate_devices()`, `update(f32)` | the backend interface |
 | `bool is_backend_compiled(audio_backend_kind)` / `result<unique_ptr<audio_backend>> create_backend(audio_backend_kind)` | backend factory |
 | `class null_backend final : audio_backend`: `stats()`, `set_capture_frames(u32)`, `captured()`, `virtual_time()`, `render_frames(u32)`, `simulate_device_loss()`, `fail_next_starts(u32)` | headless backend |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Playing sounds](playing-sounds.md) for `audio_engine`, `play_params` and groups
 - 📘 API: [Audio](index.md) for the components
 - 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>`, `CONJURE_TRY_ASSIGN`
 - 📘 API: [JSON](../core/json.md) for the import settings document
-- 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
+- 🛠 Handbook: [Audio module](../../handbook/engine/audio.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

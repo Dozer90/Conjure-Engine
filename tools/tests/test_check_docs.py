@@ -1,138 +1,174 @@
 #!/usr/bin/env python3
-"""Self-test for tools/check_docs.py (docs/design/16_documentation.md section 6).
-
-Builds a tiny fake repository in a temporary directory, points the checker at it and asserts that each
-rule fires exactly when it should. Runs as the CTest entry `docs.check_tool`; no third-party test
-framework is needed.
-"""
+"""Regression tests for the write-docs checker; uses only the standard library."""
 
 from __future__ import annotations
 
 import importlib.util
 import pathlib
-import sys
 import tempfile
+import unittest
 
-HERE = pathlib.Path(__file__).resolve().parent
-CHECKER = HERE.parent / "check_docs.py"
-
-
-def load_checker():
-    specification = importlib.util.spec_from_file_location("check_docs", CHECKER)
-    module = importlib.util.module_from_spec(specification)
-    assert specification.loader is not None
-    specification.loader.exec_module(module)
-    return module
+CHECKER = pathlib.Path(__file__).resolve().parent.parent / "check_docs.py"
 
 
-def write(path: pathlib.Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+class CheckerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = pathlib.Path(self.temporary.name)
+        spec = importlib.util.spec_from_file_location("audit_checker", CHECKER)
+        self.checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.checker)
+        self.checker.ROOT = self.root
+        self.checker.DOCS = self.root / "docs"
+        self.checker.API_DOCS = self.root / "docs/api"
+        self.checker.HANDBOOK_DOCS = self.root / "docs/handbook"
+        self.checker.INCLUDE_ROOT = self.root / "engine/include/conjure"
+        self.checker.MODULE_SRC_ROOT = self.root / "engine/src"
+        self.write("docs/api/index.md", "# API\n")
+        self.write("docs/handbook/index.md", "# Handbook\n")
+        self.write("docs/api/widgets/index.md", "# Widgets\n\n`conjure/widgets/widget.h`\n")
+        self.write("engine/include/conjure/widgets/widget.h", "#pragma once\n")
+        self.write("engine/src/widgets/CMakeLists.txt", "")
+        self.write("docs/handbook/engine/widgets.md", "# Widget module\n")
 
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
 
-def make_fake_repo(root: pathlib.Path) -> None:
-    include = root / "engine" / "include" / "conjure"
-    write(include / "widgets" / "widgets.h", "#pragma once\n")              # umbrella: excluded
-    write(include / "widgets" / "widgets_error.h", "#pragma once\n")        # error enum: excluded
-    write(include / "widgets" / "log_category.h", "#pragma once\n")         # plumbing: excluded
-    write(include / "widgets" / "detail" / "impl.h", "#pragma once\n")      # detail dir: excluded
-    write(include / "widgets" / "widget.h", "#pragma once\n")               # covered below
-    write(include / "widgets" / "gadget.h", "#pragma once\n")               # NOT covered -> problem
-    write(root / "engine" / "src" / "widgets" / "CMakeLists.txt", "")       # module exists
-    write(root / "engine" / "src" / "orphan" / "CMakeLists.txt", "")        # no handbook page -> problem
+    def page_problems(self, text, name="docs/api/widgets/probe.md"):
+        page = self.write(name, text)
+        problems = []
+        self.checker.check_page(page, problems)
+        return "\n".join(problems)
 
-    write(root / "docs" / "api" / "widgets" / "index.md",
-          "# Widgets\n\n📘 **Public API wiki**\n\nInclude `conjure/widgets/widget.h`.\n\n[glossary](../glossary.md)\n")
-    write(root / "docs" / "api" / "glossary.md", "# Glossary\n\n📘 **Public API wiki**\n\nTerms.\n")
-    write(root / "docs" / "api" / "bad.md", "# Bad page\n\nNo badge here.\n\n[dangling](missing.md)\n\nTODO later\n")
-    write(root / "docs" / "handbook" / "modules" / "widgets.md",
-          "# Widgets internals\n\n🛠 **Engineering handbook**\n\nInternals.\n")
-    long_page = "# Long\n\n🛠 **Engineering handbook**\n" + "\nline\n" * 500
-    write(root / "docs" / "handbook" / "long.md", long_page)
+    def test_removed_badge_and_length_requirements(self):
+        self.write("docs/api/widgets/long.md", "# Long\n\n" + "line\n" * 700)
+        self.assertEqual(self.checker.collect_problems(), [])
 
-    # Exactly 400 lines, the last one ending in a newline: at the limit, not over it.
-    exact_page = "# Exact\n\n🛠 **Engineering handbook**\n" + "line\n" * 397
-    write(root / "docs" / "handbook" / "exact.md", exact_page)
-    # Link syntax inside code is an example, not a link.
-    write(root / "docs" / "api" / "code.md",
-          "# Code\n\n📘 **Public API wiki**\n\nWrite `[code](nope.md)` for a link.\n\n"
-          "```markdown\n[x](fenced.md)\n```\n\n~~~~\n[y](tilde_fenced.md)\n~~~~\n")
-    # Reference definitions and HTML hrefs are links too.
-    write(root / "docs" / "api" / "refs.md",
-          "# Refs\n\n📘 **Public API wiki**\n\nSee [the page][ref] and <a href=\"gone_href.md\">this</a>.\n\n"
-          "[ref]: gone_ref.md\n[ok]: glossary.md\n")
-    write(root / "docs" / "api" / "markers.md", "# Markers\n\n📘 **Public API wiki**\n\nFIXME soon. XXX later.\n")
-    write(root / "docs" / "api" / "front.md",
-          "---\ntitle: Front\n---\n# Front\n\n📘 **Public API wiki**\n\nFront matter comes first.\n")
-    write(root / "docs" / "api" / "wrong_set.md", "# Wrong set\n\n🛠 **Engineering handbook**\n\nIn the wiki.\n")
+    def test_landing_page_obeys_the_publication_rule(self):
+        self.write("docs/index.md", "# Docs\n\nSee AGENTS.md and docs/design/12_audio.md.\n")
+        problems = "\n".join(self.checker.collect_problems())
+        self.assertIn("docs/index.md:3: internal planning metadata", problems)
 
+    def test_markers_are_words_in_any_context(self):
+        for marker in ("TODO", "FIXME", "XXX"):
+            self.assertIn("contains " + marker, self.page_problems(f"# Page\n\n```\n{marker}\n```\n"))
+        self.assertEqual(self.page_problems("# Page\n\ntodo TODOS XXXs\n"), "")
 
-def main() -> int:
-    # Problems quote the badges; a console without UTF-8 must still print a failure instead of raising.
-    sys.stdout.reconfigure(errors="backslashreplace")
-    checker = load_checker()
-    with tempfile.TemporaryDirectory() as temporary:
-        root = pathlib.Path(temporary)
-        make_fake_repo(root)
+    def test_missing_links_include_reference_html_and_images(self):
+        text = ('# Page\n\n[x](gone.md)\n![x](gone.png)\n[ref]: gone-ref.md\n'
+                '<a href="gone-html.md">x</a>\n<img src="gone-src.png">\n')
+        problems = self.page_problems(text)
+        for target in ("gone.md", "gone.png", "gone-ref.md", "gone-html.md", "gone-src.png"):
+            self.assertIn("link target does not exist: " + target, problems)
 
-        checker.ROOT = root
-        checker.DOCS = root / "docs"
-        checker.API_DOCS = checker.DOCS / "api"
-        checker.HANDBOOK_DOCS = checker.DOCS / "handbook"
-        checker.INCLUDE_ROOT = root / "engine" / "include" / "conjure"
-        checker.MODULE_SRC_ROOT = root / "engine" / "src"
+    def test_code_examples_are_literal_but_table_signatures_are_links(self):
+        text = ("# Page\n\n`[x](inline.md)`\n\n```markdown\n[x](fenced.md)\n```\n\n"
+                "~~~~\n[x](tilde.md)\n~~~~\n\n"
+                "| Function | Purpose |\n|---|---|\n| `[f()](signature.md)` | x |\n")
+        problems = self.page_problems(text)
+        self.assertIn("signature.md", problems)
+        for target in ("inline.md", "fenced.md", "tilde.md"):
+            self.assertNotIn(target, problems)
 
-        problems: list[str] = []
-        for page in checker.iter_pages(checker.API_DOCS):
-            checker.check_page(page, checker.API_BADGE, problems)
-        for page in checker.iter_pages(checker.HANDBOOK_DOCS):
-            checker.check_page(page, checker.HANDBOOK_BADGE, problems)
-        checker.check_header_coverage(problems)
-        checker.check_module_handbook_pages(problems)
+    def test_queries_encoded_paths_directories_and_anchors(self):
+        self.write("docs/api/widgets/a file.md", "# First heading\n\n## Second heading\n\n## Second heading\n")
+        self.write("docs/api/widgets/math.md", "# Math\n\n## matrix_id\n")
+        good = ("# Page\n\n[encoded](a%20file.md?q=yes#first-heading)\n"
+                "[duplicate](a%20file.md#second-heading_1)\n[index](.)\n[self](#page)\n"
+                "[type](math#matrix_id)\n")
+        self.assertEqual(self.page_problems(good), "")
+        self.assertIn("link anchor does not exist", self.page_problems("# Page\n\n[x](a%20file.md#missing)\n"))
+        self.assertIn("link anchor does not exist", self.page_problems("# Page\n\n[x](#missing)\n"))
 
-        joined = "\n".join(problems)
-        expectations = [
-            ("docs/api/bad.md: first content line", "missing badge is reported"),
-            ("link target does not exist: missing.md", "dangling link is reported"),
-            ("docs/api/bad.md: contains TODO", "TODO marker is reported"),
-            ("exceeds 400", "over-long page is reported"),
-            ("no wiki page references `conjure/widgets/gadget.h`", "uncovered header is reported"),
-            ("missing handbook page for module 'orphan'", "module without handbook page is reported"),
-            ("link target does not exist: gone_ref.md",
-             "check_docs - reference definitions and hrefs are checked (reference definition)"),
-            ("link target does not exist: gone_href.md",
-             "check_docs - reference definitions and hrefs are checked (href)"),
-            ("docs/api/markers.md: contains FIXME", "FIXME marker is reported"),
-            ("docs/api/markers.md: contains XXX", "XXX marker is reported"),
-            ("docs/api/wrong_set.md: first content line", "a wiki page with the handbook badge is reported"),
-        ]
-        failures = [why for needle, why in expectations if needle not in joined]
+    def test_absolute_paths_and_other_protocols_are_rejected(self):
+        for target in ("/index.md", "//example.com/page", "file:///tmp/page", "C:/page.md", "%2Findex.md"):
+            self.assertIn("relative", self.page_problems(f"# Page\n\n[x]({target})\n"))
+        self.assertEqual(self.page_problems("# Page\n\n[x](https://example.com)\n[x](mailto:a@example.com)\n"), "")
 
-        must_not = [
-            ("widgets/widgets.h", "umbrella header must be excluded"),
-            ("widgets_error.h", "error header must be excluded"),
-            ("log_category.h", "log category header must be excluded"),
-            ("detail/impl.h", "detail directory must be excluded"),
-            ("conjure/widgets/widget.h", "covered header must not be reported"),
-            ("module 'widgets'", "module with a handbook page must not be reported"),
-            ("exact.md", "check_docs - a page of exactly 400 lines passes"),
-            ("nope.md", "check_docs - links inside code are not checked (code span)"),
-            ("fenced.md", "check_docs - links inside code are not checked (fenced block)"),
-            ("front.md", "a page with front matter before the title carries its badge"),
-            ("glossary.md", "a reference definition to an existing page is not reported"),
-        ]
-        failures += [why for needle, why in must_not if needle in joined]
+    def test_heading_code_generics_and_literal_html_anchors(self):
+        text = ('# `result<T>`\n\n[x](#resultt)\n\n'
+                '`<a id="not-an-anchor">`\n\n[x](#not-an-anchor)\n')
+        problems = self.page_problems(text)
+        self.assertNotIn("#resultt", problems)
+        self.assertIn("#not-an-anchor", problems)
 
-        expected_count = len(expectations)
-        if len(problems) != expected_count:
-            failures.append(f"expected exactly {expected_count} problems, got {len(problems)}:\n{joined}")
+    def test_wiki_boundaries_apply_to_resolved_targets(self):
+        self.write("docs/design/design.md", "# Design\n")
+        self.write("AGENTS.md", "# Guide\n")
+        for target in ("../../design/design.md", "../../../AGENTS.md",
+                       "../../../engine/include/conjure/widgets/widget.h"):
+            self.assertIn("wiki link must use the handbook", self.page_problems(f"# Page\n\n[x]({target})\n"))
+        text = "# Page\n\n[x](../../design/design.md)\n"
+        self.assertIn("internal planning metadata", self.page_problems(text, "docs/handbook/engine/widgets.md"))
 
-    if failures:
-        print("\n".join(f"FAIL: {failure}" for failure in failures))
-        return 1
-    print("docs.check_tool: all checker rules behave as expected")
-    return 0
+    def test_callout_types_and_syntax(self):
+        for kind in ("NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"):
+            self.assertEqual(self.page_problems(f"# Page\n\n> [!{kind}]\n> Context.\n"), "")
+        self.assertIn("unsupported callout", self.page_problems("# Page\n\n> [!DANGER]\n> x\n"))
+        self.assertIn("GitHub alert syntax", self.page_problems("# Page\n\n!!! note\n    Context\n"))
+        self.assertEqual(self.page_problems("# Page\n\n`> [!DANGER]`\n\n```\n!!! note\n```\n"), "")
+
+    def test_every_header_requires_an_exact_code_span(self):
+        names = ("widgets.h", "widgets_error.h", "log_category.h", "api.h", "platform_detect.h",
+                 "build_info.h", "detail/impl.h", "internal/helper.h", "generated/table.h", "math/math.h")
+        for name in names:
+            self.write("engine/include/conjure/widgets/" + name, "#pragma once\n")
+        problems = []
+        self.checker.check_header_coverage(problems)
+        self.assertEqual(len(problems), len(names))
+        for name in names:
+            self.assertTrue(any("conjure/widgets/" + name in problem for problem in problems))
+        page = "# Widgets\n\n" + "\n".join(f"`conjure/widgets/{name}`" for name in (*names, "widget.h"))
+        self.write("docs/api/widgets/index.md", page)
+        problems = []
+        self.checker.check_header_coverage(problems)
+        self.assertEqual(problems, [])
+
+    def test_editor_headers_require_their_component_overview(self):
+        self.write("engine/include/conjure/editor/protocol/access_token.h", "enum class access_level {};\n")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertTrue(any("handbook/editor/protocol.md" in item for item in problems))
+        self.write("docs/handbook/editor/protocol.md", "# Protocol\n")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertEqual(problems, [])
+        for mention in ("conjure/widgets/widget.h", "```cpp\nconjure/widgets/widget.h\n```",
+                        "`conjure/widgets/widget.h.extra`"):
+            self.write("docs/api/widgets/index.md", "# Widgets\n\n" + mention)
+            problems = []
+            self.checker.check_header_coverage(problems)
+            self.assertTrue(any("`conjure/widgets/widget.h`" in problem for problem in problems))
+
+    def test_scope_module_paths_replace_legacy_paths(self):
+        (self.root / "docs/handbook/engine/widgets.md").unlink()
+        self.write("docs/handbook/modules/widgets.md", "# Old layout\n")
+        self.write("editor/src/tools/CMakeLists.txt", "")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertEqual(len(problems), 2)
+        self.assertTrue(any("docs/handbook/engine/widgets.md" in problem for problem in problems))
+        self.assertTrue(any("docs/handbook/editor/tools.md" in problem for problem in problems))
+        self.write("docs/handbook/engine/widgets.md", "# Widgets\n")
+        self.write("docs/handbook/editor/tools.md", "# Tools\n")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertEqual(problems, [])
+
+    def test_editor_libraries_belong_to_editor_scope(self):
+        self.write("engine/src/editor/CMakeLists.txt", "")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertTrue(any("docs/handbook/editor/editor.md" in problem for problem in problems))
+        self.write("docs/handbook/editor/editor.md", "# Editor\n")
+        problems = []
+        self.checker.check_module_handbook_pages(problems)
+        self.assertEqual(problems, [])
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    unittest.main()

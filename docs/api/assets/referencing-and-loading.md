@@ -1,28 +1,24 @@
 # Referencing and loading assets
+<!-- doc-template:wiki -->
+[API](../index.md) → [Assets](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Assets module](../../handbook/modules/assets.md)
-
+<!-- doc-content:purpose:start -->
 How to refer to an asset from your data, keep it loaded while you use it and read it every frame. Headers:
 `conjure/assets/asset_ref.h` (`asset_ref<T>`, `asset_handle`), `conjure/assets/asset_manager.h`
 (`asset_manager`, batches, events), `conjure/assets/asset_slot.h` (what a reference points at) and
 `conjure/assets/asset_types.h` (ids, states, priorities, flags). Everything is in `namespace conjure::assets`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Store a reference to an asset in a component | `asset_ref<T>` by value; it serialises as the uuid |
-| Make a reference usable (point it at the manager's slot) | `manager.bind<T>(id)` |
-| Read the asset | `ref.get()`: `T *`, or `nullptr` until it is loaded |
-| Read it, or a placeholder while it is not ready | `manager.get_or_fallback(ref)` |
-| Start loading and keep the asset resident | `asset_handle handle = manager.load(id)` |
-| Load several things and wait for all of them | `manager.load_batch(ids)`, then `batch.is_complete()` |
-| Load now, on the main thread, accepting a hitch | `manager.load_blocking(id)` |
-| Know whether something changed since you last looked | compare `ref.version()` with the value you cached |
-| Unload what nobody holds any more | `manager.collect()` |
-| Be told when assets load, fail or reload | `manager.subscribe(callback)` |
+| Name | Referencing and loading assets |
+| Module | Assets |
+| `#include` | `conjure/assets/asset_manager.h`, `conjure/assets/asset_ref.h`, `conjure/assets/asset_slot.h`, `conjure/assets/asset_types.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/assets.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 A component holds an `asset_ref`; a system holds the `asset_handle` that keeps the payload resident. Copied
 from the pattern in `tests/assets/test_binary_asset.cpp`.
@@ -58,7 +54,32 @@ class loot_system {
         }
 };
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Store a reference to an asset in a component | `asset_ref<T>` by value; it serialises as the uuid |
+| Make a reference usable (point it at the manager's slot) | `manager.bind<T>(id)` |
+| Read the asset | `ref.get()`: `T *`, or `nullptr` until it is loaded |
+| Read it, or a placeholder while it is not ready | `manager.get_or_fallback(ref)` |
+| Start loading and keep the asset resident | `asset_handle handle = manager.load(id)` |
+| Load several things and wait for all of them | `manager.load_batch(ids)`, then `batch.is_complete()` |
+| Load now, on the main thread, accepting a hitch | `manager.load_blocking(id)` |
+| Know whether something changed since you last looked | compare `ref.version()` with the value you cached |
+| Unload what nobody holds any more | `manager.collect()` |
+| Be told when assets load, fail or reload | `manager.subscribe(callback)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Two kinds of reference
 
 `asset_ref<T>` is **non-owning**: a uuid plus a pointer to the asset's slot, 24 bytes, trivially copyable, no
@@ -128,7 +149,7 @@ void tick(asset_manager &manager, u64 frameIndex) {
 ```
 
 > [!WARNING]
-> Every call that changes the manager (`bind`, `load`, `reload`, `collect`, `update`, `subscribe`, ...) is
+> Every call that changes the manager (`bind`, `load`, `reload`, `collect`, `update`, `subscribe`,...) is
 > main-thread only. Safe from any thread: `asset_ref` copy, `get()`, `state()`, `version()` and `asset_handle`
 > copy, move and destroy.
 
@@ -295,8 +316,12 @@ uuid that no source can type asks the sources again on each call, until one can.
 | `asset_type_flags` | `RELOAD_WITH_DEPENDENCIES`, `EXCLUDE_FROM_PACK`, `PINNED_FALLBACK` (a flag enumeration) |
 | `RETIRE_FRAMES` (2), `MAX_ASSET_TYPES` (256), `DEFAULT_MAX_JOBS_IN_FLIGHT` (8), `DEFAULT_WATCH_INTERVAL` (500 ms) | constants |
 | `asset_type_traits<T>`, `CONJURE_DECLARE_ASSET_TYPE(type, "name")`, `declared_asset_type` | how a C++ type is tied to its asset type name; see [Database, importers and hot reload](database-and-import.md) |
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -312,11 +337,20 @@ uuid that no source can type asks the sources again on each call, until one can.
 | `asset_subscription subscribe(asset_event_callback)` / `void unsubscribe(asset_subscription)` | events |
 | `asset_manager_stats stats()` / `u64 frame_index()` / `bool is_shut_down()` | statistics |
 | `asset_load_batch`: `is_complete()`, `progress()`, `loaded_count()`, `handles()`, `size()` | a group of handles |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Assets](index.md): how the pipeline fits together
 - 📘 API: [Database, importers and hot reload](database-and-import.md): declaring your own asset type
 - 📘 API: [Cooking, caches and packs](cooking-and-packs.md): where the blobs the manager reads come from
 - 📘 API: [Jobs and threading](../core/jobs.md), [Reflection](../core/reflection.md), [Glossary](../glossary.md)
-- 🛠 Handbook: [Assets module](../../handbook/modules/assets.md): the pipeline internals, publish and retire
+- 🛠 Handbook: [Assets module](../../handbook/engine/assets.md): the pipeline internals, publish and retire
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

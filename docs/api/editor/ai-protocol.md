@@ -1,18 +1,32 @@
 # The AI control protocol
+<!-- doc-template:wiki -->
+[API](../index.md) → [Editor](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-
+<!-- doc-content:purpose:start -->
 How an agent, a script or a test drives the editor: newline-delimited JSON over TCP, stdio or the in-process
 loopback, and a command file for `--exec`. The wire types are `conjure/editor/protocol/protocol_message.h`, the
 server `conjure/editor/protocol/protocol_server.h`, the transports `conjure/editor/protocol/protocol_transport.h`
 and `conjure/editor/protocol/loopback_transport.h`, the framing `conjure/editor/protocol/line_splitter.h`, the
 tokens `conjure/editor/protocol/access_token.h`, the audit log `conjure/editor/protocol/audit_log.h`, the error
-codes `conjure/editor/editor_error.h`, the runner `conjure/editor/headless_runner.h`. The agent-facing
-walkthrough with the whole catalogue is the skill `.claude/skills/editor-ai-control/SKILL.md`; the committed
-`editor.schema` dump is `docs/generated/editor_protocol.json`.
+codes `conjure/editor/editor_error.h`, the runner `conjure/editor/headless_runner.h`. The committed
+`editor.schema` catalogue is `docs/generated/editor_protocol.json`.
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | The AI control protocol |
+| Module | Editor |
+| `#include` | `conjure/editor/editor_command.h`, `conjure/editor/editor_error.h`, `conjure/editor/headless_runner.h`, `conjure/editor/protocol/access_token.h`, `conjure/editor/protocol/audit_log.h`, `conjure/editor/protocol/line_splitter.h`, `conjure/editor/protocol/loopback_transport.h`, `conjure/editor/protocol/protocol_message.h`, `conjure/editor/protocol/protocol_server.h`, `conjure/editor/protocol/protocol_transport.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/editor/editor.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Do |
 |---|---|
 | Start a server on the default port (47820, nine fallbacks) | `conjure_editor --project <dir>` (the UI) or `--headless --ai-port 47820` (headless, add `--trust-project` unless the project was trusted before); the bound port is written to `<project>/.conjure/ai_port` and the two tokens to `ai_token` and `ai_token_inspect` beside it; all three move to the new project's folder when `project.open` switches projects |
@@ -27,7 +41,15 @@ walkthrough with the whole catalogue is the skill `.claude/skills/editor-ai-cont
 | Address an entity | by guid string, by hierarchy path `"Board/Cell_3"`, or by unique name |
 | Address a field | `transform.position.x`, `script.scripts[0].fields.mine`, `camera.cameraData.projection` |
 | Connect from a C++ test without sockets | `loopback_transport` added through `protocol_server::add_transport`, `loopback_client` on the other end |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The wire
 
 One request per line, one response per line, events between them, UTF-8, at most `MAX_MESSAGE_BYTES` (16 MiB)
@@ -234,7 +256,7 @@ tests use.
 The command file is checked before the engine starts. `editor_application::initialise` looks at the arguments
 and the project first, then reads and parses the file, and only then starts the engine, so a mistyped file name
 or a syntax error costs no engine start: the process prints `--exec: cannot read '<file>'` or `--exec: cannot
-parse '<file>': command file: line 3: ...` on standard error and exits with 3. When a flag or the project is
+parse '<file>': command file: line 3:...` on standard error and exits with 3. When a flag or the project is
 wrong as well, that is what is reported (exit 3 or 2).
 
 A startup scene that does not load does not fail the run. The editor starts over an empty world, as it does with
@@ -296,8 +318,12 @@ frames bytes into lines with the size limit and reports an oversized line as a m
 > [!NOTE]
 > `transport_kind::LOCAL` (client 0) is the UI itself, which dispatches without a transport. Clients from TCP
 > and stdio get ids from 1 upwards; the loopback transport hands out its own.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -314,8 +340,17 @@ frames bytes into lines with the size limit and reports an oversized line as a m
 | `result<exec_summary> headless_runner::run(editor_application &, const editor_options &, span<const protocol_request>)` / `exec_summary run_requests(...)` | `--exec` |
 | `optional<json::document> editor_application::startup_scene_warning()` | the `STARTUP_SCENE_FAILED` warning data, when the startup scene did not load |
 | `std::string_view to_string(protocol_error_code)` | the wire spelling of a code |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Access tokens and the audit log](access-and-audit.md), [Headless mode and the command model](headless-and-commands.md), [The workspace UI](workspace-ui.md)
-- 🛠 Handbook: [Editor module](../../handbook/modules/editor.md), [Testing](../../handbook/testing.md) (the `protocol_client` fixture)
+- 🛠 Handbook: [Editor module](../../handbook/editor/editor.md), [Testing and Benchmarks](../../handbook/development/testing-and-benchmarks.md) (the `protocol_client` fixture)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

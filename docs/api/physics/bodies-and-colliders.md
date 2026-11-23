@@ -1,30 +1,25 @@
 # Bodies, colliders and characters
+<!-- doc-template:wiki -->
+[API](../index.md) → [Physics](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
-
+<!-- doc-content:purpose:start -->
 How to make an entity a physical body, which shapes it can have, how layers decide what collides, how the
 character controller moves, and how collision meshes come from files. Headers:
 `conjure/physics/components.h`, `conjure/physics/character_controller.h`, `conjure/physics/physics_layers.h`,
 `conjure/physics/collision_mesh_asset.h` and `conjure/physics/register.h`. Everything is in `namespace
 conjure::physics`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Register the physics components once | `register_components(registry)` (after `scene::register_components`) |
-| A falling box | `rigid_body` (default `DYNAMIC`) + `box_collider` on an entity with a `scene::local_transform` |
-| A floor or wall | a collider without a `rigid_body` (static), or `rigid_body` with `motion_type::STATIC` |
-| A moving platform you drive | `rigid_body` with `motion_type::KINEMATIC` and `KINEMATIC_MOVES_WITH_TRANSFORM`, then edit `local_transform` |
-| A sensor volume | any collider with `isTrigger = true` |
-| Friction and bounce | `physics_material {friction, restitution}` on the entity |
-| A convex hull or a triangle mesh from a file | `convex_collider` / `mesh_collider` with an `asset_ref<collision_mesh_asset>` |
-| A walking player | `character_controller` (capsule) and `physics_world::character_move(entity, velocity)` each step |
-| Name the layers and who collides with whom | `physics_layer_table` from `project.json` `extensions.physics_layers` |
-| Add the four physics systems to the scheduler | `register_systems(scheduler, world)` |
-| Register the collision mesh asset type and importer | `register_asset_types(types, importers)` |
+| Name | Bodies, colliders and characters |
+| Module | Physics |
+| `#include` | `conjure/physics/character_controller.h`, `conjure/physics/collision_mesh_asset.h`, `conjure/physics/components.h`, `conjure/physics/physics_layers.h`, `conjure/physics/register.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/physics.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/physics/components.h"
@@ -56,7 +51,33 @@ Dynamic and kinematic bodies and characters get a `scene::interpolated_transform
 between the last two fixed steps. Physics adds it (starting at the pose the entity has when its body component
 arrives), keeps it current and removes it again; a static body never has one, and a body that falls asleep
 holds still in it.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Register the physics components once | `register_components(registry)` (after `scene::register_components`) |
+| A falling box | `rigid_body` (default `DYNAMIC`) + `box_collider` on an entity with a `scene::local_transform` |
+| A floor or wall | a collider without a `rigid_body` (static), or `rigid_body` with `motion_type::STATIC` |
+| A moving platform you drive | `rigid_body` with `motion_type::KINEMATIC` and `KINEMATIC_MOVES_WITH_TRANSFORM`, then edit `local_transform` |
+| A sensor volume | any collider with `isTrigger = true` |
+| Friction and bounce | `physics_material {friction, restitution}` on the entity |
+| A convex hull or a triangle mesh from a file | `convex_collider` / `mesh_collider` with an `asset_ref<collision_mesh_asset>` |
+| A walking player | `character_controller` (capsule) and `physics_world::character_move(entity, velocity)` each step |
+| Name the layers and who collides with whom | `physics_layer_table` from `project.json` `extensions.physics_layers` |
+| Add the four physics systems to the scheduler | `register_systems(scheduler, world)` |
+| Register the collision mesh asset type and importer | `register_asset_types(types, importers)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The components
 
 All components are plain reflected structs registered under `"conjure.physics.<struct name>"` (so
@@ -219,8 +240,12 @@ The importer validates glTF sources before reading them (accessors and buffer vi
 external buffer file against its declared length, every triangle primitive's index count a multiple of three),
 so a malformed file is an import failure rather than a crash, and it keeps the triangles of a mirrored node (a
 negative scale) facing the way they were authored.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -230,8 +255,17 @@ negative scale) facing the way they were authored.
 | `static result<physics_layer_table> physics_layer_table::from_json(const json::value &)`, `result<void> to_json(json::writer &) const` | layer table I/O |
 | `result<u8> physics_layer_table::add_layer(string_id)`, `void set_collides(u8, u8, bool)`, `bool collides(u8, u8) const`, `physics_layer_mask collision_mask(u8) const`, `optional<u8> find(string_id) const`, `string_id name(u8) const`, `u32 count() const`, `result<void> validate() const` | layers |
 | `static result<collision_mesh_asset> collision_mesh_asset::from_geometry(span<const vec3>, span<const u32>)`, `from_payload(span<const byte>)`, `vector<byte> to_payload() const` | collision meshes |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [The physics world and queries](physics-world-and-queries.md), [Scenes and the hierarchy](../scene/scenes-and-hierarchy.md), [Referencing and loading assets](../assets/referencing-and-loading.md)
-- 🛠 Handbook: [Physics module](../../handbook/modules/physics.md)
+- 🛠 Handbook: [Physics module](../../handbook/engine/physics.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,7 +1,8 @@
 # Engine: the application and the frame
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Engine module](../../handbook/modules/engine.md)
-
+<!-- doc-content:purpose:start -->
 The engine module is the object that runs a game. `conjure::engine::application` owns every other module
 (the window, the graphics device, the asset manager, the world, the scene manager, physics, audio, scripting
 and the plugin loader), starts them in a fixed order, runs one frame per `step_frame()` in the fixed phase
@@ -9,7 +10,9 @@ sequence of the ECS scheduler and shuts them down in reverse. Everything on thes
 `namespace conjure::engine`. You meet it in three places: the standalone runtime (`conjure_runtime`), the
 editor (which wraps the same application) and your own tests and tools, which drive it headless on null
 backends.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. An `application` is built from an `application_desc`: a validated `engine_config` plus an optional
@@ -79,7 +82,7 @@ app.shutdown();
 ```
 
 > [!TIP]
-> In tests, prefer `conjure::testing::headless_engine` (🛠 Handbook: [Testing](../../handbook/testing.md)) over a
+> In tests, prefer `conjure::testing::headless_engine` (🛠 Handbook: [Testing and Benchmarks](../../handbook/development/testing-and-benchmarks.md)) over a
 > hand-built application: it adds the memory and log checks, scene loading by path and scripted input.
 
 ## Local terms
@@ -97,4 +100,5 @@ app.shutdown();
 
 - 📘 API: [Entities, components and systems](../ecs/index.md), [Scenes, hierarchy and prefabs](../scene/index.md), [Modules and plugins](../modules/index.md)
 - 📘 API: [The editor](../editor/index.md), [The runtime](../runtime/index.md), [Scripting from C#](../bindings/index.md)
-- 🛠 Handbook: [Engine module](../../handbook/modules/engine.md), [Architecture](../../handbook/architecture.md)
+- 🛠 Handbook: [Engine module](../../handbook/engine/engine.md), Architecture
+<!-- doc-content:body:end -->

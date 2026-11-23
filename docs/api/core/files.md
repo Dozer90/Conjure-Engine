@@ -1,33 +1,26 @@
 # Files and the virtual file system
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Read and write game files through one interface, whether they live in a project folder on disk, in memory
 or behind a `scheme://` name such as `project://scenes/main.scene`. Include `conjure/core/vfs/vfs.h` for
 the whole area (`conjure::core::vfs`); it pulls in `conjure/core/vfs/file_system.h` (the interface),
 `conjure/core/vfs/native_file_system.h` (a directory on disk), `conjure/core/vfs/memory_file_system.h`
 (an in-memory tree), `conjure/core/vfs/mount_table.h` (routes schemes to backends) and
 `conjure/core/vfs/path_utils.h` (lexical path helpers).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Read a whole text or binary file | `files.read_text_file(path)`, `files.read_file(path)` |
-| Write a file (and its parent directories) | `files.write_text_file(path, text)`, `files.write_file(path, bytes)` |
-| Save so that a crash or a power cut cannot ruin the file | `files.write_file_atomic(path, bytes)` |
-| Keep a secret other accounts of the machine must not read | `vfs::write_private_file(path, bytes)` on an on-disk path: a new file created owner-only (mode 0600; on Windows an access control list naming the process user alone) replaces `path`; `UNSUPPORTED` on FAT and exFAT; not flushed. `vfs::is_private_file(path)` checks an existing file |
-| Check a name the user typed before creating it | `vfs::path_utils::is_portable_name(name)` |
-| Check or describe an entry | `files.exists(path)`, `files.stat(path)` |
-| List a directory | `files.enumerate(dir, flags, callback)` |
-| Move, delete, create folders | `rename()`, `remove()`, `remove_all()`, `create_directories()` |
-| Read parts of a big file | `files.open_read(path)` then `file::read_at(offset, buffer)` |
-| Address files as `scheme://path` | `vfs::mount_table` with `mount("project", backend)` |
-| Expose a folder on disk | `vfs::native_file_system(rootPath)` |
-| Fake a file system in a test | `vfs::memory_file_system` |
-| Split, join or normalise a path string | `vfs::path_utils::join()`, `normalize()`, `extension()`, ... |
+| Name | Files and the virtual file system |
+| Module | Core |
+| `#include` | `conjure/core/vfs/file_system.h`, `conjure/core/vfs/memory_file_system.h`, `conjure/core/vfs/mount_table.h`, `conjure/core/vfs/native_file_system.h`, `conjure/core/vfs/path_utils.h`, `conjure/core/vfs/vfs.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/vfs/vfs.h"
@@ -55,7 +48,35 @@ result<void> save_settings(vfs::file_system &files, std::string_view jsonText) {
 
 The engine mounts `project://`, `assets://`, `engine://`, `cooked://` and `modules://` for you; game code
 normally receives a `vfs::file_system &` (the mount table) and never touches `std::filesystem` directly.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Read a whole text or binary file | `files.read_text_file(path)`, `files.read_file(path)` |
+| Write a file (and its parent directories) | `files.write_text_file(path, text)`, `files.write_file(path, bytes)` |
+| Save so that a crash or a power cut cannot ruin the file | `files.write_file_atomic(path, bytes)` |
+| Keep a secret other accounts of the machine must not read | `vfs::write_private_file(path, bytes)` on an on-disk path: a new file created owner-only (mode 0600; on Windows an access control list naming the process user alone) replaces `path`; `UNSUPPORTED` on FAT and exFAT; not flushed. `vfs::is_private_file(path)` checks an existing file |
+| Check a name the user typed before creating it | `vfs::path_utils::is_portable_name(name)` |
+| Check or describe an entry | `files.exists(path)`, `files.stat(path)` |
+| List a directory | `files.enumerate(dir, flags, callback)` |
+| Move, delete, create folders | `rename()`, `remove()`, `remove_all()`, `create_directories()` |
+| Read parts of a big file | `files.open_read(path)` then `file::read_at(offset, buffer)` |
+| Address files as `scheme://path` | `vfs::mount_table` with `mount("project", backend)` |
+| Expose a folder on disk | `vfs::native_file_system(rootPath)` |
+| Fake a file system in a test | `vfs::memory_file_system` |
+| Split, join or normalise a path string | `vfs::path_utils::join()`, `normalize()`, `extension()`,... |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Paths and the error contract
 
 Paths are UTF-8 and `/`-separated. Backslashes and a leading `/` are accepted and normalised, `""` names
@@ -314,8 +335,12 @@ forward slashes.
 `native_file_system` holds no mutable state: one instance serves any number of threads. `memory_file_system`
 and `mount_table` guard themselves with a mutex. `enumerate()` callbacks may call back into the same
 file system. `file::read_at()` is safe from several threads on one handle.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -342,10 +367,19 @@ file system. `file::read_at()` is safe from several threads on one handle.
 | `string_view path_utils::parent(path)` / `filename(path)` / `stem(path)` | lexical helpers (views) |
 | `bool path_utils::has_extension(path, ext)` / `is_absolute(path)` / `std::string relative_to(path, base)` | lexical helpers |
 | `bool path_utils::is_portable_name(string_view name)` | the rule for names of new entries |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Errors and results](errors-and-results.md) for `result<T>`, `CONJURE_TRY` and the error codes above
 - 📘 API: [JSON](json.md) to parse what you read and serialise what you write
 - 📘 API: [Processes, libraries and images](system.md) for the other operating-system services in core
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md) for the backend internals, atomic replace, the flush and sharing semantics
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md) for the backend internals, atomic replace, the flush and sharing semantics
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

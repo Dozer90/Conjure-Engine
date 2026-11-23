@@ -213,7 +213,7 @@ The reply serialiser asserts on invalid UTF-8 instead of sanitising or failing t
 
 `tests/audio/test_decoder.cpp:416` (build-ci; found by: Gap round: design docs vs code drift)
 
-`decoder - [downloaded] ogg, mp3 and flac decode to the expected length within 1 %` lives in the ordinary `conjure_audio_tests` executable (labels `unit;audio`, tests/audio/CMakeLists.txt has no LABELS), so the default presets run it. Every leg of ci.yml and nightly.yml runs `python tools/download_test_assets.py` first, which writes `tests/.assets_ready`; `precondition::DOWNLOADED_ASSETS` then holds and the case hits `REQUIRE(std::filesystem::exists(path))` for `audio/tone.ogg`, which tools/test_assets.json does not list (its only audio entry, line 42, is a disabled placeholder whose url points at a README.md). 09 section 4 item 13(d) and docs/handbook/modules/audio.md:359 both record this as "the [downloaded] decoder case skips" - the record is wrong: it only skips where nothing was downloaded (a developer machine). It also contradicts 08_testing D12 ("those tests live in their own downloaded-labelled executable"; `conjure_downloaded_tests` does not exist).
+`decoder - [downloaded] ogg, mp3 and flac decode to the expected length within 1 %` lives in the ordinary `conjure_audio_tests` executable (labels `unit;audio`, tests/audio/CMakeLists.txt has no LABELS), so the default presets run it. Every leg of ci.yml and nightly.yml runs `python tools/download_test_assets.py` first, which writes `tests/.assets_ready`; `precondition::DOWNLOADED_ASSETS` then holds and the case hits `REQUIRE(std::filesystem::exists(path))` for `audio/tone.ogg`, which tools/test_assets.json does not list (its only audio entry, line 42, is a disabled placeholder whose url points at a README.md). 09 section 4 item 13(d) and docs/handbook/engine/audio.md:359 both record this as "the [downloaded] decoder case skips" - the record is wrong: it only skips where nothing was downloaded (a developer machine). It also contradicts 08_testing D12 ("those tests live in their own downloaded-labelled executable"; `conjure_downloaded_tests` does not exist).
 
 **Smallest fix:** Either list CC0 tone.ogg/mp3/flac in tools/test_assets.json (and pin them), or until then turn the two REQUIREs into a 77 skip (`CONJURE_TEST_REQUIRE`-style) and move the case into a `downloaded`-labelled executable as D12 specifies; correct 09 item 13(d) and audio.md:359.
 
@@ -798,9 +798,9 @@ The reply serialiser asserts on invalid UTF-8 instead of sanitising or failing t
 - Options table says a missing .NET host pack fails the configure; the same page and the code say it warns and turns scripting off (`docs/handbook/build-pipeline.md:84`, docs)
 - Warning table omits the two globally disabled MSVC warnings (/wd4251 /wd4275) (`docs/handbook/build-pipeline.md:221`, docs)
 - Stale wave wording in build-pipeline and getting-started (written at wave 1/2, never refreshed) (`docs/handbook/build-pipeline.md:210`, docs)
-- Modules handbook 'Open items' still lists the CONJURE_API-only export switch as waiting (`docs/handbook/modules/modules.md:325`, docs)
-- Handbook and bindings README claim the editor does not install the bindings subsystem; it does (`docs/handbook/modules/bindings.md:149`, docs)
-- Assets handbook says the design's integration tests have not landed; they exist (`docs/handbook/modules/assets.md:319`, docs)
+- Modules handbook 'Open items' still lists the CONJURE_API-only export switch as waiting (`docs/handbook/engine/modules.md:325`, docs)
+- Handbook and bindings README claim the editor does not install the bindings subsystem; it does (`docs/handbook/engine/bindings.md:149`, docs)
+- Assets handbook says the design's integration tests have not landed; they exist (`docs/handbook/engine/assets.md:319`, docs)
 - D8 ('complete, compile-checked snippets ... kept under 30 lines') is neither enforced nor met (`docs/design/16_documentation.md:18`, docs)
 - Header usage comment passes a string literal where string_id's constructor is explicit (`engine/include/conjure/ecs/system.h:28`, docs)
 
@@ -1159,7 +1159,7 @@ The reply serialiser asserts on invalid UTF-8 instead of sanitising or failing t
 - Documentation chapter says needs_wiki_page() returns True for every header (`docs/handbook/documentation.md:156`, docs)
 - Handbook architecture, module-system and modules pages still describe waves 3-4 as future (`docs/handbook/architecture.md:37`, docs)
 - Wiki pages still announce wave-4 features as future (`docs/api/modules/index.md:34`, docs)
-- Handbook and READMEs cite test and source files that do not exist (`docs/handbook/modules/engine.md:134`, docs)
+- Handbook and READMEs cite test and source files that do not exist (`docs/handbook/engine/engine.md:134`, docs)
 - AGENTS.md layout and configuration table drift (`AGENTS.md:58`, docs)
 - Nothing compiles or path-checks the documentation, although the wiki promises examples that compile as written (`tools/check_docs.py:103`, tests)
 

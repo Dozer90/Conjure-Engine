@@ -1,13 +1,16 @@
 # The runtime
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Runtime](../../handbook/modules/runtime.md)
-
+<!-- doc-content:purpose:start -->
 `conjure_runtime` is the executable that ships with a game: one `main.cpp` over the engine's `application`
 (📘 API: [Running the engine](../engine/running-the-engine.md)). It parses the engine command line, loads
 `project.json`, adds the scripting bindings, pushes the `game_layer` that quits when the window closes, starts the
 application and returns its exit code. Nothing of the editor is linked: a Distribution build has no editor and no
 Dear ImGui, and `tools/check_distribution_symbols.py` proves it on the binaries.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## At a glance
 
 | You want to... | Run |
@@ -36,7 +39,7 @@ the wide command line and the process runs with the UTF-8 code page.
 > A `--headless` run does not execute C# scripts, whatever `project.json` says: it starts without the scripting
 > subsystem, so it needs neither a .NET runtime nor the game assembly, and for a project that names a game assembly
 > the log says `scripting: disabled; a headless run leaves the project's scripts off unless --scripting is given`.
-> Add `--scripting` to run them. The start then fails with exit code 1 when no .NET runtime is found
+> Add `--scripting` to run them. The start then fails with exit code 1 when no.NET runtime is found
 > (`SCRIPT_RUNTIME_NOT_FOUND`) or the game assembly does not load, unless the project sets `"scripting": {
 > "required": false }`. `--scripting` with `--no-scripting` is `BAD_ARGUMENTS`. A windowed run follows
 > `project.json` and needs neither flag.
@@ -99,4 +102,5 @@ your game brings on its own (📘 API: [Export and diagnostics](../engine/export
 
 - 📘 API: [Engine: the application and the frame](../engine/index.md), [Running the engine](../engine/running-the-engine.md)
 - 📘 API: [The editor](../editor/index.md) (which exports what the runtime runs)
-- 🛠 Handbook: [Runtime](../../handbook/modules/runtime.md), [Build pipeline](../../handbook/build-pipeline.md)
+- 🛠 Handbook: [Runtime](../../handbook/engine/runtime.md), [Building and Configuration](../../handbook/development/building-and-configuration.md)
+<!-- doc-content:body:end -->

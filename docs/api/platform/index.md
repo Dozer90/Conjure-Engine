@@ -1,12 +1,15 @@
 # Platform: windows, input and events
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Platform module](../../handbook/modules/platform.md)
-
+<!-- doc-content:purpose:start -->
 The platform module puts the game's window on screen, turns what the player does with the keyboard, mouse and
 gamepads into a flat list of events once per frame, and folds that list into one per-frame *input snapshot* that
 your game code queries. Everything lives in `namespace conjure::platform`; the umbrella header
 `conjure/platform/platform.h` includes every header named on these pages and adds `backend_version_string()`.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## What you get
 
 | Type | What it is | Page |
@@ -89,5 +92,12 @@ category `"platform"`). Test for one with `error.is(platform_error::X)`; see
 
 - 📘 API: [Glossary](../glossary.md)
 - 📘 API: [Jobs and threading](../core/jobs.md) for what "the main thread" means to the engine
-- 🛠 Handbook: [Platform module](../../handbook/modules/platform.md) for the GLFW backend's internals, the input state
+- 🛠 Handbook: [Platform module](../../handbook/engine/platform.md) for the GLFW backend's internals, the input state
   machine and the conformance tests
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/platform/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+<!-- doc-content:body:end -->

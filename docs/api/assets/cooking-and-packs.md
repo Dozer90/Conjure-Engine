@@ -1,27 +1,26 @@
 # Cooking, caches and packs
+<!-- doc-template:wiki -->
+[API](../index.md) → [Assets](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Assets module](../../handbook/modules/assets.md)
-
+<!-- doc-content:purpose:start -->
 Where the bytes the manager loads come from: the cooked blob format, the editor's cache, the `asset_source`
 interface that hides cache, pack and memory behind one door, the cooker that exports a pack and the records a
 plugin module uses to offer importers and asset types. Headers: `conjure/assets/cooked_blob.h`,
 `conjure/assets/asset_cache.h`, `conjure/assets/asset_source.h`, `conjure/assets/asset_cooker.h`,
 `conjure/assets/asset_pack.h` and `conjure/assets/asset_extension_desc.h`. Everything is in
 `namespace conjure::assets`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Export the game's content | `asset_cooker::cook(settings)` |
-| Load from the exported pack at runtime | `pack_reader::open()` then `pack_asset_source` as the manager's source |
-| Load from the editor cache | `cache_asset_source(cache, database)` |
-| Feed hand-made blobs to a manager in a test | `memory_asset_source::add(blob)` |
-| Search several packs (the game's, then plugins') | `composite_asset_source`, or `asset_manager::add_source()` |
-| Inspect what is in a pack | `pack_reader::toc()`, `find(id)`, `name_of(entry)`, `dependencies_of(entry)` |
-| Offer an importer or asset type from a plugin module | `importer_extension_desc`, `asset_type_extension_desc` |
+| Name | Cooking, caches and packs |
+| Module | Assets |
+| `#include` | `conjure/assets/asset_cache.h`, `conjure/assets/asset_cooker.h`, `conjure/assets/asset_extension_desc.h`, `conjure/assets/asset_pack.h`, `conjure/assets/asset_source.h`, `conjure/assets/cooked_blob.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/assets.md) |
 
-## Quick example: cook, then load the pack
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example-cook-then-load-the-pack"></a>
 
 Copied from `tests/assets/test_export_roundtrip.cpp`. The cooker needs the database and the cache the editor
 already has; the runtime needs only the pack file.
@@ -67,7 +66,29 @@ core::result<void> open_runtime(core::vfs::file_system &files, core::jobs::job_s
 > `pack_asset_source` holds a pointer to the `pack_reader` and `cache_asset_source` holds pointers to the
 > `asset_cache` and the `asset_database`; they own none of them. Keep those objects alive for as long as the
 > manager that uses the source, and construct them first.
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Export the game's content | `asset_cooker::cook(settings)` |
+| Load from the exported pack at runtime | `pack_reader::open()` then `pack_asset_source` as the manager's source |
+| Load from the editor cache | `cache_asset_source(cache, database)` |
+| Feed hand-made blobs to a manager in a test | `memory_asset_source::add(blob)` |
+| Search several packs (the game's, then plugins') | `composite_asset_source`, or `asset_manager::add_source()` |
+| Inspect what is in a pack | `pack_reader::toc()`, `find(id)`, `name_of(entry)`, `dependencies_of(entry)` |
+| Offer an importer or asset type from a plugin module | `importer_extension_desc`, `asset_type_extension_desc` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The cooked blob
 
 A cooked blob (`conjure/assets/cooked_blob.h`) is what an importer produces, the cache stores and a loader
@@ -223,9 +244,13 @@ core::result<void> attach(asset_type_registry &types, importer_registry &importe
 `asset_type_extension_desc { const char *name; u32 version; asset_type_flags flags; unique_ptr<asset_loader> (*createLoader)(); }`.
 Registration fails with `INVALID_ARGUMENT` when the factory is missing, returns nothing or produces an importer
 or loader whose id or type does not match the record. The module system chapter explains how records reach the
-engine: 🛠 Handbook: [Module system](../../handbook/module-system/index.md).
+engine: 🛠 Handbook: [Module system](../../handbook/extensions/module-system.md).
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -235,11 +260,20 @@ engine: 🛠 Handbook: [Module system](../../handbook/module-system/index.md).
 | `asset_cooker(database, cache, fs, jobs)`: `result<cook_report> cook(const cook_settings &)`, `last_report()` | export |
 | `pack_writer`: `add`, `build`, `write`, `build_manifest`, `write_manifest`; `pack_reader`: `open`, `open_bytes`, `find`, `find_by_name`, `read`, `toc` | the pack |
 | `register_importer_extension(importers, desc)` / `register_asset_type_extension(types, desc)` | plugin records |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Assets](index.md), [Referencing and loading](referencing-and-loading.md)
 - 📘 API: [Database, importers and hot reload](database-and-import.md): the importers that produce blobs and the database that decides what is stale
 - 📘 API: [Files and the virtual file system](../core/files.md), [Glossary](../glossary.md)
-- 🛠 Handbook: [Assets module](../../handbook/modules/assets.md): cache validation, cooker determinism, pack layout
-- 🛠 Handbook: [Module system](../../handbook/module-system/index.md): how extension records are collected
+- 🛠 Handbook: [Assets module](../../handbook/engine/assets.md): cache validation, cooker determinism, pack layout
+- 🛠 Handbook: [Module system](../../handbook/extensions/module-system.md): how extension records are collected
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 1168" role="img"
+ aria-labelledby="graph-title graph-description">
+<title id="graph-title">Core module dependencies</title>
+<desc id="graph-description">Arrows run from dependency to consumer. Direct dependencies are grouped in alphabetical Public and Private columns. Solid edges are public; dashed edges are private. Each access group shares one incoming arrow. Consumers, when present, appear directly below the selected module without repeated headings.</desc>
+<defs><marker id="arrow" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="0" refY="4" orient="auto">
+<path d="M0,0 L8,4 L0,8 Z" fill="#8c8c8c"/></marker>
+<mask id="node-assets" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-audio" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-bindings" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-core" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+<circle cx="280" cy="104" r="8" fill="black"/>
+</mask>
+<mask id="node-ecs" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-editor" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-engine" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-modules" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-physics" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-platform" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-renderer" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-rhi" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-scene" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+<mask id="node-scripting" maskUnits="userSpaceOnUse" x="0" y="0" width="576" height="1168" style="mask-type:luminance"><rect width="576" height="1168" fill="white"/>
+</mask>
+</defs>
+<path data-dependency="core" data-consumer="assets" d="M280,104 L280,168 L272,176 L265.5,176" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="audio" d="M280,104 L280,244 L272,252 L265.5,252" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="bindings" d="M280,104 L280,320 L272,328 L265.5,328" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="ecs" d="M280,104 L280,396 L272,404 L265.5,404" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="editor" d="M280,104 L280,472 L272,480 L265.5,480" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="engine" d="M280,104 L280,548 L272,556 L265.5,556" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="modules" d="M280,104 L280,624 L272,632 L265.5,632" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="physics" d="M280,104 L280,700 L272,708 L265.5,708" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="platform" d="M280,104 L280,776 L272,784 L265.5,784" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="renderer" d="M280,104 L280,852 L272,860 L265.5,860" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="rhi" d="M280,104 L280,928 L272,936 L265.5,936" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="scene" d="M280,104 L280,1004 L272,1012 L265.5,1012" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path data-dependency="core" data-consumer="scripting" d="M280,104 L280,1080 L272,1088 L265.5,1088" fill="none" stroke="#8c8c8c" stroke-width="2.5" marker-end="url(#arrow)"/>
+<a href="../../handbook/engine/core.html" target="_top">
+<rect x="176" y="52" width="224" height="56" rx="15" fill="#171717" stroke="#009dff" stroke-width="3" mask="url(#node-core)"/>
+<text x="288" y="86" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">core</text>
+</a>
+<a href="../../handbook/engine/assets.html" target="_top">
+<rect x="32" y="148" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-assets)"/>
+<text x="144" y="182" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">assets</text>
+</a>
+<a href="../../handbook/engine/audio.html" target="_top">
+<rect x="32" y="224" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-audio)"/>
+<text x="144" y="258" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">audio</text>
+</a>
+<a href="../../handbook/engine/bindings.html" target="_top">
+<rect x="32" y="300" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-bindings)"/>
+<text x="144" y="334" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">bindings</text>
+</a>
+<a href="../../handbook/engine/ecs.html" target="_top">
+<rect x="32" y="376" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-ecs)"/>
+<text x="144" y="410" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">ecs</text>
+</a>
+<a href="../../handbook/editor/editor.html" target="_top">
+<rect x="32" y="452" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-editor)"/>
+<text x="144" y="486" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">editor</text>
+</a>
+<a href="../../handbook/engine/engine.html" target="_top">
+<rect x="32" y="528" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-engine)"/>
+<text x="144" y="562" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">engine</text>
+</a>
+<a href="../../handbook/engine/modules.html" target="_top">
+<rect x="32" y="604" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-modules)"/>
+<text x="144" y="638" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">modules</text>
+</a>
+<a href="../../handbook/engine/physics.html" target="_top">
+<rect x="32" y="680" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-physics)"/>
+<text x="144" y="714" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">physics</text>
+</a>
+<a href="../../handbook/engine/platform.html" target="_top">
+<rect x="32" y="756" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-platform)"/>
+<text x="144" y="790" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">platform</text>
+</a>
+<a href="../../handbook/engine/renderer.html" target="_top">
+<rect x="32" y="832" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-renderer)"/>
+<text x="144" y="866" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">renderer</text>
+</a>
+<a href="../../handbook/engine/rhi.html" target="_top">
+<rect x="32" y="908" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-rhi)"/>
+<text x="144" y="942" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">rhi</text>
+</a>
+<a href="../../handbook/engine/scene.html" target="_top">
+<rect x="32" y="984" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-scene)"/>
+<text x="144" y="1018" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">scene</text>
+</a>
+<a href="../../handbook/engine/scripting.html" target="_top">
+<rect x="32" y="1060" width="224" height="56" rx="15" fill="#171717" stroke="#171717" stroke-width="3" mask="url(#node-scripting)"/>
+<text x="144" y="1094" text-anchor="middle" fill="#ffffff" font-family="Futura Bk BT, sans-serif" font-size="19">scripting</text>
+</a>
+<circle data-port="core" data-access="public" cx="280" cy="104" r="4" fill="#8c8c8c"/>
+</svg>

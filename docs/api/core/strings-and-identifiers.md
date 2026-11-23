@@ -1,28 +1,25 @@
 # Strings and identifiers
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Names in Conjure are usually compared as hashes, not as text: a `string_id` (`conjure/core/string_id.h`) is the
 64-bit FNV-1a hash of a name and still prints as the name. This page covers that type, the hash functions behind
 it (`conjure/core/hash.h`), the ASCII string helpers in `namespace str` (`conjure/core/string_utils.h`), the
 packed bit set `bit_vector` (`conjure/core/bit_vector.h`) and the stable radix sort for integer keys
 (`conjure/core/radix_sort.h`).
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Name a component, event or asset and compare it cheaply | `string_id` |
-| A compile-time id in a hot loop | `"ecs.position"_sid` (`conjure::core::literals`, an inline namespace: `using namespace conjure::core;` is enough; add `using namespace conjure::core::literals;` only when you do not want the whole namespace) |
-| An id for a static or namespace-scope variable that tools can print | `string_id::intern("name")` |
-| Get the text of an id back | `id.view()`, `id.c_str()`, `id.to_string()`, `std::format("{}", id)` |
-| Hash a string yourself | `hash::fnv1a64(text)`, `hash::fnv1a32(text)`, `hash::combine(a, b)` |
-| Trim, split, join, change case, parse a number | `str::trim`, `str::split`, `str::join`, `str::to_lower`, `str::parse_int` |
-| Convert between UTF-8 and UTF-16 / wide strings | `str::to_utf16`, `str::from_utf16`, `str::to_wide`, `str::from_wide` |
-| A growable set of bits (masks, dirty flags) | `bit_vector` |
-| Sort integer keys with attached indices, fast and stable | `radix_sort_u64`, `radix_sort_u32` |
+| Name | Strings and identifiers |
+| Module | Core |
+| `#include` | `conjure/core/bit_vector.h`, `conjure/core/hash.h`, `conjure/core/radix_sort.h`, `conjure/core/string_id.h`, `conjure/core/string_utils.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/string_id.h"
@@ -43,7 +40,31 @@ std::string normalise_key(std::string_view raw) {
     return str::to_lower(str::trim(raw));
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Name a component, event or asset and compare it cheaply | `string_id` |
+| A compile-time id in a hot loop | `"ecs.position"_sid` (`conjure::core::literals`, an inline namespace: `using namespace conjure::core;` is enough; add `using namespace conjure::core::literals;` only when you do not want the whole namespace) |
+| An id for a static or namespace-scope variable that tools can print | `string_id::intern("name")` |
+| Get the text of an id back | `id.view()`, `id.c_str()`, `id.to_string()`, `std::format("{}", id)` |
+| Hash a string yourself | `hash::fnv1a64(text)`, `hash::fnv1a32(text)`, `hash::combine(a, b)` |
+| Trim, split, join, change case, parse a number | `str::trim`, `str::split`, `str::join`, `str::to_lower`, `str::parse_int` |
+| Convert between UTF-8 and UTF-16 / wide strings | `str::to_utf16`, `str::from_utf16`, `str::to_wide`, `str::from_wide` |
+| A growable set of bits (masks, dirty flags) | `bit_vector` |
+| Sort integer keys with attached indices, fast and stable | `radix_sort_u64`, `radix_sort_u32` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## string_id
 
 A `string_id` is exactly eight bytes: the FNV-1a 64 hash of its name. Comparison, ordering, hashing and storage
@@ -236,8 +257,12 @@ void sort_draws(std::vector<u64> &sortKeys, std::vector<u32> &drawIndices) {
 > `values` must have the same size as `keys`, both scratch spans must be at least that large, and no two of the
 > spans may overlap (the sort ping-pongs between them and writes keys and values side by side). All of this is
 > asserted and the input is left untouched on a violation. The scratch contents are unspecified afterwards.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -261,9 +286,18 @@ void sort_draws(std::vector<u64> &sortKeys, std::vector<u32> &drawIndices) {
 | `bit_vector::set / reset / flip / test(usize)` / `count()` / `any()` / `find_first_set(usize from = 0)` / `set_bits()` | bit access |
 | `void radix_sort_u64(keys, values, scratchKeys, scratchValues)` / `radix_sort_u64(keys, scratchKeys)` | stable 64-bit key sort |
 | `void radix_sort_u32(...)` | 32-bit variants |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Containers](containers.md): `flat_hash_map<string_id, T>` is the usual home for things named by id
 - 📘 API: [Data types](data-types.md): `uuid`, the identifier for things that must survive across machines
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

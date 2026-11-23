@@ -261,7 +261,7 @@ characters, sync, contacts, queries, debug) plus `physics_systems.cpp` (the regi
 - `core::jobs`: an allocation-free fire-and-forget `schedule` (a counter owned by the caller) would let
   the adapter drop the `parallel_for` helper trick.
 - `tests/benchmarks/bench_physics.cpp` (10k sleeping bodies, 2k active, raycast batches); the wiki pages
-  under `docs/api/physics/` and `docs/handbook/modules/physics.md` exist since wave 3 integration.
+  under `docs/api/physics/` and `docs/handbook/engine/physics.md` exist since wave 3 integration.
 
 ## Threading
 

@@ -1,29 +1,24 @@
 # Math
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Vectors, quaternions, matrices and the geometry types every part of Conjure shares: `transform`, `aabb`, `plane`,
 `frustum`, `ray`, `rect` and `urect`, plus scalar helpers and projection matrices. Include `conjure/core/math.h`
 (the one-line umbrella) and everything lives in `namespace conjure::math`. The vector and matrix types are glm's,
-so any glm function (`glm::normalize`, `glm::dot`, `glm::angleAxis`, ...) works on them directly.
+so any glm function (`glm::normalize`, `glm::dot`, `glm::angleAxis`,...) works on them directly.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Position, rotate and scale something | `transform` (`conjure/core/math/transform.h`) |
-| Point an object or camera at a target | `transform::look_at(eye, target, upHint)` |
-| Build camera matrices | `perspective()`, `infinite_perspective()`, `orthographic()`, `look_at()` (`conjure/core/math/math.h`) |
-| Cull objects against the camera | `frustum::from_view_projection(viewProjection).intersects(box)` |
-| Pick what is under the mouse | `ray::from_viewport(pixel, viewportSize, inverseViewProjection)` then `ray::intersect*()` |
-| Bound a set of points | `aabb` (`expand()`, `from_center_extents()`) |
-| Work with screen or texture regions | `rect` (float, inclusive) or `urect` (pixels, exclusive edges) |
-| Convert angles, interpolate, clamp | `radians()`, `degrees()`, `lerp()`, `clamp()`, `smoothstep()` (`conjure/core/math/math_utils.h`) |
-| Compare floats or vectors with a tolerance | `nearly_equal(a, b)`; `same_rotation(q1, q2)` for quaternions |
-| Round sizes to an alignment | `align_up()`, `align_down()`, `is_power_of_two()`, `next_power_of_two()` |
-| Print a vector in a log message | `std::format("{}", value)` (vectors, quaternions, matrices, `transform`, `aabb`, `plane`, `rect`, `urect`; not `frustum` or `ray`) |
+| Name | Math |
+| Module | Core |
+| `#include` | `conjure/core/math.h`, `conjure/core/math/aabb.h`, `conjure/core/math/frustum.h`, `conjure/core/math/glm_types.h`, `conjure/core/math/math.h`, `conjure/core/math/math_utils.h`, `conjure/core/math/plane.h`, `conjure/core/math/ray.h`, `conjure/core/math/rect.h`, `conjure/core/math/transform.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/math.h"
@@ -48,7 +43,33 @@ transform orbit(const transform &parent, f32 angleRadians) {
     return parent * child;   // child expressed in world space
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Position, rotate and scale something | `transform` (`conjure/core/math/transform.h`) |
+| Point an object or camera at a target | `transform::look_at(eye, target, upHint)` |
+| Build camera matrices | `perspective()`, `infinite_perspective()`, `orthographic()`, `look_at()` (`conjure/core/math/math.h`) |
+| Cull objects against the camera | `frustum::from_view_projection(viewProjection).intersects(box)` |
+| Pick what is under the mouse | `ray::from_viewport(pixel, viewportSize, inverseViewProjection)` then `ray::intersect*()` |
+| Bound a set of points | `aabb` (`expand()`, `from_center_extents()`) |
+| Work with screen or texture regions | `rect` (float, inclusive) or `urect` (pixels, exclusive edges) |
+| Convert angles, interpolate, clamp | `radians()`, `degrees()`, `lerp()`, `clamp()`, `smoothstep()` (`conjure/core/math/math_utils.h`) |
+| Compare floats or vectors with a tolerance | `nearly_equal(a, b)`; `same_rotation(q1, q2)` for quaternions |
+| Round sizes to an alignment | `align_up()`, `align_down()`, `is_power_of_two()`, `next_power_of_two()` |
+| Print a vector in a log message | `std::format("{}", value)` (vectors, quaternions, matrices, `transform`, `aabb`, `plane`, `rect`, `urect`; not `frustum` or `ray`) |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Coordinate conventions
 
 Every module and the C# side agree on these; the types below assume them.
@@ -113,7 +134,7 @@ unpadded (`vec3` is 12 bytes, `mat4` is 64), and adds:
 | `lerp(a, b, t)`, `inverse_lerp(a, b, v)`, `remap(v, inLow, inHigh, outLow, outHigh)` | None of them clamp `t`; `inverse_lerp` returns 0 when `a == b`. |
 | `smoothstep(edge0, edge1, v)` | Hermite step, clamped to `[0, 1]`. |
 
-The integer helpers accept **unsigned** types only (`u8` ... `u64`, `usize`), because sizes, offsets and alignments
+The integer helpers accept **unsigned** types only (`u8`... `u64`, `usize`), because sizes, offsets and alignments
 are unsigned in the engine. Hold a signed index? `static_cast` it first.
 
 | Helper | Behaviour |
@@ -310,8 +331,12 @@ aspect or near plane; `farPlane <= nearPlane`; an empty orthographic range).
 
 Everything on this page is a value type or a pure function with no global state. Every call is safe from any thread,
 including job workers.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -336,12 +361,21 @@ including job workers.
 | `rect{min, max}`, `urect{x, y, width, height}` | Float and pixel rectangles |
 | `perspective(...)`, `infinite_perspective(...)`, `orthographic(...)`, `look_at(...)` | Camera matrices |
 | `project(p, vp)`, `unproject(ndc, inverseVp)` | `std::optional<vec3>` conversions |
-| `radians()`, `degrees()`, `wrap_angle()`, `lerp()`, `clamp()`, `smoothstep()`, ... | Scalar helpers |
+| `radians()`, `degrees()`, `wrap_angle()`, `lerp()`, `clamp()`, `smoothstep()`,... | Scalar helpers |
 | `nearly_equal(a, b)`, `same_rotation(q1, q2)`, `safe_normalize(v)` | Comparisons and safe normalisation |
 | `align_up()`, `align_down()`, `is_aligned()`, `is_power_of_two()`, `next_power_of_two()` | Unsigned integer helpers |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Data types](data-types.md) for `f32`, `u32`, `usize` and friends
 - 📘 API: [Time, events and random](time-and-events.md) for `random::unit_vector3<vec3>()`
-- 🛠 Handbook: [Core module](../../handbook/modules/core.md)
+- 🛠 Handbook: [Core module](../../handbook/engine/core.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

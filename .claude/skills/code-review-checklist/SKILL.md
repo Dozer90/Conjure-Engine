@@ -28,12 +28,12 @@ touching. Every item must hold. Fix, do not waive.
 - [ ] Braces on every control statement; early-out instead of nesting.
 - [ ] One declaration per line; every variable initialised at declaration.
 - [ ] `*` and `&` hug the name (`int *ptr`, `const foo &ref`).
-- [ ] Class layout: access modifier first; variables, then constructors/destructors, then
-      methods, each section starting with its own access modifier; ctor/dtor defined in the .cpp
-      even when empty; initialiser lists with the colon on the first line and members on
-      following lines.
 - [ ] Wrapped argument lists: all arguments moved to new lines with two-space indent, closing
       parenthesis on its own line followed by `{`.
+- [ ] Class layout: access modifier first; variables, then constructors/destructors, then
+      methods, each section starting with its own access modifier; ctor/dtor defined in the .cpp
+      even when empty; initialiser lists with the colon on the first line then follow the same rules
+      as set for `Wrapped argument lists` above.
 - [ ] `enum class` with explicit underlying type for every enumeration, flag sets included
       (`docs/CONVENTIONS.md` section 3 refines the style guide here): flag enumerations end in `_flags`, have a
       `NONE = 0` member and get their operators from `CONJURE_ENUM_FLAGS(type);`.

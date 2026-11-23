@@ -1,25 +1,25 @@
 # Memory
+<!-- doc-template:wiki -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Core module](../../handbook/modules/core.md)
-
+<!-- doc-content:purpose:start -->
 Most game code never allocates by hand: engine objects, the [containers](containers.md) and the standard library
 manage memory for you. This page is for the cases where you do: scratch memory that lives for one frame or one
 load, many small objects of one size, or a budget you need to measure. Include the umbrella
 `conjure/core/memory/memory.h`, or the individual header named with each tool. Everything lives in
 `namespace conjure::core::memory`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
+|---|---|
+| Name | Memory |
+| Module | Core |
+| `#include` | `conjure/core/memory/allocation_counters.h`, `conjure/core/memory/arena.h`, `conjure/core/memory/frame_allocator.h`, `conjure/core/memory/memory.h`, `conjure/core/memory/pool_allocator.h`, `conjure/core/memory/tracked_allocation.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/core.md) |
 
-| You want to... | Use | Header |
-|---|---|---|
-| Know how many allocations the process has made | `snapshot()`, `counters()` | `conjure/core/memory/allocation_counters.h` |
-| A raw, aligned heap block that is counted | `tracked_allocate(bytes, alignment)` / `tracked_free(pointer, bytes)` | `conjure/core/memory/tracked_allocation.h` |
-| Round sizes to an alignment | `align_up(value, alignment)`, `is_power_of_two(value)`, `is_aligned(pointer, alignment)` | `conjure/core/memory/tracked_allocation.h` |
-| Many allocations freed all at once (a parse, a command list) | `arena` | `conjure/core/memory/arena.h` |
-| Many objects of one fixed size, freed individually | `pool_allocator` | `conjure/core/memory/pool_allocator.h` |
-| Scratch memory for this frame, from any thread | `frame_allocator` | `conjure/core/memory/frame_allocator.h` |
+## Syntax
 
-## Quick example
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/core/memory/arena.h"
@@ -47,14 +47,35 @@ std::span<draw_command> build_commands(arena &scratch, u32 count) {
     return std::span<draw_command>(commands, count);
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use | Header |
+|---|---|---|
+| Know how many allocations the process has made | `snapshot()`, `counters()` | `conjure/core/memory/allocation_counters.h` |
+| A raw, aligned heap block that is counted | `tracked_allocate(bytes, alignment)` / `tracked_free(pointer, bytes)` | `conjure/core/memory/tracked_allocation.h` |
+| Round sizes to an alignment | `align_up(value, alignment)`, `is_power_of_two(value)`, `is_aligned(pointer, alignment)` | `conjure/core/memory/tracked_allocation.h` |
+| Many allocations freed all at once (a parse, a command list) | `arena` | `conjure/core/memory/arena.h` |
+| Many objects of one fixed size, freed individually | `pool_allocator` | `conjure/core/memory/pool_allocator.h` |
+| Scratch memory for this frame, from any thread | `frame_allocator` | `conjure/core/memory/frame_allocator.h` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Counting allocations
 
 Every heap acquisition made through this area (and, in test executables, every `new`) bumps three process-wide
 counters: `allocationCount`, `freeCount` and `allocatedBytes`. They are cumulative and never decrease, so "live
 allocations" is `allocationCount - freeCount`, which `memory_snapshot::live_count()` computes. Memory the standard
 library and the [containers](containers.md) obtain (`std::vector`, `small_vector`, `stable_vector`,
-`flat_hash_map`, ...) comes from `std::allocator` and is not counted in a game or the editor.
+`flat_hash_map`,...) comes from `std::allocator` and is not counted in a game or the editor.
 
 ```cpp
 #include "conjure/core/memory/allocation_counters.h"
@@ -234,8 +255,12 @@ std::span<u32> collect_visible(frame_allocator &frame, std::span<const bool> vis
 > [!NOTE]
 > Arena-size tuning: watch `high_water_bytes()` and `overflow_count()` during a representative session; an arena
 > that never overflows is big enough, and one that overflows often is paying heap costs every frame.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -254,9 +279,18 @@ std::span<u32> collect_visible(frame_allocator &frame, std::span<const bool> vis
 | `frame_allocator(usize arenaBytes, usize threadBlockBytes)` | per-frame scratch |
 | `void *frame_allocator::allocate(usize bytes, usize alignment)` / `std::span<T> allocate_span<T>(usize)` / `T *construct<T>(Args &&...)` / `void reset()` | frame operations |
 | `usize high_water_bytes() const` / `u32 overflow_count() const` / `usize overflow_bytes() const` | frame statistics |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Containers](containers.md): the usual way to hold many objects without allocating by hand
 - 📘 API: [Data types](data-types.md): `KIB`, `MIB`, `CACHE_LINE_SIZE`, `byte`
 - 📘 API: [Glossary](../glossary.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

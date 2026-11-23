@@ -1,7 +1,8 @@
 # Audio
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
-
+<!-- doc-content:purpose:start -->
 The audio module plays **clips** through **voices**, mixes voices into **groups**, places 3D voices around one
 **listener** and talks to the sound card (or to nothing at all, in tests and on servers). Everything lives in
 `namespace conjure::audio`. Include `conjure/audio/audio.h` to get all of it, or the single header named on each
@@ -12,7 +13,9 @@ page below.
 | this page | the pieces and how they fit, the `audio_source` / `audio_listener` components and how the engine syncs them | `conjure/audio/components.h` |
 | [Playing sounds](playing-sounds.md) | `audio_engine`, `play_params`, one-shots and retained voices, mix groups, 3D, devices | `audio_engine.h`, `voice.h`, `mix_groups.h`, `spatialisation.h`, `audio_types.h`, `audio_device.h` |
 | [Clips and decoding](clips-and-decoding.md) | `audio_clip`, the `conjure.audio.clip` asset type, import settings, WAV / OGG / MP3 / FLAC decoding, backends and the null backend for tests | `clip.h`, `clip_asset.h`, `decoder.h`, `audio_backend.h`, `null_backend.h` |
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## At a glance
 
 | You want to... | Use |
@@ -76,7 +79,7 @@ void audio_frame(audio_engine &engine, const listener_state &listener, f32 delta
 ## Components: `audio_source` and `audio_listener`
 
 `conjure/audio/components.h` declares the two components as plain reflected structs. They are data only: the
-audio module never touches entities. The engine's `audio_subsystem` (wave 4) registers them into the ECS and
+audio module never touches entities. The engine's `audio_subsystem` registers them into the ECS and
 runs two systems that map them onto voices every frame. Until that lands you drive `audio_engine` directly; the
 mapping below is what the systems will do, and `play_params_from()` already turns a source into `play_params`.
 
@@ -174,7 +177,7 @@ Every fallible call returns a `result<T>` carrying an error of category `"audio"
 is not resident yet), `INVALID_CLIP`, `VOICE_LIMIT_REACHED`, `STREAM_SLOT_LIMIT`, `INVALID_VOICE`,
 `INVALID_GROUP`, `GROUP_LIMIT_REACHED`, `DUPLICATE_GROUP`, `GROUP_CYCLE`, `DECODE_FAILED`, `UNSUPPORTED_FORMAT`,
 `INVALID_SETTINGS`, `BACKEND_INIT_FAILED`, `DEVICE_START_FAILED`, `DEVICE_NOT_FOUND`, `DEVICE_LOST`. Setters
-(`set_volume`, `set_position`, ...) return nothing: on a stale `voice_id` they do nothing and log at TRACE. See
+(`set_volume`, `set_position`,...) return nothing: on a stale `voice_id` they do nothing and log at TRACE. See
 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>`.
 
 ## API summary
@@ -186,7 +189,7 @@ is not resident yet), `INVALID_CLIP`, `VOICE_LIMIT_REACHED`, `STREAM_SLOT_LIMIT`
 | `struct source_handle { voice_id voice; u32 clipVersion; u8 flags; }` with `started_once()`, `FLAG_STARTED_ONCE` | hidden link from a source to its voice |
 | `enum class audio_playback_request { NONE, PLAY, STOP, PAUSE, RESUME }` | script command on a source |
 | `play_params play_params_from(const audio_source &, group_id)` | the `play_params` a source describes (`retain = true`) |
-| `AUDIO_SOURCE_TYPE_NAME`, `AUDIO_LISTENER_TYPE_NAME`, ... | reflection type names |
+| `AUDIO_SOURCE_TYPE_NAME`, `AUDIO_LISTENER_TYPE_NAME`,... | reflection type names |
 
 ## See also
 
@@ -194,4 +197,12 @@ is not resident yet), `INVALID_CLIP`, `VOICE_LIMIT_REACHED`, `STREAM_SLOT_LIMIT`
 - 📘 API: [Clips and decoding](clips-and-decoding.md)
 - 📘 API: [Reflection](../core/reflection.md) for how the component fields reach the inspector
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [Audio module](../../handbook/modules/audio.md)
+- 🛠 Handbook: [Audio module](../../handbook/engine/audio.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/audio/audio_error.h` | Declares `audio_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+| `conjure/audio/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+<!-- doc-content:body:end -->

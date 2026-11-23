@@ -1,15 +1,18 @@
 # Scripting
+<!-- doc-template:wiki-index -->
+[API](../index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
-
+<!-- doc-content:purpose:start -->
 C# scripting on the .NET 8 runtime: one CLR per process, a versioned native API table the managed SDK calls
 through function pointers, script components that own managed instances by slot, six script systems in the
 frame, hot reload with field preservation, `[EcsComponent]` mirrors registered into the ECS, and `dotnet build`
 driven from the engine. Everything on these pages is in `namespace conjure::scripting`; the C# side
 (`Conjure.Managed`: `ScriptBehaviour`, `Entity`, `Transform`, `Input`, `Time`, `Log`, `Physics`, `Audio`,
-`Prefab`, `Scene`, `Dod.ComponentQuery<T>`) is documented in the wave-4 pages with the bindings that fill the rest
+`Prefab`, `Scene`, `Dod.ComponentQuery<T>`) is documented in the pages with the bindings that fill the rest
 of the table.
+<!-- doc-content:purpose:end -->
 
+<!-- doc-content:body:start -->
 ## The mental model in five sentences
 
 1. A `script_host` owns the managed side: the real CLR (`dotnet_script_host`) or a C++ fake
@@ -99,4 +102,13 @@ The engine does this in its scripting subsystem, with the bindings filling the r
 ## See also
 
 - 📘 API: [Entities, components and systems](../ecs/index.md), [Scene files, prefabs and snapshots](../scene/scene-files-and-prefabs.md), [Processes, libraries and images](../core/system.md)
-- 🛠 Handbook: [Scripting module](../../handbook/modules/scripting.md)
+- 🛠 Handbook: [Scripting module](../../handbook/engine/scripting.md)
+
+## Supporting headers
+
+| Include path | Purpose |
+|---|---|
+| `conjure/scripting/log_category.h` | Declares the module log category used to filter its diagnostics through core logging. |
+| `conjure/scripting/scripting.h` | Convenience include for the public module APIs; individual headers can be included separately. |
+| `conjure/scripting/scripting_error.h` | Declares `script_error`, the module failure codes carried by `core::error` and `core::result<T>`. |
+<!-- doc-content:body:end -->

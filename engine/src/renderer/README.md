@@ -242,7 +242,7 @@ that sees the problem gone arms the WARN again (`warn_latch.h`, design R19, code
 covers the view, light and sprite budgets, per view index a clamped camera and an unknown render
 target, and a swapchain refusing the acquire or the present without device loss. `render_stats`
 (`viewsSkipped`, `lightsDropped`, `spritesDropped`) has every frame's count; the handbook page
-(`docs/handbook/modules/renderer.md` section 7) lists what each latch looks at and the warnings
+(`docs/handbook/engine/renderer.md` section 7) lists what each latch looks at and the warnings
 that are logged once and never armed again.
 
 A stale gpu id draws the fallback (unit cube, white texture, magenta unlit material, grey

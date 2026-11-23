@@ -1,7 +1,8 @@
 # Headless mode and the command model
+<!-- doc-template:wiki -->
+[API](../index.md) → [Editor](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
-
+<!-- doc-content:purpose:start -->
 The editor from the C++ side: the process object (`conjure/editor/editor_application.h`,
 `conjure/editor/editor_options.h`), which projects it opens (`conjure/editor/project_trust.h`), the service
 table (`conjure/editor/editor_context.h`), the command model
@@ -12,9 +13,23 @@ table (`conjure/editor/editor_context.h`), the command model
 `conjure/editor/console_buffer.h`), addressing (`conjure/editor/entity_ref.h`, `conjure/editor/reflection_path.h`),
 events (`conjure/editor/event_broadcaster.h`) and what a module adds (`conjure/editor/command_desc.h`,
 `conjure/editor/panel_desc.h`, `conjure/editor/editor_module_consumer.h`).
+<!-- doc-content:purpose:end -->
+
+|---|---|
+| Name | Headless mode and the command model |
+| Module | Editor |
+| `#include` | `conjure/editor/builtin_commands.h`, `conjure/editor/command_desc.h`, `conjure/editor/command_dispatcher.h`, `conjure/editor/command_registry.h`, `conjure/editor/console_buffer.h`, `conjure/editor/editor_application.h`, `conjure/editor/editor_camera.h`, `conjure/editor/editor_command.h`, `conjure/editor/editor_context.h`, `conjure/editor/editor_module_consumer.h`, `conjure/editor/editor_options.h`, `conjure/editor/entity_ref.h`, `conjure/editor/event_broadcaster.h`, `conjure/editor/panel_desc.h`, `conjure/editor/picker.h`, `conjure/editor/play_controller.h`, `conjure/editor/project_trust.h`, `conjure/editor/reflection_path.h`, `conjure/editor/schema_validator.h`, `conjure/editor/screenshot_service.h`, `conjure/editor/selection_set.h`, `conjure/editor/undo_stack.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/editor/editor.md) |
+
+## Syntax
+
+<!-- doc-content:syntax:start -->
+Usage and complete examples are described in the reference sections below.
+<!-- doc-content:syntax:end -->
 
 ## At a glance
 
+<!-- doc-content:at_a_glance:start -->
 | You want to... | Use |
 |---|---|
 | Run the editor headless from a test or tool | `editor_options { headless = true, projectPath, aiPort = 0 }`, `editor_application::initialise(options, {})`, `pump_frame()` |
@@ -28,7 +43,15 @@ events (`conjure/editor/event_broadcaster.h`) and what a module adds (`conjure/e
 | Switch play state | `context.play()`: `start()`, `stop()`, `pause()`, `resume()`, `step(n, reply)` |
 | Pick what is under a viewport point | `gather_pick_candidates(scene)`, `pick(ray, candidates, context, mode)` |
 | Save a screenshot as lossless JPEG XL instead of PNG | `view.screenshot` with a `.jxl` path or `"format": "jxl"`; `screenshot_request::format = screenshot_format::JPEG_XL` from C++ |
+<!-- doc-content:at_a_glance:end -->
 
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## The process object
 
 `editor_options` is the parsed command line (`parse_editor_options(args)`): `projectPath`, `execFile`,
@@ -43,12 +66,12 @@ empty value on the command line is refused, and so is the same text for both; se
 [Access tokens and the audit log](access-and-audit.md#who-may-connect-and-what-a-client-may-do)), `aiPort`
 (`0` disables the server), `timeoutSeconds` (a positive
 finite number; `0` is refused), `headless`, `offscreen`, `keepGoing`, `aiStdio`, `noScripting`, `dotnetHost`
-(`--dotnet`: a headless session keeps the real .NET script host), `trustProject` and `trustStoreFile`
+(`--dotnet`: a headless session keeps the real.NET script host), `trustProject` and `trustStoreFile`
 (`--trust-project`, which needs `--project`, and `--trust-store <file>`; see [Project trust](#project-trust)),
 `showHelp` and `engineArguments` (everything the
 editor did not recognise goes to the engine's parser; an option the engine does not know either fails with
 `engine_error::BAD_ARGUMENTS`, exit code 3, before the project is loaded). `--scripting` is one of those engine
-flags: a headless session already runs scripting (null host, or .NET with `--dotnet`), so it only changes a
+flags: a headless session already runs scripting (null host, or.NET with `--dotnet`), so it only changes a
 windowed session of a project whose `scripting.enabled` is false; together with `--no-scripting` it is
 `engine_error::BAD_ARGUMENTS`, exit code 3. `editor_options_help()` is the usage
 text `--help` prints: the editor's options followed by the engine's (`engine::command_line_help()`, without the
@@ -334,8 +357,12 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 > The editor loads its static modules before the consumer exists, so `editor_context::install_module_consumer()`
 > unloads, adds the consumer and loads again at start-up; a pre-load hook on the modules subsystem is a recorded
 > engine request.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -364,9 +391,18 @@ module fails validation with `REGISTRATION_CONFLICT`, and `module.list` counts c
 | `optional<screenshot_format> screenshot_format_of(const path &)` / `parse_screenshot_format(string_view)` / `string_view to_string(screenshot_format)` / `static bool screenshot_service::supports(screenshot_format)` | the screenshot file format |
 | `static result<ecs::entity> entity_ref::resolve(const json::value &, scene::scene &)` | guid or path to entity |
 | `static result<reflection_path> reflection_path::parse(string_view)` / `result<json::document> read_at(...)` / `result<void> write_at(...)` | field paths |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [The AI control protocol](ai-protocol.md), [The workspace UI](workspace-ui.md)
 - 📘 API: [Writing a module](../modules/writing-a-module.md), [Reflection](../core/reflection.md), [Scene files, prefabs and snapshots](../scene/scene-files-and-prefabs.md)
-- 🛠 Handbook: [Editor module](../../handbook/modules/editor.md)
+- 🛠 Handbook: [Editor module](../../handbook/editor/editor.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

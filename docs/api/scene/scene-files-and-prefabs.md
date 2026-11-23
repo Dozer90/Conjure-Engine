@@ -1,30 +1,24 @@
 # Scene files, prefabs and snapshots
+<!-- doc-template:wiki -->
+[API](../index.md) → [Scene](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
-
+<!-- doc-content:purpose:start -->
 How a scene becomes a `.scene.json` file and comes back, how prefabs are built, instantiated, diffed and applied,
 how a scene is snapshotted for play and stop, and how the `scene_manager` loads scenes as assets. Headers:
 `conjure/scene/scene_serializer.h`, `conjure/scene/prefab.h`, `conjure/scene/scene_snapshot.h` and
 `conjure/scene/scene_manager.h`. Everything is in `namespace conjure::scene`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
-
-| You want to... | Use |
 |---|---|
-| Save the scene to a file | `scene_serializer::save_scene_file(scene, fs, "scenes/main.scene.json")` |
-| Load a file into the scene | `scene_manager.load_file(fs, path, load_mode::REPLACE)` or `scene_serializer::load_scene_file(...)` |
-| Load a scene asset by uuid (dependencies first) | `scene_manager.load(assetId, load_mode::REPLACE)` |
-| Load additively, later, without blocking | `scene_manager.request_load(assetId, load_mode::ADDITIVE)`; applied at `scene.apply_pending_loads` |
-| Unload a loaded scene | `scene_manager.unload(sceneId)`, `request_unload(sceneId)`, `unload_all()` |
-| Turn a subtree into a prefab document | `prefab::build_document(scene, root, "name")` |
-| Instantiate a prefab asset | `prefab::instantiate(scene, asset, options)`, `prefab::instantiate_many(...)` |
-| See what changed in an instance / undo it / keep it | `prefab::diff`, `prefab::revert`, `prefab::apply` |
-| Stop treating entities as an instance | `prefab::unpack(scene, root, recursive)` |
-| Build a prefab without naming component types (model import) | `prefab_builder` |
-| Snapshot for play, restore on stop | `capture(scene)` then `restore(scene, snapshot)` |
-| Register the scene asset types and importers | `register_asset_types(types, importers, registry)` |
+| Name | Scene files, prefabs and snapshots |
+| Module | Scene |
+| `#include` | `conjure/scene/prefab.h`, `conjure/scene/scene_manager.h`, `conjure/scene/scene_serializer.h`, `conjure/scene/scene_snapshot.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/scene.md) |
 
-## Quick example
+## Syntax
+
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/scene/prefab.h"
@@ -47,7 +41,34 @@ core::result<void> stamp_crates(scene::scene_manager &scenes, const scene::prefa
     return scenes.unload(loaded);
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use |
+|---|---|
+| Save the scene to a file | `scene_serializer::save_scene_file(scene, fs, "scenes/main.scene.json")` |
+| Load a file into the scene | `scene_manager.load_file(fs, path, load_mode::REPLACE)` or `scene_serializer::load_scene_file(...)` |
+| Load a scene asset by uuid (dependencies first) | `scene_manager.load(assetId, load_mode::REPLACE)` |
+| Load additively, later, without blocking | `scene_manager.request_load(assetId, load_mode::ADDITIVE)`; applied at `scene.apply_pending_loads` |
+| Unload a loaded scene | `scene_manager.unload(sceneId)`, `request_unload(sceneId)`, `unload_all()` |
+| Turn a subtree into a prefab document | `prefab::build_document(scene, root, "name")` |
+| Instantiate a prefab asset | `prefab::instantiate(scene, asset, options)`, `prefab::instantiate_many(...)` |
+| See what changed in an instance / undo it / keep it | `prefab::diff`, `prefab::revert`, `prefab::apply` |
+| Stop treating entities as an instance | `prefab::unpack(scene, root, recursive)` |
+| Build a prefab without naming component types (model import) | `prefab_builder` |
+| Snapshot for play, restore on stop | `capture(scene)` then `restore(scene, snapshot)` |
+| Register the scene asset types and importers | `register_asset_types(types, importers, registry)` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Scene files
 
 A `.scene.json` file is a small header plus the ECS archive of every entity in hierarchy order:
@@ -155,8 +176,12 @@ scene is left empty rather than half-restored. `snapshot.entity_count()` says ho
 restore cannot give the scene back, `capture` refuses what `restore` would refuse: an entity whose `layer` index is
 32 or more fails the capture with `BAD_FORMAT` naming the entity, so play never starts on a scene that stop would
 lose.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -183,8 +208,17 @@ lose.
 | `result<prefab_diff> prefab::diff(const scene &, entity root)`, `result<void> revert(scene &, entity root)`, `result<prefab_document> apply(const scene &, entity root)` | overrides |
 | `result<scene_snapshot> capture(const scene &)`, `result<void> restore(scene &, const scene_snapshot &)` | play / stop |
 | `result<void> register_asset_types(assets::asset_type_registry &, assets::importer_registry &, const ecs::component_registry &)` | `conjure.scene.scene` (`.scene.json`) and `conjure.scene.prefab` (`.prefab.json`) |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Scenes and the hierarchy](scenes-and-hierarchy.md), [Archives and serialisation](../ecs/archives-and-serialization.md), [Database, importers and hot reload](../assets/database-and-import.md)
-- 🛠 Handbook: [Scene module](../../handbook/modules/scene.md)
+- 🛠 Handbook: [Scene module](../../handbook/engine/scene.md)
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->

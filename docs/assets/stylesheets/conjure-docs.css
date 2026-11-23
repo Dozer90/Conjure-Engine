@@ -1,0 +1,633 @@
+/* Editable content styles for Conjure documentation. */
+@font-face {
+    font-family: "Futura Bk BT";
+    src: local("Futura Bk BT Book"), local("Futura Bk BT");
+    font-style: normal;
+    font-weight: 400;
+}
+
+@font-face {
+    font-family: "Futura Bk BT";
+    src: local("Futura Bk BT Book Italic");
+    font-style: italic;
+    font-weight: 400;
+}
+
+@font-face {
+    font-family: "Futura Bk BT";
+    src: local("Futura Md BT Bold");
+    font-style: normal;
+    font-weight: 700;
+}
+
+@font-face {
+    font-family: "Fira Code";
+    src: local("Fira Code"), local("Fira Code Light"), local("FiraCode-Light");
+    font-weight: 300 700;
+}
+
+:root {
+    color-scheme: dark;
+    --page: #272727;
+    --panel: #171717;
+    --text: #ffffff;
+    --code: #c8c8c8;
+    --link: #ffa800;
+}
+
+:root,
+[data-md-color-scheme="slate"] {
+    --md-text-font-family: "Futura Bk BT", "Century Gothic", sans-serif;
+    --md-code-font-family: "Fira Code", "Cascadia Code", monospace;
+    --md-primary-fg-color: #171717;
+    --md-primary-fg-color--light: #272727;
+    --md-primary-fg-color--dark: #111111;
+    --md-primary-bg-color: #ffffff;
+    --md-primary-bg-color--light: #c8c8c8;
+    --md-accent-fg-color: #ffa800;
+    --md-accent-fg-color--transparent: rgba(255, 168, 0, 0.12);
+    --md-accent-bg-color: #171717;
+    --md-typeset-a-color: #ffa800;
+    --md-default-fg-color: #ffffff;
+    --md-default-fg-color--light: #c8c8c8;
+    --md-default-fg-color--lighter: #888888;
+    --md-default-fg-color--lightest: #404040;
+    --md-default-bg-color: #272727;
+    --md-code-fg-color: #c8c8c8;
+    --md-code-bg-color: #171717;
+    --md-footer-bg-color: #171717;
+    --md-footer-bg-color--dark: #171717;
+    --md-footer-fg-color: #ffffff;
+    --md-footer-fg-color--light: #c8c8c8;
+}
+
+.md-header {
+    border-bottom: 2px solid var(--link);
+}
+
+.md-header__topic:first-child {
+    color: var(--link);
+    font-family: Ebrima, sans-serif;
+    font-weight: 700;
+}
+
+.md-header__button.md-logo {
+    padding: 0;
+    width: 70px;
+    height: 70px;
+}
+
+.md-header__button.md-logo img {
+    width: 100%;
+    height: 100%;
+}
+
+.md-header .md-header__title {
+    margin-left: .2em;
+}
+
+.md-header__title .md-ellipsis {
+    font-size: 48px;
+}
+
+.md-tabs .md-tabs__link--active,
+.md-nav .md-nav__item .md-nav__link--active,
+.md-nav .md-nav__link:focus-visible {
+    color: var(--link);
+}
+
+.md-tabs .md-tabs__link--active {
+    border-bottom: 2px solid var(--link);
+}
+
+.md-nav--primary.doc-scope-navigation > .md-nav__list > .doc-primary-group {
+    display: block;
+}
+
+.doc-primary-group > .md-nav__container {
+    margin-top: 1em;
+    font-weight: 700;
+}
+
+.md-footer {
+    border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+@media screen and (min-width: 60em) {
+    .md-sidebar--secondary {
+        height: auto;
+    }
+}
+
+@media screen and (min-width: 76.25em) {
+    .md-sidebar--primary {
+        height: auto;
+    }
+
+    /* Primary groups are siblings; active theme shadows must not cover adjacent headings. */
+    .md-nav--primary.doc-scope-navigation > .md-nav__list > .doc-primary-group > .md-nav__container {
+        position: static;
+        margin-top: 1em;
+        background: transparent;
+        box-shadow: none;
+        z-index: auto;
+    }
+
+    /* Use a tree gutter: toggles precede labels, and leaves reserve the same space. */
+    [dir] .md-nav--primary > .md-nav__list {
+        padding-inline-start: 0;
+    }
+
+    .md-nav--primary .md-nav .md-nav__list {
+        padding-inline-start: 1rem;
+    }
+
+    [dir] .md-nav--primary.doc-scope-navigation > .md-nav__list > .doc-primary-group > .md-nav {
+        margin-inline-start: 0;
+    }
+
+    .md-nav--primary .md-nav__item > .md-nav__link {
+        gap: .2rem;
+    }
+
+    [dir] .md-nav--primary .md-nav__container > label.md-nav__link,
+    [dir] .md-nav--primary label.md-nav__link > .md-nav__icon {
+        order: -1;
+        flex: 0 0 .9rem;
+        margin-inline: 0;
+    }
+
+    .md-nav--primary .md-nav__container > a.md-nav__link {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .md-nav--primary .md-nav__item:not(.md-nav__item--nested) > a.md-nav__link,
+    .md-nav--primary .md-nav__container:not(:has(> label)) > a.md-nav__link {
+        padding-inline-start: 1.1rem;
+    }
+}
+
+.md-content .md-typeset * {
+    box-sizing: border-box;
+}
+
+.md-content .md-typeset {
+    background: var(--page);
+    color: var(--text);
+    font-family: "Futura Bk BT", "Century Gothic", sans-serif;
+    font-size: 18px;
+    line-height: 1.25;
+}
+
+.md-content .md-typeset a {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.md-content .md-typeset a:hover,
+.md-content .md-typeset a:focus-visible {
+    color: #ffc24d;
+}
+
+.md-content .md-typeset h1 {
+    margin: 0 0 24px;
+    font-family: Ebrima, sans-serif;
+    font-size: 48px;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.md-content .md-typeset h2 {
+    margin: 63px 0 12px;
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.md-content .md-typeset h3 {
+    margin: 37.5px 0 10px;
+    font-size: 24px;
+    line-height: 1.2;
+}
+
+.md-content .md-typeset h4 {
+    margin: 45px 18px 10px;
+    font-size: 20px;
+    line-height: 1.2;
+}
+
+.md-content .md-typeset h5 {
+    margin-top: 2.505em;
+}
+
+.md-content .md-typeset h6 {
+    margin-top: 3.495em;
+}
+
+.md-content .md-typeset h4+.function-declaration pre {
+    margin-top: 14px;
+}
+
+.md-content .md-typeset .function-group>summary h4 {
+    display: inline;
+    margin: 0;
+}
+
+.md-content .md-typeset .function-group>.function-declaration pre {
+    margin-right: 0;
+    margin-left: 0;
+}
+
+.md-content .md-typeset .function-group>.function-declaration:first-of-type pre {
+    margin-top: 14px;
+}
+
+.md-content .md-typeset p {
+    margin: 20px 0;
+    text-indent: 2em;
+}
+
+.md-content .md-typeset>p:first-child {
+    margin: 0 0 2px;
+    text-indent: 0;
+}
+
+.md-content .md-typeset>p:has(+h1) {
+    margin-top: 0;
+    text-indent: 0;
+}
+
+.md-content .md-typeset h1,
+.md-content .md-typeset h2,
+.md-content .md-typeset h3,
+.md-content .md-typeset h4,
+.md-content .md-typeset h5,
+.md-content .md-typeset h6 {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.md-content .md-typeset table {
+    display: table;
+    border: 0;
+    box-shadow: none;
+    font-size: inherit;
+}
+
+.md-content .md-typeset code {
+    background: transparent;
+    box-shadow: none;
+}
+
+.md-content .md-typeset .function-group>summary h4 code {
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.md-content .md-typeset .doc-metadata td {
+    padding-top: 7px;
+    padding-bottom: 7px;
+}
+
+.md-content .md-typeset details.function-group {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: inherit;
+    font-size: inherit;
+}
+
+.md-content .md-typeset details.function-group>summary {
+    display: list-item;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    list-style-type: disclosure-closed;
+}
+
+.md-content .md-typeset details.function-group[open]>summary {
+    list-style-type: disclosure-open;
+}
+
+.md-content .md-typeset details.function-group>summary::before,
+.md-content .md-typeset details.function-group>summary::after {
+    display: none;
+    content: none;
+}
+
+.md-content .md-typeset details.function-group>summary::-webkit-details-marker {
+    display: revert;
+}
+
+.md-content .md-typeset code,
+.md-content .md-typeset pre,
+.md-content .md-typeset .code {
+    color: var(--code);
+    font-family: "Fira Code", "Cascadia Code", monospace;
+    font-size: 0.9em;
+}
+
+.md-content .md-typeset a code,
+.md-content .md-typeset code a {
+    color: var(--link);
+}
+
+.md-content .md-typeset table {
+    width: calc(100% - 36px);
+    table-layout: auto;
+    margin: 12px 18px 24px;
+    overflow: hidden;
+    border-spacing: 0;
+    border-radius: 8px;
+    background: var(--panel);
+    text-align: left;
+}
+
+.md-content .md-typeset .md-typeset__table {
+    display: block;
+}
+
+.md-content .md-typeset .md-typeset__table table {
+    width: 100%;
+    margin-right: 0;
+    margin-left: 0;
+}
+
+.md-content .md-typeset table th,
+.md-content .md-typeset table td {
+    padding: 10px 16px;
+    border-bottom: 2px solid var(--page);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.md-content .md-typeset table th {
+    padding-top: 8px;
+    padding-bottom: 6px;
+    border-bottom-width: 4px;
+    font-size: 15px;
+    font-style: italic;
+    font-weight: 700;
+}
+
+.md-content .md-typeset table a,
+.md-content .md-typeset table code {
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.md-content .md-typeset table code {
+    padding: 0;
+}
+
+.md-content .md-typeset tr:last-child td {
+    border-bottom: 0;
+}
+
+.md-content .md-typeset .doc-metadata {
+    margin-top: 26px;
+    margin-bottom: 22px;
+}
+
+.md-content .md-typeset .doc-metadata td:first-child {
+    font-style: normal;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.md-content .md-typeset .class-page .doc-metadata td,
+.md-content .md-typeset .struct-page .doc-metadata td {
+    padding-top: 7px;
+    padding-bottom: 7px;
+}
+
+.md-content .md-typeset .signature {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.md-content .md-typeset .member-table .signature {
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.md-content .md-typeset img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 8px auto;
+}
+
+.md-content .md-typeset p:has(> img) {
+    text-indent: 0;
+}
+
+.md-content .md-typeset pre {
+    position: relative;
+    margin: 14px 18px;
+    padding: 18px;
+    overflow-x: auto;
+    border: 1px solid #888888;
+    border-radius: 4px;
+    background: #0d0d0d;
+    line-height: 1.5;
+}
+
+.md-content .md-typeset pre code {
+    font-size: 16px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.md-content .md-typeset .function-declaration pre {
+    margin-top: 34px;
+    margin-bottom: 8px;
+}
+
+.md-content .md-typeset details {
+    margin: 8px 18px 30px;
+}
+
+.md-content .md-typeset .function-group:not([open]) {
+    margin-top: 4px;
+    margin-bottom: 15px;
+}
+
+.md-content .md-typeset summary {
+    cursor: pointer;
+}
+
+.md-content .md-typeset details p {
+    margin: 5px 0 5px 24px;
+    text-indent: 0;
+}
+
+.md-content .md-typeset details ul {
+    margin-left: 14px;
+}
+
+.md-content .md-typeset .admonition {
+    --callout-colour: #448aff;
+    --callout-heading: rgba(68, 138, 255, 0.1);
+    --callout-icon: url("../icons/callout-note.svg");
+    margin: 20px 18px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--callout-colour);
+    border-radius: 4px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: inherit;
+}
+
+.md-content .md-typeset .admonition p {
+    margin: 14px;
+    text-indent: 0;
+}
+
+.md-content .md-typeset .admonition .admonition-title {
+    position: relative;
+    margin: 0;
+    padding: 10px 14px 10px 44px;
+    background: var(--callout-heading);
+    color: var(--text);
+    font-weight: 700;
+}
+
+.md-content .md-typeset .admonition-title::before {
+    position: absolute;
+    top: 11px;
+    left: 14px;
+    width: 20px;
+    height: 20px;
+    background: var(--callout-colour);
+    -webkit-mask: var(--callout-icon) no-repeat center / contain;
+    mask: var(--callout-icon) no-repeat center / contain;
+    content: "";
+}
+
+.md-content .md-typeset .admonition.tip {
+    --callout-colour: #00bfa5;
+    --callout-heading: rgba(0, 191, 165, 0.1);
+    --callout-icon: url("../icons/callout-tip.svg");
+}
+
+.md-content .md-typeset .admonition.important,
+.md-content .md-typeset .admonition.warning {
+    --callout-colour: #ff9100;
+    --callout-heading: rgba(255, 145, 0, 0.1);
+    --callout-icon: url("../icons/callout-warning.svg");
+}
+
+.md-content .md-typeset .admonition.caution,
+.md-content .md-typeset .admonition.danger {
+    --callout-colour: #ff1744;
+    --callout-heading: rgba(255, 23, 68, 0.1);
+    --callout-icon: url("../icons/callout-caution.svg");
+}
+
+.md-content .md-typeset table td .admonition,
+.md-content .md-typeset details .admonition {
+    margin: 0;
+}
+
+.md-content .md-typeset .copy-code {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 4px 7px;
+    border: 1px solid #666666;
+    border-radius: 3px;
+    background: var(--panel);
+    color: var(--code);
+    font: 12px "Futura Bk BT", sans-serif;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.md-content .md-typeset pre:hover .copy-code,
+.md-content .md-typeset .copy-code:focus-visible {
+    opacity: 1;
+}
+
+.md-content .md-typeset .k,
+.md-content .md-typeset .kt,
+.md-content .md-typeset .kr,
+.md-content .md-typeset .kd,
+.md-content .md-typeset .kn {
+    color: #38a5e9;
+}
+
+.md-content .md-typeset .nc,
+.md-content .md-typeset .nf {
+    color: #a0a4ff;
+}
+
+.md-content .md-typeset .na,
+.md-content .md-typeset .cp {
+    color: #e841ed;
+}
+
+.md-content .md-typeset .s,
+.md-content .md-typeset .s1,
+.md-content .md-typeset .s2 {
+    color: #b4cd7a;
+}
+
+.md-content .md-typeset .mi,
+.md-content .md-typeset .mf {
+    color: #c8c8c8;
+}
+
+.md-content .md-typeset .c,
+.md-content .md-typeset .c1,
+.md-content .md-typeset .cm {
+    color: #969696;
+}
+
+@media (max-width: 640px) {
+
+    .md-content .md-typeset h1 {
+        font-size: 36px;
+    }
+
+    .md-content .md-typeset h2 {
+        font-size: 28px;
+    }
+
+    .md-content .md-typeset table {
+        width: 100%;
+        margin-right: 0;
+        margin-left: 0;
+    }
+
+    .md-content .md-typeset td,
+    .md-content .md-typeset th {
+        padding-right: 10px;
+        padding-left: 10px;
+        overflow-wrap: anywhere;
+    }
+
+    .md-content .md-typeset .doc-metadata td:first-child {
+        white-space: normal;
+    }
+
+    .md-content .md-typeset .signature {
+        overflow-wrap: anywhere;
+    }
+
+    .md-content .md-typeset .member-table .signature {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+}
+
+body {
+    background: #272727;
+    font-family: "Futura Bk BT", "Century Gothic", sans-serif;
+}

@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""Structural checks for the Conjure documentation (docs/design/16_documentation.md D9).
+"""Check the documentation contract in .claude/skills/write-docs/SKILL.md.
 
-Checks every Markdown page under docs/api and docs/handbook for:
-  * the document-set badge on the first content line (📘 Public API wiki / 🛠 Engineering handbook),
-  * relative links, reference definitions and HTML hrefs outside code spans and fenced blocks that resolve
-    to an existing file (anchors are not verified),
-  * no TODO/FIXME/XXX markers, no page longer than MAX_PAGE_LINES,
-and the two coverage rules:
-  * every public header that counts as public API is referenced from a wiki page of its module,
-  * every engine module has a handbook page under docs/handbook/modules/.
-
-Exit code 0 when clean, 1 with one line per problem otherwise. Run through CTest as `docs.check`.
+Checks relative documentation links and anchors, wiki boundaries, alert syntax,
+unfinished markers, include-path code spans for every public header, and
+scope/module handbook coverage. Badges and page-length limits are not required.
+Exit 0 when clean, or 1 with one line per problem. No documentation packages are needed.
 """
 
 from __future__ import annotations
 
+import html
 import pathlib
 import re
 import sys
+import unicodedata
+from urllib.parse import unquote, urlsplit
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import docs_policy
+import docs_components
+import docs_redirects
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -26,182 +28,236 @@ HANDBOOK_DOCS = DOCS / "handbook"
 INCLUDE_ROOT = ROOT / "engine" / "include" / "conjure"
 MODULE_SRC_ROOT = ROOT / "engine" / "src"
 
-API_BADGE = "📘 **Public API wiki**"
-HANDBOOK_BADGE = "🛠 **Engineering handbook**"
-MAX_PAGE_LINES = 400
-LINK_PATTERN = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-# `[label]: target` at the start of a line (up to three spaces of indentation); footnotes (`[^1]:`) are text.
+LINK_PATTERN = re.compile(r"\]\((<?[^)\s]+>?)(?:\s+\"[^\"]*\")?\)")
 REFERENCE_DEFINITION = re.compile(r"^ {0,3}\[(?!\^)[^\]\n]+\]:[ \t]*<?([^\s>]+)>?", re.MULTILINE)
-HTML_HREF = re.compile(r"\bhref\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
-# The opening line of a fenced code block (also indented inside a list item): at least three backticks with no
-# backtick in the info string, or at least three tildes.
+HTML_LINK = re.compile(r"\b(?:href|src)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", re.IGNORECASE)
 FENCE_OPENING = re.compile(r"^[ \t]*(`{3,}(?!.*`)|~{3,})")
-# An inline code span: a run of backticks, the shortest text without a blank line, and a run of the same length.
 CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)((?:[^\n]|\n(?![ \t]*\n))+?)(?<!`)\1(?!`)")
-LINK_SCHEMES_NOT_CHECKED = ("http://", "https://", "mailto:", "#")
+CODE_LINK = re.compile(r"\[([^\]\n]+)\]\(([^\s)]+)\)")
+ALERT_KINDS = {"NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"}
 
 
 def blank(text: str) -> str:
-    """'text' with every character but newlines replaced by a space."""
     return "".join("\n" if character == "\n" else " " for character in text)
 
 
-def strip_code(text: str) -> str:
-    """'text' with fenced code blocks and inline code spans blanked (newlines kept), so examples of link
-    syntax inside code are not read as links. An unterminated fence runs to the end of the page."""
+def strip_fences(text: str) -> str:
+    """Blank fenced examples without losing source positions or line numbers."""
     lines = text.split("\n")
     fence = ""
     for index, line in enumerate(lines):
         opening = FENCE_OPENING.match(line)
         if not fence and opening:
             fence = opening.group(1)
-            lines[index] = ""
+            lines[index] = blank(line)
         elif fence:
             closing = line.strip()
             if closing.startswith(fence) and set(closing) == {fence[0]}:
                 fence = ""
-            lines[index] = ""
-    return CODE_SPAN.sub(lambda match: blank(match.group(0)), "\n".join(lines))
+            lines[index] = blank(line)
+    return "\n".join(lines)
+
+
+def strip_code(text: str) -> str:
+    """Keep linked code signatures in tables; ordinary code examples are not links."""
+    code_free = strip_fences(text)
+
+    def replace_span(match: re.Match) -> str:
+        line_start = code_free.rfind("\n", 0, match.start()) + 1
+        in_table = code_free[line_start:match.start()].lstrip().startswith("|")
+        if in_table and CODE_LINK.search(match.group(2)):
+            return " " * len(match.group(1)) + match.group(2) + " " * len(match.group(1))
+        return blank(match.group(0))
+
+    return CODE_SPAN.sub(replace_span, code_free)
 
 
 def link_targets(text: str) -> list[str]:
-    """Every link target of a page outside code: inline links and images, reference definitions and
-    HTML hrefs."""
     code_free = strip_code(text)
-    targets = [match.group(1) for match in LINK_PATTERN.finditer(code_free)]
+    targets = [match.group(1).strip("<>") for match in LINK_PATTERN.finditer(code_free)]
     targets += [match.group(1) for match in REFERENCE_DEFINITION.finditer(code_free)]
     targets += [match.group(1) if match.group(1) is not None else match.group(2)
-                for match in HTML_HREF.finditer(code_free)]
-    return targets
-
-
-def dangling_target(page: pathlib.Path, target: str) -> bool:
-    """True when a relative link target names a file that does not exist; absolute URLs, mail links and
-    anchors are not checked."""
-    if target.startswith(LINK_SCHEMES_NOT_CHECKED):
-        return False
-    path_part = target.split("#", 1)[0]
-    if not path_part:
-        return False
-    return not (page.parent / path_part).resolve().exists()
+                for match in HTML_LINK.finditer(code_free)]
+    return [html.unescape(target) for target in targets]
 
 
 def iter_pages(directory: pathlib.Path):
     yield from sorted(directory.rglob("*.md"))
 
 
-def first_content_line(text: str) -> str:
-    lines = text.split("\n")
-    index = 0
-    # Skip front matter and the H1 title; the badge must be the first paragraph after the title.
-    if lines and lines[0].strip() == "---":
-        index = 1
-        while index < len(lines) and lines[index].strip() != "---":
-            index += 1
-        index += 1
-    while index < len(lines) and (not lines[index].strip() or lines[index].startswith("# ")):
-        index += 1
-    return lines[index].strip() if index < len(lines) else ""
+def is_within(path: pathlib.Path, directory: pathlib.Path) -> bool:
+    return path == directory or directory in path.parents
 
 
-def check_page(page: pathlib.Path, badge: str, problems: list[str]) -> None:
+def resolve_target(page: pathlib.Path, target: str) -> tuple[pathlib.Path | None, str, str]:
+    """Return a local file, fragment and error; external web/mail URLs have no local file."""
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        return None, "", "invalid link target"
+    if parsed.scheme in {"http", "https", "mailto"}:
+        return None, "", ""
+    if parsed.scheme or parsed.netloc or parsed.path.startswith(("/", "\\")):
+        return None, "", "link must be relative"
+    path_part = unquote(parsed.path)
+    if "\\" in path_part or pathlib.PureWindowsPath(path_part).drive or path_part.startswith("/"):
+        return None, "", "link must use a relative URL path"
+    destination = (page.parent / path_part).resolve() if path_part else page.resolve()
+    if destination.suffix == ".html" and destination.with_suffix(".md").is_file():
+        destination = destination.with_suffix(".md")
+    if destination.is_dir():
+        destination = destination / "index.md"
+    elif not destination.exists() and not destination.suffix and destination.with_suffix(".md").is_file():
+        destination = destination.with_suffix(".md")
+    if not destination.is_file():
+        return destination, "", "link target does not exist"
+    return destination, unquote(parsed.fragment), ""
+
+
+def heading_anchors(text: str) -> set[str]:
+    """Match Markdown's heading slugs, duplicate suffixes, and explicit/HTML anchors."""
+    text = strip_fences(text)
+    anchors = set(re.findall(r'\b(?:id|name)\s*=\s*[\"\x27]([^\"\x27]+)', strip_code(text)))
+    used: set[str] = set()
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$", line)
+        if heading:
+            title = heading.group(1)
+        elif index + 1 < len(lines) and line.strip() and re.match(r"^ {0,3}(?:=+|-+)\s*$", lines[index + 1]):
+            title = line.strip()
+        else:
+            continue
+        explicit = re.search(r"\{[^}]*#([^\s}]+)[^}]*\}\s*$", title)
+        if explicit:
+            slug = explicit.group(1)
+        else:
+            title = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", title)
+            title = CODE_SPAN.sub(lambda match: html.escape(match.group(2)), title)
+            title = re.sub(r"<[^>]*>", "", title)
+            title = html.unescape(title)
+            title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+            slug = re.sub(r"[^\w\s-]", "", title).strip().lower()
+            slug = re.sub(r"[-\s]+", "-", slug)
+        unique = slug
+        suffix = 1
+        while unique in used:
+            unique = f"{slug}_{suffix}"
+            suffix += 1
+        used.add(unique)
+        anchors.add(unique)
+    return anchors
+
+
+def check_page(page: pathlib.Path, problems: list[str]) -> None:
     text = page.read_text(encoding="utf-8")
     relative = page.relative_to(ROOT).as_posix()
-
-    if badge not in first_content_line(text):
-        problems.append(f"{relative}: first content line after the title must carry the badge '{badge}'")
-
-    line_count = len(text.splitlines())
-    if line_count > MAX_PAGE_LINES:
-        problems.append(f"{relative}: {line_count} lines exceeds {MAX_PAGE_LINES}; split the page")
-
+    try:
+        redirect = docs_redirects.metadata(text)
+    except ValueError as error:
+        problems.append(f"{relative}: {error}")
+        redirect = None
+    if redirect:
+        for target in (redirect[0], *redirect[1].values()):
+            destination, fragment, error = resolve_target(page, target)
+            if error or destination is None or not is_within(destination, DOCS.resolve()):
+                problems.append(f"{relative}: redirect must name an existing local documentation page: {target}")
+            elif destination.suffix != ".md":
+                problems.append(f"{relative}: redirects must point directly to a Markdown page: {target}")
+            else:
+                try:
+                    chained = docs_redirects.metadata(destination.read_text(encoding="utf-8"))
+                except ValueError:
+                    problems.append(f"{relative}: redirect target contains invalid redirect metadata: {target}")
+                    continue
+                if chained:
+                    problems.append(f"{relative}: redirects must point directly to a Markdown page: {target}")
+                elif fragment and fragment not in heading_anchors(destination.read_text(encoding="utf-8")):
+                    problems.append(f"{relative}: redirect anchor does not exist: {target}")
+    for line, _ in docs_policy.findings(text):
+        problems.append(f"{relative}:{line}: internal planning metadata is not allowed in published documentation")
     for marker in ("TODO", "FIXME", "XXX"):
         if re.search(rf"\b{marker}\b", text):
             problems.append(f"{relative}: contains {marker}")
-
+    code_free = strip_code(text)
+    for kind in re.findall(r"^\s*>\s*\[!([^]\n]+)\]", code_free, re.MULTILINE):
+        if kind not in ALERT_KINDS:
+            problems.append(f"{relative}: unsupported callout [!{kind}]")
+    if re.search(r"^\s*(?:!!!|\?\?\?)\s+\w", code_free, re.MULTILINE):
+        problems.append(f"{relative}: use GitHub alert syntax for callouts")
     for target in link_targets(text):
-        if dangling_target(page, target):
-            problems.append(f"{relative}: link target does not exist: {target}")
+        destination, fragment, error = resolve_target(page, target)
+        if error:
+            problems.append(f"{relative}: {error}: {target}")
+        if destination is None:
+            continue
+        if is_within(page.resolve(), API_DOCS.resolve()):
+            forbidden = (DOCS / "design", ROOT / "engine", ROOT / "AGENTS.md")
+            if any(is_within(destination, path.resolve()) for path in forbidden):
+                problems.append(f"{relative}: wiki link must use the handbook: {target}")
+        if not error and fragment and destination.suffix == ".md":
+            if fragment not in heading_anchors(destination.read_text(encoding="utf-8")):
+                problems.append(f"{relative}: link anchor does not exist: {target}")
 
 
 def public_headers_by_module() -> dict[str, list[pathlib.Path]]:
-    """Public headers grouped by module directory name under engine/include/conjure/."""
     result: dict[str, list[pathlib.Path]] = {}
-    for module_dir in sorted(INCLUDE_ROOT.iterdir()):
-        if not module_dir.is_dir():
-            continue
-        headers = sorted(path for path in module_dir.rglob("*.h") if needs_wiki_page(module_dir.name, path))
-        if headers:
-            result[module_dir.name] = headers
+    if INCLUDE_ROOT.exists():
+        for module_dir in sorted(INCLUDE_ROOT.iterdir()):
+            if module_dir.is_dir():
+                result[module_dir.name] = sorted(module_dir.rglob("*.h"))
     return result
 
 
-# Exclusion policy for the wiki coverage rule (docs/design/16_documentation.md D5). Everything public is
-# covered unless it matches one of these data-driven rules; keep the table short and reviewable.
-EXCLUDED_STEMS = {
-    "api",              # CONJURE_API export macros: build plumbing
-    "platform_detect",  # compiler/platform macros: build plumbing
-    "build_info",       # generated version header
-    "log_category",     # per-module log category declaration: internal plumbing
-}
-EXCLUDED_SUFFIXES = ("_error",)          # <module>_error.h: users meet errors through result<T>
-EXCLUDED_DIRECTORIES = {"detail", "internal", "generated"}
-
-
-def needs_wiki_page(module: str, header: pathlib.Path) -> bool:
-    """Decides whether a public header is user-facing API that the wiki must cover.
-
-    Umbrella headers (``ecs/ecs.h``, ``core/math/math.h``, the ``core/math.h`` convenience include),
-    error enumerations, log categories, build-system headers and anything under a detail/internal/
-    generated directory are excluded; every other public header must be referenced by a wiki page.
-    """
-    stem = header.stem
-    if stem in EXCLUDED_STEMS:
-        return False
-    if stem.endswith(EXCLUDED_SUFFIXES):
-        return False
-    relative_parts = header.relative_to(INCLUDE_ROOT / module).parts
-    if any(part in EXCLUDED_DIRECTORIES for part in relative_parts[:-1]):
-        return False
-    is_umbrella = stem == module or stem == header.parent.name
-    return not is_umbrella
-
-
 def check_header_coverage(problems: list[str]) -> None:
-    wiki_text_by_module: dict[str, str] = {}
     for module, headers in public_headers_by_module().items():
-        module_docs = API_DOCS / module
-        if module not in wiki_text_by_module:
-            wiki_text_by_module[module] = "\n".join(
-                page.read_text(encoding="utf-8") for page in iter_pages(module_docs)
-            ) if module_docs.exists() else ""
-        corpus = wiki_text_by_module[module]
+        spans: set[str] = set()
+        for page in iter_pages(API_DOCS / module):
+            text = strip_fences(page.read_text(encoding="utf-8"))
+            spans.update(match.group(2).strip() for match in CODE_SPAN.finditer(text))
         for header in headers:
-            include_path = header.relative_to(INCLUDE_ROOT.parent).as_posix()   # conjure/<module>/<name>.h
-            if include_path not in corpus:
-                problems.append(f"docs/api/{module}: no wiki page references `{include_path}`")
+            include_path = header.relative_to(INCLUDE_ROOT.parent).as_posix()
+            if include_path not in spans:
+                problems.append(f"docs/api/{module}: no wiki code span references `{include_path}`")
 
 
 def check_module_handbook_pages(problems: list[str]) -> None:
-    for module_dir in sorted(MODULE_SRC_ROOT.iterdir()):
-        if not module_dir.is_dir() or not (module_dir / "CMakeLists.txt").exists():
+    for scope, source in (("engine", MODULE_SRC_ROOT), ("editor", ROOT / "editor" / "src")):
+        if not source.exists():
             continue
-        page = HANDBOOK_DOCS / "modules" / f"{module_dir.name}.md"
-        if not page.exists():
-            problems.append(f"docs/handbook/modules/{module_dir.name}.md: missing handbook page for module '{module_dir.name}'")
+        for module_dir in sorted(source.iterdir()):
+            if not module_dir.is_dir() or module_dir.name.startswith("."):
+                continue
+            # The editor libraries live in engine/src/editor but belong to the Editor scope.
+            page_scope = "editor" if module_dir.name == "editor" else scope
+            page = HANDBOOK_DOCS / page_scope / f"{module_dir.name}.md"
+            if not page.is_file():
+                path = page.relative_to(ROOT).as_posix()
+                owner = ("Editor application architecture" if module_dir.name == "editor"
+                         else f"{page_scope} module '{module_dir.name}'")
+                problems.append(f"{path}: missing handbook page for {owner}")
+    try:
+        for relative in sorted(docs_components.component_pages(ROOT)):
+            if not (DOCS / relative).is_file():
+                problems.append("docs/" + relative.as_posix() + ": missing Editor component overview")
+    except ValueError as error:
+        problems.append(str(error))
+
+
+def collect_problems() -> list[str]:
+    problems: list[str] = []
+    if (DOCS / "index.md").is_file():
+        check_page(DOCS / "index.md", problems)
+    for directory in (API_DOCS, HANDBOOK_DOCS):
+        for page in iter_pages(directory):
+            check_page(page, problems)
+    check_header_coverage(problems)
+    check_module_handbook_pages(problems)
+    return problems
 
 
 def main() -> int:
-    problems: list[str] = []
-
-    for page in iter_pages(API_DOCS):
-        check_page(page, API_BADGE, problems)
-    for page in iter_pages(HANDBOOK_DOCS):
-        check_page(page, HANDBOOK_BADGE, problems)
-
-    check_header_coverage(problems)
-    check_module_handbook_pages(problems)
-
+    problems = collect_problems()
     if problems:
         print("\n".join(problems))
         print(f"\n{len(problems)} documentation problem(s)")

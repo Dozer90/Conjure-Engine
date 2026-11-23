@@ -1,30 +1,25 @@
 # Devices and swapchains
+<!-- doc-template:wiki -->
+[API](../index.md) → [RHI](index.md)
 
-📘 **Public API wiki** · 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md)
-
+<!-- doc-content:purpose:start -->
 Create the graphics device, put frames on a window and know when the GPU has gone away. The device is in
 `conjure/rhi/device.h`, the swapchain in `conjure/rhi/swapchain.h`; the smaller headers they build on are the
 backend enumeration (`conjure/rhi/backend.h`), the opaque window handle (`conjure/rhi/native_window.h`), the
 engine's texture formats (`conjure/rhi/texture_format.h`) and the null device's counters
 (`conjure/rhi/null_device_stats.h`). Everything is in `namespace conjure::rhi`.
+<!-- doc-content:purpose:end -->
 
-## At a glance
+|---|---|
+| Name | Devices and swapchains |
+| Module | RHI |
+| `#include` | `conjure/rhi/backend.h`, `conjure/rhi/device.h`, `conjure/rhi/native_window.h`, `conjure/rhi/null_device_stats.h`, `conjure/rhi/swapchain.h`, `conjure/rhi/texture_format.h` |
+| Engineering Handbook | [Engineering handbook](../../handbook/engine/rhi.md) |
 
-| You want to... | Use | Header |
-|---|---|---|
-| Pick the backend the engine would pick | `default_graphics_backend()` | `conjure/rhi/backend.h` |
-| Ask whether a backend exists in this build | `is_backend_compiled(backend)` | `conjure/rhi/backend.h` |
-| Read or print a backend name | `parse_graphics_backend("d3d12")`, `to_string(backend)` | `conjure/rhi/backend.h` |
-| Create the device | `device::create(device_desc)` | `conjure/rhi/device.h` |
-| Record GPU work (engine modules only) | `device.native_device()` | `conjure/rhi/device.h` |
-| Describe the window to present to | `native_window`; a default one is headless | `conjure/rhi/native_window.h` |
-| Show frames | `swapchain::create`, then `acquire()` / `present()` each frame | `conjure/rhi/swapchain.h` |
-| React to a window resize | `swapchain.resize(width, height)` | `conjure/rhi/swapchain.h` |
-| Detect a lost GPU | `device.is_lost()`, `rhi_error::DEVICE_LOST` | `conjure/rhi/device.h` |
-| Size a texture or a row of pixels | `bytes_per_pixel(format)`, `row_pitch(format, width)` | `conjure/rhi/texture_format.h` |
-| Assert on what a test drew | `device.null_stats()` | `conjure/rhi/null_device_stats.h` |
+## Syntax
 
-## Quick example
+<!-- doc-content:syntax:start -->
+<a id="quick-example"></a>
 
 ```cpp
 #include "conjure/rhi/device.h"
@@ -58,7 +53,33 @@ core::status present_frames(u32 frameCount, void (*record)(device &gpu, nvrhi::I
     return core::status::success();
 }
 ```
+<!-- doc-content:syntax:end -->
 
+## At a glance
+
+<!-- doc-content:at_a_glance:start -->
+| You want to... | Use | Header |
+|---|---|---|
+| Pick the backend the engine would pick | `default_graphics_backend()` | `conjure/rhi/backend.h` |
+| Ask whether a backend exists in this build | `is_backend_compiled(backend)` | `conjure/rhi/backend.h` |
+| Read or print a backend name | `parse_graphics_backend("d3d12")`, `to_string(backend)` | `conjure/rhi/backend.h` |
+| Create the device | `device::create(device_desc)` | `conjure/rhi/device.h` |
+| Record GPU work (engine modules only) | `device.native_device()` | `conjure/rhi/device.h` |
+| Describe the window to present to | `native_window`; a default one is headless | `conjure/rhi/native_window.h` |
+| Show frames | `swapchain::create`, then `acquire()` / `present()` each frame | `conjure/rhi/swapchain.h` |
+| React to a window resize | `swapchain.resize(width, height)` | `conjure/rhi/swapchain.h` |
+| Detect a lost GPU | `device.is_lost()`, `rhi_error::DEVICE_LOST` | `conjure/rhi/device.h` |
+| Size a texture or a row of pixels | `bytes_per_pixel(format)`, `row_pitch(format, width)` | `conjure/rhi/texture_format.h` |
+| Assert on what a test drew | `device.null_stats()` | `conjure/rhi/null_device_stats.h` |
+<!-- doc-content:at_a_glance:end -->
+
+## Variables and Properties
+
+<!-- doc-content:variables:start -->
+Types, fields, and state are described in the reference sections below.
+<!-- doc-content:variables:end -->
+
+<!-- doc-content:body:start -->
 ## Choosing a backend
 
 `graphics_backend` has three values: `NULL_DEVICE`, `D3D12` and `VULKAN`. `is_backend_compiled()` tells you
@@ -235,7 +256,7 @@ Vulkan) and `reset_null_stats()` clears them. The most useful fields:
 
 | `null_device_stats` field | Counts |
 |---|---|
-| `texturesCreated`, `buffersCreated`, `shadersCreated`, `graphicsPipelinesCreated`, ... | resource creation by type |
+| `texturesCreated`, `buffersCreated`, `shadersCreated`, `graphicsPipelinesCreated`,... | resource creation by type |
 | `commandListsOpened`, `commandListsClosed`, `commandListsSubmitted` | command list lifecycle |
 | `draws`, `instancesDrawn`, `dispatches`, `textureClears`, `bufferWrites`, `bufferWriteBytes`, `textureCopies` | recorded work |
 | `markersBegun`, `markerNames`, `markerNamesDropped` | debug markers: `markersBegun` counts every `beginMarker`; `markerNames` holds the names in recording order (your pass names), stored only after your first `reset_null_stats()` and at most `MAX_RECORDED_MARKER_NAMES` (4096) per reset, the rest counted in `markerNamesDropped` |
@@ -284,8 +305,12 @@ run in CTest.
 > the frames you want to assert on; without it `markerNames` stays empty and every `beginMarker` is counted in
 > `markerNamesDropped` instead. Each reset keeps at most `MAX_RECORDED_MARKER_NAMES` (4096) names, so reset
 > again between long runs of frames.
+<!-- doc-content:body:end -->
 
-## API summary
+## Functions
+
+<!-- doc-content:functions:start -->
+<a id="api-summary"></a>
 
 | Signature (short) | Purpose |
 |---|---|
@@ -312,11 +337,20 @@ run in CTest.
 | `std::string_view to_string(texture_format)` / `result<texture_format> parse_texture_format(std::string_view)` | names |
 | `struct null_device_stats { ... u32 counters, std::vector<std::string> markerNames, u32 markerNamesDropped; void reset() }` | what the null device recorded |
 | `inline constexpr u32 MAX_RECORDED_MARKER_NAMES = 4096` | marker names kept per `reset_null_stats()`; the rest count in `markerNamesDropped` |
+<!-- doc-content:functions:end -->
 
-## See also
+------------------------------------------
 
+**See also:**
+
+<!-- doc-content:related:start -->
 - 📘 API: [Shaders](shaders.md) for loading the compiled shaders a device needs
 - 📘 API: [RHI overview](index.md) for the backends and when to use the renderer instead
 - 📘 API: [Errors and results](../core/errors-and-results.md) for `result<T>`, `status` and `CONJURE_TRY`
 - 📘 API: [Glossary](../glossary.md)
-- 🛠 Handbook: [RHI module](../../handbook/modules/rhi.md) for how each backend implements the swapchain
+- 🛠 Handbook: [RHI module](../../handbook/engine/rhi.md) for how each backend implements the swapchain
+<!-- doc-content:related:end -->
+
+<!-- doc-legacy-anchors:start -->
+<a id="see-also"></a>
+<!-- doc-legacy-anchors:end -->
