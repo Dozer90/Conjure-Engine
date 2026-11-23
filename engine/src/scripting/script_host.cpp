@@ -103,14 +103,14 @@ core::result<void> conjure::scripting::validate_managed_directory(const std::fil
 
 std::string_view conjure::scripting::to_string(script_host_status status) noexcept {
     switch (status) {
-        case script_host_status::UNINITIALIZED:
-            return "UNINITIALIZED";
+        case script_host_status::UNINITIALISED:
+            return "UNINITIALISED";
         case script_host_status::READY:
             return "READY";
         case script_host_status::DISABLED:
             return "DISABLED";
     }
-    return "UNINITIALIZED";
+    return "UNINITIALISED";
 }
 
 std::string_view conjure::scripting::to_string(script_backend backend) noexcept {

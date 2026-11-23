@@ -22,7 +22,7 @@ public enum LogLevel : byte
 
 /// <summary>
 /// The native table, the shared frame block and the handshake (docs/design/03_scripting.md 3.1 step 10).
-/// Initialize is idempotent: every script_host::initialize re-validates and refills.
+/// Initialize is idempotent: every script_host::initialise re-validates and refills.
 /// </summary>
 public static unsafe class NativeBridge
 {

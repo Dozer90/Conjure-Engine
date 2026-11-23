@@ -26,7 +26,7 @@
 
 // The core-owned entries of the native table (docs/design/03_scripting.md 2.1, R26/R64): log_*,
 // script_*, the five entity_* that need only ecs, component_* and query_*. Every function acts on
-// script_runtime::active(); with no runtime alive they fail softly (0 / -NOT_INITIALIZED). Every entry
+// script_runtime::active(); with no runtime alive they fail softly (0 / -NOT_INITIALISED). Every entry
 // but log_write is main-thread only (D10, 5): off the main thread it asserts and fails the same way.
 
 using namespace conjure;
@@ -205,7 +205,7 @@ namespace {
     int32_t entry_script_add(uint64_t entity, uint64_t classHash) {
         script_runtime *runtime = runtime_with_world();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALIZED);
+            return status_of(script_error::NOT_INITIALISED);
         }
         const script_entry_id id = runtime->add_script(ecs::entity::from_u64(entity), classHash, core::json::value());
         if (!id.is_valid()) {
@@ -217,7 +217,7 @@ namespace {
     int32_t entry_script_get_slots(uint64_t entity, int32_t *slots, int32_t capacity) {
         script_runtime *runtime = runtime_with_world();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALIZED);
+            return status_of(script_error::NOT_INITIALISED);
         }
         // The set is read in place: every GetScript<T>() lands here, and scripts_of() would build a vector.
         const ecs::world &world = *runtime->world();
@@ -543,7 +543,7 @@ namespace {
     int32_t entry_query_begin(const uint32_t *ids, int32_t count, conjure_query_scope *out) {
         script_runtime *runtime = active_runtime();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALIZED);
+            return status_of(script_error::NOT_INITIALISED);
         }
         if (ids == nullptr || out == nullptr || count <= 0) {
             return status_of(script_error::NOT_SUPPORTED);

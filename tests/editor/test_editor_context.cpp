@@ -93,7 +93,7 @@ TEST_SUITE("editor/editor_context") {
     TEST_CASE("editor_context - binds the engine services and reports the project and scene state") {
         editor_test::headless_editor editor = {};
         editor_context &context = editor.context();
-        CHECK(context.headless());
+        CHECK(context.is_headless());
         CHECK_FALSE(context.offscreen());
         CHECK(context.has_project());
         REQUIRE(context.project() != nullptr);
@@ -167,7 +167,11 @@ TEST_SUITE("editor/editor_context") {
         // consumer is still alive, as editor_application::shutdown does it.
         editor_context context(application, nullptr, mode);
         const editor_display_mode reported = context.display_mode();
-        const bool reportedHeadless = context.headless();
+        const bool reportedHeadless = context.is_headless();
+        // headless() is the former name of is_headless(), kept for one wave (code sweep F624).
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool reportedFormerHeadless = context.headless();
+        CONJURE_TEST_DEPRECATED_END
         const bool reportedOffscreen = context.offscreen();
         const core::json::document state = context.describe_state();
 
@@ -182,6 +186,7 @@ TEST_SUITE("editor/editor_context") {
 
         CHECK(reported == mode);
         CHECK(reportedHeadless == headless);
+        CHECK(reportedFormerHeadless == headless);
         CHECK(reportedOffscreen == offscreen);
         CHECK(state.root()["headless"].as_bool() == headless);
         CHECK(state.root()["offscreen"].as_bool() == offscreen);
@@ -250,7 +255,7 @@ TEST_SUITE("editor/editor_context") {
         CONJURE_REQUIRE_OK(application.initialise(options, {}));
         const editor_context &context = application.context();
         CHECK(context.display_mode() == expected);
-        CHECK(context.headless());
+        CHECK(context.is_headless());
         CHECK(context.offscreen() == (expected == editor_display_mode::HEADLESS_OFFSCREEN));
         application.shutdown();
     }

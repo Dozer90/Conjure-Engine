@@ -1,10 +1,19 @@
 #include "conjure/testing/doctest.h"
 
+#include "editor_test_support.h"
+
+#include "conjure/editor/command_dispatcher.h"
+#include "conjure/editor/command_registry.h"
 #include "conjure/editor/editor_command.h"
+#include "conjure/editor/editor_context.h"
+#include "conjure/editor/protocol/protocol_message.h"
 
+#include <optional>
 #include <string>
+#include <utility>
 
-// editor_command.h: the in-process command types, the flag names and async_reply without a dispatcher.
+// editor_command.h: the in-process command types, the flag names and async_reply, alone and parked by the
+// dispatcher of a headless editor.
 
 using namespace conjure;
 using namespace conjure::editor;
@@ -94,10 +103,59 @@ TEST_SUITE("editor/editor_command") {
 
     TEST_CASE("async_reply - a default reply is invalid and completing it is a no-op") {
         const async_reply reply = {};
-        CHECK_FALSE(reply.valid());
+        CHECK_FALSE(reply.is_valid());
         CHECK(reply.ticket() == 0);
         reply.succeed(core::json::document::object());
         reply.fail(protocol_error_code::INTERNAL, "ignored");
-        CHECK_FALSE(reply.valid());
+        CHECK_FALSE(reply.is_valid());
+    }
+
+    TEST_CASE("async_reply - the former name valid() answers as is_valid() for one wave") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        std::optional<protocol_response> answered = std::nullopt;
+        const u32 client = context.events().register_client({});
+        context.register_response_sink(client, [&answered](const protocol_response &response) {
+            answered = response;
+        });
+        async_reply parked = {};
+        command_descriptor descriptor = {};
+        descriptor.name = "test.park_reply";
+        descriptor.flags = command_flags::ASYNC;
+        descriptor.handler = [&parked](command_invocation &invocation) -> core::result<command_outcome> {
+            parked = invocation.reply;
+            return command_outcome{};
+        };
+        CONJURE_REQUIRE_OK(context.registry().add(std::move(descriptor)));
+        protocol_request request = {};
+        request.id = make_id(1);
+        request.command = "test.park_reply";
+        request.clientId = client;
+        REQUIRE_FALSE(context.dispatcher().dispatch(request).has_value());
+        bool expected = false;
+
+        SUBCASE("a reply to a parked request") {
+            expected = true;
+        }
+        SUBCASE("a reply that was completed") {
+            parked.succeed(core::json::document::object());
+            editor.pump(1);
+            REQUIRE(answered.has_value());
+            CHECK(answered->ok);
+            expected = false;
+        }
+        SUBCASE("a default reply") {
+            parked = {};
+            expected = false;
+        }
+
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool former = parked.valid();
+        CONJURE_TEST_DEPRECATED_END
+        CHECK(parked.is_valid() == expected);
+        CHECK(former == expected);
+        context.dispatcher().cancel_client(client);
+        context.unregister_response_sink(client);
+        context.events().unregister_client(client);
     }
 }

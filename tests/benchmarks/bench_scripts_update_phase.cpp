@@ -97,7 +97,7 @@ namespace {
                 config.host.managedDirectory = managed_directory();
                 config.gameAssemblyPath = test_scripts_assembly();
                 config.initialMode = scripting::script_mode::PLAY;
-                const core::result<void> initialised = runtime.initialize(config);
+                const core::result<void> initialised = runtime.initialise(config);
                 if (!initialised.has_value()) {
                     failure = "script runtime: " + initialised.get_error().to_string();
                     return false;

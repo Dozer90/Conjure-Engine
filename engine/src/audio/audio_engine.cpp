@@ -1217,7 +1217,7 @@ audio_engine::~audio_engine() {
 
     // Decode jobs reference the stream slots; let every one finish before the slots go away.
     for (stream_slot &stream : engine.streams) {
-        if (engine.settings.jobs != nullptr && stream.job.valid()) {
+        if (engine.settings.jobs != nullptr && stream.job.is_valid()) {
             engine.settings.jobs->wait(stream.job);
         }
         stream.decoder.close();

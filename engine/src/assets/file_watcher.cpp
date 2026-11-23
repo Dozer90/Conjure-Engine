@@ -42,7 +42,7 @@ polling_file_watcher::polling_file_watcher(
     mInterval(detail::to_steady_duration(mIntervalSeconds)) {}
 
 polling_file_watcher::~polling_file_watcher() {
-    if (mPass.valid()) {
+    if (mPass.is_valid()) {
         mJobs->wait(mPass);
     }
 }
@@ -54,7 +54,7 @@ void polling_file_watcher::add_root(std::string_view rootPath) {
         return;
     }
     // A pass scheduled by poll() reads mRoots on a worker; it must finish before the list changes.
-    if (mPass.valid()) {
+    if (mPass.is_valid()) {
         mJobs->wait(mPass);
         mPass.reset();
     }
@@ -63,7 +63,7 @@ void polling_file_watcher::add_root(std::string_view rootPath) {
 
 core::result<void> polling_file_watcher::snapshot() {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "polling_file_watcher::snapshot is main-thread only");
-    if (mPass.valid()) {
+    if (mPass.is_valid()) {
         mJobs->wait(mPass);
         mPass.reset();
     }
@@ -91,12 +91,12 @@ void polling_file_watcher::poll(std::vector<file_change> &outChanges) {
 
     // A pass runs on a job; its stat table is applied here, on the main thread, where the
     // snapshot and the debounce tables live.
-    if (mPass.valid() && mPass.is_complete()) {
+    if (mPass.is_valid() && mPass.is_complete()) {
         mPass.reset();
     }
     const auto now = std::chrono::steady_clock::now();
     const bool due = !mHasPassed || now - mLastPassStart >= mInterval;
-    if (!mPass.valid() && due) {
+    if (!mPass.is_valid() && due) {
         mLastPassStart = now;
         mHasPassed = true;
         mPass = mJobs->schedule([this]() {
@@ -161,7 +161,7 @@ void polling_file_watcher::poll(std::vector<file_change> &outChanges) {
 
 core::result<void> polling_file_watcher::scan_now() {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "polling_file_watcher::scan_now is main-thread only");
-    if (mPass.valid()) {
+    if (mPass.is_valid()) {
         mJobs->wait(mPass);
         mPass.reset();
     }

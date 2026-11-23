@@ -101,12 +101,12 @@ script_runtime::~script_runtime() {
 /*===========================================================================*/
 // Lifetime
 
-core::result<void> script_runtime::initialize(const script_runtime_config &config) {
+core::result<void> script_runtime::initialise(const script_runtime_config &config) {
     if (mStatus == script_host_status::READY) {
         return core::error(core::error_code::INVALID_STATE, "script_runtime is already initialised");
     }
     if (!core::jobs::is_main_thread()) {
-        return core::make_error(script_error::WRONG_THREAD, "script_runtime::initialize off the main thread");
+        return core::make_error(script_error::WRONG_THREAD, "script_runtime::initialise off the main thread");
     }
 
     fill_core_native_entries(mNativeApi);
@@ -123,7 +123,7 @@ core::result<void> script_runtime::initialize(const script_runtime_config &confi
         return validated;
     }
 
-    const core::result<void> hosted = mHost->initialize(config.host, mNativeApi);
+    const core::result<void> hosted = mHost->initialise(config.host, mNativeApi);
     if (!hosted.has_value()) {
         mStatus = script_host_status::DISABLED;
         CONJURE_LOG_WARN(LOG_SCRIPTING, "scripting disabled: {}", hosted.get_error());
@@ -149,7 +149,7 @@ void script_runtime::shutdown() {
         destroy_all(true);
         mHost->shutdown();
     }
-    mStatus = script_host_status::UNINITIALIZED;
+    mStatus = script_host_status::UNINITIALISED;
     mAssemblyLoaded = false;
     mAssemblyPath.clear();
     mClasses.clear();
@@ -736,7 +736,7 @@ core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds
         return core::make_error(script_error::WRONG_THREAD, "query_begin off the main thread");
     }
     if (!is_ready()) {
-        return core::make_error(script_error::NOT_INITIALIZED, "query_begin without a ready runtime");
+        return core::make_error(script_error::NOT_INITIALISED, "query_begin without a ready runtime");
     }
     if (mCurrentPhase == script_phase::COUNT) {
         return core::make_error(script_error::NOT_IN_PHASE, "query_begin outside a script phase");
@@ -951,7 +951,7 @@ bool script_runtime::is_ready() const noexcept {
 
 core::result<void> script_runtime::reload_internal(const std::filesystem::path &assemblyPath) {
     if (!is_ready()) {
-        return core::make_error(script_error::NOT_INITIALIZED, "load_game_assembly without a ready runtime");
+        return core::make_error(script_error::NOT_INITIALISED, "load_game_assembly without a ready runtime");
     }
     const conjure_managed_api &managed = mHost->managed_api();
 

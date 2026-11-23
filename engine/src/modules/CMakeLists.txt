@@ -2,7 +2,7 @@
 # (docs/design/07_modules.md). Depends on conjure::core only.
 #
 # The umbrella shared library conjure_shared and the generated abi_identity.h that module_abi.h
-# includes come from conjure_finalize_engine() (cmake/ConjureSharedLibrary.cmake), which the root
+# includes come from conjure_finalise_engine() (cmake/ConjureSharedLibrary.cmake), which the root
 # CMakeLists.txt calls right after add_subdirectory(engine); it also adds the conjure_abi_identity
 # dependency to this target.
 

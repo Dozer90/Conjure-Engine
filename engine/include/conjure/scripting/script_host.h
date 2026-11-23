@@ -24,9 +24,9 @@ namespace conjure::scripting {
     };
 
     enum class script_host_status : u8 {
-        UNINITIALIZED,
+        UNINITIALISED,
         READY,
-        DISABLED        // initialize failed; the host stays usable as an object but runs nothing
+        DISABLED        // initialise failed; the host stays usable as an object but runs nothing
     };
 
     /// <summary>
@@ -67,7 +67,7 @@ namespace conjure::scripting {
             /// caller must have filled and which must outlive the host. Main thread only. Failure leaves the
             /// host DISABLED.
             /// </summary>
-            [[nodiscard]] virtual core::result<void> initialize(
+            [[nodiscard]] virtual core::result<void> initialise(
               const script_host_config &config,
               conjure_native_api &nativeApi
             ) = 0;
@@ -89,7 +89,7 @@ namespace conjure::scripting {
     };
 
     /// <summary>
-    /// Creates the host for the backend. NULL_HOST never fails to initialize.
+    /// Creates the host for the backend. NULL_HOST never fails to initialise.
     /// </summary>
     [[nodiscard]] CONJURE_API std::unique_ptr<script_host> create_script_host(script_backend backend);
 

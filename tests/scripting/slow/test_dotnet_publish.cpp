@@ -88,7 +88,7 @@ TEST_SUITE("scripting/dotnet_publish") {
         fill_core_native_entries(api);
         script_host_config config = {};
         config.managedDirectory = layout;
-        CONJURE_REQUIRE_OK(host.initialize(config, api));
+        CONJURE_REQUIRE_OK(host.initialise(config, api));
         CHECK(host.status() == script_host_status::READY);
         if (!logs.contains(core::log_level::WARN, "attaching the host")) {
             CHECK(host.mode() == host_mode::SELF_CONTAINED);

@@ -255,11 +255,11 @@ TEST_SUITE("editor/protocol/tcp_transport") {
         CONJURE_REQUIRE_OK(client);
         CHECK((fcntl(static_cast<int>(client.value().get()), F_GETFD) & FD_CLOEXEC) != 0);
         core::result<net::socket_handle> accepted = net::accept(listener.value());
-        for (u32 attempt = 0; attempt < 200000 && accepted.has_value() && !accepted.value().valid(); ++attempt) {
+        for (u32 attempt = 0; attempt < 200000 && accepted.has_value() && !accepted.value().is_valid(); ++attempt) {
             accepted = net::accept(listener.value());
         }
         CONJURE_REQUIRE_OK(accepted);
-        REQUIRE(accepted.value().valid());
+        REQUIRE(accepted.value().is_valid());
         CHECK((fcntl(static_cast<int>(accepted.value().get()), F_GETFD) & FD_CLOEXEC) != 0);
         net::shutdown_sockets();
     }

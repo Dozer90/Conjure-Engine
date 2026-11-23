@@ -477,7 +477,7 @@ TEST_SUITE("scripting/script_runtime") {
             config.host.backend = script_backend::DOTNET;
             config.host.managedDirectory = "definitely/not/a/managed/directory";
             config.initialMode = script_mode::PLAY;
-            CONJURE_CHECK_ERROR(runtime.initialize(config), script_error::MANAGED_SDK_MISSING);
+            CONJURE_CHECK_ERROR(runtime.initialise(config), script_error::MANAGED_SDK_MISSING);
             CHECK(runtime.status() == script_host_status::DISABLED);
             CHECK(logs.count(core::log_level::WARN) == 1);
 
@@ -490,10 +490,10 @@ TEST_SUITE("scripting/script_runtime") {
             CHECK(runtime.entry(id)->managedSlot == INVALID_SLOT);
             CHECK(runtime.entry(id)->fields.root()["x"].as_i64() == 1);
             CHECK(runtime.stats().liveInstances == 0);
-            CONJURE_CHECK_ERROR(runtime.load_game_assembly("Game.dll"), script_error::NOT_INITIALIZED);
+            CONJURE_CHECK_ERROR(runtime.load_game_assembly("Game.dll"), script_error::NOT_INITIALISED);
             conjure_query_scope scope = {};
             const std::array<u32, 1> ids = {1};
-            CONJURE_CHECK_ERROR(runtime.begin_query_scope(ids, scope), script_error::NOT_INITIALIZED);
+            CONJURE_CHECK_ERROR(runtime.begin_query_scope(ids, scope), script_error::NOT_INITIALISED);
             runtime.shutdown();
             runtime.attach_world(nullptr);
         }
@@ -755,21 +755,21 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(logs.count(core::log_level::WARN) == 1);
     }
 
-    TEST_CASE("script_runtime - initialize twice is refused and shutdown allows a restart") {
+    TEST_CASE("script_runtime - initialise twice is refused and shutdown allows a restart") {
         loaded_fixture fixture = {};
         script_runtime_config config = {};
         config.host.backend = script_backend::NULL_HOST;
-        CONJURE_CHECK_ERROR(fixture.runtime.initialize(config), core::error_code::INVALID_STATE);
+        CONJURE_CHECK_ERROR(fixture.runtime.initialise(config), core::error_code::INVALID_STATE);
         fixture.runtime.set_mode(script_mode::PLAY);
         static_cast<void>(fixture.runtime.add_script(fixture.create_entity(), hash_of(PLAYER), {}));
         fixture.runtime.flush_pending();
         fixture.runtime.shutdown();
-        CHECK(fixture.runtime.status() == script_host_status::UNINITIALIZED);
+        CHECK(fixture.runtime.status() == script_host_status::UNINITIALISED);
         CHECK(fixture.runtime.stats().liveInstances == 0);
         CHECK(fixture.runtime.classes().size() == 0);
         CHECK_FALSE(fixture.runtime.is_assembly_loaded());
         CHECK(fixture.null_host().recorder().shutdown_count() == 1);
-        CONJURE_REQUIRE_OK(fixture.runtime.initialize(config));
+        CONJURE_REQUIRE_OK(fixture.runtime.initialise(config));
         CHECK(fixture.runtime.status() == script_host_status::READY);
         CHECK(fixture.runtime.mode() == script_mode::EDIT);
     }
@@ -827,7 +827,7 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(fixture.runtime.assembly_path() == assembly);
     }
 
-    TEST_CASE("script_runtime - initialize with a missing game assembly fails but stays READY") {
+    TEST_CASE("script_runtime - initialise with a missing game assembly fails but stays READY") {
         temp_directory directory = {};
         ecs::component_registry registry = {};
         register_test_components(registry);
@@ -838,7 +838,7 @@ TEST_SUITE("scripting/script_runtime") {
             script_runtime_config config = {};
             config.host.backend = script_backend::NULL_HOST;
             config.gameAssemblyPath = directory.file("Missing.dll");
-            CONJURE_CHECK_ERROR(runtime.initialize(config), script_error::ASSEMBLY_LOAD_FAILED);
+            CONJURE_CHECK_ERROR(runtime.initialise(config), script_error::ASSEMBLY_LOAD_FAILED);
             CHECK(runtime.status() == script_host_status::READY);
             CHECK_FALSE(runtime.is_assembly_loaded());
             CHECK_FALSE(runtime.classes().is_staging_open());
@@ -960,7 +960,7 @@ TEST_SUITE("scripting/script_runtime") {
         fixture.runtime.shutdown();
         script_runtime_config config = {};
         config.host.backend = script_backend::NULL_HOST;
-        CONJURE_REQUIRE_OK(fixture.runtime.initialize(config));
+        CONJURE_REQUIRE_OK(fixture.runtime.initialise(config));
         CHECK(fixture.runtime.note_mirror_mismatch(5));
         CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
 

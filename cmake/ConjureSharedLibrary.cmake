@@ -1,7 +1,7 @@
 # The umbrella shared library conjure_shared and the ABI identity header (docs/design/07_modules.md
 # D1, 3.8 and 5; docs/ARCHITECTURE.md 2.1).
 #
-#   conjure_finalize_engine()
+#   conjure_finalise_engine()
 #
 #     Called once by the root CMakeLists.txt right after add_subdirectory(engine), so every engine
 #     module has been declared (the function is idempotent). It creates:
@@ -306,7 +306,7 @@ function(conjure_hide_imported_thirdparty_symbols)
 endfunction()
 
 
-function(conjure_finalize_engine)
+function(conjure_finalise_engine)
     if(TARGET conjure_shared)
         return()
     endif()
@@ -314,7 +314,7 @@ function(conjure_finalize_engine)
     get_property(libraries GLOBAL PROPERTY CONJURE_STATIC_LIBRARIES)
     if(NOT libraries)
         message(FATAL_ERROR
-            "conjure_finalize_engine: no engine library registered with conjure_register_static_library"
+            "conjure_finalise_engine: no engine library registered with conjure_register_static_library"
         )
     endif()
 

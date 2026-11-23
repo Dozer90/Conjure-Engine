@@ -90,6 +90,30 @@ namespace conjure::testing {
     }                                                                                                       \
     static_assert(true, "")
 
+// Deprecated-call markers, for the case that pins a forwarder kept for one wave under a renamed function's
+// former name (code sweep F624: job_handle::valid() forwards to is_valid()). The warning for using a
+// [[deprecated]] function is silenced between the two markers only and stays an error everywhere else. Each
+// marker expands to pragmas only, so the pair goes around whole statements inside a function body:
+//
+//   CONJURE_TEST_DEPRECATED_BEGIN
+//   const bool former = handle.valid();
+//   CONJURE_TEST_DEPRECATED_END
+//   CHECK(former == handle.is_valid());
+#if CONJURE_COMPILER_MSVC
+    #define CONJURE_TEST_DEPRECATED_BEGIN __pragma(warning(push)) __pragma(warning(disable : 4996))
+    #define CONJURE_TEST_DEPRECATED_END __pragma(warning(pop))
+#elif CONJURE_COMPILER_CLANG
+    #define CONJURE_TEST_DEPRECATED_BEGIN                                                                   \
+        _Pragma("clang diagnostic push")                                                                    \
+        _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
+    #define CONJURE_TEST_DEPRECATED_END _Pragma("clang diagnostic pop")
+#else
+    #define CONJURE_TEST_DEPRECATED_BEGIN                                                                   \
+        _Pragma("GCC diagnostic push")                                                                      \
+        _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
+    #define CONJURE_TEST_DEPRECATED_END _Pragma("GCC diagnostic pop")
+#endif
+
 // Readable values in failed CHECKs for the foundation types every module uses. Math types are in
 // approx.h.
 namespace doctest {

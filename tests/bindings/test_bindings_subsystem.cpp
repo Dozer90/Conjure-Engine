@@ -199,7 +199,7 @@ TEST_SUITE("bindings/bindings_subsystem") {
         scripting::script_runtime &runtime = *app->context().scripting;
         conjure_native_api &api = runtime.native_api();
         CHECK(is_scope_hook_installed(api));
-        // script_runtime::initialize refills the core slots with the raw entries: the hook and the core
+        // script_runtime::initialise refills the core slots with the raw entries: the hook and the core
         // thunks are gone until the bindings' begin_frame notices.
         scripting::fill_core_native_entries(api);
         CHECK_FALSE(is_scope_hook_installed(api));

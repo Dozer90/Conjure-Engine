@@ -281,7 +281,7 @@ TEST_SUITE("core/job_system") {
 
         CHECK(ran.load() == 1);
         CHECK(observedIndex == 0);
-        CHECK(handle.valid());
+        CHECK(handle.is_valid());
         CHECK(handle.is_complete());
 
         const job_system_stats stats = system.stats();
@@ -301,7 +301,7 @@ TEST_SUITE("core/job_system") {
         const job_handle handle = fixture->schedule([&ran] {
             ran.fetch_add(1);
         });
-        REQUIRE(handle.valid());
+        REQUIRE(handle.is_valid());
         fixture->wait(handle);
 
         CHECK(handle.is_complete());
@@ -333,7 +333,7 @@ TEST_SUITE("core/job_system") {
 
         const job_handle handle = fixture->schedule(std::function<void()>());
 
-        CHECK_FALSE(handle.valid());
+        CHECK_FALSE(handle.is_valid());
         CHECK(asserts.count() == 1);
         CHECK(fixture->stats().scheduled == 0);
     }
@@ -352,7 +352,7 @@ TEST_SUITE("core/job_system") {
         }
 
         const job_handle handle = fixture->schedule(std::span<const std::function<void()>>(jobs));
-        REQUIRE(handle.valid());
+        REQUIRE(handle.is_valid());
         fixture->wait(handle);
 
         CHECK(handle.is_complete());
@@ -368,7 +368,7 @@ TEST_SUITE("core/job_system") {
         std::atomic<int> ran = 0;
 
         const std::vector<std::function<void()>> empty = {};
-        CHECK_FALSE(fixture->schedule(std::span<const std::function<void()>>(empty)).valid());
+        CHECK_FALSE(fixture->schedule(std::span<const std::function<void()>>(empty)).is_valid());
 
         std::vector<std::function<void()>> sparse = {};
         sparse.emplace_back([&ran] { ran.fetch_add(1); });
@@ -376,7 +376,7 @@ TEST_SUITE("core/job_system") {
         sparse.emplace_back([&ran] { ran.fetch_add(1); });
 
         const job_handle handle = fixture->schedule(std::span<const std::function<void()>>(sparse));
-        REQUIRE(handle.valid());
+        REQUIRE(handle.is_valid());
         fixture->wait(handle);
 
         CHECK(ran.load() == 2);

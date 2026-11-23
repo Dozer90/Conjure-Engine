@@ -197,7 +197,7 @@ namespace scripting_test {
         conjure::ecs::component_registry registry = {};
         conjure::ecs::world world;          // no default: built on the registry in the constructor
         conjure::scripting::script_runtime runtime;    // no default: built on the host in the constructor
-        conjure::core::result<void> initialized = conjure::core::result<void>::success();
+        conjure::core::result<void> initialised = conjure::core::result<void>::success();
 
         dotnet_fixture(std::string_view variant = "v1", bool playMode = true);   // default-constructible fixture
         ~dotnet_fixture();

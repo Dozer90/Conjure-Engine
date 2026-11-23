@@ -261,7 +261,7 @@ namespace conjure::bindings {
 
     /// <summary>
     /// True while the scope-end hook of wrap_with_counters sits over query_end. False again after
-    /// script_runtime::initialize refilled the core slots (a runtime re-initialised after shutdown()), which
+    /// script_runtime::initialise refilled the core slots (a runtime re-initialised after shutdown()), which
     /// is the signal to call wrap_with_counters once more.
     /// </summary>
     [[nodiscard]] CONJURE_API bool is_scope_hook_installed(const conjure_native_api &api) noexcept;

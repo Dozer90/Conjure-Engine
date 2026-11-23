@@ -124,7 +124,7 @@ add_subdirectory(engine)
 # The umbrella shared library conjure_shared and the ABI identity header are created once every
 # engine module has been declared (docs/design/07_modules.md 5, R17): executables, game modules and
 # the LINK_ENGINE_SHARED test modules link conjure::shared and nothing else from the engine.
-conjure_finalize_engine()
+conjure_finalise_engine()
 
 if(CONJURE_BUILD_MANAGED AND CONJURE_WITH_SCRIPTING)
     add_subdirectory(managed)

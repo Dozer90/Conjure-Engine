@@ -513,7 +513,7 @@ namespace conjure::scripting {
 
     /// <summary>
     /// Checks the header (size, version, hash) and that every core entry is filled. ABI_MISMATCH or
-    /// NOT_INITIALIZED naming the first missing entry.
+    /// NOT_INITIALISED naming the first missing entry.
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<void> validate_native_api(const conjure_native_api &api);
 

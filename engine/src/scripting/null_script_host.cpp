@@ -151,7 +151,7 @@ null_script_host::~null_script_host() {
 /*===========================================================================*/
 // script_host
 
-core::result<void> null_script_host::initialize(const script_host_config &config, conjure_native_api &nativeApi) {
+core::result<void> null_script_host::initialise(const script_host_config &config, conjure_native_api &nativeApi) {
     CONJURE_UNUSED(config);
     CONJURE_ASSERT(sActiveHost == nullptr || sActiveHost == this, "a second null_script_host is being initialised");
     sActiveHost = this;
@@ -172,7 +172,7 @@ core::result<void> null_script_host::initialize(const script_host_config &config
     mManagedApi.collect_garbage = &trampoline_collect_garbage;
     mManagedApi.shutdown = &trampoline_shutdown;
     mStatus = script_host_status::READY;
-    mRecorder.record_call("initialize");
+    mRecorder.record_call("initialise");
     return core::result<void>::success();
 }
 
@@ -180,7 +180,7 @@ void null_script_host::shutdown() {
     if (mStatus == script_host_status::READY) {
         static_cast<void>(shutdown_managed());
     }
-    mStatus = script_host_status::UNINITIALIZED;
+    mStatus = script_host_status::UNINITIALISED;
     if (sActiveHost == this) {
         sActiveHost = nullptr;
     }
@@ -650,7 +650,7 @@ void null_script_host::free_slot(i32 slot) {
 
 i32 null_script_host::trampoline_load_game_assembly(const char *utf8Path, i32 length) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     const std::string_view path =
       utf8Path == nullptr ? std::string_view() : std::string_view(utf8Path, static_cast<usize>(length));
@@ -658,52 +658,52 @@ i32 null_script_host::trampoline_load_game_assembly(const char *utf8Path, i32 le
 }
 
 i32 null_script_host::trampoline_unload_game_assembly() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALIZED) : sActiveHost->unload_game_assembly();
+    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->unload_game_assembly();
 }
 
 i32 null_script_host::trampoline_create_instances(conjure_create_request *requests, i32 count) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     return sActiveHost->create_instances(requests, count);
 }
 
 i32 null_script_host::trampoline_destroy_instances(const i32 *slots, i32 count, i32 callOnDestroy) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     return sActiveHost->destroy_instances(slots, count, callOnDestroy);
 }
 
 i32 null_script_host::trampoline_run_phase(u8 phase, f32 deltaTime) {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALIZED) : sActiveHost->run_phase(phase, deltaTime);
+    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->run_phase(phase, deltaTime);
 }
 
 i32 null_script_host::trampoline_dispatch_collisions(const conjure_collision_record *records, i32 count) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     return sActiveHost->dispatch_collisions(records, count);
 }
 
 i32 null_script_host::trampoline_apply_fields(i32 slot, const u8 *blob, i32 size) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     return sActiveHost->apply_fields(slot, blob, size);
 }
 
 i32 null_script_host::trampoline_collect_fields(i32 slot, u8 *buffer, i32 capacity) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALIZED);
+        return status_of(script_error::NOT_INITIALISED);
     }
     return sActiveHost->collect_fields(slot, buffer, capacity);
 }
 
 i32 null_script_host::trampoline_collect_garbage() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALIZED) : sActiveHost->collect_garbage();
+    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->collect_garbage();
 }
 
 i32 null_script_host::trampoline_shutdown() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALIZED) : sActiveHost->shutdown_managed();
+    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->shutdown_managed();
 }

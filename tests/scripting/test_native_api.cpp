@@ -91,7 +91,7 @@ TEST_SUITE("scripting/native_api") {
 
     TEST_CASE("validate_native_api - fails on missing core entries and header drift") {
         conjure_native_api api = make_native_api(nullptr);
-        CONJURE_CHECK_ERROR(validate_native_api(api), script_error::NOT_INITIALIZED);
+        CONJURE_CHECK_ERROR(validate_native_api(api), script_error::NOT_INITIALISED);
 
         fill_core_native_entries(api);
         CONJURE_CHECK_OK(validate_native_api(api));
@@ -99,7 +99,7 @@ TEST_SUITE("scripting/native_api") {
         SUBCASE("one core entry cleared") {
             api.component_get = nullptr;
             const core::result<void> validated = validate_native_api(api);
-            CONJURE_CHECK_ERROR(validated, script_error::NOT_INITIALIZED);
+            CONJURE_CHECK_ERROR(validated, script_error::NOT_INITIALISED);
             CHECK(validated.get_error().message().find("component_get") != std::string::npos);
         }
         SUBCASE("bindings entries may stay null") {

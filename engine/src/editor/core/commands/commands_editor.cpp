@@ -32,14 +32,14 @@ namespace conjure::editor::support {
                     mTargetFrame(targetFrame) {}
 
                 ~wait_frames_task() override {
-                    if (mReply.valid()) {
+                    if (mReply.is_valid()) {
                         mReply.fail(protocol_error_code::CANCELLED, "editor.wait_frames was dropped before it ended");
                     }
                 }
 
             public:
                 bool tick(editor_context &context) override {
-                    if (!mReply.valid()) {
+                    if (!mReply.is_valid()) {
                         // The request was cancelled (its client disconnected) or timed out: nobody reads the
                         // answer, so the task leaves now instead of ticking until the target frame.
                         return true;
@@ -81,14 +81,14 @@ namespace conjure::editor::support {
 
                 ~exec_file_task() override {
                     release_client();
-                    if (mReply.valid()) {
+                    if (mReply.is_valid()) {
                         mReply.fail(protocol_error_code::CANCELLED, "editor.exec_file was dropped before it finished");
                     }
                 }
 
             public:
                 bool tick(editor_context &context) override {
-                    if (!mReply.valid()) {
+                    if (!mReply.is_valid()) {
                         // Cancelled or timed out: nobody reads the summary, so the rest of the file must not run.
                         release_client();
                         return true;
@@ -147,7 +147,7 @@ namespace conjure::editor::support {
                     (void) context;
                     mSummary.exitCode = mSummary.failed == 0 ? 0 : 1;
                     release_client();
-                    if (mReply.valid()) {
+                    if (mReply.is_valid()) {
                         mReply.succeed(mSummary.to_json());
                     }
                     return true;

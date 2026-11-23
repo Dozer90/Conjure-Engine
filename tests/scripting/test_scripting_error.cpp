@@ -22,6 +22,16 @@ TEST_SUITE("scripting/scripting_error") {
         CHECK(script_error_name(script_error::NOT_SUPPORTED) == "NOT_SUPPORTED");
     }
 
+    TEST_CASE("script_error - NOT_INITIALISED keeps the code 16 that managed code maps by number") {
+        // The rename to the British spelling changed the name only: Conjure.Managed (ComponentQuery.BeginFailure)
+        // reads the negated number, so the value must not move.
+        CHECK(static_cast<u16>(script_error::NOT_INITIALISED) == 16);
+        CHECK(status_of(script_error::NOT_INITIALISED) == -16);
+        CHECK(script_error_name(script_error::NOT_INITIALISED) == "NOT_INITIALISED");
+        const core::error failure = core::make_error(script_error::NOT_INITIALISED, "no runtime");
+        CHECK(failure.to_string() == "scripting.NOT_INITIALISED: no runtime");
+    }
+
     TEST_CASE("script_error - binds to the scripting category") {
         const core::error failure = core::make_error(script_error::CLASS_NOT_FOUND, "Game.Missing");
         CHECK(failure.category_name() == "scripting");

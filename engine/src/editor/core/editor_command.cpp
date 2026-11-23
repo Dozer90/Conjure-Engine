@@ -44,7 +44,7 @@ namespace conjure::editor {
     async_reply::~async_reply() = default;
 
     void async_reply::succeed(core::json::document result) const {
-        if (!valid()) {
+        if (!is_valid()) {
             return;
         }
         protocol_response response = {};
@@ -54,7 +54,7 @@ namespace conjure::editor {
     }
 
     void async_reply::fail(protocol_error_code code, std::string message, core::json::document details) const {
-        if (!valid()) {
+        if (!is_valid()) {
             return;
         }
         protocol_response response = {};
@@ -65,8 +65,12 @@ namespace conjure::editor {
         mDispatcher->complete(mTicket, std::move(response));
     }
 
-    bool async_reply::valid() const noexcept {
+    bool async_reply::is_valid() const noexcept {
         return mDispatcher != nullptr && mTicket != 0 && mDispatcher->is_pending(mTicket);
+    }
+
+    bool async_reply::valid() const noexcept {
+        return is_valid();
     }
 
     /*===========================================================================*/

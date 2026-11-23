@@ -332,6 +332,67 @@ def define_of_macro_name(checker, root: pathlib.Path) -> None:
 
 
 #------------------------------------------------------------------------------
+# lifecycle-spelling
+#------------------------------------------------------------------------------
+
+def american_lifecycle_identifiers_reported(checker, root: pathlib.Path) -> None:
+    text = (
+        "enum class status : unsigned char { UNINITIALIZED, READY };\n"   # 1: an enumerator
+        "int initialize(int value);\n"                                     # 2: a function
+        "constexpr int NOT_INITIALIZED = 16;\n"                            # 3: a constant
+        "void Finalize();\n"                                               # 4: any case
+        "bool mReinitialized = false;\n"                                   # 5: the stem inside a longer name
+        "#define CONJURE_FINALIZE_STEP 1\n"                                # 6: a macro
+        "int my_initializer_list_view = 0;\n"                              # 7: contains an owned name only
+        "enum class host_status : unsigned { SUCCESS_HOST_ALREADY_INITIALIZED = 1 };\n"   # 8: re-spells another's
+    )
+    # Engine and test code follow the same rule.
+    for relative in ("engine/src/foo/bar.cpp", "tests/foo/test_bar.cpp"):
+        write(root, relative, text)
+        result = run(checker, root, relative)
+        lines = reported_lines(result, "lifecycle-spelling", relative)
+        assert lines == ["1", "2", "3", "4", "5", "6", "7", "8"], (relative, result.findings)
+        assert result.code == 1, (relative, result.code)
+
+
+def british_and_owned_lifecycle_names_allowed(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp",
+          "#include <initializer_list>\n"
+          "#include <memory>\n"
+          "\n"
+          "enum class status : unsigned char { UNINITIALISED, NOT_INITIALISED, READY };\n"
+          "int initialise(std::initializer_list<int> values);\n"
+          "void finalise_initialisation(int *first, int *last, int *out) {\n"
+          "    std::uninitialized_copy(first, last, out);\n"
+          "}\n"
+          "int describe(int code) { return code == GLFW_NOT_INITIALIZED ? 1 : 0; }\n"
+          "void open() { InitializeAcl(nullptr, 0, 0); }\n"
+          "// initialize and finalize in a comment are prose\n"
+          "const char *NAME = \"NOT_INITIALIZED\";\n"
+          "const char *RAW = R\"(finalize)\";\n")
+    result = run(checker, root, "engine/src/foo/bar.cpp")
+    assert not result.of_rule("lifecycle-spelling"), result.findings
+
+
+def regression_american_lifecycle_names(checker, root: pathlib.Path) -> None:
+    # The three names of the finding, as scripting spelled them beside application::initialise.
+    write(root, "engine/include/conjure/scripting/script_host.h",
+          "#pragma once\n"
+          "\n"
+          "enum class script_host_status : unsigned char { UNINITIALIZED, READY, DISABLED };\n"
+          "enum class script_error : unsigned short { NOT_INITIALIZED = 16 };\n"
+          "class script_host {\n"
+          "    public:\n"
+          "        virtual int initialize(int config) = 0;\n"
+          "};\n")
+    result = run(checker, root, "engine/include/conjure/scripting/script_host.h")
+    findings = result.of_rule("lifecycle-spelling")
+    assert len(findings) == 3, result.findings
+    for name in ("'UNINITIALIZED'", "'NOT_INITIALIZED'", "'initialize'"):
+        assert any(name in line for line in findings), (name, findings)
+
+
+#------------------------------------------------------------------------------
 # thread-outside-jobs
 #------------------------------------------------------------------------------
 
@@ -592,6 +653,12 @@ CASES = [
     ("windows-macro - an ALL_CAPS const constant is checked", all_caps_const_checked),
     ("windows-macro - a camelCase const local is a variable, not a constant", camel_case_const_local_is_variable),
     ("windows-macro - a #define of a Windows macro name is reported", define_of_macro_name),
+    ("lifecycle-spelling - an American initialize or finalize in any identifier is reported",
+     american_lifecycle_identifiers_reported),
+    ("lifecycle-spelling - British names, names other libraries own, includes, comments and strings are allowed",
+     british_and_owned_lifecycle_names_allowed),
+    ("regression - code sweep F623 scripting's American lifecycle names are reported",
+     regression_american_lifecycle_names),
     ("thread-outside-jobs - a std::thread or std::jthread in engine, editor or runtime code is reported",
      thread_outside_jobs_reported),
     ("thread-outside-jobs - the two jobs folders of core are the only allowed places", thread_in_jobs_allowed),

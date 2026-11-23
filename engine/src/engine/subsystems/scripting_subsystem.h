@@ -24,7 +24,7 @@
 
 // Startup steps 14 and 17 (docs/design/06_engine_loop.md 3.4, R27/R29/R36): step 14 constructs the
 // script_runtime over the .NET host (or the null host for tests and tools) and registers script_component;
-// the bindings subsystem fills the native table at step 16; step 17 runs initialize (handshake) and
+// the bindings subsystem fills the native table at step 16; step 17 runs initialise (handshake) and
 // load_game_assembly. A missing runtime is SCRIPT_RUNTIME_NOT_FOUND when scripting.required, otherwise a WARN
 // and a null context pointer. With scripting.enabled == false nothing is constructed and one INFO line says so;
 // when it is the headless default that holds back a project with a game assembly, the line names --scripting
@@ -56,7 +56,7 @@ namespace conjure::engine {
             void shutdown(engine_context &context) override;
 
             /// <summary>
-            /// True once initialize() succeeded (the runtime is ready for the game assembly).
+            /// True once initialise() succeeded (the runtime is ready for the game assembly).
             /// </summary>
             [[nodiscard]] bool is_initialised() const noexcept {
                 return mInitialised;

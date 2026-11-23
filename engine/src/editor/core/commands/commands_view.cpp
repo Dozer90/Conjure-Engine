@@ -222,7 +222,7 @@ namespace conjure::editor::support {
 
         core::result<command_outcome> view_debug_draw(command_invocation &invocation) {
             editor_context &context = invocation.context;
-            if (context.headless() && !context.offscreen()) {
+            if (context.is_headless() && !context.offscreen()) {
                 return not_available("debug drawing needs a viewport: run with a window or --offscreen");
             }
             editor_context::debug_draw_flags &flags = context.debug_draw();

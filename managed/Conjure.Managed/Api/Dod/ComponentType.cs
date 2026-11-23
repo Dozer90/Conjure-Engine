@@ -9,7 +9,7 @@ namespace Conjure.Dod;
 
 /// <summary>
 /// The native component id of a mirror or [EcsComponent] struct, resolved once per type and per native
-/// handshake (NativeBridge.Generation: every script_host::initialize / shutdown may bring a registry with
+/// handshake (NativeBridge.Generation: every script_host::initialise / shutdown may bring a registry with
 /// other ids). 0 means the mirror does not match the native layout (docs/design/03_scripting.md 3.9,
 /// R61): RequireId then throws InvalidOperationException, and 0 is never cached. The reflected part (the
 /// attributes, the layout and its hash) never changes for a type, so it is computed, and an undescribable

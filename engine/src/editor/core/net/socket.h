@@ -66,7 +66,10 @@ namespace conjure::editor::net {
                 return mHandle;
             }
 
-            [[nodiscard]] bool valid() const noexcept {
+            /// <summary>
+            /// True while the handle holds an open socket.
+            /// </summary>
+            [[nodiscard]] bool is_valid() const noexcept {
                 return mHandle != INVALID_NATIVE_SOCKET;
             }
 

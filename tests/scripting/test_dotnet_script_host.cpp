@@ -29,7 +29,7 @@ TEST_SUITE("scripting/dotnet_script_host") {
         fill_core_native_entries(api);
         script_host_config config = {};
         config.managedDirectory = managed_directory();
-        CONJURE_REQUIRE_OK(host.initialize(config, api));
+        CONJURE_REQUIRE_OK(host.initialise(config, api));
         CHECK(host.status() == script_host_status::READY);
         CHECK(host.backend() == script_backend::DOTNET);
         CHECK(dotnet_script_host::is_runtime_started());
@@ -39,7 +39,7 @@ TEST_SUITE("scripting/dotnet_script_host") {
         CHECK(host.managed_api().size == sizeof(conjure_managed_api));
         CHECK(host.managed_api().collect_garbage() == 0);
         host.shutdown();
-        CHECK(host.status() == script_host_status::UNINITIALIZED);
+        CHECK(host.status() == script_host_status::UNINITIALISED);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
@@ -51,10 +51,10 @@ TEST_SUITE("scripting/dotnet_script_host") {
         config.managedDirectory = managed_directory();
         {
             dotnet_script_host first = {};
-            CONJURE_REQUIRE_OK(first.initialize(config, api));
+            CONJURE_REQUIRE_OK(first.initialise(config, api));
         }
         dotnet_script_host second = {};
-        CONJURE_REQUIRE_OK(second.initialize(config, api));
+        CONJURE_REQUIRE_OK(second.initialise(config, api));
         CHECK(second.status() == script_host_status::READY);
         CHECK(second.managed_directory() == managed_directory());
         CHECK(second.managed_api().run_phase != nullptr);
@@ -79,11 +79,11 @@ TEST_SUITE("scripting/dotnet_script_host") {
         SUBCASE("version") {
             api.version = CONJURE_NATIVE_API_VERSION + 7;
         }
-        const core::result<void> initialized = host.initialize(config, api);
-        CONJURE_CHECK_ERROR(initialized, script_error::ABI_MISMATCH);
+        const core::result<void> initialised = host.initialise(config, api);
+        CONJURE_CHECK_ERROR(initialised, script_error::ABI_MISMATCH);
         CHECK(host.status() == script_host_status::DISABLED);
         // The message carries both hashes so a stale Conjure.Managed.dll is diagnosable.
-        CHECK(initialized.get_error().message().find("managed hash") != std::string::npos);
+        CHECK(initialised.get_error().message().find("managed hash") != std::string::npos);
     }
 
     TEST_CASE("dotnet_script_host - a runtime over the host runs phases [dotnet]" * doctest::timeout(60)) {

@@ -27,7 +27,7 @@ namespace conjure::scripting::hostfxr {
     /// </summary>
     enum class host_status : u32 {
         SUCCESS = 0,
-        SUCCESS_HOST_ALREADY_INITIALIZED = 0x00000001,
+        SUCCESS_HOST_ALREADY_INITIALISED = 0x00000001,   // Success_HostAlreadyInitialized
         SUCCESS_DIFFERENT_RUNTIME_PROPERTIES = 0x00000002,
         INVALID_ARG_FAILURE = 0x80008081,
         CORE_HOST_LIB_LOAD_FAILURE = 0x80008082,

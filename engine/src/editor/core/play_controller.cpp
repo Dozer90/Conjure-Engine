@@ -189,7 +189,7 @@ namespace conjure::editor {
         }
         // The engine returns to PAUSED on its own after a forced step; the state already says so.
         ++mSimulationFrames;
-        if (mPendingStep->reply.valid()) {
+        if (mPendingStep->reply.is_valid()) {
             mPendingStep->reply.succeed(describe());
         }
         mPendingStep.reset();

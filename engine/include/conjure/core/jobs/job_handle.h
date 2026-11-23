@@ -53,8 +53,15 @@ namespace conjure::core::jobs {
             /// True when this handle refers to scheduled work. False for a default-constructed or
             /// reset handle.
             /// </summary>
-            [[nodiscard]] bool valid() const noexcept {
+            [[nodiscard]] bool is_valid() const noexcept {
                 return mCounter != nullptr;
+            }
+
+            /// <summary>
+            /// The former name of is_valid(), kept for one wave (code sweep F624); returns is_valid().
+            /// </summary>
+            [[deprecated("use is_valid()")]] [[nodiscard]] bool valid() const noexcept {
+                return is_valid();
             }
 
             /// <summary>

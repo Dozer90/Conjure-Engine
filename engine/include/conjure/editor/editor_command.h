@@ -81,7 +81,12 @@ namespace conjure::editor {
             /// <summary>
             /// True while the reply refers to a parked request that was not completed yet.
             /// </summary>
-            [[nodiscard]] bool valid() const noexcept;
+            [[nodiscard]] bool is_valid() const noexcept;
+
+            /// <summary>
+            /// The former name of is_valid(), kept for one wave (code sweep F624); returns is_valid().
+            /// </summary>
+            [[deprecated("use is_valid()")]] [[nodiscard]] bool valid() const noexcept;
 
             [[nodiscard]] u64 ticket() const noexcept {
                 return mTicket;

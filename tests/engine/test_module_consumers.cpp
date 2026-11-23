@@ -687,7 +687,7 @@ TEST_SUITE("engine/module_consumers") {
         scripting::script_runtime runtime(scripting::create_script_host(scripting::script_backend::NULL_HOST));
         scripting::script_runtime_config config = {};
         config.host.backend = scripting::script_backend::NULL_HOST;
-        CONJURE_REQUIRE_OK(runtime.initialize(config));
+        CONJURE_REQUIRE_OK(runtime.initialise(config));
         CONJURE_REQUIRE_OK(runtime.load_game_assembly({}));
         REQUIRE(runtime.is_assembly_loaded());
 

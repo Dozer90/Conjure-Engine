@@ -21,6 +21,10 @@ namespace {
     status succeed() {
         return status::success();
     }
+
+    [[deprecated("pinned by the deprecated-call marker case")]] [[nodiscard]] int former_answer() noexcept {
+        return 42;
+    }
 }
 
 TEST_SUITE("testing/doctest") {
@@ -60,6 +64,14 @@ TEST_SUITE("testing/doctest") {
         CONJURE_CHECK_ERROR(parse_positive(-4, evaluations), error_code::INVALID_ARGUMENT);
 
         CHECK(evaluations == 1);
+    }
+
+    TEST_CASE("CONJURE_TEST_DEPRECATED_BEGIN - a deprecated call between the markers builds as a warning-free call") {
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const int answer = former_answer();
+        CONJURE_TEST_DEPRECATED_END
+
+        CHECK(answer == 42);
     }
 
     TEST_CASE("StringMaker - prints errors and codes") {

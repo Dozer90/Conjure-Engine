@@ -166,7 +166,7 @@ bool managed_build_runner::is_building() const noexcept {
 }
 
 void managed_build_runner::wait() {
-    if (mJobs != nullptr && mJob.valid()) {
+    if (mJobs != nullptr && mJob.is_valid()) {
         mJobs->wait(mJob);
         mJob.reset();
     }

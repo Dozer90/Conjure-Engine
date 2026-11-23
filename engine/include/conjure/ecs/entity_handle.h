@@ -17,7 +17,7 @@
 //
 //   entity_handle player = world.handle(id);
 //   component_ref<position> position = player.component<position>();
-//   if (position.valid()) { position.write()->y += 1.0f; }
+//   if (position.is_valid()) { position.write()->y += 1.0f; }
 
 namespace conjure::ecs {
 
@@ -49,8 +49,15 @@ namespace conjure::ecs {
             /// <summary>
             /// True while the entity is alive and holds the component.
             /// </summary>
-            [[nodiscard]] bool valid() const noexcept {
+            [[nodiscard]] bool is_valid() const noexcept {
                 return mWorld != nullptr && mWorld->has<ComponentType>(mEntity);
+            }
+
+            /// <summary>
+            /// The former name of is_valid(), kept for one wave (code sweep F624); returns is_valid().
+            /// </summary>
+            [[deprecated("use is_valid()")]] [[nodiscard]] bool valid() const noexcept {
+                return is_valid();
             }
 
             /// <summary>
@@ -149,7 +156,7 @@ namespace conjure::ecs {
             }
 
             /// <summary>
-            /// A reference to a component; valid() tells whether it exists.
+            /// A reference to a component; is_valid() tells whether it exists.
             /// </summary>
             template <typename ComponentType>
             [[nodiscard]] component_ref<ComponentType> component() const noexcept {

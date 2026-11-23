@@ -22,7 +22,7 @@ TEST_SUITE("core/job_handle") {
     TEST_CASE("job_handle - a default handle is invalid and reports itself complete") {
         const job_handle handle = {};
 
-        CHECK_FALSE(handle.valid());
+        CHECK_FALSE(handle.is_valid());
         CHECK(handle.is_complete());
         CHECK(handle.pending() == 0);
     }
@@ -32,7 +32,7 @@ TEST_SUITE("core/job_handle") {
         counter->remaining.store(2);
         const job_handle handle(counter);
 
-        CHECK(handle.valid());
+        CHECK(handle.is_valid());
         CHECK_FALSE(handle.is_complete());
         CHECK(handle.pending() == 2);
 
@@ -53,7 +53,7 @@ TEST_SUITE("core/job_handle") {
         counter->remaining.store(HUGE_COUNT);
         const job_handle handle(counter);
 
-        CHECK(handle.valid());
+        CHECK(handle.is_valid());
         CHECK_FALSE(handle.is_complete());
         CHECK(handle.pending() == HUGE_COUNT);
 
@@ -94,11 +94,37 @@ TEST_SUITE("core/job_handle") {
 
         handle.reset();
 
-        CHECK_FALSE(handle.valid());
+        CHECK_FALSE(handle.is_valid());
         CHECK(handle.is_complete());
-        CHECK(copy.valid());
+        CHECK(copy.is_valid());
         CHECK_FALSE(copy.is_complete());
         CHECK_FALSE(handle == copy);
+    }
+
+    TEST_CASE("job_handle - the former name valid() answers as is_valid() for one wave") {
+        std::shared_ptr<jobs::detail::job_counter> counter = std::make_shared<jobs::detail::job_counter>();
+        counter->remaining.store(1);
+        job_handle handle = {};
+        bool expected = false;
+
+        SUBCASE("a default handle") {
+            expected = false;
+        }
+        SUBCASE("a handle over a counter") {
+            handle = job_handle(counter);
+            expected = true;
+        }
+        SUBCASE("a reset handle") {
+            handle = job_handle(counter);
+            handle.reset();
+            expected = false;
+        }
+
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool former = handle.valid();
+        CONJURE_TEST_DEPRECATED_END
+        CHECK(handle.is_valid() == expected);
+        CHECK(former == expected);
     }
 
     TEST_CASE("job_handle - handles from a job system complete after wait [parallel]") {
@@ -109,7 +135,7 @@ TEST_SUITE("core/job_handle") {
         const job_handle handle = fixture->schedule([&ran] {
             ran.fetch_add(1);
         });
-        REQUIRE(handle.valid());
+        REQUIRE(handle.is_valid());
 
         fixture->wait(handle);
         CHECK(handle.is_complete());
@@ -124,7 +150,7 @@ TEST_SUITE("core/job_handle") {
             handle = fixture->schedule([] {});
             fixture->wait(handle);
         }
-        CHECK(handle.valid());
+        CHECK(handle.is_valid());
         CHECK(handle.is_complete());
     }
 

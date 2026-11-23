@@ -882,7 +882,7 @@ struct asset_manager::state {
     void wait_for_jobs() {
         for (u32 index = 0; index < slots.size(); ++index) {
             slot_data &data = slots.data(slots.at(index));
-            if (data.job.valid() && !data.job.is_complete()) {
+            if (data.job.is_valid() && !data.job.is_complete()) {
                 jobs->wait(data.job);
             }
         }

@@ -371,7 +371,7 @@ TEST_SUITE("editor/command_catalogue") {
         CHECK_MESSAGE(before == after, editor_test::describe_difference(before, after));
         CHECK(shared_state(editor) == sharedBefore);
         CHECK(editor.context().dispatcher().pending_count() == 0);
-        CHECK_FALSE(editor.application().quit_requested());
+        CHECK_FALSE(editor.application().is_quit_requested());
         // A refusal does not cost the client its connection, and the other token opens the same commands.
         CHECK(session.client().is_connected());
         const core::json::document raised = session.ok("session.hello", core::json::object({{"token", "tok-7f3a9c"}}));

@@ -1142,7 +1142,7 @@ void job_system::schedule(std::span<const std::function<void()>> jobs, job_fence
 }
 
 void job_system::wait(const job_handle &handle) {
-    if (!handle.valid() || handle.is_complete()) {
+    if (!handle.is_valid() || handle.is_complete()) {
         return;
     }
     mState->wait(*handle.mCounter);

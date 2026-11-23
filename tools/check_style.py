@@ -56,6 +56,12 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
                         no thread and are not reported. std::async and the raw OS thread calls (pthread_create,
                         CreateThread, _beginthread, _beginthreadex) are reported in every folder, the two jobs
                         folders included
+  lifecycle-spelling    identifiers spell the lifecycle words the British way (code sweep F623,
+                        docs/reviews/code_sweep_2026-11-12_decisions.md): initialise, finalise and their forms
+                        (UNINITIALISED, NOT_INITIALISED, initialisation). Identifiers are compared without case;
+                        comments, string literals and #include targets are not read; the names other code owns
+                        (std::initializer_list, GLFW_NOT_INITIALIZED, the Win32, Vulkan, Jolt and .NET hosting
+                        names the engine calls) are listed in AMERICAN_LIFECYCLE_NAMES
   file-name             file names are snake_case
 
 With --tests-mirror-headers it also verifies that every engine/include/conjure/<module>/**/<name>.h
@@ -104,6 +110,32 @@ WINDOWS_MACRO_NAMES = {
     "GENERIC_READ", "GENERIC_WRITE", "INPUT_KEYBOARD", "INPUT_MOUSE", "MOUSE_MOVED", "ALTERNATE", "WINDING",
     "WIN32", "interface", "small", "hyper", "min", "max", "far", "near", "pascal", "cdecl",
 }
+
+# Lifecycle words are British in identifiers (code sweep F623, docs/reviews/code_sweep_2026-11-12_decisions.md):
+# initialise and finalise, as in application::initialise, audio_error::NOT_INITIALISED and
+# script_host_status::UNINITIALISED. The pattern finds the American stem anywhere in an identifier and in any case
+# (initialize, UNINITIALIZED, Finalizer, reinitialization).
+AMERICAN_LIFECYCLE_PATTERN = re.compile(r"initializ|finaliz", re.IGNORECASE)
+IDENTIFIER_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# An #include directive names a file, not an identifier: <initializer_list> or a third-party header is not checked.
+INCLUDE_LINE_PATTERN = re.compile(r"^[ \t]*#[ \t]*include\b[^\n]*", re.MULTILINE)
+# Names other code owns, spelled the way their owner spells them. Each entry is one whole identifier: a Conjure name
+# that merely contains one of them (my_initializer_list_view) is still reported.
+AMERICAN_LIFECYCLE_NAMES = frozenset({
+    # C++ standard library.
+    "initializer_list", "uninitialized_copy", "uninitialized_copy_n", "uninitialized_fill", "uninitialized_fill_n",
+    "uninitialized_move", "uninitialized_move_n", "uninitialized_default_construct",
+    "uninitialized_default_construct_n", "uninitialized_value_construct", "uninitialized_value_construct_n",
+    # GLFW, Vulkan and Jolt.
+    "GLFW_NOT_INITIALIZED", "VK_ERROR_INITIALIZATION_FAILED", "AddBodiesFinalize",
+    # Win32.
+    "InitializeAcl", "InitializeSecurityDescriptor", "InitializeProcThreadAttributeList",
+    # .NET hosting (hostfxr.h). A Conjure name that re-spells one of the runtime's (hostfxr_api.h's host_status) is
+    # Conjure's own and follows the rule.
+    "hostfxr_initialize_parameters", "hostfxr_initialize_for_runtime_config",
+    "hostfxr_initialize_for_dotnet_command_line", "hostfxr_initialize_for_runtime_config_fn",
+    "hostfxr_initialize_for_dotnet_command_line_fn",
+})
 
 # Third-party include prefixes: the include-order rule requires angle brackets for them, and
 # third-party-include-in-test reports them in test code (is_third_party_library). The public-header rule does not
@@ -432,6 +464,7 @@ def check_file(
                 findings.append(finding(path, number, "using-namespace", "using-namespace directive in a header"))
 
     check_windows_macro_names(path, code, findings)
+    check_lifecycle_spelling(path, code, findings)
     check_enum_class(path, code, findings)
     check_includes(path, relative, directive_lines, findings)
     check_include_order(path, relative, directive_lines, findings)
@@ -563,6 +596,22 @@ def check_windows_macro_names(path: pathlib.Path, code: str, findings: list[find
             findings.append(finding(
                 path, line_of(code, match.start(1)), "windows-macro",
                 f"macro '{name}' redefines a Windows macro name"))
+
+
+def check_lifecycle_spelling(path: pathlib.Path, code: str, findings: list[finding]) -> None:
+    """Reports every identifier of 'code' (comments and literals already blanked) that spells initialise or
+    finalise the American way, unless it is a name other code owns (AMERICAN_LIFECYCLE_NAMES). The target of an
+    #include directive is a file name and is not read."""
+    identifiers = INCLUDE_LINE_PATTERN.sub(lambda directive: " " * len(directive.group(0)), code)
+    for match in IDENTIFIER_TOKEN_PATTERN.finditer(identifiers):
+        name = match.group(0)
+        if not AMERICAN_LIFECYCLE_PATTERN.search(name) or name in AMERICAN_LIFECYCLE_NAMES:
+            continue
+        findings.append(finding(
+            path, line_of(identifiers, match.start()), "lifecycle-spelling",
+            f"'{name}' spells a lifecycle word the American way: identifiers use initialise / finalise "
+            f"(code sweep F623, docs/reviews/code_sweep_2026-11-12_decisions.md); a name another library owns goes "
+            f"in AMERICAN_LIFECYCLE_NAMES"))
 
 
 def check_includes(

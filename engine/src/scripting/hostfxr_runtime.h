@@ -21,7 +21,7 @@ namespace conjure::scripting {
 
     class hostfxr_runtime {
         public:
-            using initialize_fn = int32_t (*)(conjure_native_api *nativeApi, conjure_managed_api *managedApi);
+            using initialise_fn = int32_t (*)(conjure_native_api *nativeApi, conjure_managed_api *managedApi);
 
         private:
             std::mutex mMutex = {};
@@ -29,11 +29,11 @@ namespace conjure::scripting {
             std::filesystem::path mHostfxrPath = {};
             std::filesystem::path mManagedDirectory = {};
             host_mode mMode = host_mode::FRAMEWORK_DEPENDENT;
-            initialize_fn mInitialize = nullptr;
+            initialise_fn mInitialise = nullptr;
             bool mStarted = false;              // steps 1-9 completed: later hosts attach
             bool mRuntimeStarted = false;       // CoreCLR runs (step 7 succeeded) even if a later step failed
-            hostfxr_initialize_for_runtime_config_fn mInitializeForRuntimeConfig = nullptr;
-            hostfxr_initialize_for_dotnet_command_line_fn mInitializeForCommandLine = nullptr;
+            hostfxr_initialize_for_runtime_config_fn mInitialiseForRuntimeConfig = nullptr;
+            hostfxr_initialize_for_dotnet_command_line_fn mInitialiseForCommandLine = nullptr;
             hostfxr_get_runtime_delegate_fn mGetRuntimeDelegate = nullptr;
             hostfxr_set_runtime_property_value_fn mSetRuntimeProperty = nullptr;
             hostfxr_set_error_writer_fn mSetErrorWriter = nullptr;
@@ -84,8 +84,8 @@ namespace conjure::scripting {
             /// <summary>
             /// Conjure.Interop.NativeBridge.Initialize; nullptr before the runtime started.
             /// </summary>
-            [[nodiscard]] initialize_fn initialize_entry() const noexcept {
-                return mInitialize;
+            [[nodiscard]] initialise_fn initialise_entry() const noexcept {
+                return mInitialise;
             }
 
             /// <summary>

@@ -114,8 +114,8 @@ namespace conjure::editor {
     };
 
     /// <summary>
-    /// How the editor session presents itself, fixed for the context's lifetime (headless() and offscreen() read
-    /// it back). One enum instead of two bools, so an off-screen session with a window cannot be expressed.
+    /// How the editor session presents itself, fixed for the context's lifetime (is_headless() and offscreen()
+    /// read it back). One enum instead of two bools, so an off-screen session with a window cannot be expressed.
     /// </summary>
     enum class editor_display_mode : u8 {
         WINDOWED,                 // a window with its panels (no --headless)
@@ -481,8 +481,15 @@ namespace conjure::editor {
             /// <summary>
             /// True for HEADLESS and HEADLESS_OFFSCREEN: the session has no window.
             /// </summary>
-            [[nodiscard]] bool headless() const noexcept {
+            [[nodiscard]] bool is_headless() const noexcept {
                 return mDisplayMode != editor_display_mode::WINDOWED;
+            }
+
+            /// <summary>
+            /// The former name of is_headless(), kept for one wave (code sweep F624); returns is_headless().
+            /// </summary>
+            [[deprecated("use is_headless()")]] [[nodiscard]] bool headless() const noexcept {
+                return is_headless();
             }
 
             /// <summary>

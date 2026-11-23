@@ -10,7 +10,7 @@
 #include <filesystem>
 
 // The real host (docs/design/03_scripting.md 3.1): one CLR per process, started on first use by the
-// private hostfxr_runtime singleton; every dotnet_script_host::initialize re-runs the handshake
+// private hostfxr_runtime singleton; every dotnet_script_host::initialise re-runs the handshake
 // (managed Initialize is idempotent), so hosts may be created and destroyed freely.
 
 namespace conjure::scripting {
@@ -19,7 +19,7 @@ namespace conjure::scripting {
         private:
             conjure_managed_api mManagedApi = {};
             conjure_native_api *mNativeApi = nullptr;
-            script_host_status mStatus = script_host_status::UNINITIALIZED;
+            script_host_status mStatus = script_host_status::UNINITIALISED;
             host_mode mMode = host_mode::FRAMEWORK_DEPENDENT;
             std::filesystem::path mManagedDirectory = {};
 
@@ -34,13 +34,13 @@ namespace conjure::scripting {
             /// tables. RUNTIME_NOT_FOUND, HOSTFXR_INCOMPATIBLE, RUNTIME_CONFIG_INVALID, MANAGED_SDK_MISSING,
             /// HOST_ALREADY_RUNNING, ABI_MISMATCH, WRONG_THREAD.
             /// </summary>
-            [[nodiscard]] core::result<void> initialize(
+            [[nodiscard]] core::result<void> initialise(
               const script_host_config &config,
               conjure_native_api &nativeApi
             ) override;
 
             /// <summary>
-            /// managed.shutdown(): destroys instances, unloads the game load context. READY -> UNINITIALIZED.
+            /// managed.shutdown(): destroys instances, unloads the game load context. READY -> UNINITIALISED.
             /// </summary>
             void shutdown() override;
 

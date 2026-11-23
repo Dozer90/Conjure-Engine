@@ -91,7 +91,7 @@ public unsafe ref struct ComponentQuery
         14 => "ComponentQuery.Begin is only available inside OnFixedUpdate, OnUpdate, OnLateUpdate, the collision " +
             "callbacks and OnCreate/OnDestroy run by the flush at the end of those phases; OnCreate/OnDestroy at " +
             "scene start, frame end or a mode change run outside a script phase (NOT_IN_PHASE)",
-        16 => "ComponentQuery.Begin needs a running script runtime (NOT_INITIALIZED)",
+        16 => "ComponentQuery.Begin needs a running script runtime (NOT_INITIALISED)",
         17 => "ComponentQuery.Begin was refused: it needs 1..8 registered component ids and an attached world " +
             "(NOT_SUPPORTED, see the log)",
         _ => "ComponentQuery.Begin failed with scripting status " + status,

@@ -213,7 +213,7 @@ namespace conjure::editor {
                 // answer to a later one: nothing after it can run reliably.
                 break;
             }
-            if (application.quit_requested()) {
+            if (application.is_quit_requested()) {
                 // editor.quit (or a quit from another client) ends the run after its reply.
                 break;
             }
@@ -238,7 +238,7 @@ namespace conjure::editor {
         // A non-zero quit code wins: editor.quit's exitCode, or INIT_FAILURE from a project.open whose restart failed
         // for both projects (that quit ends the run through the failed frame, not through the check above).
         // editor.quit's default 0 still reports an earlier failure under --keep-going.
-        if (application.quit_requested() && application.exit_code() != 0) {
+        if (application.is_quit_requested() && application.exit_code() != 0) {
             summary.exitCode = application.exit_code();
         }
         return summary;

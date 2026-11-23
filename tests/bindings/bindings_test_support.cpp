@@ -300,10 +300,10 @@ bindings_test::bare_fixture::bare_fixture(const bare_fixture_options &options) :
     if (runtime != nullptr) {
         scripting::script_runtime_config config = {};
         config.host.backend = scripting::script_backend::NULL_HOST;
-        CONJURE_REQUIRE_OK(runtime->initialize(config));
+        CONJURE_REQUIRE_OK(runtime->initialise(config));
         runtime->set_mode(scripting::script_mode::PLAY);
         if (options.fill) {
-            // The core entries exist only after initialize: wrap them too so every count is observable.
+            // The core entries exist only after initialise: wrap them too so every count is observable.
             wrap_with_counters(runtime->native_api());
         }
     }

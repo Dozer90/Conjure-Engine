@@ -128,7 +128,7 @@ core::result<void> scripting_bindings_subsystem::post_startup(engine::engine_con
     if (!mFilled || context.scripting == nullptr) {
         return core::result<void>::success();
     }
-    // The core entries exist only once script_runtime::initialize ran (scripting's post_startup, step 17,
+    // The core entries exist only once script_runtime::initialise ran (scripting's post_startup, step 17,
     // which precedes ours: user subsystems come after the built-in ones).
     wrap_with_counters(context.scripting->native_api());
     return core::result<void>::success();
@@ -139,7 +139,7 @@ void scripting_bindings_subsystem::begin_frame(engine::engine_context &context) 
         return;
     }
     if (context.scripting != nullptr && !is_scope_hook_installed(context.scripting->native_api())) {
-        // script_runtime::initialize refills the core slots: a runtime re-initialised after shutdown() has
+        // script_runtime::initialise refills the core slots: a runtime re-initialised after shutdown() has
         // lost the query_end hook and the core counting thunks until they are installed again here.
         wrap_with_counters(context.scripting->native_api());
     }

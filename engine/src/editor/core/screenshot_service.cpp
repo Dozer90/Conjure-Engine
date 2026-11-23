@@ -335,7 +335,7 @@ namespace conjure::editor {
                     // Out of the queue before the reply: a completion may dispatch against this service.
                     const async_reply refused = entry.reply;
                     mPending.erase(mPending.begin());
-                    if (refused.valid()) {
+                    if (refused.is_valid()) {
                         refused.fail(classify_error(begun.get_error()), begun.get_error().message());
                     }
                     continue;
@@ -366,7 +366,7 @@ namespace conjure::editor {
               ))
               : mBackend->capture(due.request);
             if (!captured.has_value()) {
-                if (due.reply.valid()) {
+                if (due.reply.is_valid()) {
                     due.reply.fail(classify_error(captured.get_error()), captured.get_error().message());
                 }
                 continue;
@@ -377,7 +377,7 @@ namespace conjure::editor {
 
     void screenshot_service::cancel_pending() {
         for (pending &entry : mPending) {
-            if (entry.reply.valid()) {
+            if (entry.reply.is_valid()) {
                 entry.reply.fail(protocol_error_code::CANCELLED, "the screenshot was cancelled");
             }
         }
@@ -419,7 +419,7 @@ namespace conjure::editor {
       const async_reply &reply,
       const core::result<void> &written
     ) {
-        if (!reply.valid()) {
+        if (!reply.is_valid()) {
             return;
         }
         if (!written.has_value()) {

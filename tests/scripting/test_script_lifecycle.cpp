@@ -180,7 +180,7 @@ TEST_SUITE("scripting/script_lifecycle") {
         static_cast<void>(fixture.add_script(fixture.create_entity(), PROBE));
         static_cast<void>(fixture.add_script(fixture.create_entity(), PROBE));
         fixture.runtime.shutdown();
-        CHECK(fixture.runtime.status() == script_host_status::UNINITIALIZED);
+        CHECK(fixture.runtime.status() == script_host_status::UNINITIALISED);
         CHECK(fixture.runtime.stats().liveInstances == 0);
         CHECK(logs.count(core::log_level::INFO) >= 2);
         CHECK(logs.contains(core::log_level::INFO, "LifecycleProbe.OnDestroy alive=True"));

@@ -45,7 +45,7 @@ namespace conjure::editor::support {
               {"engineVersion", engine::engine_version_string()},
               {"schemaHash", std::format("{:016x}", context.registry().schema_hash())},
               {"clientId", invocation.clientId},
-              {"headless", context.headless()},
+              {"headless", context.is_headless()},
               {"access", to_string(access)},
             });
             return outcome;

@@ -229,7 +229,7 @@ core::result<void> conjure::scripting::validate_native_api(const conjure_native_
     for (u32 index = 0; index < CONJURE_NATIVE_API_CORE_ENTRY_COUNT; ++index) {
         if (slots[index] == nullptr) {
             return core::make_error(
-              script_error::NOT_INITIALIZED,
+              script_error::NOT_INITIALISED,
               "core native entry '{}' is not filled",
               table().fullNames[index]
             );

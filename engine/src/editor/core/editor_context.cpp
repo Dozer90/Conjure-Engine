@@ -465,7 +465,7 @@ namespace conjure::editor {
             guids.push_back(guid.to_string());
         }
         state.set("selection", guids);
-        state.set("headless", headless());
+        state.set("headless", is_headless());
         state.set("offscreen", offscreen());
         state.set("port", mServer == nullptr ? u32{0} : u32{mServer->bound_port()});
         state.set("clients", mServer == nullptr ? usize{0} : mServer->client_count());

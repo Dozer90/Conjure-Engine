@@ -309,7 +309,7 @@ TEST_SUITE("editor/ai_protocol_e2e") {
         REQUIRE(quit.has_value());
         CHECK(quit->errorCode == protocol_error_code::UNAUTHORISED);
         CHECK(editor.scene().world().entity_count() == 1);
-        CHECK_FALSE(editor.application().quit_requested());
+        CHECK_FALSE(editor.application().is_quit_requested());
 
         // The inspect token does not lead to the other one: the one command that reads project files ends in
         // scripts/, and the refusal is not an oracle for the file's content.

@@ -28,7 +28,7 @@ namespace {
         null_script_host host = {};
 
         bare_host() {
-            CONJURE_REQUIRE_OK(host.initialize({}, api));
+            CONJURE_REQUIRE_OK(host.initialise({}, api));
         }
 
         ~bare_host() {
@@ -56,21 +56,21 @@ namespace {
 
 TEST_SUITE("scripting/null_script_host") {
 
-    TEST_CASE("null_script_host - initialize fills the managed api and becomes active") {
+    TEST_CASE("null_script_host - initialise fills the managed api and becomes active") {
         null_script_host host = {};
         CHECK(null_script_host::active() == nullptr);
-        CHECK(host.status() == script_host_status::UNINITIALIZED);
+        CHECK(host.status() == script_host_status::UNINITIALISED);
         conjure_native_api api = make_native_api(nullptr);
-        CONJURE_REQUIRE_OK(host.initialize({}, api));
+        CONJURE_REQUIRE_OK(host.initialise({}, api));
         CHECK(host.status() == script_host_status::READY);
         CHECK(null_script_host::active() == &host);
         CONJURE_CHECK_OK(validate_managed_api(host.managed_api()));
         CHECK(host.managed_api().size == sizeof(conjure_managed_api));
         CHECK(host.managed_api().layout_hash == CONJURE_NATIVE_API_HASH);
-        CHECK(host.recorder().count("initialize") == 1);
+        CHECK(host.recorder().count("initialise") == 1);
         host.shutdown();
         CHECK(null_script_host::active() == nullptr);
-        CHECK(host.status() == script_host_status::UNINITIALIZED);
+        CHECK(host.status() == script_host_status::UNINITIALISED);
         CHECK(host.recorder().shutdown_count() == 1);
     }
 
@@ -142,7 +142,7 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(phases[3].phase == script_phase::COUNT);
         const std::vector<std::string> &calls = fixture.host.recorder().calls();
         const std::vector<std::string> expected = {
-          "initialize", "create_instances", "run_phase", "run_phase", "run_phase", "run_phase"
+          "initialise", "create_instances", "run_phase", "run_phase", "run_phase", "run_phase"
         };
         CHECK(calls == expected);
     }
@@ -343,11 +343,11 @@ TEST_SUITE("scripting/null_script_host") {
             copy = fixture.managed();
         }
         CHECK(null_script_host::active() == nullptr);
-        CHECK(copy.run_phase(0, 0.0f) == status_of(script_error::NOT_INITIALIZED));
-        CHECK(copy.unload_game_assembly() == status_of(script_error::NOT_INITIALIZED));
-        CHECK(copy.collect_garbage() == status_of(script_error::NOT_INITIALIZED));
-        CHECK(copy.shutdown() == status_of(script_error::NOT_INITIALIZED));
-        CHECK(copy.load_game_assembly(nullptr, 0) == status_of(script_error::NOT_INITIALIZED));
+        CHECK(copy.run_phase(0, 0.0f) == status_of(script_error::NOT_INITIALISED));
+        CHECK(copy.unload_game_assembly() == status_of(script_error::NOT_INITIALISED));
+        CHECK(copy.collect_garbage() == status_of(script_error::NOT_INITIALISED));
+        CHECK(copy.shutdown() == status_of(script_error::NOT_INITIALISED));
+        CHECK(copy.load_game_assembly(nullptr, 0) == status_of(script_error::NOT_INITIALISED));
     }
 
     TEST_CASE("null_script_host - fake classes can be replaced, removed and cleared") {

@@ -140,7 +140,7 @@ namespace conjure::scripting {
             std::vector<u8> mBlobBuffer = {};
             script_mode mMode = script_mode::EDIT;
             script_phase mCurrentPhase = script_phase::COUNT;
-            script_host_status mStatus = script_host_status::UNINITIALIZED;
+            script_host_status mStatus = script_host_status::UNINITIALISED;
             ecs::component_id mScriptComponentId = {};
             ecs::observer_id mAddedObserver = {};
             ecs::observer_id mRemovedObserver = {};
@@ -182,7 +182,7 @@ namespace conjure::scripting {
             /// (ASSEMBLY_LOAD_FAILED) but leaves the runtime READY without an assembly (03_scripting.md 6:
             /// scenes still load); call load_game_assembly again once it is built.
             /// </summary>
-            [[nodiscard]] core::result<void> initialize(const script_runtime_config &config);
+            [[nodiscard]] core::result<void> initialise(const script_runtime_config &config);
 
             /// <summary>
             /// destroy_all(true), unload, host shutdown. The runtime may be initialised again.
@@ -215,7 +215,7 @@ namespace conjure::scripting {
             /// <summary>
             /// Loads the game assembly: new load context, classes staged then committed, every entry whose
             /// class now exists is created in PLAY mode. With an assembly already loaded this is a reload.
-            /// NOT_INITIALIZED, ASSEMBLY_LOAD_FAILED (nothing changes).
+            /// NOT_INITIALISED, ASSEMBLY_LOAD_FAILED (nothing changes).
             /// </summary>
             [[nodiscard]] core::result<void> load_game_assembly(const std::filesystem::path &assemblyPath);
 
@@ -411,7 +411,7 @@ namespace conjure::scripting {
             /// <summary>
             /// Opens a scope over the archetypes holding every type: locks the world, fills the chunk views
             /// (columns in 'typeIds' order, null for an absent id), bumps the change versions of the written
-            /// columns. WRONG_THREAD, NOT_IN_PHASE, NOT_INITIALIZED, INVALID_ARGUMENT (no world, bad id;
+            /// columns. WRONG_THREAD, NOT_IN_PHASE, NOT_INITIALISED, INVALID_ARGUMENT (no world, bad id;
             /// id 0 is never valid, R4). Allocation-free once warm: the ecs::query behind a component set is
             /// cached for the life of the attached world (cached_query_count()) and finished scope states
             /// are reused, so the scripting.update_10k_dod gate of 08_testing.md 7.1 holds.
@@ -600,7 +600,7 @@ namespace conjure::scripting {
 
     /// <summary>
     /// Fills the core-owned entries (log_*, script_*, the five entity_*, component_*, query_*) of a table
-    /// with functions that act on script_runtime::active(). Called by script_runtime::initialize.
+    /// with functions that act on script_runtime::active(). Called by script_runtime::initialise.
     /// </summary>
     CONJURE_API void fill_core_native_entries(conjure_native_api &api) noexcept;
 }

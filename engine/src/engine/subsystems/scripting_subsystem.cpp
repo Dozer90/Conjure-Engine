@@ -128,7 +128,7 @@ core::result<void> scripting_subsystem::post_startup(engine_context &context) {
         assemblyPath = context.project->root_directory() / assemblyPath;
     }
 
-    const core::result<void> initialised = mServices->scripting->initialize(runtimeConfig);
+    const core::result<void> initialised = mServices->scripting->initialise(runtimeConfig);
     if (!initialised.has_value()) {
         const core::error &error = initialised.get_error();
         if (config.scripting.required) {

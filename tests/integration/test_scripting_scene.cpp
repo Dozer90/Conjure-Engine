@@ -102,7 +102,7 @@ namespace {
                 runtime.attach_world(&world);
                 scripting::script_runtime_config config = {};
                 config.host.backend = scripting::script_backend::NULL_HOST;
-                CONJURE_REQUIRE_OK(runtime.initialize(config));
+                CONJURE_REQUIRE_OK(runtime.initialise(config));
                 REQUIRE(runtime.status() == scripting::script_host_status::READY);
                 null_host().add_fake_class(player_class());
                 CONJURE_REQUIRE_OK(runtime.load_game_assembly({}));

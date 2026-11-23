@@ -26,7 +26,7 @@ TEST_SUITE("ecs/entity_handle") {
 
         const core::result<component_ref<position>> added = handle.add<position>(position{1.0f, 2.0f, 3.0f});
         CONJURE_REQUIRE_OK(added);
-        CHECK(added.value().valid());
+        CHECK(added.value().is_valid());
         CHECK(added.value().read()->y == 2.0f);
         CHECK(handle.has<position>());
         CHECK(world.has<position>(created.value()));
@@ -53,12 +53,12 @@ TEST_SUITE("ecs/entity_handle") {
         CONJURE_REQUIRE_OK(created);
         entity_handle handle = world.handle(created.value());
         component_ref<position> reference = handle.component<position>();
-        CHECK(reference.valid());
+        CHECK(reference.is_valid());
         CONJURE_REQUIRE_OK(world.destroy_entity(created.value()));
 
         CHECK_FALSE(handle.is_alive());
         CHECK_FALSE(handle.has<position>());
-        CHECK_FALSE(reference.valid());
+        CHECK_FALSE(reference.is_valid());
         CHECK(reference.read() == nullptr);
         CHECK(reference.write() == nullptr);
         CONJURE_CHECK_ERROR(reference.set(position{}), ecs_error::ENTITY_NOT_ALIVE);
@@ -77,7 +77,7 @@ TEST_SUITE("ecs/entity_handle") {
         CONJURE_CHECK_ERROR(emptyMutable.add<position>(), ecs_error::ENTITY_NOT_ALIVE);
         CONJURE_CHECK_ERROR(emptyMutable.remove<position>(), ecs_error::ENTITY_NOT_ALIVE);
         component_ref<position> noRef = empty.component<position>();
-        CHECK_FALSE(noRef.valid());
+        CHECK_FALSE(noRef.is_valid());
         CHECK(noRef.read() == nullptr);
         CHECK(noRef.write() == nullptr);
         CONJURE_CHECK_ERROR(noRef.set(position{}), ecs_error::ENTITY_NOT_ALIVE);
@@ -95,20 +95,48 @@ TEST_SUITE("ecs/entity_handle") {
         // Moving the entity to another archetype relocates the component; the reference follows.
         CONJURE_REQUIRE_OK(world.add<velocity>(created.value()));
         CONJURE_REQUIRE_OK(world.add<health>(created.value()));
-        CHECK(reference.valid());
+        CHECK(reference.is_valid());
         CHECK(reference.read() != before);
         CHECK(reference.read()->x == 5.0f);
 
         // Removing the component invalidates it; adding it back revalidates it.
         CONJURE_REQUIRE_OK(world.remove<position>(created.value()));
-        CHECK_FALSE(reference.valid());
+        CHECK_FALSE(reference.is_valid());
         CHECK(reference.read() == nullptr);
         CONJURE_CHECK_ERROR(reference.set(position{}), ecs_error::COMPONENT_NOT_PRESENT);
         CONJURE_REQUIRE_OK(world.add<position>(created.value(), position{9.0f, 0.0f, 0.0f}));
-        CHECK(reference.valid());
+        CHECK(reference.is_valid());
         CHECK(reference.read()->x == 9.0f);
         CONJURE_REQUIRE_OK(reference.set(position{1.0f, 1.0f, 1.0f}));
         CHECK(reference.read()->z == 1.0f);
+    }
+
+    TEST_CASE("component_ref - the former name valid() answers as is_valid() for one wave") {
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        const core::result<entity> created = world.create_entity(fixture.mask<position>());
+        CONJURE_REQUIRE_OK(created);
+        component_ref<position> reference = {};
+        bool expected = false;
+
+        SUBCASE("a reference to nothing") {
+            expected = false;
+        }
+        SUBCASE("a reference to a present component") {
+            reference = world.handle(created.value()).component<position>();
+            expected = true;
+        }
+        SUBCASE("a reference to a removed component") {
+            reference = world.handle(created.value()).component<position>();
+            CONJURE_REQUIRE_OK(world.remove<position>(created.value()));
+            expected = false;
+        }
+
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool former = reference.valid();
+        CONJURE_TEST_DEPRECATED_END
+        CHECK(reference.is_valid() == expected);
+        CHECK(former == expected);
     }
 
     TEST_CASE("component_ref - write stamps") {

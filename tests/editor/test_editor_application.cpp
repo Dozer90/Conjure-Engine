@@ -13,6 +13,7 @@
 #include "conjure/editor/play_controller.h"
 #include "conjure/editor/project_trust.h"
 #include "conjure/editor/protocol/protocol_message.h"
+#include "conjure/engine/application.h"
 #include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
@@ -241,9 +242,18 @@ TEST_SUITE("editor/editor_application") {
         CONJURE_REQUIRE_OK(application.pump_frame());
         CHECK(application.ticks() == 2);
         CHECK(application.context().frame_index() >= 2);
-        CHECK_FALSE(application.quit_requested());
+        // quit_requested() is the former name of is_quit_requested(), kept for one wave (code sweep F624).
+        CHECK_FALSE(application.is_quit_requested());
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool formerBeforeQuit = application.quit_requested();
+        CONJURE_TEST_DEPRECATED_END
+        CHECK_FALSE(formerBeforeQuit);
         application.request_quit(5);
-        CHECK(application.quit_requested());
+        CHECK(application.is_quit_requested());
+        CONJURE_TEST_DEPRECATED_BEGIN
+        const bool formerAfterQuit = application.quit_requested();
+        CONJURE_TEST_DEPRECATED_END
+        CHECK(formerAfterQuit);
         CHECK(application.exit_code() == 5);
         CHECK(application.run() == 5);
         application.shutdown();
@@ -277,11 +287,19 @@ TEST_SUITE("editor/editor_application") {
         application.shutdown();
     }
 
+    TEST_CASE("editor_application - is_quit_requested reads the editor's own quit, not one the engine asked for") {
+        editor_test::headless_editor editor = {};
+        editor.application().engine().request_quit(engine::exit_code::RUNTIME_FAILURE);
+        CHECK(editor.application().engine().is_quit_requested());
+        CHECK_FALSE(editor.application().is_quit_requested());
+        CHECK(editor.application().exit_code() == 0);
+    }
+
     TEST_CASE("editor_application - editor.quit requests the exit code through the host") {
         editor_test::headless_editor editor = {};
         const core::json::document result = editor.ok("editor.quit", core::json::object({{"exitCode", 3}}));
         CHECK(result.root()["exitCode"].as_i64() == 3);
-        CHECK(editor.application().quit_requested());
+        CHECK(editor.application().is_quit_requested());
         CHECK(editor.application().exit_code() == 3);
         CHECK(editor.application().run() == 3);
     }
@@ -304,7 +322,7 @@ TEST_SUITE("editor/editor_application") {
         // scene.save is refused while playing, so the quit leaves play first: what it writes is the scene of
         // before the session, and the request does not fail on the refused save.
         (void) editor.ok("editor.quit", core::json::object({{"saveChanges", true}}));
-        CHECK(editor.application().quit_requested());
+        CHECK(editor.application().is_quit_requested());
         CHECK(editor.context().play().is_editing());
         const std::string saved = editor_test::read_text_file(
           editor.project_directory() / "assets" / "scenes" / "test.scene.json"
@@ -328,7 +346,7 @@ TEST_SUITE("editor/editor_application") {
         const protocol_response refused = editor.send("editor.quit", core::json::object({{"saveChanges", true}}));
         REQUIRE_FALSE(refused.ok);
         CHECK(refused.errorCode == protocol_error_code::IO_ERROR);
-        CHECK_FALSE(editor.application().quit_requested());
+        CHECK_FALSE(editor.application().is_quit_requested());
         // The stop is not taken back: the editor is left in the editing state over the scene of before the
         // session, still unsaved.
         CHECK(editor.context().play().is_editing());
@@ -341,7 +359,7 @@ TEST_SUITE("editor/editor_application") {
         // Once the file can be written again the same request saves and quits.
         REQUIRE(std::filesystem::remove(editor_test::test_scene_file(editor), ignored));
         (void) editor.ok("editor.quit", core::json::object({{"saveChanges", true}}));
-        CHECK(editor.application().quit_requested());
+        CHECK(editor.application().is_quit_requested());
         CHECK(std::filesystem::is_regular_file(editor_test::test_scene_file(editor)));
     }
 
@@ -936,7 +954,7 @@ TEST_SUITE("editor/editor_application") {
         CONJURE_REQUIRE_OK(editor.application().request_open_project(broken));
         editor.pump(1);
         CHECK(editor.log().contains(core::log_level::ERR, "failed"));
-        CHECK_FALSE(editor.application().quit_requested());
+        CHECK_FALSE(editor.application().is_quit_requested());
         if (revoke) {
             CHECK(editor.context().project() == nullptr);
             CHECK(editor.application().options().projectPath.empty());

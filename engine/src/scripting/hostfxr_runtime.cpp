@@ -163,37 +163,37 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
     }
 
     hostfxr_handle handle = nullptr;
-    int32_t initialized = 0;
+    int32_t initialised = 0;
     if (mode == host_mode::FRAMEWORK_DEPENDENT) {
-        initialized = mInitializeForRuntimeConfig(runtimeConfig.c_str(), &parameters, &handle);
+        initialised = mInitialiseForRuntimeConfig(runtimeConfig.c_str(), &parameters, &handle);
     } else {
         std::array<const char_t *, 1> argv = {bootstrapDll.c_str()};
-        initialized = mInitializeForCommandLine(1, argv.data(), &parameters, &handle);
+        initialised = mInitialiseForCommandLine(1, argv.data(), &parameters, &handle);
     }
-    if (initialized == static_cast<int32_t>(host_status::HOST_INVALID_STATE)) {
+    if (initialised == static_cast<int32_t>(host_status::HOST_INVALID_STATE)) {
         return core::make_error(
           script_error::HOST_ALREADY_RUNNING,
           "a .NET runtime of another configuration already runs in this process ({})",
-          describe_status(initialized)
+          describe_status(initialised)
         );
     }
-    if (initialized == static_cast<int32_t>(host_status::INVALID_CONFIG_FILE)) {
+    if (initialised == static_cast<int32_t>(host_status::INVALID_CONFIG_FILE)) {
         return core::make_error(
           script_error::RUNTIME_CONFIG_INVALID,
           "hostfxr rejected '{}' ({})",
           detail::path_to_utf8(config.managedDirectory / std::filesystem::path(BOOTSTRAP_RUNTIME_CONFIG)),
-          describe_status(initialized)
+          describe_status(initialised)
         );
     }
-    if (!is_success(initialized) || handle == nullptr) {
+    if (!is_success(initialised) || handle == nullptr) {
         return core::make_error(
           script_error::RUNTIME_NOT_FOUND,
           "hostfxr could not initialise the runtime ({}); install the .NET 8 runtime from {}",
-          describe_status(initialized),
+          describe_status(initialised),
           DOWNLOAD_URL
         );
     }
-    const bool firstContext = initialized == static_cast<int32_t>(host_status::SUCCESS);
+    const bool firstContext = initialised == static_cast<int32_t>(host_status::SUCCESS);
 
     // 6. Properties the managed side reads through AppContext (first context only, before the CLR starts).
     if (firstContext) {
@@ -261,24 +261,24 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
     // 8. The handshake entry point.
     const host_string typeName = host_text(BRIDGE_TYPE);
     const host_string methodName = host_text(BRIDGE_METHOD);
-    void *initializeRaw = nullptr;
-    const int32_t gotInitialize = getFunctionPointer(
+    void *initialiseRaw = nullptr;
+    const int32_t gotInitialise = getFunctionPointer(
       typeName.c_str(),
       methodName.c_str(),
       UNMANAGEDCALLERSONLY_METHOD,
       nullptr,
       nullptr,
-      &initializeRaw
+      &initialiseRaw
     );
-    if (!is_success(gotInitialize) || initializeRaw == nullptr) {
+    if (!is_success(gotInitialise) || initialiseRaw == nullptr) {
         mClose(handle);
         return core::make_error(
           script_error::MANAGED_SDK_MISSING,
           "Conjure.Interop.NativeBridge.Initialize was not found in Conjure.Managed ({})",
-          describe_status(gotInitialize)
+          describe_status(gotInitialise)
         );
     }
-    std::memcpy(&mInitialize, &initializeRaw, sizeof(mInitialize));
+    std::memcpy(&mInitialise, &initialiseRaw, sizeof(mInitialise));
 
     // 9. The context is not needed again: delegates have process lifetime.
     mClose(handle);
@@ -323,9 +323,9 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
     mLibrary = std::make_unique<core::dynamic_library>(std::move(loaded).value());
     mHostfxrPath = path;
 
-    mInitializeForRuntimeConfig =
+    mInitialiseForRuntimeConfig =
       mLibrary->symbol_as<hostfxr_initialize_for_runtime_config_fn>("hostfxr_initialize_for_runtime_config");
-    mInitializeForCommandLine =
+    mInitialiseForCommandLine =
       mLibrary->symbol_as<hostfxr_initialize_for_dotnet_command_line_fn>("hostfxr_initialize_for_dotnet_command_line");
     mGetRuntimeDelegate = mLibrary->symbol_as<hostfxr_get_runtime_delegate_fn>("hostfxr_get_runtime_delegate");
     mSetRuntimeProperty =
@@ -333,7 +333,7 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
     mSetErrorWriter = mLibrary->symbol_as<hostfxr_set_error_writer_fn>("hostfxr_set_error_writer");
     mClose = mLibrary->symbol_as<hostfxr_close_fn>("hostfxr_close");
 
-    const bool complete = mInitializeForRuntimeConfig != nullptr && mInitializeForCommandLine != nullptr &&
+    const bool complete = mInitialiseForRuntimeConfig != nullptr && mInitialiseForCommandLine != nullptr &&
       mGetRuntimeDelegate != nullptr && mSetRuntimeProperty != nullptr && mSetErrorWriter != nullptr &&
       mClose != nullptr;
     if (!complete) {

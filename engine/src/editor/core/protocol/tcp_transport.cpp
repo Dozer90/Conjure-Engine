@@ -193,7 +193,7 @@ namespace conjure::editor {
                 CONJURE_LOG_WARN(LOG_EDITOR, "ai protocol: accept failed: {}", accepted.get_error().message());
                 return;
             }
-            if (!accepted.value().valid()) {
+            if (!accepted.value().is_valid()) {
                 return;
             }
             // Connections that are closing but still draining their last response do not hold a seat.

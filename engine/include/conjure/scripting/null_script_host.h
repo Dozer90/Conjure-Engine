@@ -21,7 +21,7 @@
 // collect_fields echoes it, run_phase and dispatch_collisions are logged, load_game_assembly registers
 // fake classes (add_fake_class and an optional <assembly>.classes.json fixture) through the native table
 // so the registry, blob and reload paths all run without .NET. Every scripting, scene, engine and editor
-// test uses it; one null host is active (initialized) at a time.
+// test uses it; one null host is active (initialised) at a time.
 
 namespace conjure::scripting {
 
@@ -231,7 +231,7 @@ namespace conjure::scripting {
 
             conjure_managed_api mManagedApi = {};
             conjure_native_api *mNativeApi = nullptr;
-            script_host_status mStatus = script_host_status::UNINITIALIZED;
+            script_host_status mStatus = script_host_status::UNINITIALISED;
             null_host_recorder mRecorder = {};
             std::vector<slot_state> mSlots = {};
             std::vector<i32> mFreeList = {};               // LIFO
@@ -254,7 +254,7 @@ namespace conjure::scripting {
             /// Fills the managed table with the recording functions and becomes the active null host. Never
             /// fails; a second active null host in the process asserts and replaces the first.
             /// </summary>
-            [[nodiscard]] core::result<void> initialize(
+            [[nodiscard]] core::result<void> initialise(
               const script_host_config &config,
               conjure_native_api &nativeApi
             ) override;

@@ -546,7 +546,7 @@ namespace conjure::editor::support {
                     mReply(reply) {}
 
                 ~compile_task() override {
-                    if (mReply.valid()) {
+                    if (mReply.is_valid()) {
                         mReply.fail(protocol_error_code::CANCELLED, "script.compile was dropped before it finished");
                     }
                 }
@@ -561,7 +561,7 @@ namespace conjure::editor::support {
                         // script.reload's default assembly is the output of this build.
                         context.set_last_script_configuration(mConfiguration);
                     }
-                    if (!mReply.valid()) {
+                    if (!mReply.is_valid()) {
                         return true;
                     }
                     const bool ran = report.launch.has_value() ||

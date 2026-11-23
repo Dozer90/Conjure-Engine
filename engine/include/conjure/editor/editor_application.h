@@ -135,8 +135,20 @@ namespace conjure::editor {
             [[nodiscard]] core::result<void> request_open_project(const std::filesystem::path &directory) override;
             [[nodiscard]] bool has_pending_project_open() const noexcept override;
 
-            [[nodiscard]] bool quit_requested() const noexcept {
+            /// <summary>
+            /// True once request_quit() was called on the editor; it stays true for the application's lifetime. A
+            /// quit the engine asked for by itself is read from engine().is_quit_requested() and is not included.
+            /// </summary>
+            [[nodiscard]] bool is_quit_requested() const noexcept {
                 return mQuitRequested;
+            }
+
+            /// <summary>
+            /// The former name of is_quit_requested(), kept for one wave (code sweep F624); returns
+            /// is_quit_requested().
+            /// </summary>
+            [[deprecated("use is_quit_requested()")]] [[nodiscard]] bool quit_requested() const noexcept {
+                return is_quit_requested();
             }
 
             [[nodiscard]] int exit_code() const noexcept {

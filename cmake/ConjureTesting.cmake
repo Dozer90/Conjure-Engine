@@ -21,7 +21,7 @@
 #     new, while objects allocated inside conjure_shared come from the C runtime's (the file documents
 #     the core::memory hooks that would make it CRT-compatible). memory_guard and allocation_scope
 #     therefore count nothing in a LINK_ENGINE_SHARED executable. The option requires
-#     conjure_finalize_engine() to have run (the root CMakeLists.txt does that before tests/).
+#     conjure_finalise_engine() to have run (the root CMakeLists.txt does that before tests/).
 #
 #     ENGINE (08_testing.md D2, 3.8) additionally links conjure::test_support_engine (tests/support/engine:
 #     headless_engine, input_script, world_builder, protocol_client, golden_image), or
@@ -111,7 +111,7 @@ function(conjure_add_test_executable name)
         if(NOT TARGET conjure::shared OR NOT TARGET conjure::test_support_shared)
             message(FATAL_ERROR
                 "conjure_add_test_executable(${name}): LINK_ENGINE_SHARED needs conjure::shared and "
-                "conjure::test_support_shared; call conjure_finalize_engine() before adding tests/"
+                "conjure::test_support_shared; call conjure_finalise_engine() before adding tests/"
             )
         endif()
         set(mainSources "${CONJURE_TEST_MAIN_SOURCE}")

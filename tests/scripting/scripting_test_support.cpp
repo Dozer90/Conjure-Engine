@@ -157,7 +157,7 @@ scripting_test::scripting_fixture::scripting_fixture() :
     runtime.attach_world(&world);
     script_runtime_config config = {};
     config.host.backend = script_backend::NULL_HOST;
-    CONJURE_REQUIRE_OK(runtime.initialize(config));
+    CONJURE_REQUIRE_OK(runtime.initialise(config));
     REQUIRE(runtime.status() == script_host_status::READY);
 }
 
@@ -206,8 +206,8 @@ scripting_test::dotnet_fixture::dotnet_fixture(std::string_view variant, bool pl
     config.host.managedDirectory = managed_directory();
     config.gameAssemblyPath = test_scripts_assembly(variant);
     config.initialMode = playMode ? script_mode::PLAY : script_mode::EDIT;
-    initialized = runtime.initialize(config);
-    REQUIRE_MESSAGE(initialized.has_value(), describe_error(initialized));
+    initialised = runtime.initialise(config);
+    REQUIRE_MESSAGE(initialised.has_value(), describe_error(initialised));
     REQUIRE(runtime.status() == script_host_status::READY);
 }
 

@@ -37,23 +37,23 @@ TEST_SUITE("scripting/script_host") {
         std::unique_ptr<script_host> host = create_script_host(script_backend::NULL_HOST);
         REQUIRE(host != nullptr);
         CHECK(host->backend() == script_backend::NULL_HOST);
-        CHECK(host->status() == script_host_status::UNINITIALIZED);
+        CHECK(host->status() == script_host_status::UNINITIALISED);
         CHECK(host->managed_api().run_phase == nullptr);
 
         conjure_native_api api = make_native_api(nullptr);
-        CONJURE_REQUIRE_OK(host->initialize({}, api));
+        CONJURE_REQUIRE_OK(host->initialise({}, api));
         CHECK(host->status() == script_host_status::READY);
         CHECK(host->managed_api().run_phase != nullptr);
         CONJURE_CHECK_OK(validate_managed_api(host->managed_api()));
         host->shutdown();
-        CHECK(host->status() == script_host_status::UNINITIALIZED);
+        CHECK(host->status() == script_host_status::UNINITIALISED);
     }
 
     TEST_CASE("create_script_host - DOTNET creates the real host without starting anything") {
         std::unique_ptr<script_host> host = create_script_host(script_backend::DOTNET);
         REQUIRE(host != nullptr);
         CHECK(host->backend() == script_backend::DOTNET);
-        CHECK(host->status() == script_host_status::UNINITIALIZED);
+        CHECK(host->status() == script_host_status::UNINITIALISED);
         CHECK(dynamic_cast<dotnet_script_host *>(host.get()) != nullptr);
     }
 
@@ -124,15 +124,15 @@ TEST_SUITE("scripting/script_host") {
         conjure_native_api api = make_native_api(nullptr);
         script_host_config config = {};
         config.managedDirectory = directory.path();
-        CONJURE_CHECK_ERROR(host.initialize(config, api), script_error::MANAGED_SDK_MISSING);
+        CONJURE_CHECK_ERROR(host.initialise(config, api), script_error::MANAGED_SDK_MISSING);
         CHECK(host.status() == script_host_status::DISABLED);
         CHECK(host.managed_api().run_phase == nullptr);
         host.shutdown();
-        CHECK(host.status() == script_host_status::UNINITIALIZED);
+        CHECK(host.status() == script_host_status::UNINITIALISED);
     }
 
     TEST_CASE("to_string - host enumerations have stable names") {
-        CHECK(to_string(script_host_status::UNINITIALIZED) == "UNINITIALIZED");
+        CHECK(to_string(script_host_status::UNINITIALISED) == "UNINITIALISED");
         CHECK(to_string(script_host_status::READY) == "READY");
         CHECK(to_string(script_host_status::DISABLED) == "DISABLED");
         CHECK(to_string(script_backend::DOTNET) == "DOTNET");

@@ -26,10 +26,10 @@ dotnet_script_host::~dotnet_script_host() {
 /*===========================================================================*/
 // script_host
 
-core::result<void> dotnet_script_host::initialize(const script_host_config &config, conjure_native_api &nativeApi) {
+core::result<void> dotnet_script_host::initialise(const script_host_config &config, conjure_native_api &nativeApi) {
     mStatus = script_host_status::DISABLED;
     if (!core::jobs::is_main_thread()) {
-        return core::make_error(script_error::WRONG_THREAD, "dotnet_script_host::initialize off the main thread");
+        return core::make_error(script_error::WRONG_THREAD, "dotnet_script_host::initialise off the main thread");
     }
 
     hostfxr_runtime &runtime = hostfxr_runtime::instance();
@@ -37,7 +37,7 @@ core::result<void> dotnet_script_host::initialize(const script_host_config &conf
 
     // 10. The handshake: managed fills its header first, so a failure still reports both hashes.
     mManagedApi = {};
-    const int32_t handshake = runtime.initialize_entry()(&nativeApi, &mManagedApi);
+    const int32_t handshake = runtime.initialise_entry()(&nativeApi, &mManagedApi);
     if (handshake != 0) {
         return core::make_error(
           script_error::ABI_MISMATCH,
@@ -69,7 +69,7 @@ void dotnet_script_host::shutdown() {
     }
     mManagedApi = {};
     mNativeApi = nullptr;
-    mStatus = script_host_status::UNINITIALIZED;
+    mStatus = script_host_status::UNINITIALISED;
 }
 
 const conjure_managed_api &dotnet_script_host::managed_api() const noexcept {

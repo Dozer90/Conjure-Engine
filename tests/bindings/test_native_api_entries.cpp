@@ -278,7 +278,7 @@ TEST_SUITE("bindings/native_api_entries") {
         api.query_end = &fake_query_end;
         wrap_with_counters(api);
         CHECK(is_scope_hook_installed(api));
-        // script_runtime::initialize writes the raw core entry back over the slot: the hook is gone until
+        // script_runtime::initialise writes the raw core entry back over the slot: the hook is gone until
         // the next wrap (the subsystem's begin_frame does that).
         api.query_end = &fake_query_end;
         CHECK_FALSE(is_scope_hook_installed(api));

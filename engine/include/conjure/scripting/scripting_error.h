@@ -28,7 +28,7 @@ namespace conjure::scripting {
         WRONG_THREAD,               // called off the main thread
         NOT_IN_PHASE,               // a query scope was requested outside a script phase
         BUILD_FAILED,               // dotnet build reported errors
-        NOT_INITIALIZED,            // the host or runtime is not READY
+        NOT_INITIALISED,            // the host or runtime is not READY
         NOT_SUPPORTED,              // the entry or feature is not available in this configuration
         COUNT
     };

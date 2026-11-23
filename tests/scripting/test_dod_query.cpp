@@ -317,7 +317,7 @@ TEST_SUITE("scripting/dod_query") {
         config.host.managedDirectory = managed_directory();
         config.gameAssemblyPath = test_scripts_assembly("v1");
         config.initialMode = script_mode::PLAY;
-        CONJURE_REQUIRE_OK(runtime.initialize(config));
+        CONJURE_REQUIRE_OK(runtime.initialise(config));
         const core::result<ecs::entity> positioned = world.create_entity();
         CONJURE_REQUIRE_OK(positioned);
         CONJURE_REQUIRE_OK(world.add<test_position>(positioned.value(), test_position{5.0f, 0.0f, 0.0f}));

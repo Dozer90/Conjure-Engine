@@ -34,8 +34,8 @@ std::string_view conjure::scripting::script_error_name(script_error code) noexce
             return "NOT_IN_PHASE";
         case script_error::BUILD_FAILED:
             return "BUILD_FAILED";
-        case script_error::NOT_INITIALIZED:
-            return "NOT_INITIALIZED";
+        case script_error::NOT_INITIALISED:
+            return "NOT_INITIALISED";
         case script_error::NOT_SUPPORTED:
             return "NOT_SUPPORTED";
         case script_error::COUNT:

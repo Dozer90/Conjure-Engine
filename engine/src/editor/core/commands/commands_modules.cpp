@@ -387,7 +387,7 @@ namespace conjure::editor::support {
                     mReloadAfter(reloadAfter) {}
 
                 ~module_build_task() override {
-                    if (mReply.valid()) {
+                    if (mReply.is_valid()) {
                         mReply.fail(protocol_error_code::CANCELLED, "module.build was dropped before it finished");
                     }
                 }
