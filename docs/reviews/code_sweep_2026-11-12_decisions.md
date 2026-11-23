@@ -52,8 +52,21 @@ notices) and F187 with F740 (protocol security):
 | `2232427` editor | F187, F740 |
 | `97deb14` ci | the workflow side of F187, F200 and F790 |
 
-Still to do: 17 decisions of effort M and 18 of effort L. The next round holds the 17 of effort M and F778 (.NET
-10); F194 (audio fixtures) waits for an audio encoder on the build host.
+Nine more were implemented on 2026-11-24 in the same way. Documentation is on hold until the code is complete, so
+the pages these changes made stale are owed rather than updated:
+
+| Commit | Decisions |
+|---|---|
+| `7fecd38` tools | F546 (the check_style rule; its wording in the testing design is owed) |
+| `a7da0f0` assets | F640, F311 |
+| `91b515d` platform | F015 |
+| `98620a1` modules | F339 |
+| `de68641` scene | F362, F634 |
+| `cd8845d` scripting | F631 (the Tag setter waits for the owner), F673 |
+
+Still to do: 8 decisions of effort M and 18 of effort L. The next round holds five of effort M (F613, F623, F624,
+F772, F776) and F778 (.NET 10); F130, F195 and F353 are documentation only and wait until the code is complete;
+F194 (audio fixtures) waits for an audio encoder on the build host.
 
 ## Tests and CI
 
