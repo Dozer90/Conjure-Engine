@@ -1,6 +1,13 @@
 # Pull-request matrix (docs/design/08_testing.md 7.3 and D15, docs/handbook/development/continuous-integration.md):
-# five build-and-test legs with the presets developers use locally plus the style-and-headers job. Expensive and
-# noisy checks (TSan, golden images, benchmarks, the Distribution export) run in nightly.yml.
+# two build-and-test legs with the presets developers use locally plus the style-and-headers job. Expensive and
+# noisy checks (golden images, benchmarks, the Distribution export) run in nightly.yml.
+#
+# Every job runs on the owner's self-hosted Windows runner (labels self-hosted, Windows, X64): GitHub-hosted
+# runners are not available to this account. The Linux legs (linux-gcc-debug, linux-clang-sanitize) and the macOS
+# leg (macos-debug) were removed until a runner of that OS exists; they are restored from git history (the commit
+# that removed them) with runs-on [self-hosted, Linux, X64] or its macOS equivalent. A job reuses no build state
+# from an earlier one: checkout cleans the workspace. One runner runs the jobs one after another, each from a clean
+# checkout, hence the 120-minute timeouts. No step uses bash: on this runner it is the WSL launcher.
 
 name: CI
 
@@ -21,42 +28,27 @@ concurrency:
 env:
   # Skips of these labels are expected on pull requests (golden images are nightly only). Skips by case-name
   # tag are allowed per leg through skip-tags below (08_testing.md D12): [window] and [downloaded] everywhere,
-  # [audio_device] everywhere (the runners have no playback endpoint), [gpu] where the D3D12 WARP adapter does
-  # not exist (Linux, macOS); on Windows a [gpu] skip means WARP is missing and fails the leg.
+  # [audio_device] everywhere (the runner may run as a Windows service, where a playback endpoint is not
+  # guaranteed). [gpu] is allowed nowhere: every leg runs on Windows, where a [gpu] skip means the D3D12 WARP
+  # adapter is missing and fails the leg.
   CONJURE_TEST_ALLOWED_SKIPS: golden
 
 jobs:
   build-test:
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: windows-msvc-debug
-            os: windows-latest
             preset: windows-msvc-debug
             skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device
           - name: windows-msvc-dev
-            os: windows-latest
             preset: windows-msvc-dev
             skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device
             export-smoke: true
-          - name: linux-gcc-debug
-            os: ubuntu-24.04
-            preset: linux-gcc-debug
-            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
-          - name: linux-clang-sanitize
-            os: ubuntu-24.04
-            preset: linux-clang-sanitize
-            # D13: CoreCLR is not sanitizer-clean; scripting is covered by the other legs.
-            configure-args: -DCONJURE_WITH_SCRIPTING=OFF
-            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
-          - name: macos-debug
-            os: macos-14
-            preset: macos-debug
-            skip-tags: --allow-tag window --allow-tag downloaded --allow-tag audio_device --allow-tag gpu
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -71,19 +63,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
-
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: brew install ninja
-
       - name: Set up MSVC
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
@@ -106,23 +86,17 @@ jobs:
         run: python tools/download_test_assets.py
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
 
       - name: Test
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: ctest --preset ${{ matrix.preset }} --output-junit junit.xml
 
       # --no-tests=error: a label run that matches nothing is a broken registration, not a pass. The report of this
       # run goes through the skip check as well, so a [process] or [downloaded] case that exits 77 is examined.
       - name: Downloaded-asset and process tests
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: >
           ctest --test-dir build/${{ matrix.preset }} --output-on-failure -L "downloaded|process"
           --no-tests=error --output-junit junit_labels.xml
@@ -141,7 +115,7 @@ jobs:
       # runtime has no trust question.
       - name: Export smoke
         if: matrix.export-smoke
-        shell: pwsh
+        shell: powershell
         run: |
           Copy-Item -Recurse tests/assets/projects/minimal build/export_smoke_project
           build/${{ matrix.preset }}/bin/conjure_editor.exe --headless --project build/export_smoke_project `
@@ -163,14 +137,12 @@ jobs:
 
   style-and-headers:
     name: style-and-headers
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # The id gives the "dotnet format" step the SDK version this step installs (its dotnet-version output).
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
-        id: dotnet
         with:
           dotnet-version: "10.0.x"
 
@@ -178,88 +150,84 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
+      # First, because the Visual Studio environment it sets up carries the cmake and ctest of this runner: the
+      # Distribution path check tests, the ctest_check_skips.py self-test and the header check below call them.
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
 
       - name: Style
         run: python tools/check_style.py --tests-mirror-headers
 
       # Distribution binaries must not name the checkout that built them (code sweep F613). The check itself needs
       # a Distribution build and runs in nightly.yml; its tests run here on every change, with the probe of the
-      # compile options (cmake/ConjureDistributionPathsProbe.cmake, through the runner image's cmake).
+      # compile options (cmake/ConjureDistributionPathsProbe.cmake, through the cmake that Set up MSVC provides).
       - name: Distribution path check tests
         run: python -I tools/tests/test_check_distribution_paths.py
 
       - name: Export annotations
+        shell: cmd
         run: |
-          python tools/check_exports.py
-          python tools/check_exports.py --self-test
+          python tools/check_exports.py || exit /b 1
+          python tools/check_exports.py --self-test || exit /b 1
 
       - name: Tool self-tests
+        shell: cmd
         run: |
-          python tools/check_distribution_symbols.py --self-test
-          python tools/ctest_check_skips.py --self-test
+          python tools/check_distribution_symbols.py --self-test || exit /b 1
+          python tools/ctest_check_skips.py --self-test || exit /b 1
 
       - name: Documentation
+        shell: cmd
         run: |
-          python tools/check_docs.py
-          python tools/tests/test_check_docs.py
-          python tools/tests/test_docs.py
-          python tools/tests/test_regenerate_docs.py
-          python tools/tests/test_docs_policy.py
-          python tools/tests/test_docs_cpp.py
-          python tools/tests/test_docs_engineering.py
-          python tools/tests/test_docs_redirects.py
-          python tools/tests/test_docs_components.py
-          python tools/regenerate_docs.py --check
-          python -m pip install -r tools/docs_requirements.txt
-          python tools/tests/test_docs_site.py
-          python -m mkdocs build --strict
+          python tools/check_docs.py || exit /b 1
+          python tools/tests/test_check_docs.py || exit /b 1
+          python tools/tests/test_docs.py || exit /b 1
+          python tools/tests/test_regenerate_docs.py || exit /b 1
+          python tools/tests/test_docs_policy.py || exit /b 1
+          python tools/tests/test_docs_cpp.py || exit /b 1
+          python tools/tests/test_docs_engineering.py || exit /b 1
+          python tools/tests/test_docs_redirects.py || exit /b 1
+          python tools/tests/test_docs_components.py || exit /b 1
+          python tools/regenerate_docs.py --check || exit /b 1
+          python -m pip install -r tools/docs_requirements.txt || exit /b 1
+          python tools/tests/test_docs_site.py || exit /b 1
+          python -m mkdocs build --strict || exit /b 1
 
       - name: Cache dependency sources
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: build/linux-gcc-debug/_deps
+          path: build/windows-msvc-debug/_deps
           key: deps-style-and-headers-${{ hashFiles('third_party/CMakeLists.txt', 'third_party/*.cmake') }}
 
       - name: Header check
+        shell: cmd
         run: |
-          cmake --preset linux-gcc-debug
-          cmake --build --preset linux-gcc-debug --parallel --target conjure_header_check
+          cmake --preset windows-msvc-debug || exit /b 1
+          cmake --build --preset windows-msvc-debug --parallel --target conjure_header_check || exit /b 1
 
       # The C# layout gate (08_testing.md D17, code sweep F784): the formatter reads the rules from .editorconfig
       # and a difference in any of the three managed projects fails the job. C++ has no formatter step:
       # tools/check_style.py above is its only style gate, because .clang-format cannot express
       # docs/CODE_STYLE.cpp (the two-space continuation indent) and stays an optional local aid.
       #
-      # Which formatter judges: with no global.json, dotnet runs the newest SDK on the runner, and the image
-      # carries newer ones than the SDK setup-dotnet adds. So the step writes a global.json that names exactly
-      # the version setup-dotnet installed (roll-forward disabled: that SDK or an error) and prints the version
-      # in use. A global.json that is already there is left alone and decides instead: once the repository
-      # tracks one (decided in code sweep F778), this step needs no change, provided the setup-dotnet step
-      # installs an SDK that file accepts; dotnet fails here when none is installed.
+      # Which formatter judges: the repository's global.json (code sweep F778: SDK 10.0.100, rollForward
+      # latestFeature) selects it, the newest installed 10.0 SDK, which is the one the setup-dotnet step installs
+      # (10.0.x, the newest release). The step prints global.json and the SDK version in use.
       #
       # The step is the last of the job and runs after a failed step too, so a C# difference cannot hide the
       # header check or the other way round; the loop lets all three projects report before the step fails.
       - name: dotnet format
         if: ${{ !cancelled() }}
-        env:
-          SETUP_DOTNET_SDK: ${{ steps.dotnet.outputs.dotnet-version }}
+        shell: powershell
         run: |
-          if [ ! -f global.json ]; then
-            if ! printf '%s' "$SETUP_DOTNET_SDK" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*$'; then
-              echo "::error::setup-dotnet reported no SDK version ('$SETUP_DOTNET_SDK'): the formatter is unknown"
-              exit 1
-            fi
-            printf '{ "sdk": { "version": "%s", "rollForward": "disable" } }\n' "$SETUP_DOTNET_SDK" > global.json
-          fi
-          cat global.json
+          Get-Content -LiteralPath global.json
           dotnet --version
-          status=0
-          for project in Conjure.Managed Conjure.Bootstrap Conjure.TestScripts; do
-            dotnet format --verify-no-changes "managed/$project/$project.csproj" || status=1
-          done
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $status = 0
+          foreach ($project in 'Conjure.Managed', 'Conjure.Bootstrap', 'Conjure.TestScripts') {
+            dotnet format --verify-no-changes "managed/$project/$project.csproj"
+            if ($LASTEXITCODE -ne 0) { $status = 1 }
+          }
           exit $status

@@ -1,8 +1,15 @@
 # Nightly matrix (docs/design/08_testing.md 7.3, D11, D13, D15, D16;
-# docs/handbook/development/continuous-integration.md): the five build legs with the slow and scripting-hot-reload
-# cases, TSan over the job-system users, the Distribution unit suite and export round trip, the golden images on
-# software rasterisers and the benchmarks at the ci machine class.
+# docs/handbook/development/continuous-integration.md): the two build legs with the slow and scripting-hot-reload
+# cases, the Distribution unit suite and export round trip, the golden images on the D3D12 WARP software rasteriser
+# and the benchmarks at the ci machine class.
 # Nothing here gates a pull request; a red nightly is a ticket for the module owner.
+#
+# Every job runs on the owner's self-hosted Windows runner (labels self-hosted, Windows, X64): GitHub-hosted
+# runners are not available to this account. The Linux legs and jobs (linux-gcc-debug, linux-clang-sanitize,
+# linux-gcc-dist, linux-clang-tsan, golden-vulkan-lavapipe, the Linux benchmarks) and the macOS leg (macos-debug)
+# were removed until a runner of that OS exists; they are restored from git history (the commit that removed them)
+# with runs-on [self-hosted, Linux, X64] or its macOS equivalent. A job reuses no build state from an earlier one:
+# checkout cleans the workspace. No step uses bash: on this runner it is the WSL launcher.
 
 name: Nightly
 
@@ -18,45 +25,28 @@ permissions:
 env:
   # Nightly allows no label-based skips: the golden jobs enable the images, the others never register them.
   # Skips by case-name tag follow the same per-leg policy as ci.yml (skip-tags): [window] and [audio_device]
-  # everywhere, [gpu] where no D3D12 WARP adapter exists; the downloaded cases must run in full-matrix-nightly.
+  # everywhere, [gpu] nowhere (every job runs on Windows, where a [gpu] skip means the D3D12 WARP adapter is
+  # missing); the downloaded cases must run in full-matrix-nightly.
   # distribution-export fetches no downloaded assets, so its unit suite may skip [downloaded] as well.
   CONJURE_TEST_ALLOWED_SKIPS: ""
 
 jobs:
   full-matrix-nightly:
     name: nightly-${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: windows-msvc-debug
-            os: windows-latest
             preset: windows-msvc-debug
             test-preset: windows-msvc-debug-nightly
             skip-tags: --allow-tag window --allow-tag audio_device
           - name: windows-msvc-dev
-            os: windows-latest
             preset: windows-msvc-dev
             test-preset: ""
             skip-tags: --allow-tag window --allow-tag audio_device
-          - name: linux-gcc-debug
-            os: ubuntu-24.04
-            preset: linux-gcc-debug
-            test-preset: linux-gcc-debug-nightly
-            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
-          - name: linux-clang-sanitize
-            os: ubuntu-24.04
-            preset: linux-clang-sanitize
-            configure-args: -DCONJURE_WITH_SCRIPTING=OFF
-            test-preset: ""
-            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
-          - name: macos-debug
-            os: macos-14
-            preset: macos-debug
-            test-preset: ""
-            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag gpu
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -67,17 +57,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: brew install ninja
       - name: Set up MSVC
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
@@ -89,22 +69,16 @@ jobs:
       - name: Download test assets
         run: python tools/download_test_assets.py
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }} ${{ matrix.configure-args }}
+        run: cmake --preset ${{ matrix.preset }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       # The *-nightly test presets exclude only the benchmark label (slow, process and downloaded cases run);
       # legs without one run the same filter through --test-dir.
       - name: Test (nightly preset)
         if: matrix.test-preset != ''
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: ctest --preset ${{ matrix.test-preset }} --output-junit junit.xml
       - name: Test (benchmark label excluded)
         if: matrix.test-preset == ''
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: >
           ctest --test-dir build/${{ matrix.preset }} --output-on-failure -j 4 -LE benchmark
           --output-junit junit.xml
@@ -122,55 +96,18 @@ jobs:
             build/${{ matrix.preset }}/test_output
           if-no-files-found: ignore
 
-  linux-clang-tsan:
-    name: linux-clang-tsan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
-      - name: Cache dependency sources
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: build/linux-clang-tsan/_deps
-          key: deps-linux-clang-tsan-${{ hashFiles('third_party/CMakeLists.txt', 'third_party/*.cmake') }}
-      - name: Configure
-        run: cmake --preset linux-clang-tsan
-      - name: Build
-        run: cmake --build --preset linux-clang-tsan --parallel
-      # The preset filters to the job-system users (core, ecs, scene, engine, integration) with scripting off.
-      - name: Test
-        env:
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
-        run: ctest --preset linux-clang-tsan
-
   distribution-export:
     name: distribution-export-${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: windows
-            os: windows-latest
             dist-preset: windows-msvc-dist
             dev-preset: windows-msvc-dev
-            exe: .exe
             skip-tags: --allow-tag window --allow-tag audio_device --allow-tag downloaded
-          - name: linux
-            os: ubuntu-24.04
-            dist-preset: linux-gcc-dist
-            dev-preset: linux-gcc-dev
-            exe: ""
-            skip-tags: --allow-tag window --allow-tag audio_device --allow-tag downloaded --allow-tag gpu
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -179,14 +116,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
       - name: Set up MSVC
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
@@ -194,34 +124,42 @@ jobs:
       # a Distribution build, 04_editor.md 8).
       - name: Configure and build Distribution
         id: build-dist
+        shell: cmd
         run: |
-          cmake --preset ${{ matrix.dist-preset }}
-          cmake --build --preset ${{ matrix.dist-preset }} --parallel
+          cmake --preset ${{ matrix.dist-preset }} || exit /b 1
+          cmake --build --preset ${{ matrix.dist-preset }} --parallel || exit /b 1
       - name: Configure and build Development
+        shell: cmd
         run: |
-          cmake --preset ${{ matrix.dev-preset }}
-          cmake --build --preset ${{ matrix.dev-preset }} --parallel --target conjure_editor conjure_runtime
+          cmake --preset ${{ matrix.dev-preset }} || exit /b 1
+          cmake --build --preset ${{ matrix.dev-preset }} --parallel ^
+            --target conjure_editor conjure_runtime || exit /b 1
       - name: Distribution symbol check and process tests
         run: ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error
       # Export tests/assets/projects/minimal (samples/feature_test once wave 5 lands it) with the Development
       # editor and --distribution, the export path a user takes: step 5 copies the Distribution runtime,
       # conjure_shared, nethost.dll when present, the Visual C++ runtime DLLs (06_engine_loop.md D14), the
       # licence notices (D15) and shaders/ (engine/src/engine/export_pipeline.cpp). The step checks that the
-      # notices and, on Windows, vcruntime140.dll arrived, then runs that runtime headless for 300 frames
-      # (08_testing.md 7.3 nightly table). Nobody on the runner answered for the copied project, so the export
-      # needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27).
+      # notices and vcruntime140.dll arrived, then runs that runtime headless for 300 frames (08_testing.md 7.3
+      # nightly table) and checks its exported symbols. Nobody on the runner answered for the copied project, so
+      # the export needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27).
       - name: Export and run
-        shell: bash
+        shell: powershell
         run: |
-          cp -r tests/assets/projects/minimal build/export_project
-          build/${{ matrix.dev-preset }}/bin/conjure_editor${{ matrix.exe }} --headless --project build/export_project \
+          Copy-Item -Recurse tests/assets/projects/minimal build/export_project
+          build/${{ matrix.dev-preset }}/bin/conjure_editor.exe --headless --project build/export_project `
             --trust-project --export build/export_out --distribution build/${{ matrix.dist-preset }}/bin
-          test -f build/export_out/THIRD_PARTY_NOTICES.txt
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            test -f build/export_out/vcruntime140.dll
-          fi
-          build/export_out/conjure_runtime${{ matrix.exe }} --project build/export_out --headless --frames 300
-          python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime${{ matrix.exe }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in 'THIRD_PARTY_NOTICES.txt', 'vcruntime140.dll') {
+            if (-not (Test-Path -LiteralPath "build/export_out/$file" -PathType Leaf)) {
+              Write-Output "::error::the export has no $file"
+              exit 1
+            }
+          }
+          build/export_out/conjure_runtime.exe --project build/export_out --headless --frames 300
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Neither the source nor the build directory may appear in the Distribution runtime or conjure_shared, in a
       # string, debug information or a PDB reference (code sweep F613, cmake/ConjureDistributionPaths.cmake). Runs
       # whenever the Distribution build succeeded, so a red export does not hide it.
@@ -257,7 +195,7 @@ jobs:
 
   golden-d3d12-warp:
     name: golden-d3d12-warp
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -289,60 +227,16 @@ jobs:
           path: build/windows-msvc-dev/test_output
           if-no-files-found: ignore
 
-  golden-vulkan-lavapipe:
-    name: golden-vulkan-lavapipe
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    # The lavapipe references are per backend and the rasteriser still drifts; the job reports until it has
-    # been stable for two weeks (08_testing.md D11).
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          lfs: true
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
-        with:
-          dotnet-version: "10.0.x"
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev mesa-vulkan-drivers
-      - name: Configure
-        run: cmake --preset linux-gcc-dev -DCONJURE_TEST_GOLDEN_IMAGES=ON
-      - name: Build
-        run: cmake --build --preset linux-gcc-dev --parallel
-      - name: Golden images
-        env:
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-        run: ctest --test-dir build/linux-gcc-dev --output-on-failure -L golden --no-tests=error
-      - name: Upload golden diffs
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: golden-vulkan-lavapipe
-          path: build/linux-gcc-dev/test_output
-          if-no-files-found: ignore
-
   benchmarks-ci-class:
     name: benchmarks-${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: windows
-            os: windows-latest
             preset: windows-msvc-dev
-            exe: .exe
-          - name: linux
-            os: ubuntu-24.04
-            preset: linux-gcc-dev
-            exe: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
@@ -351,14 +245,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build xorg-dev libwayland-dev libxkbcommon-dev \
-            libgl1-mesa-dev libasound2-dev libpulse-dev libvulkan-dev
       - name: Set up MSVC
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
@@ -368,23 +255,27 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel --target conjure_benchmarks
       # The ci machine class is 3x desktop; a breach or a missing threshold fails the job (08_testing.md D10).
       # The runner exits 77 only when every scenario skipped, and every skip() is an unmet precondition, so a
-      # single SKIPPED row fails the job too (D12); the summary is written first so it is still published.
+      # single SKIPPED row fails the job too (D12). The report is written to the step summary before either
+      # check fails the step, so it is still published. The report file is written as UTF-8 without a byte order
+      # mark (Tee-Object -FilePath in Windows PowerShell 5.1 would write UTF-16).
       - name: Benchmarks
-        shell: bash
+        shell: powershell
         run: |
-          build/${{ matrix.preset }}/bin/conjure_benchmarks${{ matrix.exe }} --class ci --enforce \
-            --out build/bench-${{ matrix.name }}.json | tee build/bench-${{ matrix.name }}.txt
-          {
-            echo '### Benchmarks (${{ matrix.name }}, class ci)'
-            echo '```'
-            cat build/bench-${{ matrix.name }}.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if grep -q 'status=SKIPPED' build/bench-${{ matrix.name }}.txt; then
-            echo '::error::a benchmark scenario was SKIPPED (08_testing.md D12: skipped means not measured)'
-            grep 'status=SKIPPED' build/bench-${{ matrix.name }}.txt
+          $report = Join-Path (Get-Location).Path 'build/bench-${{ matrix.name }}.txt'
+          build/${{ matrix.preset }}/bin/conjure_benchmarks.exe --class ci --enforce `
+            --out build/bench-${{ matrix.name }}.json | Tee-Object -Variable lines
+          $benchmarkExit = $LASTEXITCODE
+          $lines = [string[]]@($lines)
+          [System.IO.File]::WriteAllLines($report, $lines)
+          $summary = [string[]](@('### Benchmarks (${{ matrix.name }}, class ci)', '```') + $lines + @('```'))
+          [System.IO.File]::AppendAllLines($env:GITHUB_STEP_SUMMARY, $summary)
+          $skipped = @($lines | Select-String -SimpleMatch 'status=SKIPPED')
+          if ($skipped.Count -gt 0) {
+            Write-Output '::error::a benchmark scenario was SKIPPED (08_testing.md D12: skipped means not measured)'
+            $skipped | ForEach-Object { $_.Line }
             exit 1
-          fi
+          }
+          exit $benchmarkExit
       # Also after a breach or a SKIPPED row: those are the runs whose JSON report needs inspecting.
       - name: Upload results
         if: success() || failure()
