@@ -20,9 +20,9 @@ using namespace conjure::testing;
 namespace {
 
     constexpr std::string_view FRAMEWORK_CONFIG =
-      R"({"runtimeOptions":{"tfm":"net8.0","framework":{"name":"Microsoft.NETCore.App","version":"8.0.0"}}})";
+      R"({"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}})";
     constexpr std::string_view SELF_CONTAINED_CONFIG =
-      R"({"runtimeOptions":{"includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"8.0.0"}]}})";
+      R"({"runtimeOptions":{"includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"}]}})";
 
     void write_anchor_files(const temp_directory &directory, std::string_view config) {
         CONJURE_REQUIRE_OK(directory.write_text("Conjure.Bootstrap.dll", "not a real assembly"));
@@ -97,7 +97,7 @@ TEST_SUITE("scripting/script_host") {
             CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
         }
         SUBCASE("no framework at all") {
-            write_anchor_files(directory, R"({"runtimeOptions":{"tfm":"net8.0"}})");
+            write_anchor_files(directory, R"({"runtimeOptions":{"tfm":"net10.0"}})");
             CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
         }
     }

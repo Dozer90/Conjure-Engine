@@ -1,11 +1,30 @@
 #include "engine/export_commands.h"
 
+#include <format>
+#include <string_view>
 #include <utility>
 
 using namespace conjure;
 using namespace conjure::engine;
 
 namespace {
+
+    // Code sweep F776: only an export builds as a CI build. In a git repository with at least one commit, for the
+    // project being built, the SDK then maps the source root to /_/ in the paths the compiler records (the .pdb path
+    // in the assembly, the documents of the .pdb, CallerFilePath), and Source Link embeds the URL of the repository's
+    // remote when it has one, so no folder of the exporting machine ships with the game. Outside such a repository
+    // the SDK finds no source root and the paths stay as they are. Local builds never pass it, so they keep the real
+    // paths a debugger needs (cmake/ConjureManaged.cmake, managed_build_runner).
+    constexpr const char *CONTINUOUS_INTEGRATION_BUILD = "-p:ContinuousIntegrationBuild=true";
+
+    // The flag changes no input MSBuild's incremental check looks at, so a build sharing its intermediates with a
+    // build without the flag reuses the assembly that one compiled: an export after a Release script.compile would
+    // ship the machine's paths, and a Release script.compile after an export would hand the debugger /_/ paths. The
+    // export therefore compiles into intermediates of its own. The bootstrap gets its own artifacts pivot below the
+    // ArtifactsPath of managed/Directory.Build.props (inside the engine's repository, so the recorded .pdb path is
+    // mapped too); the game's scripts get an artifacts path inside their own obj/, which the template's compile items
+    // exclude and which lies in the game's repository for the same reason.
+    constexpr std::string_view EXPORT_INTERMEDIATES = "conjure_export";
 
     /// <summary>
     /// The MSBuild properties that keep the .pdb files out of a Release output.
@@ -31,6 +50,13 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
         managedDirectory.string(),
         "--self-contained",
         selfContained ? "true" : "false",
+        CONTINUOUS_INTEGRATION_BUILD,
+        std::format(
+          "-p:ArtifactsPivots=release_export_{}{}{}",
+          selfContained ? "self_contained" : "framework_dependent",
+          settings.runtimeIdentifier.empty() ? "" : "_",
+          settings.runtimeIdentifier
+        ),
     };
     if (!settings.runtimeIdentifier.empty()) {
         publish.push_back("-r");
@@ -56,6 +82,9 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
         "Release",
         "-o",
         managedDirectory.string(),
+        "--artifacts-path",
+        (settings.scriptsProject.parent_path() / "obj" / EXPORT_INTERMEDIATES).string(),
+        CONTINUOUS_INTEGRATION_BUILD,
     };
     if (!scripting.exportDebugSymbols) {
         strip_debug_symbols(build);

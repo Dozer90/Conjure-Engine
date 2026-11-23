@@ -113,6 +113,16 @@ TEST_SUITE("editor/commands_script") {
         CHECK(project.find("<Compile Include=\"**/*.cs\" Exclude=\"bin/**;obj/**\" />") != std::string::npos);
     }
 
+    TEST_CASE("regression - code sweep F778 script.create writes a Game.csproj that targets .NET 10") {
+        // The engine's managed projects and managed/Conjure.Templates/Game/Game.csproj moved to net10.0; a game
+        // project the editor generates must target the same framework as the Conjure.Managed it references.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Mover"}}));
+        const std::string project = editor_test::read_text_file(editor.project_directory() / "scripts" / "Game.csproj");
+        CHECK(project.find("<TargetFramework>net10.0</TargetFramework>") != std::string::npos);
+        CHECK(project.find("net8.0") == std::string::npos);
+    }
+
     TEST_CASE("script.create - the Behaviour and Empty templates compile against Conjure.Managed"
       * doctest::timeout(300)) {
         editor_test::headless_editor editor = {};
@@ -375,6 +385,7 @@ TEST_SUITE("editor/commands_script") {
         REQUIRE_FALSE(response.ok);
         CHECK(response.errorCode == protocol_error_code::NOT_AVAILABLE);
         CHECK(response.errorMessage.find("dotnet") != std::string::npos);
+        CHECK(response.errorMessage.find("install the .NET 10 SDK") != std::string::npos);
     }
 
     TEST_CASE("regression - code sweep F084 script.compile builds against the managed SDK next to the executable"

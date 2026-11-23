@@ -4,12 +4,15 @@
 #include "conjure/testing/test_environment.h"
 #include "scripting_test_support.h"
 
+#include "conjure/core/json/document.h"
+#include "conjure/core/json/value.h"
 #include "conjure/scripting/dotnet_script_host.h"
 #include "conjure/scripting/native_api.h"
 #include "conjure/scripting/script_host.h"
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <format>
 #include <string>
 
 using namespace conjure;
@@ -41,6 +44,24 @@ TEST_SUITE("scripting/dotnet_script_host") {
         host.shutdown();
         CHECK(host.status() == script_host_status::UNINITIALISED);
         CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("dotnet_script_host - the managed SDK is built for the .NET major global.json pins [dotnet]") {
+        // Code sweep F778: the runtime config the build writes beside Conjure.Bootstrap.dll decides which runtime
+        // hostfxr starts, so it must name the framework of managed/Directory.Build.props, not an older one.
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        const i32 major = dotnet_major();
+        CAPTURE(major);
+        const core::result<core::json::document> parsed =
+          core::json::document::parse_file(managed_directory() / "Conjure.Bootstrap.runtimeconfig.json");
+        CONJURE_REQUIRE_OK(parsed);
+        const core::json::value options = parsed.value().root()["runtimeOptions"];
+        REQUIRE(options.is_object());
+        CHECK(options["tfm"].as_string() == std::format("net{}.0", major));
+        CHECK(options["rollForward"].as_string() == "Major");
+        const core::json::value framework = options["framework"];
+        CHECK(framework["name"].as_string() == "Microsoft.NETCore.App");
+        CHECK(framework["version"].as_string().starts_with(std::format("{}.0.", major)));
     }
 
     TEST_CASE("dotnet_script_host - a second host reuses the process runtime [dotnet]" * doctest::timeout(60)) {

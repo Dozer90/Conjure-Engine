@@ -203,7 +203,9 @@ core::process_desc managed_build_runner::command_line(const build_request &reque
     }
     desc.arguments.push_back("--nologo");
     desc.arguments.push_back("-clp:NoSummary");
-    desc.arguments.push_back("-p:ContinuousIntegrationBuild=true");
+    // No ContinuousIntegrationBuild (code sweep F776): in a git repository with a commit it maps the source paths in
+    // the .pdb to /_/, and the user must be able to step through the scripts this builds. Only an export passes it
+    // (engine/src/engine/export_commands.cpp), into intermediates of its own.
     for (const auto &[name, value] : request.properties) {
         desc.arguments.push_back("-p:" + name + "=" + value);
     }

@@ -14,7 +14,7 @@ namespace conjure::scripting {
 
     enum class script_error : u16 {
         RUNTIME_NOT_FOUND = 1,      // hostfxr could not be located: no .NET runtime installed
-        HOSTFXR_INCOMPATIBLE,       // hostfxr loaded but lacks a required export (older than .NET 8)
+        HOSTFXR_INCOMPATIBLE,       // hostfxr lacks a required export or delegate: older than .NET 10
         RUNTIME_CONFIG_INVALID,     // Conjure.Bootstrap.runtimeconfig.json missing or malformed
         MANAGED_SDK_MISSING,        // Conjure.Managed.dll / Conjure.Bootstrap.dll not in managed_directory
         HOST_ALREADY_RUNNING,       // a runtime of another mode already lives in this process

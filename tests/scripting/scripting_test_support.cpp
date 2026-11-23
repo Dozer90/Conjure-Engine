@@ -87,6 +87,14 @@ std::filesystem::path scripting_test::manifest_path() {
     return std::filesystem::path(CONJURE_SCRIPTING_MANIFEST_PATH);
 }
 
+std::filesystem::path scripting_test::source_root() {
+    return std::filesystem::path(CONJURE_SCRIPTING_SOURCE_ROOT);
+}
+
+conjure::i32 scripting_test::dotnet_major() noexcept {
+    return CONJURE_SCRIPTING_DOTNET_MIN_MAJOR;
+}
+
 bool scripting_test::has_managed_sdk() noexcept {
     return CONJURE_SCRIPTING_HAS_DOTNET != 0;
 }

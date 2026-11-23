@@ -24,7 +24,7 @@ using namespace conjure::scripting::hostfxr;
 
 namespace {
 
-    constexpr std::string_view DOWNLOAD_URL = "https://dotnet.microsoft.com/download/dotnet/8.0";
+    constexpr std::string_view DOWNLOAD_URL = "https://dotnet.microsoft.com/download/dotnet/10.0";
     constexpr std::string_view BOOTSTRAP_DLL = "Conjure.Bootstrap.dll";
     constexpr std::string_view BOOTSTRAP_RUNTIME_CONFIG = "Conjure.Bootstrap.runtimeconfig.json";
     constexpr std::string_view MANAGED_DLL = "Conjure.Managed.dll";
@@ -107,7 +107,7 @@ core::result<std::filesystem::path> hostfxr_runtime::locate_hostfxr(
     if (probe != static_cast<int32_t>(host_status::HOST_API_BUFFER_TOO_SMALL) || size == 0) {
         return core::make_error(
           script_error::RUNTIME_NOT_FOUND,
-          "no .NET runtime found (get_hostfxr_path {}); install the .NET 8 runtime from {}",
+          "no .NET runtime found (get_hostfxr_path {}); install the .NET 10 runtime from {}",
           describe_status(probe),
           DOWNLOAD_URL
         );
@@ -118,7 +118,7 @@ core::result<std::filesystem::path> hostfxr_runtime::locate_hostfxr(
     if (located != 0) {
         return core::make_error(
           script_error::RUNTIME_NOT_FOUND,
-          "get_hostfxr_path failed with {}; install the .NET 8 runtime from {}",
+          "get_hostfxr_path failed with {}; install the .NET 10 runtime from {}",
           describe_status(located),
           DOWNLOAD_URL
         );
@@ -188,7 +188,7 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
     if (!is_success(initialised) || handle == nullptr) {
         return core::make_error(
           script_error::RUNTIME_NOT_FOUND,
-          "hostfxr could not initialise the runtime ({}); install the .NET 8 runtime from {}",
+          "hostfxr could not initialise the runtime ({}); install the .NET 10 runtime from {}",
           describe_status(initialised),
           DOWNLOAD_URL
         );
@@ -223,7 +223,7 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
         mClose(handle);
         return core::make_error(
           script_error::HOSTFXR_INCOMPATIBLE,
-          "hostfxr has no hdt_get_function_pointer delegate ({}); .NET 8 or later is required",
+          "hostfxr has no hdt_get_function_pointer delegate ({}); .NET 10 or later is required",
           describe_status(gotGetFn)
         );
     }
@@ -240,7 +240,7 @@ core::result<void> hostfxr_runtime::start(const script_host_config &config, host
             mClose(handle);
             return core::make_error(
               script_error::HOSTFXR_INCOMPATIBLE,
-              "hostfxr has no hdt_load_assembly delegate ({}); .NET 8 or later is required",
+              "hostfxr has no hdt_load_assembly delegate ({}); .NET 10 or later is required",
               describe_status(gotLoad)
             );
         }
@@ -341,7 +341,7 @@ core::result<void> hostfxr_runtime::load_library(const std::filesystem::path &pa
         mHostfxrPath.clear();
         return core::make_error(
           script_error::HOSTFXR_INCOMPATIBLE,
-          "hostfxr at '{}' lacks a required export; .NET 8 or later is required",
+          "hostfxr at '{}' lacks a required export; .NET 10 or later is required",
           detail::path_to_utf8(path)
         );
     }

@@ -664,6 +664,71 @@ TEST_SUITE("engine/export") {
         CHECK(managed_export_commands(settings, defaults, managed).size() == 1);
     }
 
+    TEST_CASE("regression - code sweep F776 every dotnet command of an export is a CI build") {
+        // The CMake and editor builds used to pass ContinuousIntegrationBuild and the export did not. Now only the
+        // export does, so the folders of the exporting machine stay out of what ships while the engine's and the
+        // editor's own builds keep them for the debugger. MSBuild's incremental check does not see the flag, so each
+        // command also compiles into intermediates no build without the flag shares: the publish into an artifacts
+        // pivot of its own, the scripts build into an artifacts path inside the scripts project's obj/.
+        const std::filesystem::path managed = std::filesystem::path("out") / "managed";
+        export_settings settings = {};
+        settings.bootstrapProject = "Boot.csproj";
+        settings.scriptsProject = std::filesystem::path("Scripts") / "Game.csproj";
+        scripting_settings scripting = {};
+        usize expectedCommands = 2;
+        std::string expectedPivot = "-p:ArtifactsPivots=release_export_framework_dependent";
+        std::filesystem::path expectedArtifacts = std::filesystem::path("Scripts") / "obj" / "conjure_export";
+
+        SUBCASE("framework-dependent without debug symbols") {
+            scripting.exportDebugSymbols = false;
+        }
+        SUBCASE("with debug symbols") {
+            scripting.exportDebugSymbols = true;
+        }
+        SUBCASE("self-contained for a runtime identifier") {
+            scripting.exportMode = script_export_mode::SELF_CONTAINED;
+            settings.runtimeIdentifier = "linux-x64";
+            expectedPivot = "-p:ArtifactsPivots=release_export_self_contained_linux-x64";
+        }
+        SUBCASE("framework-dependent for a runtime identifier") {
+            settings.runtimeIdentifier = "osx-arm64";
+            expectedPivot = "-p:ArtifactsPivots=release_export_framework_dependent_osx-arm64";
+        }
+        SUBCASE("a scripts project in the working directory") {
+            settings.scriptsProject = "Game.csproj";
+            expectedArtifacts = std::filesystem::path("obj") / "conjure_export";
+        }
+        SUBCASE("without game scripts") {
+            settings.scriptsProject.clear();
+            expectedCommands = 1;
+        }
+
+        const std::vector<std::vector<std::string>> commands = managed_export_commands(settings, scripting, managed);
+        REQUIRE(commands.size() == expectedCommands);
+        for (usize index = 0; index < commands.size(); ++index) {
+            CAPTURE(index);
+            const std::vector<std::string> &arguments = commands[index];
+            CHECK(std::count(arguments.begin(), arguments.end(), "-p:ContinuousIntegrationBuild=true") == 1);
+        }
+
+        const std::vector<std::string> &publish = commands.front();
+        const auto isPivot = [](const std::string &argument) {
+            return argument.starts_with("-p:ArtifactsPivots=");
+        };
+        CHECK(std::count_if(publish.begin(), publish.end(), isPivot) == 1);
+        CHECK(std::count(publish.begin(), publish.end(), expectedPivot) == 1);
+        CHECK(std::count(publish.begin(), publish.end(), "--artifacts-path") == 0);
+        if (commands.size() < 2) {
+            return;
+        }
+        const std::vector<std::string> &build = commands[1];
+        CHECK(std::count(build.begin(), build.end(), "--artifacts-path") == 1);
+        const auto artifacts = std::find(build.begin(), build.end(), "--artifacts-path");
+        REQUIRE(artifacts != build.end());
+        REQUIRE(artifacts + 1 != build.end());
+        CHECK(*(artifacts + 1) == expectedArtifacts.string());
+    }
+
     TEST_CASE("export_pipeline - a cooked project cannot be exported again") {
         log_capture logs = {};
         temp_directory directory("engine_export_twice");

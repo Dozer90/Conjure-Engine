@@ -135,7 +135,9 @@ namespace conjure::scripting {
 
             /// <summary>
             /// The process description a request turns into: dotnet build <project> -c <configuration>
-            /// [-o <output>] --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true [-p:Name=Value...].
+            /// [-o <output>] --nologo -clp:NoSummary [-p:Name=Value...]. It never adds ContinuousIntegrationBuild,
+            /// so the debug information keeps the real source paths and the built scripts can be debugged; a
+            /// caller that wants it passes it in build_request::properties.
             /// </summary>
             [[nodiscard]] static core::process_desc command_line(const build_request &request, std::string_view dotnet);
 

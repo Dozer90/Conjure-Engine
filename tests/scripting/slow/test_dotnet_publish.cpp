@@ -60,6 +60,9 @@ TEST_SUITE("scripting/dotnet_publish") {
           "-o", directory.file("managed").string(), "--artifacts-path", directory.file("artifacts").string(),
           "--nologo", "-p:ContinuousIntegrationBuild=true"
         };
+        // dotnet looks for global.json from its working directory: the project's own directory makes the SDK the
+        // repository pins build the anchor wherever the test runs from (code sweep F778).
+        publish.workingDirectory = bootstrap_project().parent_path();
         publish.mergeStderr = true;
         publish.timeoutSeconds = 540.0;
         publish.environment = {{"DOTNET_CLI_TELEMETRY_OPTOUT", "1"}, {"DOTNET_NOLOGO", "1"}, {"MSBUILDNODEREUSE", "0"}};

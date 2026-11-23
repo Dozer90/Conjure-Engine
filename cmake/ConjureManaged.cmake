@@ -5,20 +5,29 @@
 #                               [DEPENDS <targets...>] [SKIP_SOURCES_CHECK])
 #
 #     Creates the target conjure_managed_<n> (part of ALL) that runs
-#       dotnet build <csproj> -c <configuration> -o <dir> --artifacts-path <build>/artifacts/<n>
-#                    --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true
+#       dotnet build <csproj> -c <configuration> -o <dir> --artifacts-path <build>/artifacts/<n> --nologo -clp:NoSummary
 #     behind a stamp file that depends on the listed SOURCES, the project file, every project file it reaches through
 #     <ProjectReference> items (transitively; the project file and each of those are configure dependencies too, so
-#     editing any of them, an added or removed reference included, re-runs configure), managed/Directory.Build.props and
-#     the stamp files of the managed DEPENDS targets (so a rebuilt SDK rebuilds the projects compiled against it), so an
-#     unchanged project costs nothing. A referenced project that does not exist is a configure error. No globbing:
-#     SOURCES lists every file the csproj compiles (a referenced project's source files are inputs only through SOURCES
-#     or the stamp of a DEPENDS target that builds it), and the CTest entry conjure_managed_sources_match.<n> (label
-#     "managed") checks that the csproj's explicit <Compile Include> items and SOURCES name the same files
-#     (SKIP_SOURCES_CHECK omits the entry when SOURCES deliberately covers more than the project, such as referenced
-#     projects). The configuration defaults to Debug for the Debug build type and Release otherwise. The dotnet program
-#     comes from NetHost_DOTNET_EXECUTABLE (cmake/FindNetHost.cmake) or PATH; missing dotnet with
-#     CONJURE_BUILD_MANAGED=ON is a configure error.
+#     editing any of them, an added or removed reference included, re-runs configure), managed/Directory.Build.props,
+#     global.json and the stamp files of the managed DEPENDS targets (so a rebuilt SDK rebuilds the projects compiled
+#     against it), so an unchanged project costs nothing. A referenced project that does not exist is a configure error.
+#     No globbing: SOURCES lists every file the csproj compiles (a referenced project's source files are inputs only
+#     through SOURCES or the stamp of a DEPENDS target that builds it), and the CTest entry
+#     conjure_managed_sources_match.<n> (label "managed") checks that the csproj's explicit <Compile Include> items and
+#     SOURCES name the same files (SKIP_SOURCES_CHECK omits the entry when SOURCES deliberately covers more than the
+#     project, such as referenced projects). The configuration defaults to Debug for the Debug build type and Release
+#     otherwise. The dotnet program comes from NetHost_DOTNET_EXECUTABLE (cmake/FindNetHost.cmake) or PATH; missing
+#     dotnet with CONJURE_BUILD_MANAGED=ON is a configure error. dotnet runs from the source root, so the repository's
+#     global.json chooses the SDK wherever the build tree lies, and the configure fails, naming the cause, when
+#     no SDK that file accepts is installed or the one it selects is older than CONJURE_DOTNET_MIN_MAJOR; the
+#     configure prints the SDK in use. global.json is a configure dependency and an input of every stamp, so a
+#     changed pin checks the SDK again and rebuilds the assemblies with it.
+#
+#     The build never passes ContinuousIntegrationBuild (code sweep F776): the debug information keeps the real
+#     paths of this machine, so a debugger finds the sources without a mapping. Only an export sets the flag
+#     (engine/src/engine/export_commands.cpp). The assemblies stay deterministic for unchanged checkout and
+#     build-tree paths through <Deterministic> in managed/Directory.Build.props: the assembly records the path of
+#     its .pdb below --artifacts-path, and the .pdb the paths of the sources.
 #
 #     -o redirects only the final assemblies; restore and the compile intermediates follow --artifacts-path,
 #     one directory per managed target of this build tree, so concurrent build trees of one checkout
@@ -130,9 +139,53 @@ else()
 endif()
 if(NOT CONJURE_DOTNET_EXECUTABLE)
     message(FATAL_ERROR
-        "CONJURE_BUILD_MANAGED is ON but no dotnet SDK was found; install the .NET 8 SDK, set DOTNET_ROOT, "
-        "or configure with -DCONJURE_BUILD_MANAGED=OFF"
+        "CONJURE_BUILD_MANAGED is ON but no dotnet SDK was found; install the .NET ${CONJURE_DOTNET_MIN_MAJOR} SDK, "
+        "set DOTNET_ROOT, or configure with -DCONJURE_BUILD_MANAGED=OFF"
     )
+endif()
+
+# The SDK the managed build runs (code sweep F778): global.json at the repository root pins the major and lets the
+# newest installed feature band of it win, and dotnet finds that file from its working directory, so the check runs
+# from the source root as every dotnet build below does. A machine without such an SDK fails here, naming the cause,
+# instead of on the first managed target; so does an SDK older than the host pack minimum (cmake/FindNetHost.cmake).
+execute_process(
+    COMMAND "${CONJURE_DOTNET_EXECUTABLE}" --version
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    RESULT_VARIABLE dotnetVersionResult
+    OUTPUT_VARIABLE dotnetVersionOutput
+    ERROR_VARIABLE dotnetVersionError
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_STRIP_TRAILING_WHITESPACE
+)
+if(NOT dotnetVersionResult EQUAL 0)
+    message(FATAL_ERROR
+        "CONJURE_BUILD_MANAGED is ON but '${CONJURE_DOTNET_EXECUTABLE} --version' in ${PROJECT_SOURCE_DIR} failed "
+        "(${dotnetVersionResult}): ${dotnetVersionError}${dotnetVersionOutput}\n"
+        "The SDK global.json names (a later feature band of the same major will do) is not installed; install the "
+        ".NET ${CONJURE_DOTNET_MIN_MAJOR} SDK, set DOTNET_ROOT, or configure with -DCONJURE_BUILD_MANAGED=OFF"
+    )
+endif()
+if(NOT dotnetVersionOutput MATCHES "^([0-9]+)\\.[0-9]+\\.[0-9]+")
+    message(FATAL_ERROR
+        "CONJURE_BUILD_MANAGED is ON but '${CONJURE_DOTNET_EXECUTABLE} --version' in ${PROJECT_SOURCE_DIR} printed "
+        "no SDK version: '${dotnetVersionOutput}'"
+    )
+endif()
+if(CMAKE_MATCH_1 LESS CONJURE_DOTNET_MIN_MAJOR)
+    message(FATAL_ERROR
+        "CONJURE_BUILD_MANAGED is ON but the dotnet SDK in use is ${dotnetVersionOutput}; the managed projects "
+        "need the .NET ${CONJURE_DOTNET_MIN_MAJOR} SDK (global.json)"
+    )
+endif()
+message(STATUS "Managed build uses the .NET SDK ${dotnetVersionOutput}")
+
+# A changed pin re-runs this check, and every stamp below lists the file, so the assemblies follow the SDK it
+# selects. Without the file there is nothing to depend on (a dependency on a missing file re-runs every configure).
+set(CONJURE_DOTNET_GLOBAL_JSON "${PROJECT_SOURCE_DIR}/global.json")
+if(EXISTS "${CONJURE_DOTNET_GLOBAL_JSON}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CONJURE_DOTNET_GLOBAL_JSON}")
+else()
+    set(CONJURE_DOTNET_GLOBAL_JSON "")
 endif()
 
 function(conjure_add_managed_project)
@@ -149,6 +202,9 @@ function(conjure_add_managed_project)
             message(FATAL_ERROR "conjure_add_managed_project: ${required} is required")
         endif()
     endforeach()
+    # dotnet build runs from the source root (global.json), so a relative OUTPUT keeps its old meaning only as an
+    # absolute path below the current binary directory.
+    get_filename_component(ARG_OUTPUT "${ARG_OUTPUT}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
     get_filename_component(projectPath "${ARG_PROJECT}" ABSOLUTE)
     if(NOT EXISTS "${projectPath}")
@@ -218,16 +274,20 @@ function(conjure_add_managed_project)
         endif()
     endforeach()
     # A referenced project file may also be listed in SOURCES; each input is named once.
-    set(stampInputs ${sources} "${projectPath}" ${referencedProjects} "${propsFile}" ${dependencyStamps})
+    set(stampInputs
+        ${sources} "${projectPath}" ${referencedProjects} "${propsFile}" ${CONJURE_DOTNET_GLOBAL_JSON}
+        ${dependencyStamps}
+    )
     list(REMOVE_DUPLICATES stampInputs)
 
     add_custom_command(
         OUTPUT "${stamp}"
         COMMAND "${CONJURE_DOTNET_EXECUTABLE}" build "${projectPath}"
                 -c "${ARG_CONFIGURATION}" -o "${ARG_OUTPUT}" --artifacts-path "${artifactsDirectory}"
-                --nologo -clp:NoSummary -p:ContinuousIntegrationBuild=true ${propertyArguments}
+                --nologo -clp:NoSummary ${propertyArguments}
         COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
         DEPENDS ${stampInputs} ${ARG_DEPENDS}
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         COMMENT "dotnet build ${ARG_NAME} (${ARG_CONFIGURATION}) -> ${ARG_OUTPUT}"
         VERBATIM
     )

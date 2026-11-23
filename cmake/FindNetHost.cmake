@@ -5,14 +5,16 @@
 #
 # Variables honoured:
 #   DOTNET_ROOT        (env or cache)  root of a .NET installation
-#   CONJURE_DOTNET_MIN_MAJOR            minimum major version of the host pack (default 8)
+#   CONJURE_DOTNET_MIN_MAJOR            minimum major version of the host pack (default 10: the .NET the
+#                                       managed projects target, managed/Directory.Build.props, and the
+#                                       SDK major global.json pins)
 #
 # Result variables:
 #   NetHost_FOUND, NetHost_INCLUDE_DIR, NetHost_LIBRARY, NetHost_VERSION, NetHost_RID,
 #   NetHost_DOTNET_EXECUTABLE
 
 if(NOT CONJURE_DOTNET_MIN_MAJOR)
-    set(CONJURE_DOTNET_MIN_MAJOR 8)
+    set(CONJURE_DOTNET_MIN_MAJOR 10)
 endif()
 
 find_program(NetHost_DOTNET_EXECUTABLE NAMES dotnet

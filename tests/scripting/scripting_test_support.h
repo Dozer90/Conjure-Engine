@@ -114,6 +114,17 @@ namespace scripting_test {
     [[nodiscard]] std::filesystem::path manifest_path();
 
     /// <summary>
+    /// The repository root (global.json, managed/), for the cases that check the committed project settings.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path source_root();
+
+    /// <summary>
+    /// The .NET major the managed projects target and global.json pins: CONJURE_DOTNET_MIN_MAJOR of the configure
+    /// (cmake/FindNetHost.cmake).
+    /// </summary>
+    [[nodiscard]] conjure::i32 dotnet_major() noexcept;
+
+    /// <summary>
     /// True when the SDK was built with this build (CONJURE_SCRIPTING_HAS_DOTNET).
     /// </summary>
     [[nodiscard]] bool has_managed_sdk() noexcept;

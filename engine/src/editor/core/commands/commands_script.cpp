@@ -42,7 +42,7 @@ namespace conjure::editor::support {
           "-p:ConjureManagedDir=<dir>. -->\n"
           "  <PropertyGroup>\n"
           "    <OutputType>Library</OutputType>\n"
-          "    <TargetFramework>net8.0</TargetFramework>\n"
+          "    <TargetFramework>net10.0</TargetFramework>\n"
           "    <LangVersion>12</LangVersion>\n"
           "    <Nullable>enable</Nullable>\n"
           "    <ImplicitUsings>disable</ImplicitUsings>\n"
@@ -569,7 +569,7 @@ namespace conjure::editor::support {
                     if (!ran) {
                         mReply.fail(
                           protocol_error_code::NOT_AVAILABLE,
-                          std::format("dotnet could not be started ({}): install the .NET 8 SDK or set the dotnet "
+                          std::format("dotnet could not be started ({}): install the .NET 10 SDK or set the dotnet "
                             "executable",
                             report.launch.get_error().message())
                         );
