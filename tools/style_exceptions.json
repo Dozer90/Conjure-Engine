@@ -32,5 +32,25 @@
         "tests/core/vfs/test_memory_file_system.cpp": "memory_file_system is documented thread-safe (10_core.md 2.9: concurrent writers); the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
         "tests/core/vfs/test_mount_table.cpp": "mount/unmount racing lookups; the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread",
         "tests/core/vfs/test_native_file_system.cpp": "write-time changes need the real clock to advance (10_core.md 2.9); the area sits below core::jobs in the dependency order (10_core.md C2), so its thread-safety contract is exercised with raw std::thread instead of dedicated_thread"
+    },
+    "third_party_in_tests": {
+        "tests/core/system/test_image.cpp": "encodes grey, grey+alpha and RGB PNG fixtures with stb_image_write directly, to check that image::load_png expands every channel count",
+        "tests/editor/ui/panels/test_hierarchy_panel.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/editor/ui/panels/test_toolbar_panel.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/editor/ui/panels/test_viewport_panel.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/editor/ui/test_editor_workspace.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/editor/ui/test_gizmo_controller.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/editor/ui/test_imgui_frame_scope.cpp": "imgui_frame_scope owns an ImGui context; the test checks the current context and the built font atlas through ImGui",
+        "tests/editor/ui/test_property_drawer.cpp": "the editor UI is drawn with Dear ImGui: the test opens the ImGui windows the code under test draws into and drives or reads their frames, input and widget state through ImGui (04_editor.md)",
+        "tests/engine/test_imgui_layer.cpp": "imgui_layer exposes its ImGui context (editor builds only); the test checks the display size and input it forwards through ImGui",
+        "tests/renderer/test_gpu_resource_cache.cpp": "the renderer records into NVRHI command lists and hands out NVRHI handles (02_renderer.md R15), so the test creates targets and command lists on the null device and reads the recorded state through NVRHI",
+        "tests/renderer/test_imgui_renderer.cpp": "the Dear ImGui backend of the renderer: the test builds ImGui draw data and renders it into an NVRHI target on the null device, both libraries being the interfaces under test (02_renderer.md 3.11, R16)",
+        "tests/renderer/test_pipeline_cache.cpp": "the cached pipelines and binding layouts are NVRHI objects; the test reads their descriptions (bindings, raster state) through NVRHI (02_renderer.md R15)",
+        "tests/renderer/test_render_graph.cpp": "the renderer records into NVRHI command lists and hands out NVRHI handles (02_renderer.md R15), so the test creates targets and command lists on the null device and reads the recorded state through NVRHI",
+        "tests/renderer/test_transient_pool.cpp": "the pool maps its descriptions to nvrhi::TextureDesc and hands out NVRHI textures; the test checks the mapping and the pooled handles through NVRHI (02_renderer.md R3, R15)",
+        "tests/rhi/test_device_lost.cpp": "device loss is raised through the NVRHI message callback of the null device, reached only through device::native_device() (02_renderer.md R15, R17)",
+        "tests/rhi/test_null_device.cpp": "the null device and its swapchain are reachable only as NVRHI interfaces through device::native_device() and swapchain::back_buffer(), so NVRHI is the API under test (02_renderer.md R15, R17)",
+        "tests/rhi/test_null_swapchain.cpp": "the null device and its swapchain are reachable only as NVRHI interfaces through device::native_device() and swapchain::back_buffer(), so NVRHI is the API under test (02_renderer.md R15, R17)",
+        "tests/rhi/test_swapchain.cpp": "the null device and its swapchain are reachable only as NVRHI interfaces through device::native_device() and swapchain::back_buffer(), so NVRHI is the API under test (02_renderer.md R15, R17)"
     }
 }

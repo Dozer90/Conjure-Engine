@@ -123,6 +123,175 @@ def quoted_non_conjure_include(checker, root: pathlib.Path) -> None:
 
 
 #------------------------------------------------------------------------------
+# third-party-include-in-test and doctest-include
+#------------------------------------------------------------------------------
+
+def reported_lines(result: run_result, rule: str, relative: str) -> list[str]:
+    """The line numbers of the findings of 'rule' in the file 'relative', in output order."""
+    return [line.split(":")[1] for line in result.of_rule(rule) if line.startswith(f"{relative}:")]
+
+
+def third_party_in_test_reported(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_bar.cpp",
+          "#include \"conjure/testing/doctest.h\"\n"     # 1
+          "\n"
+          "#include <nvrhi/nvrhi.h>\n"                   # 3: a root with a directory
+          "#include <imgui.h>\n"                         # 4: a single-file library
+          "#include <imgui_internal.h>\n"                # 5
+          "#include <stb_image_write.h>\n"               # 6
+          "#include <Jolt/Jolt.h>\n"                     # 7
+          "#include <spdlog/spdlog.h>\n"                 # 8: on no list, but a directory prefix is third-party
+          "#include <d3d12.h>\n"                         # 9: a graphics API, reached through rhi
+          "#include <vulkan/vulkan.h>\n"                 # 10
+          "#include \"imgui.h\"\n"                       # 11: quoted, still a library
+          "#if CONJURE_BUILD_EDITOR\n"
+          "    #include <ImGuizmo.h>\n"                  # 13: a conditional include still reaches the library
+          "#endif\n")
+    write(root, "tests/foo/foo_test_support.h", "#pragma once\n\n#include <jxl/decode.h>\n")
+    result = run(checker, root)
+    assert reported_lines(result, "third-party-include-in-test", "tests/foo/test_bar.cpp") == [
+        "3", "4", "5", "6", "7", "8", "9", "10", "11", "13"], result.findings
+    assert reported_lines(result, "third-party-include-in-test", "tests/foo/foo_test_support.h") == ["3"], \
+        result.findings
+    assert result.code == 1, result.code
+    # The message names the include as written and the table that would allow it.
+    messages = {line.split(":")[1]: line for line in result.of_rule("third-party-include-in-test")
+                if line.startswith("tests/foo/test_bar.cpp:")}
+    assert "the third-party header <spdlog/spdlog.h>;" in messages["8"], messages["8"]
+    assert "\"third_party_in_tests\" in tools/style_exceptions.json" in messages["8"], messages["8"]
+    assert "the third-party header \"imgui.h\";" in messages["11"], messages["11"]
+
+
+def third_party_in_test_leaves_other_headers(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_bar.cpp",
+          "#include \"conjure/testing/doctest.h\"\n"
+          "#include \"bar_test_support.h\"\n"
+          "\n"
+          "#include \"conjure/core/types.h\"\n"
+          "#include \"core/jobs/thread_name.h\"\n"
+          "\n"
+          "#include <cstdint>\n"
+          "#include <vector>\n"
+          "#if CONJURE_PLATFORM_WINDOWS\n"
+          "    #include <Windows.h>\n"
+          "    #include <windows.h>\n"
+          "    #include <winsock2.h>\n"
+          "#else\n"
+          "    #include <fcntl.h>\n"
+          "    #include <sys/socket.h>\n"
+          "    #include <netinet/in.h>\n"
+          "    #include <unistd.h>\n"
+          "#endif\n"
+          "// #include <imgui.h>\n"
+          "/* #include <nvrhi/nvrhi.h> */\n"
+          # A source held in a multi-line raw string: its include line is text, not a directive.
+          "const char *SOURCE = R\"(\n#include <imgui.h>\n)\";\n")
+    result = run(checker, root, "tests/foo/test_bar.cpp")
+    assert not result.of_rule("third-party-include-in-test"), result.findings
+
+
+def third_party_outside_tests_not_this_rule(checker, root: pathlib.Path) -> None:
+    write(root, "engine/src/foo/bar.cpp", "#include <imgui.h>\n#include <nvrhi/nvrhi.h>\n")
+    write(root, "editor/src/ui/panel.cpp", "#include <imgui.h>\n")
+    result = run(checker, root)
+    assert not result.of_rule("third-party-include-in-test"), result.findings
+
+
+def third_party_in_test_exception(checker, root: pathlib.Path) -> None:
+    write(root, "tests/rhi/test_null_device.cpp", "#include <nvrhi/nvrhi.h>\n")
+    write(root, "tests/rhi/test_other.cpp", "#include <nvrhi/nvrhi.h>\n")
+    write(root, "tools/style_exceptions.json",
+          "{ \"third_party_in_tests\": {"
+          " \"tests/rhi/test_null_device.cpp\": \"the null device is an NVRHI device\" } }")
+    # The exception covers its own file only, on a whole-repository run and on a run over the file.
+    for arguments in ((), ("tests/rhi",), ("tests/rhi/test_null_device.cpp",)):
+        result = run(checker, root, *arguments)
+        reported = [line.split(":")[0] for line in result.of_rule("third-party-include-in-test")]
+        expected = [] if arguments == ("tests/rhi/test_null_device.cpp",) else ["tests/rhi/test_other.cpp"]
+        assert reported == expected, (arguments, result.findings)
+
+
+def third_party_in_test_stale_exception(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_bar.cpp", "#include <vector>\n")
+    write(root, "tests/foo/test_needed.cpp", "#include <imgui.h>\n")
+    write(root, "tools/style_exceptions.json",
+          "{ \"third_party_in_tests\": {"
+          " \"tests/foo/test_bar.cpp\": \"used to include ImGui\","
+          " \"tests/foo/test_needed.cpp\": \"drives ImGui\","
+          " \"tests/foo/test_gone.cpp\": \"deleted since\" } }")
+    result = run(checker, root)
+    stale = sorted(line.split(": ", 2)[2] for line in result.of_rule("third-party-include-in-test"))
+    assert stale == [
+        "exception 'tests/foo/test_bar.cpp' names a file that includes no third-party header; remove it",
+        "exception 'tests/foo/test_gone.cpp' names no C++ source under tests/; remove it",
+    ], result.findings
+    assert all(line.startswith("tools/style_exceptions.json:1:") for line in result.of_rule(
+        "third-party-include-in-test")), result.findings
+
+    # A run over some paths knows the files it checked, not the ones it skipped.
+    result = run(checker, root, "tests/foo/test_bar.cpp")
+    stale = [line.split(": ", 2)[2] for line in result.of_rule("third-party-include-in-test")]
+    assert stale == [
+        "exception 'tests/foo/test_bar.cpp' names a file that includes no third-party header; remove it",
+    ], result.findings
+    result = run(checker, root, "tests/foo/test_needed.cpp")
+    assert not result.of_rule("third-party-include-in-test"), result.findings
+
+
+def doctest_include_spellings(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_bar.cpp",
+          "#include <doctest/doctest.h>\n#include <doctest.h>\n#include \"doctest/doctest.h\"\n"
+          "#include \"doctest.h\"\n#include \"conjure/testing/doctest.h\"\n")
+    write(root, "tests/support/include/conjure/testing/doctest.h", "#pragma once\n\n#include <doctest/doctest.h>\n")
+    result = run(checker, root)
+    assert reported_lines(result, "doctest-include", "tests/foo/test_bar.cpp") == ["1", "2", "3", "4"], \
+        result.findings
+    # Each message names the include as written, delimiters included.
+    endings = [line.split("instead of ")[1] for line in result.of_rule("doctest-include")]
+    assert endings == ["<doctest/doctest.h>", "<doctest.h>", "\"doctest/doctest.h\"", "\"doctest.h\""], \
+        result.findings
+    assert not result.of_rule("third-party-include-in-test"), result.findings
+    assert not reported_lines(result, "doctest-include", "tests/support/include/conjure/testing/doctest.h"), \
+        result.findings
+
+
+def raw_string_lines_are_no_directives(checker, root: pathlib.Path) -> None:
+    # Every include rule reads the same preprocessor lines: a line of a multi-line raw string that looks like a
+    # directive is text. The unmatched #if in the first string must not hide the includes after it either.
+    write(root, "tests/foo/test_bar.cpp",
+          "#include \"conjure/testing/doctest.h\"\n"     # 1
+          "\n"
+          "const char *GUARD = R\"(\n#if 1\n)\";\n"      # 3-5
+          "const char *SOURCE = R\"(\n"                  # 6
+          "#include <vector>\n"                          # 7
+          "#include \"conjure/core/types.h\"\n"          # 8: would break the include order
+          "#include <doctest/doctest.h>\n"               # 9: would be a doctest include
+          "#include <imgui.h>\n"                         # 10: would be a third-party include
+          ")\";\n"
+          "\n"
+          "#include <vector>\n"                          # 13
+          "#include \"conjure/core/types.h\"\n")         # 14: a real include-order finding
+    write(root, "engine/include/conjure/foo/bar.h",
+          "#pragma once\n\nconst char *SOURCE = R\"(\n#include <spdlog/spdlog.h>\n)\";\n")
+    result = run(checker, root)
+    for rule in ("doctest-include", "third-party-include-in-test", "third-party-include"):
+        assert not result.of_rule(rule), (rule, result.findings)
+    assert reported_lines(result, "include-order", "tests/foo/test_bar.cpp") == ["14"], result.findings
+    assert not reported_lines(result, "include-order", "engine/include/conjure/foo/bar.h"), result.findings
+
+
+def regression_third_party_in_tests(checker, root: pathlib.Path) -> None:
+    # Code sweep F546: 08_testing.md 5.1 forbade third-party headers in tests, yet nothing reported the 18
+    # files that included NVRHI, Dear ImGui or stb_image_write.
+    write(root, "tests/editor/ui/test_gizmo_controller.cpp",
+          "#include \"conjure/testing/doctest.h\"\n\n#include <imgui.h>\n")
+    result = run(checker, root)
+    reported = [line.split(": ")[0] for line in result.of_rule("third-party-include-in-test")]
+    assert reported == ["tests/editor/ui/test_gizmo_controller.cpp:3"], result.findings
+    assert result.code == 1, result.code
+
+
+#------------------------------------------------------------------------------
 # include-order
 #------------------------------------------------------------------------------
 
@@ -227,6 +396,20 @@ def thread_in_tests_is_the_other_rule(checker, root: pathlib.Path) -> None:
     assert len(forbidden) == 1 and forbidden[0].startswith("tests/foo/test_bar.cpp:1:"), result.findings
 
 
+def forbidden_in_tests_stale_exception(checker, root: pathlib.Path) -> None:
+    write(root, "tests/foo/test_allowed.cpp", "std::thread worker;\n")
+    write(root, "tools/style_exceptions.json",
+          "{ \"forbidden_in_tests\": { \"tests/foo/test_allowed.cpp\": \"the area sits below core::jobs\","
+          " \"tests/foo/test_gone.cpp\": \"deleted since\" } }")
+    result = run(checker, root)
+    assert result.of_rule("forbidden-in-tests") == [
+        "tools/style_exceptions.json:1: forbidden-in-tests: exception 'tests/foo/test_gone.cpp' names a file that "
+        "does not exist; remove it"], result.findings
+    # A run over some paths cannot tell a missing file from one it skipped.
+    result = run(checker, root, "tests/foo/test_allowed.cpp")
+    assert not result.of_rule("forbidden-in-tests"), result.findings
+
+
 def thread_created_without_the_type_reported(checker, root: pathlib.Path) -> None:
     write(root, "engine/src/foo/bar.cpp",
           "auto pending = std::async(std::launch::async, [] {});\n"
@@ -326,6 +509,17 @@ def benchmark_headers_mirrored(checker, root: pathlib.Path) -> None:
     assert not result.of_rule("tests-mirror-headers"), result.findings
 
 
+def mirror_stale_exception(checker, root: pathlib.Path) -> None:
+    write(root, "engine/include/conjure/foo/widget.h", HEADER)
+    write(root, "tools/style_exceptions.json",
+          "{ \"tests_mirror_headers\": { \"conjure/foo/widget.h\": \"tested through its owner\","
+          " \"conjure/foo/gone.h\": \"deleted since\" } }")
+    result = run(checker, root, "--tests-mirror-headers")
+    assert result.of_rule("tests-mirror-headers") == [
+        "tools/style_exceptions.json:1: tests-mirror-headers: exception 'conjure/foo/gone.h' names a header that "
+        "does not exist; remove it"], result.findings
+
+
 #------------------------------------------------------------------------------
 # Usage errors
 #------------------------------------------------------------------------------
@@ -362,9 +556,12 @@ def malformed_exceptions(checker, root: pathlib.Path) -> None:
     result = run(checker, root)
     assert result.code == 2 and "style_exceptions.json" in result.errors, (result.code, result.errors)
 
-    write(root, "tools/style_exceptions.json", "{ \"forbidden_in_tests\": [\"tests/a.cpp\"] }")
-    result = run(checker, root)
-    assert result.code == 2 and "must map paths to reasons" in result.errors, (result.code, result.errors)
+    for table in ("forbidden_in_tests", "tests_mirror_headers", "third_party_in_tests"):
+        for value in ("[\"tests/a.cpp\"]", "{ \"tests/a.cpp\": 1 }", "\"tests/a.cpp\""):
+            write(root, "tools/style_exceptions.json", f"{{ \"{table}\": {value} }}")
+            result = run(checker, root)
+            assert result.code == 2 and f"{table} must map paths to reasons" in result.errors, \
+                (table, value, result.code, result.errors)
 
 
 CASES = [
@@ -377,6 +574,19 @@ CASES = [
     ("third-party-include - standard headers and glm in glm_types.h are allowed", standard_and_glm_allowed),
     ("third-party-include - glm outside glm_types.h is reported", glm_outside_glm_types),
     ("third-party-include - a quoted non-Conjure include in a public header is reported", quoted_non_conjure_include),
+    ("third-party-include-in-test - every library include in test code is reported, conditional and quoted ones too",
+     third_party_in_test_reported),
+    ("third-party-include-in-test - Conjure, helper, standard and operating-system headers are not reported",
+     third_party_in_test_leaves_other_headers),
+    ("third-party-include-in-test - code outside tests/ is not checked", third_party_outside_tests_not_this_rule),
+    ("third-party-include-in-test - a file listed under third_party_in_tests is not reported",
+     third_party_in_test_exception),
+    ("third-party-include-in-test - an entry naming a missing file or one without a library include is stale",
+     third_party_in_test_stale_exception),
+    ("doctest-include - doctest/ and a bare doctest.h are reported in either quote style", doctest_include_spellings),
+    ("include rules - a directive-like line inside a multi-line raw string is text",
+     raw_string_lines_are_no_directives),
+    ("regression - code sweep F546 a third-party include in a test is reported", regression_third_party_in_tests),
     ("include-order - a quoted libjxl or Highway header must use angle brackets", quoted_jpeg_xl_headers),
     ("windows-macro - enumerators of anonymous enums are checked", anonymous_enums_checked),
     ("windows-macro - an ALL_CAPS const constant is checked", all_caps_const_checked),
@@ -390,6 +600,8 @@ CASES = [
     ("thread-outside-jobs - a comment or a string literal is not reported", thread_in_comment_or_string),
     ("thread-outside-jobs - test code is left to forbidden-in-tests and its exception table",
      thread_in_tests_is_the_other_rule),
+    ("forbidden-in-tests - an entry naming a missing file is stale on a whole-repository run",
+     forbidden_in_tests_stale_exception),
     ("thread-outside-jobs - std::async and the raw OS thread calls are reported in every folder",
      thread_created_without_the_type_reported),
     ("thread-outside-jobs - a name that only resembles a thread call, a comment and a string are not reported",
@@ -398,6 +610,7 @@ CASES = [
     ("tests-mirror-headers - the test in the header's sub-directory wins", sub_directory_test_wins),
     ("tests-mirror-headers - a test file no CMakeLists.txt lists does not count", unlisted_test_file),
     ("tests-mirror-headers - benchmark harness headers need a test file", benchmark_headers_mirrored),
+    ("tests-mirror-headers - an entry naming a missing header is stale", mirror_stale_exception),
     ("check_style - a missing path argument is a usage error", missing_path),
     ("check_style - a path outside --root is a usage error", path_outside_root),
     ("check_style - a non-source file argument is a usage error", non_source_argument),

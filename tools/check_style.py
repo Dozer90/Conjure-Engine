@@ -23,7 +23,24 @@ Checks every C++ file under engine/, editor/, runtime/, tests/ and samples/ for:
   third-party-include   public headers (engine/include) include only Conjure headers ("conjure/...") and C++
                         standard library headers (a bare name such as <vector>): third-party and operating-
                         system headers are rejected; glm in conjure/core/math/glm_types.h is the single exception
-  doctest-include       test code includes doctest only through conjure/testing/doctest.h
+  doctest-include       test code includes doctest (<doctest/...> or a bare <doctest.h>, either quote style)
+                        only through conjure/testing/doctest.h
+  third-party-include-in-test
+                        test code (tests/, headers included, also inside #if branches) includes no third-party
+                        library header and tests through the public API (08_testing.md 5.1): a quoted or angle
+                        include under THIRD_PARTY_INCLUDE_ROOTS, or an angle include the include-order rule
+                        puts in the third-party group (a directory prefix outside SYSTEM_INCLUDE_DIRECTORIES,
+                        or a known single-file library). doctest is left to doctest-include. Operating-system
+                        headers are not third-party, but only those the rule can tell apart: Windows.h (in any
+                        case) and the angle includes include-order puts in the system group (a bare name such
+                        as <unistd.h>, or a SYSTEM_INCLUDE_DIRECTORIES prefix such as <sys/...>). The graphics-
+                        API headers <d3d12*>, <dxgi*> and <vulkan/...> are reported, since tests reach them
+                        through rhi, and an operating-system framework directory a test needs (<X11/...>,
+                        <Cocoa/...>) must first be added to SYSTEM_INCLUDE_DIRECTORIES. Files that drive a
+                        library directly, with their reason, are listed under "third_party_in_tests" in
+                        tools/style_exceptions.json
+  (all include rules)   read preprocessor lines only: a line inside a multi-line raw string literal that looks
+                        like `#include <imgui.h>` or `#if` is text, not a directive
   test-case-name        TEST_CASE names (also through TEST_CASE_TEMPLATE, TEST_CASE_FIXTURE and any
                         <PREFIX>_CASE("...") wrapper macro, comments excluded) follow "<type> - <behaviour>"
                         and contain no ';' or unbalanced '[' / ']' (doctest_discover_tests splits them as
@@ -88,8 +105,9 @@ WINDOWS_MACRO_NAMES = {
     "WIN32", "interface", "small", "hyper", "min", "max", "far", "near", "pascal", "cdecl",
 }
 
-# Third-party include prefixes: the include-order rule requires angle brackets for them. The public-header
-# rule does not read this list; it accepts Conjure and standard library headers only (is_allowed_public_include).
+# Third-party include prefixes: the include-order rule requires angle brackets for them, and
+# third-party-include-in-test reports them in test code (is_third_party_library). The public-header rule does not
+# read this list; it accepts Conjure and standard library headers only (is_allowed_public_include).
 THIRD_PARTY_INCLUDE_ROOTS = (
     "glm/", "yyjson", "stb_", "nvrhi", "Jolt/", "GLFW/", "imgui", "ImGuizmo", "miniaudio", "cgltf", "doctest",
     "nethost", "hostfxr", "coreclr", "vulkan/", "d3d12", "dxgi", "windows.h", "Windows.h",
@@ -111,6 +129,14 @@ GLM_ALLOWED_HEADER = pathlib.PurePosixPath("engine/include/conjure/core/math/glm
 DOCTEST_ALLOWED_HEADERS = {
     pathlib.PurePosixPath("tests/support/include/conjure/testing/doctest.h"),
 }
+# The Win32 umbrella header sits in THIRD_PARTY_INCLUDE_ROOTS so that include-order demands angle brackets for
+# it, but it is an operating-system header: third-party-include-in-test leaves it alone, as it leaves <unistd.h>,
+# <fcntl.h> and <sys/...>. Compared without case, since Windows volumes ignore it. These are the only
+# operating-system headers the rule exempts beyond the angle includes include_group puts in the system group (a bare
+# name or a SYSTEM_INCLUDE_DIRECTORIES prefix): the graphics-API headers <d3d12*>, <dxgi*> and <vulkan/...> are
+# reported, since tests reach them through rhi, and an operating-system framework directory a test needs (<X11/...>,
+# <Cocoa/...>) must first be added to SYSTEM_INCLUDE_DIRECTORIES.
+OPERATING_SYSTEM_HEADERS = frozenset({"windows.h"})
 
 # Include groups in the documented order (docs/CONVENTIONS.md 2).
 GROUP_OWN = 0
@@ -174,6 +200,33 @@ RAW_DELIMITER_EXCLUDED = frozenset(" ()\\\t\v\f\n")
 
 class usage_error(Exception):
     """A bad command line or a malformed tools/style_exceptions.json: reported on stderr with exit code 2."""
+
+
+class exception_use:
+    """An exception table of tools/style_exceptions.json (path -> reason) and what one run did with it: 'seen'
+    holds the entries the rule met (their file or header was checked), 'needed' those whose file still did what
+    the entry allows. Only third_party_in_tests fills 'needed'; forbidden_in_tests and tests_mirror_headers report
+    an entry only when it was never seen."""
+
+    def __init__(self, table: dict[str, str]) -> None:
+        self.table = table
+        self.seen: set[str] = set()
+        self.needed: set[str] = set()
+
+    def covers(self, key: str) -> bool:
+        """True when the table lists 'key', which is then marked seen."""
+        if key not in self.table:
+            return False
+        self.seen.add(key)
+        return True
+
+    def unseen(self) -> list[str]:
+        """The entries the run never met, sorted."""
+        return sorted(set(self.table) - self.seen)
+
+    def unneeded(self) -> list[str]:
+        """The entries the run met whose file no longer needed them, sorted."""
+        return sorted(self.seen - self.needed)
 
 
 class finding:
@@ -340,8 +393,8 @@ def relative_posix(root: pathlib.Path, path: pathlib.Path) -> pathlib.PurePosixP
 def check_file(
     root: pathlib.Path,
     path: pathlib.Path,
-    forbidden_exceptions: dict[str, str],
-    used_forbidden_exceptions: set[str],
+    forbidden_exceptions: exception_use,
+    third_party_exceptions: exception_use,
 ) -> list[finding]:
     findings: list[finding] = []
     raw = path.read_bytes()
@@ -369,7 +422,8 @@ def check_file(
     code_lines = code.split("\n")
     # Include targets and TEST_CASE names are string literals: those rules read a copy that keeps them.
     literal_code = strip_comments(text, keep_strings=True)
-    literal_lines = literal_code.split("\n")
+    # The include rules read real preprocessor lines only, with their quoted targets kept.
+    directive_lines = preprocessor_lines(code_lines, literal_code.split("\n"))
 
     if is_header:
         check_pragma_once(path, code_lines, findings)
@@ -379,20 +433,31 @@ def check_file(
 
     check_windows_macro_names(path, code, findings)
     check_enum_class(path, code, findings)
-    check_includes(path, relative, literal_lines, findings)
-    check_include_order(path, relative, literal_lines, findings)
+    check_includes(path, relative, directive_lines, findings)
+    check_include_order(path, relative, directive_lines, findings)
     if is_test_code and not is_header:
         check_test_case_names(path, literal_code, findings)
     if is_test_code:
-        key = relative.as_posix()
-        if key in forbidden_exceptions:
-            used_forbidden_exceptions.add(key)
-        else:
+        check_third_party_in_test(path, relative, directive_lines, third_party_exceptions, findings)
+        if not forbidden_exceptions.covers(relative.as_posix()):
             check_forbidden_in_tests(path, code, findings)
     else:
         in_jobs_area = any(relative.is_relative_to(directory) for directory in THREAD_ALLOWED_DIRECTORIES)
         check_thread_outside_jobs(path, code, in_jobs_area, findings)
     return findings
+
+
+def preprocessor_lines(code_lines: list[str], literal_lines: list[str]) -> list[str]:
+    """'literal_lines' (strings kept) with every line that is not a preprocessor directive blanked. 'code_lines'
+    (strings blanked) tells them apart: a line inside a multi-line raw string literal, such as `#include <imgui.h>`
+    in a source a generator test feeds to the code under test, is blanked there, while a real directive keeps its
+    '#' and keyword. Both lists come from strip_comments, which keeps every newline, so they have the same length."""
+    return [literal if DIRECTIVE_PATTERN.match(code) else "" for code, literal in zip(code_lines, literal_lines)]
+
+
+def include_spelling(target: str, quoted: bool) -> str:
+    """An include target as written: "target" or <target>."""
+    return f"\"{target}\"" if quoted else f"<{target}>"
 
 
 def check_test_case_names(path: pathlib.Path, code: str, findings: list[finding]) -> None:
@@ -513,15 +578,68 @@ def check_includes(
         if not match:
             continue
         target = match.group(2)
-        if is_public_header and not is_allowed_public_include(target, match.group(1) == '"', relative):
+        quoted = match.group(1) == '"'
+        if is_public_header and not is_allowed_public_include(target, quoted, relative):
             findings.append(finding(
                 path, number, "third-party-include",
-                f"public header includes <{target}>; public headers include only Conjure and C++ standard "
-                f"library headers (glm only through conjure/core/math/glm_types.h)"))
-        if is_test_code and target.startswith("doctest/") and relative not in DOCTEST_ALLOWED_HEADERS:
+                f"public header includes {include_spelling(target, quoted)}; public headers include only Conjure "
+                f"and C++ standard library headers (glm only through conjure/core/math/glm_types.h)"))
+        if is_test_code and is_doctest_include(target) and relative not in DOCTEST_ALLOWED_HEADERS:
             findings.append(finding(
                 path, number, "doctest-include",
-                "include \"conjure/testing/doctest.h\" instead of <doctest/doctest.h>"))
+                f"include \"conjure/testing/doctest.h\" instead of {include_spelling(target, quoted)}"))
+
+
+def is_doctest_include(target: str) -> bool:
+    """True for an include of doctest itself: a header under doctest/ or the bare single-file doctest.h."""
+    return target.startswith("doctest/") or target == "doctest.h"
+
+
+def is_third_party_library(target: str, quoted: bool) -> bool:
+    """True when an include in test code names a third-party library header (08_testing.md 5.1): any include under
+    THIRD_PARTY_INCLUDE_ROOTS, or an angle include that include_group puts in the third-party group (a directory
+    prefix outside SYSTEM_INCLUDE_DIRECTORIES, or a known single-file library). Conjure headers, doctest (the
+    doctest-include rule's) and operating-system headers are not; a quoted include outside the roots is a helper
+    next to the file or a private engine header."""
+    if target.startswith("conjure/") or is_doctest_include(target):
+        return False
+    if target.lower() in OPERATING_SYSTEM_HEADERS:
+        return False
+    if target.startswith(THIRD_PARTY_INCLUDE_ROOTS):
+        return True
+    if quoted:
+        return False
+    return include_group(target, False, None) == GROUP_THIRD_PARTY
+
+
+def check_third_party_in_test(
+    path: pathlib.Path,
+    relative: pathlib.PurePosixPath,
+    code_lines: list[str],
+    exceptions: exception_use,
+    findings: list[finding],
+) -> None:
+    """Reports every third-party library include of a test file, conditional ones included (a library reached only
+    under #if is still reached). A file listed under "third_party_in_tests" reports none; it is marked seen, and
+    needed when it still includes one, so that main can report an entry that has gone stale."""
+    key = relative.as_posix()
+    excepted = exceptions.covers(key)
+    for number, line in enumerate(code_lines, start=1):
+        match = INCLUDE_PATTERN.match(line)
+        if not match:
+            continue
+        target = match.group(2)
+        quoted = match.group(1) == '"'
+        if not is_third_party_library(target, quoted):
+            continue
+        if excepted:
+            exceptions.needed.add(key)
+            continue
+        findings.append(finding(
+            path, number, "third-party-include-in-test",
+            f"test code includes the third-party header {include_spelling(target, quoted)}; test through the public "
+            f"API (08_testing.md 5.1), or list the file under \"third_party_in_tests\" in tools/style_exceptions.json "
+            f"with a reason when it drives the library directly"))
 
 
 def is_allowed_public_include(target: str, quoted: bool, relative: pathlib.PurePosixPath) -> bool:
@@ -696,18 +814,16 @@ def is_listed_in_cmake(test_file: pathlib.Path, test_root: pathlib.Path, listing
         directory = directory.parent
 
 
-def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -> list[finding]:
+def check_tests_mirror_headers(root: pathlib.Path, exceptions: exception_use) -> list[finding]:
     """One test file per public header (08_testing.md 5.1): test_<stem>.cpp under the header's test root, in
     the header's sub-directory when the stem occurs more than once, listed in a CMakeLists.txt and mirroring no
     other header."""
     findings: list[finding] = []
     listings: dict[pathlib.Path, str] = {}
     claimed: dict[pathlib.Path, str] = {}
-    used_exceptions: set[str] = set()
     for header, test_root, key, sub_directory in mirrored_headers(root):
         expected = f"test_{header.stem}.cpp"
-        if key in exceptions:
-            used_exceptions.add(key)
+        if exceptions.covers(key):
             continue
         shown_root = test_root.relative_to(root).as_posix()
         candidates = sorted(test_root.rglob(expected)) if test_root.is_dir() else []
@@ -737,7 +853,7 @@ def check_tests_mirror_headers(root: pathlib.Path, exceptions: dict[str, str]) -
                 header, 1, "tests-mirror-headers",
                 f"{shown_test} already mirrors {first}; one test file per public header (08_testing.md 5.1)"))
 
-    for key in sorted(set(exceptions) - used_exceptions):
+    for key in exceptions.unseen():
         findings.append(finding(
             root / "tools" / "style_exceptions.json", 1, "tests-mirror-headers",
             f"exception '{key}' names a header that does not exist; remove it"))
@@ -759,24 +875,34 @@ def main(argv: list[str]) -> int:
 
     try:
         exceptions = load_exceptions(root)
-        forbidden_exceptions = exception_table(exceptions, "forbidden_in_tests")
-        mirror_exceptions = exception_table(exceptions, "tests_mirror_headers")
+        forbidden_exceptions = exception_use(exception_table(exceptions, "forbidden_in_tests"))
+        mirror_exceptions = exception_use(exception_table(exceptions, "tests_mirror_headers"))
+        third_party_exceptions = exception_use(exception_table(exceptions, "third_party_in_tests"))
         files = iter_source_files(root, args.paths)
     except usage_error as error:
         print(f"check_style: {error}", file=sys.stderr)
         return 2
-    used_forbidden_exceptions: set[str] = set()
 
     findings: list[finding] = []
     for path in files:
-        findings.extend(check_file(root, path, forbidden_exceptions, used_forbidden_exceptions))
+        findings.extend(check_file(root, path, forbidden_exceptions, third_party_exceptions))
 
-    # Stale entries are only detectable on a whole-repository run.
+    exceptions_path = root / "tools" / "style_exceptions.json"
+    # An entry whose file was checked and includes no third-party header is stale on any run; one whose file was
+    # never checked is only detectable on a whole-repository run.
+    for key in third_party_exceptions.unneeded():
+        findings.append(finding(
+            exceptions_path, 1, "third-party-include-in-test",
+            f"exception '{key}' names a file that includes no third-party header; remove it"))
     if not args.paths:
-        for key in sorted(set(forbidden_exceptions) - used_forbidden_exceptions):
+        for key in forbidden_exceptions.unseen():
             findings.append(finding(
-                root / "tools" / "style_exceptions.json", 1, "forbidden-in-tests",
+                exceptions_path, 1, "forbidden-in-tests",
                 f"exception '{key}' names a file that does not exist; remove it"))
+        for key in third_party_exceptions.unseen():
+            findings.append(finding(
+                exceptions_path, 1, "third-party-include-in-test",
+                f"exception '{key}' names no C++ source under tests/; remove it"))
 
     if args.tests_mirror_headers:
         findings.extend(check_tests_mirror_headers(root, mirror_exceptions))
