@@ -8,21 +8,28 @@
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/engine_time.h"
 #include "conjure/engine/log_category.h"
+#include "conjure/engine/project.h"
 
+#include "conjure/core/json/document.h"
+#include "conjure/core/json/value.h"
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/reflect/type_registry.h"
+#include "conjure/core/uuid.h"
 #include "conjure/ecs/scheduler.h"
 #include "conjure/ecs/view.h"
 #include "conjure/renderer/environment_asset.h"
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/renderer.h"
+#include "conjure/renderer/renderer_error.h"
 #include "conjure/renderer/texture_asset.h"
 #include "conjure/scene/components.h"
 
 #include <algorithm>
 #include <format>
+#include <span>
+#include <string>
 #include <utility>
 
 using namespace conjure;
@@ -38,6 +45,80 @@ namespace {
         const math::vec3 rotated = math::vec3(matrix * math::vec4(local, 0.0f));
         const f32 length = glm::length(rotated);
         return length > 1.0e-6f ? rotated / length : local;
+    }
+
+    /// <summary>
+    /// Reads project.json "rendering.defaults" (render-settings design 2.3 step 1, 2.4): engine defaults without a
+    /// project or without the key. Both hosts log one WARN per unknown key. A runtime (not 'editor') fails with
+    /// RENDERER_INIT_FAILED naming the first problem's path, as physics fails on its section, so a game never runs
+    /// with settings its author did not write; the editor logs one ERR per problem and keeps the engine default for
+    /// each bad leaf only, so the project still opens and its settings can be repaired.
+    /// </summary>
+    [[nodiscard]] core::result<renderer::render_settings> read_project_defaults(const project *loaded, bool editor) {
+        core::json::value defaults = {};
+        if (loaded != nullptr) {
+            defaults = loaded->description().renderingSection.root()["defaults"];
+        }
+        const renderer::render_settings_reading reading = renderer::read_render_settings(defaults);
+        for (const std::string &path : reading.unknownKeys) {
+            CONJURE_LOG_WARN(LOG_ENGINE, "renderer: project.json {} is not a rendering setting; it is ignored", path);
+        }
+        if (reading.errors.empty()) {
+            return reading.settings;
+        }
+        if (!editor) {
+            const renderer::render_settings_problem &first = reading.errors.front();
+            const core::error cause =
+              core::make_error(renderer::renderer_error::INVALID_SETTINGS, "{}: {}", first.path, first.reason);
+            return renderer_error("reading the rendering defaults", cause);
+        }
+        for (const renderer::render_settings_problem &problem : reading.errors) {
+            CONJURE_LOG_ERROR(
+              LOG_ENGINE,
+              "renderer: project.json {}: {}; the engine default is used",
+              problem.path,
+              problem.reason
+            );
+        }
+        return reading.settings;
+    }
+
+    /// <summary>
+    /// How the tie WARN names a candidate: its scene guid, or "entity 12" (its index) when it has none.
+    /// </summary>
+    [[nodiscard]] std::string candidate_name(const renderer::scene_settings_candidate &candidate) {
+        if (candidate.guid.is_null()) {
+            return std::format("entity {}", candidate.entityIndex);
+        }
+        return candidate.guid.to_string();
+    }
+
+    /// <summary>
+    /// The candidates of a group tied with its winner at the top priority, as "guid, guid, entity 12". Whether a
+    /// candidate takes part in the group is asked of renderer::choose_scene_settings over that candidate alone, so
+    /// the group membership rule lives in the renderer only. Runs on the WARN path only.
+    /// </summary>
+    [[nodiscard]] std::string tied_candidates(
+      std::span<const renderer::scene_settings_candidate> candidates,
+      usize group,
+      u32 winner
+    ) {
+        std::string names = {};
+        const i32 topPriority = candidates[winner].component->priority;
+        for (const renderer::scene_settings_candidate &candidate : candidates) {
+            if (candidate.component == nullptr || candidate.component->priority != topPriority) {
+                continue;
+            }
+            const renderer::scene_settings_choice alone = renderer::choose_scene_settings(std::span(&candidate, 1));
+            if (alone.winner[group] == renderer::NO_SETTINGS_CANDIDATE) {
+                continue;
+            }
+            if (!names.empty()) {
+                names += ", ";
+            }
+            names += candidate_name(candidate);
+        }
+        return names;
     }
 }
 
@@ -62,6 +143,14 @@ std::string_view renderer_subsystem::name() const noexcept {
 core::result<void> renderer_subsystem::startup(engine_context &context) {
     const engine_config &config = *context.config;
     mStats = {};
+    mAmbiguousLatch = {};
+    mOrphanPostProcessLatch = false;
+
+    // The project defaults come first, before the rendering early-out: a headless server fails on bad settings as
+    // the shipped game would, and renderDefaults is published without a renderer too.
+    CONJURE_TRY_ASSIGN(const renderer::render_settings defaults, read_project_defaults(context.project, config.editor));
+    mDefaults.set(defaults);
+    context.renderDefaults = &mDefaults;
 
     // The component types exist whatever the rendering flag says: a headless server still loads the scene.
     CONJURE_TRY(renderer::register_components(core::reflect::registry()));
@@ -71,6 +160,8 @@ core::result<void> renderer_subsystem::startup(engine_context &context) {
     CONJURE_TRY(components.register_component<renderer::camera_component>());
     CONJURE_TRY(components.register_component<renderer::light_component>());
     CONJURE_TRY(components.register_component<renderer::environment_component>());
+    CONJURE_TRY(components.register_component<renderer::render_settings_component>());
+    CONJURE_TRY(components.register_component<renderer::post_process_component>());
     CONJURE_TRY(renderer::renderer::register_asset_types(
       mServices->assetManager->types(),
       mServices->importers,
@@ -138,24 +229,7 @@ void renderer_subsystem::register_systems(ecs::scheduler &scheduler, engine_cont
         );
     }
 
-    ecs::system_desc extract = ecs::make_system<
-      const renderer::mesh_renderer_component,
-      const renderer::sprite_component,
-      const renderer::camera_component,
-      const renderer::light_component,
-      const renderer::environment_component,
-      const scene::render_world_transform,
-      const scene::local_bounds>(
-      core::string_id::intern(SYSTEM_EXTRACT),
-      ecs::system_phase::EXTRACT,
-      [this](ecs::system_context &systemContext) {
-          if (mServices->extractTarget != nullptr) {
-              this->extract(systemContext, *mServices->extractTarget);
-          }
-      }
-    );
-    extract.flags = ecs::system_flags::MAIN_THREAD | ecs::system_flags::RUNS_WHILE_PAUSED;
-    added = scheduler.add_system(std::move(extract));
+    added = scheduler.add_system(describe_extract());
     if (!added.has_value()) {
         CONJURE_LOG_ERROR(
           LOG_ENGINE,
@@ -172,6 +246,7 @@ void renderer_subsystem::begin_frame(engine_context &context) {
 
 void renderer_subsystem::shutdown(engine_context &context) {
     context.renderer = nullptr;
+    context.renderDefaults = nullptr;
     if (mSubscription.is_valid() && mServices->assetManager != nullptr) {
         mServices->assetManager->unsubscribe(mSubscription);
     }
@@ -179,9 +254,23 @@ void renderer_subsystem::shutdown(engine_context &context) {
     mServices->extractTarget = nullptr;
     mCameras.clear();
     mCameras.shrink_to_fit();
+    mSettingsCandidates.clear();
+    mSettingsCandidates.shrink_to_fit();
+    mAmbiguousLatch = {};
+    mOrphanPostProcessLatch = false;
     mServices->debugDraw.reset();
     mServices->renderer.reset();
     mServices->shaders.reset();
+}
+
+renderer_subsystem *renderer_subsystem::find(std::span<const std::unique_ptr<engine_subsystem>> subsystems) noexcept {
+    for (const std::unique_ptr<engine_subsystem> &subsystem : subsystems) {
+        renderer_subsystem *found = dynamic_cast<renderer_subsystem *>(subsystem.get());
+        if (found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
 }
 
 std::filesystem::path renderer_subsystem::shader_directory(
@@ -194,8 +283,33 @@ std::filesystem::path renderer_subsystem::shader_directory(
     return engineDirectory / "shaders";
 }
 
+ecs::system_desc renderer_subsystem::describe_extract() {
+    ecs::system_desc extract = ecs::make_system<
+      const renderer::mesh_renderer_component,
+      const renderer::sprite_component,
+      const renderer::camera_component,
+      const renderer::light_component,
+      const renderer::environment_component,
+      const renderer::render_settings_component,
+      const renderer::post_process_component,
+      const scene::render_world_transform,
+      const scene::local_bounds,
+      const scene::guid>(
+      core::string_id::intern(SYSTEM_EXTRACT),
+      ecs::system_phase::EXTRACT,
+      [this](ecs::system_context &systemContext) {
+          if (mServices->extractTarget != nullptr) {
+              this->extract(systemContext, *mServices->extractTarget);
+          }
+      }
+    );
+    extract.flags = ecs::system_flags::MAIN_THREAD | ecs::system_flags::RUNS_WHILE_PAUSED;
+    return extract;
+}
+
 void renderer_subsystem::extract(ecs::system_context &context, renderer::render_scene &target) {
     using render_transform = scene::render_world_transform;
+    using post_process = renderer::post_process_component;
     renderer::renderer &instance = *mServices->renderer;
     mStats.views = 0;
     mStats.meshes = 0;
@@ -203,20 +317,28 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
     mStats.lights = 0;
     mStats.sprites = 0;
     mStats.environmentSeen = false;
+    mStats.viewsWithSettingsOverride = 0;
 
     target.frameIndex = context.frame().frameIndex;
     target.deltaSeconds = context.frame().deltaTime;
+    extract_scene_settings(context, target);
 
     // Cameras: the main cameras first in priority order; a scene without an isMain camera renders every camera.
-    // The candidate list is a member so a steady-state frame allocates nothing (08_testing.md 7.1).
+    // The candidate list is a member so a steady-state frame allocates nothing (08_testing.md 7.1). A camera's
+    // post_process component carries the groups it overrides into its view.
     std::vector<camera_candidate> &cameras = mCameras;
     cameras.clear();
-    context.view<const renderer::camera_component, const scene::render_world_transform>()
+    context.view<const renderer::camera_component, const render_transform, ecs::maybe<const post_process>>()
       .without<scene::disabled>()
       .without<scene::inactive>()
-      .for_each([&](ecs::entity, const renderer::camera_component &camera, const render_transform &transform) {
+      .for_each([&](
+        ecs::entity,
+        const renderer::camera_component &camera,
+        const render_transform &transform,
+        const post_process *overrides
+      ) {
           camera_candidate candidate = {};
-          candidate.view = renderer::make_camera_view(camera, transform.matrix);
+          candidate.view = renderer::make_camera_view(camera, transform.matrix, {}, overrides);
           if (mServices->debugDraw != nullptr) {
               candidate.view.flags |= renderer::view_flags::DRAW_DEBUG;
           }
@@ -243,6 +365,9 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
             continue;
         }
         ++mStats.views;
+        if (candidate.view.settingsOverride != renderer::view_settings_override_flags::NONE) {
+            ++mStats.viewsWithSettingsOverride;
+        }
         if (hasSwapchain) {
             target.views.push_back(candidate.view);
         }
@@ -368,6 +493,76 @@ void renderer_subsystem::extract(ecs::system_context &context, renderer::render_
 /*===========================================================================*/
 // Private methods
 
+void renderer_subsystem::extract_scene_settings(ecs::system_context &context, renderer::render_scene &target) {
+    // Scene layer (render-settings design 2.2): every enabled render_settings component is a candidate, and per
+    // group the highest priority among those that override it replaces the project defaults.
+    std::vector<renderer::scene_settings_candidate> &candidates = mSettingsCandidates;
+    candidates.clear();
+    context.view<const renderer::render_settings_component, ecs::maybe<const scene::guid>>()
+      .without<scene::disabled>()
+      .without<scene::inactive>()
+      .for_each([&](ecs::entity entity, const renderer::render_settings_component &settings, const scene::guid *id) {
+          renderer::scene_settings_candidate candidate = {};
+          candidate.component = &settings;
+          candidate.guid = id != nullptr ? id->value : core::uuid{};
+          candidate.entityIndex = entity.index;
+          candidates.push_back(candidate);
+      });
+    mStats.settingsCandidates = static_cast<u32>(candidates.size());
+
+    const renderer::scene_settings_choice choice = renderer::choose_scene_settings(candidates);
+    warn_ambiguous_groups(choice);
+    const renderer::resolved_render_settings resolved =
+      renderer::resolve_scene_settings(mDefaults.get(), candidates, choice);
+    target.postProcess = resolved.settings.postProcess;
+    target.shadows = resolved.settings.shadows;
+    target.ssao = resolved.settings.ssao;
+    // The pointers lead into chunk storage, which the next frame's structural changes may move.
+    candidates.clear();
+
+    // Camera layer: a post_process component is read only on a camera's entity; anywhere else it does nothing.
+    u32 orphans = 0;
+    context.view<const renderer::post_process_component>()
+      .without<renderer::camera_component>()
+      .without<scene::disabled>()
+      .without<scene::inactive>()
+      .for_each([&](ecs::entity, const renderer::post_process_component &) {
+          ++orphans;
+      });
+    mStats.orphanPostProcess = orphans;
+    const bool orphaned = orphans > 0;
+    if (orphaned && !mOrphanPostProcessLatch) {
+        CONJURE_LOG_WARN(
+          LOG_ENGINE,
+          "renderer: {} post_process component(s) on entities without a camera component are ignored; a "
+          "post_process component overrides the settings of its own entity's camera only",
+          orphans
+        );
+    }
+    mOrphanPostProcessLatch = orphaned;
+}
+
+void renderer_subsystem::warn_ambiguous_groups(const renderer::scene_settings_choice &choice) {
+    for (usize group = 0; group < renderer::SETTINGS_GROUP_COUNT; ++group) {
+        const bool ambiguous = choice.ambiguous[group];
+        if (ambiguous && !mAmbiguousLatch[group]) {
+            const u32 winner = choice.winner[group];
+            // The winner is named because the tie-break is not always the guid order: candidates without a scene
+            // guid come after those with one, by entity index (renderer::choose_scene_settings).
+            CONJURE_LOG_WARN(
+              LOG_ENGINE,
+              "renderer: render_settings components tie at priority {} for the {} group ({}); {} wins (the lowest "
+              "guid, entities without a guid after, by index), give one of them a higher priority",
+              mSettingsCandidates[winner].component->priority,
+              renderer::to_string(static_cast<renderer::render_settings_group>(group)),
+              tied_candidates(mSettingsCandidates, group, winner),
+              candidate_name(mSettingsCandidates[winner])
+            );
+        }
+        mAmbiguousLatch[group] = ambiguous;
+    }
+}
+
 void renderer_subsystem::handle_asset_event(const assets::asset_event &event) {
     renderer::renderer &instance = *mServices->renderer;
     assets::asset_manager &assets = *mServices->assetManager;
@@ -430,6 +625,42 @@ void renderer_subsystem::sync(ecs::system_context &context) {
     if (mServices->debugDraw != nullptr) {
         mServices->debugDraw->tick(mLastDeltaSeconds);
     }
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// render_extract_runner
+
+render_extract_runner::render_extract_runner(engine_context &context, renderer_subsystem &subsystem) :
+    mWorld(context.world),
+    mSubsystem(&subsystem),
+    mDesc(subsystem.describe_extract()),
+    mCommands(*context.world) {
+    mDesc.resolveAccess(*context.components, mDesc.reads, mDesc.writes);
+}
+
+render_extract_runner::~render_extract_runner() {}
+
+void render_extract_runner::run(renderer::render_scene &target) {
+    ++mFrame.frameIndex;
+    const u64 runVersion = mWorld->bump_version();
+    // No job system and no chunk parallelism: engine.render_extract is a MAIN_THREAD system.
+    ecs::system_context context(
+      *mWorld,
+      mFrame,
+      mSinceVersion,
+      runVersion,
+      mCommands,
+      nullptr,
+      mDesc,
+      mScratch,
+      false,
+      1024
+    );
+    target.clear();
+    mSubsystem->extract(context, target);
+    mSinceVersion = runVersion;
 }
 
 #endif

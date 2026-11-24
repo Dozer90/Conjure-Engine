@@ -84,11 +84,12 @@ if(CONJURE_WITH_PHYSICS AND TARGET conjure::physics)
     list(APPEND CONJURE_BENCHMARK_DEPS conjure::physics)
 endif()
 if(CONJURE_WITH_RENDERER AND TARGET conjure::renderer)
-    list(APPEND CONJURE_BENCHMARK_SOURCES bench_render_null_frame.cpp)
+    list(APPEND CONJURE_BENCHMARK_SOURCES bench_render_null_frame.cpp bench_render_extract.cpp)
     list(APPEND CONJURE_BENCHMARK_SCENARIOS
         renderer.extract_10k
         renderer.null_frame_10k
         engine.full_frame_10k_transform_render
+        engine.render_extract_8_views
     )
     list(APPEND CONJURE_BENCHMARK_DEPS conjure::renderer conjure::rhi)
 endif()

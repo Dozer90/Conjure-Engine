@@ -18,6 +18,7 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // project.h (docs/design/06_engine_loop.md 2.10, R39, R52, R53): load, validation errors, extensions
 // preservation, fixed_hz round trips, apply_to and the module manifest listing.
@@ -419,6 +420,116 @@ TEST_SUITE("engine/project") {
         CHECK(logs.contains(core::log_level::WARN, "'build'"));
         const core::json::document written = parsed.value().to_json();
         CHECK(written.root()["extensions"]["build"].as_string() == "dist");
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L2 rendering.defaults and unknown keys survive to_json and save") {
+        // to_json used to write a fresh rendering object of the three engine keys, so a save (and project.set_settings,
+        // and the cooked export, which write the same document) dropped the project's rendering defaults.
+        log_capture logs = {};
+        temp_directory directory("engine_project_rendering_defaults");
+        constexpr std::string_view RENDERING = R"("rendering": {"defaults": {"post_process": {"tonemap": "agx",
+          "bloom_intensity": 0.06, "future_key": [1, 2]}, "ssao": {"radius": 0.75}}, "enabled": true,
+          "backend": "null", "studio_note": "kept"})";
+        const project written = engine_test::write_project(directory.path(), "kept", {}, RENDERING);
+        const core::json::value section = written.description().renderingSection.root();
+        REQUIRE(section.is_object());
+        const core::json::document defaults = core::json::document::from_value(section["defaults"]);
+        CHECK(defaults.root()["post_process"]["tonemap"].as_string() == "agx");
+
+        SUBCASE("to_json and parse again") {
+            const core::json::document document = written.to_json();
+            CHECK(core::json::document::from_value(document.root()["rendering"]["defaults"]) == defaults);
+            CHECK(document.root()["rendering"]["studio_note"].as_string() == "kept");
+            const core::result<project> reparsed =
+              project::parse(core::json::to_string(document.root()), written.root_directory());
+            CONJURE_REQUIRE_OK(reparsed);
+            const core::json::value again = reparsed.value().description().renderingSection.root();
+            CHECK(core::json::document::from_value(again["defaults"]) == defaults);
+            CHECK(again["studio_note"].as_string() == "kept");
+        }
+        SUBCASE("save and load") {
+            CONJURE_REQUIRE_OK(written.save());
+            const core::result<project> reloaded = project::load(directory.path());
+            CONJURE_REQUIRE_OK(reloaded);
+            const core::json::value again = reloaded.value().description().renderingSection.root();
+            CHECK(core::json::document::from_value(again["defaults"]) == defaults);
+            CHECK(again["studio_note"].as_string() == "kept");
+            CHECK(reloaded.value().description().rendering.backend == rhi_backend_choice::NULL_DEVICE);
+        }
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
+    TEST_CASE("project - the engine's rendering keys are written over the raw rendering section") {
+        // The section as the file had it says one thing, the parsed (and since edited) settings another: the
+        // settings win, keep their place in the section, and the other members stay.
+        const core::result<project> parsed = project::parse(
+          R"({"schema_version": 1, "name": "o", "rendering": {"gpu_validation": "debug_layer", "enabled": false,
+              "defaults": {"ssao": {"enabled": false}}}})",
+          std::filesystem::path(".")
+        );
+        CONJURE_REQUIRE_OK(parsed);
+        project edited = parsed.value();
+        edited.description().rendering.enabled = true;
+        edited.description().rendering.gpuValidation = gpu_validation_level::OFF;
+        edited.description().rendering.backend = rhi_backend_choice::VULKAN;
+        const core::json::document document = edited.to_json();
+        const core::json::value rendering = document.root()["rendering"];
+        CHECK(rendering["enabled"].as_bool());
+        CHECK(rendering["gpu_validation"].as_string() == "off");
+        CHECK(rendering["backend"].as_string() == to_string(rhi_backend_choice::VULKAN));
+        CHECK_FALSE(rendering["defaults"]["ssao"]["enabled"].as_bool());
+        std::vector<std::string_view> keys = {};
+        for (const core::json::member entry : rendering.members()) {
+            keys.push_back(entry.key);
+        }
+        CHECK(keys == std::vector<std::string_view>{"gpu_validation", "enabled", "defaults", "backend"});
+
+        SUBCASE("a section that is not an object is replaced by one with the engine's keys") {
+            edited.description().renderingSection = core::json::document{};
+            const core::json::document rebuilt = edited.to_json();
+            CHECK(rebuilt.root()["rendering"].is_object());
+            CHECK(rebuilt.root()["rendering"]["enabled"].as_bool());
+            CHECK_FALSE(rebuilt.root()["rendering"].contains("defaults"));
+        }
+    }
+
+    TEST_CASE("project - a project without a rendering section writes no rendering defaults") {
+        const core::result<project> parsed =
+          project::parse(R"({"schema_version": 1, "name": "bare"})", std::filesystem::path("."));
+        CONJURE_REQUIRE_OK(parsed);
+        CHECK(parsed.value().description().renderingSection.root().is_object());
+        CHECK(parsed.value().description().renderingSection.root().size() == 0);
+        const core::json::document document = parsed.value().to_json();
+        const core::json::value rendering = document.root()["rendering"];
+        REQUIRE(rendering.is_object());
+        CHECK(rendering.size() == 3);
+        CHECK(rendering.contains("enabled"));
+        CHECK(rendering.contains("backend"));
+        CHECK(rendering.contains("gpu_validation"));
+        CHECK_FALSE(rendering.contains("defaults"));
+    }
+
+    TEST_CASE("project - parse keeps rendering.defaults without checking it") {
+        // The project knows no renderer type: the renderer subsystem and the export check the defaults.
+        log_capture logs = {};
+        const std::array<std::string_view, 3> unchecked = {
+            R"({"ssao": {"radius": "wide"}})",
+            R"({"post_process": {"bloom_intensity": 1000}, "fog": {}})",
+            "42",
+        };
+        for (const std::string_view defaults : unchecked) {
+            CAPTURE(defaults);
+            const std::string text =
+              std::format(R"({{"schema_version": 1, "name": "u", "rendering": {{"defaults": {}}}}})", defaults);
+            const core::result<project> parsed = project::parse(text, std::filesystem::path("."));
+            CONJURE_REQUIRE_OK(parsed);
+            const core::result<core::json::document> expected = core::json::document::parse(defaults);
+            CONJURE_REQUIRE_OK(expected);
+            const core::json::value kept = parsed.value().description().renderingSection.root()["defaults"];
+            CHECK(core::json::document::from_value(kept) == expected.value());
+        }
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("project - a root given with a trailing separator names the game module after its folder") {

@@ -98,6 +98,11 @@
             "ci": { "p50_ms": 12.0 },
             "allocs": 0
         },
+        "engine.render_extract_8_views": {
+            "desktop": { "p50_ms": 0.005 },
+            "ci": { "p50_ms": 0.015 },
+            "allocs": 0
+        },
         "engine.full_frame_10k_physics": {
             "desktop": { "p50_ms": 12.0, "p99_ms": 16.0 },
             "ci": { "p50_ms": 36.0, "p99_ms": 48.0 },

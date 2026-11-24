@@ -6,7 +6,9 @@
 #include "conjure/engine/engine_context.h"
 #include "conjure/modules/module_service.h"
 
+#include <cstddef>
 #include <string_view>
+#include <type_traits>
 
 // engine_context.h (docs/design/06_engine_loop.md 2.5, R22, R51): the service table every pointer of which is
 // null until an application fills it, and its module service identity.
@@ -41,6 +43,15 @@ TEST_SUITE("engine/engine_context") {
         CHECK(context.modules == nullptr);
         CHECK(context.checks == nullptr);
         CHECK(context.stats == nullptr);
+        CHECK(context.renderDefaults == nullptr);
+    }
+
+    TEST_CASE("engine_context - renderDefaults is appended after stats, the former last member") {
+        // Plugins built against the table before renderDefaults existed read every earlier member at its old
+        // offset, so the new pointer comes after all of them and nothing else moved.
+        static_assert(std::is_standard_layout_v<engine_context>);
+        CHECK(offsetof(engine_context, renderDefaults) == offsetof(engine_context, stats) + sizeof(void *));
+        CHECK(sizeof(engine_context) == offsetof(engine_context, renderDefaults) + sizeof(void *));
     }
 
     TEST_CASE("engine_context - is a module service with a stable id") {
@@ -63,5 +74,7 @@ TEST_SUITE("engine/engine_context") {
         CHECK(context.stats == &app.stats());
         CHECK(context.project == nullptr);
         CHECK(context.world == nullptr);
+        // The renderer subsystem publishes the rendering defaults during initialise, not before.
+        CHECK(context.renderDefaults == nullptr);
     }
 }

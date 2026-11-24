@@ -48,6 +48,7 @@ namespace conjure::scene {
 
 namespace conjure::renderer {
     class renderer;
+    class render_defaults;
 }
 
 namespace conjure::physics {
@@ -105,5 +106,10 @@ namespace conjure::engine {
         conjure::modules::module_manager *modules = nullptr;        // registry() for reads; request_* for the editor
         diagnostics::check_registry *checks = nullptr;    // self-verifying samples (08_testing.md 2.5)
         const frame_stats *stats = nullptr;               // read by the editor profiler and diagnostics_frame_stats
+        // Appended after every other member so none of them moves. The live project.json "rendering.defaults",
+        // owned by the renderer subsystem: set at its startup, also when rendering is disabled; nullptr when the
+        // renderer is compiled out, before that startup, after its shutdown and when a runtime's startup refused
+        // invalid defaults. Main thread only.
+        conjure::renderer::render_defaults *renderDefaults = nullptr;
     };
 }

@@ -9,6 +9,7 @@
 #include "conjure/assets/asset_manager.h"
 #include "conjure/core/dynamic_library.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/json/value.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
 #include "conjure/core/string_utils.h"
@@ -744,6 +745,103 @@ TEST_SUITE("engine/export") {
         CONJURE_REQUIRE_OK(source);
         CHECK(source.value().description().rendering.gpuValidation == named);
         CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L2 the exported project.json keeps the rendering defaults") {
+        // Step 6 writes project::to_json, which used to drop every rendering key but the engine's three, so a game
+        // shipped without the look its project defines. Unknown keys, inside the defaults and beside them, are no
+        // reason to refuse the export and ship as they are (a newer engine may read them).
+        log_capture logs = {};
+        temp_directory directory("engine_export_rendering_defaults");
+        const std::filesystem::path projectDir = directory.path() / "project";
+        const std::filesystem::path outputDir = directory.path() / "out";
+        const project loaded = engine_test::write_project(
+          projectDir,
+          "looks",
+          {},
+          R"("rendering": {"studio_note": "kept", "defaults": {"post_process": {"tonemap": "agx",
+             "agx_look": "punchy", "future_key": 1}, "shadows": {"cascade_count": 2}}})"
+        );
+        const core::json::document defaults =
+          core::json::document::from_value(loaded.description().renderingSection.root()["defaults"]);
+        REQUIRE(defaults.root().is_object());
+        {
+            application app(project_desc(loaded, 0));
+            CONJURE_REQUIRE_OK(app.initialise());
+            export_pipeline pipeline(app.context());
+            export_settings settings = {};
+            settings.outputDirectory = outputDir;
+            settings.buildNativeModule = false;
+            settings.publishManaged = false;
+            settings.copyRuntime = false;
+            CONJURE_REQUIRE_OK(pipeline.run(settings));
+            app.shutdown();
+        }
+
+        core::result<project> exported = project::load(outputDir);
+        CONJURE_REQUIRE_OK(exported);
+        const core::json::value shippedRendering = exported.value().description().renderingSection.root();
+        CHECK(core::json::document::from_value(shippedRendering["defaults"]) == defaults);
+        CHECK(shippedRendering["defaults"]["post_process"]["future_key"].as_i64() == 1);
+        CHECK(shippedRendering["studio_note"].as_string() == "kept");
+        // The renderer subsystem of a build with the renderer reports the unknown leaf of the defaults once; the
+        // key beside the defaults is the project's own business.
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "rendering/defaults/post_process/future_key"));
+#else
+        CHECK(logs.count(core::log_level::WARN) == 0);
+#endif
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("export_pipeline - invalid rendering defaults refuse the export before anything is written") {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        // The editor opens such a project leniently (an ERR per problem), but the exported runtime reads the defaults
+        // strictly and would not start, so the export refuses with the path of the problem.
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_export_bad_rendering_defaults");
+        const std::filesystem::path projectDir = directory.path() / "project";
+        const std::filesystem::path outputDir = directory.path() / "out";
+        std::string defaults = {};
+        std::string_view path = {};
+        SUBCASE("a value out of range") {
+            defaults = R"({"ssao": {"radius": 100.0}})";
+            path = "rendering/defaults/ssao/radius";
+        }
+        SUBCASE("an unknown enumerator") {
+            defaults = R"({"post_process": {"tonemap": "filmic"}})";
+            path = "rendering/defaults/post_process/tonemap";
+        }
+        SUBCASE("a defaults member that is not an object") {
+            defaults = "true";
+            path = "rendering/defaults";
+        }
+        const std::string rendering = std::format(R"("rendering": {{"defaults": {}}})", defaults);
+        const project loaded = engine_test::write_project(projectDir, "broken_look", {}, rendering);
+        application_desc desc = project_desc(loaded, 0);
+        desc.config.editor = true;
+        application app(std::move(desc));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        export_settings settings = {};
+        settings.outputDirectory = outputDir;
+        settings.buildNativeModule = false;
+        settings.publishManaged = false;
+        settings.copyRuntime = false;
+        const core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+
+        CONJURE_CHECK_ERROR(ran, engine_error::EXPORT_FAILED);
+        REQUIRE_FALSE(ran.has_value());
+        CHECK(ran.get_error().message().find("write_project") != std::string::npos);
+        CHECK(ran.get_error().message().find(path) != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(outputDir));
+        CHECK(logs.contains(core::log_level::ERR, path));
+#else
+        MESSAGE("this build has no renderer: nothing reads the rendering defaults, so the export checks none");
+#endif
     }
 
     TEST_CASE("export_pipeline - refuses the project directory and a folder inside the assets root as output") {

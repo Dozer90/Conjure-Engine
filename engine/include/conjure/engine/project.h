@@ -53,6 +53,9 @@ namespace conjure::engine {
         scripting_settings scripting = {};
         std::vector<std::string> layers = {};       // scene layer names, index order (at most 32)
         core::json::document physicsSection = core::json::document::object();   // the raw "physics" object (R53)
+        // The raw "rendering" object as the file has it: "defaults" (read by the renderer subsystem and checked by
+        // the export, never by parse()) and every key the engine does not read survive to_json().
+        core::json::document renderingSection = core::json::document::object();
         core::json::document extensions = core::json::document::object();       // opaque per-module sections
         bool cooked = false;                        // true in an exported build: only cookedRoot is mounted
     };
@@ -95,7 +98,9 @@ namespace conjure::engine {
 
             /// <summary>
             /// The document save() writes: every section in schema order, "fixed_hz" instead of the delta,
-            /// unknown keys inside "extensions".
+            /// unknown keys inside "extensions". "physics" and "rendering" are the raw sections the file had
+            /// (physicsSection, renderingSection) with the engine's own keys written over them, so keys the
+            /// engine does not read, rendering.defaults among them, are kept as they were.
             /// </summary>
             [[nodiscard]] core::json::document to_json() const;
 

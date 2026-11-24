@@ -254,11 +254,17 @@ namespace {
         return core::result<void>::success();
     }
 
-    [[nodiscard]] core::result<void> read_rendering(const value &root, rendering_settings &settings) {
+    /// <summary>
+    /// Reads the engine's keys of "rendering" and keeps the whole section raw, like physics: "defaults" is read by
+    /// the renderer subsystem and checked by the export, never here, because the project knows no renderer type.
+    /// </summary>
+    [[nodiscard]] core::result<void> read_rendering(const value &root, project_description &description) {
         CONJURE_TRY_ASSIGN(const value section, read_object(root, "rendering"));
         if (!section.is_valid()) {
             return core::result<void>::success();
         }
+        description.renderingSection = core::json::document::from_value(section);
+        rendering_settings &settings = description.rendering;
         CONJURE_TRY(read_bool(section, "enabled", settings.enabled));
         std::string backend = {};
         CONJURE_TRY(read_string(section, "backend", backend));
@@ -442,7 +448,7 @@ core::result<project> project::parse(std::string_view text, std::filesystem::pat
     CONJURE_TRY(read_window(root, description.window));
     CONJURE_TRY(read_time(root, description.time));
     CONJURE_TRY(read_physics(root, description));
-    CONJURE_TRY(read_rendering(root, description.rendering));
+    CONJURE_TRY(read_rendering(root, description));
     CONJURE_TRY(read_audio(root, description.audio));
     CONJURE_TRY(read_assets(root, description.assets));
     CONJURE_TRY(read_scripting(root, description.scripting));
@@ -545,7 +551,12 @@ core::json::document project::to_json() const {
     physics.set("max_bodies", desc.physics.maxBodies);
     root.set("physics", physics);
 
-    core::json::document rendering = core::json::document::object();
+    // The raw rendering section carries "defaults" and every key the engine does not read; the engine-owned keys
+    // are written over it, so the two never disagree. A further engine-owned key is one more set() here.
+    core::json::document rendering = desc.renderingSection;
+    if (!rendering.root().is_object()) {
+        rendering = core::json::document::object();
+    }
     rendering.set("enabled", desc.rendering.enabled);
     rendering.set("backend", to_string(desc.rendering.backend));
     rendering.set("gpu_validation", to_string(desc.rendering.gpuValidation));

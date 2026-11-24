@@ -2,6 +2,7 @@
 
 #include "conjure/testing/allocation_scope.h"
 #include "conjure/testing/log_capture.h"
+#include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
 
 #include "conjure/assets/asset_manager.h"
@@ -9,6 +10,7 @@
 #include "conjure/assets/asset_source.h"
 #include "conjure/assets/asset_types.h"
 #include "conjure/assets/cooked_blob.h"
+#include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
@@ -16,11 +18,16 @@
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/world.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/application_desc.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/engine_context.h"
+#include "conjure/engine/engine_error.h"
+#include "conjure/engine/project.h"
 #include "conjure/renderer/components.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/model_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_settings.h"
 #include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/scene/components.h"
@@ -34,15 +41,20 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 // renderer_subsystem (docs/design/06_engine_loop.md 3.4 step 13, 09 R7/R8/R10 and section 3): the renderer
 // components exist even headless, a LOADED mesh asset becomes a GPU mirror through the asset events, the
 // extraction fills views, instances and lights from render_world_transform, and a model_asset converts into
-// a prefab document through prefab_builder.
+// a prefab document through prefab_builder. The project's rendering defaults (render-settings design 2.3, 2.4)
+// are read at startup, strictly by a runtime and leniently by the editor, and the extraction resolves them with
+// the render_settings and post_process components into the scene's settings groups and the camera views.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -54,15 +66,6 @@ namespace {
     // maximum over several frames absorbs a periodic block (an asset manager sweep, a stats sample) that two
     // frames would miss and the relative gate below would then report against the extraction.
     constexpr u32 BASELINE_FRAMES = 5;
-
-    [[nodiscard]] renderer_subsystem *find_renderer_subsystem(application &app) {
-        for (const std::unique_ptr<engine_subsystem> &subsystem : app.subsystems()) {
-            if (subsystem->name() == "renderer") {
-                return dynamic_cast<renderer_subsystem *>(subsystem.get());
-            }
-        }
-        return nullptr;
-    }
 
     [[nodiscard]] assets::cooked_blob mesh_blob(const assets::asset_id &id) {
         assets::cooked_blob_header header = {};
@@ -83,6 +86,73 @@ namespace {
         CONJURE_REQUIRE_OK(app.context().world->add<renderer::camera_component>(entity.value()));
         return entity.value();
     }
+
+    /// <summary>
+    /// The descriptor of a project whose project.json carries 'rendering' (the JSON of the "rendering" member) in
+    /// 'directory', started as the editor or as a runtime, with rendering on the null device or disabled.
+    /// </summary>
+    [[nodiscard]] application_desc rendering_project_desc(
+      const temp_directory &directory,
+      std::string_view rendering,
+      bool editor,
+      bool nullRendering
+    ) {
+        const std::string member = std::format(R"("rendering": {})", rendering);
+        project loaded = engine_test::write_project(directory.path(), "rendering_defaults", {}, member);
+        engine_config config = engine_test::inline_config();
+        config.projectPath = loaded.root_directory();
+        config.editor = editor;
+        loaded.apply_to(config);
+        if (nullRendering) {
+            engine_test::enable_null_rendering(config);
+        }
+        application_desc desc = engine_test::make_desc(config);
+        desc.project = std::move(loaded);
+        return desc;
+    }
+
+    /// <summary>
+    /// How many messages of a level the capture holds that contain 'text'.
+    /// </summary>
+    [[nodiscard]] usize count_containing(const log_capture &logs, core::log_level level, std::string_view text) {
+        const std::vector<std::string> messages = logs.messages(level);
+        return static_cast<usize>(std::count_if(messages.begin(), messages.end(), [text](const std::string &message) {
+            return message.find(text) != std::string::npos;
+        }));
+    }
+
+    /// <summary>
+    /// A root entity of the active scene with a fixed scene guid (so the tie-break order is known) and a
+    /// render_settings component.
+    /// </summary>
+    [[nodiscard]] ecs::entity create_settings_entity(
+      application &app,
+      const core::uuid &guid,
+      const renderer::render_settings_component &settings
+    ) {
+        scene::scene &active = app.context().scenes->active();
+        const core::result<ecs::entity> entity = active.create_entity(core::string_id("render_settings"));
+        CONJURE_REQUIRE_OK(entity);
+        CONJURE_REQUIRE_OK(active.set_guid(entity.value(), guid));
+        CONJURE_REQUIRE_OK(app.context().world->add<renderer::render_settings_component>(entity.value(), settings));
+        return entity.value();
+    }
+
+    // The project defaults of the settings tests: one leaf of each group, all away from the engine defaults.
+    constexpr std::string_view PROJECT_DEFAULTS = R"({"defaults": {"post_process": {"tonemap": "agx",
+      "bloom_intensity": 0.5}, "shadows": {"distance": 60.0}, "ssao": {"radius": 0.75}}})";
+
+    /// <summary>
+    /// The engine defaults with PROJECT_DEFAULTS applied.
+    /// </summary>
+    [[nodiscard]] renderer::render_settings project_defaults() {
+        renderer::render_settings settings = {};
+        settings.postProcess.tonemap = renderer::tonemap_operator::AGX;
+        settings.postProcess.bloomIntensity = 0.5f;
+        settings.shadows.distance = 60.0f;
+        settings.ssao.radius = 0.75f;
+        return settings;
+    }
 }
 
 TEST_SUITE("engine/renderer_subsystem") {
@@ -96,6 +166,8 @@ TEST_SUITE("engine/renderer_subsystem") {
         CHECK(registry.find(core::string_id(renderer::CAMERA_COMPONENT_TYPE_NAME)).is_valid());
         CHECK(registry.find(core::string_id(renderer::LIGHT_COMPONENT_TYPE_NAME)).is_valid());
         CHECK(registry.find(core::string_id(renderer::ENVIRONMENT_COMPONENT_TYPE_NAME)).is_valid());
+        CHECK(registry.find(core::string_id(renderer::RENDER_SETTINGS_COMPONENT_TYPE_NAME)).is_valid());
+        CHECK(registry.find(core::string_id(renderer::POST_PROCESS_COMPONENT_TYPE_NAME)).is_valid());
         CHECK(app.context().assets->types().find(renderer::MESH_ASSET_TYPE_NAME) != nullptr);
         CHECK(app.context().renderer == nullptr);
         app.shutdown();
@@ -145,7 +217,7 @@ TEST_SUITE("engine/renderer_subsystem") {
         application app(engine_test::make_desc(config));
         CONJURE_REQUIRE_OK(app.initialise());
         REQUIRE(app.context().renderer != nullptr);
-        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
         REQUIRE(subsystem != nullptr);
 
         // The empty frame's own cost in this executable (0 in Development; an MSVC Debug build sees the
@@ -229,7 +301,7 @@ TEST_SUITE("engine/renderer_subsystem") {
         CONJURE_REQUIRE_OK(app.initialise());
         renderer::renderer *instance = app.context().renderer;
         REQUIRE(instance != nullptr);
-        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
         REQUIRE(subsystem != nullptr);
         CONJURE_UNUSED(create_camera(app));
 
@@ -267,7 +339,7 @@ TEST_SUITE("engine/renderer_subsystem") {
         engine_test::enable_null_rendering(config);
         application app(engine_test::make_desc(config));
         CONJURE_REQUIRE_OK(app.initialise());
-        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
         REQUIRE(subsystem != nullptr);
         CONJURE_UNUSED(create_camera(app));
         scene::scene &active = app.context().scenes->active();
@@ -290,7 +362,7 @@ TEST_SUITE("engine/renderer_subsystem") {
         engine_test::enable_null_rendering(config);
         application app(engine_test::make_desc(config));
         CONJURE_REQUIRE_OK(app.initialise());
-        renderer_subsystem *subsystem = find_renderer_subsystem(app);
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
         REQUIRE(subsystem != nullptr);
 
         const assets::asset_id meshId = core::uuid::generate();
@@ -328,6 +400,383 @@ TEST_SUITE("engine/renderer_subsystem") {
         }
         handle = assets::asset_handle{};
         app.shutdown();
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L2 a runtime refuses to start on invalid rendering defaults") {
+        // The shipped game must not run with a look its author did not write: the runtime reads the defaults
+        // strictly, before the rendering early-out, so a headless server fails the same way.
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_renderer_strict_defaults");
+        bool nullRendering = false;
+        SUBCASE("headless, rendering disabled") {
+            nullRendering = false;
+        }
+        SUBCASE("rendering on the null device") {
+            nullRendering = true;
+        }
+        CAPTURE(nullRendering);
+        constexpr std::string_view RENDERING =
+          R"({"defaults": {"post_process": {"bloom_intensity": 0.5}, "ssao": {"radius": -1.0}}})";
+        application app(rendering_project_desc(directory, RENDERING, false, nullRendering));
+        const core::result<void> started = app.initialise();
+        CONJURE_CHECK_ERROR(started, engine_error::RENDERER_INIT_FAILED);
+        REQUIRE_FALSE(started.has_value());
+        CHECK(started.get_error().message().find("reading the rendering defaults") != std::string::npos);
+        CHECK(started.get_error().message().find("rendering/defaults/ssao/radius") != std::string::npos);
+        CHECK(app.state() == application_state::CREATED);
+        CHECK(app.context().renderDefaults == nullptr);
+        CHECK(app.context().renderer == nullptr);
+    }
+
+    TEST_CASE("renderer_subsystem - the editor starts on invalid rendering defaults, each bad leaf at its default") {
+        // The editor must open the project so its settings can be repaired: one ERR per problem, and only the bad
+        // leaves fall back; a valid leaf next to them still applies. Unknown keys are one WARN each on both hosts.
+        log_capture logs = {};
+        logs.allow_errors();
+        temp_directory directory("engine_renderer_lenient_defaults");
+        constexpr std::string_view RENDERING = R"({"defaults": {"post_process": {"bloom_intensity": 5.0,
+          "tonemap": "reinhard_extended", "vignette": 0.2}, "ssao": {"radius": "wide"}, "fog": {}}})";
+        application app(rendering_project_desc(directory, RENDERING, true, false));
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.context().renderDefaults != nullptr);
+        const renderer::render_settings &defaults = app.context().renderDefaults->get();
+        const renderer::render_settings engineDefaults = {};
+        CHECK(defaults.postProcess.bloomIntensity == engineDefaults.postProcess.bloomIntensity);
+        CHECK(defaults.postProcess.tonemap == renderer::tonemap_operator::REINHARD_EXTENDED);
+        CHECK(defaults.ssao.radius == engineDefaults.ssao.radius);
+        CHECK(defaults.shadows == engineDefaults.shadows);
+        CHECK(logs.count(core::log_level::ERR) == 2);
+        CHECK(count_containing(logs, core::log_level::ERR, "rendering/defaults/post_process/bloom_intensity") == 1);
+        CHECK(count_containing(logs, core::log_level::ERR, "rendering/defaults/ssao/radius") == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, "rendering/defaults/post_process/vignette") == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, "rendering/defaults/fog") == 1);
+        app.shutdown();
+    }
+
+    TEST_CASE("renderer_subsystem - renderDefaults is published also headless and is null after shutdown") {
+        log_capture logs = {};
+        temp_directory directory("engine_renderer_published_defaults");
+        bool editor = false;
+        SUBCASE("runtime") {
+            editor = false;
+        }
+        SUBCASE("editor") {
+            editor = true;
+        }
+        CAPTURE(editor);
+        // An unknown key is not an error on either host: one WARN, and the project starts.
+        constexpr std::string_view RENDERING = R"({"defaults": {"post_process": {"tonemap": "agx",
+          "bloom_intensity": 0.5}, "shadows": {"distance": 60.0}, "ssao": {"radius": 0.75, "samples": 16}}})";
+        application app(rendering_project_desc(directory, RENDERING, editor, false));
+        CONJURE_REQUIRE_OK(app.initialise());
+        CHECK(app.context().renderer == nullptr);
+        REQUIRE(app.context().renderDefaults != nullptr);
+        CHECK(app.context().renderDefaults->get() == project_defaults());
+        CHECK(app.context().renderDefaults->revision() >= 1);
+        CHECK(count_containing(logs, core::log_level::WARN, "rendering/defaults/ssao/samples") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        app.shutdown();
+        CHECK(app.context().renderDefaults == nullptr);
+    }
+
+    TEST_CASE("renderer_subsystem - without a project or without defaults the rendering defaults are the engine's") {
+        log_capture logs = {};
+        temp_directory directory("engine_renderer_no_defaults");
+        application_desc desc = {};
+        SUBCASE("no project") {
+            desc = engine_test::make_desc(engine_test::inline_config());
+        }
+        SUBCASE("a rendering section without defaults") {
+            desc = rendering_project_desc(directory, R"({"enabled": false})", false, false);
+        }
+        SUBCASE("null defaults") {
+            desc = rendering_project_desc(directory, R"({"defaults": null})", false, false);
+        }
+        application app(std::move(desc));
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.context().renderDefaults != nullptr);
+        CHECK(app.context().renderDefaults->get() == renderer::render_settings{});
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        app.shutdown();
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L2 the extracted settings are the project defaults and group winners") {
+        // Extraction used to leave render_scene's settings at their defaults, so neither the project nor a
+        // render_settings component changed the picture.
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        temp_directory directory("engine_renderer_extract_settings");
+        application app(rendering_project_desc(directory, PROJECT_DEFAULTS, false, true));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
+        REQUIRE(subsystem != nullptr);
+        render_extract_runner extraction(app.context(), *subsystem);
+        renderer::render_scene extracted = {};
+        const renderer::render_settings defaults = project_defaults();
+
+        // Two components of the same priority over disjoint groups (a base scene's mood and an additively loaded
+        // level's shadows): both apply, and the group neither overrides keeps the project's values.
+        renderer::render_settings_component mood = {};
+        mood.overridePostProcess = true;
+        mood.postProcess.tonemap = renderer::tonemap_operator::NONE;
+        mood.postProcess.bloomEnabled = false;
+        mood.shadows.distance = 15.0f;          // not overridden: never applies
+        const ecs::entity moodEntity = create_settings_entity(app, core::uuid(0, 1), mood);
+        renderer::render_settings_component level = {};
+        level.overrideShadows = true;
+        level.shadows.distance = 40.0f;
+        level.shadows.cascadeCount = 2;
+        CONJURE_UNUSED(create_settings_entity(app, core::uuid(0, 2), level));
+        renderer::render_settings_component inert = {};
+        inert.priority = 100;
+        inert.ssao.enabled = false;             // no flag set: takes part in no group
+        CONJURE_UNUSED(create_settings_entity(app, core::uuid(0, 3), inert));
+
+        extraction.run(extracted);
+        CHECK(subsystem->stats().settingsCandidates == 3);
+        CHECK(extracted.postProcess == mood.postProcess);
+        CHECK(extracted.shadows == level.shadows);
+        CHECK(extracted.ssao == defaults.ssao);
+
+        SUBCASE("a higher priority wins only the groups it overrides") {
+            renderer::render_settings_component boss = {};
+            boss.priority = 5;
+            boss.overridePostProcess = true;
+            boss.overrideSsao = true;
+            boss.postProcess.exposure = renderer::exposure_mode::MANUAL;
+            boss.ssao.intensity = 2.0f;
+            const ecs::entity bossEntity = create_settings_entity(app, core::uuid(0, 9), boss);
+            extraction.run(extracted);
+            CHECK(extracted.postProcess == boss.postProcess);
+            CHECK(extracted.ssao == boss.ssao);
+            CHECK(extracted.shadows == level.shadows);
+
+            // A winner that is disabled, inactive or gone leaves its groups to the next candidate or the project.
+            SUBCASE("disabled") {
+                CONJURE_REQUIRE_OK(app.context().world->add<scene::disabled>(bossEntity));
+            }
+            SUBCASE("inactive") {
+                CONJURE_REQUIRE_OK(app.context().world->add<scene::inactive>(bossEntity));
+            }
+            SUBCASE("destroyed") {
+                CONJURE_REQUIRE_OK(app.context().world->destroy_entity(bossEntity));
+            }
+            extraction.run(extracted);
+            CHECK(extracted.postProcess == mood.postProcess);
+            CHECK(extracted.ssao == defaults.ssao);
+            CHECK(extracted.shadows == level.shadows);
+        }
+        SUBCASE("a group without a candidate is the project's") {
+            CONJURE_REQUIRE_OK(app.context().world->remove<renderer::render_settings_component>(moodEntity));
+            extraction.run(extracted);
+            CHECK(subsystem->stats().settingsCandidates == 2);
+            CHECK(extracted.postProcess == defaults.postProcess);
+            CHECK(extracted.shadows == level.shadows);
+        }
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        // No app.shutdown() here: the application shuts down when it goes out of scope, after the runner
+        // that reads its world.
+    }
+
+    TEST_CASE("renderer_subsystem - tied render_settings components log one WARN per group until the tie ends") {
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
+        REQUIRE(subsystem != nullptr);
+        render_extract_runner extraction(app.context(), *subsystem);
+        renderer::render_scene extracted = {};
+
+        renderer::render_settings_component first = {};
+        first.priority = 3;
+        first.overridePostProcess = true;
+        first.overrideSsao = true;
+        first.postProcess.bloomIntensity = 0.1f;
+        renderer::render_settings_component second = first;
+        second.postProcess.bloomIntensity = 0.2f;
+        const core::uuid lowGuid(0, 0xA1);
+        ecs::entity secondEntity = ecs::NULL_ENTITY;
+        std::string secondName = {};
+        // The second candidate is created first in both variants, so it would win if the first one found or the
+        // lower entity index won.
+        SUBCASE("both have a scene guid: the lowest guid wins") {
+            const core::uuid highGuid(0, 0xB2);
+            secondEntity = create_settings_entity(app, highGuid, second);
+            secondName = highGuid.to_string();
+        }
+        SUBCASE("one has no scene guid: it comes after the one with a guid despite its lower index") {
+            // A scene entity always gets a guid, so this one is a bare world entity, as a system may spawn it.
+            const core::result<ecs::entity> unnamed = app.context().world->create_entity();
+            CONJURE_REQUIRE_OK(unnamed);
+            secondEntity = unnamed.value();
+            CONJURE_REQUIRE_OK(app.context().world->add<renderer::render_settings_component>(secondEntity, second));
+            REQUIRE(app.context().world->get<scene::guid>(secondEntity) == nullptr);
+            secondName = std::format("entity {}", secondEntity.index);
+        }
+        CAPTURE(secondName);
+        const ecs::entity firstEntity = create_settings_entity(app, lowGuid, first);
+        // Without the guid rule the lower entity index would win the tie.
+        CHECK(secondEntity.index < firstEntity.index);
+        constexpr std::string_view TIE = "tie at priority";
+
+        extraction.run(extracted);
+        CHECK(extracted.postProcess == first.postProcess);
+        CHECK(count_containing(logs, core::log_level::WARN, TIE) == 2);
+        CHECK(count_containing(logs, core::log_level::WARN, "post_process group") == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, "ssao group") == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, "shadows group") == 0);
+        CHECK(count_containing(logs, core::log_level::WARN, lowGuid.to_string()) == 2);
+        CHECK(count_containing(logs, core::log_level::WARN, secondName) == 2);
+        // The WARN names the winner, so it is right also where the guid order is not the rule.
+        CHECK(count_containing(logs, core::log_level::WARN, std::format("); {} wins", lowGuid.to_string())) == 2);
+
+        // While the tie lasts nothing more is logged.
+        extraction.run(extracted);
+        CHECK(count_containing(logs, core::log_level::WARN, TIE) == 2);
+
+        // An extraction without the tie re-arms the latch; the next tie is logged again.
+        renderer::render_settings_component *raised =
+          app.context().world->get<renderer::render_settings_component>(secondEntity);
+        REQUIRE(raised != nullptr);
+        raised->priority = 4;
+        extraction.run(extracted);
+        CHECK(extracted.postProcess == second.postProcess);
+        CHECK(count_containing(logs, core::log_level::WARN, TIE) == 2);
+        raised->priority = 3;
+        extraction.run(extracted);
+        CHECK(count_containing(logs, core::log_level::WARN, TIE) == 4);
+        // No app.shutdown() here: the application shuts down when it goes out of scope, after the runner
+        // that reads its world.
+    }
+
+    TEST_CASE("renderer_subsystem - a post_process component without a camera is counted and logs one WARN") {
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
+        REQUIRE(subsystem != nullptr);
+        render_extract_runner extraction(app.context(), *subsystem);
+        renderer::render_scene extracted = {};
+        constexpr std::string_view ORPHAN = "without a camera component";
+
+        scene::scene &active = app.context().scenes->active();
+        const core::result<ecs::entity> stray = active.create_entity(core::string_id("stray"));
+        CONJURE_REQUIRE_OK(stray);
+        renderer::post_process_component overrides = {};
+        overrides.overridePostProcess = true;
+        overrides.postProcess.tonemap = renderer::tonemap_operator::NONE;
+        CONJURE_REQUIRE_OK(app.context().world->add<renderer::post_process_component>(stray.value(), overrides));
+        const core::result<ecs::entity> hidden = active.create_entity(core::string_id("hidden"));
+        CONJURE_REQUIRE_OK(hidden);
+        CONJURE_REQUIRE_OK(app.context().world->add<renderer::post_process_component>(hidden.value(), overrides));
+        CONJURE_REQUIRE_OK(app.context().world->add<scene::disabled>(hidden.value()));
+
+        extraction.run(extracted);
+        CHECK(subsystem->stats().orphanPostProcess == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, ORPHAN) == 1);
+        // It changes nothing: the scene keeps the project's (here the engine's) post-process group.
+        CHECK(extracted.postProcess == renderer::post_process_settings{});
+        extraction.run(extracted);
+        CHECK(count_containing(logs, core::log_level::WARN, ORPHAN) == 1);
+
+        // On a camera's entity it is no orphan; taken off again, the next orphan frame logs again.
+        CONJURE_REQUIRE_OK(app.context().world->add<renderer::camera_component>(stray.value()));
+        extraction.run(extracted);
+        CHECK(subsystem->stats().orphanPostProcess == 0);
+        CONJURE_REQUIRE_OK(app.context().world->remove<renderer::camera_component>(stray.value()));
+        extraction.run(extracted);
+        CHECK(subsystem->stats().orphanPostProcess == 1);
+        CHECK(count_containing(logs, core::log_level::WARN, ORPHAN) == 2);
+        // No app.shutdown() here: the application shuts down when it goes out of scope, after the runner
+        // that reads its world.
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L2 a camera's post_process component reaches its view") {
+        // The camera view used to be built without the camera's overrides, so a per-camera look never rendered.
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
+        REQUIRE(subsystem != nullptr);
+        CONJURE_UNUSED(create_camera(app));
+        const ecs::entity scoped = create_camera(app);
+        renderer::post_process_component overrides = {};
+        SUBCASE("post-process group") {
+            overrides.overridePostProcess = true;
+            overrides.postProcess.exposure = renderer::exposure_mode::MANUAL;
+        }
+        SUBCASE("SSAO group") {
+            overrides.overrideSsao = true;
+            overrides.ssao.enabled = false;
+        }
+        CONJURE_REQUIRE_OK(app.context().world->add<renderer::post_process_component>(scoped, overrides));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(subsystem->stats().views == 2);
+        CHECK(subsystem->stats().viewsWithSettingsOverride == 1);
+        CHECK(subsystem->stats().orphanPostProcess == 0);
+
+        // A component that overrides no group carries nothing into the view.
+        renderer::post_process_component *current = app.context().world->get<renderer::post_process_component>(scoped);
+        REQUIRE(current != nullptr);
+        current->overridePostProcess = false;
+        current->overrideSsao = false;
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CHECK(subsystem->stats().viewsWithSettingsOverride == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        app.shutdown();
+    }
+
+    TEST_CASE("renderer_subsystem - a steady-state extraction with settings components allocates nothing") {
+        REQUIRE_FALSE(engine_test::shader_directory().empty());
+        log_capture logs = {};
+        temp_directory directory("engine_renderer_extract_allocations");
+        application app(rendering_project_desc(directory, PROJECT_DEFAULTS, false, true));
+        CONJURE_REQUIRE_OK(app.initialise());
+        renderer_subsystem *subsystem = renderer_subsystem::find(app.subsystems());
+        REQUIRE(subsystem != nullptr);
+        for (u32 index = 0; index < 4; ++index) {
+            CAPTURE(index);
+            const ecs::entity camera = create_camera(app);
+            if (index % 2 == 0) {
+                renderer::post_process_component overrides = {};
+                overrides.overridePostProcess = true;
+                CONJURE_REQUIRE_OK(app.context().world->add<renderer::post_process_component>(camera, overrides));
+            }
+        }
+        renderer::render_settings_component settings = {};
+        settings.overrideShadows = true;
+        CONJURE_UNUSED(create_settings_entity(app, core::uuid(0, 1), settings));
+        settings.overrideShadows = false;
+        settings.overrideSsao = true;
+        CONJURE_UNUSED(create_settings_entity(app, core::uuid(0, 2), settings));
+        // The cameras need their render_world_transform, which the frame's transform phase writes.
+        CONJURE_REQUIRE_OK(app.step_frame());
+
+        render_extract_runner extraction(app.context(), *subsystem);
+        renderer::render_scene extracted = {};
+        extraction.run(extracted);
+        CHECK(subsystem->stats().views == 4);
+        CHECK(subsystem->stats().viewsWithSettingsOverride == 2);
+        CHECK(subsystem->stats().settingsCandidates == 2);
+        for (u32 frame = 0; frame < 3; ++frame) {
+            CAPTURE(frame);
+            allocation_scope scope = {};
+            extraction.run(extracted);
+            CHECK(scope.allocation_count() == 0);
+        }
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        // No app.shutdown() here: the application shuts down when it goes out of scope, after the runner
+        // that reads its world.
     }
 
     TEST_CASE("model_prefab_converter - nodes become prefab nodes with renderer components") {

@@ -101,10 +101,12 @@ namespace conjure::renderer {
         std::vector<light> lights = {};
         std::vector<sprite> sprites = {};
         environment_settings environment = {};
-        // The scene-wide post-process, shadow and SSAO groups, shared by every view (the engine's extraction
-        // leaves them at their defaults; a hand-built scene sets them). A view's settingsOverride groups replace
-        // postProcess and ssao for that view. The renderer clamps them into their ranges (sanitise) on its own
-        // copy, so values out of range render clamped and never abort a frame.
+        // The scene-wide post-process, shadow and SSAO groups, shared by every view (engine.render_extract writes
+        // them every frame: project.json rendering.defaults with each group that a render_settings component
+        // overrides replaced by that group's winner, renderer::resolve_scene_settings; a hand-built scene sets
+        // them). A view's settingsOverride groups replace postProcess and ssao for that view. The renderer clamps
+        // them into their ranges (sanitise) on its own copy, so values out of range render clamped and never abort
+        // a frame.
         post_process_settings postProcess = {};
         shadow_settings shadows = {};
         ssao_settings ssao = {};

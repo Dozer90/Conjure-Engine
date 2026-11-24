@@ -26,10 +26,12 @@
 #include <type_traits>
 
 // Component data for the ECS (docs/design/02_renderer.md 4.2, R7). Plain reflected structs; this module
-// never includes ecs. The engine's renderer_subsystem registers the mesh renderer, sprite, camera, light and
-// environment components, and its extraction system maps them 1:1 onto the render_scene structs, resolving
-// asset references through renderer::find_*. The two rendering-settings components (render_settings_component,
-// post_process_component) are resolved by the pure functions below, which any caller with ECS access can use.
+// never includes ecs. The engine's renderer_subsystem registers the mesh renderer, sprite, camera, light,
+// environment, render_settings and post_process components. Its extraction system maps the first five 1:1 onto
+// the render_scene structs, resolving asset references through renderer::find_*, and resolves the two
+// rendering-settings components through the pure functions below (choose_scene_settings, resolve_scene_settings,
+// make_camera_view), which any other caller with ECS access can use; the editor and the bindings call
+// make_camera_view.
 
 namespace conjure::renderer {
 
@@ -85,7 +87,8 @@ namespace conjure::renderer {
     /// (choose_scene_settings). A component with no flag set takes part in no group.
     /// </summary>
     struct render_settings_component {
-        i32 priority = 0;                               // per group; ties go to the lowest scene guid
+        i32 priority = 0;                               // per group; a tie goes to the lowest scene guid, entities
+                                                        // without one after (choose_scene_settings)
         bool overridePostProcess = false;
         bool overrideShadows = false;
         bool overrideSsao = false;                      // offset 6; byte 7 is kept free for a later group's flag

@@ -25,6 +25,11 @@
 #include "conjure/modules/module_manifest.h"
 #include "conjure/scripting/native_api_hash.h"
 
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #include "conjure/core/json/value.h"
+    #include "conjure/renderer/render_settings.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <format>
@@ -532,6 +537,32 @@ namespace {
     }
 
     /// <summary>
+    /// EXPORT_FAILED naming write_project, with the path and reason of the first problem, when the project's
+    /// "rendering.defaults" is not valid (render-settings design 2.4): the exported runtime reads it strictly and
+    /// would refuse to start, while the editor that exports only reported it. Unknown keys are not problems. A
+    /// build without the renderer has no reader and no renderer to refuse to start, so it checks nothing.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_rendering_defaults(const project &loaded) {
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+        const core::json::value defaults = loaded.description().renderingSection.root()["defaults"];
+        const core::result<renderer::render_settings> parsed = renderer::render_settings_from_json(defaults);
+        if (!parsed.has_value()) {
+            return export_error(
+              export_pipeline::STEP_NAMES[5],
+              std::format(
+                "project '{}' has invalid rendering defaults, which the exported game would refuse to start with: {}",
+                loaded.description().name,
+                parsed.get_error().message()
+              )
+            );
+        }
+#else
+        CONJURE_UNUSED(loaded);
+#endif
+        return core::result<void>::success();
+    }
+
+    /// <summary>
     /// EXPORT_FAILED naming step 3 unless 'directory' holds a prebuilt SDK this engine can ship (owner decision
     /// OWN-INSTALL): the manifest export_pipeline::MANAGED_SDK_MANIFEST_NAME of the kind, schema and host mode the
     /// build target conjure_managed_sdk_export writes, naming this engine's native API hash (Conjure.Managed.dll
@@ -810,6 +841,9 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
     // Before the output directory is created: an export that cannot publish the managed code it was asked for
     // writes nothing (follow-up FU-NOSCRIPTING).
     CONJURE_TRY(check_managed_publishable(settings, config.scripting, *loaded));
+    // Before the output directory is created too: a game the export would ship could not start (step 6 writes
+    // rendering.defaults as the project has it).
+    CONJURE_TRY(check_rendering_defaults(*loaded));
     // Empty: step 3 compiles in a folder of its staging directory (follow-up FU-ARTIFACTS).
     std::filesystem::path artifacts = {};
     if (!settings.artifactsDirectory.empty()) {

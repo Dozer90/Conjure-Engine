@@ -34,7 +34,10 @@
 //      (the licence notices the build wrote next to the runtime) and what an MSVC build placed there: nethost.dll
 //      and the Visual C++ runtime DLLs (every vcruntime140*.dll and msvcp140*.dll but those of the debug runtime)
 //   6  write <dir>/project.json with "cooked": true, cooked_root "cooked" and rendering.gpu_validation "off" (a
-//      Distribution build never enables GPU validation, code sweep F458; --gpu-validation still sets it for a run)
+//      Distribution build never enables GPU validation, code sweep F458; --gpu-validation still sets it for a run);
+//      every other key of the project's "rendering" section, rendering.defaults included, ships as the project has
+//      it, and defaults the runtime would refuse (renderer::render_settings_from_json) refuse the export before
+//      step 1 (EXPORT_FAILED naming this step), so nothing is written
 //
 // The exported folder runs standalone: conjure_runtime --project <dir>. On Windows that holds without the
 // Microsoft Visual C++ Redistributable when the distribution directory held the Visual C++ runtime DLLs, as the
@@ -215,9 +218,13 @@ namespace conjure::engine {
             /// removes the folders the export created for the output again, so it writes nothing).
             /// EXPORT_FAILED naming publish_managed, before the output directory is created, when publishManaged is
             /// set and the project enables scripting but the engine's configuration disables it (--no-scripting):
-            /// the exported runtime would start the .NET host and find no managed code. BAD_ARGUMENTS, before the
-            /// output directory is created, when the settings name both bootstrapProject and
-            /// prebuiltManagedDirectory, and, before step 1, when step 3 would copy a prebuilt SDK that lies inside
+            /// the exported runtime would start the .NET host and find no managed code. EXPORT_FAILED naming
+            /// write_project, before the output directory is created, when project.json "rendering.defaults" is
+            /// not valid (renderer::render_settings_from_json; the message carries the first problem's slash path
+            /// and reason; unknown keys are not problems): the exported runtime reads it strictly and would refuse
+            /// to start. A build without the renderer checks nothing. BAD_ARGUMENTS, before the output directory
+            /// is created, when the settings name both bootstrapProject and prebuiltManagedDirectory, and, before
+            /// step 1, when step 3 would copy a prebuilt SDK that lies inside
             /// the output directory (an existing one, then, which keeps what it held). EXPORT_FAILED naming
             /// publish_managed, before the output directory is created, when step 3 would copy a prebuilt SDK whose
             /// folder lacks MANAGED_SDK_MANIFEST_NAME, holds one of another kind, schema, host mode or native API hash

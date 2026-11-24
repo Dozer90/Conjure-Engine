@@ -11,7 +11,7 @@ kind: header
 | File Path | `engine/include/conjure/renderer/components.h` |
 | API ↗ | [Rendering](../../../api/renderer/index.md), [Rendering a frame](../../../api/renderer/rendering-a-frame.md) |
 
-<p>Component data for the ECS. Plain reflected structs; this module never includes ecs. The engine&#x27;s <code>renderer_subsystem</code> registers the mesh renderer, sprite, camera, light and environment components, and its extraction system maps them 1:1 onto the <code><a href="render-scene/render-scene.html">render_scene</a></code> structs, resolving asset references through <code>renderer::find_</code>*. The two rendering-settings components (<code><a href="components/render-settings-component.html">render_settings_component</a></code>, <code><a href="components/post-process-component.html">post_process_component</a></code>) are resolved by the pure functions below, which any caller with ECS access can use.</p>
+<p>Component data for the ECS. Plain reflected structs; this module never includes ecs. The engine&#x27;s <code>renderer_subsystem</code> registers the mesh renderer, sprite, camera, light, environment, <code><a href="render-settings/render-settings.html">render_settings</a></code> and <code>post_process</code> components. Its extraction system maps the first five 1:1 onto the <code><a href="render-scene/render-scene.html">render_scene</a></code> structs, resolving asset references through <code>renderer::find_</code>*, and resolves the two rendering-settings components through the pure functions below (<code>choose_scene_settings</code>, <code>resolve_scene_settings</code>, <code>make_camera_view</code>), which any other caller with ECS access can use; the editor and the bindings call <code>make_camera_view</code>.</p>
 
 ## Structs
 

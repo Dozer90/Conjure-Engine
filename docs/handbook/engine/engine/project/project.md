@@ -124,7 +124,7 @@ class CONJURE_API project
 
 <div class="function-declaration" id="function-to-json-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/json/document/json-document.html">core::json::document</a> to_json() <span class="k">const</span>;</code></pre></div>
 
-<p>The document <code><a href="#function-save-1">save</a>()</code> writes: every section in schema order, &quot;<code>fixed_hz</code>&quot; instead of the delta, unknown keys inside &quot;extensions&quot;.</p>
+<p>The document <code><a href="#function-save-1">save</a>()</code> writes: every section in schema order, &quot;<code>fixed_hz</code>&quot; instead of the delta, unknown keys inside &quot;extensions&quot;. &quot;physics&quot; and &quot;rendering&quot; are the raw sections the file had (<code>physicsSection</code>, <code>renderingSection</code>) with the engine&#x27;s own keys written over them, so keys the engine does not read, <code>rendering.defaults</code> among them, are kept as they were.</p>
 
 ## Operator Overloads
 

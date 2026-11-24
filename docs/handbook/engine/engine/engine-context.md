@@ -117,6 +117,12 @@ class physics_world;
 class project;
 ```
 
+### `render_defaults` {#symbol-render-defaults}
+
+```cpp
+class render_defaults;
+```
+
 ### `renderer` {#symbol-renderer}
 
 ```cpp
