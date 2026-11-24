@@ -11,6 +11,14 @@
 #include "core/vfs/native_platform.h"
 #include "core/vfs/vfs_internal.h"
 
+// The ACL case denies access to a file through the operating system directly: std::filesystem::permissions only
+// toggles the read-only attribute on Windows, which never refuses a read.
+#if CONJURE_PLATFORM_WINDOWS
+    #include <Windows.h>
+
+    #include <AclAPI.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -62,6 +70,33 @@ namespace {
         MESSAGE("no owner-only files on this volume (" << written.get_error().message() << "): the case did not run");
         return false;
     }
+
+#if CONJURE_PLATFORM_WINDOWS
+    // Gives a file a protected, empty DACL, which grants nothing, for one scope. The owner keeps WRITE_DAC, so the
+    // destructor can hand the file back its inherited entries (an unprotected empty DACL) before the folder goes.
+    class scoped_denied_file {
+        private:
+            std::wstring mPath = {};
+            ACL mEmpty = {};
+
+        public:
+            explicit scoped_denied_file(const std::filesystem::path &path)
+                : mPath(path.native()) {
+                REQUIRE(InitializeAcl(&mEmpty, sizeof(mEmpty), ACL_REVISION) != 0);
+                const SECURITY_INFORMATION deny = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+                REQUIRE(SetNamedSecurityInfoW(mPath.data(), SE_FILE_OBJECT, deny, nullptr, nullptr, &mEmpty, nullptr)
+                        == ERROR_SUCCESS);
+            }
+
+            ~scoped_denied_file() {
+                const SECURITY_INFORMATION inherit = DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION;
+                SetNamedSecurityInfoW(mPath.data(), SE_FILE_OBJECT, inherit, nullptr, nullptr, &mEmpty, nullptr);
+            }
+
+            scoped_denied_file(const scoped_denied_file &) = delete;
+            scoped_denied_file &operator=(const scoped_denied_file &) = delete;
+    };
+#endif
 }
 
 TEST_SUITE("core/native_file_system") {
@@ -1078,6 +1113,28 @@ TEST_SUITE("core/native_file_system") {
         CHECK(read_native(existing) == "mine");
         CHECK(native_entries(directory.path()) == std::vector<std::string>{"existing.txt"});
     }
+
+#if CONJURE_PLATFORM_WINDOWS
+    TEST_CASE("regression - ci-402cd23: a file its ACL refuses reads as IO_FAILURE, not NOT_FOUND") {
+        // Windows also answers "access denied" while a file is being deleted. The backend told the two apart with a
+        // zero-access open, which an empty DACL refuses too (CreateFileW adds SYNCHRONIZE), so a refused file read
+        // as missing. The probe is now an attribute query, which the folder's list right answers; when it answers,
+        // the lookup is tried again (another file may have taken a deleted name), and a refusal that repeats on
+        // every attempt is reported as one.
+        testing::temp_directory directory("core_vfs_native");
+        if (!private_files_supported(directory.path())) {
+            return;
+        }
+        native_file_system fileSystem(directory.path());
+        REQUIRE(fileSystem.write_file("locked.bin", to_bytes("secret")));
+        const scoped_denied_file denied(directory.path() / "locked.bin");
+
+        const result<std::unique_ptr<file>> opened = fileSystem.open_read("locked.bin");
+        CHECK(code_of(opened) == error_code::IO_FAILURE);
+        CHECK(code_of(fileSystem.read_file("locked.bin")) == error_code::IO_FAILURE);
+        CHECK(fileSystem.exists("locked.bin"));
+    }
+#endif
 
     TEST_CASE("is_private_file - a missing path is NOT_FOUND, a folder and an ordinary file are not private") {
         const testing::temp_directory directory = {};

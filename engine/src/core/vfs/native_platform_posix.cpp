@@ -152,8 +152,11 @@ result<usize> internal::read_at(
     return total;
 }
 
-bool internal::is_being_deleted(const std::filesystem::path &, const std::error_code &) noexcept {
-    return false;
+internal::refused_lookup internal::classify_refused_lookup(
+  const std::filesystem::path &,
+  const std::error_code &
+) noexcept {
+    return refused_lookup::REFUSED;
 }
 
 void internal::close_read_handle(std::intptr_t value) noexcept {

@@ -109,8 +109,11 @@ the new ones. That costs one device flush per call (milliseconds); `write_file` 
   another spelling of the same entry (a case-only rename on a case-insensitive volume) is handed
   to `std::filesystem::rename` directly. While a file's last name is being removed and a reader
   still holds it open, Windows answers lookups with "access denied" for an instant; `stat` and
-  `open_read` recognise that state (a zero-access probe open fails too) and report `NOT_FOUND`, so
-  readers racing a `remove` see the same codes as on POSIX. UTF-8 paths are converted with
+  `open_read` recognise that state (an attribute query fails too, where an ACL refusal still
+  answers one if the folder grants list rights; without them a refused file also reads as missing)
+  and report `NOT_FOUND`, so readers racing a `remove` see the same codes as on POSIX.
+  When the query answers, another file may already have taken the name, so the lookup is tried
+  again a few times before it is reported as refused. UTF-8 paths are converted with
   `std::u8string` so Windows receives wide paths.
 - Paths beyond the classic Windows limit: single-entry calls go through `extend_native_path`, which
   switches to the extended-length form (`\\?\`) from 248 characters on. A path with a segment that

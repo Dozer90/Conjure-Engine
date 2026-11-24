@@ -54,19 +54,37 @@ namespace {
         return std::format("{} (error {})", text, errorCode);
     }
 
-    // A delete-pending file refuses even an open that asks for no access at all, whereas a file
-    // protected by its ACL still grants that (only the parent's traverse right is needed).
-    bool is_delete_pending(const std::filesystem::path &path) noexcept {
-        const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-        const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS;
-        const HANDLE probe = CreateFileW(path.c_str(), 0, share, nullptr, OPEN_EXISTING, flags, nullptr);
-        if (probe != INVALID_HANDLE_VALUE) {
-            CloseHandle(probe);
-            return false;
+    // Classifies an "access denied" answer for 'path'. A delete-pending file refuses even a query of
+    // its attributes, whereas a file its ACL protects still answers one: the parent folder's list
+    // right is enough. (An open that asks for no access is not: CreateFileW adds SYNCHRONIZE, which an
+    // empty DACL refuses.) The probe is a second look at a name other callers may be changing: when
+    // it answers, the refusal may have been real or the deleted file may already have been replaced
+    // by another (an atomic write or a rename landing on the name), so the caller tries again rather
+    // than reporting a refusal the next attempt would not see.
+    internal::refused_lookup classify_access_denied(const std::filesystem::path &path) noexcept {
+        WIN32_FILE_ATTRIBUTE_DATA attributes = {};
+        bool answered = GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes) != 0;
+        if (answered && (attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            // The query describes a final link itself, while the refused lookup followed it to a target
+            // that may be the file being deleted. A zero-access open follows the link the same way; it
+            // also reads a target its ACL refuses as being deleted, as this probe did before.
+            const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+            const DWORD flags = FILE_FLAG_BACKUP_SEMANTICS;
+            const HANDLE probe = CreateFileW(path.c_str(), 0, share, nullptr, OPEN_EXISTING, flags, nullptr);
+            answered = probe != INVALID_HANDLE_VALUE;
+            if (answered) {
+                CloseHandle(probe);
+            }
+        }
+        if (answered) {
+            return internal::refused_lookup::TRY_AGAIN;
         }
         const DWORD errorCode = GetLastError();
         const bool gone = errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND;
-        return errorCode == ERROR_ACCESS_DENIED || gone;
+        if (errorCode == ERROR_ACCESS_DENIED || gone) {
+            return internal::refused_lookup::DELETING;
+        }
+        return internal::refused_lookup::REFUSED;
     }
 
     // The extended-length ("\\?\") and device ("\\.\") forms, which Win32 takes literally.
@@ -284,20 +302,28 @@ result<internal::read_handle> internal::open_read_handle(
     // FILE_SHARE_DELETE is what std::ifstream lacks: without it every rename over or removal of
     // the file fails for as long as the handle is open.
     const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    const HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) {
+    for (int attempt = 1;; ++attempt) {
+        const HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, share, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (handle != INVALID_HANDLE_VALUE) {
+            return read_handle(reinterpret_cast<std::intptr_t>(handle));
+        }
         // The file may have been removed between the caller's stat and this open; that is still
         // "missing", not an operating system refusal.
         const DWORD errorCode = GetLastError();
         if (errorCode == ERROR_FILE_NOT_FOUND || errorCode == ERROR_PATH_NOT_FOUND) {
             return not_found(displayPath);
         }
-        if (errorCode == ERROR_ACCESS_DENIED && is_delete_pending(path)) {
+        if (errorCode != ERROR_ACCESS_DENIED) {
+            return io_failure("open", displayPath, errorCode);
+        }
+        const refused_lookup refusal = classify_access_denied(path);
+        if (refusal == refused_lookup::DELETING) {
             return not_found(displayPath);
         }
-        return io_failure("open", displayPath, errorCode);
+        if (refusal == refused_lookup::REFUSED || attempt == REFUSED_LOOKUP_ATTEMPTS) {
+            return io_failure("open", displayPath, errorCode);
+        }
     }
-    return read_handle(reinterpret_cast<std::intptr_t>(handle));
 }
 
 result<u64> internal::read_handle_size(const read_handle &handle, std::string_view displayPath) {
@@ -341,11 +367,14 @@ result<usize> internal::read_at(
     return total;
 }
 
-bool internal::is_being_deleted(const std::filesystem::path &path, const std::error_code &code) noexcept {
+internal::refused_lookup internal::classify_refused_lookup(
+  const std::filesystem::path &path,
+  const std::error_code &code
+) noexcept {
     if (code != std::errc::permission_denied) {
-        return false;
+        return refused_lookup::REFUSED;
     }
-    return is_delete_pending(path);
+    return classify_access_denied(path);
 }
 
 void internal::close_read_handle(std::intptr_t value) noexcept {

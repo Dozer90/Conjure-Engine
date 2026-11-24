@@ -45,17 +45,26 @@ namespace {
     result<file_stat> stat_native(const std::filesystem::path &nativePath, std::string_view displayPath) {
         // status() reports the not-found family through the file type (whether or not it also
         // leaves a code behind, which differs between standard libraries); any other code means the
-        // operating system refused to look (permissions, I/O error).
+        // operating system refused to look (permissions, I/O error) or, on Windows, that the entry
+        // was in the middle of being deleted (see internal::classify_refused_lookup).
         std::error_code code = {};
-        const std::filesystem::file_status status = std::filesystem::status(nativePath, code);
-        if (status.type() == std::filesystem::file_type::not_found) {
-            return not_found(displayPath);
-        }
-        if (code) {
-            if (internal::is_being_deleted(nativePath, code)) {
+        std::filesystem::file_status status = {};
+        for (int attempt = 1;; ++attempt) {
+            code.clear();
+            status = std::filesystem::status(nativePath, code);
+            if (status.type() == std::filesystem::file_type::not_found) {
                 return not_found(displayPath);
             }
-            return internal::io_error("stat", displayPath, code);
+            if (!code) {
+                break;
+            }
+            const internal::refused_lookup refusal = internal::classify_refused_lookup(nativePath, code);
+            if (refusal == internal::refused_lookup::DELETING) {
+                return not_found(displayPath);
+            }
+            if (refusal == internal::refused_lookup::REFUSED || attempt == internal::REFUSED_LOOKUP_ATTEMPTS) {
+                return internal::io_error("stat", displayPath, code);
+            }
         }
         if (!std::filesystem::exists(status)) {
             return not_found(displayPath);

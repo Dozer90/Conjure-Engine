@@ -84,12 +84,34 @@ namespace conjure::core::vfs::internal {
     );
 
     /// <summary>
-    /// True when a lookup of 'path' that failed with 'code' did so because the entry is in the
-    /// middle of being deleted: Windows answers "access denied" for a file whose last name is being
-    /// removed while a handle to it is still open, and such a path counts as missing rather than as
-    /// refused. Always false on POSIX, where unlinking is immediate.
+    /// What a lookup the operating system refused means; see classify_refused_lookup.
     /// </summary>
-    [[nodiscard]] bool is_being_deleted(const std::filesystem::path &path, const std::error_code &code) noexcept;
+    enum class refused_lookup : u8 {
+        /// A real refusal (permissions, an I/O error), reported as one.
+        REFUSED,
+        /// The entry is in the middle of being deleted: Windows answers "access denied" for a file
+        /// whose last name is being removed while a handle to it is still open, and such a path
+        /// counts as missing rather than as refused.
+        DELETING,
+        /// Windows answered "access denied", but the name answers a probe now. Either
+        /// the file it named was being deleted and another file has taken the name since (an
+        /// atomic write or a rename landing on it), or the refusal is real: the caller looks the
+        /// path up again, and a lookup refused on every one of REFUSED_LOOKUP_ATTEMPTS is reported
+        /// as refused.
+        TRY_AGAIN,
+    };
+
+    /// How many times in all a lookup answered with refused_lookup::TRY_AGAIN is made.
+    inline constexpr int REFUSED_LOOKUP_ATTEMPTS = 4;
+
+    /// <summary>
+    /// Classifies a lookup of 'path' that failed with 'code'. Always REFUSED on POSIX, where
+    /// unlinking is immediate and "permission denied" is never transient.
+    /// </summary>
+    [[nodiscard]] refused_lookup classify_refused_lookup(
+      const std::filesystem::path &path,
+      const std::error_code &code
+    ) noexcept;
 
     /// <summary>
     /// Releases a raw handle obtained through open_read_handle. Used by read_handle only.
