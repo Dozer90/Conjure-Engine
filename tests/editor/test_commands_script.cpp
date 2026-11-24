@@ -55,6 +55,19 @@ namespace {
         REQUIRE_MESSAGE(run.has_value(), testing::describe_error(run));
         return std::move(run).value();
     }
+
+    /// <summary>
+    /// How many times needle occurs in text, counting occurrences that do not overlap.
+    /// </summary>
+    usize count_occurrences(std::string_view text, std::string_view needle) {
+        usize count = 0;
+        usize position = text.find(needle);
+        while (position != std::string_view::npos) {
+            ++count;
+            position = text.find(needle, position + needle.size());
+        }
+        return count;
+    }
 }
 
 TEST_SUITE("editor/commands_script") {
@@ -123,27 +136,25 @@ TEST_SUITE("editor/commands_script") {
         CHECK(project.find("net8.0") == std::string::npos);
     }
 
-    TEST_CASE("script.create - the Behaviour and Empty templates compile against Conjure.Managed"
-      * doctest::timeout(300)) {
+    TEST_CASE("script.create - the Behaviour template moves through Transform.Translate, not an assignment to a copy") {
+        // ScriptBehaviour.Transform returns a struct: assigning its Position is CS1612, a method call is not. The
+        // [dotnet][slow] case below compiles the templates.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Mover"}}));
+        const std::string behaviour = editor_test::read_text_file(editor.project_directory() / "scripts" / "Mover.cs");
+        CHECK(behaviour.find("Transform.Translate(") != std::string::npos);
+        CHECK(behaviour.find("Transform.Position =") == std::string::npos);
+        CHECK(behaviour.find("* 0.0f") == std::string::npos);
+    }
+
+    TEST_CASE("script.create - the Behaviour and Empty templates compile against Conjure.Managed [dotnet][slow]"
+      * doctest::timeout(600)) {
+        CONJURE_TEST_REQUIRE(testing::precondition::DOTNET_RUNTIME);
+        REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
         editor_test::headless_editor editor = {};
         (void) editor.ok("script.create", core::json::object({{"name", "Mover"}}));
         (void) editor.ok("script.create", core::json::object({{"name", "Marker"}, {"template", "Empty"}}));
         const std::filesystem::path scripts = editor.project_directory() / "scripts";
-        const std::string behaviour = editor_test::read_text_file(scripts / "Mover.cs");
-        // ScriptBehaviour.Transform returns a struct: assigning its Position is CS1612, a method call is not.
-        CHECK(behaviour.find("Transform.Translate(") != std::string::npos);
-        CHECK(behaviour.find("Transform.Position =") == std::string::npos);
-        CHECK(behaviour.find("* 0.0f") == std::string::npos);
-
-        std::error_code probe = {};
-        const bool sdkBuilt = std::filesystem::is_regular_file(
-          editor_test::managed_directory() / "Conjure.Managed.dll",
-          probe
-        );
-        if (!editor_test::dotnet_available() || !sdkBuilt) {
-            MESSAGE("dotnet or Conjure.Managed.dll is missing: the templates are compiled only where both exist");
-            return;
-        }
         const core::process_result first = build_scripts(scripts / "Game.csproj");
         CHECK_FALSE(first.timedOut);
         CHECK_MESSAGE(first.exitCode == 0, first.standardOutput);
@@ -154,6 +165,37 @@ TEST_SUITE("editor/commands_script") {
         // MSBuild's output never counts as a script.
         const core::json::document list = editor.ok("script.list");
         CHECK(list.root()["scripts"].size() == 2);
+    }
+
+    TEST_CASE("script.create - the generated Game.csproj pins C# 14") {
+        // managed/Directory.Build.props and the game template pin LangVersion 14 as well. MSBuild takes the last value
+        // of a property, so the project file holds exactly one pin. The [dotnet][slow] case below compiles a script
+        // that uses C# 14 in such a project.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Mover"}}));
+        const std::string project = editor_test::read_text_file(editor.project_directory() / "scripts" / "Game.csproj");
+        CHECK(project.find("<LangVersion>14</LangVersion>") != std::string::npos);
+        CHECK(count_occurrences(project, "<LangVersion>") == 1);
+    }
+
+    TEST_CASE("script.create - a script that uses C# 14 compiles in the generated Game.csproj [dotnet][slow]"
+      * doctest::timeout(600)) {
+        CONJURE_TEST_REQUIRE(testing::precondition::DOTNET_RUNTIME);
+        REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
+        // The probe of the test scripts (managed/Conjure.TestScripts/LanguageVersionProbe.cs) uses features of C# 14:
+        // written into the project beside a template script, it compiles only under a pin of 14 or above.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Mover"}}));
+        const std::filesystem::path probeFile(CONJURE_EDITOR_TEST_LANGUAGE_PROBE);
+        const std::string probe = editor_test::read_text_file(probeFile);
+        REQUIRE(probe.find("class LanguageVersionProbe") != std::string::npos);
+        (void) editor.ok("script.write", editor_test::script_write_args("LanguageVersionProbe.cs", probe));
+        const core::process_result built = build_scripts(editor.project_directory() / "scripts" / "Game.csproj");
+        CHECK_FALSE(built.timedOut);
+        CHECK_MESSAGE(
+          built.exitCode == 0,
+          "the C# 14 probe did not compile (is LangVersion below 14?):\n" << built.standardOutput
+        );
     }
 
     TEST_CASE("script.write / read / delete - edit sources with undo and reject paths outside scripts/") {

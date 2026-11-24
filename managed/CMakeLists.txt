@@ -131,6 +131,7 @@ set(CONJURE_TEST_SCRIPT_SOURCES
     Conjure.TestScripts/DodScripts.cs
     Conjure.TestScripts/FieldKinds.cs
     Conjure.TestScripts/InspectorProbe.cs
+    Conjure.TestScripts/LanguageVersionProbe.cs
     Conjure.TestScripts/LeakyTimer.cs
     Conjure.TestScripts/LifecycleProbe.cs
     Conjure.TestScripts/Mover.cs

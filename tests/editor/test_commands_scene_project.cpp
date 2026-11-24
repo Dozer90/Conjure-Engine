@@ -477,6 +477,8 @@ TEST_SUITE("editor/commands_scene_project") {
         // script.create writes it and a startup scene whose one entity carries Game.ExportProbe, which logs a line
         // when it is created. The editor exports a copy with the real dotnet and the runtime of this tree; the
         // exported runtime, started headless with scripting, runs the script from the assemblies the export shipped.
+        // ExportProbe uses features of C# 14 (a setter through the field keyword, an extension property): a
+        // LangVersion below 14 in the project file fails the export, and the second line shows what they computed.
         REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
         testing::temp_directory directory = {};
         const std::filesystem::path project = directory.path() / "scripted";
@@ -530,6 +532,7 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK_MESSAGE(ran.value().exitCode == 0, ran.value().standardOutput);
         const std::string log = editor_test::read_text_file(logFile);
         CHECK_MESSAGE(log.find("ExportProbe ran in the exported game") != std::string::npos, log);
+        CHECK_MESSAGE(log.find("ExportProbe C# 14: lives 0, seven squared 49") != std::string::npos, log);
     }
 #endif
 

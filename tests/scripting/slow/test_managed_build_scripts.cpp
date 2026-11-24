@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 using namespace conjure;
 using namespace conjure::scripting;
@@ -101,5 +102,40 @@ TEST_SUITE("scripting/managed_build_scripts") {
         CHECK(received.exitCode != 0);
         CHECK_MESSAGE(received.output.find("ConjureManagedDir") != std::string::npos, received.output);
         CHECK(source_tree_clean(request.projectPath));
+    }
+
+    TEST_CASE(
+      "managed_build_runner - builds the game template's project file with C# 14 [dotnet][slow]" * doctest::timeout(600)
+    ) {
+        // The template's Game.csproj pins LangVersion 14 and compiles one file, Player.cs. A copy of the project file
+        // is built against the SDK of this tree with the C# 14 probe of the test scripts as its Player.cs
+        // (managed/Conjure.TestScripts/LanguageVersionProbe.cs), which compiles only under a pin of 14 or above. The
+        // export cases of tests/engine build the template's own Player.cs.
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        temp_directory directory = {};
+        const std::filesystem::path project = directory.file("game/Game.csproj");
+        const std::filesystem::path probe =
+          scripting_test::source_root() / "managed" / "Conjure.TestScripts" / "LanguageVersionProbe.cs";
+        std::error_code copyError = {};
+        std::filesystem::create_directories(project.parent_path(), copyError);
+        REQUIRE_MESSAGE(!copyError, copyError.message());
+        std::filesystem::copy_file(game_template_project(), project, copyError);
+        REQUIRE_MESSAGE(!copyError, copyError.message());
+        std::filesystem::copy_file(probe, project.parent_path() / "Player.cs", copyError);
+        REQUIRE_MESSAGE(!copyError, copyError.message());
+
+        build_request request = {};
+        request.projectPath = project;
+        request.configuration = "Debug";
+        request.properties = {{"ConjureManagedDir", scripting_test::managed_directory().string()}};
+        const build_report received = run_build(directory, request);
+        CHECK_MESSAGE(
+          received.succeeded,
+          "the C# 14 probe did not compile (is LangVersion below 14?):\n" << received.output
+        );
+        CHECK(received.exitCode == 0);
+        CHECK(received.error_count() == 0);
+        std::error_code probeError = {};
+        CHECK(std::filesystem::is_regular_file(directory.file("out/Game.dll"), probeError));
     }
 }

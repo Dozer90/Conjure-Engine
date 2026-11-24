@@ -127,12 +127,15 @@ if(TARGET conjure::editor_ui)
     target_link_libraries(conjure_editor_tests PRIVATE conjure::thirdparty::imgui)
 endif()
 
-# Fixtures, the generated protocol document and the real executable for the process test.
+# Fixtures, the generated protocol document and the real executable for the process test. The C# 14 probe of the
+# test scripts is also compiled into a project script.create made, against the language version its Game.csproj pins.
 set(editorDataDirectory "${CMAKE_CURRENT_SOURCE_DIR}/data")
 set(editorProtocolDocument "${PROJECT_SOURCE_DIR}/docs/generated/editor_protocol.json")
+set(editorLanguageProbe "${PROJECT_SOURCE_DIR}/managed/Conjure.TestScripts/LanguageVersionProbe.cs")
 target_compile_definitions(conjure_editor_tests PRIVATE
     CONJURE_EDITOR_TEST_DATA_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${editorDataDirectory}>"
     CONJURE_EDITOR_PROTOCOL_DOCUMENT="$<PATH:CMAKE_PATH,NORMALIZE,${editorProtocolDocument}>"
+    CONJURE_EDITOR_TEST_LANGUAGE_PROBE="$<PATH:CMAKE_PATH,NORMALIZE,${editorLanguageProbe}>"
 )
 if(TARGET conjure_editor)
     target_compile_definitions(conjure_editor_tests PRIVATE

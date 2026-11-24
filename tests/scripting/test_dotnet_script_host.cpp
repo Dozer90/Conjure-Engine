@@ -187,6 +187,34 @@ TEST_SUITE("scripting/dotnet_script_host") {
         CHECK(kinds->find_field("Current")->meta.root()["enumValues"].size() == 3);
     }
 
+    TEST_CASE("dotnet_script_host - the test scripts run code that uses C# 14 [dotnet]" * doctest::timeout(60)) {
+        // managed/Directory.Build.props pins LangVersion 14 for the SDK and the test scripts, and LanguageVersionProbe
+        // uses features of C# 14: under a lower pin the test scripts do not build. Each public field holds what one
+        // feature computed in OnCreate. The backing field the field keyword declares is compiler generated, so it is
+        // not serialised, and the types the compiler emits for extension blocks leave discovery undisturbed.
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        const script_class_info *probe = fixture.runtime.classes().find("Conjure.TestScripts.LanguageVersionProbe");
+        REQUIRE(probe != nullptr);
+        CHECK(probe->has_callback(script_callback::CREATE));
+        CHECK(probe->fields.size() == 7);
+        const script_entry_id id = fixture.add_script(
+          fixture.create_entity(),
+          "Conjure.TestScripts.LanguageVersionProbe"
+        );
+        REQUIRE(fixture.runtime.entry(id)->is_live());
+        CHECK(fixture.field_i64(id, "ClampedHealth") == 100);                  // the field keyword
+        CHECK(fixture.field_i64(id, "ExtensionSquare") == 49);                 // an extension property
+        CHECK(fixture.field_i64(id, "SpanTotal") == 10);                       // first-class spans
+        CHECK(fixture.field_i64(id, "AssignedValue") == 42);                   // null-conditional assignment
+        CHECK(fixture.field_i64(id, "RightSideEvaluations") == 1);
+        CHECK(fixture.field_string(id, "UnboundGenericName") == "Dictionary"); // nameof of an unbound generic
+        CHECK(fixture.field_i64(id, "ParsedByLambda") == 42);                  // simple lambda parameter modifiers
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
     TEST_CASE(
       "regression - review 17 a field redeclared by a derived class keeps both under distinct names [dotnet]" *
       doctest::timeout(60)

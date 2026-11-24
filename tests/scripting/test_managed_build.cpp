@@ -28,22 +28,22 @@ using namespace conjure::testing;
 namespace {
 
     /// <summary>
-    /// The value of the one TargetFramework element of an MSBuild project file; "" when the element is missing,
-    /// unterminated or appears more than once (a second one would silently override the first).
+    /// The value of the one element 'name' (a property such as TargetFramework) of an MSBuild project file; "" when
+    /// the element is missing, unterminated or appears more than once (a second one would silently override the first).
     /// </summary>
-    [[nodiscard]] std::string target_framework(std::string_view project) {
-        constexpr std::string_view OPEN_TAG = "<TargetFramework>";
-        constexpr std::string_view CLOSE_TAG = "</TargetFramework>";
-        const usize open = project.find(OPEN_TAG);
+    [[nodiscard]] std::string project_property(std::string_view project, std::string_view name) {
+        const std::string openTag = std::format("<{}>", name);
+        const std::string closeTag = std::format("</{}>", name);
+        const usize open = project.find(openTag);
         if (open == std::string_view::npos) {
             return {};
         }
-        const usize valueBegin = open + OPEN_TAG.size();
-        const usize close = project.find(CLOSE_TAG, valueBegin);
+        const usize valueBegin = open + openTag.size();
+        const usize close = project.find(closeTag, valueBegin);
         if (close == std::string_view::npos) {
             return {};
         }
-        if (project.find(OPEN_TAG, close) != std::string_view::npos) {
+        if (project.find(openTag, close) != std::string_view::npos) {
             return {};
         }
         return std::string(project.substr(valueBegin, close - valueBegin));
@@ -326,7 +326,27 @@ TEST_SUITE("scripting/managed_build") {
             CAPTURE(project);
             const core::result<std::string> text = sources.read_text_file(project);
             CONJURE_REQUIRE_OK(text);
-            CHECK(target_framework(text.value()) == expected);
+            CHECK(project_property(text.value(), "TargetFramework") == expected);
+        }
+    }
+
+    TEST_CASE("managed projects - the engine's projects, the game template and the scripted test project pin C# 14") {
+        // C# 14 is the language of the .NET 10 SDK global.json pins. The engine's projects
+        // (managed/Directory.Build.props), the game template and the scripted project the export cases build pin the
+        // same version; the project file script.create writes is checked by the editor's cases. A build that compiles
+        // C# 14 also proves each pin: the test scripts' LanguageVersionProbe in every build, the template and the
+        // scripted project in the [dotnet][slow] cases.
+        core::vfs::native_file_system sources(scripting_test::source_root(), true);
+        constexpr std::string_view PROJECTS[] = {
+          "managed/Directory.Build.props",
+          "managed/Conjure.Templates/Game/Game.csproj",
+          "tests/assets/projects/scripted/scripts/Game.csproj",
+        };
+        for (const std::string_view project : PROJECTS) {
+            CAPTURE(project);
+            const core::result<std::string> text = sources.read_text_file(project);
+            CONJURE_REQUIRE_OK(text);
+            CHECK(project_property(text.value(), "LangVersion") == "14");
         }
     }
 

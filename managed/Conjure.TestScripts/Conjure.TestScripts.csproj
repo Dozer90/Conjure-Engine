@@ -16,6 +16,7 @@
     <Compile Include="DodScripts.cs" />
     <Compile Include="FieldKinds.cs" />
     <Compile Include="InspectorProbe.cs" />
+    <Compile Include="LanguageVersionProbe.cs" />
     <Compile Include="LeakyTimer.cs" />
     <Compile Include="LifecycleProbe.cs" />
     <Compile Include="Mover.cs" />

@@ -43,7 +43,7 @@ namespace conjure::editor::support {
           "  <PropertyGroup>\n"
           "    <OutputType>Library</OutputType>\n"
           "    <TargetFramework>net10.0</TargetFramework>\n"
-          "    <LangVersion>12</LangVersion>\n"
+          "    <LangVersion>14</LangVersion>\n"
           "    <Nullable>enable</Nullable>\n"
           "    <ImplicitUsings>disable</ImplicitUsings>\n"
           "    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n"
