@@ -96,10 +96,12 @@ namespace conjure::editor {
     };
 
     /// <summary>
-    /// Work the editor advances once per frame (editor.wait_frames, editor.exec_file): tick() returns true
-    /// when the task finished and may be destroyed. A task destroyed before it finished (engine restart,
-    /// shutdown) releases what it registered on the context and fails its reply with CANCELLED when that is
-    /// still pending.
+    /// Work the editor advances once per frame (editor.wait_frames, editor.exec_file, the prefab commands that
+    /// wait for their asset): tick() returns true when the task finished and may be destroyed. A task destroyed
+    /// before it finished (engine restart, shutdown) releases what it registered on the context and fails its
+    /// reply with CANCELLED when that is still pending. The engine a task works on is shut down before the task
+    /// is destroyed, so a task that holds something of the engine (an asset handle) lets go of it in
+    /// release_engine(), which the context calls while the engine's asset manager and database still exist.
     /// </summary>
     class CONJURE_API frame_task {
         public:
@@ -111,6 +113,14 @@ namespace conjure::editor {
 
         public:
             [[nodiscard]] virtual bool tick(editor_context &context) = 0;
+
+            /// <summary>
+            /// The engine is shutting down (editor shutdown, the restart of project.open): release every handle
+            /// into it, undo what the task left half done, fail a pending reply with CANCELLED and report finished
+            /// from the next tick(). The default holds nothing and does nothing. Called at most once per engine,
+            /// possibly again for a later engine the task never saw: an implementation is idempotent.
+            /// </summary>
+            virtual void release_engine(editor_context &context);
     };
 
     /// <summary>
@@ -184,11 +194,15 @@ namespace conjure::editor {
             std::weak_ptr<void> mScriptCompileToken = {};   // held by the running script.compile task
             std::string mScenePath = "";
             std::string mDotnetExecutable = "dotnet";
+            // Where project.export finds the managed SDK it ships (owner decision OWN-INSTALL); set by the constructor.
+            std::filesystem::path mBootstrapProject = {};
+            std::filesystem::path mPrebuiltManagedDirectory = {};   // empty = engine().managed_directory()
             std::string mLastScriptConfiguration = "Debug"; // of the last script.compile that succeeded
             debug_draw_flags mDebugDraw = {};
             view_mode mViewMode = view_mode::THREE_D;
             f32 mViewportAspect = DEFAULT_VIEWPORT_ASPECT;
             u64 mRevision = 0;
+            u64 mSceneGeneration = 0;                       // see scene_generation()
             u64 mLastLogSeq = 0;
             usize mRequestsPerFrame = protocol_server::DEFAULT_REQUESTS_PER_FRAME;
             bool mSceneOpen = false;
@@ -423,7 +437,28 @@ namespace conjure::editor {
                 return mScenePath;
             }
 
+            /// <summary>
+            /// The scene was opened, created or closed: sets whether one is open and its path, clears the dirty
+            /// flag and advances scene_generation().
+            /// </summary>
             void set_scene_state(bool open, std::string path);
+
+            /// <summary>
+            /// The open scene was saved under another path (scene.save_as): sets the path and clears the dirty
+            /// flag. The scene is the same one, so scene_generation() does not move.
+            /// </summary>
+            void set_scene_path(std::string path);
+
+            /// <summary>
+            /// Advances whenever the scene the editor shows is replaced or closed: set_scene_state() (scene.new,
+            /// scene.open, scene.close), an engine bound by rebind() and the startup scene bind_engine() adopts.
+            /// An asynchronous command compares it at completion with the value at dispatch to tell that the scene
+            /// it started on is gone (code sweep F736). A play session restores its snapshot into the same scene
+            /// without moving it: play_controller::state_changes() covers that.
+            /// </summary>
+            [[nodiscard]] u64 scene_generation() const noexcept {
+                return mSceneGeneration;
+            }
 
             /// <summary>
             /// True when 'assetPath' names the source file of the registered asset 'id'. Decided by file, not by
@@ -521,6 +556,37 @@ namespace conjure::editor {
             void set_dotnet_executable(std::string executable);
 
             /// <summary>
+            /// The Conjure.Bootstrap project of the engine source this editor was built from, which project.export
+            /// publishes while the file exists and prebuilt_managed_directory() holds no prebuilt SDK manifest (an
+            /// editor run from its build tree); empty for an editor built without scripting. An installed editor keeps
+            /// the path of the machine that built it and exports with prebuilt_managed_directory(), which wins even
+            /// where that path still exists (owner decision OWN-INSTALL).
+            /// </summary>
+            [[nodiscard]] const std::filesystem::path &bootstrap_project() const noexcept {
+                return mBootstrapProject;
+            }
+
+            /// <summary>
+            /// Replaces bootstrap_project(); an empty path stands for an editor without a source tree (tests stand in
+            /// for an installed editor so).
+            /// </summary>
+            void set_bootstrap_project(std::filesystem::path project);
+
+            /// <summary>
+            /// The folder project.export copies the prebuilt SDK from whenever it holds the manifest
+            /// export_pipeline::MANAGED_SDK_MANIFEST_NAME, before it considers bootstrap_project(): the one
+            /// set_prebuilt_managed_directory() named, otherwise engine().managed_directory(), the managed/ folder
+            /// beside the editor that an installed editor also runs its scripts from (owner decision OWN-INSTALL). A
+            /// build tree's development SDK (bin/managed) never holds the manifest.
+            /// </summary>
+            [[nodiscard]] std::filesystem::path prebuilt_managed_directory() const;
+
+            /// <summary>
+            /// Names the folder of prebuilt_managed_directory(); empty restores the default.
+            /// </summary>
+            void set_prebuilt_managed_directory(std::filesystem::path directory);
+
+            /// <summary>
             /// True while a script.compile runs: its task holds the token registered with
             /// set_script_compile_token, and the token expires when the task finishes or is dropped.
             /// </summary>
@@ -596,6 +662,14 @@ namespace conjure::editor {
             [[nodiscard]] usize frame_task_count() const noexcept {
                 return mFrameTasks.size();
             }
+
+            /// <summary>
+            /// The engine is shutting down: every frame task's release_engine() runs now, while the engine's asset
+            /// manager and database still exist. The editor's frame layer calls it when the engine detaches it
+            /// (editor_application::engine_stopping); the tasks themselves are destroyed later, by rebind() or the
+            /// destructor.
+            /// </summary>
+            void release_engine_work();
 
             /// <summary>
             /// Writes {project, scene, playState, revision, selection, headless, offscreen, port, clients, frame,

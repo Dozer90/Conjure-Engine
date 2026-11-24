@@ -101,7 +101,7 @@ TEST_SUITE("scripting/dotnet_script_host") {
             api.version = CONJURE_NATIVE_API_VERSION + 7;
         }
         const core::result<void> initialised = host.initialise(config, api);
-        CONJURE_CHECK_ERROR(initialised, script_error::ABI_MISMATCH);
+        CONJURE_CHECK_ERROR(initialised, scripting_error::ABI_MISMATCH);
         CHECK(host.status() == script_host_status::DISABLED);
         // The message carries both hashes so a stale Conjure.Managed.dll is diagnosable.
         CHECK(initialised.get_error().message().find("managed hash") != std::string::npos);

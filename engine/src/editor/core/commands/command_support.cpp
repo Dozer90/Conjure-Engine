@@ -28,23 +28,23 @@ namespace conjure::editor::support {
     // Errors
 
     core::error invalid_args(std::string message) {
-        return make_editor_error(protocol_error_code::INVALID_ARGS, std::move(message));
+        return core::make_error(protocol_error_code::INVALID_ARGS, std::move(message));
     }
 
     core::error not_available(std::string message) {
-        return make_editor_error(protocol_error_code::NOT_AVAILABLE, std::move(message));
+        return core::make_error(protocol_error_code::NOT_AVAILABLE, std::move(message));
     }
 
     core::error io_error(std::string message) {
-        return make_editor_error(protocol_error_code::IO_ERROR, std::move(message));
+        return core::make_error(protocol_error_code::IO_ERROR, std::move(message));
     }
 
     core::error path_not_found(std::string message) {
-        return make_editor_error(protocol_error_code::PATH_NOT_FOUND, std::move(message));
+        return core::make_error(protocol_error_code::PATH_NOT_FOUND, std::move(message));
     }
 
     core::error internal(std::string message) {
-        return make_editor_error(protocol_error_code::INTERNAL, std::move(message));
+        return core::make_error(protocol_error_code::INTERNAL, std::move(message));
     }
 
     core::error unusable_path(const std::filesystem::path &path, std::string_view reason) {
@@ -88,7 +88,7 @@ namespace conjure::editor::support {
         if (failure.is_category<protocol_error_code>()) {
             return failure;
         }
-        return make_editor_error(classify_error(failure), failure.to_string());
+        return core::make_error(classify_error(failure), failure.to_string());
     }
 
     /*===========================================================================*/
@@ -419,7 +419,7 @@ namespace conjure::editor::support {
             }
             parent = scene.find_guid(*parentGuid);
             if (parent.is_null()) {
-                return make_editor_error(protocol_error_code::ENTITY_NOT_FOUND, "archive parent: no such entity");
+                return core::make_error(protocol_error_code::ENTITY_NOT_FOUND, "archive parent: no such entity");
             }
         }
         const core::json::value indexValue = args["index"];
@@ -458,7 +458,7 @@ namespace conjure::editor::support {
                 return mount.rootPath + "/" + relative;
             }
         }
-        return make_editor_error(
+        return core::make_error(
           protocol_error_code::ASSET_NOT_FOUND,
           std::format("unknown asset mount '{}'", parts->mount)
         );

@@ -107,8 +107,8 @@ TEST_SUITE("scripting/script_fields") {
         ) {
             CAPTURE(cut);
             const std::span<const u8> truncated(blob.data(), cut);
-            CONJURE_CHECK_ERROR(field_blob_reader::validate(truncated), script_error::FIELD_BLOB_INVALID);
-            CONJURE_CHECK_ERROR(blob_to_json(info, truncated), script_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(field_blob_reader::validate(truncated), scripting_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(blob_to_json(info, truncated), scripting_error::FIELD_BLOB_INVALID);
         }
     }
 
@@ -121,16 +121,16 @@ TEST_SUITE("scripting/script_fields") {
             field_blob_reader reader(blob);
             CHECK_FALSE(reader.is_valid());
             field_blob_field field = {};
-            CONJURE_CHECK_ERROR(reader.next(field), script_error::FIELD_BLOB_INVALID);
-            CONJURE_CHECK_ERROR(blob_to_json(info, blob), script_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(reader.next(field), scripting_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(blob_to_json(info, blob), scripting_error::FIELD_BLOB_INVALID);
         }
         SUBCASE("version") {
             blob[4] = 2;
-            CONJURE_CHECK_ERROR(field_blob_reader::validate(blob), script_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(field_blob_reader::validate(blob), scripting_error::FIELD_BLOB_INVALID);
         }
         SUBCASE("kind byte") {
             blob[FIELD_BLOB_HEADER_SIZE + 8] = static_cast<u8>(script_field_kind::COUNT);
-            CONJURE_CHECK_ERROR(field_blob_reader::validate(blob), script_error::FIELD_BLOB_INVALID);
+            CONJURE_CHECK_ERROR(field_blob_reader::validate(blob), scripting_error::FIELD_BLOB_INVALID);
         }
         SUBCASE("short header") {
             const std::array<u8, 3> stub = {'C', 'S', 'F'};
@@ -381,17 +381,17 @@ TEST_SUITE("scripting/script_fields") {
     TEST_CASE("read_field_value - rejects short payloads and odd lists") {
         const script_field_info vec = make_field("v", script_field_kind::VEC3);
         const std::array<u8, 4> tooShort = {};
-        CONJURE_CHECK_ERROR(read_field_value(vec, tooShort), script_error::FIELD_BLOB_INVALID);
+        CONJURE_CHECK_ERROR(read_field_value(vec, tooShort), scripting_error::FIELD_BLOB_INVALID);
 
         const script_field_info list = make_field("l", script_field_kind::LIST, "[]", script_field_kind::INT32);
         const std::array<u8, 2> noCount = {};
-        CONJURE_CHECK_ERROR(read_field_value(list, noCount), script_error::FIELD_BLOB_INVALID);
+        CONJURE_CHECK_ERROR(read_field_value(list, noCount), scripting_error::FIELD_BLOB_INVALID);
         const std::array<u8, 6> truncatedList = {2, 0, 0, 0, 1, 0};
-        CONJURE_CHECK_ERROR(read_field_value(list, truncatedList), script_error::FIELD_BLOB_INVALID);
+        CONJURE_CHECK_ERROR(read_field_value(list, truncatedList), scripting_error::FIELD_BLOB_INVALID);
 
         const script_field_info strings = make_field("s", script_field_kind::LIST, "[]", script_field_kind::STRING);
         const std::array<u8, 8> badLength = {1, 0, 0, 0, 9, 0, 0, 0};
-        CONJURE_CHECK_ERROR(read_field_value(strings, badLength), script_error::FIELD_BLOB_INVALID);
+        CONJURE_CHECK_ERROR(read_field_value(strings, badLength), scripting_error::FIELD_BLOB_INVALID);
 
         const script_field_info text = make_field("t", script_field_kind::STRING);
         const core::result<core::json::document> empty = read_field_value(text, {});

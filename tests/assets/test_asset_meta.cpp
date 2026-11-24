@@ -70,33 +70,33 @@ TEST_SUITE("assets/asset_meta") {
     }
 
     TEST_CASE("asset_meta - corrupt content is META_INVALID") {
-        CONJURE_CHECK_ERROR(parse_asset_meta("not json"), asset_error_code::META_INVALID);
-        CONJURE_CHECK_ERROR(parse_asset_meta("[]"), asset_error_code::META_INVALID);
-        CONJURE_CHECK_ERROR(parse_asset_meta("{}"), asset_error_code::META_INVALID);
-        CONJURE_CHECK_ERROR(parse_asset_meta(R"({"uuid": "nope"})"), asset_error_code::META_INVALID);
+        CONJURE_CHECK_ERROR(parse_asset_meta("not json"), assets_error::META_INVALID);
+        CONJURE_CHECK_ERROR(parse_asset_meta("[]"), assets_error::META_INVALID);
+        CONJURE_CHECK_ERROR(parse_asset_meta("{}"), assets_error::META_INVALID);
+        CONJURE_CHECK_ERROR(parse_asset_meta(R"({"uuid": "nope"})"), assets_error::META_INVALID);
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "00000000-0000-0000-0000-000000000000"})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "7f3c1d2e-5d2b-4e7a-9c1f-2b6d8e4a7f01", "schema": 7})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "7f3c1d2e-5d2b-4e7a-9c1f-2b6d8e4a7f01", "importer": 3})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "7f3c1d2e-5d2b-4e7a-9c1f-2b6d8e4a7f01", "settings": []})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "7f3c1d2e-5d2b-4e7a-9c1f-2b6d8e4a7f01", "subAssets": {"a": 1}})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
         CONJURE_CHECK_ERROR(
           parse_asset_meta(R"({"uuid": "7f3c1d2e-5d2b-4e7a-9c1f-2b6d8e4a7f01", "subAssets": {"a": "bad"}})"),
-          asset_error_code::META_INVALID
+          assets_error::META_INVALID
         );
     }
 
@@ -104,12 +104,12 @@ TEST_SUITE("assets/asset_meta") {
         core::vfs::memory_file_system fileSystem = {};
         CONJURE_REQUIRE_OK(fileSystem.write_file("a.png.meta", bytes_of("{ corrupt")));
         const u64 writes = fileSystem.write_counter();
-        CONJURE_CHECK_ERROR(read_asset_meta(fileSystem, "a.png.meta"), asset_error_code::META_INVALID);
+        CONJURE_CHECK_ERROR(read_asset_meta(fileSystem, "a.png.meta"), assets_error::META_INVALID);
         CHECK(fileSystem.write_counter() == writes);
         core::result<std::string> content = fileSystem.read_text_file("a.png.meta");
         CONJURE_REQUIRE_OK(content);
         CHECK(content.value() == "{ corrupt");
-        CONJURE_CHECK_ERROR(read_asset_meta(fileSystem, "missing.meta"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(read_asset_meta(fileSystem, "missing.meta"), assets_error::NOT_FOUND);
     }
 
     TEST_CASE("asset_meta - unknown keys survive a read/write round trip") {
@@ -151,7 +151,7 @@ TEST_SUITE("assets/asset_meta") {
         fileSystem.set_read_only(true);
         asset_meta meta = {};
         meta.id = test_id(1);
-        CONJURE_CHECK_ERROR(write_asset_meta(fileSystem, "x.meta", meta), asset_error_code::IO_ERROR);
+        CONJURE_CHECK_ERROR(write_asset_meta(fileSystem, "x.meta", meta), assets_error::IO_ERROR);
     }
 
     TEST_CASE("canonical_settings_hash - is independent of key order and whitespace") {

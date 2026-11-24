@@ -75,9 +75,9 @@ TEST_SUITE("bindings/bindings_error") {
         CHECK(map_error(core::make_error(ecs::ecs_error::STRUCTURE_LOCKED)) == bindings_error::STRUCTURE_LOCKED);
         CHECK(map_error(core::make_error(ecs::ecs_error::WRONG_THREAD)) == bindings_error::WRONG_THREAD);
         CHECK(map_error(core::make_error(ecs::ecs_error::COMPONENT_NOT_PRESENT)) == bindings_error::COMPONENT_MISSING);
-        CHECK(map_error(core::make_error(assets::asset_error_code::NOT_FOUND)) == bindings_error::NOT_FOUND);
+        CHECK(map_error(core::make_error(assets::assets_error::NOT_FOUND)) == bindings_error::NOT_FOUND);
         CHECK(
-          map_error(core::make_error(assets::asset_error_code::TYPE_MISMATCH)) == bindings_error::ASSET_TYPE_MISMATCH
+          map_error(core::make_error(assets::assets_error::TYPE_MISMATCH)) == bindings_error::ASSET_TYPE_MISMATCH
         );
         CHECK(map_error(core::make_error(scene::scene_error::INVALID_ENTITY)) == bindings_error::ENTITY_NOT_ALIVE);
         CHECK(map_error(core::make_error(scene::scene_error::SCENE_NOT_LOADED)) == bindings_error::SCENE_NOT_FOUND);
@@ -108,7 +108,7 @@ TEST_SUITE("bindings/bindings_error") {
 
         // The error form records the module's category, code and message as the detail.
         const int32_t status =
-          fail(core::make_error(assets::asset_error_code::TIMEOUT, "waited 30 s"), "asset_load_blocking");
+          fail(core::make_error(assets::assets_error::TIMEOUT, "waited 30 s"), "asset_load_blocking");
         CHECK(status == to_status(bindings_error::INTERNAL));
         CHECK(last_error_message() == "asset_load_blocking: assets.TIMEOUT: waited 30 s");
         CHECK(
@@ -138,5 +138,10 @@ TEST_SUITE("bindings/bindings_error") {
         CHECK(failure.code_name() == "STRUCTURE_LOCKED");
         CHECK(failure.is(bindings_error::STRUCTURE_LOCKED));
         CHECK(failure.to_string() == "bindings.STRUCTURE_LOCKED: inside a scope");
+    }
+
+    TEST_CASE("bindings_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<bindings_error>);
     }
 }

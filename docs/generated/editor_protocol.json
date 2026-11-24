@@ -2217,12 +2217,14 @@
         },
         {
             "name": "prefab.apply",
-            "summary": "Writes an instance's current state back into its prefab asset. While playing the file change is kept: play.stop records it for undo with the session's other file changes.",
+            "summary": "Writes an instance's current state back into its prefab asset. While playing the file change is kept: play.stop records it for undo with the session's other file changes. Asynchronous: it answers once the prefab is loaded (at once when it is resident or inside editor.batch) and applies the instance as it is then, with STALE_STATE when the scene or the play state changed or the entity left the instance.",
             "flags": [
                 "mutates",
                 "requires_project",
                 "requires_scene",
-                "on_disk"
+                "async",
+                "on_disk",
+                "sync_in_batch"
             ],
             "owner": "editor",
             "args": {
@@ -2257,12 +2259,14 @@
         },
         {
             "name": "prefab.create",
-            "summary": "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance. Editing state only: play.stop would discard the marked instance and keep the file.",
+            "summary": "Saves an entity's subtree as a .prefab.json asset and marks the subtree as its first instance. Editing state only: play.stop would discard the marked instance and keep the file. Asynchronous: it answers once the new prefab has loaded (inside editor.batch at once), with STALE_STATE and the file removed when the scene, the play state, the entity or its subtree changed meanwhile.",
             "flags": [
                 "mutates",
                 "requires_project",
                 "requires_scene",
-                "editing_only"
+                "editing_only",
+                "async",
+                "sync_in_batch"
             ],
             "owner": "editor",
             "args": {
@@ -2304,10 +2308,12 @@
         },
         {
             "name": "prefab.instantiate",
-            "summary": "Instantiates a prefab (uuid or path) count times under a parent, with an optional root name, transform and root guids.",
+            "summary": "Instantiates a prefab (uuid or path) count times under a parent, with an optional root name, transform and root guids. Asynchronous: it answers once the prefab is loaded (at once when it is resident or inside editor.batch), with STALE_STATE when the scene, the play state, the parent or a requested guid changed meanwhile.",
             "flags": [
                 "mutates",
-                "requires_scene"
+                "requires_scene",
+                "async",
+                "sync_in_batch"
             ],
             "owner": "editor",
             "args": {
@@ -2484,7 +2490,7 @@
         },
         {
             "name": "project.export",
-            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied. Relative directories are relative to the project root. publishManaged (default: the project enables scripting) publishes Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj when present; an editor without that source answers NOT_AVAILABLE, and an editor run with --no-scripting refuses a project that enables scripting.",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied. Relative directories are relative to the project root. publishManaged (default: the project enables scripting) copies the prebuilt SDK of the editor's managed/ folder when that folder holds its manifest (an installed editor), otherwise publishes Conjure.Bootstrap from the engine source the editor was built from, and builds scripts/Game.csproj when present. Publishing and building need a .NET SDK: without a usable one the export fails naming the version global.json asks for and Microsoft's download page. An editor with neither the source nor the prebuilt SDK answers NOT_AVAILABLE, and an editor run with --no-scripting refuses a project that enables scripting.",
             "flags": [
                 "requires_project",
                 "async",
@@ -3171,7 +3177,7 @@
         },
         {
             "name": "script.compile",
-            "summary": "Runs dotnet build on <project>/scripts/Game.csproj and answers with the diagnostics.",
+            "summary": "Runs dotnet build on <project>/scripts/Game.csproj and answers with the diagnostics. Without a usable .NET SDK it answers NOT_AVAILABLE naming the version global.json asks for and Microsoft's download page.",
             "flags": [
                 "requires_project",
                 "async",
@@ -4079,7 +4085,8 @@
         "CANCELLED",
         "UNAUTHORISED",
         "PROJECT_NOT_TRUSTED",
+        "STALE_STATE",
         "INTERNAL"
     ],
-    "schemaHash": "d882ad5be2f11047"
+    "schemaHash": "cb5a92a09251b431"
 }

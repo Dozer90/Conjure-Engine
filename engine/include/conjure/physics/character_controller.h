@@ -8,6 +8,7 @@
 #include "conjure/ecs/entity.h"
 
 #include <cstddef>
+#include <numbers>
 #include <type_traits>
 
 // The character controller component (docs/design/14_physics.md 2.3, P13): a JPH::CharacterVirtual with
@@ -67,7 +68,9 @@ namespace conjure::physics {
     struct character_controller {
         f32 radius = 0.3f;
         f32 height = 1.8f;                                // total capsule height
-        f32 maxSlopeAngleDegrees = 45.0f;
+        // steepest walkable ground, radians (45 degrees), shown in degrees by the editor; files that stored the
+        // older maxSlopeAngleDegrees are migrated on load (scene_serializer::parse_document)
+        f32 maxSlopeAngleRadians = std::numbers::pi_v<f32> / 4.0f;
         f32 stepHeight = 0.4f;
         f32 mass = 70.0f;                                 // push on dynamic bodies
         f32 maxStrength = 100.0f;
@@ -106,7 +109,8 @@ CONJURE_REFLECT_FLAGS(conjure::physics::character_flags, "conjure.physics.charac
 CONJURE_REFLECT_STRUCT(conjure::physics::character_controller, "conjure.physics.character_controller",
     CONJURE_FIELD(radius, .min = 0.0),
     CONJURE_FIELD(height, .min = 0.0),
-    CONJURE_FIELD(maxSlopeAngleDegrees, .min = 0.0, .max = 90.0),
+    CONJURE_FIELD(maxSlopeAngleRadians, .min = 0.0, .max = std::numbers::pi / 2.0,
+      .unit = conjure::core::reflect::field_unit::RADIANS),
     CONJURE_FIELD(stepHeight, .min = 0.0),
     CONJURE_FIELD(mass, .min = 0.0),
     CONJURE_FIELD(maxStrength, .min = 0.0),

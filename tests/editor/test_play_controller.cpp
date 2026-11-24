@@ -460,4 +460,25 @@ TEST_SUITE("editor/play_controller") {
         REQUIRE(editor.context().undo().size() == 1);
         CHECK(editor.context().undo().entries().back()->label == play_controller::FILE_EDITS_LABEL);
     }
+
+    TEST_CASE("play_controller - state_changes counts every transition and no refused one") {
+        editor_test::headless_editor editor = {};
+        const play_controller &play = editor.context().play();
+        const u64 start = play.state_changes();
+        (void) editor.ok("play.start");
+        CHECK(play.state_changes() == start + 1);
+        CHECK(editor.fail("play.start") == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(play.state_changes() == start + 1);
+        (void) editor.ok("play.pause");
+        (void) editor.ok("play.resume");
+        CHECK(play.state_changes() == start + 3);
+        (void) editor.ok("play.stop");
+        (void) editor.ok("play.start");
+        // Back in the state it was in two transitions ago, and still told apart from it.
+        CHECK(play.state() == play_state::PLAYING);
+        CHECK(play.state_changes() == start + 5);
+        (void) editor.ok("play.stop");
+        CHECK(editor.fail("play.stop") == protocol_error_code::WRONG_PLAY_STATE);
+        CHECK(play.state_changes() == start + 6);
+    }
 }

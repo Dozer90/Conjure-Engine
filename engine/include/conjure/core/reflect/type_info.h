@@ -61,8 +61,9 @@ namespace conjure::core::reflect {
     /// field inside the struct, no overlapping fields, natural alignment of every field (and no
     /// field stricter than the type's own alignment), a size that matches the kind (fixed kinds,
     /// enums, nested structs and arrays), struct/enum pointers present where the kind needs them,
-    /// field ids matching the pointed-to description, and enum widths of 1, 2, 4 or 8 bytes. Fails
-    /// with INVALID_ARGUMENT naming the offending field.
+    /// field ids matching the pointed-to description, enum widths of 1, 2, 4 or 8 bytes, and a unit
+    /// attribute (field_unit) other than NONE only on F32 and F64 fields and arrays of them. Fails with
+    /// INVALID_ARGUMENT naming the offending field.
     /// </summary>
     [[nodiscard]] CONJURE_API result<void> validate_layout(const type_info &info);
 

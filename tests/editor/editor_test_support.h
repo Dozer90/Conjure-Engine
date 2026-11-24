@@ -26,9 +26,9 @@
 
 // Shared fixtures of the editor tests (docs/design/04_editor.md 10, 08_testing.md 6.3): a headless editor over a
 // scratch project (null platform, rhi and audio, scripting on the null host), request helpers that pump frames
-// until an asynchronous reply arrives, a protocol client of that editor on a loopback transport, state snapshots
-// for the inverse round trips of the command catalogue, the
-// fixture file format of tests/editor/data/commands/, the LOOPBACK_TCP precondition probe and the two helpers
+// until an asynchronous reply arrives, a second in-process client that leaves a request parked, a protocol client
+// of that editor on a loopback transport, state snapshots for the inverse round trips of the command catalogue,
+// the fixture file format of tests/editor/data/commands/, the LOOPBACK_TCP precondition probe and the two helpers
 // that move bytes over a test's loopback socket.
 
 namespace conjure::editor::net {
@@ -169,6 +169,79 @@ namespace editor_test {
             /// Creates an entity through the protocol and returns its guid.
             /// </summary>
             [[nodiscard]] std::string create_entity(std::string_view name, std::string_view parentGuid = {});
+    };
+
+    /// <summary>
+    /// A frame task that never finishes by itself and records how often release_engine() reached it and whether
+    /// the engine's asset manager was still running then (code sweep F736: tasks let go of the engine before its
+    /// assets are torn down). Both pointers must outlive the task.
+    /// </summary>
+    class release_probe_task final : public conjure::editor::frame_task {
+        private:
+            int *mReleases = nullptr;
+            bool *mAssetsAlive = nullptr;
+
+        public:
+            release_probe_task(int *releases, bool *assetsAlive);
+            ~release_probe_task() override;
+
+        public:
+            [[nodiscard]] bool tick(conjure::editor::editor_context &context) override;
+            void release_engine(conjure::editor::editor_context &context) override;
+    };
+
+    /// <summary>
+    /// A second in-process client of a headless_editor, for a case that leaves an asynchronous request pending
+    /// while it does other things (code sweep F736): dispatch() returns what the dispatcher answered at once
+    /// (nullopt for a parked request), wait() pumps frames until the parked reply arrives. Its client id, response
+    /// sink and event subscription live as long as the object; the editor must outlive it.
+    /// </summary>
+    class parked_client {
+        private:
+            headless_editor *mEditor = nullptr;
+            std::optional<conjure::editor::protocol_response> mReply = std::nullopt;
+            std::vector<conjure::editor::protocol_event> mEvents = {};
+            conjure::u32 mClientId = 0;
+            conjure::i64 mNextId = 1;
+
+        public:
+            explicit parked_client(headless_editor &editor);
+            ~parked_client();
+
+            parked_client(const parked_client &) = delete;
+            parked_client &operator=(const parked_client &) = delete;
+
+        public:
+            /// <summary>
+            /// Dispatches the command from this client; nullopt when it was parked.
+            /// </summary>
+            [[nodiscard]] std::optional<conjure::editor::protocol_response> dispatch(
+              std::string_view command,
+              conjure::core::json::document args = conjure::core::json::document::object()
+            );
+
+            /// <summary>
+            /// The parked reply, once it arrived (resolve_completed hands it over at the start of a frame).
+            /// </summary>
+            [[nodiscard]] const std::optional<conjure::editor::protocol_response> &reply() const noexcept {
+                return mReply;
+            }
+
+            /// <summary>
+            /// Pumps frames until the parked reply arrives and returns it; fails the case after 'maxFrames'.
+            /// </summary>
+            [[nodiscard]] conjure::editor::protocol_response wait(conjure::u32 maxFrames = 600);
+
+            /// <summary>
+            /// Events that reached this client so far.
+            /// </summary>
+            [[nodiscard]] const std::vector<conjure::editor::protocol_event> &events() const noexcept {
+                return mEvents;
+            }
+
+            [[nodiscard]] conjure::u32 client_id() const noexcept {
+                return mClientId;
+            }
     };
 
     /// <summary>
@@ -409,6 +482,19 @@ namespace editor_test {
     /// Directory holding Conjure.Bootstrap.* and Conjure.Managed.dll; empty when the SDK was not built.
     /// </summary>
     [[nodiscard]] std::filesystem::path managed_directory();
+
+    /// <summary>
+    /// The export-flavoured SDK the build target conjure_managed_sdk_export published (an installed editor's managed/
+    /// folder, owner decision OWN-INSTALL); empty when this build has none.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path managed_export_directory();
+
+    /// <summary>
+    /// Lays out the managed/ folder of a stand-in installed editor in 'editorDirectory' as a copy of
+    /// managed_export_directory() and returns it. Fails the case when the copy fails; call it only when
+    /// managed_export_directory() is not empty.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path install_managed_export(const std::filesystem::path &editorDirectory);
 
     /// <summary>
     /// Conjure.TestScripts.dll of the v1 variant (the probes of the [dotnet] cases); empty when the SDK was not

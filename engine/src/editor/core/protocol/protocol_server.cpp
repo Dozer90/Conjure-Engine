@@ -60,7 +60,7 @@ namespace conjure::editor {
 
     core::result<void> protocol_server::start(const editor_options &options, const std::filesystem::path &projectRoot) {
         if (!options.aiToken.empty() && options.aiToken == options.aiInspectToken) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               "the full-control token and the inspect-only token must differ"
             );
@@ -116,7 +116,7 @@ namespace conjure::editor {
 
     core::result<void> protocol_server::add_transport(std::unique_ptr<protocol_transport> transport) {
         if (transport == nullptr) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "add_transport: null transport");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "add_transport: null transport");
         }
         transport->set_client_id_allocator([this]() {
             return mEvents->register_client({});
@@ -322,7 +322,7 @@ namespace conjure::editor {
 
     core::result<void> protocol_server::set_token(std::string token) {
         if (!token.empty() && token == mInspectToken) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               "set_token: the full-control token must differ from the inspect-only token"
             );
@@ -336,7 +336,7 @@ namespace conjure::editor {
 
     core::result<void> protocol_server::set_inspect_token(std::string token) {
         if (!token.empty() && token == mToken) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               "set_inspect_token: the inspect-only token must differ from the full-control token"
             );

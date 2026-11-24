@@ -7,12 +7,12 @@
 #include <string_view>
 
 // Error codes of the scripting module (docs/design/03_scripting.md 4, 6). Built with the generic
-// core::make_error(script_error::X, detail) and bound to the "scripting" category below (R63). The codes
+// core::make_error(scripting_error::X, detail) and bound to the "scripting" category below (R63). The codes
 // start at 1 so the negated value the native table entries return (-code, native_api.inl) is never 0.
 
 namespace conjure::scripting {
 
-    enum class script_error : u16 {
+    enum class scripting_error : u16 {
         RUNTIME_NOT_FOUND = 1,      // hostfxr could not be located: no .NET runtime installed
         HOSTFXR_INCOMPATIBLE,       // hostfxr lacks a required export or delegate: older than .NET 10
         RUNTIME_CONFIG_INVALID,     // Conjure.Bootstrap.runtimeconfig.json missing or malformed
@@ -36,14 +36,18 @@ namespace conjure::scripting {
     /// <summary>
     /// The enumerator name of a code ("ABI_MISMATCH"); "" for unknown values.
     /// </summary>
-    [[nodiscard]] CONJURE_API std::string_view script_error_name(script_error code) noexcept;
+    [[nodiscard]] CONJURE_API std::string_view scripting_error_name(scripting_error code) noexcept;
 
     /// <summary>
     /// The negative status a native table entry returns for this error (-code).
     /// </summary>
-    [[nodiscard]] constexpr i32 status_of(script_error code) noexcept {
+    [[nodiscard]] constexpr i32 status_of(scripting_error code) noexcept {
         return -static_cast<i32>(code);
     }
 }
 
-CONJURE_DECLARE_ERROR_CATEGORY(conjure::scripting::script_error, "scripting", conjure::scripting::script_error_name);
+CONJURE_DECLARE_ERROR_CATEGORY(
+  conjure::scripting::scripting_error,
+  "scripting",
+  conjure::scripting::scripting_error_name
+);

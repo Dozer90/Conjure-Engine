@@ -61,30 +61,30 @@ namespace conjure::editor {
 
     core::result<void> command_registry::add(command_descriptor descriptor) {
         if (descriptor.name.empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "a command needs a name");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "a command needs a name");
         }
         if (!descriptor.handler) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("command '{}' has no handler", descriptor.name)
             );
         }
         if (find_entry(descriptor.name) != nullptr) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("command '{}' is already registered", descriptor.name)
             );
         }
         core::result<compiled_schema> argsSchema = compiled_schema::compile(descriptor.argsSchema);
         if (!argsSchema.has_value()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("command '{}': args {}", descriptor.name, argsSchema.get_error().message())
             );
         }
         core::result<compiled_schema> resultSchema = compiled_schema::compile(descriptor.resultSchema);
         if (!resultSchema.has_value()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("command '{}': result {}", descriptor.name, resultSchema.get_error().message())
             );
@@ -93,7 +93,7 @@ namespace conjure::editor {
             const bool undoable = has_flag(descriptor.flags, command_flags::MUTATES) &&
               !has_flag(descriptor.flags, command_flags::NO_UNDO);
             if (!undoable) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format(
                     "command '{}': the on_disk flag needs mutates and excludes no_undo (it promises an inverse)",
@@ -104,7 +104,7 @@ namespace conjure::editor {
         }
         const bool readOnly = has_flag(descriptor.flags, command_flags::READ_ONLY);
         if (readOnly && has_flag(descriptor.flags, command_flags::MUTATES)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format(
                 "command '{}': the read_only flag excludes mutates (it opens the command to inspect-only clients)",
@@ -112,7 +112,20 @@ namespace conjure::editor {
               )
             );
         }
-        if (has_flag(descriptor.flags, command_flags::ASYNC)) {
+        if (has_flag(descriptor.flags, command_flags::SYNC_IN_BATCH)) {
+            const bool batchable = has_flag(descriptor.flags, command_flags::ASYNC) &&
+              !has_flag(descriptor.flags, command_flags::NOT_IN_BATCH);
+            if (!batchable) {
+                return core::make_error(
+                  protocol_error_code::INVALID_ARGS,
+                  std::format(
+                    "command '{}': the sync_in_batch flag needs async and excludes not_in_batch (it promises an "
+                    "answer inside a batch)",
+                    descriptor.name
+                  )
+                );
+            }
+        } else if (has_flag(descriptor.flags, command_flags::ASYNC)) {
             descriptor.flags |= command_flags::NOT_IN_BATCH;
         }
 

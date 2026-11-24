@@ -20,7 +20,7 @@ using namespace conjure::engine;
 namespace {
 
     [[nodiscard]] core::error database_error(std::string_view what, const core::error &cause) {
-        return make_error(engine_error::ASSET_DATABASE_FAILED, std::format("{}: {}", what, cause.to_string()));
+        return core::make_error(engine_error::ASSET_DATABASE_FAILED, std::format("{}: {}", what, cause.to_string()));
     }
 
     /// <summary>
@@ -72,7 +72,7 @@ core::result<void> assets_subsystem::startup(engine_context &context) {
     if (mServices->cooked) {
         // Exported project: the pack is the only source; no database, no importers at work.
         if (mServices->cookedFileSystem == nullptr) {
-            return make_error(engine_error::ASSET_DATABASE_FAILED, "a cooked project needs its cooked root");
+            return core::make_error(engine_error::ASSET_DATABASE_FAILED, "a cooked project needs its cooked root");
         }
         mServices->packReader = std::make_unique<assets::pack_reader>();
         const core::result<void> opened = mServices->packReader->open(*mServices->cookedFileSystem, PACK_FILE_NAME);
@@ -83,7 +83,10 @@ core::result<void> assets_subsystem::startup(engine_context &context) {
         CONJURE_LOG_INFO(LOG_ENGINE, "assets: {} cooked asset(s) in the pack", mServices->packReader->toc().size());
     } else {
         if (mServices->projectFileSystem == nullptr) {
-            return make_error(engine_error::ASSET_DATABASE_FAILED, "no project file system to build the database over");
+            return core::make_error(
+              engine_error::ASSET_DATABASE_FAILED,
+              "no project file system to build the database over"
+            );
         }
         mAssetsMountRoot = mount_root_of(context.project);
         // An assets root inside the project is a directory of the project file system; one outside it (an
@@ -93,7 +96,7 @@ core::result<void> assets_subsystem::startup(engine_context &context) {
         core::vfs::file_system *databaseFileSystem = mServices->projectFileSystem.get();
         if (mAssetsMountRoot.empty() && context.project != nullptr) {
             if (mServices->assetsFileSystem == nullptr) {
-                return make_error(
+                return core::make_error(
                   engine_error::ASSET_DATABASE_FAILED,
                   "the assets root outside the project is not mounted"
                 );

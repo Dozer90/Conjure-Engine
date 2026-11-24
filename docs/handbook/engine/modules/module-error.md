@@ -11,7 +11,7 @@ kind: header
 | File Path | `engine/include/conjure/modules/module_error.h` |
 | API ↗ | [Modules and plugins](../../../api/modules/index.md) |
 
-<p>Failure codes of the module system. Every code is returned as a <code><a href="../core/error/error.html">core::error</a></code> whose message names the module and, where relevant, the expected and actual values, so the editor can show it verbatim.</p>
+<p>Failure codes of the module system. Every code is returned as a <code><a href="../core/error/error.html">core::error</a></code> built with the generic <code>core::make_error(module_error::X, ...)</code>, whose message names the module and, where relevant, the expected and actual values, so the editor can show it verbatim.</p>
 
 ## Enumerations
 
@@ -67,21 +67,6 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::modules::module_error, "modules", conjur
 
 ### Public
 
-#### `make_module_error` {#function-make-module-error}
-
-<div class="function-declaration" id="function-make-module-error-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span>... Args&gt; [[<span class="na">nodiscard</span>]] <a href="../core/error/error.html">core::error</a> make_module_error(
-    <a href="module-error.html#symbol-module-error">module_error</a> code,
-    std::format_string&lt;Args...&gt; format,
-    Args &amp;&amp;...args);</code></pre></div>
-
-<p>Builds a module error with a <code>std::format</code> style message.</p>
-
-<div class="function-declaration" id="function-make-module-error-2"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">inline</span> <a href="../core/error/error.html">core::error</a> make_module_error(
-    <a href="module-error.html#symbol-module-error">module_error</a> code,
-    std::string_view detail = {});</code></pre></div>
-
-<p>Builds a module error with a fixed detail message (possibly empty).</p>
-
 #### `module_error_name` {#function-module-error-name}
 
 <div class="function-declaration" id="function-module-error-name-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view module_error_name(
@@ -114,6 +99,9 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::modules::module_error, "modules", conjur
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
+<a id="function-make-module-error"></a>
+<a id="function-make-module-error-1"></a>
+<a id="function-make-module-error-2"></a>
 <a id="internals-and-algorithms"></a>
 <a id="make_module_error"></a>
 <a id="module_error"></a>

@@ -196,7 +196,7 @@ The three callback phases <code>run_phase</code> takes.
 
 <div class="function-declaration" id="function-compute-native-api-hash-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/types.html#symbol-u64">u64</a> compute_native_api_hash() <span class="k">noexcept</span>;</code></pre></div>
 
-<p>FNV-1a 64 over &quot;&lt;group&gt;<code>_&lt;name&gt;</code> &lt;signature&gt;\n&quot; per descriptor, the generator&#x27;s algorithm run at runtime; equals <code>CONJURE_NATIVE_API_HASH</code>, which proves both implementations agree.</p>
+<p>FNV-1a 64 over &quot;&lt;group&gt;<code>_&lt;name&gt;</code> &lt;signature&gt;\n&quot; per descriptor, then over &quot;&lt;line&gt;\n&quot; per line of <code>CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE</code> (the <code>conjure_</code>* records, enumerations and table members of this header): the generator&#x27;s algorithm run at runtime over the text it generated. It equals <code>CONJURE_NATIVE_API_HASH</code>, which proves both implementations agree; whether the generated text still matches this header is checked by tools/<code>generate_native_api.py</code> --check, not here.</p>
 
 #### `find_native_entry` {#function-find-native-entry}
 

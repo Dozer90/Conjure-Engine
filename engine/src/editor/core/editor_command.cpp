@@ -16,7 +16,7 @@ namespace conjure::editor {
             std::string_view name = "";
         };
 
-        constexpr std::array<flag_name, 11> FLAG_NAMES = {
+        constexpr std::array<flag_name, 12> FLAG_NAMES = {
             flag_name{command_flags::MUTATES, "mutates"},
             flag_name{command_flags::REQUIRES_PROJECT, "requires_project"},
             flag_name{command_flags::REQUIRES_SCENE, "requires_scene"},
@@ -28,6 +28,7 @@ namespace conjure::editor {
             flag_name{command_flags::NO_UNDO, "no_undo"},
             flag_name{command_flags::ON_DISK, "on_disk"},
             flag_name{command_flags::READ_ONLY, "read_only"},
+            flag_name{command_flags::SYNC_IN_BATCH, "sync_in_batch"},
         };
     }
 
@@ -51,6 +52,13 @@ namespace conjure::editor {
         response.ok = true;
         response.result = std::move(result);
         mDispatcher->complete(mTicket, std::move(response));
+    }
+
+    void async_reply::succeed_mutation(command_outcome outcome) const {
+        if (!is_valid()) {
+            return;
+        }
+        mDispatcher->complete_mutation(mTicket, std::move(outcome));
     }
 
     void async_reply::fail(protocol_error_code code, std::string message, core::json::document details) const {

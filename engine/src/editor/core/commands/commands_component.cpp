@@ -92,7 +92,7 @@ namespace conjure::editor::support {
         ) {
             scene::scene &scene = invocation.context.scene();
             if (!scene.world().has_raw(entity, resolved.component)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::COMPONENT_NOT_FOUND,
                   std::format("the entity has no '{}' component", resolved.typeName)
                 );

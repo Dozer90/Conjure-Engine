@@ -23,7 +23,7 @@ namespace conjure::editor::support {
             // --exec file, an editor.exec_file task, the UI) have no transport entry and are trusted.
             protocol_server *server = context.server();
             if (server != nullptr && !server->accept_hello(invocation.clientId, token)) {
-                return make_editor_error(protocol_error_code::UNAUTHORISED, "session.hello: the token does not match");
+                return core::make_error(protocol_error_code::UNAUTHORISED, "session.hello: the token does not match");
             }
             const access_level access =
               server != nullptr ? server->access_of_client(invocation.clientId) : access_level::FULL_CONTROL;

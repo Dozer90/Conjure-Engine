@@ -78,7 +78,7 @@ namespace conjure::modules {
             [[nodiscard]] core::result<ServiceType *> require_service() const {
                 ServiceType *service = mServices->find<ServiceType>();
                 if (service == nullptr) {
-                    return make_module_error(
+                    return core::make_error(
                       module_error::SERVICE_MISSING,
                       "module '{}' requires service '{}', which the host does not provide",
                       mManifest->name,

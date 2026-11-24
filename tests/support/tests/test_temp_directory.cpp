@@ -156,6 +156,36 @@ TEST_SUITE("testing/temp_directory") {
         }
     }
 
+    TEST_CASE("temp_directory - replaying_copy copies a program with its permissions and writes its replay beside it") {
+        const temp_directory directory("support_replaying_copy");
+        const std::filesystem::path program = directory.write_file("tools/program.bin", "program bytes");
+        std::filesystem::permissions(
+          program,
+          std::filesystem::perms::owner_exec,
+          std::filesystem::perm_options::add
+        );
+        const core::result<std::filesystem::path> copied =
+          replaying_copy(directory, program, "stand_in", "echo 1.2.3");
+        CONJURE_REQUIRE_OK(copied);
+        CHECK(copied.value() == directory.file("stand_in.bin"));
+        CHECK(read_file(copied.value()) == "program bytes");
+        CHECK(read_file(directory.file("stand_in.bin.replay")) == "echo 1.2.3");
+        CHECK(std::filesystem::status(copied.value()).permissions() == std::filesystem::status(program).permissions());
+
+        // A second copy of the same name replaces the first, replay included.
+        CONJURE_REQUIRE_OK(replaying_copy(directory, program, "stand_in", "exit 3"));
+        CHECK(read_file(directory.file("stand_in.bin.replay")) == "exit 3");
+    }
+
+    TEST_CASE("temp_directory - replaying_copy of a program that does not exist is IO_FAILURE and writes nothing") {
+        const temp_directory directory("support_replaying_copy_missing");
+        const core::result<std::filesystem::path> copied =
+          replaying_copy(directory, directory.file("missing.bin"), "stand_in", "echo 1.2.3");
+        CONJURE_CHECK_ERROR(copied, core::error_code::IO_FAILURE);
+        std::error_code failure = {};
+        CHECK_FALSE(std::filesystem::exists(directory.file("stand_in.bin.replay"), failure));
+    }
+
     TEST_CASE("temp_directory - directories made with one prefix are all distinct and exist together") {
         constexpr std::size_t COUNT = 64;
         std::vector<std::unique_ptr<temp_directory>> directories = {};

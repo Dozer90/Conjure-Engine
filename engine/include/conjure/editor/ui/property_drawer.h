@@ -19,11 +19,16 @@
 // "-inf" for an infinity, null for NaN. The built-in drawers show those as inf, -inf and nan, write them back
 // unchanged when a neighbouring field or component is edited and never add one (a typed "inf" is not written);
 // a replacement drawer for a float kind receives the same values.
+//
+// A float field whose attributes carry a unit (core::reflect::field_unit) is shown as an angle by the built-in
+// drawers: a RADIANS field in degrees, its min, max and step converted from the radians they are authored in, a
+// DEGREES field as stored; both with a "deg" suffix. The value is written back in the stored unit, and only when
+// the user changed it.
 
 namespace conjure::editor::ui {
 
     /// <summary>
-    /// What a drawer receives: the field description (attributes drive ranges and tooltips) and the value.
+    /// What a drawer receives: the field description (attributes drive ranges, units and tooltips) and the value.
     /// </summary>
     struct property_draw_context {
         const core::reflect::field_info *field = nullptr;   // nullptr for unreflected values

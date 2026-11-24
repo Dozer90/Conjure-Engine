@@ -43,8 +43,8 @@ TEST_SUITE("assets/asset_cache") {
         const asset_cache cache(fileSystem, "cache", "test");
         const cooked_blob blob = make_test_blob(test_id(1), "cached", {test_id(2)});
         CHECK_FALSE(cache.contains(test_id(1)));
-        CONJURE_CHECK_ERROR(cache.read(test_id(1)), asset_error_code::CACHE_MISS);
-        CONJURE_CHECK_ERROR(cache.read_header(test_id(1)), asset_error_code::CACHE_MISS);
+        CONJURE_CHECK_ERROR(cache.read(test_id(1)), assets_error::CACHE_MISS);
+        CONJURE_CHECK_ERROR(cache.read_header(test_id(1)), assets_error::CACHE_MISS);
 
         CONJURE_REQUIRE_OK(cache.write(blob));
         CHECK(cache.contains(test_id(1)));
@@ -106,17 +106,17 @@ TEST_SUITE("assets/asset_cache") {
         std::vector<std::byte> flipped = bytes.value();
         flipped.back() = static_cast<std::byte>(static_cast<u8>(flipped.back()) ^ 0x01);
         CONJURE_REQUIRE_OK(fileSystem.write_file(path, flipped));
-        CONJURE_CHECK_ERROR(cache.read(test_id(1)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(cache.read(test_id(1)), assets_error::CACHE_CORRUPT);
         CONJURE_CHECK_OK(cache.read_header(test_id(1)));
 
         std::vector<std::byte> truncated = bytes.value();
         truncated.resize(truncated.size() - 3);
         CONJURE_REQUIRE_OK(fileSystem.write_file(path, truncated));
-        CONJURE_CHECK_ERROR(cache.read(test_id(1)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(cache.read(test_id(1)), assets_error::CACHE_CORRUPT);
 
         std::vector<std::byte> shortHeader(bytes.value().begin(), bytes.value().begin() + 20);
         CONJURE_REQUIRE_OK(fileSystem.write_file(path, shortHeader));
-        CONJURE_CHECK_ERROR(cache.read_header(test_id(1)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(cache.read_header(test_id(1)), assets_error::CACHE_CORRUPT);
     }
 
     TEST_CASE("asset_cache - a blob stored under another uuid's path is CACHE_CORRUPT") {
@@ -124,8 +124,8 @@ TEST_SUITE("assets/asset_cache") {
         const asset_cache cache(fileSystem, "cache", "test");
         const cooked_blob blob = make_test_blob(test_id(1), "mislabelled");
         CONJURE_REQUIRE_OK(fileSystem.write_file(cache.blob_path(test_id(2)), write_cooked_blob(blob)));
-        CONJURE_CHECK_ERROR(cache.read(test_id(2)), asset_error_code::CACHE_CORRUPT);
-        CONJURE_CHECK_ERROR(cache.read_header(test_id(2)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(cache.read(test_id(2)), assets_error::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(cache.read_header(test_id(2)), assets_error::CACHE_CORRUPT);
     }
 
     TEST_CASE("asset_cache - remove_temporaries deletes leftover .tmp files only") {
@@ -161,6 +161,6 @@ TEST_SUITE("assets/asset_cache") {
         core::vfs::memory_file_system fileSystem = {};
         fileSystem.set_read_only(true);
         const asset_cache cache(fileSystem, "cache", "test");
-        CONJURE_CHECK_ERROR(cache.write(make_test_blob(test_id(1), "x")), asset_error_code::IO_ERROR);
+        CONJURE_CHECK_ERROR(cache.write(make_test_blob(test_id(1), "x")), assets_error::IO_ERROR);
     }
 }

@@ -80,4 +80,17 @@ namespace conjure::testing {
     /// is returned in its classic form. Fails the case when the folder cannot be created.
     /// </summary>
     std::filesystem::path long_directory(const temp_directory &directory, usize minimumLength);
+
+    /// <summary>
+    /// Copies the program 'program' into 'directory' as 'name' plus the program's extension, with the program's
+    /// permissions (the execute bit on Linux and macOS), and writes 'replay' beside it as '<copy>.replay': the file a
+    /// copy of conjure_process_child takes its arguments from (tests/core/system/process_child.cpp), so the copy can
+    /// stand in for another tool. Returns the copy's path; IO_FAILURE (core) when a file cannot be copied or written.
+    /// </summary>
+    [[nodiscard]] core::result<std::filesystem::path> replaying_copy(
+      const temp_directory &directory,
+      const std::filesystem::path &program,
+      std::string_view name,
+      std::string_view replay
+    );
 }

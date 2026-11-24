@@ -112,7 +112,7 @@ namespace conjure::editor::support {
                 if (code == protocol_error_code::INVALID_ARGS) {
                     code = protocol_error_code::IO_ERROR;
                 }
-                return make_editor_error(
+                return core::make_error(
                   code,
                   std::format("cannot load '{}': {}", path, loaded.get_error().to_string())
                 );
@@ -168,7 +168,7 @@ namespace conjure::editor::support {
                 return not_a_scene_path(pathText);
             }
             CONJURE_TRY(save_to(context, path));
-            context.set_scene_state(true, path);
+            context.set_scene_path(path);
             command_outcome outcome = {};
             outcome.label = "Save scene as";
             outcome.result = core::json::object({{"path", path}});
@@ -178,7 +178,7 @@ namespace conjure::editor::support {
         core::result<command_outcome> scene_close(command_invocation &invocation) {
             editor_context &context = invocation.context;
             if (!context.has_scene()) {
-                return make_editor_error(protocol_error_code::SCENE_NOT_OPEN, "no scene is open");
+                return core::make_error(protocol_error_code::SCENE_NOT_OPEN, "no scene is open");
             }
             const bool discard = bool_or(invocation.args, "discard", false);
             if (context.scene_dirty() && !discard) {

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace conjure::physics {
 
@@ -58,7 +59,7 @@ namespace {
     /// True when a field that shapes the character changed (runtime fields excluded).
     /// </summary>
     [[nodiscard]] bool authored_fields_differ(const character_controller &a, const character_controller &b) noexcept {
-        return a.radius != b.radius || a.height != b.height || a.maxSlopeAngleDegrees != b.maxSlopeAngleDegrees
+        return a.radius != b.radius || a.height != b.height || a.maxSlopeAngleRadians != b.maxSlopeAngleRadians
           || a.stepHeight != b.stepHeight || a.mass != b.mass || a.maxStrength != b.maxStrength
           || a.padding != b.padding || a.layer != b.layer || a.flags != b.flags;
     }
@@ -68,7 +69,7 @@ namespace {
         settings.mShape = make_character_shape(controller);
         settings.mInnerBodyShape = settings.mShape;
         settings.mInnerBodyLayer = jolt::object_layer(layer, motion_type::KINEMATIC);
-        settings.mMaxSlopeAngle = math::radians(math::clamp(controller.maxSlopeAngleDegrees, 0.0f, 90.0f));
+        settings.mMaxSlopeAngle = math::clamp(controller.maxSlopeAngleRadians, 0.0f, std::numbers::pi_v<f32> / 2.0f);
         settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -radius);
         settings.mMass = std::max(controller.mass, 0.0f);
         settings.mMaxStrength = std::max(controller.maxStrength, 0.0f);

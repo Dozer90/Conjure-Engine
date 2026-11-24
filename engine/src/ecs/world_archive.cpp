@@ -48,7 +48,7 @@ core::result<void> world::instantiate_batch(
         return core::error(core::error_code::INVALID_ARGUMENT, "instantiate_batch needs an archive");
     }
     if (&archive->registry() != mRegistry) {
-        return make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
+        return core::make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
     }
     if (commands != nullptr && &commands->target() != this) {
         // The ids would be reserved from, and placed in, the buffer's world instead of this one.
@@ -115,7 +115,7 @@ core::result<void> world::instantiate_now(const entity_archive &archive, std::sp
         return core::result<void>::success();
     }
     if (ids.size() != static_cast<usize>(count) * copies) {
-        return make_error(ecs_error::ARCHIVE_CORRUPT, "instantiate received the wrong number of ids");
+        return core::make_error(ecs_error::ARCHIVE_CORRUPT, "instantiate received the wrong number of ids");
     }
     bump_version();
 

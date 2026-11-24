@@ -11,6 +11,13 @@ using namespace conjure;
 using namespace conjure::core;
 using namespace conjure::modules;
 
+namespace {
+    // True again if the factory that code sweep F625 removed comes back: the module builds its errors with
+    // core::make_error. The call is dependent, so the name need not exist for the concept to be false.
+    template <typename EnumType>
+    concept declares_make_module_error = requires(EnumType code) { make_module_error(code); };
+}
+
 TEST_SUITE("modules/module_error") {
 
     TEST_CASE("module_error - every code has its enumerator name and values past COUNT have none") {
@@ -28,9 +35,9 @@ TEST_SUITE("modules/module_error") {
         }
     }
 
-    TEST_CASE("module_error - make_module_error binds the modules category") {
+    TEST_CASE("module_error - make_error binds the modules category") {
         const error formatted =
-          make_module_error(module_error::BINARY_NOT_FOUND, "module '{}' has no binary at {}", "alpha", 3);
+          core::make_error(module_error::BINARY_NOT_FOUND, "module '{}' has no binary at {}", "alpha", 3);
         CHECK(formatted.is(module_error::BINARY_NOT_FOUND));
         CHECK_FALSE(formatted.is(module_error::ABI_MISMATCH));
         CHECK(formatted.is_category<module_error>());
@@ -41,21 +48,26 @@ TEST_SUITE("modules/module_error") {
         CHECK(formatted.to_string() == "modules.BINARY_NOT_FOUND: module 'alpha' has no binary at 3");
         CHECK(formatted.generic_code() == error_code::NONE);
 
-        const error fixed = make_module_error(module_error::STALE_ID, "braces {} stay");
+        const error fixed = core::make_error(module_error::STALE_ID, "braces {} stay");
         CHECK(fixed.is(module_error::STALE_ID));
         CHECK(fixed.message() == "braces {} stay");
 
-        const error bare = make_module_error(module_error::FAULTED);
+        const error bare = core::make_error(module_error::FAULTED);
         CHECK(bare.is(module_error::FAULTED));
         CHECK(bare.message().empty());
         CHECK(bare.to_string() == "modules.FAULTED");
     }
 
     TEST_CASE("module_error - the category id is the hash of its name and differs from core") {
-        const error moduleError = make_module_error(module_error::IN_USE);
+        const error moduleError = core::make_error(module_error::IN_USE);
         const error coreError(error_code::NOT_FOUND);
         CHECK(moduleError.category() == hash::fnv1a32("modules"));
         CHECK(moduleError.category() != coreError.category());
         CHECK(moduleError != coreError);
+    }
+
+    TEST_CASE("regression - code sweep F625 module_error has no factory beside core::make_error") {
+        CHECK_FALSE(declares_make_module_error<module_error>);
+        CHECK_FALSE(testing::declares_own_make_error<module_error>);
     }
 }

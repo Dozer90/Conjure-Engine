@@ -243,7 +243,7 @@ namespace conjure::editor::support {
             } else if (state == modules::module_state::SKIPPED) {
                 return not_available(std::format("module '{}' excludes this platform", name));
             } else if (state == modules::module_state::FAULTED) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INTERNAL,
                   std::format("module '{}' is faulted; restart the editor", name)
                 );
@@ -483,7 +483,7 @@ namespace conjure::editor::support {
             editor_context &context = invocation.context;
             const engine::project *project = context.project();
             if (project == nullptr) {
-                return make_editor_error(protocol_error_code::PROJECT_NOT_OPEN, "module.build needs a project");
+                return core::make_error(protocol_error_code::PROJECT_NOT_OPEN, "module.build needs a project");
             }
             std::string name = std::string(string_or(invocation.args, "name", ""));
             std::filesystem::path moduleRoot = project->root_directory();

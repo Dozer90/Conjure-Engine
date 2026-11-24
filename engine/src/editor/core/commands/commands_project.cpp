@@ -171,7 +171,7 @@ namespace conjure::editor::support {
                 return not_available("project.open: this session has no process host to restart the engine");
             }
             if (!context.play().is_editing()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::WRONG_PLAY_STATE,
                   "stop playing before opening a project"
                 );
@@ -346,7 +346,7 @@ namespace conjure::editor::support {
             }
             core::result<engine::project> parsed = engine::project::parse(next.to_string(), project->root_directory());
             if (!parsed.has_value()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, parsed.get_error().message());
+                return core::make_error(protocol_error_code::INVALID_ARGS, parsed.get_error().message());
             }
             *project = std::move(parsed).value();
             const core::result<void> saved = project->save();
@@ -378,40 +378,58 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
-        /// Names the two projects export step 3 builds (follow-up FU-PDB): the engine's Conjure.Bootstrap, from the
-        /// source tree this editor was built from (CONJURE_EDITOR_BOOTSTRAP_PROJECT, which
-        /// engine/src/editor/CMakeLists.txt sets), and the game's scripts/Game.csproj when the project has one (the
-        /// file script.create writes and script.compile builds). An editor without that source tree, because it was
-        /// built without scripting or no longer lies next to its sources, is NOT_AVAILABLE naming what it misses:
-        /// exporting anyway would ship a game whose runtime starts the .NET host and finds no managed code. Where an
-        /// installed editor, which has no source tree, finds the bootstrap is not decided yet.
+        /// The path with '/' separators as UTF-8, for messages: generic_string() would give the ANSI code page on
+        /// Windows.
+        /// </summary>
+        [[nodiscard]] std::string display_path(const std::filesystem::path &path) {
+            const std::u8string text = path.generic_u8string();
+            return std::string(text.begin(), text.end());
+        }
+
+        /// <summary>
+        /// Names where export step 3 takes the engine's managed code from, and the game's scripts/Game.csproj when the
+        /// project has one (the file script.create writes and script.compile builds). An installed editor copies the
+        /// prebuilt SDK of its install layout (owner decision OWN-INSTALL): the managed/ folder beside it,
+        /// editor_context::prebuilt_managed_directory(), when it holds the manifest the build target
+        /// conjure_managed_sdk_export writes; the pipeline checks the rest of that folder, the native API hash
+        /// included, before it writes anything. That folder wins even when the bootstrap project exists too (an
+        /// editor packaged on the machine that built it): publishing whatever revision that source holds now would
+        /// skip the hash check. Only a folder without the manifest, which a build tree's bin/managed always is, lets
+        /// an editor run from its build tree publish Conjure.Bootstrap from the engine source it was built from
+        /// (editor_context::bootstrap_project(), follow-up FU-PDB). An editor with neither is NOT_AVAILABLE naming
+        /// both: exporting anyway would ship a game whose runtime starts the .NET host and finds no managed code.
         /// </summary>
         [[nodiscard]] core::result<void> name_managed_projects(
           editor_context &context,
           engine::export_settings &settings
         ) {
-#if defined(CONJURE_EDITOR_BOOTSTRAP_PROJECT)
-            const std::string_view bootstrapText = CONJURE_EDITOR_BOOTSTRAP_PROJECT;
-            const std::filesystem::path bootstrap(std::u8string(bootstrapText.begin(), bootstrapText.end()));
             std::error_code probe = {};
-            if (!std::filesystem::is_regular_file(bootstrap, probe)) {
-                return not_available(std::format(
-                  "managed code cannot be exported: the engine source this editor was built from has no '{}' (an "
-                  "editor publishes Conjure.Bootstrap from its source tree); pass publishManaged false to export "
-                  "without managed code",
-                  bootstrap.generic_string()
-                ));
+            const std::filesystem::path prebuilt = context.prebuilt_managed_directory();
+            const std::filesystem::path manifest =
+              prebuilt / std::filesystem::path(engine::export_pipeline::MANAGED_SDK_MANIFEST_NAME);
+            if (!prebuilt.empty() && std::filesystem::is_regular_file(manifest, probe)) {
+                settings.prebuiltManagedDirectory = prebuilt;
+                settings.scriptsProject = game_scripts_project(context);
+                return core::result<void>::success();
             }
-            settings.bootstrapProject = bootstrap;
-#else
-            (void) settings;
-            return not_available(
-              "managed code cannot be exported: this editor was built without scripting and knows no "
-              "Conjure.Bootstrap project; pass publishManaged false to export without managed code"
-            );
-#endif
-            settings.scriptsProject = game_scripts_project(context);
-            return core::result<void>::success();
+            const std::filesystem::path &bootstrap = context.bootstrap_project();
+            const bool fromSource = !bootstrap.empty() && std::filesystem::is_regular_file(bootstrap, probe);
+            if (fromSource) {
+                settings.bootstrapProject = bootstrap;
+                settings.scriptsProject = game_scripts_project(context);
+                return core::result<void>::success();
+            }
+            const std::string source = bootstrap.empty()
+              ? std::string("this editor was built without scripting and knows no Conjure.Bootstrap project")
+              : std::format("the engine source this editor was built from has no '{}'", display_path(bootstrap));
+            return not_available(std::format(
+              "managed code cannot be exported: {}, and its managed directory '{}' holds no prebuilt SDK ({}, which "
+              "the build target conjure_managed_sdk_export publishes into <build>/bin/managed_export for an installed "
+              "editor); pass publishManaged false to export without managed code",
+              source,
+              display_path(prebuilt),
+              engine::export_pipeline::MANAGED_SDK_MANIFEST_NAME
+            ));
         }
 
         core::result<command_outcome> project_export(command_invocation &invocation) {
@@ -645,10 +663,14 @@ namespace conjure::editor::support {
             "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied "
             "runtime executable, null when the runtime was not copied. An export is always a Distribution export: "
             "distributionDirectory names the Distribution build whose runtime is copied. Relative directories are "
-            "relative to the project root. publishManaged (default: the project enables scripting) publishes "
-            "Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj "
-            "when present; an editor without that source answers NOT_AVAILABLE, and an editor run with "
-            "--no-scripting refuses a project that enables scripting.",
+            "relative to the project root. publishManaged (default: the project enables scripting) copies the "
+            "prebuilt SDK of the editor's managed/ folder when that folder holds its manifest (an installed editor), "
+            "otherwise publishes Conjure.Bootstrap from the engine source the editor was built from, and builds "
+            "scripts/Game.csproj when present. "
+            "Publishing and building need a .NET SDK: without a usable one the export fails naming the version "
+            "global.json asks for and Microsoft's download page. An editor with neither the source nor the prebuilt "
+            "SDK answers NOT_AVAILABLE, and an editor run with --no-scripting refuses a project that enables "
+            "scripting.",
             R"({"type":"object","properties":{"directory":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",

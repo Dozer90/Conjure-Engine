@@ -57,16 +57,20 @@ Exit code 0 when no binary contains a root, 1 when one does (one `<binary>: 0x<o
 Tests: python tools/tests/test_check_distribution_paths.py. CI runs them in the style-and-headers job of ci.yml.
 The distribution-export job of nightly.yml runs the check over the Distribution tree as the CTest entry
 runtime.distribution_paths (its "process|runtime" step, before the export). Its "Managed path check" step, after the
-export, runs it over the managed assemblies the export published, once the editor's export publishes any: it does
-not yet (project.export names no bootstrap project and the exported test project has scripting disabled), so that
-step finds no managed directory and only warns:
+export, runs it over the managed assemblies the export published. project.export publishes managed code (the
+Conjure.Bootstrap of the engine source, or the prebuilt SDK an installed editor copies), but the exported test project
+has scripting disabled, so that step finds no managed directory and only warns:
 
     python tools/check_distribution_paths.py --build-dir build/windows-msvc-dist
     python tools/check_distribution_paths.py --binary build/export_out/managed/Game.dll ...
 
-Until then the end-to-end proof for managed code is the [dotnet] case "regression - code sweep FU-PDB ..." of
-tests/engine/test_export.cpp, which runs the check over the assemblies and .pdb files of a real export (label slow,
-run by the nightly test presets).
+While that project has scripting disabled, the end-to-end proof for managed code is the [dotnet] case
+"regression - code sweep FU-PDB ..." of tests/engine/test_export.cpp, which runs the check over the assemblies and
+.pdb files of a real export (label slow, run by the nightly test presets). The prebuilt SDK an installed editor
+exports with (owner decision OWN-INSTALL: the build target conjure_managed_sdk_export publishes it into
+<build>/bin/managed_export) is checked in every tree with a .NET SDK and Python by the CTest entry
+conjure_managed_sdk_export_paths.sdk_export (label "managed", managed/CMakeLists.txt): --binary over its two
+assemblies and their .pdb files, with the build tree as a --root.
 
 tests/runtime/CMakeLists.txt registers both with CTest: runtime.check_distribution_paths_tool (the tests, in every
 tree) and runtime.distribution_paths (the check, label "process", in a Distribution tree or on the tree that

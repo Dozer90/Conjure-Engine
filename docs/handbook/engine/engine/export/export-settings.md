@@ -41,6 +41,7 @@ struct export_settings
 <tr><td>public</td><td><code class="signature">distribution<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">dotnet<wbr>Executable</code></td><td><code class="signature">std::string</code></td><td><code class="signature"><span class="s">"dotnet"</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">output<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">prebuilt<wbr>Managed<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">process<wbr>Timeout<wbr>Seconds</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f64">f64</a></code></td><td><code class="signature"><span class="mi">1800.0</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">publish<wbr>Managed</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">runtime<wbr>Identifier</code></td><td><code class="signature">std::string</code></td><td><code class="signature">{}</code></td><td></td></tr>

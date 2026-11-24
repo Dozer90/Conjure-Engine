@@ -13,7 +13,7 @@ using namespace conjure::assets;
 
 namespace {
     core::error unknown_asset(const asset_id &id) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown to the source", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown to the source", id));
     }
 }
 
@@ -127,21 +127,21 @@ core::result<cooked_blob> cache_asset_source::read(const asset_id &id) const {
     }
     switch (*status) {
         case asset_record_status::META_INVALID:
-            return make_asset_error(asset_error_code::META_INVALID, std::format("the meta of {} is invalid", id));
+            return core::make_error(assets_error::META_INVALID, std::format("the meta of {} is invalid", id));
         case asset_record_status::NO_IMPORTER:
-            return make_asset_error(asset_error_code::NO_IMPORTER, std::format("no importer for {}", id));
+            return core::make_error(assets_error::NO_IMPORTER, std::format("no importer for {}", id));
         case asset_record_status::CYCLIC_DEPENDENCY:
-            return make_asset_error(
-              asset_error_code::CYCLIC_DEPENDENCY,
+            return core::make_error(
+              assets_error::CYCLIC_DEPENDENCY,
               std::format("{} is part of a dependency cycle", id)
             );
         case asset_record_status::DUPLICATE_UUID:
-            return make_asset_error(
-              asset_error_code::DUPLICATE_UUID,
+            return core::make_error(
+              assets_error::DUPLICATE_UUID,
               std::format("{} duplicates another asset's uuid", id)
             );
         case asset_record_status::MISSING_SOURCE:
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("the source of {} is missing", id));
+            return core::make_error(assets_error::NOT_FOUND, std::format("the source of {} is missing", id));
         case asset_record_status::OK:
         case asset_record_status::IMPORT_FAILED:
             break;

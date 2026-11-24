@@ -107,7 +107,7 @@ namespace {
         public:
             core::result<void> begin(const screenshot_request &request) override {
                 if (!refusedCamera.empty() && request.camera == refusedCamera) {
-                    return make_editor_error(protocol_error_code::COMPONENT_NOT_FOUND, "no such camera");
+                    return core::make_error(protocol_error_code::COMPONENT_NOT_FOUND, "no such camera");
                 }
                 ++begun;
                 begunPaths.push_back(request.path.generic_string());

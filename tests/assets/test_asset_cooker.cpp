@@ -162,7 +162,7 @@ TEST_SUITE("assets/asset_cooker") {
         cook_settings settings = fixture.settings_for({});
         settings.includeAll = true;
         core::result<cook_report> report = fixture.cooker.cook(settings);
-        CONJURE_CHECK_ERROR(report, asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(report, assets_error::IMPORT_FAILED);
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export/content.cpak"));
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export/manifest.json"));
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export"));
@@ -252,7 +252,7 @@ TEST_SUITE("assets/asset_cooker") {
             settings.alwaysInclude = {orphan};
         }
 
-        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), assets_error::IMPORT_FAILED);
         const cook_report &last = fixture.cooker.last_report();
         REQUIRE(last.failures.size() == 1);
         CHECK(last.failures[0].id == orphan);
@@ -273,7 +273,7 @@ TEST_SUITE("assets/asset_cooker") {
         cook_settings settings = fixture.settings_for({});
         settings.includeAll = true;
         settings.outputDirectory = "export_all";
-        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(fixture.cooker.cook(settings), assets_error::IMPORT_FAILED);
         const cook_report &last = fixture.cooker.last_report();
         REQUIRE(last.failures.size() == 1);
         CHECK(last.failures[0].id == fixture.mid);
@@ -286,7 +286,7 @@ TEST_SUITE("assets/asset_cooker") {
         cook_fixture fixture = {};
         cook_settings empty = {};
         CONJURE_CHECK_ERROR(fixture.cooker.cook(empty), core::error_code::INVALID_ARGUMENT);
-        CONJURE_CHECK_ERROR(fixture.cooker.cook(fixture.settings_for({test_id(99)})), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.cooker.cook(fixture.settings_for({test_id(99)})), assets_error::NOT_FOUND);
         CHECK_FALSE(fixture.pipeline.fileSystem->exists("export"));
     }
 

@@ -12,7 +12,7 @@ TEST_SUITE("scripting/scripting") {
         CHECK(hostConfig.backend == script_backend::DOTNET);
         const script_runtime_config runtimeConfig = {};
         CHECK(runtimeConfig.initialMode == script_mode::EDIT);
-        CHECK(status_of(script_error::NOT_INITIALISED) < 0);
+        CHECK(status_of(scripting_error::NOT_INITIALISED) < 0);
         CHECK(MAX_SCRIPTS_PER_ENTITY == 8);
         CHECK(QUERY_MAX_COMPONENTS == 8);
         CHECK(SYSTEM_UPDATE == "scripting.update");

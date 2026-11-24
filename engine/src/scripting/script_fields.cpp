@@ -175,7 +175,12 @@ namespace {
     }
 
     [[nodiscard]] core::error truncated_list(const script_field_info &field, u32 index) {
-        return core::make_error(script_error::FIELD_BLOB_INVALID, "list '{}' element {} truncated", field.name, index);
+        return core::make_error(
+          scripting_error::FIELD_BLOB_INVALID,
+          "list '{}' element {} truncated",
+          field.name,
+          index
+        );
     }
 
     void put_zero_scalar(field_blob_writer &writer, script_field_kind kind) {
@@ -191,7 +196,7 @@ namespace {
         const usize needed = fixed_payload_size(kind);
         if (payload.size() < needed) {
             return core::make_error(
-              script_error::FIELD_BLOB_INVALID,
+              scripting_error::FIELD_BLOB_INVALID,
               "{} payload needs {} bytes, {} present",
               to_string(kind),
               needed,
@@ -256,7 +261,7 @@ namespace {
             case script_field_kind::COUNT:
                 break;
         }
-        return core::make_error(script_error::FIELD_BLOB_INVALID, "unsupported scalar kind {}", to_string(kind));
+        return core::make_error(scripting_error::FIELD_BLOB_INVALID, "unsupported scalar kind {}", to_string(kind));
     }
 }
 
@@ -485,14 +490,14 @@ field_blob_reader::~field_blob_reader() {}
 
 core::result<bool> field_blob_reader::next(field_blob_field &out) {
     if (!mValid) {
-        return core::make_error(script_error::FIELD_BLOB_INVALID, "bad field blob header");
+        return core::make_error(scripting_error::FIELD_BLOB_INVALID, "bad field blob header");
     }
     if (mBlob.empty() || mFieldsRead >= mFieldCount) {
         return false;
     }
     if (mCursor + FIELD_BLOB_FIELD_HEADER_SIZE > mBlob.size()) {
         return core::make_error(
-          script_error::FIELD_BLOB_INVALID,
+          scripting_error::FIELD_BLOB_INVALID,
           "field {} header runs past the blob ({} bytes)",
           mFieldsRead,
           mBlob.size()
@@ -507,12 +512,12 @@ core::result<bool> field_blob_reader::next(field_blob_field &out) {
     std::memcpy(&payloadSize, mBlob.data() + mCursor + 12, sizeof(payloadSize));
     constexpr u8 KIND_COUNT = static_cast<u8>(script_field_kind::COUNT);
     if (kindByte >= KIND_COUNT || elementByte >= KIND_COUNT) {
-        return core::make_error(script_error::FIELD_BLOB_INVALID, "field {} has an unknown kind", mFieldsRead);
+        return core::make_error(scripting_error::FIELD_BLOB_INVALID, "field {} has an unknown kind", mFieldsRead);
     }
     const usize payloadStart = mCursor + FIELD_BLOB_FIELD_HEADER_SIZE;
     if (payloadStart + payloadSize > mBlob.size()) {
         return core::make_error(
-          script_error::FIELD_BLOB_INVALID,
+          scripting_error::FIELD_BLOB_INVALID,
           "field {} payload of {} bytes runs past the blob",
           mFieldsRead,
           payloadSize
@@ -626,7 +631,7 @@ core::result<core::json::document> conjure::scripting::read_field_value(
         return decode_scalar(field.kind, payload);
     }
     if (payload.size() < sizeof(u32)) {
-        return core::make_error(script_error::FIELD_BLOB_INVALID, "list '{}' has no count", field.name);
+        return core::make_error(scripting_error::FIELD_BLOB_INVALID, "list '{}' has no count", field.name);
     }
     u32 count = 0;
     std::memcpy(&count, payload.data(), sizeof(count));

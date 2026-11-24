@@ -66,7 +66,7 @@ core::result<chunk_layout> chunk_layout::compute(const component_mask &mask, con
         rowBytes += info.size;
     });
     if (unknown) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "the mask names an unregistered component");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "the mask names an unregistered component");
     }
 
     // Descending alignment packs the padding at the front where the entity column already pays it.
@@ -90,7 +90,7 @@ core::result<chunk_layout> chunk_layout::compute(const component_mask &mask, con
         --capacity;
     }
     if (capacity == 0) {
-        return make_error(ecs_error::ARCHETYPE_TOO_LARGE, "not even one row of this component set fits a chunk");
+        return core::make_error(ecs_error::ARCHETYPE_TOO_LARGE, "not even one row of this component set fits a chunk");
     }
     layout.capacity = capacity;
 
@@ -224,7 +224,7 @@ chunk *archetype::open_chunk(u32 &chunkIndex) noexcept {
 
 core::result<void> archetype::reserve_row(chunk_pool &pool) {
     if (mLayout.capacity == 0) {
-        return make_error(ecs_error::ARCHETYPE_TOO_LARGE, "archetype holds no rows");
+        return core::make_error(ecs_error::ARCHETYPE_TOO_LARGE, "archetype holds no rows");
     }
     u32 chunkIndex = 0;
     if (open_chunk(chunkIndex) != nullptr) {
@@ -232,7 +232,7 @@ core::result<void> archetype::reserve_row(chunk_pool &pool) {
     }
     void *block = pool.allocate();
     if (block == nullptr) {
-        return make_error(ecs_error::OUT_OF_MEMORY, "the chunk pool could not provide a block");
+        return core::make_error(ecs_error::OUT_OF_MEMORY, "the chunk pool could not provide a block");
     }
     if (!mSpareChunks.empty()) {
         // A drained chunk's metadata was parked by the world; attaching the block is allocation-free.
@@ -252,7 +252,7 @@ core::result<archetype::row_location> archetype::push_row(chunk_pool &pool) {
     chunk *target = open_chunk(chunkIndex);
     if (target == nullptr) {
         CONJURE_ASSERT(false, "archetype::reserve_row left no open chunk");
-        return make_error(ecs_error::OUT_OF_MEMORY, "no chunk accepts a row after a successful reservation");
+        return core::make_error(ecs_error::OUT_OF_MEMORY, "no chunk accepts a row after a successful reservation");
     }
     row_location location = {};
     location.chunkIndex = chunkIndex;

@@ -86,32 +86,32 @@ TEST_SUITE("scripting/script_host") {
             CHECK(mode.value() == host_mode::SELF_CONTAINED);
         }
         SUBCASE("missing file") {
-            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
+            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), scripting_error::RUNTIME_CONFIG_INVALID);
         }
         SUBCASE("malformed JSON") {
             write_anchor_files(directory, "{not json");
-            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
+            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), scripting_error::RUNTIME_CONFIG_INVALID);
         }
         SUBCASE("no runtimeOptions") {
             write_anchor_files(directory, "{}");
-            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
+            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), scripting_error::RUNTIME_CONFIG_INVALID);
         }
         SUBCASE("no framework at all") {
             write_anchor_files(directory, R"({"runtimeOptions":{"tfm":"net10.0"}})");
-            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), script_error::RUNTIME_CONFIG_INVALID);
+            CONJURE_CHECK_ERROR(detect_host_mode(directory.path()), scripting_error::RUNTIME_CONFIG_INVALID);
         }
     }
 
     TEST_CASE("validate_managed_directory - names the first missing anchor file") {
         temp_directory directory = {};
-        CONJURE_CHECK_ERROR(validate_managed_directory({}), script_error::MANAGED_SDK_MISSING);
+        CONJURE_CHECK_ERROR(validate_managed_directory({}), scripting_error::MANAGED_SDK_MISSING);
         const core::result<void> empty = validate_managed_directory(directory.path());
-        CONJURE_CHECK_ERROR(empty, script_error::MANAGED_SDK_MISSING);
+        CONJURE_CHECK_ERROR(empty, scripting_error::MANAGED_SDK_MISSING);
         CHECK(empty.get_error().message().find("Conjure.Bootstrap.dll") != std::string::npos);
 
         CONJURE_REQUIRE_OK(directory.write_text("Conjure.Bootstrap.dll", "x"));
         const core::result<void> noConfig = validate_managed_directory(directory.path());
-        CONJURE_CHECK_ERROR(noConfig, script_error::MANAGED_SDK_MISSING);
+        CONJURE_CHECK_ERROR(noConfig, scripting_error::MANAGED_SDK_MISSING);
         CHECK(noConfig.get_error().message().find("runtimeconfig.json") != std::string::npos);
 
         write_anchor_files(directory, FRAMEWORK_CONFIG);
@@ -124,7 +124,7 @@ TEST_SUITE("scripting/script_host") {
         conjure_native_api api = make_native_api(nullptr);
         script_host_config config = {};
         config.managedDirectory = directory.path();
-        CONJURE_CHECK_ERROR(host.initialise(config, api), script_error::MANAGED_SDK_MISSING);
+        CONJURE_CHECK_ERROR(host.initialise(config, api), scripting_error::MANAGED_SDK_MISSING);
         CHECK(host.status() == script_host_status::DISABLED);
         CHECK(host.managed_api().run_phase == nullptr);
         host.shutdown();

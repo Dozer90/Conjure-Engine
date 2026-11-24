@@ -22,7 +22,7 @@ using namespace conjure::engine;
 namespace {
 
     [[nodiscard]] core::error physics_error(std::string_view what, const core::error &cause) {
-        return make_error(engine_error::PHYSICS_INIT_FAILED, std::format("{}: {}", what, cause.to_string()));
+        return core::make_error(engine_error::PHYSICS_INIT_FAILED, std::format("{}: {}", what, cause.to_string()));
     }
 }
 

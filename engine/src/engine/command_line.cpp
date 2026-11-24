@@ -43,7 +43,7 @@ namespace {
     /// The BAD_ARGUMENTS error for one flag.
     /// </summary>
     [[nodiscard]] core::error bad_argument(std::string_view flag, std::string_view reason) {
-        return make_error(engine_error::BAD_ARGUMENTS, std::format("{}: {}", flag, reason));
+        return core::make_error(engine_error::BAD_ARGUMENTS, std::format("{}: {}", flag, reason));
     }
 
     /// <summary>

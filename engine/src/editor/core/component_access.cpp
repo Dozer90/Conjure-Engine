@@ -106,11 +106,11 @@ namespace conjure::editor::access {
             scene::layer value = current != nullptr ? *current : scene::layer{};
             const core::result<void> read = ecs::read_component_json(info, &value, in);
             if (!read.has_value()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, read.get_error().message());
+                return core::make_error(protocol_error_code::INVALID_ARGS, read.get_error().message());
             }
             const core::result<void> layered = scene.set_layer(entity, value.index);
             if (!layered.has_value()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, layered.get_error().message());
+                return core::make_error(protocol_error_code::INVALID_ARGS, layered.get_error().message());
             }
             return core::result<void>::success();
         }
@@ -122,7 +122,7 @@ namespace conjure::editor::access {
       core::json::document *details
     ) {
         if (name.empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "a component type name must not be empty");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "a component type name must not be empty");
         }
         const ecs::component_id exact = registry.find(core::string_id(name));
         if (exact.is_valid()) {
@@ -134,7 +134,7 @@ namespace conjure::editor::access {
                 if (aliased.is_valid()) {
                     return aliased;
                 }
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::TYPE_NOT_FOUND,
                   std::format("component type '{}' ({}) is not registered in this build", name, entry.name)
                 );
@@ -160,12 +160,12 @@ namespace conjure::editor::access {
                 }
                 details->set("candidates", candidates);
             }
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("component type '{}' is ambiguous ({} registered types end with it)", name, matches.size())
             );
         }
-        return make_editor_error(protocol_error_code::TYPE_NOT_FOUND, std::format("unknown component type '{}'", name));
+        return core::make_error(protocol_error_code::TYPE_NOT_FOUND, std::format("unknown component type '{}'", name));
     }
 
     std::string component_name(const ecs::component_registry &registry, ecs::component_id id) {
@@ -207,13 +207,13 @@ namespace conjure::editor::access {
     ) {
         const ecs::world &world = scene.world();
         if (!world.is_alive(entity)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::ENTITY_NOT_FOUND,
               std::format("entity {} is not alive", entity)
             );
         }
         if (!world.has_raw(entity, id)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::COMPONENT_NOT_FOUND,
               std::format("entity {} has no '{}' component", entity, component_name(world.registry(), id))
             );
@@ -225,11 +225,11 @@ namespace conjure::editor::access {
         core::json::writer out = {};
         const core::result<void> written = ecs::component_to_json(world, entity, id, out);
         if (!written.has_value()) {
-            return make_editor_error(protocol_error_code::INTERNAL, written.get_error().message());
+            return core::make_error(protocol_error_code::INTERNAL, written.get_error().message());
         }
         core::result<core::json::document> parsed = core::json::document::parse(out.finish());
         if (!parsed.has_value()) {
-            return make_editor_error(protocol_error_code::INTERNAL, parsed.get_error().message());
+            return core::make_error(protocol_error_code::INTERNAL, parsed.get_error().message());
         }
         core::json::document document = std::move(parsed).value();
         if (!document.root().is_object()) {
@@ -247,19 +247,19 @@ namespace conjure::editor::access {
     ) {
         ecs::world &world = scene.world();
         if (!world.is_alive(entity)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::ENTITY_NOT_FOUND,
               std::format("entity {} is not alive", entity)
             );
         }
         if (!world.has_raw(entity, id)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::COMPONENT_NOT_FOUND,
               std::format("entity {} has no '{}' component", entity, component_name(world.registry(), id))
             );
         }
         if (!external.is_object()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "a component value is a JSON object");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "a component value is a JSON object");
         }
         const ecs::component_info &info = world.registry().info(id);
         if (info.is_tag()) {
@@ -272,7 +272,7 @@ namespace conjure::editor::access {
         }
         const core::result<void> applied = ecs::component_from_json(world, entity, id, internal.root());
         if (!applied.has_value()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, applied.get_error().message());
+            return core::make_error(protocol_error_code::INVALID_ARGS, applied.get_error().message());
         }
         if (scene.assets() != nullptr) {
             scene::scene_serializer::bind_entity(world, entity, *scene.assets());
@@ -288,13 +288,13 @@ namespace conjure::editor::access {
     ) {
         ecs::world &world = scene.world();
         if (!world.is_alive(entity)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::ENTITY_NOT_FOUND,
               std::format("entity {} is not alive", entity)
             );
         }
         if (world.has_raw(entity, id)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("entity {} already has a '{}' component", entity, component_name(world.registry(), id))
             );
@@ -305,7 +305,7 @@ namespace conjure::editor::access {
         } else {
             const core::result<void *> added = world.add_raw(entity, id);
             if (!added.has_value()) {
-                return make_editor_error(classify_error(added.get_error()), added.get_error().message());
+                return core::make_error(classify_error(added.get_error()), added.get_error().message());
             }
         }
         if (initial.is_object() && !info.is_tag() && initial.size() > 0) {
@@ -323,20 +323,20 @@ namespace conjure::editor::access {
     core::result<void> remove_component(scene::scene &scene, ecs::entity entity, ecs::component_id id) {
         ecs::world &world = scene.world();
         if (!world.is_alive(entity)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::ENTITY_NOT_FOUND,
               std::format("entity {} is not alive", entity)
             );
         }
         if (!world.has_raw(entity, id)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::COMPONENT_NOT_FOUND,
               std::format("entity {} has no '{}' component", entity, component_name(world.registry(), id))
             );
         }
         const core::result<void> removed = world.remove_raw(entity, id);
         if (!removed.has_value()) {
-            return make_editor_error(classify_error(removed.get_error()), removed.get_error().message());
+            return core::make_error(classify_error(removed.get_error()), removed.get_error().message());
         }
         return core::result<void>::success();
     }
@@ -392,7 +392,7 @@ namespace conjure::editor::access {
             // Only guid strings cross the protocol (D5): the archive's {"external": "index:generation"} form
             // would let a client plant stale or foreign ecs::entity ids in a component.
             if (!current.is_string()) {
-                failure = make_editor_error(
+                failure = core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("{}: an entity reference is a guid string or null", pointer)
                 );
@@ -400,7 +400,7 @@ namespace conjure::editor::access {
             }
             const std::optional<core::uuid> guid = core::uuid::parse(current.as_string());
             if (!guid.has_value()) {
-                failure = make_editor_error(
+                failure = core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("{}: '{}' is not a guid", pointer, current.as_string())
                 );
@@ -408,7 +408,7 @@ namespace conjure::editor::access {
             }
             const ecs::entity entity = scene.find_guid(*guid);
             if (entity.is_null()) {
-                failure = make_editor_error(
+                failure = core::make_error(
                   protocol_error_code::ENTITY_NOT_FOUND,
                   std::format("{}: no entity carries guid {}", pointer, guid->to_string())
                 );

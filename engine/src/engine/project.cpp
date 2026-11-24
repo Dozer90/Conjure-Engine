@@ -35,7 +35,7 @@ namespace {
     };
 
     [[nodiscard]] core::error invalid(std::string_view pointer, std::string_view reason) {
-        return make_error(engine_error::PROJECT_INVALID, std::format("project.json {}: {}", pointer, reason));
+        return core::make_error(engine_error::PROJECT_INVALID, std::format("project.json {}: {}", pointer, reason));
     }
 
     /// <summary>
@@ -378,7 +378,7 @@ core::result<project> project::load(const std::filesystem::path &directory) {
     std::error_code ignored = {};
     const std::filesystem::path file = directory / std::filesystem::path(PROJECT_FILE_NAME);
     if (!std::filesystem::is_regular_file(file, ignored)) {
-        return make_error(
+        return core::make_error(
           engine_error::PROJECT_NOT_FOUND,
           std::format("no {} in '{}'", PROJECT_FILE_NAME, directory.generic_string())
         );
@@ -386,7 +386,7 @@ core::result<project> project::load(const std::filesystem::path &directory) {
 
     std::ifstream stream(file, std::ios::binary);
     if (!stream.is_open()) {
-        return make_error(engine_error::PROJECT_NOT_FOUND, std::format("cannot open '{}'", file.generic_string()));
+        return core::make_error(engine_error::PROJECT_NOT_FOUND, "cannot open '{}'", file.generic_string());
     }
     std::ostringstream buffer = {};
     buffer << stream.rdbuf();
@@ -400,7 +400,7 @@ core::result<project> project::load(const std::filesystem::path &directory) {
 core::result<project> project::parse(std::string_view text, std::filesystem::path rootDirectory) {
     core::result<core::json::document> parsed = core::json::document::parse(text);
     if (!parsed.has_value()) {
-        return make_error(engine_error::PROJECT_PARSE_FAILED, parsed.get_error().message());
+        return core::make_error(engine_error::PROJECT_PARSE_FAILED, parsed.get_error().message());
     }
     const core::json::document &document = parsed.value();
     const value root = document.root();
@@ -419,7 +419,7 @@ core::result<project> project::parse(std::string_view text, std::filesystem::pat
 
     CONJURE_TRY(read_u32(root, "schema_version", description.schemaVersion));
     if (description.schemaVersion > PROJECT_SCHEMA_VERSION) {
-        return make_error(
+        return core::make_error(
           engine_error::PROJECT_SCHEMA_TOO_NEW,
           std::format(
             "schema_version {} is newer than the supported {}",

@@ -122,7 +122,7 @@ core::result<void> world::destroy_entity(entity target) {
     CONJURE_TRY(check_structural());
     entity_record *record = find_alive(target);
     if (record == nullptr) {
-        return make_error(ecs_error::ENTITY_NOT_ALIVE, "destroy_entity on a dead or stale entity");
+        return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "destroy_entity on a dead or stale entity");
     }
     bump_version();
     begin_structural();
@@ -148,14 +148,14 @@ core::result<void *> world::add_raw(entity target, component_id id, std::span<co
 core::result<void> world::remove_raw(entity target, component_id id) {
     CONJURE_TRY(check_structural());
     if (!mRegistry->is_registered(id)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "remove of an unregistered component");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "remove of an unregistered component");
     }
     entity_record *record = find_alive(target);
     if (record == nullptr) {
-        return make_error(ecs_error::ENTITY_NOT_ALIVE, "remove on a dead or stale entity");
+        return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "remove on a dead or stale entity");
     }
     if (!record->owner->has(id)) {
-        return make_error(ecs_error::COMPONENT_NOT_PRESENT, "remove of a component the entity does not hold");
+        return core::make_error(ecs_error::COMPONENT_NOT_PRESENT, "remove of a component the entity does not hold");
     }
     CONJURE_TRY_ASSIGN(archetype *destination, archetype_with(*record->owner, id, false));
 
@@ -169,7 +169,7 @@ core::result<void> world::remove_raw(entity target, component_id id) {
 core::result<void> world::remove_from_all(component_id id) {
     CONJURE_TRY(check_structural());
     if (!mRegistry->is_registered(id)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "remove_from_all of an unregistered component");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "remove_from_all of an unregistered component");
     }
 
     std::vector<entity> holders = {};
@@ -426,14 +426,14 @@ void world::destroy_alive(entity target, entity_record &record, bool fireObserve
 core::result<void *> world::add_storage(entity target, component_id id) {
     CONJURE_TRY(check_structural());
     if (!mRegistry->is_registered(id)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "add of an unregistered component");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "add of an unregistered component");
     }
     entity_record *record = find_alive(target);
     if (record == nullptr) {
-        return make_error(ecs_error::ENTITY_NOT_ALIVE, "add on a dead or stale entity");
+        return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "add on a dead or stale entity");
     }
     if (record->owner->has(id)) {
-        return make_error(ecs_error::COMPONENT_ALREADY_PRESENT, "add of a component the entity already holds");
+        return core::make_error(ecs_error::COMPONENT_ALREADY_PRESENT, "add of a component the entity already holds");
     }
     CONJURE_TRY_ASSIGN(archetype *destination, archetype_with(*record->owner, id, true));
 

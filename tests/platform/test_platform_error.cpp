@@ -78,4 +78,9 @@ TEST_SUITE("platform/platform_error") {
         CHECK_FALSE(testing::has_error(failed, platform_error::INIT_FAILED));
         CONJURE_CHECK_ERROR(failed, platform_error::FEATURE_UNAVAILABLE);
     }
+
+    TEST_CASE("platform_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<platform_error>);
+    }
 }

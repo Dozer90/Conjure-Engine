@@ -88,7 +88,7 @@ TEST_SUITE("scripting/script_fields_inspector") {
         const script_entry_id probe = fixture.add_script(fixture.create_entity(), INSPECTOR_PROBE);
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(probe, hash_of("Nope"), json("1").root()),
-          script_error::FIELD_NOT_FOUND
+          scripting_error::FIELD_NOT_FOUND
         );
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(probe, hash_of("Speed"), json("\"fast\"").root()),

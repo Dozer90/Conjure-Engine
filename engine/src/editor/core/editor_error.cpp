@@ -33,6 +33,7 @@ namespace conjure::editor {
             "CANCELLED",
             "UNAUTHORISED",
             "PROJECT_NOT_TRUSTED",
+            "STALE_STATE",
             "INTERNAL",
         };
 
@@ -58,6 +59,7 @@ namespace conjure::editor {
             protocol_error_code::CANCELLED,
             protocol_error_code::UNAUTHORISED,
             protocol_error_code::PROJECT_NOT_TRUSTED,
+            protocol_error_code::STALE_STATE,
             protocol_error_code::INTERNAL,
         };
     }
@@ -133,25 +135,25 @@ namespace conjure::editor {
             }
             return protocol_error_code::INTERNAL;
         }
-        if (failure.is_category<assets::asset_error_code>()) {
-            if (failure.is(assets::asset_error_code::NOT_FOUND) || failure.is(assets::asset_error_code::CACHE_MISS)) {
+        if (failure.is_category<assets::assets_error>()) {
+            if (failure.is(assets::assets_error::NOT_FOUND) || failure.is(assets::assets_error::CACHE_MISS)) {
                 return protocol_error_code::ASSET_NOT_FOUND;
             }
-            if (failure.is(assets::asset_error_code::IO_ERROR)) {
+            if (failure.is(assets::assets_error::IO_ERROR)) {
                 return protocol_error_code::IO_ERROR;
             }
             if (
-              failure.is(assets::asset_error_code::NO_IMPORTER) || failure.is(assets::asset_error_code::TYPE_UNKNOWN)
+              failure.is(assets::assets_error::NO_IMPORTER) || failure.is(assets::assets_error::TYPE_UNKNOWN)
             ) {
                 return protocol_error_code::TYPE_NOT_FOUND;
             }
-            if (failure.is(assets::asset_error_code::IMPORT_FAILED) ||
-              failure.is(assets::asset_error_code::META_INVALID) ||
-              failure.is(assets::asset_error_code::TYPE_MISMATCH) ||
-              failure.is(assets::asset_error_code::LOAD_FAILED)) {
+            if (failure.is(assets::assets_error::IMPORT_FAILED) ||
+              failure.is(assets::assets_error::META_INVALID) ||
+              failure.is(assets::assets_error::TYPE_MISMATCH) ||
+              failure.is(assets::assets_error::LOAD_FAILED)) {
                 return protocol_error_code::INVALID_ARGS;
             }
-            if (failure.is(assets::asset_error_code::TIMEOUT)) {
+            if (failure.is(assets::assets_error::TIMEOUT)) {
                 return protocol_error_code::TIMEOUT;
             }
             return protocol_error_code::INTERNAL;

@@ -33,7 +33,7 @@ namespace {
     }
 
     core::error invalid(std::string message) {
-        return make_asset_error(asset_error_code::META_INVALID, std::move(message));
+        return core::make_error(assets_error::META_INVALID, std::move(message));
     }
 
     std::vector<std::byte> to_bytes(std::string_view text) {
@@ -187,10 +187,10 @@ core::result<asset_meta> conjure::assets::read_asset_meta(
     core::result<std::string> text = fileSystem.read_text_file(metaPath);
     if (!text.has_value()) {
         if (text.get_error().generic_code() == core::error_code::NOT_FOUND) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("no meta at '{}'", metaPath));
+            return core::make_error(assets_error::NOT_FOUND, std::format("no meta at '{}'", metaPath));
         }
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot read meta '{}': {}", metaPath, text.get_error().message())
         );
     }
@@ -209,8 +209,8 @@ core::result<void> conjure::assets::write_asset_meta(
     const std::vector<std::byte> bytes = to_bytes(serialize_asset_meta(meta));
     core::result<void> written = fileSystem.write_file_atomic(metaPath, bytes);
     if (!written.has_value()) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot write meta '{}': {}", metaPath, written.get_error().message())
         );
     }

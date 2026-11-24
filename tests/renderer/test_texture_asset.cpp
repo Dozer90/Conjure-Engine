@@ -571,7 +571,7 @@ TEST_SUITE("renderer/texture_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badContext), assets::assets_error::IMPORT_FAILED);
         const core::json::document badSettings = core::json::object({{"wrap", "spherical"}});
         assets::import_context badSettingsContext(
           fileSystem,
@@ -584,7 +584,7 @@ TEST_SUITE("renderer/texture_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::assets_error::IMPORT_FAILED);
     }
 
     TEST_CASE("texture_importer - version 2 claims .jxl and cooks JPEG XL by signature, inline or on jobs") {
@@ -662,7 +662,7 @@ TEST_SUITE("renderer/texture_asset") {
         // A truncated file is an import failure like any undecodable source.
         CONJURE_CHECK_ERROR(
           cook(importer, "cut.jxl", jxlBytes.first(jxlBytes.size() / 2)),
-          assets::asset_error_code::IMPORT_FAILED
+          assets::assets_error::IMPORT_FAILED
         );
     }
 

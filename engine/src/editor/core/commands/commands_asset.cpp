@@ -79,7 +79,7 @@ namespace conjure::editor::support {
             const std::optional<core::uuid> parsed = core::uuid::parse(text);
             if (parsed.has_value()) {
                 if (!database.contains(*parsed)) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::ASSET_NOT_FOUND,
                       std::format("no asset {}", parsed->to_string())
                     );
@@ -89,7 +89,7 @@ namespace conjure::editor::support {
             const std::string path = normalise_asset_path(text);
             const std::optional<assets::asset_id> found = database.find_by_path(path);
             if (!found.has_value()) {
-                return make_editor_error(protocol_error_code::ASSET_NOT_FOUND, std::format("no asset at '{}'", path));
+                return core::make_error(protocol_error_code::ASSET_NOT_FOUND, std::format("no asset at '{}'", path));
             }
             return *found;
         }
@@ -140,7 +140,7 @@ namespace conjure::editor::support {
         ) {
             const std::optional<assets::asset_record> record = database.find(id);
             if (!record.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::ASSET_NOT_FOUND,
                   std::format("no asset {}", id.to_string())
                 );
@@ -149,7 +149,7 @@ namespace conjure::editor::support {
             const std::optional<std::string> assetPath = database.asset_path_of(primary);
             const std::optional<std::string> filePath = database.file_path_of(primary);
             if (!assetPath.has_value() || !filePath.has_value()) {
-                return make_editor_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
+                return core::make_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
             }
             core::result<std::vector<std::byte>> bytes = database.vfs().read_file(*filePath);
             if (!bytes.has_value()) {
@@ -202,7 +202,7 @@ namespace conjure::editor::support {
             }
             const core::result<void> switched = database.set_importer(id, importer);
             if (!switched.has_value()) {
-                if (switched.get_error().is(assets::asset_error_code::NO_IMPORTER)) {
+                if (switched.get_error().is(assets::assets_error::NO_IMPORTER)) {
                     return invalid_args(std::format("args.importer: {}", switched.get_error().message()));
                 }
                 return wrap(switched.get_error());
@@ -289,7 +289,7 @@ namespace conjure::editor::support {
         core::result<void> require_source_file(assets::asset_database &database, const assets::asset_id &id) {
             const std::optional<std::string> filePath = database.file_path_of(id);
             if (!filePath.has_value()) {
-                return make_editor_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
+                return core::make_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
             }
             const core::result<std::unique_ptr<core::vfs::file>> opened = database.vfs().open_read(*filePath);
             if (!opened.has_value()) {
@@ -324,7 +324,7 @@ namespace conjure::editor::support {
             }
             if (!context.play().is_editing()) {
                 invocation.errorDetails.set("state", to_string(context.play().state()));
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::WRONG_PLAY_STATE,
                   std::format("'{}' is the open scene: stop playing before deleting it", path)
                 );
@@ -497,7 +497,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const assets::asset_id id, resolve_asset(*database, reference));
             const std::optional<assets::asset_record> record = database->find(id);
             if (!record.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::ASSET_NOT_FOUND,
                   std::format("no asset {}", id.to_string())
                 );
@@ -729,7 +729,7 @@ namespace conjure::editor::support {
             CONJURE_TRY_ASSIGN(const assets::asset_id id, resolve_asset(*database, reference));
             const std::optional<std::string> filePath = database->file_path_of(id);
             if (!filePath.has_value()) {
-                return make_editor_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
+                return core::make_error(protocol_error_code::ASSET_NOT_FOUND, "the asset has no source file");
             }
             core::result<std::string> text = database->vfs().read_text_file(*filePath);
             if (!text.has_value()) {
@@ -752,7 +752,7 @@ namespace conjure::editor::support {
             }
             const core::json::value previousValue = parsed.value().at_pointer(pointer);
             if (!previousValue.is_valid()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::PATH_NOT_FOUND,
                   std::format("path '{}' does not exist in the asset", pathText)
                 );
@@ -763,7 +763,7 @@ namespace conjure::editor::support {
             // The undo puts the file back byte for byte: a re-serialisation would change its formatting.
             CONJURE_TRY_ASSIGN(command_inverse restore, restore_inverse_for(*database, id));
             if (!parsed.value().set_pointer(pointer, value)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::PATH_NOT_FOUND,
                   std::format("path '{}' cannot be set in the asset", pathText)
                 );

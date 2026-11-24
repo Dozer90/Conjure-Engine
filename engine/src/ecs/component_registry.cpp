@@ -146,7 +146,7 @@ namespace {
             const u32 elementSize = field.is_array() ? field.element_size() : field.size;
             const u32 elementCount = field.is_array() ? field.arrayCount : 1u;
             if (field.is_array() && field.elementKind == field_kind::ARRAY) {
-                return make_error(ecs_error::UNSUPPORTED_FIELD, "field '" + field.name + "': nested arrays");
+                return core::make_error(ecs_error::UNSUPPORTED_FIELD, "field '" + field.name + "': nested arrays");
             }
 
             for (u32 element = 0; element < elementCount; ++element) {
@@ -154,7 +154,7 @@ namespace {
                 switch (kind) {
                     case field_kind::ENTITY:
                         if (elementSize != sizeof(entity)) {
-                            return make_error(
+                            return core::make_error(
                               ecs_error::UNSUPPORTED_FIELD,
                               "field '" + field.name + "': ENTITY fields must be ecs::entity (8 bytes)"
                             );
@@ -163,7 +163,7 @@ namespace {
                         break;
                     case field_kind::ASSET_REF:
                         if (elementSize < sizeof(core::uuid)) {
-                            return make_error(
+                            return core::make_error(
                               ecs_error::UNSUPPORTED_FIELD,
                               "field '" + field.name + "': ASSET_REF fields must start with a uuid"
                             );
@@ -172,7 +172,7 @@ namespace {
                         break;
                     case field_kind::STRUCT:
                         if (field.structType == nullptr) {
-                            return make_error(
+                            return core::make_error(
                               ecs_error::UNSUPPORTED_FIELD,
                               "field '" + field.name + "': nested struct without a description"
                             );
@@ -181,7 +181,7 @@ namespace {
                         break;
                     case field_kind::ENUM:
                         if (field.enumType == nullptr) {
-                            return make_error(
+                            return core::make_error(
                               ecs_error::UNSUPPORTED_FIELD,
                               "field '" + field.name + "': enum without a description"
                             );
@@ -189,7 +189,10 @@ namespace {
                         break;
                     case field_kind::ARRAY:
                     case field_kind::COUNT:
-                        return make_error(ecs_error::UNSUPPORTED_FIELD, "field '" + field.name + "': unknown kind");
+                        return core::make_error(
+                          ecs_error::UNSUPPORTED_FIELD,
+                          "field '" + field.name + "': unknown kind"
+                        );
                     default:
                         break;
                 }
@@ -270,10 +273,10 @@ core::result<component_id> component_registry::register_dynamic(const dynamic_co
         return core::error(core::error_code::INVALID_ARGUMENT, "dynamic component has no name");
     }
     if (desc.alignment == 0 || desc.alignment > 16 || !math::is_power_of_two(desc.alignment)) {
-        return make_error(ecs_error::BAD_ALIGNMENT, "dynamic component alignment must be 1, 2, 4, 8 or 16");
+        return core::make_error(ecs_error::BAD_ALIGNMENT, "dynamic component alignment must be 1, 2, 4, 8 or 16");
     }
     if (desc.size > MAX_COMPONENT_SIZE) {
-        return make_error(ecs_error::COMPONENT_TOO_LARGE, "dynamic component exceeds MAX_COMPONENT_SIZE");
+        return core::make_error(ecs_error::COMPONENT_TOO_LARGE, "dynamic component exceeds MAX_COMPONENT_SIZE");
     }
     if (!desc.defaultValue.empty() && desc.defaultValue.size() != desc.size) {
         return core::error(core::error_code::INVALID_ARGUMENT, "dynamic default value size differs from the type size");
@@ -304,22 +307,25 @@ core::result<component_id> component_registry::register_dynamic(const dynamic_co
 
 core::result<void> component_registry::redefine_dynamic(component_id id, const dynamic_component_desc &desc) {
     if (!is_registered(id) || !has_flag(info(id).flags, component_flags::DYNAMIC)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "redefine_dynamic needs a registered dynamic component");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "redefine_dynamic needs a registered dynamic component");
     }
     if (!desc.name.is_null() && desc.name != info(id).name) {
-        return make_error(ecs_error::NAME_CONFLICT, "redefine_dynamic cannot rename a component");
+        return core::make_error(ecs_error::NAME_CONFLICT, "redefine_dynamic cannot rename a component");
     }
     if (desc.alignment == 0 || desc.alignment > 16 || !math::is_power_of_two(desc.alignment)) {
-        return make_error(ecs_error::BAD_ALIGNMENT, "dynamic component alignment must be 1, 2, 4, 8 or 16");
+        return core::make_error(ecs_error::BAD_ALIGNMENT, "dynamic component alignment must be 1, 2, 4, 8 or 16");
     }
     if (desc.size > MAX_COMPONENT_SIZE) {
-        return make_error(ecs_error::COMPONENT_TOO_LARGE, "dynamic component exceeds MAX_COMPONENT_SIZE");
+        return core::make_error(ecs_error::COMPONENT_TOO_LARGE, "dynamic component exceeds MAX_COMPONENT_SIZE");
     }
     if (!desc.defaultValue.empty() && desc.defaultValue.size() != desc.size) {
         return core::error(core::error_code::INVALID_ARGUMENT, "dynamic default value size differs from the type size");
     }
     if (has_instances(id)) {
-        return make_error(ecs_error::COMPONENT_IN_USE, "redefine_dynamic while instances exist; remove_from_all first");
+        return core::make_error(
+          ecs_error::COMPONENT_IN_USE,
+          "redefine_dynamic while instances exist; remove_from_all first"
+        );
     }
     CONJURE_TRY_ASSIGN(std::unique_ptr<core::reflect::type_info> type, build_dynamic_type(desc));
 
@@ -403,7 +409,7 @@ core::result<component_id> component_registry::register_info(component_info info
         if (existing != mByName.end()) {
             const component_info &current = mTypes[existing->second.value];
             if (!same_layout(current, info)) {
-                return make_error(
+                return core::make_error(
                   ecs_error::NAME_CONFLICT,
                   "component '" + info.name.to_string() + "' is already registered with a different layout"
                 );
@@ -413,7 +419,7 @@ core::result<component_id> component_registry::register_info(component_info info
 
         const u32 count = mCount.load(std::memory_order_relaxed);
         if (count >= MAX_COMPONENTS) {
-            return make_error(ecs_error::COMPONENT_LIMIT_REACHED, "MAX_COMPONENTS types are registered");
+            return core::make_error(ecs_error::COMPONENT_LIMIT_REACHED, "MAX_COMPONENTS types are registered");
         }
         info.id = component_id{static_cast<u16>(count)};
         mTypes.push_back(std::move(info));
@@ -429,17 +435,23 @@ core::result<component_id> component_registry::register_info(component_info info
 
 core::result<void> component_registry::validate_layout(const component_info &info) const {
     if (info.size > MAX_COMPONENT_SIZE) {
-        return make_error(
+        return core::make_error(
           ecs_error::COMPONENT_TOO_LARGE,
           "component '" + info.name.to_string() + "' exceeds 4096 bytes"
         );
     }
     if (info.alignment == 0 || info.alignment > MAX_COMPONENT_ALIGNMENT || !math::is_power_of_two(info.alignment)) {
-        return make_error(ecs_error::BAD_ALIGNMENT, "component '" + info.name.to_string() + "' has a bad alignment");
+        return core::make_error(
+          ecs_error::BAD_ALIGNMENT,
+          "component '" + info.name.to_string() + "' has a bad alignment"
+        );
     }
     if (!info.is_trivial() && info.alignment > 16) {
         // Archive payloads live in std::vector<std::byte> storage, which only guarantees 16 bytes.
-        return make_error(ecs_error::BAD_ALIGNMENT, "non-trivial components must not need more than 16 byte alignment");
+        return core::make_error(
+          ecs_error::BAD_ALIGNMENT,
+          "non-trivial components must not need more than 16 byte alignment"
+        );
     }
     if (info.is_tag() && info.size != 0) {
         return core::error(
@@ -459,13 +471,13 @@ core::result<void> component_registry::validate_layout(const component_info &inf
 
     const bool hasCustomHooks = info.serializer.writeJson != nullptr && info.serializer.readJson != nullptr;
     if (info.reflection == nullptr && !info.is_tag() && !info.is_transient() && !hasCustomHooks) {
-        return make_error(
+        return core::make_error(
           ecs_error::UNSUPPORTED_FIELD,
           "component '" + info.name.to_string() + "' has no reflection description and no serializer hooks"
         );
     }
     if (info.reflection != nullptr && !info.is_tag() && info.reflection->size != info.size) {
-        return make_error(
+        return core::make_error(
           ecs_error::UNSUPPORTED_FIELD,
           "component '" + info.name.to_string() + "': reflection size differs from the component size"
         );
@@ -487,7 +499,7 @@ core::result<void> component_registry::collect_field_offsets(component_info &inf
             info.assetRefFieldOffsets.clear();
             return core::result<void>::success();
         }
-        return make_error(
+        return core::make_error(
           ecs_error::UNSUPPORTED_FIELD,
           "component '" + info.name.to_string() + "': " + walked.get_error().message()
         );
@@ -503,7 +515,7 @@ core::result<std::unique_ptr<core::reflect::type_info>> component_registry::buil
     for (const dynamic_field_desc &field : desc.fields) {
         const core::reflect::field_kind kind = dynamic_field_kind(field.type);
         if (kind == core::reflect::field_kind::COUNT) {
-            return make_error(
+            return core::make_error(
               ecs_error::UNSUPPORTED_FIELD,
               "dynamic field '" + field.name.to_string() + "' has an unsupported type"
             );
@@ -520,7 +532,7 @@ core::result<std::unique_ptr<core::reflect::type_info>> component_registry::buil
     core::result<core::reflect::type_info> built =
       core::reflect::build_type_info(desc.name.to_string(), desc.size, desc.alignment, fields);
     if (!built.has_value()) {
-        return make_error(ecs_error::UNSUPPORTED_FIELD, built.get_error().message());
+        return core::make_error(ecs_error::UNSUPPORTED_FIELD, built.get_error().message());
     }
     return std::make_unique<core::reflect::type_info>(std::move(built).value());
 }

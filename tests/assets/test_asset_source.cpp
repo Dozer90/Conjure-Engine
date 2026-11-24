@@ -93,7 +93,7 @@ namespace {
         CHECK(blob.value().header.id == known);
         CHECK(blob.value().header.type == asset_type_traits<test_asset>::id());
         CHECK(text_of(blob.value().payload) == "known");
-        CONJURE_CHECK_ERROR(source.read(unknown), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(source.read(unknown), assets_error::NOT_FOUND);
     }
 }
 
@@ -136,14 +136,14 @@ TEST_SUITE("assets/asset_source") {
         fixture.scan_and_import();
         const cache_asset_source source(fixture.cache(), *fixture.database);
 
-        CONJURE_CHECK_ERROR(source.read(fixture.id_of("nope.xyz")), asset_error_code::NO_IMPORTER);
-        CONJURE_CHECK_ERROR(source.read(fixture.id_of("broken.ta")), asset_error_code::META_INVALID);
+        CONJURE_CHECK_ERROR(source.read(fixture.id_of("nope.xyz")), assets_error::NO_IMPORTER);
+        CONJURE_CHECK_ERROR(source.read(fixture.id_of("broken.ta")), assets_error::META_INVALID);
         CHECK_FALSE(source.type_of(fixture.id_of("nope.xyz")).has_value());
 
         // A record whose blob was deleted is a CACHE_MISS, not an unknown asset.
         const asset_id ok = fixture.id_of("ok.ta");
         CONJURE_REQUIRE_OK(fixture.cache().remove(ok));
-        CONJURE_CHECK_ERROR(source.read(ok), asset_error_code::CACHE_MISS);
+        CONJURE_CHECK_ERROR(source.read(ok), assets_error::CACHE_MISS);
         CHECK(source.contains(ok));
     }
 
@@ -176,7 +176,7 @@ TEST_SUITE("assets/asset_source") {
         composite_asset_source composite = {};
         CHECK(composite.size() == 0);
         CHECK_FALSE(composite.contains(known));
-        CONJURE_CHECK_ERROR(composite.read(known), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(composite.read(known), assets_error::NOT_FOUND);
         composite.add(std::move(first));
         composite.add(std::move(second));
         composite.add(nullptr);
@@ -220,7 +220,7 @@ TEST_SUITE("assets/asset_source") {
         CHECK(handleA.state() == asset_state::LOADED);
         CHECK(handleA.get<test_asset>()->content == "from first");
         REQUIRE(fixture.manager->last_error(a) != nullptr);
-        CHECK(fixture.manager->last_error(a)->is(asset_error_code::NOT_FOUND));
+        CHECK(fixture.manager->last_error(a)->is(assets_error::NOT_FOUND));
     }
 
     TEST_CASE("regression - swap_source waits for a read in flight and the parked load still completes [parallel]") {

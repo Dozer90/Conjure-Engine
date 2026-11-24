@@ -84,11 +84,15 @@ TEST_SUITE("editor/editor_command") {
         const command_flags others = command_flags::MUTATES | command_flags::REQUIRES_PROJECT |
           command_flags::REQUIRES_SCENE | command_flags::EDITING_ONLY | command_flags::PLAYING_ONLY |
           command_flags::ASYNC | command_flags::UI_ONLY | command_flags::NOT_IN_BATCH | command_flags::NO_UNDO |
-          command_flags::ON_DISK;
+          command_flags::ON_DISK | command_flags::SYNC_IN_BATCH;
         CHECK(required_access(others) == access_level::FULL_CONTROL);
-        for (u32 bit = 0; bit < 10; ++bit) {
+        for (u32 bit = 0; bit < 12; ++bit) {
             CAPTURE(bit);
-            CHECK(required_access(static_cast<command_flags>(1u << bit)) == access_level::FULL_CONTROL);
+            const command_flags flag = static_cast<command_flags>(1u << bit);
+            if (flag == command_flags::READ_ONLY) {
+                continue;
+            }
+            CHECK(required_access(flag) == access_level::FULL_CONTROL);
         }
     }
 
@@ -157,5 +161,22 @@ TEST_SUITE("editor/editor_command") {
         context.dispatcher().cancel_client(client);
         context.unregister_response_sink(client);
         context.events().unregister_client(client);
+    }
+
+    TEST_CASE("command_flag_names - sync_in_batch is the wire name of SYNC_IN_BATCH and comes last") {
+        CHECK(command_flag_name(command_flags::SYNC_IN_BATCH) == "sync_in_batch");
+        const core::json::document names = command_flag_names(
+          command_flags::SYNC_IN_BATCH | command_flags::ASYNC | command_flags::MUTATES
+        );
+        REQUIRE(names.root().size() == 3);
+        CHECK(names.root()[0].as_string() == "mutates");
+        CHECK(names.root()[1].as_string() == "async");
+        CHECK(names.root()[2].as_string() == "sync_in_batch");
+    }
+
+    TEST_CASE("async_reply - succeed_mutation of a default reply is a no-op") {
+        const async_reply reply = {};
+        reply.succeed_mutation(command_outcome{});
+        CHECK_FALSE(reply.is_valid());
     }
 }

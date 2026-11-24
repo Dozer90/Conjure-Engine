@@ -7,7 +7,10 @@
 #include <string_view>
 
 // Error codes of the ecs module (docs/design/01_ecs.md 4.1). Every fallible ecs call returns a
-// core::result carrying one of these through the "ecs" error category:
+// core::result carrying one of these through the "ecs" error category, built with the generic
+// core::make_error (R63):
+//
+//   return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "entity was destroyed");
 //
 //   core::result<entity> created = world.create_entity();
 //   if (!created.has_value() && created.get_error().is(ecs_error::STRUCTURE_LOCKED)) { ... }
@@ -50,13 +53,3 @@ namespace conjure::ecs {
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::ecs::ecs_error, "ecs", conjure::ecs::ecs_error_name);
-
-namespace conjure::ecs {
-
-    /// <summary>
-    /// Builds an error of the ecs category with an optional fixed detail message.
-    /// </summary>
-    [[nodiscard]] inline core::error make_error(ecs_error code, std::string_view detail = {}) {
-        return core::make_error(code, detail);
-    }
-}

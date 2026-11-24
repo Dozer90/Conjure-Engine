@@ -65,9 +65,22 @@ namespace conjure::editor {
 
         public:
             /// <summary>
-            /// Completes the parked request with a result object.
+            /// Completes the parked request with a result object. For a command that is not MUTATES; a MUTATES
+            /// command completes with succeed_mutation() (a plain succeed() of one records nothing, bumps no
+            /// revision and leaves the dirty flag alone).
             /// </summary>
             void succeed(core::json::document result) const;
+
+            /// <summary>
+            /// Completes the parked request of an ASYNC | MUTATES command with what its change produced. The
+            /// dispatcher does now what it does for a synchronous mutation at dispatch: records the inverse and the
+            /// replay (the undo stack, the client's open transaction, coalescing, a running batch, or the play
+            /// controller while playing), marks the scene dirty unless NO_UNDO, bumps the revision, adds it to the
+            /// result and emits scene.changed; an undo or redo step does neither of the last three (the history
+            /// command does). The caller has already applied the change; on a reply that is no longer valid (timed
+            /// out, cancelled) nothing is recorded, so a handler checks is_valid() before it changes anything.
+            /// </summary>
+            void succeed_mutation(command_outcome outcome) const;
 
             /// <summary>
             /// Completes the parked request with an error.

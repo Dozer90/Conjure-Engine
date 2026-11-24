@@ -291,7 +291,7 @@ namespace conjure::scripting {
             void clear_fake_classes();
 
             /// <summary>
-            /// The value load_game_assembly returns (0 = success; a script_error code models a failed load).
+            /// The value load_game_assembly returns (0 = success; a scripting_error code models a failed load).
             /// </summary>
             void set_load_result(i32 result) noexcept;
 

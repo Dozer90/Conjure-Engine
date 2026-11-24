@@ -56,7 +56,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
     core::result<core::json::document> parsed = core::json::document::parse_file(configPath);
     if (!parsed.has_value()) {
         return core::make_error(
-          script_error::RUNTIME_CONFIG_INVALID,
+          scripting_error::RUNTIME_CONFIG_INVALID,
           "'{}': {}",
           detail::path_to_utf8(configPath),
           parsed.get_error().message()
@@ -65,7 +65,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
     const core::json::value options = parsed.value().root()["runtimeOptions"];
     if (!options.is_object()) {
         return core::make_error(
-          script_error::RUNTIME_CONFIG_INVALID,
+          scripting_error::RUNTIME_CONFIG_INVALID,
           "'{}' has no runtimeOptions object",
           detail::path_to_utf8(configPath)
         );
@@ -75,7 +75,7 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
     }
     if (!options["framework"].is_object() && !options["frameworks"].is_array()) {
         return core::make_error(
-          script_error::RUNTIME_CONFIG_INVALID,
+          scripting_error::RUNTIME_CONFIG_INVALID,
           "'{}' names neither a framework nor includedFrameworks",
           detail::path_to_utf8(configPath)
         );
@@ -85,13 +85,13 @@ core::result<host_mode> conjure::scripting::detect_host_mode(const std::filesyst
 
 core::result<void> conjure::scripting::validate_managed_directory(const std::filesystem::path &managedDirectory) {
     if (managedDirectory.empty()) {
-        return core::make_error(script_error::MANAGED_SDK_MISSING, "no managed directory configured");
+        return core::make_error(scripting_error::MANAGED_SDK_MISSING, "no managed directory configured");
     }
     for (const std::string_view anchor : ANCHOR_FILES) {
         std::error_code probe = {};
         if (!std::filesystem::is_regular_file(managedDirectory / anchor, probe)) {
             return core::make_error(
-              script_error::MANAGED_SDK_MISSING,
+              scripting_error::MANAGED_SDK_MISSING,
               "'{}' is missing from '{}'",
               anchor,
               detail::path_to_utf8(managedDirectory)

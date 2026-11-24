@@ -31,7 +31,7 @@ using namespace conjure::engine;
 namespace {
 
     [[nodiscard]] core::error renderer_error(std::string_view what, const core::error &cause) {
-        return make_error(engine_error::RENDERER_INIT_FAILED, std::format("{}: {}", what, cause.to_string()));
+        return core::make_error(engine_error::RENDERER_INIT_FAILED, std::format("{}: {}", what, cause.to_string()));
     }
 
     [[nodiscard]] math::vec3 rotate_direction(const math::mat4 &matrix, const math::vec3 &local) noexcept {

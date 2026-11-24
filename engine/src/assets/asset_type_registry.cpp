@@ -47,8 +47,8 @@ core::result<void> asset_type_registry::register_type(asset_type_desc desc) {
         );
     }
     if (mIndexById.contains(desc.id)) {
-        return make_asset_error(
-          asset_error_code::TYPE_DUPLICATE,
+        return core::make_error(
+          assets_error::TYPE_DUPLICATE,
           std::format("asset type '{}' is already registered", desc.name)
         );
     }
@@ -77,7 +77,7 @@ core::result<void> asset_type_registry::unregister_type(asset_type_id id) {
 
     const auto found = mIndexById.find(id);
     if (found == mIndexById.end()) {
-        return make_asset_error(asset_error_code::TYPE_UNKNOWN, "asset type is not registered");
+        return core::make_error(assets_error::TYPE_UNKNOWN, "asset type is not registered");
     }
     if (mHooks.isInUse && mHooks.isInUse(id)) {
         return core::error(

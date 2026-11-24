@@ -289,6 +289,9 @@ public unsafe struct FrameStatsBlock
 
 /// <summary>
 /// Expected sizes of the records above (15_bindings.md 2.4); checked once by NativeBridge.Initialize.
+/// The native records' members are part of NativeApi.ExpectedLayoutHash (sweep F445), which catches a stale
+/// build of this assembly; a mirror here that drifts within one build is caught only by this size check and
+/// the native field offset test (sweep F670).
 /// </summary>
 internal static class RecordSizes
 {

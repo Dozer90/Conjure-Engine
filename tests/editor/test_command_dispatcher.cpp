@@ -2,9 +2,13 @@
 
 #include "editor_test_support.h"
 
+#include "conjure/testing/assert_capture.h"
+#include "conjure/testing/log_capture.h"
+
 #include "conjure/core/event.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/log.h"
+#include "conjure/core/uuid.h"
 #include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/event_broadcaster.h"
@@ -16,6 +20,8 @@
 
 #include <array>
 #include <filesystem>
+#include <format>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -97,6 +103,112 @@ namespace {
     std::vector<core::json::document> audit_records(editor_test::headless_editor &editor) {
         editor.pump(1);
         return editor_test::read_json_lines(editor.project_directory() / ".conjure" / "ai_audit.log");
+    }
+
+    /// <summary>
+    /// Renames the entity with the guid and returns the outcome of that change: the inverse renames it back, the
+    /// replay is the request itself.
+    /// </summary>
+    command_outcome rename_entity(editor_context &context, std::string_view guid, std::string_view name) {
+        scene::scene &scene = context.scene();
+        const std::optional<core::uuid> parsed = core::uuid::parse(guid);
+        REQUIRE(parsed.has_value());
+        const ecs::entity entity = scene.find_guid(*parsed);
+        REQUIRE_FALSE(entity.is_null());
+        const std::string previous = scene.name_of(entity).to_string();
+        CONJURE_REQUIRE_OK(scene.set_name(entity, core::string_id(name)));
+        command_outcome outcome = {};
+        outcome.label = std::format("Rename to '{}'", name);
+        outcome.result = core::json::object({{"name", name}});
+        outcome.inverse = command_inverse{"entity.rename", core::json::object({{"entity", guid}, {"name", previous}})};
+        return outcome;
+    }
+
+    /// <summary>
+    /// A command the tests register that renames an entity asynchronously ({entity: guid, name}; ASYNC | MUTATES
+    /// | SYNC_IN_BATCH plus 'extra'), the way the prefab commands change the scene once their asset has loaded
+    /// (code sweep F736). It parks its reply, and answers inside its handler when the dispatcher requires that
+    /// (unless set_answers_when_required(false)). finish() makes the change of a parked request and completes it.
+    /// </summary>
+    class async_rename {
+        private:
+            struct parked_request {
+                async_reply reply = {};
+                std::string guid = "";
+                std::string name = "";
+            };
+
+            std::vector<parked_request> mParked = {};
+            bool mAnswersWhenRequired = true;
+            bool mFailsAtOnce = false;
+
+        public:
+            static constexpr std::string_view NAME = "test.async_rename";
+
+            /// <summary>
+            /// false: the handler parks its reply even where the dispatcher needs the answer at once.
+            /// </summary>
+            void set_answers_when_required(bool answers) noexcept {
+                mAnswersWhenRequired = answers;
+            }
+
+            /// <summary>
+            /// true: the handler fails its reply before returning, as a command refused up front does.
+            /// </summary>
+            void set_fails_at_once(bool fails) noexcept {
+                mFailsAtOnce = fails;
+            }
+
+            void install(editor_context &context, command_flags extra = command_flags::NONE) {
+                command_descriptor descriptor = {};
+                descriptor.name = std::string(NAME);
+                descriptor.argsSchema =
+                  R"({"type":"object","properties":{"entity":{"type":"string"},"name":{"type":"string"}},)"
+                  R"("required":["entity","name"]})";
+                descriptor.flags = command_flags::ASYNC | command_flags::MUTATES | command_flags::SYNC_IN_BATCH |
+                  command_flags::REQUIRES_SCENE | extra;
+                descriptor.handler = [this](command_invocation &invocation) -> core::result<command_outcome> {
+                    const std::string guid = std::string(invocation.args["entity"].as_string());
+                    const std::string name = std::string(invocation.args["name"].as_string());
+                    if (mFailsAtOnce) {
+                        invocation.reply.fail(protocol_error_code::IO_ERROR, "the change could not be made");
+                        return command_outcome{};
+                    }
+                    const bool required = invocation.context.dispatcher().requires_synchronous_completion();
+                    if (required && mAnswersWhenRequired) {
+                        invocation.reply.succeed_mutation(rename_entity(invocation.context, guid, name));
+                        return command_outcome{};
+                    }
+                    mParked.push_back(parked_request{invocation.reply, guid, name});
+                    return command_outcome{};
+                };
+                CONJURE_REQUIRE_OK(context.registry().add(std::move(descriptor)));
+            }
+
+            [[nodiscard]] usize parked() const noexcept {
+                return mParked.size();
+            }
+
+            [[nodiscard]] const async_reply &reply(usize index) const {
+                REQUIRE(index < mParked.size());
+                return mParked[index].reply;
+            }
+
+            void finish(editor_context &context, usize index) {
+                REQUIRE(index < mParked.size());
+                const parked_request &request = mParked[index];
+                REQUIRE(request.reply.is_valid());
+                request.reply.succeed_mutation(rename_entity(context, request.guid, request.name));
+            }
+
+            void fail(usize index) {
+                REQUIRE(index < mParked.size());
+                mParked[index].reply.fail(protocol_error_code::IO_ERROR, "the change could not be made");
+            }
+    };
+
+    core::json::document rename_args(std::string_view guid, std::string_view name) {
+        return core::json::object({{"entity", guid}, {"name", name}});
     }
 }
 
@@ -903,5 +1015,342 @@ TEST_SUITE("editor/command_dispatcher") {
         CHECK(text.find(INSPECT_TOKEN) == std::string::npos);
         CHECK(editor.scene().world().entity_count() == 1);
         CHECK(guid.size() == 36);
+    }
+
+    TEST_CASE("regression - code sweep F736 an asynchronous mutation is recorded, dirties the scene and bumps the "
+              "revision when it completes, not when it is dispatched") {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        editor_test::parked_client client(editor);
+        (void) editor.ok("scene.save");
+        REQUIRE_FALSE(editor.context().scene_dirty());
+        const u64 revision = editor.context().revision();
+        const usize entries = editor.context().undo().size();
+        editor.clear_events();
+
+        CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "After")).has_value());
+        REQUIRE(command.parked() == 1);
+        editor.pump(2);
+        // Parked: nothing of the change happened yet, so nothing of its bookkeeping either.
+        CHECK(editor.context().revision() == revision);
+        CHECK(editor.context().undo().size() == entries);
+        CHECK_FALSE(editor.context().scene_dirty());
+        CHECK(scene_changed_count(editor) == 0);
+        CHECK_FALSE(client.reply().has_value());
+
+        command.finish(editor.context(), 0);
+        const protocol_response answered = client.wait();
+        REQUIRE(answered.ok);
+        CHECK(answered.result.root()["name"].as_string() == "After");
+        CHECK(answered.result.root()["revision"].as_u64() == revision + 1);
+        CHECK(editor.context().revision() == revision + 1);
+        REQUIRE(editor.context().undo().size() == entries + 1);
+        CHECK(editor.context().undo().entries().back()->label == "Rename to 'After'");
+        CHECK(editor.context().undo().entries().back()->clientId == client.client_id());
+        CHECK(editor.context().scene_dirty());
+        REQUIRE(scene_changed_count(editor) == 1);
+        for (const protocol_event &event : editor.events()) {
+            if (event.name == "scene.changed") {
+                CHECK(event.data.root()["cmd"].as_string() == async_rename::NAME);
+                CHECK(event.data.root()["revision"].as_u64() == revision + 1);
+            }
+        }
+
+        // The undo entry holds the inverse and, as the replay, the request with its args.
+        (void) editor.ok("history.undo");
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "Before");
+        (void) editor.ok("history.redo");
+        CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() == "After");
+        // The redo replayed the command inside the step, where it answered synchronously.
+        CHECK(command.parked() == 1);
+    }
+
+    TEST_CASE("command_dispatcher - an asynchronous mutation that fails or is no longer pending records nothing") {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        editor_test::parked_client client(editor);
+        const u64 revision = editor.context().revision();
+        const usize entries = editor.context().undo().size();
+
+        SUBCASE("a failed completion") {
+            CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "After")).has_value());
+            command.fail(0);
+            const protocol_response answered = client.wait();
+            CHECK_FALSE(answered.ok);
+            CHECK(answered.errorCode == protocol_error_code::IO_ERROR);
+        }
+        SUBCASE("a request that timed out") {
+            editor.context().dispatcher().set_async_timeout_seconds(0.0);
+            CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "After")).has_value());
+            const protocol_response answered = client.wait();
+            CHECK(answered.errorCode == protocol_error_code::TIMEOUT);
+            // The handler's reply is dead: completing it is ignored and records nothing.
+            CHECK_FALSE(command.reply(0).is_valid());
+            command.reply(0).succeed_mutation(command_outcome{});
+        }
+        SUBCASE("a client that disconnected") {
+            CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "After")).has_value());
+            editor.context().dispatcher().cancel_client(client.client_id());
+            CHECK_FALSE(command.reply(0).is_valid());
+            command.reply(0).succeed_mutation(command_outcome{});
+            editor.pump(1);
+            CHECK_FALSE(client.reply().has_value());
+        }
+        CHECK(editor.context().revision() == revision);
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.context().dispatcher().pending_count() == 0);
+    }
+
+    TEST_CASE("command_dispatcher - an asynchronous mutation completed inside its handler is recorded at once") {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        const u64 revision = editor.context().revision();
+        const usize entries = editor.context().undo().size();
+        const core::json::document batch = core::json::object({
+          {"label", "Renames"},
+          {"commands", core::json::array({
+            child(async_rename::NAME, rename_args(guid, "One")),
+            child(async_rename::NAME, rename_args(guid, "Two")),
+          })},
+        });
+
+        SUBCASE("inside a batch: the children join the batch's single entry") {
+            const core::json::document result = editor.ok(
+              "editor.batch",
+              core::json::document::from_value(batch.root())
+            );
+            CHECK(result.root()["count"].as_u64() == 2);
+            CHECK(result.root()["results"][1]["result"]["name"].as_string() == "Two");
+            CHECK(command.parked() == 0);
+            REQUIRE(editor.context().undo().size() == entries + 1);
+            CHECK(editor.context().undo().entries().back()->label == "Renames");
+            CHECK(editor.context().undo().entries().back()->undo.size() == 2);
+            (void) editor.ok("history.undo");
+            CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() ==
+              "Before");
+        }
+        SUBCASE("a batch that rolls back undoes the completed child") {
+            core::json::document failing = core::json::document::from_value(batch.root());
+            core::json::document commands = core::json::array({
+              child(async_rename::NAME, rename_args(guid, "One")),
+              child(
+                "entity.rename",
+                core::json::object({{"entity", core::uuid::generate().to_string()}, {"name", "x"}})
+              ),
+            });
+            failing.set("commands", commands);
+            CHECK(editor.fail("editor.batch", std::move(failing)) == protocol_error_code::ENTITY_NOT_FOUND);
+            CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() ==
+              "Before");
+            CHECK(editor.context().undo().size() == entries);
+        }
+        SUBCASE("a coalesce key merges two completions into one entry") {
+            editor_test::parked_client client(editor);
+            const std::array<std::string_view, 2> names = {"One", "Two"};
+            for (const std::string_view name : names) {
+                CAPTURE(name);
+                protocol_request request = request_of(
+                  async_rename::NAME,
+                  rename_args(guid, name),
+                  client.client_id()
+                );
+                request.coalesceKey = 99;
+                CHECK_FALSE(editor.context().dispatcher().dispatch(request).has_value());
+                command.finish(editor.context(), command.parked() - 1);
+                CHECK(client.wait().ok);
+            }
+            CHECK(editor.context().undo().size() == entries + 1);
+            CHECK(editor.context().revision() == revision + 2);
+        }
+        SUBCASE("an open transaction of the client takes the completion") {
+            (void) editor.ok("editor.begin_transaction", core::json::object({{"label", "Grouped"}}));
+            protocol_request request = request_of(async_rename::NAME, rename_args(guid, "One"), editor.client_id());
+            CHECK_FALSE(editor.context().dispatcher().dispatch(request).has_value());
+            command.finish(editor.context(), 0);
+            editor.pump(1);
+            CHECK(editor.context().undo().size() == entries);
+            (void) editor.ok("editor.end_transaction");
+            REQUIRE(editor.context().undo().size() == entries + 1);
+            CHECK(editor.context().undo().entries().back()->label == "Grouped");
+        }
+    }
+
+    TEST_CASE("regression - code sweep F736 an asynchronous command that does not answer inside a batch or an undo "
+              "step is INTERNAL and its late completion is ignored") {
+        editor_test::headless_editor editor = {};
+        editor.log().allow_errors();
+        async_rename command = {};
+        command.set_answers_when_required(false);
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        const usize entries = editor.context().undo().size();
+        const core::json::document batch = core::json::object({
+          {"commands", core::json::array({child(async_rename::NAME, rename_args(guid, "One"))})},
+        });
+        CHECK(editor.fail("editor.batch", core::json::document::from_value(batch.root())) ==
+          protocol_error_code::INTERNAL);
+        REQUIRE(command.parked() == 1);
+        CHECK_FALSE(command.reply(0).is_valid());
+        CHECK(editor.context().dispatcher().pending_count() == 0);
+        command.reply(0).succeed_mutation(command_outcome{});
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.log().contains(core::log_level::ERR, "did not complete inside its handler"));
+    }
+
+    TEST_CASE("regression - code sweep F736 only a parked request counts toward a client's pending cap: a batch "
+              "child, a redo and an answer inside the handler pass, a ninth parked request is BUSY") {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        command_dispatcher &dispatcher = editor.context().dispatcher();
+        editor_test::parked_client client(editor);
+        // An undo entry of the command, made by this client, for the redo below.
+        CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "Recorded")).has_value());
+        command.finish(editor.context(), 0);
+        REQUIRE(client.wait().ok);
+        const usize finished = command.parked();
+        for (u32 index = 0; index < command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT; ++index) {
+            CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "Parked")).has_value());
+        }
+        REQUIRE(dispatcher.pending_count(client.client_id()) == command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT);
+
+        SUBCASE("a ninth request its handler leaves parked is BUSY and its reply is dropped") {
+            const std::optional<protocol_response> ninth =
+              client.dispatch(async_rename::NAME, rename_args(guid, "Ninth"));
+            REQUIRE(ninth.has_value());
+            CHECK(ninth->errorCode == protocol_error_code::BUSY);
+            REQUIRE(command.parked() == finished + command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT + 1);
+            CHECK_FALSE(command.reply(command.parked() - 1).is_valid());
+        }
+        SUBCASE("a request whose handler answers at once is not refused") {
+            command.set_fails_at_once(true);
+            const std::optional<protocol_response> answered =
+              client.dispatch(async_rename::NAME, rename_args(guid, "AtOnce"));
+            REQUIRE(answered.has_value());
+            CHECK(answered->errorCode == protocol_error_code::IO_ERROR);
+            command.set_fails_at_once(false);
+        }
+        SUBCASE("a batch child, which must answer inside its handler") {
+            const core::json::document batch = core::json::object({
+              {"commands", core::json::array({child(async_rename::NAME, rename_args(guid, "InBatch"))})},
+            });
+            const std::optional<protocol_response> answered =
+              client.dispatch("editor.batch", core::json::document::from_value(batch.root()));
+            REQUIRE(answered.has_value());
+            CHECK_MESSAGE(answered->ok, answered->errorMessage);
+            CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() ==
+              "InBatch");
+        }
+        SUBCASE("the redo of the client's entry, which replays the command inside the step") {
+            const std::optional<protocol_response> undone = client.dispatch("history.undo");
+            REQUIRE(undone.has_value());
+            REQUIRE_MESSAGE(undone->ok, undone->errorMessage);
+            const std::optional<protocol_response> redone = client.dispatch("history.redo");
+            REQUIRE(redone.has_value());
+            CHECK_MESSAGE(redone->ok, redone->errorMessage);
+            CHECK(editor.ok("entity.get", core::json::object({{"entity", guid}})).root()["name"].as_string() ==
+              "Recorded");
+        }
+        CHECK(dispatcher.pending_count(client.client_id()) == command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT);
+        dispatcher.cancel_client(client.client_id());
+    }
+
+    TEST_CASE("command_dispatcher - an asynchronous mutation completed while playing follows the play rules") {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        SUBCASE("a scene edit is not recorded and warns once") {
+            command.install(editor.context());
+        }
+        SUBCASE("a file edit is kept for play.stop") {
+            command.install(editor.context(), command_flags::ON_DISK);
+        }
+        const std::string guid = editor.create_entity("Before");
+        const bool onDisk = has_command_flag(
+          *editor.context().registry().find(async_rename::NAME),
+          command_flags::ON_DISK
+        );
+        const usize entries = editor.context().undo().size();
+        (void) editor.ok("play.start");
+        editor.clear_events();
+        editor_test::parked_client client(editor);
+        CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "Playing")).has_value());
+        command.finish(editor.context(), 0);
+        CHECK(client.wait().ok);
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.context().play().kept_file_edits() == (onDisk ? 1u : 0u));
+        CHECK(editor.warnings("UNRECORDED_PLAY_EDIT").size() == (onDisk ? 0u : 1u));
+        CHECK(editor.warnings("PLAY_FILE_EDIT").size() == (onDisk ? 1u : 0u));
+    }
+
+    TEST_CASE("command_dispatcher - complete_mutation of a command that does not mutate asserts and answers plainly") {
+        editor_test::headless_editor editor = {};
+        async_reply parked = {};
+        command_descriptor descriptor = {};
+        descriptor.name = "test.async_plain";
+        descriptor.flags = command_flags::ASYNC;
+        descriptor.handler = [&parked](command_invocation &invocation) -> core::result<command_outcome> {
+            parked = invocation.reply;
+            return command_outcome{};
+        };
+        CONJURE_REQUIRE_OK(editor.context().registry().add(std::move(descriptor)));
+        editor_test::parked_client client(editor);
+        const u64 revision = editor.context().revision();
+        CHECK_FALSE(client.dispatch("test.async_plain").has_value());
+        command_outcome outcome = {};
+        outcome.result = core::json::object({{"value", 3}});
+        CONJURE_CHECK_ASSERTS(parked.succeed_mutation(std::move(outcome)));
+        const protocol_response answered = client.wait();
+        CHECK(answered.ok);
+        CHECK(answered.result.root()["value"].as_i64() == 3);
+        CHECK(editor.context().revision() == revision);
+    }
+
+    TEST_CASE(
+      "command_dispatcher - a request of the local UI is logged with its command when it fails later, not at once"
+    ) {
+        editor_test::headless_editor editor = {};
+        async_rename command = {};
+        command.install(editor.context());
+        const std::string guid = editor.create_entity("Before");
+        command_request request = {};
+        request.name = std::string(async_rename::NAME);
+        request.args = rename_args(guid, "After");
+        SUBCASE("a request that fails after its handler returned") {
+            const core::result<core::json::document> parked = editor.context().dispatcher().execute(request);
+            CONJURE_REQUIRE_OK(parked);
+            REQUIRE(command.parked() == 1);
+            CHECK_FALSE(editor.log().contains(core::log_level::WARN, "ui: test.async_rename failed"));
+            command.fail(0);
+            CHECK(editor.log().contains(
+              core::log_level::WARN,
+              "ui: test.async_rename failed: the change could not be made"
+            ));
+        }
+        SUBCASE("a request that fails inside its handler is left to the caller") {
+            // execute() returns that failure, and ui::support::run_command logs it: a second line here would log
+            // one failure twice.
+            command.set_fails_at_once(true);
+            const testing::log_capture failing = {};
+            const core::result<core::json::document> failed = editor.context().dispatcher().execute(request);
+            CONJURE_CHECK_ERROR(failed, protocol_error_code::IO_ERROR);
+            CHECK(command.parked() == 0);
+            CHECK_FALSE(failing.contains(core::log_level::WARN, "ui: test.async_rename failed"));
+            command.set_fails_at_once(false);
+        }
+        // Any other client hears the failure in its response instead.
+        const testing::log_capture later = {};
+        editor_test::parked_client client(editor);
+        CHECK_FALSE(client.dispatch(async_rename::NAME, rename_args(guid, "Other")).has_value());
+        REQUIRE(command.parked() > 0);
+        command.fail(command.parked() - 1);
+        CHECK(client.wait().errorCode == protocol_error_code::IO_ERROR);
+        CHECK_FALSE(later.contains(core::log_level::WARN, "ui: test.async_rename failed"));
     }
 }

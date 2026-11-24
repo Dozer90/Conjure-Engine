@@ -132,6 +132,13 @@ namespace reflect_test {
         conjure::f32 drag = 0.0f;
     };
 
+    struct turret {
+        conjure::f32 yaw = 0.0f;
+        conjure::f64 arc = 90.0;
+        std::array<conjure::f32, 2> limits = {};
+        conjure::f32 range = 10.0f;
+    };
+
     struct with_odd_handle {
         odd_handle handle = {};
         conjure::u8 pad = 0;
@@ -212,6 +219,12 @@ CONJURE_REFLECT_STRUCT(reflect_test::projectile, "test.projectile",
     CONJURE_FIELD(speed, .min = 0.0, .max = 100.0, .step = 0.5, .tooltip = "Units per second"),
     CONJURE_FIELD_HIDDEN(internalCounter),
     CONJURE_FIELD_READ_ONLY(drag));
+
+CONJURE_REFLECT_STRUCT(reflect_test::turret, "test.turret",
+    CONJURE_FIELD(yaw, .min = -3.0, .max = 3.0, .unit = conjure::core::reflect::field_unit::RADIANS),
+    CONJURE_FIELD(arc, .unit = conjure::core::reflect::field_unit::DEGREES),
+    CONJURE_FIELD(limits, .unit = conjure::core::reflect::field_unit::RADIANS),
+    CONJURE_FIELD(range, .min = 0.0));
 
 CONJURE_REFLECT_STRUCT(reflect_test::with_odd_handle, "test.with_odd_handle",
     CONJURE_FIELD(handle),

@@ -60,7 +60,7 @@ core::result<system_id> scheduler::add_system(system_desc desc) {
     // holds each name once (01_ecs.md D13): an edge to a name two systems shared would bind to whichever
     // was registered first.
     if (find_system(desc.phase, desc.name).is_valid()) {
-        return make_error(
+        return core::make_error(
           ecs_error::NAME_CONFLICT,
           std::format("system '{}' already exists in phase {}", desc.name, to_string(desc.phase))
         );
@@ -110,7 +110,7 @@ core::result<system_id> scheduler::add_system(system_desc desc) {
 core::result<void> scheduler::remove_system(system_id id) {
     system_record *record = find_record(id);
     if (record == nullptr) {
-        return make_error(ecs_error::SYSTEM_NOT_FOUND, "remove_system with an unknown or stale id");
+        return core::make_error(ecs_error::SYSTEM_NOT_FOUND, "remove_system with an unknown or stale id");
     }
     const system_phase phase = record->desc.phase;
     record->alive = false;
@@ -132,7 +132,7 @@ core::result<void> scheduler::remove_system(system_id id) {
 core::result<void> scheduler::set_enabled(system_id id, bool enabled) {
     system_record *record = find_record(id);
     if (record == nullptr) {
-        return make_error(ecs_error::SYSTEM_NOT_FOUND, "set_enabled with an unknown or stale id");
+        return core::make_error(ecs_error::SYSTEM_NOT_FOUND, "set_enabled with an unknown or stale id");
     }
     if (enabled) {
         record->desc.flags = without_flag(record->desc.flags, system_flags::DISABLED);

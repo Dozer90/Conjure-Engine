@@ -58,7 +58,7 @@ TEST_SUITE("assets/binary_asset") {
         REQUIRE(types.find(asset_type_traits<binary_asset>::id()) != nullptr);
         CHECK(types.find(asset_type_traits<binary_asset>::id())->version == 1);
         CHECK(importers.find_for_extension(".BYTES") != nullptr);
-        CONJURE_CHECK_ERROR(register_binary_asset_type(types, &importers), asset_error_code::TYPE_DUPLICATE);
+        CONJURE_CHECK_ERROR(register_binary_asset_type(types, &importers), assets_error::TYPE_DUPLICATE);
 
         asset_type_registry typesOnly = {};
         CONJURE_REQUIRE_OK(register_binary_asset_type(typesOnly));
@@ -137,7 +137,7 @@ TEST_SUITE("assets/binary_asset") {
         CHECK(record->importerId.empty());
         CHECK(record->type == asset_type_id::INVALID);
         CHECK_FALSE(fixture.cache().contains(buffer));
-        CONJURE_CHECK_ERROR(fixture.manager->load_blocking(buffer), asset_error_code::NO_IMPORTER);
+        CONJURE_CHECK_ERROR(fixture.manager->load_blocking(buffer), assets_error::NO_IMPORTER);
 
         // The same bytes named .bytes are a raw data file and import as one.
         CONJURE_REQUIRE_OK(fixture.fileSystem->write_file("assets/data/robot.bytes", bytes_of("buffer")));

@@ -19,11 +19,13 @@
 #include "conjure/engine/export.h"
 #include "conjure/engine/project.h"
 #include "conjure/modules/module_abi.h"
+#include "conjure/scripting/native_api_hash.h"
 #include "engine/export_commands.h"
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -161,6 +163,15 @@ namespace {
     }
 
     /// <summary>
+    /// The path as UTF-8, the encoding core::process takes; path::string() would give the ANSI code page on
+    /// Windows.
+    /// </summary>
+    [[nodiscard]] std::string utf8(const std::filesystem::path &path) {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
+    }
+
+    /// <summary>
     /// 'relative' below the root of the working directory's volume (C:\ on Windows, / elsewhere): the absolute path
     /// managed_export_commands requires, for the cases that only build command lines and touch no file.
     /// </summary>
@@ -183,6 +194,82 @@ namespace {
         desc.config.scripting.hotReload = false;
         desc.config.scripting.exportDebugSymbols = exportDebugSymbols;
         return desc;
+    }
+
+    /// <summary>
+    /// The manifest conjure_managed_sdk_export writes (export_pipeline::MANAGED_SDK_MANIFEST_NAME) with this engine's
+    /// native API hash.
+    /// </summary>
+    [[nodiscard]] std::string prebuilt_manifest() {
+        return std::format(
+          "{{\n  \"schema_version\": 1,\n  \"kind\": \"conjure_managed_sdk_export\",\n  \"host_mode\": "
+          "\"framework_dependent\",\n  \"native_api_hash\": \"0x{:016X}\"\n}}\n",
+          CONJURE_NATIVE_API_HASH
+        );
+    }
+
+    // The stand-in files of a prebuilt SDK, as conjure_managed_sdk_export publishes them; their content is their name.
+    constexpr std::array<std::string_view, 8> PREBUILT_FILES = {
+        "Conjure.Bootstrap.dll",
+        "Conjure.Bootstrap.deps.json",
+        "Conjure.Bootstrap.pdb",
+        "Conjure.Bootstrap.runtimeconfig.json",
+        "Conjure.Managed.dll",
+        "Conjure.Managed.deps.json",
+        "Conjure.Managed.PDB",
+        "Conjure.Managed.xml",
+    };
+
+    /// <summary>
+    /// Lays out a stand-in prebuilt SDK in the folder 'relative' of 'directory' (PREBUILT_FILES and 'manifest' under
+    /// export_pipeline::MANAGED_SDK_MANIFEST_NAME) and returns the folder.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path write_prebuilt_sdk(
+      const temp_directory &directory,
+      std::string_view relative,
+      std::string_view manifest
+    ) {
+        for (const std::string_view name : PREBUILT_FILES) {
+            CONJURE_REQUIRE_OK(directory.write_text(std::format("{}/{}", relative, name), name));
+        }
+        CONJURE_REQUIRE_OK(directory.write_text(
+          std::format("{}/{}", relative, export_pipeline::MANAGED_SDK_MANIFEST_NAME),
+          manifest
+        ));
+        return directory.file(relative);
+    }
+
+    /// <summary>
+    /// Exports 'loaded' with scripting on the null host (export mode and debug symbols from 'scripting') and nothing
+    /// but the managed step: step 3 copies the prebuilt SDK 'prebuilt' into 'outputDir' and builds 'scriptsProject'
+    /// (empty for no game scripts, so no dotnet runs) with 'dotnet'. The log level is INFO, so the staging line of
+    /// step 3 (STAGING_LINE) shows whether the step went as far as building.
+    /// </summary>
+    [[nodiscard]] core::result<export_report> export_prebuilt(
+      const project &loaded,
+      const scripting_settings &scripting,
+      const std::filesystem::path &prebuilt,
+      const std::filesystem::path &outputDir,
+      const std::filesystem::path &dotnet,
+      const std::filesystem::path &scriptsProject
+    ) {
+        application_desc desc = scripted_desc(loaded, scripting.exportDebugSymbols);
+        desc.config.scripting.exportMode = scripting.exportMode;
+        desc.config.logLevel = core::log_level::INFO;
+        application app(std::move(desc));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        export_settings settings = {};
+        settings.outputDirectory = outputDir;
+        settings.buildNativeModule = false;
+        settings.copyRuntime = false;
+        settings.prebuiltManagedDirectory = prebuilt;
+        settings.scriptsProject = scriptsProject;
+        const std::u8string dotnetText = dotnet.u8string();
+        settings.dotnetExecutable = std::string(dotnetText.begin(), dotnetText.end());
+        core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+        return ran;
     }
 
     // The INFO lines in which publish_managed names its MSBuild staging directory and the artifacts directory both
@@ -219,15 +306,6 @@ namespace {
     constexpr f64 DOTNET_COMMAND_SECONDS = 360.0;
     constexpr f64 TOOL_SECONDS = 60.0;
     constexpr f64 DOTNET_SUBCASE_SECONDS = 2.0 * DOTNET_COMMAND_SECONDS + 5.0 * TOOL_SECONDS;
-
-    /// <summary>
-    /// The path as UTF-8, the encoding core::process takes; path::string() would give the ANSI code page on
-    /// Windows.
-    /// </summary>
-    [[nodiscard]] std::string utf8(const std::filesystem::path &path) {
-        const std::u8string text = path.u8string();
-        return std::string(text.begin(), text.end());
-    }
 
     /// <summary>
     /// Writes 'text' to 'path', creating its folders; temp_directory::write_text takes a narrow name, which cannot
@@ -1245,7 +1323,7 @@ TEST_SUITE("engine/export") {
         // The defaults: framework-dependent, no debug symbols.
         const scripting_settings defaults = {};
         const std::vector<std::vector<std::string>> stripped =
-          managed_export_commands(settings, defaults, managed, targets, artifacts);
+          managed_export_commands(settings, defaults, managed, targets, artifacts, {});
         REQUIRE(stripped.size() == 2);
         CHECK(stripped[0].front() == "publish");
         CHECK(count_argument(stripped[0], "Boot.csproj") == 1);
@@ -1260,7 +1338,7 @@ TEST_SUITE("engine/export") {
         scripting_settings symbols = {};
         symbols.exportDebugSymbols = true;
         const std::vector<std::vector<std::string>> kept =
-          managed_export_commands(settings, symbols, managed, targets, artifacts);
+          managed_export_commands(settings, symbols, managed, targets, artifacts, {});
         REQUIRE(kept.size() == 2);
         CHECK(arguments_with_prefix(kept[0], "-p:DebugType").empty());
         CHECK(arguments_with_prefix(kept[1], "-p:DebugType").empty());
@@ -1269,14 +1347,14 @@ TEST_SUITE("engine/export") {
         scripting_settings selfContained = {};
         selfContained.exportMode = script_export_mode::SELF_CONTAINED;
         const std::vector<std::vector<std::string>> standalone =
-          managed_export_commands(settings, selfContained, managed, targets, artifacts);
+          managed_export_commands(settings, selfContained, managed, targets, artifacts, {});
         REQUIRE_FALSE(standalone.empty());
         CHECK(arguments_with_prefix(standalone[0], "-p:UseAppHost").empty());
         CHECK(argument_after(standalone[0], "--self-contained") == "true");
 
         // Without game scripts only the bootstrap is published.
         settings.scriptsProject.clear();
-        CHECK(managed_export_commands(settings, defaults, managed, targets, artifacts).size() == 1);
+        CHECK(managed_export_commands(settings, defaults, managed, targets, artifacts, {}).size() == 1);
     }
 
     TEST_CASE("regression - code sweep F776 every dotnet command of an export is a CI build") {
@@ -1318,7 +1396,8 @@ TEST_SUITE("engine/export") {
           scripting,
           managed,
           absolute_path("roots.targets"),
-          absolute_path("artifacts")
+          absolute_path("artifacts"),
+          {}
         );
         REQUIRE(commands.size() == expectedCommands);
         const std::vector<std::string> expectedPivots = {expectedPivot};
@@ -1365,7 +1444,7 @@ TEST_SUITE("engine/export") {
         }
 
         const std::vector<std::vector<std::string>> commands =
-          managed_export_commands(settings, scripting, managed, absolute_path("roots.targets"), artifacts);
+          managed_export_commands(settings, scripting, managed, absolute_path("roots.targets"), artifacts, {});
         REQUIRE(commands.size() == expectedCommands);
         for (usize index = 0; index < commands.size(); ++index) {
             CAPTURE(index);
@@ -1402,7 +1481,7 @@ TEST_SUITE("engine/export") {
         }
 
         const std::vector<std::vector<std::string>> commands =
-          managed_export_commands(settings, scripting, managed, targets, absolute_path("artifacts"));
+          managed_export_commands(settings, scripting, managed, targets, absolute_path("artifacts"), {});
         REQUIRE(commands.size() == expectedCommands);
         const std::vector<std::string> expected = {"-p:CustomAfterMicrosoftCommonTargets=" + targets.string()};
         for (usize index = 0; index < commands.size(); ++index) {
@@ -1491,7 +1570,8 @@ TEST_SUITE("engine/export") {
           scripting,
           managed,
           absolute_path("roots.targets"),
-          absolute_path("artifacts")
+          absolute_path("artifacts"),
+          {}
         );
         REQUIRE(commands.size() == 2);
         // Only the scripts build reads it: the bootstrap and Conjure.Managed are the engine's own projects.
@@ -1535,7 +1615,7 @@ TEST_SUITE("engine/export") {
         }
 
         CONJURE_CHECK_ASSERTS(
-          (void) managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts)
+          (void) managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts, {})
         );
     }
 
@@ -1556,7 +1636,7 @@ TEST_SUITE("engine/export") {
         settings.bootstrapProject = std::filesystem::path(u8"Boot,1;\u00e4.csproj");
         settings.scriptsProject = std::filesystem::path(u8"Sc,ripts;\u00e4") / "Game.csproj";
         const std::vector<std::vector<std::string>> commands =
-          managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts);
+          managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts, {});
         REQUIRE(commands.size() == 2);
 
         const std::string escapedManaged = root + "out%2C1%3Bx%252%22q" + separator + "Spiel\xC3\xA4";
@@ -1669,7 +1749,9 @@ TEST_SUITE("engine/export") {
         }
     }
 
-    TEST_CASE("export_pipeline - publish_managed fails naming a dotnet that cannot be started and stops there") {
+    TEST_CASE(
+      "export_pipeline - publish_managed fails naming a dotnet that cannot be started or has no SDK and stops there"
+    ) {
         // The step also removes the MSBuild staging directory it made below the system's temporary directory before
         // the first command, on this way out as on success; the pipeline names it in an INFO line.
         log_capture logs = {};
@@ -1687,14 +1769,28 @@ TEST_SUITE("engine/export") {
         settings.buildNativeModule = false;
         settings.copyRuntime = false;
         settings.bootstrapProject = directory.path() / "Boot.csproj";
-        settings.dotnetExecutable = directory.file("no_dotnet_here").string();
+        // Owner decision OWN-INSTALL: from the engine source too, the failure names the SDK global.json asks for and
+        // Microsoft's download page, for a dotnet that cannot be started and for one without an SDK, which answers
+        // --version with an error (conjure_process_child answers every unknown mode with exit code 2).
+        std::string found = "no_dotnet_here";
+        SUBCASE("a dotnet that cannot be started") {
+            settings.dotnetExecutable = directory.file("no_dotnet_here").string();
+            found = "no_dotnet_here";
+        }
+        SUBCASE("a dotnet without an SDK") {
+            settings.dotnetExecutable = CONJURE_ENGINE_TEST_PROCESS_CHILD;
+            found = "--version' exited with 2";
+        }
         const core::result<export_report> ran = pipeline.run(settings);
         app.shutdown();
 
         REQUIRE_FALSE(ran.has_value());
         const std::string message = ran.get_error().to_string();
+        CAPTURE(message);
         CHECK(message.find("publish_managed") != std::string::npos);
-        CHECK(message.find("no_dotnet_here") != std::string::npos);
+        CHECK(message.find(found) != std::string::npos);
+        CHECK(message.find(std::string(required_dotnet_sdk_version())) != std::string::npos);
+        CHECK(message.find(dotnet_sdk_download_page()) != std::string::npos);
         CHECK_FALSE(std::filesystem::exists(outputDir / "managed"));
         CHECK_FALSE(std::filesystem::exists(outputDir / "project.json"));
 
@@ -1765,6 +1861,307 @@ TEST_SUITE("engine/export") {
         std::error_code error = {};
         CHECK_FALSE(std::filesystem::exists(artifacts.front(), error));
         CHECK_FALSE(error);
+    }
+
+    TEST_CASE("export_pipeline - with a prebuilt SDK the managed commands build only the game's scripts against it") {
+        // Owner decision OWN-INSTALL: an installed editor has no bootstrap project to publish; the pipeline copies the
+        // prebuilt SDK itself, and the scripts build still writes into the export's managed directory.
+        export_settings settings = {};
+        settings.scriptsProject = absolute_path(std::filesystem::path("game") / "scripts" / "Game.csproj");
+        const std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
+        const std::filesystem::path prebuilt = absolute_path(std::filesystem::path("editor") / "managed");
+        const std::filesystem::path targets = absolute_path("roots.targets");
+        const std::filesystem::path artifacts = absolute_path("artifacts");
+
+        const std::vector<std::vector<std::string>> commands =
+          managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts, prebuilt);
+        REQUIRE(commands.size() == 1);
+        const std::vector<std::string> &build = commands.front();
+        CHECK(build.front() == "build");
+        CHECK(count_argument(build, "publish") == 0);
+        CHECK(argument_after(build, "-o") == utf8(managed));
+        const std::vector<std::string> managedDir = arguments_with_prefix(build, "-p:ConjureManagedDir=");
+        REQUIRE(managedDir.size() == 1);
+        CHECK(managedDir.front() == "-p:ConjureManagedDir=" + utf8(prebuilt));
+        CHECK(count_argument(build, "-p:ContinuousIntegrationBuild=true") == 1);
+
+        settings.scriptsProject.clear();
+        CHECK(managed_export_commands(settings, scripting_settings{}, managed, targets, artifacts, prebuilt).empty());
+    }
+
+    TEST_CASE("export_pipeline - managed commands assert on a relative prebuilt SDK directory") {
+        export_settings settings = {};
+        settings.scriptsProject = absolute_path("Game.csproj");
+        CONJURE_CHECK_ASSERTS(
+          (void) managed_export_commands(
+            settings,
+            scripting_settings{},
+            absolute_path("managed"),
+            absolute_path("roots.targets"),
+            absolute_path("artifacts"),
+            std::filesystem::path("editor") / "managed"
+          )
+        );
+    }
+
+    TEST_CASE("export_pipeline - publish_managed copies a prebuilt SDK without its manifest and runs no dotnet") {
+        // Owner decision OWN-INSTALL: a project without game scripts needs no .NET SDK at all, so the dotnet of this
+        // case does not exist and the export still succeeds. The .pdb files travel only with the debug symbols, named
+        // without regard to case. A folder named relative to the current directory is resolved against it before it
+        // is checked and copied (and before managed_export_commands, which asserts on a relative one).
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt");
+        const std::filesystem::path prebuilt = write_prebuilt_sdk(directory, "editor/managed", prebuilt_manifest());
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt");
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        scripting_settings scripting = {};
+        std::filesystem::path given = prebuilt;
+        SUBCASE("without debug symbols") {
+            scripting.exportDebugSymbols = false;
+        }
+        SUBCASE("with debug symbols") {
+            scripting.exportDebugSymbols = true;
+        }
+        SUBCASE("named relative to the current directory") {
+            scripting.exportDebugSymbols = false;
+            given = std::filesystem::relative(prebuilt);
+            REQUIRE_FALSE(given.empty());
+            REQUIRE(given.is_relative());
+        }
+        const std::filesystem::path outputDir = directory.path() / "out";
+        const core::result<export_report> ran =
+          export_prebuilt(loaded, scripting, given, outputDir, directory.file("no_dotnet_here"), {});
+
+        CONJURE_REQUIRE_OK(ran);
+        const std::vector<std::filesystem::path> copied = logged_paths(logs, "export: copying the prebuilt SDK '");
+        REQUIRE(copied.size() == 1);
+        CAPTURE(copied.front().string());
+        CHECK(copied.front().is_absolute());
+        std::error_code same = {};
+        CHECK(std::filesystem::equivalent(copied.front(), prebuilt, same));
+        CHECK_FALSE(same);
+        CHECK(ran.value().managedPublished);
+        CHECK(ran.value().steps.size() == export_pipeline::STEP_NAMES.size());
+        const std::filesystem::path managed = outputDir / "managed";
+        for (const std::string_view name : PREBUILT_FILES) {
+            CAPTURE(name);
+            const bool symbols = core::str::iends_with(name, ".pdb");
+            const bool expected = !symbols || scripting.exportDebugSymbols;
+            CHECK(std::filesystem::is_regular_file(managed / std::filesystem::path(name)) == expected);
+            if (expected) {
+                CHECK(file_text(managed / std::filesystem::path(name)) == name);
+            }
+        }
+        const std::filesystem::path manifest = std::filesystem::path(export_pipeline::MANAGED_SDK_MANIFEST_NAME);
+        CHECK_FALSE(std::filesystem::exists(managed / manifest));
+        CHECK(std::filesystem::is_regular_file(outputDir / "project.json"));
+        // No staging directory: nothing was built.
+        CHECK(logged_paths(logs, STAGING_LINE).empty());
+    }
+
+    TEST_CASE("export_pipeline - a prebuilt SDK the engine cannot ship is refused before anything is written") {
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt_refused");
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt_refused");
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        const std::string hash = std::format("0x{:016X}", CONJURE_NATIVE_API_HASH);
+        std::string manifest = prebuilt_manifest();
+        std::string_view missingFile = {};
+        std::string expected = {};
+        std::string_view alsoExpected = {};
+        scripting_settings scripting = {};
+        const auto replaced = [&manifest](std::string_view from, std::string_view to) {
+            const usize at = manifest.find(from);
+            REQUIRE(at != std::string::npos);
+            manifest.replace(at, from.size(), to);
+        };
+        SUBCASE("no manifest") {
+            manifest.clear();
+            expected = "holds no conjure_managed_sdk.json";
+        }
+        SUBCASE("a manifest that is no JSON") {
+            manifest = "{ not json";
+            expected = "reading '";
+        }
+        SUBCASE("a manifest of another kind") {
+            replaced("conjure_managed_sdk_export", "something_else");
+            expected = "is no manifest of schema 1";
+        }
+        SUBCASE("a manifest of another schema") {
+            replaced("\"schema_version\": 1", "\"schema_version\": 2");
+            expected = "is no manifest of schema 1";
+        }
+        SUBCASE("a self-contained SDK") {
+            replaced("framework_dependent", "self_contained");
+            expected = "describes a 'self_contained' SDK";
+        }
+        SUBCASE("another native API hash") {
+            replaced(hash, std::format("0x{:016X}", CONJURE_NATIVE_API_HASH ^ 1ull));
+            expected = "was built for the native API hash";
+        }
+        SUBCASE("no native API hash") {
+            replaced(hash, "");
+            expected = "was built for the native API hash ''";
+        }
+        SUBCASE("no Conjure.Managed.dll") {
+            missingFile = "Conjure.Managed.dll";
+            expected = "has no Conjure.Managed.dll";
+        }
+        SUBCASE("no runtime configuration of the bootstrap") {
+            missingFile = "Conjure.Bootstrap.runtimeconfig.json";
+            expected = "has no Conjure.Bootstrap.runtimeconfig.json";
+        }
+        SUBCASE("a self-contained export") {
+            scripting.exportMode = script_export_mode::SELF_CONTAINED;
+            expected = "cannot make a self-contained export";
+            // The advice names the spelling parse_script_export_mode accepts.
+            alsoExpected = "scripting.export_mode to \"framework-dependent\"";
+        }
+        const std::filesystem::path prebuilt = write_prebuilt_sdk(directory, "editor/managed", manifest);
+        std::error_code error = {};
+        if (manifest.empty()) {
+            const std::filesystem::path manifestName(export_pipeline::MANAGED_SDK_MANIFEST_NAME);
+            std::filesystem::remove(prebuilt / manifestName, error);
+            REQUIRE_FALSE(error);
+        }
+        if (!missingFile.empty()) {
+            std::filesystem::remove(prebuilt / std::filesystem::path(missingFile), error);
+            REQUIRE_FALSE(error);
+        }
+        const std::filesystem::path outputDir = directory.path() / "out";
+        const core::result<export_report> ran =
+          export_prebuilt(loaded, scripting, prebuilt, outputDir, directory.file("no_dotnet_here"), {});
+
+        CONJURE_CHECK_ERROR(ran, engine_error::EXPORT_FAILED);
+        REQUIRE_FALSE(ran.has_value());
+        const std::string message = ran.get_error().message();
+        CAPTURE(message);
+        CHECK(message.find("publish_managed") != std::string::npos);
+        CHECK(message.find(expected) != std::string::npos);
+        CHECK(message.find(alsoExpected) != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(outputDir));
+    }
+
+    TEST_CASE("export_pipeline - a prebuilt SDK is not checked when no managed code is published") {
+        // The prebuilt folder has no manifest; with scripting disabled or publishManaged false step 3 copies nothing,
+        // so nothing refuses the export.
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt_unused");
+        CONJURE_REQUIRE_OK(directory.write_text("editor/managed/Conjure.Managed.dll", "x"));
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        export_settings settings = {};
+        settings.outputDirectory = directory.path() / "out";
+        settings.buildNativeModule = false;
+        settings.copyRuntime = false;
+        settings.prebuiltManagedDirectory = directory.path() / "editor" / "managed";
+        bool scriptingEnabled = true;
+        std::string extraJson = {};
+        SUBCASE("publishManaged is false") {
+            settings.publishManaged = false;
+        }
+        SUBCASE("scripting is disabled in the configuration and the project") {
+            scriptingEnabled = false;
+            extraJson = R"("scripting": {"enabled": false})";
+        }
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt_unused", {}, extraJson);
+        application_desc desc = scripted_desc(loaded, false);
+        desc.config.scripting.enabled = scriptingEnabled;
+        application app(std::move(desc));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        const core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+
+        CONJURE_REQUIRE_OK(ran);
+        CHECK_FALSE(ran.value().managedPublished);
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "out" / "managed"));
+    }
+
+    TEST_CASE("export_pipeline - a bootstrap project and a prebuilt SDK together are BAD_ARGUMENTS") {
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt_both");
+        const std::filesystem::path prebuilt = write_prebuilt_sdk(directory, "editor/managed", prebuilt_manifest());
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt_both");
+        application app(scripted_desc(loaded, false));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        export_settings settings = {};
+        settings.outputDirectory = directory.path() / "out";
+        settings.buildNativeModule = false;
+        settings.copyRuntime = false;
+        settings.bootstrapProject = directory.path() / "Boot.csproj";
+        settings.prebuiltManagedDirectory = prebuilt;
+        const core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+
+        CONJURE_CHECK_ERROR(ran, engine_error::BAD_ARGUMENTS);
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "out"));
+    }
+
+    TEST_CASE("export_pipeline - a prebuilt SDK inside the output is BAD_ARGUMENTS and nothing is written") {
+        // An export into the editor's own folder would copy the SDK onto itself.
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt_inside");
+        const std::filesystem::path prebuilt = write_prebuilt_sdk(directory, "editor/managed", prebuilt_manifest());
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt_inside");
+        std::filesystem::path outputDir = {};
+        SUBCASE("the output is the editor's folder") {
+            outputDir = directory.path() / "editor";
+        }
+        SUBCASE("the output is the prebuilt SDK itself") {
+            outputDir = prebuilt;
+        }
+        const core::result<export_report> ran =
+          export_prebuilt(loaded, scripting_settings{}, prebuilt, outputDir, directory.file("no_dotnet_here"), {});
+
+        CONJURE_CHECK_ERROR(ran, engine_error::BAD_ARGUMENTS);
+        CHECK(std::filesystem::is_directory(outputDir));
+        CHECK_FALSE(std::filesystem::exists(outputDir / "project.json"));
+        CHECK_FALSE(std::filesystem::exists(outputDir / "cooked"));
+        CHECK(file_text(prebuilt / "Conjure.Managed.dll") == "Conjure.Managed.dll");
+    }
+
+    TEST_CASE("export_pipeline - publish_managed names the SDK it needs when no dotnet can build the game's scripts") {
+        // Owner decision OWN-INSTALL: the .NET SDK is an optional download. A dotnet that cannot be started, or one
+        // that answers --version with an error as a dotnet without an SDK does (conjure_process_child answers every
+        // unknown mode with exit code 2), ends the step with the version global.json asks for and Microsoft's
+        // download page; the prebuilt SDK was copied before.
+        log_capture logs = {};
+        temp_directory directory("engine_export_prebuilt_no_sdk");
+        const std::filesystem::path prebuilt = write_prebuilt_sdk(directory, "editor/managed", prebuilt_manifest());
+        project loaded = engine_test::write_project(directory.path() / "project", "prebuilt_no_sdk");
+        CONJURE_REQUIRE_OK(directory.write_text("project/scripts/Game.csproj", "<Project />\n"));
+        std::filesystem::path dotnet = directory.file("no_dotnet_here");
+        std::string found = "could not be started";
+        SUBCASE("a dotnet that cannot be started") {
+            found = "could not be started";
+        }
+        SUBCASE("a dotnet without an SDK") {
+            dotnet = std::filesystem::path(CONJURE_ENGINE_TEST_PROCESS_CHILD);
+            found = "--version' exited with 2";
+        }
+        const std::filesystem::path outputDir = directory.path() / "out";
+        const core::result<export_report> ran = export_prebuilt(
+          loaded,
+          scripting_settings{},
+          prebuilt,
+          outputDir,
+          dotnet,
+          directory.path() / "project" / "scripts" / "Game.csproj"
+        );
+
+        CONJURE_CHECK_ERROR(ran, engine_error::EXPORT_FAILED);
+        REQUIRE_FALSE(ran.has_value());
+        const std::string message = ran.get_error().message();
+        CAPTURE(message);
+        CHECK(message.find("publish_managed") != std::string::npos);
+        CHECK(message.find(found) != std::string::npos);
+        CHECK(message.find(std::string(required_dotnet_sdk_version())) != std::string::npos);
+        CHECK(message.find(dotnet_sdk_download_page()) != std::string::npos);
+        CHECK(std::filesystem::is_regular_file(outputDir / "managed" / "Conjure.Managed.dll"));
+        CHECK_FALSE(std::filesystem::exists(outputDir / "project.json"));
+        // The game's scripts took the step as far as building: it made its staging directory before asking dotnet.
+        CHECK(logged_paths(logs, STAGING_LINE).size() == 1);
     }
 
 #if CONJURE_ENGINE_TEST_HAS_DOTNET

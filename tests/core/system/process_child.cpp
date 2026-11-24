@@ -4,6 +4,8 @@
 //   stderr <words...>      same, to stderr
 //   both                   print "out" to stdout and "err" to stderr, each followed by a newline
 //   exit <code>            exit with the given code
+//   echo-exit <code> <words...>
+//                          print the words as echo does, then exit with the given code
 //   sleep <milliseconds>   sleep, then exit 0
 //   args <values...>       print every remaining argument as "[value]" on its own line
 //   env <name>             print the variable's value, or "<unset>"
@@ -24,6 +26,12 @@
 //
 // Anything else prints a usage line to stderr and exits with 2.
 //
+// A copy of this program can stand in for another tool (a dotnet that has no SDK or an old one, in the engine's
+// and the editor's tests): when a file named like the program as the parent spelt it (argv[0]) plus ".replay"
+// exists, one of its lines replaces the arguments, a mode and its words separated by single spaces, whatever the
+// parent passed. A line "when <word> <mode> <words...>" applies when the parent's first argument is <word> (a
+// dotnet's "build" or "--version"); otherwise the first line that does not start with "when " does.
+//
 // This is a test program, not engine code: the pid, zero-write, spawn-sleeper and fds modes need
 // the operating system directly, so the platform guard below is accepted here.
 
@@ -43,6 +51,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -77,6 +86,54 @@ namespace {
         long long value = 0;
         std::from_chars(text.data(), text.data() + text.size(), value);
         return value;
+    }
+
+    // The words of the line of '<self>.replay' that applies to the parent's first argument 'first' (see the top of
+    // the file), split at single spaces; false when there is no such file or no line applies.
+    bool read_replay(const char *self, std::string_view first, std::vector<std::string> &words) {
+        std::ifstream stream(std::filesystem::path(std::string(self) + ".replay"), std::ios::binary);
+        if (!stream.is_open()) {
+            return false;
+        }
+        constexpr std::string_view WHEN = "when ";
+        std::string chosen = {};
+        bool chosenFound = false;
+        std::string fallback = {};
+        bool fallbackFound = false;
+        std::string line = {};
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            const std::string_view text = line;
+            if (!text.starts_with(WHEN)) {
+                if (!fallbackFound) {
+                    fallback = line;
+                    fallbackFound = true;
+                }
+                continue;
+            }
+            const std::string_view rule = text.substr(WHEN.size());
+            const std::size_t space = rule.find(' ');
+            if (!chosenFound && space != std::string_view::npos && rule.substr(0, space) == first) {
+                chosen = std::string(rule.substr(space + 1));
+                chosenFound = true;
+            }
+        }
+        if (!chosenFound) {
+            if (!fallbackFound) {
+                return false;
+            }
+            chosen = fallback;
+        }
+        std::size_t start = 0;
+        while (start <= chosen.size()) {
+            const std::size_t space = chosen.find(' ', start);
+            const std::size_t end = space == std::string::npos ? chosen.size() : space;
+            words.push_back(chosen.substr(start, end - start));
+            start = end + 1;
+        }
+        return true;
     }
 
     void print_joined(std::ostream &stream, const std::vector<std::string_view> &words) {
@@ -271,6 +328,11 @@ int main(int argc, char **argv) {
     for (int index = 1; index < argc; ++index) {
         arguments.emplace_back(argv[index]);
     }
+    std::vector<std::string> replayed = {};
+    const std::string_view firstArgument = arguments.empty() ? std::string_view() : arguments.front();
+    if (argc > 0 && read_replay(argv[0], firstArgument, replayed)) {
+        arguments.assign(replayed.begin(), replayed.end());
+    }
     if (arguments.empty()) {
         return usage("");
     }
@@ -295,6 +357,13 @@ int main(int argc, char **argv) {
     }
     if (mode == "exit") {
         return rest.empty() ? 0 : static_cast<int>(parse_number(rest.front()));
+    }
+    if (mode == "echo-exit") {
+        if (rest.empty()) {
+            return usage(mode);
+        }
+        print_joined(std::cout, std::vector<std::string_view>(rest.begin() + 1, rest.end()));
+        return static_cast<int>(parse_number(rest.front()));
     }
     if (mode == "sleep") {
         const long long milliseconds = rest.empty() ? 0 : parse_number(rest.front());

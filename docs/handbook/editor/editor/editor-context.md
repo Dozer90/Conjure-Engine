@@ -25,7 +25,7 @@ kind: header
 |---|---|
 | [`editor_context`](editor-context/editor-context.md) |  |
 | [`editor_host`](editor-context/editor-host.md) | What the owning executable does for the context: operations that outlive one <code><a href="../../engine/engine/application/application.html">engine::application</a></code>. |
-| [`frame_task`](editor-context/frame-task.md) | Work the editor advances once per frame (<code>editor.wait_frames</code>, <code>editor.exec_file</code>): <code>tick()</code> returns <code>true</code> when the task finished and may be destroyed. <code>A</code> task destroyed before it finished (engine restart, shutdown) releases what it registered on the context and fails its reply with <code>CANCELLED</code> when that is still pending. |
+| [`frame_task`](editor-context/frame-task.md) | Work the editor advances once per frame (<code>editor.wait_frames</code>, <code>editor.exec_file</code>, the prefab commands that wait for their asset): <code>tick()</code> returns <code>true</code> when the task finished and may be destroyed. <code>A</code> task destroyed before it finished (engine restart, shutdown) releases what it registered on the context and fails its reply with <code>CANCELLED</code> when that is still pending. The engine a task works on is shut down before the task is destroyed, so a task that holds something of the engine (an asset handle) lets go of it in <code>release_engine()</code>, which the context calls while the engine&#x27;s asset manager and database still exist. |
 
 ## Enumerations
 

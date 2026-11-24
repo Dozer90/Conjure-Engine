@@ -195,6 +195,18 @@ namespace {
             }
         }
 
+        const field_unit unit = field.attributes.unit;
+        if (unit != field_unit::NONE && unit != field_unit::RADIANS && unit != field_unit::DEGREES) {
+            return layout_error(type, field, std::format("has an unknown unit {}", static_cast<u32>(unit)));
+        }
+        if (unit != field_unit::NONE && !is_float_kind(valueKind)) {
+            return layout_error(
+              type,
+              field,
+              std::format("has the unit '{}' but holds {}, not F32 or F64", to_string(unit), to_string(valueKind))
+            );
+        }
+
         const u32 expectedSize = expected_value_size(field);
         if (expectedSize != 0 && field.element_size() != expectedSize) {
             return layout_error(

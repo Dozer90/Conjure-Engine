@@ -1,0 +1,20 @@
+<Project>
+  <!-- Imported into every project a Conjure export builds: by export step 3 (engine/src/engine/export_commands.cpp,
+       which embeds this file and writes it into its staging directory) and by the build target
+       conjure_managed_sdk_export (managed/CMakeLists.txt), which publishes the prebuilt SDK an installed editor
+       exports with. It maps the source paths of a project that source control gives no source root, and those
+       of its intermediate directory, which may lie outside every repository. -->
+  <Target Name="ConjureExportSourceRoots" BeforeTargets="InitializeSourceRootMappedPaths"
+          Condition="'$(DeterministicSourcePaths)' == 'true'">
+    <ItemGroup>
+      <_ConjureExportControlledSourceRoot Include="@(SourceRoot)"
+                                          Condition="'%(SourceRoot.SourceControl)' != ''" />
+    </ItemGroup>
+    <ItemGroup Condition="'@(_ConjureExportControlledSourceRoot)' == ''">
+      <SourceRoot Include="$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)'))))" />
+    </ItemGroup>
+    <ItemGroup>
+      <SourceRoot Include="$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)'))))" />
+    </ItemGroup>
+  </Target>
+</Project>

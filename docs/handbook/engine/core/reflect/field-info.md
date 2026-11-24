@@ -82,6 +82,18 @@ enum class field_kind : u8 {
 
 What a field holds. <code>ARRAY</code> fields describe their element in <code>field_info::elementKind</code>.
 
+### `reflect::field_unit` {#symbol-reflect-field-unit}
+
+```cpp
+enum class field_unit : u8 {
+    NONE,
+    RADIANS,
+    DEGREES
+};
+```
+
+The unit a float field is stored in, as a display hint (<code>field_attributes::unit</code>). The value, its min, max and step and its JSON form stay in this unit; the editor&#x27;s inspector shows a <code>RADIANS</code> field in degrees and converts what is typed back, and marks a <code>DEGREES</code> field as degrees. Only <code>F32</code> and <code>F64</code> fields (and arrays of them) may carry a unit other than <code>NONE</code> (<code>validate_layout</code>).
+
 ## Type Aliases
 
 ### `reflect::detail::std_array_traits<std::array<ElementType, N>>::element_type` {#symbol-reflect-detail-std-array-traits-std-array-elementtype-n-element-type}
@@ -209,6 +221,10 @@ struct type_info;
 <div class="function-declaration" id="function-reflect-to-string-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view to_string(<a href="field-info.html#symbol-reflect-field-kind">field_kind</a> kind) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>Returns the stable upper-case enumerator name of a kind (&quot;<code>VEC3</code>&quot;); &quot;<code>UNKNOWN</code>&quot; for <code>COUNT</code> and out-of-range values.</p>
+
+<div class="function-declaration" id="function-reflect-to-string-2"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view to_string(<a href="field-info.html#symbol-reflect-field-unit">field_unit</a> unit) <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The lower-case name of a unit, as the editor protocol sends it in a field&#x27;s attributes: &quot;none&quot;, &quot;radians&quot; or &quot;degrees&quot;; &quot;unknown&quot; for a value outside the enumeration.</p>
 
 <!-- doc-content:notes:start -->
 

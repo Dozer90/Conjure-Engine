@@ -248,6 +248,8 @@ core::process_desc managed_build_runner::command_line(const build_request &reque
     desc.captureStderr = true;
     desc.mergeStderr = true;
     desc.timeoutSeconds = request.timeoutSeconds;
+    // dotnet picks its SDK through the global.json in or above this directory.
+    desc.workingDirectory = request.workingDirectory;
     // dotnet's first-run telemetry banner and MSBuild node reuse only add noise and lingering processes.
     desc.environment = {{"DOTNET_CLI_TELEMETRY_OPTOUT", "1"}, {"DOTNET_NOLOGO", "1"}, {"MSBUILDNODEREUSE", "0"}};
     return desc;
@@ -271,7 +273,7 @@ build_report managed_build_runner::run_blocking(const build_request &request, st
     report.succeeded = result.exitCode == 0 && !result.timedOut;
     if (!report.succeeded) {
         report.launch = core::make_error(
-          script_error::BUILD_FAILED,
+          scripting_error::BUILD_FAILED,
           "dotnet build of '{}' exited with {} ({} error(s))",
           detail::path_to_utf8(request.projectPath),
           result.exitCode,

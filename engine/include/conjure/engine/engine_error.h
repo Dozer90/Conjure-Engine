@@ -4,13 +4,15 @@
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
-#include <string>
 #include <string_view>
 
 // Error codes of the engine module (docs/design/06_engine_loop.md 2.12). Every fallible engine call
-// returns a core::result carrying one of these through the "engine" category; errors of the modules the
-// engine drives (ecs, assets, scene, ...) are wrapped into the matching startup code with the original
-// message quoted, so a log line names both the step and the cause.
+// returns a core::result carrying one of these through the "engine" category, built with the generic
+// core::make_error (R63); errors of the modules the engine drives (ecs, assets, scene, ...) are wrapped
+// into the matching startup code with the original message quoted, so a log line names both the step
+// and the cause.
+//
+//   return core::make_error(engine_error::INVALID_CONFIG, "window.width must be positive");
 //
 //   core::result<void> started = app.initialise();
 //   if (!started.has_value() && started.get_error().is(engine_error::INVALID_CONFIG)) { ... }
@@ -58,13 +60,3 @@ namespace conjure::engine {
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::engine::engine_error, "engine", conjure::engine::engine_error_name);
-
-namespace conjure::engine {
-
-    /// <summary>
-    /// Builds an error of the engine category with a fixed detail message (possibly empty).
-    /// </summary>
-    [[nodiscard]] inline core::error make_error(engine_error code, std::string message = {}) {
-        return core::error::from(code, std::move(message));
-    }
-}

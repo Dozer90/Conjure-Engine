@@ -27,7 +27,7 @@ namespace {
     }
 
     [[nodiscard]] core::error conflict(std::string_view module, std::string_view detail) {
-        return modules::make_module_error(
+        return core::make_error(
           modules::module_error::REGISTRATION_CONFLICT,
           "assets: module '{}': {}",
           module,

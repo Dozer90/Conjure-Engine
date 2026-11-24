@@ -239,8 +239,8 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
         for (const cook_failure &failure : report.failures) {
             CONJURE_LOG_ERROR(LOG_ASSETS, "cook: {} {}: {}", failure.id, failure.assetPath, failure.message);
         }
-        return make_asset_error(
-          asset_error_code::IMPORT_FAILED,
+        return core::make_error(
+          assets_error::IMPORT_FAILED,
           std::format("{} asset(s) could not be cooked; nothing was written", report.failures.size())
         );
     }
@@ -248,8 +248,8 @@ core::result<cook_report> asset_cooker::cook(const cook_settings &settings) {
     const std::string outputDirectory = core::vfs::path_utils::normalize(settings.outputDirectory);
     core::result<void> created = mFileSystem->create_directories(outputDirectory);
     if (!created.has_value()) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot create '{}': {}", outputDirectory, created.get_error().message())
         );
     }

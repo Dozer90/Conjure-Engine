@@ -6,7 +6,11 @@ namespace Conjure.Interop;
 
 /// <summary>
 /// Mirror of conjure_managed_api: the functions managed provides to native, filled by
-/// NativeBridge.Initialize with the entry points below.
+/// NativeBridge.Initialize with the entry points below. The native members are part of
+/// NativeApi.ExpectedLayoutHash (sweep F445), so a build of this assembly older than a change of
+/// conjure_managed_api fails the handshake; of this hand-written mirror only its size is checked
+/// (validate_managed_api), so a same-size reorder or retype goes unnoticed: change it together with
+/// native_api.h.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct ManagedApi

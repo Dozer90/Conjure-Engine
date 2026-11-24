@@ -217,10 +217,21 @@ TEST_SUITE("core/field_info") {
         CHECK_FALSE(defaults.hidden);
         CHECK_FALSE(defaults.readOnly);
         CHECK(defaults.category.empty());
+        CHECK(defaults.unit == field_unit::NONE);
 
         const field_attributes ranged = {.min = 0.0, .max = 1.0, .tooltip = "t"};
         CHECK(ranged == field_attributes{.min = 0.0, .max = 1.0, .tooltip = "t"});
         CHECK(ranged != defaults);
+        CHECK(field_attributes{.unit = field_unit::RADIANS} != defaults);
+        CHECK(field_attributes{.unit = field_unit::RADIANS} != field_attributes{.unit = field_unit::DEGREES});
+    }
+
+    TEST_CASE("field_info - to_string of a field_unit is the lower-case name the editor protocol sends") {
+        CHECK(to_string(field_unit::NONE) == "none");
+        CHECK(to_string(field_unit::RADIANS) == "radians");
+        CHECK(to_string(field_unit::DEGREES) == "degrees");
+        CHECK(to_string(static_cast<field_unit>(3)) == "unknown");
+        CHECK(to_string(static_cast<field_unit>(255)) == "unknown");
     }
 
     TEST_CASE("field_info - enum_info finds enumerators by name and value") {

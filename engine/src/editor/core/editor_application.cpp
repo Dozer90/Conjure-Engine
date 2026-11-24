@@ -50,6 +50,13 @@ namespace conjure::editor {
                     (void) context;
                     mApplication->headless_tick();
                 }
+
+                void on_detach(engine::engine_context &context) override {
+                    // application::shutdown detaches the layers after the scenes and before the subsystems, so the
+                    // asset manager the frame tasks hold handles into is still there.
+                    (void) context;
+                    mApplication->engine_stopping();
+                }
         };
 
         /// <summary>
@@ -70,7 +77,7 @@ namespace conjure::editor {
         /// explicit ways to answer.
         /// </summary>
         [[nodiscard]] core::error not_trusted(const std::filesystem::path &projectPath) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::PROJECT_NOT_TRUSTED,
               std::format(
                 "the project '{}' is not trusted on this machine. Opening a project runs its scripts and native "
@@ -120,7 +127,7 @@ namespace conjure::editor {
                 }
                 unknown += argument;
             }
-            return engine::make_error(
+            return core::make_error(
               engine::engine_error::BAD_ARGUMENTS,
               std::format("unknown option(s): {}", unknown)
             );
@@ -162,7 +169,7 @@ namespace conjure::editor {
 
     core::result<void> editor_application::initialise(const editor_options &options, layer_factory uiFactory) {
         if (mInitialised) {
-            return make_editor_error(protocol_error_code::INVALID_REQUEST, "editor_application is already initialised");
+            return core::make_error(protocol_error_code::INVALID_REQUEST, "editor_application is already initialised");
         }
         mOptions = options;
         mUiFactory = std::move(uiFactory);
@@ -176,7 +183,7 @@ namespace conjure::editor {
             core::result<std::vector<protocol_request>> requests = headless_runner::load_command_file(options.execFile);
             if (!requests.has_value()) {
                 // The file is an argument: BAD_ARGUMENTS is what conjure_editor's main turns into exit code 3.
-                return engine::make_error(engine::engine_error::BAD_ARGUMENTS, requests.get_error().message());
+                return core::make_error(engine::engine_error::BAD_ARGUMENTS, requests.get_error().message());
             }
             mExecRequests = std::move(requests).value();
         }
@@ -251,7 +258,7 @@ namespace conjure::editor {
 
     core::result<void> editor_application::pump_frame() {
         if (mEngine == nullptr) {
-            return make_editor_error(protocol_error_code::INTERNAL, "no engine to pump");
+            return core::make_error(protocol_error_code::INTERNAL, "no engine to pump");
         }
         CONJURE_TRY(mEngine->step_frame());
         ++mTicks;
@@ -264,6 +271,12 @@ namespace conjure::editor {
     void editor_application::headless_tick() {
         if (mContext != nullptr) {
             mContext->tick();
+        }
+    }
+
+    void editor_application::engine_stopping() {
+        if (mContext != nullptr) {
+            mContext->release_engine_work();
         }
     }
 

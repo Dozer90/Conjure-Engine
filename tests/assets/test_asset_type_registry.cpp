@@ -51,7 +51,7 @@ TEST_SUITE("assets/asset_type_registry") {
         CONJURE_REQUIRE_OK(registry.register_type(named_desc("conjure.test.dup")));
         CONJURE_CHECK_ERROR(
           registry.register_type(named_desc("conjure.test.dup", 2)),
-          asset_error_code::TYPE_DUPLICATE
+          assets_error::TYPE_DUPLICATE
         );
         CHECK(registry.size() == 1);
     }
@@ -97,7 +97,7 @@ TEST_SUITE("assets/asset_type_registry") {
         CHECK(registry.size() == 1);
         CONJURE_CHECK_ERROR(
           registry.unregister_type(make_asset_type_id("conjure.test.a")),
-          asset_error_code::TYPE_UNKNOWN
+          assets_error::TYPE_UNKNOWN
         );
     }
 

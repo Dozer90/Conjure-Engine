@@ -123,6 +123,102 @@ if(TARGET conjure_scripting)
     add_dependencies(conjure_scripting conjure_managed_sdk)
 endif()
 
+# The export-flavoured SDK (owner decision OWN-INSTALL): Conjure.Bootstrap and Conjure.Managed published as an export
+# publishes them (engine/src/engine/export_commands.cpp: Release, framework-dependent, no apphost, a CI build that
+# imports export_source_roots.targets so no folder of this machine stays in the assemblies or their .pdb files) into
+# bin/managed_export. An installed editor carries this folder as the managed/ folder beside it: it runs its scripts
+# from it and project.export copies it instead of publishing the bootstrap from a source tree, which it does not
+# have. The assemblies must match the native table of the editor that ships them, so the folder belongs to the same
+# build; a packaging step copies it. It is rebuilt from scratch, and conjure_managed_sdk.json (the manifest
+# export_pipeline::MANAGED_SDK_MANIFEST_NAME, naming CONJURE_NATIVE_API_HASH) is written last, so a failed publish
+# leaves no folder an export would take for a complete SDK. The .pdb files stay: the export copies them only when
+# the project keeps its debug symbols (scripting.debug_symbols in project.json, scripting_settings::exportDebugSymbols).
+set(CONJURE_MANAGED_SDK_EXPORT_OUTPUT "${PROJECT_BINARY_DIR}/bin/managed_export")
+set(managedNativeApiHashHeader "${PROJECT_SOURCE_DIR}/engine/include/conjure/scripting/native_api_hash.h")
+set(managedSourceRootsTargets "${PROJECT_SOURCE_DIR}/engine/src/engine/export_source_roots.targets")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${managedNativeApiHashHeader}")
+file(STRINGS "${managedNativeApiHashHeader}" managedNativeApiHashLine REGEX "^#define CONJURE_NATIVE_API_HASH ")
+if(NOT managedNativeApiHashLine MATCHES "^#define CONJURE_NATIVE_API_HASH (0x[0-9A-Fa-f]+)ull$")
+    message(FATAL_ERROR "managed: ${managedNativeApiHashHeader} defines no CONJURE_NATIVE_API_HASH 0x...ull")
+endif()
+set(managedNativeApiHash "${CMAKE_MATCH_1}")
+set(managedSdkManifest "${CMAKE_CURRENT_BINARY_DIR}/sdk_export/conjure_managed_sdk.json")
+# Written only when the text changes; the stamp below depends on it, so a new hash publishes again.
+set(managedSdkManifestText "{\n")
+string(APPEND managedSdkManifestText
+    "  \"schema_version\": 1,\n"
+    "  \"kind\": \"conjure_managed_sdk_export\",\n"
+    "  \"host_mode\": \"framework_dependent\",\n"
+    "  \"native_api_hash\": \"@managedNativeApiHash@\"\n"
+    "}\n"
+)
+file(CONFIGURE OUTPUT "${managedSdkManifest}" CONTENT "${managedSdkManifestText}" @ONLY)
+set(managedSdkExportStamp "${CMAKE_CURRENT_BINARY_DIR}/conjure_managed_sdk_export.stamp")
+set(managedSdkExportProjects
+    "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Bootstrap/Conjure.Bootstrap.csproj"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Managed/Conjure.Managed.csproj"
+)
+set(managedSdkExportSources ${CONJURE_MANAGED_SDK_SOURCES} Conjure.Bootstrap/Program.cs
+    Conjure.Bootstrap/runtimeconfig.template.json)
+list(TRANSFORM managedSdkExportSources PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+add_custom_command(
+    OUTPUT "${managedSdkExportStamp}"
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}"
+    COMMAND "${CONJURE_DOTNET_EXECUTABLE}" publish
+            "${CMAKE_CURRENT_SOURCE_DIR}/Conjure.Bootstrap/Conjure.Bootstrap.csproj"
+            -c Release -o "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}" --self-contained false
+            --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/artifacts/sdk_export"
+            -p:ArtifactsPivots=release_export_framework_dependent
+            -p:ContinuousIntegrationBuild=true
+            "-p:CustomAfterMicrosoftCommonTargets=${managedSourceRootsTargets}"
+            -p:UseAppHost=false
+            --nologo -clp:NoSummary
+    COMMAND "${CMAKE_COMMAND}" -E copy "${managedSdkManifest}" "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}/"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${managedSdkExportStamp}"
+    DEPENDS
+        ${managedSdkExportSources}
+        ${managedSdkExportProjects}
+        "${CMAKE_CURRENT_SOURCE_DIR}/Directory.Build.props"
+        ${CONJURE_DOTNET_GLOBAL_JSON}
+        "${managedSourceRootsTargets}"
+        "${managedSdkManifest}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    COMMENT "dotnet publish sdk_export (Release, export properties) -> ${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}"
+    VERBATIM
+)
+add_custom_target(conjure_managed_sdk_export ALL DEPENDS "${managedSdkExportStamp}")
+set_target_properties(conjure_managed_sdk_export PROPERTIES
+    FOLDER "Managed"
+    CONJURE_MANAGED_OUTPUT_DIR "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}"
+    CONJURE_MANAGED_STAMP "${managedSdkExportStamp}"
+)
+# Only an order: the two publish into separate artifacts directories, but one dotnet at a time restores the SDK's
+# packages.
+add_dependencies(conjure_managed_sdk_export conjure_managed_sdk)
+set(CONJURE_MANAGED_SDK_EXPORT_DIR "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}" CACHE INTERNAL
+    "directory holding the export-flavoured Conjure.Managed.dll and bootstrap with their manifest")
+# The published assemblies and .pdb files name neither the checkout nor this build tree
+# (tools/check_distribution_paths.py --binary looks for both). Without Python there is no entry.
+if(CONJURE_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        set(managedSdkExportBinaries "")
+        foreach(assembly IN ITEMS Conjure.Bootstrap Conjure.Managed)
+            foreach(extension IN ITEMS dll pdb)
+                list(APPEND managedSdkExportBinaries
+                    --binary "${CONJURE_MANAGED_SDK_EXPORT_OUTPUT}/${assembly}.${extension}")
+            endforeach()
+        endforeach()
+        add_test(NAME conjure_managed_sdk_export_paths.sdk_export
+            COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/check_distribution_paths.py"
+                ${managedSdkExportBinaries} --root "${PROJECT_BINARY_DIR}"
+        )
+        set_tests_properties(conjure_managed_sdk_export_paths.sdk_export PROPERTIES LABELS "managed" TIMEOUT 120)
+    else()
+        message(STATUS "managed: no Python interpreter, conjure_managed_sdk_export_paths.sdk_export not registered")
+    endif()
+endif()
+
 # The test scripts: one project, three variants, built one after another (they share the SDK project).
 set(CONJURE_TEST_SCRIPT_SOURCES
     Conjure.TestScripts/BindingProbes.cs

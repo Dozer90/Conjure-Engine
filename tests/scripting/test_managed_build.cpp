@@ -180,6 +180,16 @@ TEST_SUITE("scripting/managed_build") {
         CHECK(telemetryOff);
     }
 
+    TEST_CASE("regression - code sweep OWN-INSTALL command_line runs dotnet in the request's working directory") {
+        // dotnet picks its SDK through the global.json in or above the directory it runs in; script.compile runs the
+        // build and its SDK probe in the scripts root so both read the same one.
+        build_request request = {};
+        request.projectPath = "Game/Game.csproj";
+        CHECK(managed_build_runner::command_line(request, "dotnet").workingDirectory.empty());
+        request.workingDirectory = std::filesystem::path("project") / "scripts";
+        CHECK(managed_build_runner::command_line(request, "dotnet").workingDirectory == request.workingDirectory);
+    }
+
     TEST_CASE("regression - code sweep F776 command_line never makes a script build a CI build") {
         // ContinuousIntegrationBuild maps the source paths of the .pdb to /_/ in a git repository with a commit, and
         // the debugger then cannot find the user's scripts. Only an export passes it

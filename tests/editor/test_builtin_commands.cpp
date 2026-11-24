@@ -86,7 +86,11 @@ TEST_SUITE("editor/builtin_commands") {
             CHECK_MESSAGE(descriptor->owner == "editor", descriptor->name);
             CHECK_MESSAGE(static_cast<bool>(descriptor->handler), descriptor->name);
             if (has_command_flag(*descriptor, command_flags::ASYNC)) {
-                CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::NOT_IN_BATCH), descriptor->name);
+                CHECK_MESSAGE(
+                  has_command_flag(*descriptor, command_flags::NOT_IN_BATCH) !=
+                    has_command_flag(*descriptor, command_flags::SYNC_IN_BATCH),
+                  descriptor->name
+                );
             }
             if (has_command_flag(*descriptor, command_flags::NO_UNDO)) {
                 CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::MUTATES), descriptor->name);
@@ -111,10 +115,11 @@ TEST_SUITE("editor/builtin_commands") {
     TEST_CASE("register_builtin_commands - the asynchronous commands are exactly the ones the design lists") {
         command_registry registry = {};
         register_builtin_commands(registry);
-        const std::array<std::string_view, 7> asynchronous = {
+        const std::array<std::string_view, 10> asynchronous = {
             "editor.wait_frames", "editor.exec_file", "project.export", "script.compile", "play.step",
             "view.screenshot",
             "module.build",
+            "prefab.create", "prefab.instantiate", "prefab.apply",
         };
         for (const command_descriptor *descriptor : registry.descriptors()) {
             bool expected = false;
@@ -122,6 +127,25 @@ TEST_SUITE("editor/builtin_commands") {
                 expected = expected || name == descriptor->name;
             }
             CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::ASYNC) == expected, descriptor->name);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F736 the prefab commands that load their prefab are asynchronous and stay "
+              "batchable") {
+        command_registry registry = {};
+        register_builtin_commands(registry);
+        const std::array<std::string_view, 3> batchable = {"prefab.create", "prefab.instantiate", "prefab.apply"};
+        for (const command_descriptor *descriptor : registry.descriptors()) {
+            bool expected = false;
+            for (const std::string_view name : batchable) {
+                expected = expected || name == descriptor->name;
+            }
+            CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::SYNC_IN_BATCH) == expected, descriptor->name);
+            if (expected) {
+                CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::ASYNC), descriptor->name);
+                CHECK_MESSAGE(has_command_flag(*descriptor, command_flags::MUTATES), descriptor->name);
+                CHECK_MESSAGE(!has_command_flag(*descriptor, command_flags::NOT_IN_BATCH), descriptor->name);
+            }
         }
     }
 

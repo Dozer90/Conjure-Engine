@@ -1133,4 +1133,31 @@ TEST_SUITE("editor/editor_application") {
         (void) editor.ok("play.stop");
     }
 #endif
+
+    TEST_CASE("regression - code sweep F736 editor_application shutdown lets the frame tasks release the engine "
+              "before its asset manager goes") {
+        testing::temp_directory directory = {};
+        write_project(directory.path(), "releasing");
+        editor_options options = {};
+        options.headless = true;
+        options.aiPort = u16{0};
+        options.projectPath = directory.path();
+        options.trustProject = true;
+        options.engineArguments = {"--log-level", "warn"};
+        int releases = 0;
+        bool assetsAlive = false;
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        application.context().add_frame_task(
+          std::make_unique<editor_test::release_probe_task>(&releases, &assetsAlive)
+        );
+        CONJURE_REQUIRE_OK(application.pump_frame());
+        CHECK(releases == 0);
+        application.shutdown();
+        CHECK(releases == 1);
+        CHECK(assetsAlive);
+        // Without a context there is nothing to release.
+        application.engine_stopping();
+        CHECK(releases == 1);
+    }
 }

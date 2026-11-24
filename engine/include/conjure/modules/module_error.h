@@ -4,14 +4,12 @@
 #include "conjure/core/error.h"
 #include "conjure/core/types.h"
 
-#include <format>
-#include <string>
 #include <string_view>
-#include <utility>
 
 // Failure codes of the module system (docs/design/07_modules.md section 7). Every code is returned
-// as a core::error whose message names the module and, where relevant, the expected and actual
-// values, so the editor can show it verbatim.
+// as a core::error built with the generic core::make_error(module_error::X, ...) (R63), whose message
+// names the module and, where relevant, the expected and actual values, so the editor can show it
+// verbatim.
 
 namespace conjure::modules {
 
@@ -58,21 +56,3 @@ namespace conjure::modules {
 }
 
 CONJURE_DECLARE_ERROR_CATEGORY(conjure::modules::module_error, "modules", conjure::modules::module_error_name);
-
-namespace conjure::modules {
-
-    /// <summary>
-    /// Builds a module error with a std::format style message.
-    /// </summary>
-    template <typename... Args>
-    [[nodiscard]] core::error make_module_error(module_error code, std::format_string<Args...> format, Args &&...args) {
-        return core::error::from(code, std::format(format, std::forward<Args>(args)...));
-    }
-
-    /// <summary>
-    /// Builds a module error with a fixed detail message (possibly empty).
-    /// </summary>
-    [[nodiscard]] inline core::error make_module_error(module_error code, std::string_view detail = {}) {
-        return core::error::from(code, std::string(detail));
-    }
-}

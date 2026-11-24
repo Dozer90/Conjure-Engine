@@ -880,9 +880,9 @@ TEST_SUITE("scripting/dod_query") {
         dotnet_fixture fixture = {};
         conjure_query_scope scope = {};
         const std::array<u32, 1> position = {fixture.registry.id_of<test_position>().value};
-        CONJURE_CHECK_ERROR(fixture.runtime.begin_query_scope(position, scope), script_error::NOT_IN_PHASE);
+        CONJURE_CHECK_ERROR(fixture.runtime.begin_query_scope(position, scope), scripting_error::NOT_IN_PHASE);
         const std::array<u32, 9> tooMany = {};
-        CONJURE_CHECK_ERROR(fixture.runtime.begin_query_scope(tooMany, scope), script_error::NOT_IN_PHASE);
+        CONJURE_CHECK_ERROR(fixture.runtime.begin_query_scope(tooMany, scope), scripting_error::NOT_IN_PHASE);
         CHECK(scope.chunk_count == 0);
         CHECK(fixture.runtime.open_query_scope_count() == 0);
         fixture.runtime.end_query_scope(12345);                       // unknown scopes are ignored

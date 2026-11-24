@@ -81,7 +81,7 @@ namespace {
                     }
                     fail(
                       dependentIndex,
-                      make_module_error(
+                      core::make_error(
                         module_error::DEPENDENCY_FAILED,
                         "module '{}' depends on '{}', which cannot load: {}",
                         name_of(dependentIndex),
@@ -123,7 +123,7 @@ namespace {
                     if (!manifest.engineVersion.contains(mInput.engineVersion)) {
                         fail(
                           index,
-                          make_module_error(
+                          core::make_error(
                             module_error::ENGINE_VERSION_MISMATCH,
                             "module '{}' requires engine {} but the host is {}",
                             manifest.name,
@@ -137,7 +137,7 @@ namespace {
                     if (missing != module_feature_flags::NONE) {
                         fail(
                           index,
-                          make_module_error(
+                          core::make_error(
                             module_error::FEATURE_UNAVAILABLE,
                             "module '{}' requires the engine feature(s) {} which this build lacks",
                             manifest.name,
@@ -177,7 +177,7 @@ namespace {
                     }
                     fail(
                       index,
-                      make_module_error(
+                      core::make_error(
                         module_error::MULTIPLE_GAME_MODULES,
                         "module '{}' is a game module but '{}' is already the game module",
                         name_of(index),
@@ -233,7 +233,7 @@ namespace {
                 if (mNodes[dependencyIndex].failed && !dependency.optional) {
                     fail(
                       index,
-                      make_module_error(
+                      core::make_error(
                         module_error::DEPENDENCY_FAILED,
                         "module '{}' depends on '{}', which cannot load: {}",
                         name,
@@ -255,7 +255,7 @@ namespace {
               module_id registeredId
             ) const {
                 if (!registeredId.is_valid()) {
-                    return make_module_error(
+                    return core::make_error(
                       module_error::DEPENDENCY_MISSING,
                       "module '{}' depends on '{}', which is not registered on this host",
                       name,
@@ -264,7 +264,7 @@ namespace {
                 }
                 const module_state state = mRegistry.state(registeredId);
                 if (state == module_state::SKIPPED) {
-                    return make_module_error(
+                    return core::make_error(
                       module_error::DEPENDENCY_MISSING,
                       "module '{}' depends on '{}', which is SKIPPED on this platform",
                       name,
@@ -272,7 +272,7 @@ namespace {
                     );
                 }
                 if (state == module_state::FAULTED) {
-                    return make_module_error(
+                    return core::make_error(
                       module_error::DEPENDENCY_MISSING,
                       "module '{}' depends on '{}', which is FAULTED: {}",
                       name,
@@ -280,7 +280,7 @@ namespace {
                       mRegistry.last_error(registeredId).message()
                     );
                 }
-                return make_module_error(
+                return core::make_error(
                   module_error::DEPENDENCY_MISSING,
                   "module '{}' depends on '{}', which is {} and not part of this load",
                   name,
@@ -294,7 +294,7 @@ namespace {
               const module_dependency &dependency,
               semantic_version found
             ) {
-                return make_module_error(
+                return core::make_error(
                   module_error::DEPENDENCY_VERSION,
                   "module '{}' depends on '{}' {} but version {} is registered",
                   name,
@@ -390,7 +390,7 @@ namespace {
                     text.append(name_of(cycle.front()));
                     fail(
                       cycle.front(),
-                      make_module_error(module_error::DEPENDENCY_CYCLE, "dependency cycle: {}", text)
+                      core::make_error(module_error::DEPENDENCY_CYCLE, "dependency cycle: {}", text)
                     );
                 }
 
@@ -404,7 +404,7 @@ namespace {
                         if (!mNodes[dependencyIndex].ordered) {
                             fail(
                               index,
-                              make_module_error(
+                              core::make_error(
                                 module_error::DEPENDENCY_FAILED,
                                 "module '{}' depends on '{}', which cannot load: {}",
                                 name_of(index),

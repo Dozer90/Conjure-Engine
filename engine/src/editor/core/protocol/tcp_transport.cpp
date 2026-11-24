@@ -80,7 +80,7 @@ namespace conjure::editor {
                 break;
             }
         }
-        return make_editor_error(
+        return core::make_error(
           protocol_error_code::IO_ERROR,
           std::format("ai protocol: cannot listen on 127.0.0.1:{}: {}", mRequestedPort, lastError.message())
         );

@@ -38,7 +38,7 @@ namespace {
     // Error helpers: every message carries the source and the JSON pointer of the member.
 
     error invalid(std::string_view source, std::string_view pointer, std::string_view reason) {
-        return make_module_error(module_error::MANIFEST_INVALID, "{}: {}: {}", source, pointer, reason);
+        return core::make_error(module_error::MANIFEST_INVALID, "{}: {}: {}", source, pointer, reason);
     }
 
     error invalid_type(
@@ -209,7 +209,7 @@ namespace {
 
         CONJURE_TRY_ASSIGN(manifest.name, read_string(root, "name", sourceName, true));
         if (!is_valid_module_name(manifest.name)) {
-            return make_module_error(
+            return core::make_error(
               module_error::INVALID_NAME,
               "{}: /name: '{}' is not a valid module name ([a-z0-9_.], 1 to {} characters)",
               sourceName,
@@ -382,7 +382,7 @@ result<module_manifest> conjure::modules::load_module_manifest(const std::filesy
     const std::filesystem::path readablePath = modules::detail::extend_path(path);
     std::error_code ignored = {};
     if (!std::filesystem::is_regular_file(readablePath, ignored)) {
-        return make_module_error(
+        return core::make_error(
           module_error::MANIFEST_NOT_FOUND,
           "manifest '{}' does not exist",
           path.generic_string()

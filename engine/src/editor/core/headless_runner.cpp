@@ -97,7 +97,7 @@ namespace conjure::editor {
             }
             file.open(options.outputFile, std::ios::binary | std::ios::trunc);
             if (!file.is_open()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::IO_ERROR,
                   std::format("--out: cannot write '{}'", options.outputFile.generic_string())
                 );
@@ -246,7 +246,7 @@ namespace conjure::editor {
 
     core::result<std::vector<protocol_request>> headless_runner::load_command_file(const std::filesystem::path &file) {
         if (file.empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "--exec needs a command file");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "--exec needs a command file");
         }
         // A directory opens as a stream on some platforms and then reads as an empty file. Only a directory is
         // turned away here: a pipe or a device is as good a source as a regular file.
@@ -256,7 +256,7 @@ namespace conjure::editor {
             input.open(file, std::ios::binary);
         }
         if (!input.is_open()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("--exec: cannot read '{}'", file.generic_string())
             );
@@ -265,7 +265,7 @@ namespace conjure::editor {
         buffer << input.rdbuf();
         core::result<std::vector<protocol_request>> requests = parse_command_file(buffer.str());
         if (!requests.has_value()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("--exec: cannot parse '{}': {}", file.generic_string(), requests.get_error().message())
             );
@@ -287,7 +287,7 @@ namespace conjure::editor {
         if (trimmed.front() == '[') {
             core::result<core::json::document> parsed = core::json::document::parse(trimmed);
             if (!parsed.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("command file: {}", parsed.get_error().message())
                 );
@@ -298,7 +298,7 @@ namespace conjure::editor {
                   core::json::document::from_value(entry).to_string()
                 );
                 if (!request.has_value()) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::INVALID_ARGS,
                       std::format("command file: entry {}: {}", index, request.get_error().message())
                     );
@@ -321,7 +321,7 @@ namespace conjure::editor {
             }
             core::result<protocol_request> request = parse_request(content);
             if (!request.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("command file: line {}: {}", lineNumber, request.get_error().message())
                 );

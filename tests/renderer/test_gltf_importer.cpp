@@ -1267,7 +1267,7 @@ TEST_SUITE("renderer/gltf_importer") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::assets_error::IMPORT_FAILED);
         const std::vector<std::byte> garbage = bytes_of("{");
         assets::import_context garbageContext(
           fileSystem,
@@ -1280,7 +1280,7 @@ TEST_SUITE("renderer/gltf_importer") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(garbageContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(garbageContext), assets::assets_error::IMPORT_FAILED);
 
         // External buffers are read as side files next to the source.
         CONJURE_REQUIRE_OK(fileSystem.write_file("assets/models/ext.bin", builder.binary()));

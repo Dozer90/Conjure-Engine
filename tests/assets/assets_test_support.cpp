@@ -245,13 +245,13 @@ core::result<test_asset> test_loader::load_cpu_typed(
 core::result<test_asset> test_loader::finalise_typed(const finalise_context &context, test_asset &&intermediate) const {
     controls().finaliseCalls.fetch_add(1, std::memory_order_relaxed);
     if (controls().failFinalise.load(std::memory_order_acquire)) {
-        return make_asset_error(asset_error_code::FINALISE_FAILED, "finalise asked to fail");
+        return core::make_error(assets_error::FINALISE_FAILED, "finalise asked to fail");
     }
     test_asset finished = std::move(intermediate);
     finished.finaliseCount = 1;
     for (const asset_handle &dependency : context.dependencies) {
         if (!dependency.is_terminal()) {
-            return make_asset_error(asset_error_code::FINALISE_FAILED, "a dependency was not terminal");
+            return core::make_error(assets_error::FINALISE_FAILED, "a dependency was not terminal");
         }
     }
     return finished;

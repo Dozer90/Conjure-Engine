@@ -14,7 +14,7 @@ namespace {
     constexpr std::string_view REBUILD_HINT = "rebuild the module against this engine build";
 
     error mismatch(std::string_view field, std::uint64_t expected, std::uint64_t actual) {
-        return make_module_error(
+        return core::make_error(
           module_error::ABI_MISMATCH,
           "ABI field '{}' differs: expected {}, actual {}; {}",
           field,
@@ -25,7 +25,7 @@ namespace {
     }
 
     error mismatch_hex(std::string_view field, std::uint64_t expected, std::uint64_t actual) {
-        return make_module_error(
+        return core::make_error(
           module_error::ABI_MISMATCH,
           "ABI field '{}' differs: expected 0x{:X}, actual 0x{:X}; {}",
           field,

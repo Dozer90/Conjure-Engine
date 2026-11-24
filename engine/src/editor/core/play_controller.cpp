@@ -36,7 +36,7 @@ namespace conjure::editor {
 
     core::result<void> play_controller::start() {
         if (mState != play_state::EDITING) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::WRONG_PLAY_STATE,
               std::format("play.start needs the editing state (currently {})", to_string(mState))
             );
@@ -45,14 +45,14 @@ namespace conjure::editor {
         // would otherwise carry the session, with its snapshot of the old project's scene, into the new project.
         const editor_host *host = mContext->host();
         if (host != nullptr && host->has_pending_project_open()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::BUSY,
               "play.start: a project.open is pending; play after the engine has restarted"
             );
         }
         core::result<scene::scene_snapshot> snapshot = scene::capture(mContext->scene());
         if (!snapshot.has_value()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INTERNAL,
               std::format("the scene snapshot failed: {}", snapshot.get_error().to_string())
             );
@@ -70,6 +70,7 @@ namespace conjure::editor {
         set_script_mode(true);
         mContext->engine().set_simulation_mode(engine::simulation_mode::RUNNING);
         mState = play_state::PLAYING;
+        ++mStateChanges;
         mSessionStartFrame = mContext->frame_index();
         mSimulationFrames = 0;
         mSessionStartFixedStep = mContext->engine().time().fixedStepIndex;
@@ -83,7 +84,7 @@ namespace conjure::editor {
 
     core::result<void> play_controller::stop() {
         if (mState == play_state::EDITING) {
-            return make_editor_error(protocol_error_code::WRONG_PLAY_STATE, "play.stop: the editor is not playing");
+            return core::make_error(protocol_error_code::WRONG_PLAY_STATE, "play.stop: the editor is not playing");
         }
         mContext->engine().set_simulation_mode(engine::simulation_mode::PAUSED);
         if (mPendingStep.has_value()) {
@@ -120,6 +121,7 @@ namespace conjure::editor {
             mContext->undo().push(std::exchange(mFileEdits, {}));
         }
         mState = play_state::EDITING;
+        ++mStateChanges;
         emit_state();
         mContext->emit_selection_changed();
         return core::result<void>::success();
@@ -127,45 +129,47 @@ namespace conjure::editor {
 
     core::result<void> play_controller::pause() {
         if (mState != play_state::PLAYING) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::WRONG_PLAY_STATE,
               std::format("play.pause needs the playing state (currently {})", to_string(mState))
             );
         }
         mContext->engine().set_simulation_mode(engine::simulation_mode::PAUSED);
         mState = play_state::PAUSED;
+        ++mStateChanges;
         emit_state();
         return core::result<void>::success();
     }
 
     core::result<void> play_controller::resume() {
         if (mState != play_state::PAUSED) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::WRONG_PLAY_STATE,
               std::format("play.resume needs the paused state (currently {})", to_string(mState))
             );
         }
         if (mPendingStep.has_value()) {
-            return make_editor_error(protocol_error_code::BUSY, "a play.step is still running");
+            return core::make_error(protocol_error_code::BUSY, "a play.step is still running");
         }
         mContext->engine().set_simulation_mode(engine::simulation_mode::RUNNING);
         mState = play_state::PLAYING;
+        ++mStateChanges;
         emit_state();
         return core::result<void>::success();
     }
 
     core::result<void> play_controller::step(u32 fixedSteps, async_reply reply) {
         if (mState != play_state::PAUSED) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::WRONG_PLAY_STATE,
               std::format("play.step needs the paused state (currently {})", to_string(mState))
             );
         }
         if (fixedSteps == 0) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "fixedSteps must be at least 1");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "fixedSteps must be at least 1");
         }
         if (mPendingStep.has_value()) {
-            return make_editor_error(protocol_error_code::BUSY, "a play.step is already pending");
+            return core::make_error(protocol_error_code::BUSY, "a play.step is already pending");
         }
         pending_step pending = {};
         pending.reply = reply;

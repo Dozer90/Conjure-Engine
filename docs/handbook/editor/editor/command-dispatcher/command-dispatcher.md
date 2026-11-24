@@ -99,7 +99,15 @@ class CONJURE_API command_dispatcher
     <a href="../../../engine/core/types.html#symbol-u64">u64</a> ticket,
     <a href="../protocol/protocol-message/protocol-response.html">protocol_response</a> response);</code></pre></div>
 
-<p>Completes a parked request (called by <code><a href="../editor-command/async-reply.html">async_reply</a></code>).</p>
+<p>Completes a parked request (called by <code><a href="../editor-command/async-reply.html">async_reply</a></code>). <code>A</code> failure of client 0 (the UI, which does not wait for its answers) is logged as a <code>WARN</code> naming the command.</p>
+
+#### `complete_mutation` {#function-complete-mutation}
+
+<div class="function-declaration" id="function-complete-mutation-1"><pre><code><span class="k">void</span> complete_mutation(
+    <a href="../../../engine/core/types.html#symbol-u64">u64</a> ticket,
+    <a href="../editor-command/command-outcome.html">command_outcome</a> outcome);</code></pre></div>
+
+<p>Completes the parked request of an <code>ASYNC</code> | <code>MUTATES</code> command with its outcome (called by <code>async_reply::succeed_mutation</code>): records it the way a synchronous mutation is recorded at dispatch, with the request&#x27;s args, client and coalesce key (the undo stack, the client&#x27;s transaction, the running batch, or the play controller while frozen), marks the scene dirty unless <code>NO_UNDO</code> and, outside an undo or redo step, bumps the revision, sets <code>result.revision</code> and emits <code>scene.changed</code>. <code>A</code> completion inside the handler (a batch child, a replay) is recorded under the state it runs in. Asserted: the ticket is pending and its command is <code>MUTATES</code>.</p>
 
 #### `dispatch` {#function-dispatch}
 
@@ -122,12 +130,19 @@ class CONJURE_API command_dispatcher
     std::span&lt;<span class="k">const</span> <a href="../editor-command/command-request.html">command_request</a>&gt; replays,
     <a href="../../../engine/core/types.html#symbol-u32">u32</a> clientId);</code></pre></div>
 
+#### `exceeds_pending_limit` {#function-exceeds-pending-limit}
+
+<div class="function-declaration" id="function-exceeds-pending-limit-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> exceeds_pending_limit(
+    <a href="../../../engine/core/types.html#symbol-u32">u32</a> clientId) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True when the client has more parked requests than <code><a href="#function-max-pending-per-client-1">max_pending_per_client</a>()</code>. Inside an <code>ASYNC</code> handler the request being dispatched is parked already and counts.</p>
+
 #### `execute` {#function-execute}
 
 <div class="function-declaration" id="function-execute-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/core/result/result.html">core::result</a>&lt;<a href="../../../engine/core/json/document/json-document.html">core::json::document</a>&gt; execute(
     <span class="k">const</span> <a href="../editor-command/command-request.html">command_request</a> &amp;request);</code></pre></div>
 
-<p>UI convenience: dispatches from client 0 and returns the result object or the error (the error&#x27;s code is the protocol code). An asynchronous command answers through <code>on_local_response</code>.</p>
+<p>UI convenience: dispatches from client 0 and returns the result object or the error (the error&#x27;s code is the protocol code). An asynchronous command answers through <code>on_local_response</code>; when such a reply of client 0 fails, <code><a href="#function-complete-1">complete</a>()</code> also logs a <code>WARN</code> &quot;ui: &lt;command&gt; failed: &lt;message&gt;&quot;.</p>
 
 #### `in_batch` {#function-in-batch}
 
@@ -141,6 +156,10 @@ class CONJURE_API command_dispatcher
     <a href="../../../engine/core/types.html#symbol-u64">u64</a> ticket) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
 <p>True while the ticket is parked and not completed.</p>
+
+#### `max_pending_per_client` {#function-max-pending-per-client}
+
+<div class="function-declaration" id="function-max-pending-per-client-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/core/types.html#symbol-u32">u32</a> max_pending_per_client() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
 #### `on_local_response` {#function-on-local-response}
 
@@ -160,6 +179,12 @@ class CONJURE_API command_dispatcher
 <div class="function-declaration" id="function-replaying-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> replaying() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
 <p>True while <code>history.undo</code> / redo or a batch rollback dispatch recorded inverses and replays. Handlers use it to accept values a client may not send but an earlier state legitimately held (a legacy entity name restored by undo).</p>
+
+#### `requires_synchronous_completion` {#function-requires-synchronous-completion}
+
+<div class="function-declaration" id="function-requires-synchronous-completion-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> requires_synchronous_completion() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True while a request dispatched now must answer before its handler returns: inside a batch (its children are recorded into one entry and rolled back together), an undo or redo step and a batch rollback (<code><a href="#function-replaying-1">replaying</a>()</code>). <code>A</code> <code>SYNC_IN_BATCH</code> handler checks it and completes its reply synchronously; an <code>ASYNC</code> handler that does not is answered with <code>INTERNAL</code> and its reply is dropped.</p>
 
 #### `resolve_completed` {#function-resolve-completed}
 
@@ -196,6 +221,8 @@ class CONJURE_API command_dispatcher
 <div class="function-declaration" id="function-set-max-pending-per-client-1"><pre><code><span class="k">void</span> set_max_pending_per_client(
     <a href="../../../engine/core/types.html#symbol-u32">u32</a> count) <span class="k">noexcept</span>;</code></pre></div>
 
+<p>The most requests one client may leave parked. An <code>ASYNC</code> request beyond it answers <code>BUSY</code>, except one that must complete inside its handler (<code><a href="#function-requires-synchronous-completion-1">requires_synchronous_completion</a>()</code>), which cannot stay parked and is never refused. <code>A</code> <code>SYNC_IN_BATCH</code> request may also finish inside its handler elsewhere (a prefab that is already loaded), so it is counted only when its handler leaves it parked: the dispatcher answers <code>BUSY</code> then and drops its reply, and the handler checks <code><a href="#function-exceeds-pending-limit-1">exceeds_pending_limit</a>()</code> before it starts waiting, so it can refuse with nothing changed.</p>
+
 ### Private
 
 #### `access_of_client` {#function-access-of-client}
@@ -216,6 +243,13 @@ class CONJURE_API command_dispatcher
     <span class="k">const</span> <a href="../editor-command/command-descriptor.html">command_descriptor</a> &amp;descriptor,
     <a href="../../../engine/core/json/document/json-document.html">core::json::document</a> &amp;details) <span class="k">const</span>;</code></pre></div>
 
+#### `conclude_mutation` {#function-conclude-mutation}
+
+<div class="function-declaration" id="function-conclude-mutation-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../protocol/protocol-message/protocol-response.html">protocol_response</a> conclude_mutation(
+    <a href="../command-desc.html#symbol-command-flags">command_flags</a> flags,
+    <span class="k">const</span> <a href="../protocol/protocol-message/protocol-request.html">protocol_request</a> &amp;request,
+    <a href="../editor-command/command-outcome.html">command_outcome</a> &amp;outcome);</code></pre></div>
+
 #### `dispatch_internal` {#function-dispatch-internal}
 
 <div class="function-declaration" id="function-dispatch-internal-1"><pre><code>[[<span class="na">nodiscard</span>]] std::optional&lt;<a href="../protocol/protocol-message/protocol-response.html">protocol_response</a>&gt; dispatch_internal(
@@ -233,7 +267,7 @@ class CONJURE_API command_dispatcher
 #### `record_outcome` {#function-record-outcome}
 
 <div class="function-declaration" id="function-record-outcome-1"><pre><code><span class="k">void</span> record_outcome(
-    <span class="k">const</span> <a href="../editor-command/command-descriptor.html">command_descriptor</a> &amp;descriptor,
+    <a href="../command-desc.html#symbol-command-flags">command_flags</a> flags,
     <span class="k">const</span> <a href="../protocol/protocol-message/protocol-request.html">protocol_request</a> &amp;request,
     <a href="../editor-command/command-outcome.html">command_outcome</a> &amp;outcome);</code></pre></div>
 

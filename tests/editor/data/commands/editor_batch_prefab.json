@@ -1,0 +1,87 @@
+{
+  "_comment": "Code sweep F736: the asynchronous prefab commands are sync_in_batch, so inside editor.batch they finish in their handler and join the batch's single undo entry.",
+  "setup": [
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Root",
+        "guid": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Child",
+        "guid": "9d06d521-6097-50e3-84dc-b43f5c44cefc",
+        "parent": "09474d6c-1194-5bfd-8b59-6973cf69e781"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Leaf",
+        "guid": "2c815ab2-a7d1-5a6c-9fbb-f4412b41d0e3",
+        "parent": "9d06d521-6097-50e3-84dc-b43f5c44cefc"
+      }
+    },
+    {
+      "cmd": "entity.create",
+      "args": {
+        "name": "Other",
+        "guid": "d2c05824-ac89-555b-9a97-0c31faa881eb"
+      }
+    },
+    {
+      "cmd": "component.add",
+      "args": {
+        "entity": "09474d6c-1194-5bfd-8b59-6973cf69e781",
+        "type": "sprite",
+        "value": {
+          "size": [
+            0.9,
+            0.9
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "prefab.create",
+      "args": {
+        "entity": "09474d6c-1194-5bfd-8b59-6973cf69e781",
+        "path": "prefabs/cell",
+        "uuid": "3811d5b1-6d7c-5fc2-892b-57910a93e0c3"
+      }
+    }
+  ],
+  "request": {
+    "cmd": "editor.batch",
+    "args": {
+      "label": "Prefab work",
+      "commands": [
+        {
+          "cmd": "prefab.instantiate",
+          "args": {
+            "prefab": "3811d5b1-6d7c-5fc2-892b-57910a93e0c3",
+            "guids": [
+              "959575f7-a2b1-5494-9e8b-dd157cb0a93e"
+            ]
+          }
+        },
+        {
+          "cmd": "prefab.create",
+          "args": {
+            "entity": "d2c05824-ac89-555b-9a97-0c31faa881eb",
+            "path": "prefabs/other",
+            "uuid": "6a3be0a1-2c4e-5f17-9d38-7b51c2e4f906"
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "ok": true,
+    "result": {
+      "count": 2
+    }
+  }
+}

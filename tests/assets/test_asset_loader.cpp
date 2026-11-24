@@ -95,7 +95,7 @@ TEST_SUITE("assets/asset_loader") {
         CHECK(failed.get_error().generic_code() == core::error_code::UNKNOWN);
 
         core::result<asset_payload> noInput = loader.finalise(finalise_context{}, make_null_payload());
-        CONJURE_CHECK_ERROR(noInput, asset_error_code::FINALISE_FAILED);
+        CONJURE_CHECK_ERROR(noInput, assets_error::FINALISE_FAILED);
     }
 
     TEST_CASE("typed_asset_loader - a typed finalise failure propagates and the CPU output is released") {
@@ -105,7 +105,7 @@ TEST_SUITE("assets/asset_loader") {
         controls().failFinalise = true;
         core::result<asset_payload> failed = loader.finalise(finalise_context{}, std::move(cpu).value());
         controls().failFinalise = false;
-        CONJURE_CHECK_ERROR(failed, asset_error_code::FINALISE_FAILED);
+        CONJURE_CHECK_ERROR(failed, assets_error::FINALISE_FAILED);
     }
 
     TEST_CASE("typed_asset_loader - the typed fallback is erased, nullopt means no fallback") {

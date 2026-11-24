@@ -444,7 +444,7 @@ core::json::document texture_importer::default_settings() const {
 core::result<assets::import_output> texture_importer::import(assets::import_context &context) const {
     core::result<texture_import_settings> settings = texture_import_settings::from_json(context.settings());
     if (!settings.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, settings.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, settings.get_error().message());
     }
     core::result<texture_asset> decoded = texture_asset::decode(
       context.source_bytes(),
@@ -453,7 +453,7 @@ core::result<assets::import_output> texture_importer::import(assets::import_cont
       mJobs
     );
     if (!decoded.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, decoded.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, decoded.get_error().message());
     }
     texture_asset &texture = decoded.value();
     texture.set_filter(settings.value().filter);

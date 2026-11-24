@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 
 // reflection.* and editor.schema (docs/design/04_editor.md D15): the agent's self-description, and the dump of the
 // catalogue into docs/generated/editor_protocol.json that this test keeps in sync.
@@ -102,6 +103,64 @@ TEST_SUITE("editor/reflection_commands") {
           "reflection.type",
           core::json::object({{"name", "no.such.type"}})
         ) == protocol_error_code::TYPE_NOT_FOUND);
+    }
+
+    TEST_CASE("reflection.type - a field stored in radians names its unit, a plain number has none") {
+        editor_test::headless_editor editor = {};
+        const core::json::document camera = editor.ok(
+          "reflection.type",
+          core::json::object({{"name", "conjure.renderer.camera_data"}})
+        );
+        bool fov = false;
+        for (const core::json::value field : camera.root()["type"]["fields"]) {
+            CAPTURE(field["name"].as_string());
+            const core::json::value attributes = field["attributes"];
+            if (field["name"].as_string() == "verticalFovRadians") {
+                fov = true;
+                CHECK(attributes["unit"].as_string() == "radians");
+                // The limits stay in the stored unit.
+                CHECK(attributes["max"].as_f64() == doctest::Approx(3.1));
+            } else {
+                CHECK_FALSE(attributes.contains("unit"));
+            }
+        }
+        CHECK(fov);
+        const core::json::document light = editor.ok(
+          "reflection.type",
+          core::json::object({{"name", "conjure.renderer.light"}})
+        );
+        usize cones = 0;
+        for (const core::json::value field : light.root()["type"]["fields"]) {
+            if (field["name"].as_string() != "lightData") {
+                continue;
+            }
+            for (const core::json::value sub : field["fields"]) {
+                const std::string_view name = sub["name"].as_string();
+                CAPTURE(name);
+                if (name == "innerConeRadians" || name == "outerConeRadians") {
+                    ++cones;
+                    CHECK(sub["attributes"]["unit"].as_string() == "radians");
+                } else {
+                    CHECK_FALSE(sub["attributes"].contains("unit"));
+                }
+            }
+        }
+        CHECK(cones == 2);
+        // reflection.components carries the same attributes.
+        const core::json::document components = editor.ok("reflection.components");
+        bool environment = false;
+        for (const core::json::value component : components.root()["components"]) {
+            if (component["name"].as_string() != "conjure.renderer.environment") {
+                continue;
+            }
+            for (const core::json::value field : component["fields"]) {
+                if (field["name"].as_string() == "rotationRadians") {
+                    environment = true;
+                    CHECK(field["attributes"]["unit"].as_string() == "radians");
+                }
+            }
+        }
+        CHECK(environment);
     }
 
     TEST_CASE("reflection.asset_types - lists the registered types and the importers seen in the project") {

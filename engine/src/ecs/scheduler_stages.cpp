@@ -125,7 +125,7 @@ core::result<std::vector<u32>> scheduler::topological_order(
             }
         }
         if (next == count) {
-            return make_error(
+            return core::make_error(
               ecs_error::SYSTEM_CYCLE,
               "after/before edges form a cycle in phase " + std::string(to_string(target))
             );

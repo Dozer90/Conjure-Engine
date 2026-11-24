@@ -76,7 +76,7 @@ CONJURE_REFLECT_FLAGS(conjure::physics::character_flags, "conjure.physics.charac
 ### `CONJURE_REFLECT_STRUCT` {#symbol-conjure-reflect-struct}
 
 ```cpp
-CONJURE_REFLECT_STRUCT(conjure::physics::character_controller, "conjure.physics.character_controller", CONJURE_FIELD(radius, .min = 0.0), CONJURE_FIELD(height, .min = 0.0), CONJURE_FIELD(maxSlopeAngleDegrees, .min = 0.0, .max = 90.0), CONJURE_FIELD(stepHeight, .min = 0.0), CONJURE_FIELD(mass, .min = 0.0), CONJURE_FIELD(maxStrength, .min = 0.0), CONJURE_FIELD(padding, .min = 0.0), CONJURE_FIELD(layer, .min = 0.0, .max = 31.0), CONJURE_FIELD(flags), CONJURE_FIELD(velocity), CONJURE_FIELD(ground, .readOnly = true), CONJURE_FIELD(groundNormal, .readOnly = true), CONJURE_FIELD(groundEntity, .readOnly = true))
+CONJURE_REFLECT_STRUCT(conjure::physics::character_controller, "conjure.physics.character_controller", CONJURE_FIELD(radius, .min = 0.0), CONJURE_FIELD(height, .min = 0.0), CONJURE_FIELD(maxSlopeAngleRadians, .min = 0.0, .max = std::numbers::pi / 2.0, .unit = conjure::core::reflect::field_unit::RADIANS), CONJURE_FIELD(stepHeight, .min = 0.0), CONJURE_FIELD(mass, .min = 0.0), CONJURE_FIELD(maxStrength, .min = 0.0), CONJURE_FIELD(padding, .min = 0.0), CONJURE_FIELD(layer, .min = 0.0, .max = 31.0), CONJURE_FIELD(flags), CONJURE_FIELD(velocity), CONJURE_FIELD(ground, .readOnly = true), CONJURE_FIELD(groundNormal, .readOnly = true), CONJURE_FIELD(groundEntity, .readOnly = true))
 ```
 
 <!-- doc-content:notes:start -->

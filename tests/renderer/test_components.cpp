@@ -12,6 +12,7 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
+#include "conjure/core/reflect/field_info.h"
 #include "conjure/core/reflect/json_conversion.h"
 #include "conjure/core/reflect/reflect.h"
 #include "conjure/core/reflect/type_registry.h"
@@ -182,6 +183,57 @@ TEST_SUITE("renderer/components") {
         REQUIRE(cameraComponent != nullptr);
         CHECK(cameraComponent->fields.size() == 5);
         CHECK(cameraComponent->fields[0].name == "cameraData");
+    }
+
+    TEST_CASE("register_components - the angle fields are stored in radians and say so, the others have no unit") {
+        core::reflect::type_registry registry = {};
+        CONJURE_REQUIRE_OK(register_components(registry));
+        struct angle_field {
+            std::string_view type = {};
+            std::string_view field = {};
+        };
+        const angle_field angles[] = {
+          {"conjure.renderer.camera_data", "verticalFovRadians"},
+          {"conjure.renderer.light_data", "innerConeRadians"},
+          {"conjure.renderer.light_data", "outerConeRadians"},
+          {"conjure.renderer.environment", "rotationRadians"},
+        };
+        for (const angle_field &angle : angles) {
+            CAPTURE(angle.type);
+            CAPTURE(angle.field);
+            const core::reflect::type_info *type = registry.find(angle.type);
+            REQUIRE(type != nullptr);
+            const core::reflect::field_info *field = type->find_field(angle.field);
+            REQUIRE(field != nullptr);
+            CHECK(field->attributes.unit == core::reflect::field_unit::RADIANS);
+        }
+        // The limits stay in radians: a light cone ends at a right angle, the field of view short of pi.
+        const core::reflect::field_info *outerCone = registry.find("conjure.renderer.light_data")
+          ->find_field("outerConeRadians");
+        REQUIRE(outerCone != nullptr);
+        CHECK(outerCone->attributes.max == doctest::Approx(1.5708));
+        const core::reflect::field_info *fov = registry.find("conjure.renderer.camera_data")
+          ->find_field("verticalFovRadians");
+        REQUIRE(fov != nullptr);
+        CHECK(fov->attributes.max == doctest::Approx(3.1));
+        for (const std::string_view typeName : {
+               std::string_view("conjure.renderer.camera_data"),
+               std::string_view("conjure.renderer.light_data"),
+               std::string_view("conjure.renderer.environment"),
+               MESH_RENDERER_COMPONENT_TYPE_NAME,
+               CAMERA_COMPONENT_TYPE_NAME,
+             }) {
+            const core::reflect::type_info *type = registry.find(typeName);
+            REQUIRE(type != nullptr);
+            for (const core::reflect::field_info &field : type->fields) {
+                if (field.name.ends_with("Radians")) {
+                    continue;
+                }
+                CAPTURE(typeName);
+                CAPTURE(field.name);
+                CHECK(field.attributes.unit == core::reflect::field_unit::NONE);
+            }
+        }
     }
 
     TEST_CASE("components - camera and light components round-trip through reflected JSON") {

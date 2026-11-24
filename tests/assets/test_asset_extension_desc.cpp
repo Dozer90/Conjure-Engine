@@ -78,7 +78,7 @@ TEST_SUITE("assets/asset_extension_desc") {
         CHECK(registered->version == 4);
         CHECK(registered->flags == asset_type_flags::RELOAD_WITH_DEPENDENCIES);
         CHECK(registered->loader != nullptr);
-        CONJURE_CHECK_ERROR(register_asset_type_extension(types, desc), asset_error_code::TYPE_DUPLICATE);
+        CONJURE_CHECK_ERROR(register_asset_type_extension(types, desc), assets_error::TYPE_DUPLICATE);
     }
 
     TEST_CASE("register_asset_type_extension - rejects a missing factory, a null loader and a name mismatch") {

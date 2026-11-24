@@ -157,7 +157,7 @@ core::result<void> engine_test::probe_subsystem::startup(engine_context &context
     CONJURE_UNUSED(context);
     mLog->push_back(mName + ".startup");
     if (mFailStartup) {
-        return make_error(engine_error::LAYER_ATTACH_FAILED, mName + " refused to start");
+        return core::make_error(engine_error::LAYER_ATTACH_FAILED, mName + " refused to start");
     }
     mStarted = true;
     return core::result<void>::success();
@@ -167,7 +167,7 @@ core::result<void> engine_test::probe_subsystem::post_startup(engine_context &co
     CONJURE_UNUSED(context);
     mLog->push_back(mName + ".post_startup");
     if (mFailPostStartup) {
-        return make_error(engine_error::SCRIPT_RUNTIME_NOT_FOUND, mName + " refused post_startup");
+        return core::make_error(engine_error::SCRIPT_RUNTIME_NOT_FOUND, mName + " refused post_startup");
     }
     return core::result<void>::success();
 }

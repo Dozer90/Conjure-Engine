@@ -35,8 +35,10 @@
 // is a compile error on every compiler, a stray one would be -Wpedantic noise on GCC/Clang) and take the
 // type's fully qualified C++ name plus the registered name the id is hashed from. Field
 // attributes use designated initialisers in field_attributes declaration order: min, max, step, tooltip,
-// hidden, readOnly, category. A reflected struct must not be polymorphic and its members must be
-// reflectable (kind_of<T>()); member offsets come from offsetof, so keep reflected structs plain data.
+// hidden, readOnly, category, unit (the field_unit an F32 or F64 field is stored in, spelled out in full
+// at global scope: .unit = conjure::core::reflect::field_unit::RADIANS). A reflected struct must not be
+// polymorphic and its members must be reflectable (kind_of<T>()); member offsets come from offsetof, so
+// keep reflected structs plain data.
 // Members may use the fixed-width aliases or the platform integer types (long, long long, usize, ...),
 // which reflect as the fixed-width kind of their width. Enumerations need at least one enumerator (at
 // most 64 per macro); a name ending in "_flags" is treated as a flag set even with CONJURE_REFLECT_ENUM.

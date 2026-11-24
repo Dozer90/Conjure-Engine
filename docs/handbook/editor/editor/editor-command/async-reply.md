@@ -79,7 +79,14 @@ class CONJURE_API async_reply
 <div class="function-declaration" id="function-succeed-1"><pre><code><span class="k">void</span> succeed(
     <a href="../../../engine/core/json/document/json-document.html">core::json::document</a> result) <span class="k">const</span>;</code></pre></div>
 
-<p>Completes the parked request with a result object.</p>
+<p>Completes the parked request with a result object. For a command that is not <code>MUTATES</code>; a <code>MUTATES</code> command completes with <code><a href="#function-succeed-mutation-1">succeed_mutation</a>()</code> (a plain <code><a href="#function-succeed-1">succeed</a>()</code> of one records nothing, bumps no revision and leaves the dirty flag alone).</p>
+
+#### `succeed_mutation` {#function-succeed-mutation}
+
+<div class="function-declaration" id="function-succeed-mutation-1"><pre><code><span class="k">void</span> succeed_mutation(
+    <a href="command-outcome.html">command_outcome</a> outcome) <span class="k">const</span>;</code></pre></div>
+
+<p>Completes the parked request of an <code>ASYNC</code> | <code>MUTATES</code> command with what its change produced. The dispatcher does now what it does for a synchronous mutation at dispatch: records the inverse and the replay (the undo stack, the client&#x27;s open transaction, coalescing, a running batch, or the play controller while playing), marks the scene dirty unless <code>NO_UNDO</code>, bumps the revision, adds it to the result and emits <code>scene.changed</code>; an undo or redo step does neither of the last three (the history command does). The caller has already applied the change; on a reply that is no longer valid (timed out, cancelled) nothing is recorded, so a handler checks <code><a href="#function-is-valid-1">is_valid</a>()</code> before it changes anything.</p>
 
 #### `ticket` {#function-ticket}
 

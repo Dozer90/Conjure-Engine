@@ -179,7 +179,7 @@ TEST_SUITE("physics/register") {
         REQUIRE(importer != nullptr);
         CHECK(importers.find_for_extension("obj") == importer);
         CHECK(importers.find_for_extension(".fbx") == nullptr);
-        CONJURE_CHECK_ERROR(physics::register_asset_types(types, importers), assets::asset_error_code::TYPE_DUPLICATE);
+        CONJURE_CHECK_ERROR(physics::register_asset_types(types, importers), assets::assets_error::TYPE_DUPLICATE);
     }
 
     TEST_CASE("regression - code sweep F137 the collision mesh importer claims .obj by extension and no glTF") {

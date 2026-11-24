@@ -8,6 +8,8 @@
 #include "conjure/core/reflect/type_info.h"
 #include "conjure/editor/ui/imgui_frame_scope.h"
 #include "conjure/editor/ui/property_drawer.h"
+#include "conjure/renderer/camera.h"
+#include "conjure/renderer/components.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -15,6 +17,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <numbers>
 #include <string>
 #include <string_view>
 
@@ -23,6 +26,8 @@
 using namespace conjure;
 using namespace conjure::editor;
 using namespace conjure::editor::ui;
+using conjure::core::reflect::field_kind;
+using conjure::core::reflect::field_unit;
 
 namespace {
     /// <summary>
@@ -79,6 +84,40 @@ namespace {
         return text;
     }
 
+    /// <summary>
+    /// Drags the widget that 'draw' submits with the left mouse button: presses at the centre of its rectangle
+    /// (which 'draw' stores in 'centre' after drawing it), moves 'pixels' to the right in two steps, each past
+    /// ImGui's drag threshold, and releases.
+    /// </summary>
+    void drag_by(imgui_frame_scope &scope, const std::function<void()> &draw, const ImVec2 &centre, f32 pixels) {
+        draw_window(scope, draw);
+        draw_window(scope, draw);
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddMousePosEvent(centre.x, centre.y);
+        draw_window(scope, draw);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        draw_window(scope, draw);
+        io.AddMousePosEvent(centre.x + pixels * 0.5f, centre.y);
+        draw_window(scope, draw);
+        io.AddMousePosEvent(centre.x + pixels, centre.y);
+        draw_window(scope, draw);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        draw_window(scope, draw);
+    }
+
+    /// <summary>
+    /// The centre of the last item ImGui submitted.
+    /// </summary>
+    [[nodiscard]] ImVec2 last_item_centre() {
+        const ImVec2 low = ImGui::GetItemRectMin();
+        const ImVec2 high = ImGui::GetItemRectMax();
+        return ImVec2((low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f);
+    }
+
+    [[nodiscard]] core::json::document float_value(f64 value) {
+        return core::json::document::from_value(core::json::object({{"v", value}}).root()["v"]);
+    }
+
     [[nodiscard]] usize count_of(std::string_view text, std::string_view part) {
         usize found = 0;
         for (usize at = text.find(part); at != std::string_view::npos; at = text.find(part, at + part.size())) {
@@ -91,6 +130,16 @@ namespace {
         core::reflect::field_info field = {};
         field.name = name;
         field.kind = kind;
+        return field;
+    }
+
+    [[nodiscard]] core::reflect::field_info angle_field(
+      const char *name,
+      core::reflect::field_kind kind,
+      core::reflect::field_unit unit
+    ) {
+        core::reflect::field_info field = float_field(name, kind);
+        field.attributes.unit = unit;
         return field;
     }
 
@@ -744,5 +793,175 @@ TEST_SUITE("editor/ui/property_drawer") {
         );
         CHECK(value.root().as_f64() == doctest::Approx(2.5));
         CHECK_FALSE(changed);
+    }
+
+    TEST_CASE("regression - code sweep F628 property_drawer_registry shows a radian angle in degrees and writes what "
+      "is typed back in radians") {
+        // The camera's own field description: tagged RADIANS, with its limits (0.01, 3.1) authored in radians.
+        const core::reflect::type_info camera = core::reflect::describe_struct<renderer::camera>();
+        const core::reflect::field_info *fov = camera.find_field("verticalFovRadians");
+        REQUIRE(fov != nullptr);
+        core::reflect::type_info type = {};
+        type.name = "test.fov";
+        type.fields = {*fov};
+        property_drawer_registry registry = {};
+        imgui_frame_scope scope{};
+        core::json::document object = core::json::object({{"verticalFovRadians", std::numbers::pi / 3.0}});
+        const std::function<void()> draw = [&]() {
+            (void) registry.draw_object(type, object, false);
+        };
+        const std::string shown = shown_text(scope, draw);
+        CAPTURE(shown);
+        CHECK(count_of(shown, "{ 60.000 deg }") == 1);
+        type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "90");
+        CHECK(object.root()["verticalFovRadians"].as_f64() == doctest::Approx(std::numbers::pi / 2.0).epsilon(1.0e-6));
+        // The limits apply in radians whatever the unit typed in: 200 degrees is past 3.1 radians, 0 below 0.01.
+        type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "200");
+        CHECK(object.root()["verticalFovRadians"].as_f64() == doctest::Approx(3.1));
+        type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "0");
+        CHECK(object.root()["verticalFovRadians"].as_f64() == doctest::Approx(0.01));
+    }
+
+    TEST_CASE("property_drawer_registry - a radian field that is only shown keeps its exact value and its infinity") {
+        const core::reflect::field_info loose = angle_field("loose", field_kind::F32, field_unit::RADIANS);
+        const core::reflect::field_info wide = angle_field("wide", field_kind::F64, field_unit::RADIANS);
+        core::reflect::field_info endless = angle_field("endless", field_kind::F32, field_unit::RADIANS);
+        endless.attributes.min = 0.0;
+        core::reflect::type_info type = {};
+        type.name = "test.angles";
+        type.fields = {loose, wide, endless};
+        property_drawer_registry registry = {};
+        imgui_frame_scope scope{};
+        core::json::document object = core::json::object({{"loose", 1.0}, {"wide", -1.0}, {"endless", "inf"}});
+        const std::string before = object.to_string();
+        bool changed = false;
+        const std::string shown = shown_text(scope, [&]() {
+            changed = registry.draw_object(type, object, false) || changed;
+        });
+        CAPTURE(shown);
+        CHECK(count_of(shown, "{ 57.296 deg }") == 1);
+        CHECK(count_of(shown, "{ -57.295780 deg }") == 1);
+        CHECK(count_of(shown, "{ inf deg }") == 1);
+        CHECK_FALSE(changed);
+        CHECK(object.to_string() == before);
+    }
+
+    TEST_CASE("property_drawer_registry - a degree field is shown as stored, an f64 or array radian field converts") {
+        core::reflect::field_info slope = angle_field("slope", field_kind::F32, field_unit::DEGREES);
+        slope.attributes.min = 0.0;
+        slope.attributes.max = 90.0;
+        const core::reflect::field_info heading = angle_field("heading", field_kind::F64, field_unit::RADIANS);
+        core::reflect::field_info limits = angle_field("limits", field_kind::ARRAY, field_unit::RADIANS);
+        limits.elementKind = field_kind::F32;
+        limits.arrayCount = 2;
+        property_drawer_registry registry = {};
+        imgui_frame_scope scope{};
+        SUBCASE("degrees") {
+            property_draw_context context = {};
+            context.field = &slope;
+            context.label = "slope";
+            core::json::document value = float_value(45.0);
+            const std::function<void()> draw = [&]() {
+                (void) registry.draw(field_kind::F32, context, value);
+            };
+            const std::string shown = shown_text(scope, draw);
+            CAPTURE(shown);
+            CHECK(count_of(shown, "{ 45.000 deg }") == 1);
+            type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "30");
+            CHECK(value.root().as_f64() == doctest::Approx(30.0));
+            type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "120");
+            CHECK(value.root().as_f64() == doctest::Approx(90.0));
+        }
+        SUBCASE("an f64 radian field") {
+            property_draw_context context = {};
+            context.field = &heading;
+            context.label = "heading";
+            core::json::document value = float_value(1.0);
+            const std::function<void()> draw = [&]() {
+                (void) registry.draw(field_kind::F64, context, value);
+            };
+            const std::string shown = shown_text(scope, draw);
+            CAPTURE(shown);
+            CHECK(count_of(shown, "{ 57.295780 deg }") == 1);
+            type_into(scope, []() { ImGui::SetKeyboardFocusHere(0); }, draw, "180");
+            CHECK(value.root().as_f64() == doctest::Approx(std::numbers::pi).epsilon(1.0e-9));
+        }
+        SUBCASE("the elements of a radian array") {
+            core::reflect::type_info type = {};
+            type.name = "test.limits_array";
+            type.fields = {limits};
+            core::json::document object = core::json::object({{"limits", core::json::array({0.5f, 1.0f})}});
+            const std::function<void()> draw = [&]() {
+                ImGui::SetNextItemOpen(true);
+                (void) registry.draw_object(type, object, false);
+            };
+            const std::string shown = shown_text(scope, draw);
+            CAPTURE(shown);
+            CHECK(count_of(shown, "{ 28.648 deg }") == 1);
+            CHECK(count_of(shown, "{ 57.296 deg }") == 1);
+            // Focus 0 is the array's tree node, 1 its first element.
+            type_into(scope, []() { ImGui::SetKeyboardFocusHere(1); }, draw, "45");
+            CHECK(object.root()["limits"][0].as_f64() == doctest::Approx(std::numbers::pi / 4.0).epsilon(1.0e-6));
+            CHECK(object.root()["limits"][1].as_f64() == doctest::Approx(1.0));
+        }
+    }
+
+    TEST_CASE("property_drawer_registry - a drag over an angle moves in degrees and takes its step in stored units") {
+        property_drawer_registry registry = {};
+        ImVec2 centre = {};
+        struct drag_case {
+            std::string_view name = {};
+            field_unit unit = field_unit::NONE;
+            f64 step = 0.0;
+            f64 expected = 0.0;
+        };
+        // 10 pixels: half a degree per pixel without a step, one step per pixel with one, whatever the unit.
+        const drag_case cases[] = {
+          {"radians without a step", field_unit::RADIANS, 0.0, 5.0 * std::numbers::pi / 180.0},
+          {"radians with a step", field_unit::RADIANS, 0.01, 0.1},
+          {"degrees without a step", field_unit::DEGREES, 0.0, 5.0},
+          {"degrees with a step", field_unit::DEGREES, 0.25, 2.5},
+          {"no unit with a step", field_unit::NONE, 0.01, 0.1},
+          {"no unit without a step", field_unit::NONE, 0.0, 0.5},
+        };
+        for (const drag_case &dragged : cases) {
+            CAPTURE(dragged.name);
+            // A context of its own: a press where the last case pressed would be a double click, which types.
+            imgui_frame_scope scope{};
+            core::reflect::field_info field = angle_field("turn", field_kind::F32, dragged.unit);
+            field.attributes.step = dragged.step;
+            property_draw_context context = {};
+            context.field = &field;
+            context.label = "turn";
+            core::json::document value = float_value(0.0);
+            const std::function<void()> draw = [&]() {
+                (void) registry.draw(field_kind::F32, context, value);
+                centre = last_item_centre();
+            };
+            drag_by(scope, draw, centre, 10.0f);
+            // The shown value is rounded to the format's three decimals as it is dragged.
+            CHECK(value.root().as_f64() == doctest::Approx(dragged.expected).epsilon(1.0e-3));
+        }
+    }
+
+    TEST_CASE("property_drawer_registry - a unit on a field that holds no float changes nothing") {
+        // validate_layout refuses such a field; a hand-built description reaches the drawers anyway.
+        core::reflect::field_info offset = angle_field("offset", field_kind::VEC3, field_unit::RADIANS);
+        offset.attributes.step = 0.01;
+        const core::reflect::field_info count = angle_field("count", field_kind::I32, field_unit::DEGREES);
+        core::reflect::type_info type = {};
+        type.name = "test.no_float";
+        type.fields = {offset, count};
+        property_drawer_registry registry = {};
+        imgui_frame_scope scope{};
+        core::json::document object = core::json::object({
+          {"offset", core::json::array({1.0f, 2.0f, 3.0f})},
+          {"count", 7},
+        });
+        const std::string shown = shown_text(scope, [&]() { (void) registry.draw_object(type, object, false); });
+        CAPTURE(shown);
+        CHECK(shown.find("deg") == std::string::npos);
+        CHECK(shown.find("{ 1.000 }") != std::string::npos);
+        CHECK(shown.find("{ 7 }") != std::string::npos);
     }
 }

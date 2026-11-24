@@ -14,11 +14,11 @@ namespace conjure::editor {
         using core::reflect::type_info;
 
         [[nodiscard]] core::error path_error(std::string_view text, std::string_view problem) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, std::format("path '{}': {}", text, problem));
+            return core::make_error(protocol_error_code::INVALID_ARGS, std::format("path '{}': {}", text, problem));
         }
 
         [[nodiscard]] core::error not_found(std::string_view path, std::string_view segment, std::string_view why) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::PATH_NOT_FOUND,
               std::format("path '{}': segment '{}' {}", path, segment, why)
             );
@@ -127,7 +127,7 @@ namespace conjure::editor {
             if (at.arrayPending) {
                 const field_info *field = at.field;
                 if (field != nullptr && index >= field->arrayCount) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::PATH_NOT_FOUND,
                       std::format(
                         "path '{}': index {} is past the end of '{}' ({} elements)",
@@ -324,7 +324,7 @@ namespace conjure::editor {
         const core::json::document owner = core::json::document::from_value(componentJson);
         const core::json::value found = owner.at_pointer(reference.pointer);
         if (!found.is_valid()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::PATH_NOT_FOUND,
               std::format("path '{}' does not exist in the component's data", reference.path)
             );
@@ -339,13 +339,13 @@ namespace conjure::editor {
     ) {
         if (reference.is_whole_component()) {
             if (!value.is_object()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "a whole component is set from an object");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "a whole component is set from an object");
             }
             componentJson = core::json::document::from_value(value);
             return core::result<void>::success();
         }
         if (!componentJson.set_pointer(reference.pointer, value)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("path '{}' cannot be written in the component's data", reference.path)
             );

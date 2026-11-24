@@ -179,7 +179,7 @@ namespace conjure::editor::support {
                 const std::string_view name = string_or(invocation.args, "command", "");
                 const command_descriptor *descriptor = context.registry().find(name);
                 if (descriptor == nullptr) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::UNKNOWN_COMMAND,
                       std::format("unknown command '{}'", name)
                     );

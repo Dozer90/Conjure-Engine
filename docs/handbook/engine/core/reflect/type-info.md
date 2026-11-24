@@ -63,7 +63,7 @@ True for structs described with <code><a href="../../audio/components.html#symbo
 
 <div class="function-declaration" id="function-reflect-validate-layout-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../result/result.html">result</a>&lt;<span class="k">void</span>&gt; validate_layout(<span class="k">const</span> <a href="type-info/reflect-type-info.html">type_info</a> &amp;info);</code></pre></div>
 
-<p>Checks a description for internal consistency: non-empty names usable in field paths, every field inside the struct, no overlapping fields, natural alignment of every field (and no field stricter than the type&#x27;s own alignment), a size that matches the kind (fixed kinds, enums, nested structs and arrays), struct/enum pointers present where the kind needs them, field ids matching the pointed-to description, and enum widths of 1, 2, 4 or 8 bytes. Fails with <code>INVALID_ARGUMENT</code> naming the offending field.</p>
+<p>Checks a description for internal consistency: non-empty names usable in field paths, every field inside the struct, no overlapping fields, natural alignment of every field (and no field stricter than the type&#x27;s own alignment), a size that matches the kind (fixed kinds, enums, nested structs and arrays), struct/enum pointers present where the kind needs them, field ids matching the pointed-to description, enum widths of 1, 2, 4 or 8 bytes, and a unit attribute (<code><a href="field-info.html#symbol-reflect-field-unit">field_unit</a></code>) other than <code>NONE</code> only on <code>F32</code> and <code>F64</code> fields and arrays of them. Fails with <code>INVALID_ARGUMENT</code> naming the offending field.</p>
 
 <!-- doc-content:notes:start -->
 

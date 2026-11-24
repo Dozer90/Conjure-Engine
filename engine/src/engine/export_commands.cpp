@@ -1,5 +1,7 @@
 #include "engine/export_commands.h"
 
+#include "engine/export_source_roots_targets.h"
+
 #include "conjure/engine/log_category.h"
 
 #include "conjure/core/assert.h"
@@ -33,28 +35,10 @@ namespace {
     // (follow-up FU-ARTIFACTS): it lies below the export's artifacts directory, by default in the system's temporary
     // directory outside every repository, where no root of source control covers the generated sources and the .pdb
     // the CodeView entry names. The paths go through MSBuild's Escape so that the item Include takes them
-    // literally, never as a list or a wildcard.
-    constexpr std::string_view SOURCE_ROOTS_TARGETS =
-      "<Project>\n"
-      "  <!-- Written by the Conjure export (engine/src/engine/export_commands.cpp) and imported into every project\n"
-      "       it builds: maps the source paths of a project that source control gives no source root, and those\n"
-      "       of its intermediate directory, which may lie outside every repository. -->\n"
-      "  <Target Name=\"ConjureExportSourceRoots\" BeforeTargets=\"InitializeSourceRootMappedPaths\"\n"
-      "          Condition=\"'$(DeterministicSourcePaths)' == 'true'\">\n"
-      "    <ItemGroup>\n"
-      "      <_ConjureExportControlledSourceRoot Include=\"@(SourceRoot)\"\n"
-      "                                          Condition=\"'%(SourceRoot.SourceControl)' != ''\" />\n"
-      "    </ItemGroup>\n"
-      "    <ItemGroup Condition=\"'@(_ConjureExportControlledSourceRoot)' == ''\">\n"
-      "      <SourceRoot Include=\"$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory("
-      "'$(MSBuildProjectDirectory)'))))\" />\n"
-      "    </ItemGroup>\n"
-      "    <ItemGroup>\n"
-      "      <SourceRoot Include=\"$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory("
-      "'$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)'))))\" />\n"
-      "    </ItemGroup>\n"
-      "  </Target>\n"
-      "</Project>\n";
+    // literally, never as a list or a wildcard. The file is engine/src/engine/export_source_roots.targets, embedded
+    // through a header the configure generates; the publish of the prebuilt SDK (conjure_managed_sdk_export,
+    // managed/CMakeLists.txt, owner decision OWN-INSTALL) imports the same file.
+    constexpr std::string_view SOURCE_ROOTS_TARGETS = conjure::engine::detail::EXPORT_SOURCE_ROOTS_TARGETS;
 
     constexpr std::string_view SOURCE_ROOTS_FILE_NAME = "conjure_export_source_roots.targets";
 
@@ -137,6 +121,47 @@ namespace {
     void map_source_roots(std::vector<std::string> &arguments, const std::filesystem::path &sourceRootsTargets) {
         arguments.emplace_back(CONTINUOUS_INTEGRATION_BUILD);
         arguments.push_back("-p:CustomAfterMicrosoftCommonTargets=" + property_value(sourceRootsTargets));
+    }
+
+    /// <summary>
+    /// The publish of settings.bootstrapProject into 'managedDirectory' (export step 3 from an engine source tree).
+    /// 'artifacts' and 'pivot' are the escaped --artifacts-path value and the ArtifactsPivots property.
+    /// </summary>
+    [[nodiscard]] std::vector<std::string> publish_command(
+      const export_settings &settings,
+      const std::filesystem::path &managedDirectory,
+      const std::filesystem::path &sourceRootsTargets,
+      const std::string &artifacts,
+      const std::string &pivot,
+      const scripting_settings &scripting
+    ) {
+        const bool selfContained = scripting.exportMode == script_export_mode::SELF_CONTAINED;
+        std::vector<std::string> publish = {
+            "publish",
+            utf8(settings.bootstrapProject),
+            "-c",
+            "Release",
+            "-o",
+            property_value(managedDirectory),
+            "--self-contained",
+            selfContained ? "true" : "false",
+            "--artifacts-path",
+            artifacts,
+            pivot,
+        };
+        map_source_roots(publish, sourceRootsTargets);
+        if (!settings.runtimeIdentifier.empty()) {
+            publish.push_back("-r");
+            publish.push_back(settings.runtimeIdentifier);
+        }
+        // hostfxr loads Conjure.Bootstrap.dll and never starts the apphost the SDK writes next to it.
+        if (!selfContained) {
+            publish.emplace_back("-p:UseAppHost=false");
+        }
+        if (!scripting.exportDebugSymbols) {
+            strip_debug_symbols(publish);
+        }
+        return publish;
     }
 }
 
@@ -230,7 +255,8 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
   const scripting_settings &scripting,
   const std::filesystem::path &managedDirectory,
   const std::filesystem::path &sourceRootsTargets,
-  const std::filesystem::path &artifactsDirectory
+  const std::filesystem::path &artifactsDirectory,
+  const std::filesystem::path &prebuiltSdkDirectory
 ) {
     // MSBuild resolves a relative property value against the directory of each project it builds, while dotnet
     // resolves -o against its working directory: relative paths would send ConjureManagedDir, the import and the
@@ -245,6 +271,10 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
       artifactsDirectory.is_absolute(),
       "managed_export_commands: the artifacts directory must be absolute"
     );
+    CONJURE_ASSERT(
+      prebuiltSdkDirectory.empty() || prebuiltSdkDirectory.is_absolute(),
+      "managed_export_commands: the prebuilt SDK directory must be absolute"
+    );
     const bool selfContained = scripting.exportMode == script_export_mode::SELF_CONTAINED;
     const std::string pivot = std::format(
       "-p:ArtifactsPivots={}{}{}{}",
@@ -254,34 +284,15 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
       settings.runtimeIdentifier
     );
     const std::string artifacts = property_value(artifactsDirectory);
-    std::vector<std::string> publish = {
-        "publish",
-        utf8(settings.bootstrapProject),
-        "-c",
-        "Release",
-        "-o",
-        property_value(managedDirectory),
-        "--self-contained",
-        selfContained ? "true" : "false",
-        "--artifacts-path",
-        artifacts,
-        pivot,
-    };
-    map_source_roots(publish, sourceRootsTargets);
-    if (!settings.runtimeIdentifier.empty()) {
-        publish.push_back("-r");
-        publish.push_back(settings.runtimeIdentifier);
-    }
-    // hostfxr loads Conjure.Bootstrap.dll and never starts the apphost the SDK writes next to it.
-    if (!selfContained) {
-        publish.emplace_back("-p:UseAppHost=false");
-    }
-    if (!scripting.exportDebugSymbols) {
-        strip_debug_symbols(publish);
-    }
-
     std::vector<std::vector<std::string>> commands = {};
-    commands.push_back(std::move(publish));
+    // Owner decision OWN-INSTALL: an installed editor has no bootstrap project to publish. The pipeline copies the
+    // prebuilt SDK into the managed directory instead, and only the game's scripts are built, against that SDK.
+    const bool prebuilt = !prebuiltSdkDirectory.empty();
+    if (!prebuilt) {
+        commands.push_back(
+          publish_command(settings, managedDirectory, sourceRootsTargets, artifacts, pivot, scripting)
+        );
+    }
     if (settings.scriptsProject.empty()) {
         return commands;
     }
@@ -297,8 +308,9 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
         pivot,
         // Follow-up FU-MANAGEDDIR: the game template (managed/Conjure.Templates/Game and the project file the
         // editor's script.create writes) references Conjure.Managed.dll through this property and stops the build
-        // without it. The publish above wrote the dll into the same directory.
-        "-p:ConjureManagedDir=" + property_value(managedDirectory),
+        // without it. The publish above wrote the dll into the managed directory; with a prebuilt SDK the build
+        // references it where it was installed.
+        "-p:ConjureManagedDir=" + property_value(prebuilt ? prebuiltSdkDirectory : managedDirectory),
     };
     map_source_roots(build, sourceRootsTargets);
     if (!scripting.exportDebugSymbols) {

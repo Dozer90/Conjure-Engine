@@ -153,7 +153,7 @@ TEST_SUITE("scripting/native_entries") {
         const ecs::entity entity = fixture.create_entity();
         CHECK(api.script_add(entity.to_u64(), hash_of(PLAYER)) == 0);   // the entry index
         CHECK(api.script_add(entity.to_u64(), hash_of(PLAYER)) == 1);
-        CHECK(api.script_add(999, hash_of(PLAYER)) == status_of(script_error::INSTANCE_NOT_FOUND));
+        CHECK(api.script_add(999, hash_of(PLAYER)) == status_of(scripting_error::INSTANCE_NOT_FOUND));
         std::array<int32_t, 8> slots = {};
         CHECK(api.script_get_slots(entity.to_u64(), slots.data(), 8) == 0);     // nothing live before the flush
         fixture.runtime.flush_pending();
@@ -311,9 +311,9 @@ TEST_SUITE("scripting/native_entries") {
 
         // Outside a phase the scope is refused (as managed Begin would be told).
         conjure_query_scope scope = {};
-        CHECK(api.query_begin(ids.data(), 2, &scope) == status_of(script_error::NOT_IN_PHASE));
-        CHECK(api.query_begin(nullptr, 2, &scope) == status_of(script_error::NOT_SUPPORTED));
-        CHECK(api.query_begin(ids.data(), 0, &scope) == status_of(script_error::NOT_SUPPORTED));
+        CHECK(api.query_begin(ids.data(), 2, &scope) == status_of(scripting_error::NOT_IN_PHASE));
+        CHECK(api.query_begin(nullptr, 2, &scope) == status_of(scripting_error::NOT_SUPPORTED));
+        CHECK(api.query_begin(ids.data(), 0, &scope) == status_of(scripting_error::NOT_SUPPORTED));
         const std::array<u32, 1> zero = {0};
         api.query_end(77);                                              // unknown scopes are ignored
 
@@ -324,7 +324,7 @@ TEST_SUITE("scripting/native_entries") {
         u32 chunks = 0;
         const u64 versionBefore = fixture.world.version();
         fixture.null_host().set_phase_hook([&](script_phase, f32) {
-            CHECK(api.query_begin(zero.data(), 1, &scope) == status_of(script_error::NOT_SUPPORTED));
+            CHECK(api.query_begin(zero.data(), 1, &scope) == status_of(scripting_error::NOT_SUPPORTED));
             REQUIRE(api.query_begin(ids.data(), 1, &scope) == 0);
             CHECK(fixture.world.is_locked());
             CHECK(fixture.runtime.open_query_scope_count() == 1);
@@ -523,9 +523,9 @@ TEST_SUITE("scripting/native_entries") {
                     CAPTURE(index);
                     CHECK(api.script_add(reserved, hash_of(PLAYER)) == static_cast<int32_t>(index));
                 }
-                CHECK(api.script_add(reserved, hash_of(PLAYER)) == status_of(script_error::NOT_SUPPORTED));
-                CHECK(api.script_add(live.to_u64(), hash_of(PLAYER)) == status_of(script_error::NOT_SUPPORTED));
-                CHECK(api.script_add(dead.to_u64(), hash_of(PLAYER)) == status_of(script_error::INSTANCE_NOT_FOUND));
+                CHECK(api.script_add(reserved, hash_of(PLAYER)) == status_of(scripting_error::NOT_SUPPORTED));
+                CHECK(api.script_add(live.to_u64(), hash_of(PLAYER)) == status_of(scripting_error::NOT_SUPPORTED));
+                CHECK(api.script_add(dead.to_u64(), hash_of(PLAYER)) == status_of(scripting_error::INSTANCE_NOT_FOUND));
                 CHECK(api.component_add(dead.to_u64(), positionType, &first) == 0);
                 CHECK(api.component_set(dead.to_u64(), positionType, &first) == 0);
                 CHECK(api.component_remove(dead.to_u64(), positionType) == 0);
@@ -603,8 +603,8 @@ TEST_SUITE("scripting/native_entries") {
         conjure_script_class_desc classDesc = {};
         api.script_register_class(&classDesc);
         api.script_mark_faulted(0, 0);
-        CHECK(api.script_add(1, 1) == status_of(script_error::NOT_INITIALISED));
-        CHECK(api.script_get_slots(1, nullptr, 0) == status_of(script_error::NOT_INITIALISED));
+        CHECK(api.script_add(1, 1) == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(api.script_get_slots(1, nullptr, 0) == status_of(scripting_error::NOT_INITIALISED));
         CHECK(api.entity_create("x", 1) == 0);
         CHECK(api.entity_destroy(1) == 0);
         CHECK(api.entity_is_alive(1) == 0);
@@ -619,7 +619,7 @@ TEST_SUITE("scripting/native_entries") {
         CHECK(api.component_set(1, 1, nullptr) == 0);
         conjure_query_scope scope = {};
         const std::array<u32, 1> ids = {1};
-        CHECK(api.query_begin(ids.data(), 1, &scope) == status_of(script_error::NOT_INITIALISED));
+        CHECK(api.query_begin(ids.data(), 1, &scope) == status_of(scripting_error::NOT_INITIALISED));
         api.query_end(1);
     }
 
@@ -641,7 +641,7 @@ TEST_SUITE("scripting/native_entries") {
             worker.join();
         }
         CHECK(alive == 0);
-        CHECK(added == status_of(script_error::NOT_INITIALISED));
+        CHECK(added == status_of(scripting_error::NOT_INITIALISED));
         CHECK(created == 0);
         CHECK(fixture.world.is_alive(entity));
         CHECK(fixture.runtime.scripts_of(entity).empty());

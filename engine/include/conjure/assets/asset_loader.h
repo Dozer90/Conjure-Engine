@@ -113,7 +113,7 @@ namespace conjure::assets {
             ) const final {
                 Intermediate *intermediate = payload_as<Intermediate>(cpuOutput);
                 if (intermediate == nullptr) {
-                    return make_asset_error(asset_error_code::FINALISE_FAILED, "finalise received no CPU output");
+                    return core::make_error(assets_error::FINALISE_FAILED, "finalise received no CPU output");
                 }
                 core::result<AssetType> finished = finalise_typed(context, std::move(*intermediate));
                 cpuOutput.reset();

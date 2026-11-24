@@ -1,6 +1,6 @@
 {
-  "hash": "0xC6292B87C84ABEB1",
-  "version": 1,
+  "hash": "0x967165453AD419E1",
+  "version": 2,
   "entryCount": 127,
   "coreEntryCount": 20,
   "entries": [
@@ -2249,6 +2249,343 @@
         }
       ],
       "signature": "int32_t (uint64_t entity, char *utf8, int32_t capacity)"
+    }
+  ],
+  "records": [
+    {
+      "name": "conjure_vec2",
+      "declaration": "struct conjure_vec2 {",
+      "members": [
+        "float x;",
+        "float y;"
+      ]
+    },
+    {
+      "name": "conjure_vec3",
+      "declaration": "struct conjure_vec3 {",
+      "members": [
+        "float x;",
+        "float y;",
+        "float z;"
+      ]
+    },
+    {
+      "name": "conjure_vec4",
+      "declaration": "struct conjure_vec4 {",
+      "members": [
+        "float x;",
+        "float y;",
+        "float z;",
+        "float w;"
+      ]
+    },
+    {
+      "name": "conjure_quat_xyzw",
+      "declaration": "struct conjure_quat_xyzw {",
+      "members": [
+        "float x;",
+        "float y;",
+        "float z;",
+        "float w;"
+      ]
+    },
+    {
+      "name": "conjure_mat4",
+      "declaration": "struct conjure_mat4 {",
+      "members": [
+        "float m[16];"
+      ]
+    },
+    {
+      "name": "conjure_transform",
+      "declaration": "struct conjure_transform {",
+      "members": [
+        "conjure_vec3 position;",
+        "conjure_quat_xyzw rotation;",
+        "conjure_vec3 scale;"
+      ]
+    },
+    {
+      "name": "conjure_uuid",
+      "declaration": "struct conjure_uuid {",
+      "members": [
+        "uint64_t high;",
+        "uint64_t low;"
+      ]
+    },
+    {
+      "name": "conjure_gamepad_state",
+      "declaration": "struct conjure_gamepad_state {",
+      "members": [
+        "uint32_t buttons_down;",
+        "uint32_t buttons_pressed;",
+        "uint32_t buttons_released;",
+        "float axes[6];",
+        "uint8_t connected;"
+      ]
+    },
+    {
+      "name": "conjure_input_block",
+      "declaration": "struct conjure_input_block {",
+      "members": [
+        "uint64_t keys_down[8];",
+        "uint64_t keys_pressed[8];",
+        "uint64_t keys_released[8];",
+        "float mouse_x;",
+        "float mouse_y;",
+        "float mouse_dx;",
+        "float mouse_dy;",
+        "float scroll_x;",
+        "float scroll_y;",
+        "uint32_t mouse_buttons_down;",
+        "uint32_t mouse_buttons_pressed;",
+        "uint32_t mouse_buttons_released;",
+        "conjure_gamepad_state gamepads[4];"
+      ]
+    },
+    {
+      "name": "conjure_frame_block",
+      "declaration": "struct alignas(64) conjure_frame_block {",
+      "members": [
+        "double time_seconds;",
+        "double unscaled_time_seconds;",
+        "float delta_time;",
+        "float fixed_delta_time;",
+        "float time_scale;",
+        "uint64_t frame_index;",
+        "uint32_t fixed_step_index;",
+        "uint8_t current_phase;",
+        "uint8_t in_play_mode;",
+        "conjure_input_block input;",
+        "uint8_t padding[8];"
+      ]
+    },
+    {
+      "name": "conjure_create_request",
+      "declaration": "struct conjure_create_request {",
+      "members": [
+        "uint64_t entity;",
+        "uint64_t class_hash;",
+        "const uint8_t *fields;",
+        "int32_t fields_size;",
+        "uint8_t flags;",
+        "int32_t out_slot;"
+      ]
+    },
+    {
+      "name": "conjure_collision_record",
+      "declaration": "struct conjure_collision_record {",
+      "members": [
+        "int32_t slot;",
+        "uint64_t other;",
+        "conjure_vec3 point;",
+        "conjure_vec3 normal;",
+        "float impulse;",
+        "uint8_t kind;"
+      ]
+    },
+    {
+      "name": "conjure_script_class_desc",
+      "declaration": "struct conjure_script_class_desc {",
+      "members": [
+        "uint64_t hash;",
+        "const char *full_name;",
+        "int32_t name_length;",
+        "uint16_t callback_mask;",
+        "uint16_t field_count;"
+      ]
+    },
+    {
+      "name": "conjure_script_field_desc",
+      "declaration": "struct conjure_script_field_desc {",
+      "members": [
+        "uint64_t hash;",
+        "const char *name;",
+        "int32_t name_length;",
+        "uint8_t kind;",
+        "uint8_t element_kind;",
+        "const char *default_json;",
+        "int32_t default_length;",
+        "const char *meta_json;",
+        "int32_t meta_length;"
+      ]
+    },
+    {
+      "name": "conjure_managed_component_desc",
+      "declaration": "struct conjure_managed_component_desc {",
+      "members": [
+        "uint64_t name_hash;",
+        "const char *full_name;",
+        "int32_t name_length;",
+        "uint32_t size;",
+        "uint32_t alignment;",
+        "uint64_t layout_hash;",
+        "const char *schema_json;",
+        "int32_t schema_length;"
+      ]
+    },
+    {
+      "name": "conjure_chunk_view",
+      "declaration": "struct conjure_chunk_view {",
+      "members": [
+        "const uint64_t *entities;",
+        "void *columns[8];",
+        "int32_t count;"
+      ]
+    },
+    {
+      "name": "conjure_query_scope",
+      "declaration": "struct conjure_query_scope {",
+      "members": [
+        "uint32_t scope_id;",
+        "int32_t chunk_count;",
+        "const conjure_chunk_view *chunks;"
+      ]
+    },
+    {
+      "name": "conjure_ray_query",
+      "declaration": "struct conjure_ray_query {",
+      "members": [
+        "conjure_vec3 origin;",
+        "conjure_vec3 direction;",
+        "float max_distance;",
+        "uint32_t layer_mask;",
+        "uint64_t ignore_entity;"
+      ]
+    },
+    {
+      "name": "conjure_shape_query",
+      "declaration": "struct conjure_shape_query {",
+      "members": [
+        "conjure_ray_query ray;",
+        "uint8_t shape;",
+        "uint8_t pad[3];",
+        "conjure_vec3 half_extents;",
+        "float radius;",
+        "conjure_quat_xyzw rotation;"
+      ]
+    },
+    {
+      "name": "conjure_raycast_hit",
+      "declaration": "struct conjure_raycast_hit {",
+      "members": [
+        "uint64_t entity;",
+        "conjure_vec3 point;",
+        "conjure_vec3 normal;",
+        "float distance;",
+        "int32_t layer;"
+      ]
+    },
+    {
+      "name": "conjure_asset_info",
+      "declaration": "struct conjure_asset_info {",
+      "members": [
+        "uint8_t state;",
+        "uint8_t pad[3];",
+        "uint32_t version;",
+        "uint64_t type_id;"
+      ]
+    },
+    {
+      "name": "conjure_module_record",
+      "declaration": "struct conjure_module_record {",
+      "members": [
+        "uint32_t version_major;",
+        "uint32_t version_minor;",
+        "uint32_t version_patch;",
+        "uint8_t state;",
+        "uint8_t kind;",
+        "uint8_t pad[2];",
+        "uint32_t feature_flags;"
+      ]
+    },
+    {
+      "name": "conjure_frame_stats_block",
+      "declaration": "struct conjure_frame_stats_block {",
+      "members": [
+        "float frame_ms;",
+        "float phase_ms[10];",
+        "float submit_ms;",
+        "uint32_t fixed_steps;",
+        "uint32_t jobs_executed;",
+        "uint64_t frame_memory_high_water;"
+      ]
+    },
+    {
+      "name": "conjure_force_mode",
+      "declaration": "enum class conjure_force_mode : uint8_t {",
+      "members": [
+        "FORCE,",
+        "IMPULSE,",
+        "VELOCITY_CHANGE,",
+        "ACCELERATION,"
+      ]
+    },
+    {
+      "name": "conjure_cast_shape",
+      "declaration": "enum class conjure_cast_shape : uint8_t {",
+      "members": [
+        "SPHERE,",
+        "BOX,",
+        "CAPSULE,"
+      ]
+    },
+    {
+      "name": "conjure_cursor_mode",
+      "declaration": "enum class conjure_cursor_mode : uint8_t {",
+      "members": [
+        "NORMAL,",
+        "HIDDEN,",
+        "DISABLED,",
+        "CAPTURED,"
+      ]
+    },
+    {
+      "name": "conjure_button_action",
+      "declaration": "enum class conjure_button_action : uint8_t {",
+      "members": [
+        "RELEASE,",
+        "PRESS,",
+        "REPEAT,"
+      ]
+    },
+    {
+      "name": "conjure_asset_load_priority",
+      "declaration": "enum class conjure_asset_load_priority : uint8_t {",
+      "members": [
+        "LOW,",
+        "NORMAL,",
+        "HIGH,"
+      ]
+    },
+    {
+      "name": "conjure_native_api",
+      "declaration": "struct conjure_native_api {",
+      "members": [
+        "uint32_t size;",
+        "uint32_t version;",
+        "uint64_t layout_hash;",
+        "const conjure_frame_block *frame;"
+      ]
+    },
+    {
+      "name": "conjure_managed_api",
+      "declaration": "struct conjure_managed_api {",
+      "members": [
+        "uint32_t size;",
+        "uint32_t version;",
+        "uint64_t layout_hash;",
+        "int32_t (*load_game_assembly)(const char *utf8Path, int32_t length);",
+        "int32_t (*unload_game_assembly)(void);",
+        "int32_t (*create_instances)(conjure_create_request *requests, int32_t count);",
+        "int32_t (*destroy_instances)(const int32_t *slots, int32_t count, int32_t callOnDestroy);",
+        "int32_t (*run_phase)(uint8_t phase, float deltaTime);",
+        "int32_t (*dispatch_collisions)(const conjure_collision_record *records, int32_t count);",
+        "int32_t (*apply_fields)(int32_t slot, const uint8_t *blob, int32_t size);",
+        "int32_t (*collect_fields)(int32_t slot, uint8_t *buffer, int32_t capacity);",
+        "int32_t (*collect_garbage)(void);",
+        "int32_t (*shutdown)(void);"
+      ]
     }
   ]
 }

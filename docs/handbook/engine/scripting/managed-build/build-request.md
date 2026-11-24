@@ -36,6 +36,7 @@ struct build_request
 <tr><td>public</td><td><code class="signature">projectPath</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">properties</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr>std::<wbr>pair&lt;<wbr>std::<wbr>string,<wbr> std::<wbr>string&gt;&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">timeout<wbr>Seconds</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f64">f64</a></code></td><td><code class="signature"><span class="mi">600.0</span></code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">working<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 </tbody>
 </table>
 

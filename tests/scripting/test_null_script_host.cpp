@@ -164,8 +164,10 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(fixture.managed().collect_fields(slot, buffer.data(), 16) == 2);
         CHECK(buffer[1] == 9);
         CHECK(fixture.host.recorder().collect_fields_count() == 3);
-        CHECK(fixture.managed().apply_fields(99, blob.data(), 1) == status_of(script_error::INSTANCE_NOT_FOUND));
-        CHECK(fixture.managed().collect_fields(99, buffer.data(), 16) == status_of(script_error::INSTANCE_NOT_FOUND));
+        CHECK(fixture.managed().apply_fields(99, blob.data(), 1) == status_of(scripting_error::INSTANCE_NOT_FOUND));
+        CHECK(
+          fixture.managed().collect_fields(99, buffer.data(), 16) == status_of(scripting_error::INSTANCE_NOT_FOUND)
+        );
     }
 
     TEST_CASE("null_script_host - run_phase is recorded in order with per-slot counters") {
@@ -175,7 +177,7 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(fixture.managed().run_phase(static_cast<u8>(script_phase::FIXED_UPDATE), 0.5f) == 1);
         CHECK(fixture.managed().run_phase(static_cast<u8>(script_phase::UPDATE), 0.25f) == 1);
         CHECK(fixture.managed().run_phase(static_cast<u8>(script_phase::LATE_UPDATE), 0.125f) == 1);
-        CHECK(fixture.managed().run_phase(9, 0.0f) == status_of(script_error::NOT_SUPPORTED));
+        CHECK(fixture.managed().run_phase(9, 0.0f) == status_of(scripting_error::NOT_SUPPORTED));
         CHECK(fixture.host.is_slot_started(slot));
         CHECK(fixture.host.slot_phase_count(slot, script_phase::UPDATE) == 1);
         CHECK(fixture.host.slot_phase_count(slot, script_phase::COUNT) == 0);
@@ -250,7 +252,7 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(fixture.runtime.classes().size() == 1);
         CONJURE_CHECK_ERROR(
           fixture.runtime.load_game_assembly(directory.file("Missing.dll")),
-          script_error::ASSEMBLY_LOAD_FAILED
+          scripting_error::ASSEMBLY_LOAD_FAILED
         );
         CHECK(fixture.runtime.classes().size() == 1);
         CHECK(fixture.runtime.classes().find("Game.Keep") != nullptr);
@@ -264,7 +266,7 @@ TEST_SUITE("scripting/null_script_host") {
         CONJURE_REQUIRE_OK(directory.write_text("Bad.classes.json", R"({"classes":[{"callbacks":[]}]})"));
         CONJURE_CHECK_ERROR(
           fixture.runtime.load_game_assembly(directory.file("Bad.dll")),
-          script_error::ASSEMBLY_LOAD_FAILED
+          scripting_error::ASSEMBLY_LOAD_FAILED
         );
         CHECK(logs.count(core::log_level::ERR) == 1);
     }
@@ -298,8 +300,8 @@ TEST_SUITE("scripting/null_script_host") {
 
     TEST_CASE("null_script_host - load and unload results are configurable") {
         scripting_fixture fixture = {};
-        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
-        CONJURE_CHECK_ERROR(fixture.runtime.load_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+        fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
+        CONJURE_CHECK_ERROR(fixture.runtime.load_game_assembly({}), scripting_error::ASSEMBLY_LOAD_FAILED);
         CHECK(fixture.null_host().recorder().loaded_assemblies().size() == 1);
         fixture.null_host().set_load_result(0);
         CONJURE_REQUIRE_OK(fixture.runtime.load_game_assembly({}));
@@ -389,11 +391,11 @@ TEST_SUITE("scripting/null_script_host") {
             copy = fixture.managed();
         }
         CHECK(null_script_host::active() == nullptr);
-        CHECK(copy.run_phase(0, 0.0f) == status_of(script_error::NOT_INITIALISED));
-        CHECK(copy.unload_game_assembly() == status_of(script_error::NOT_INITIALISED));
-        CHECK(copy.collect_garbage() == status_of(script_error::NOT_INITIALISED));
-        CHECK(copy.shutdown() == status_of(script_error::NOT_INITIALISED));
-        CHECK(copy.load_game_assembly(nullptr, 0) == status_of(script_error::NOT_INITIALISED));
+        CHECK(copy.run_phase(0, 0.0f) == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(copy.unload_game_assembly() == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(copy.collect_garbage() == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(copy.shutdown() == status_of(scripting_error::NOT_INITIALISED));
+        CHECK(copy.load_game_assembly(nullptr, 0) == status_of(scripting_error::NOT_INITIALISED));
     }
 
     TEST_CASE("null_script_host - fake classes can be replaced, removed and cleared") {

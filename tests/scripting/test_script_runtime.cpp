@@ -642,8 +642,8 @@ TEST_SUITE("scripting/script_runtime") {
             CHECK(fixture.runtime.stats().reloadCount == 2);
         }
         SUBCASE("a failed reload runs no OnReload") {
-            fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
-            CONJURE_CHECK_ERROR(fixture.runtime.reload_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+            fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
+            CONJURE_CHECK_ERROR(fixture.runtime.reload_game_assembly({}), scripting_error::ASSEMBLY_LOAD_FAILED);
             CHECK(tally.reloaded.empty());
             CHECK(tally.created.empty());
         }
@@ -714,9 +714,9 @@ TEST_SUITE("scripting/script_runtime") {
         const script_entry_id id = fixture.runtime.add_script(fixture.create_entity(), hash_of(PLAYER), {});
         fixture.runtime.flush_pending();
         const i32 slot = fixture.slot_of(id);
-        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+        fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
         fixture.null_host().reset_recorder();
-        CONJURE_CHECK_ERROR(fixture.runtime.reload_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+        CONJURE_CHECK_ERROR(fixture.runtime.reload_game_assembly({}), scripting_error::ASSEMBLY_LOAD_FAILED);
         CHECK(fixture.null_host().recorder().calls() == std::vector<std::string>{"load_game_assembly"});
         CHECK(fixture.slot_of(id) == slot);
         CHECK(fixture.null_host().is_slot_live(slot));
@@ -768,7 +768,7 @@ TEST_SUITE("scripting/script_runtime") {
             config.host.backend = script_backend::DOTNET;
             config.host.managedDirectory = "definitely/not/a/managed/directory";
             config.initialMode = script_mode::PLAY;
-            CONJURE_CHECK_ERROR(runtime.initialise(config), script_error::MANAGED_SDK_MISSING);
+            CONJURE_CHECK_ERROR(runtime.initialise(config), scripting_error::MANAGED_SDK_MISSING);
             CHECK(runtime.status() == script_host_status::DISABLED);
             CHECK(logs.count(core::log_level::WARN) == 1);
 
@@ -781,10 +781,10 @@ TEST_SUITE("scripting/script_runtime") {
             CHECK(runtime.entry(id)->managedSlot == INVALID_SLOT);
             CHECK(runtime.entry(id)->fields.root()["x"].as_i64() == 1);
             CHECK(runtime.stats().liveInstances == 0);
-            CONJURE_CHECK_ERROR(runtime.load_game_assembly("Game.dll"), script_error::NOT_INITIALISED);
+            CONJURE_CHECK_ERROR(runtime.load_game_assembly("Game.dll"), scripting_error::NOT_INITIALISED);
             conjure_query_scope scope = {};
             const std::array<u32, 1> ids = {1};
-            CONJURE_CHECK_ERROR(runtime.begin_query_scope(ids, scope), script_error::NOT_INITIALISED);
+            CONJURE_CHECK_ERROR(runtime.begin_query_scope(ids, scope), scripting_error::NOT_INITIALISED);
             runtime.shutdown();
             runtime.attach_world(nullptr);
         }
@@ -1003,7 +1003,7 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(fixture.runtime.entry(id)->fields.root()["speed"].as_f64() == doctest::Approx(4.0));
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(id, hash_of("nope"), json("1").root()),
-          script_error::FIELD_NOT_FOUND
+          scripting_error::FIELD_NOT_FOUND
         );
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(id, hash_of("speed"), json("\"text\"").root()),
@@ -1011,12 +1011,12 @@ TEST_SUITE("scripting/script_runtime") {
         );
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(script_entry_id{}, hash_of("speed"), json("1").root()),
-          script_error::INSTANCE_NOT_FOUND
+          scripting_error::INSTANCE_NOT_FOUND
         );
         const script_entry_id unknownClass = fixture.runtime.add_script(entity, 555, {});
         CONJURE_CHECK_ERROR(
           fixture.runtime.set_field(unknownClass, hash_of("speed"), json("1").root()),
-          script_error::CLASS_NOT_FOUND
+          scripting_error::CLASS_NOT_FOUND
         );
 
         fixture.runtime.set_mode(script_mode::PLAY);
@@ -1053,7 +1053,10 @@ TEST_SUITE("scripting/script_runtime") {
         CONJURE_REQUIRE_OK(collected);
         CHECK(collected.value().root()["speed"].as_f64() == doctest::Approx(6.0));
         CHECK(collected.value().root()["custom"].as_bool() == true);
-        CONJURE_CHECK_ERROR(fixture.runtime.collect_entry_fields(script_entry_id{}), script_error::INSTANCE_NOT_FOUND);
+        CONJURE_CHECK_ERROR(
+          fixture.runtime.collect_entry_fields(script_entry_id{}),
+          scripting_error::INSTANCE_NOT_FOUND
+        );
     }
 
     TEST_CASE("script_runtime - remap_entity_fields rewrites entity references through the class schema") {
@@ -1194,7 +1197,7 @@ TEST_SUITE("scripting/script_runtime") {
             script_runtime_config config = {};
             config.host.backend = script_backend::NULL_HOST;
             config.gameAssemblyPath = directory.file("Missing.dll");
-            CONJURE_CHECK_ERROR(runtime.initialise(config), script_error::ASSEMBLY_LOAD_FAILED);
+            CONJURE_CHECK_ERROR(runtime.initialise(config), scripting_error::ASSEMBLY_LOAD_FAILED);
             CHECK(runtime.status() == script_host_status::READY);
             CHECK_FALSE(runtime.is_assembly_loaded());
             CHECK_FALSE(runtime.classes().is_staging_open());
@@ -1305,8 +1308,8 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
 
         // A failed load changes nothing, a successful one re-arms.
-        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
-        CONJURE_CHECK_ERROR(fixture.runtime.load_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+        fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
+        CONJURE_CHECK_ERROR(fixture.runtime.load_game_assembly({}), scripting_error::ASSEMBLY_LOAD_FAILED);
         CHECK_FALSE(fixture.runtime.note_mirror_mismatch(5));
         fixture.null_host().set_load_result(0);
         CONJURE_REQUIRE_OK(fixture.runtime.load_game_assembly({}));
@@ -1361,7 +1364,7 @@ TEST_SUITE("scripting/script_runtime") {
         });
         CONJURE_CHECK_ERROR(
           fixture.runtime.deserialize_entity_scripts(entity, replacement.root()),
-          script_error::INSTANCE_NOT_FOUND
+          scripting_error::INSTANCE_NOT_FOUND
         );
         fixture.null_host().set_destroy_hook({});
         CHECK_FALSE(fixture.world.is_alive(entity));
@@ -1537,7 +1540,7 @@ TEST_SUITE("scripting/script_runtime") {
 
         // OnCreate of a script created by the flush at the end of a phase runs inside that phase.
         script_phase phaseInCreate = script_phase::COUNT;
-        core::result<u32> openedInCreate = core::make_error(script_error::NOT_IN_PHASE, "unset");
+        core::result<u32> openedInCreate = core::make_error(scripting_error::NOT_IN_PHASE, "unset");
         fixture.null_host().set_create_hook([&](const conjure_create_request &, i32) {
             phaseInCreate = fixture.runtime.current_phase();
             conjure_query_scope scope = {};
@@ -1557,7 +1560,7 @@ TEST_SUITE("scripting/script_runtime") {
         fixture.runtime.flush_pending();
         fixture.null_host().set_create_hook({});
         CHECK(phaseInCreate == script_phase::COUNT);
-        CONJURE_CHECK_ERROR(openedInCreate, script_error::NOT_IN_PHASE);
+        CONJURE_CHECK_ERROR(openedInCreate, scripting_error::NOT_IN_PHASE);
         CHECK(logs.count(core::log_level::WARN) == 2);
     }
 

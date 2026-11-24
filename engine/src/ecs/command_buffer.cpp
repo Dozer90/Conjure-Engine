@@ -170,7 +170,7 @@ core::result<entity> command_buffer::instantiate(std::shared_ptr<const entity_ar
         return core::error(core::error_code::INVALID_ARGUMENT, "instantiate needs an archive");
     }
     if (&archive->registry() != mRegistry) {
-        return make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
+        return core::make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
     }
     CONJURE_TRY(archive->validate());
     if (archive->entity_count() == 0) {
@@ -306,7 +306,7 @@ core::result<std::span<const entity>> command_buffer::push_instantiate(
   u32 copies
 ) {
     if (&archive->registry() != mRegistry) {
-        return make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
+        return core::make_error(ecs_error::ARCHIVE_CORRUPT, "the archive belongs to another component registry");
     }
 
     instantiate_entry entry = {};
@@ -318,7 +318,7 @@ core::result<std::span<const entity>> command_buffer::push_instantiate(
     record *command = push_plain_record(opcode::INSTANTIATE, NULL_ENTITY, component_id{});
     if (command == nullptr) {
         mWorld->mAllocator->return_unused(entry.ids);
-        return make_error(ecs_error::OUT_OF_MEMORY, "command_buffer could not record the instantiation");
+        return core::make_error(ecs_error::OUT_OF_MEMORY, "command_buffer could not record the instantiation");
     }
     command->instantiateIndex = static_cast<u32>(mInstantiates.size());
     mInstantiates.push_back(std::move(entry));

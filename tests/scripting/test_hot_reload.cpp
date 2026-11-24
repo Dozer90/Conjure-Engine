@@ -142,12 +142,12 @@ TEST_SUITE("scripting/hot_reload") {
         hot_reload_controller reload(fixture.runtime, {});
         reload.set_debounce_seconds(0.0);
         CHECK(reload.last_result().has_value());
-        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+        fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
         reload.request();
         reload.tick(0.0);
         CHECK(reload.state() == reload_state::IDLE);
         CHECK(reload.reload_count() == 1);
-        CONJURE_CHECK_ERROR(reload.last_result(), script_error::ASSEMBLY_LOAD_FAILED);
+        CONJURE_CHECK_ERROR(reload.last_result(), scripting_error::ASSEMBLY_LOAD_FAILED);
         CHECK(logs.count(core::log_level::WARN) == 1);
         CHECK(fixture.runtime.classes().find("Game.A") != nullptr);
     }
@@ -199,7 +199,7 @@ TEST_SUITE("scripting/hot_reload") {
         hot_reload_controller reload(fixture.runtime, assembly);
         reload.set_watch_interval_seconds(1.0);
         reload.set_debounce_seconds(0.0);
-        fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+        fixture.null_host().set_load_result(status_of(scripting_error::ASSEMBLY_LOAD_FAILED));
         reload.tick(1.0);                                      // baseline stamp
         bump_write_time(assembly, 5);
 
@@ -213,7 +213,7 @@ TEST_SUITE("scripting/hot_reload") {
         }
         CHECK(reload.state() == reload_state::IDLE);
         CHECK(reload.request_count() == 1);
-        CONJURE_CHECK_ERROR(reload.last_result(), script_error::ASSEMBLY_LOAD_FAILED);
+        CONJURE_CHECK_ERROR(reload.last_result(), scripting_error::ASSEMBLY_LOAD_FAILED);
         CHECK(logs.count(core::log_level::WARN) == 4);
         CHECK(logs.contains(core::log_level::WARN, "retrying (0 left)"));
 

@@ -318,6 +318,22 @@ TEST_SUITE("core/type_info") {
         CHECK_FALSE(info.fields[2].attributes.readOnly);
         CHECK(info.fields[3].attributes.readOnly);
         CHECK_FALSE(info.fields[3].attributes.hidden);
+        for (const field_info &field : info.fields) {
+            CAPTURE(field.name);
+            CHECK(field.attributes.unit == field_unit::NONE);
+        }
+    }
+
+    TEST_CASE("type_info - a unit given to the macro reaches the field with the other attributes") {
+        const reflect::type_info info = describe_struct<reflect_test::turret>();
+        REQUIRE(info.fields.size() == 4);
+        CHECK(info.find_field("yaw")->attributes.unit == field_unit::RADIANS);
+        CHECK(info.find_field("yaw")->attributes.min == -3.0);
+        CHECK(info.find_field("yaw")->attributes.max == 3.0);
+        CHECK(info.find_field("arc")->attributes.unit == field_unit::DEGREES);
+        CHECK(info.find_field("limits")->attributes.unit == field_unit::RADIANS);
+        CHECK(info.find_field("range")->attributes.unit == field_unit::NONE);
+        CHECK(validate_layout(info).has_value());
     }
 
     TEST_CASE("type_info - an empty struct describes with no fields") {
@@ -799,6 +815,93 @@ TEST_SUITE("core/type_info") {
         const result<void> stray = validate_layout(notArray);
         REQUIRE_FALSE(stray.has_value());
         CHECK(stray.get_error().message().find("not an array") != std::string::npos);
+    }
+
+    TEST_CASE("type_info - validate_layout accepts a unit only on F32 and F64 fields and arrays of them") {
+        SUBCASE("float scalars and float arrays take every unit") {
+            reflect::type_info floats = {};
+            floats.name = "test.unit_floats";
+            floats.size = 24;
+            floats.alignment = 8;
+            const field_info single = make_field("single", field_kind::F32, 0, 4);
+            field_info pair = make_field("pair", field_kind::ARRAY, 4, 4);
+            pair.elementKind = field_kind::F32;
+            pair.arrayCount = 1;
+            const field_info wide = make_field("wide", field_kind::F64, 8, 8);
+            const field_info plain = make_field("plain", field_kind::F64, 16, 8);
+            floats.fields = {single, pair, wide, plain};
+            for (const field_unit unit : {field_unit::NONE, field_unit::RADIANS, field_unit::DEGREES}) {
+                CAPTURE(to_string(unit));
+                for (usize index = 0; index < 3; ++index) {
+                    floats.fields[index].attributes.unit = unit;
+                }
+                CHECK(validate_layout(floats).has_value());
+            }
+        }
+        SUBCASE("any other kind is refused naming the field, the unit and the kind") {
+            struct refused_case {
+                field_kind kind = field_kind::COUNT;
+                u32 size = 0;
+                std::string_view kindName = {};
+            };
+            const refused_case cases[] = {
+              {field_kind::I32, 4, "I32"},
+              {field_kind::U8, 1, "U8"},
+              {field_kind::BOOL, 1, "BOOL"},
+              {field_kind::VEC3, 12, "VEC3"},
+              {field_kind::QUAT, 16, "QUAT"},
+            };
+            for (const refused_case &refused : cases) {
+                CAPTURE(refused.kindName);
+                reflect::type_info type = {};
+                type.name = "test.unit_refused";
+                type.size = 16;
+                type.alignment = 4;
+                field_info angle = make_field("angle", refused.kind, 0, refused.size);
+                angle.attributes.unit = field_unit::DEGREES;
+                type.fields = {angle};
+                const result<void> checked = validate_layout(type);
+                REQUIRE_FALSE(checked.has_value());
+                CHECK(checked.get_error().is(error_code::INVALID_ARGUMENT));
+                const std::string &message = checked.get_error().message();
+                CAPTURE(message);
+                CHECK(message.find("'angle'") != std::string::npos);
+                CHECK(message.find("'degrees'") != std::string::npos);
+                CHECK(message.find(refused.kindName) != std::string::npos);
+                type.fields[0].attributes.unit = field_unit::NONE;
+                CHECK(validate_layout(type).has_value());
+            }
+        }
+        SUBCASE("an array of another kind is refused") {
+            reflect::type_info type = {};
+            type.name = "test.unit_array";
+            type.size = 8;
+            type.alignment = 4;
+            field_info counts = make_field("counts", field_kind::ARRAY, 0, 8);
+            counts.elementKind = field_kind::I32;
+            counts.arrayCount = 2;
+            counts.attributes.unit = field_unit::RADIANS;
+            type.fields = {counts};
+            const result<void> checked = validate_layout(type);
+            REQUIRE_FALSE(checked.has_value());
+            CHECK(checked.get_error().message().find("I32") != std::string::npos);
+        }
+        SUBCASE("a value outside the enumeration is refused even on a float") {
+            reflect::type_info type = make_inner_layout();
+            type.fields[1].attributes.unit = static_cast<field_unit>(7);
+            const result<void> checked = validate_layout(type);
+            REQUIRE_FALSE(checked.has_value());
+            CHECK(checked.get_error().message().find("unknown unit 7") != std::string::npos);
+        }
+        SUBCASE("build_type_info applies the same rule") {
+            field_info tagged = make_field("count", field_kind::I32, 0, 4);
+            tagged.attributes.unit = field_unit::RADIANS;
+            const field_info fields[] = {tagged};
+            CHECK_FALSE(build_type_info("test.unit_dynamic", 4, 4, fields).has_value());
+            tagged.kind = field_kind::F32;
+            const field_info floatFields[] = {tagged};
+            CHECK(build_type_info("test.unit_dynamic", 4, 4, floatFields).has_value());
+        }
     }
 
     TEST_CASE("type_info - validate_layout accepts handle kinds of any size and checks their alignment") {

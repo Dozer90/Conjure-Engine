@@ -87,7 +87,7 @@ core::result<void> rhi_subsystem::startup(engine_context &context) {
         );
     }
     if (mServices->device == nullptr) {
-        return make_error(
+        return core::make_error(
           engine_error::DEVICE_CREATE_FAILED,
           std::format("no graphics device could be created: {}", lastError.to_string())
         );
@@ -104,7 +104,7 @@ core::result<void> rhi_subsystem::startup(engine_context &context) {
         if (!swapchain.has_value()) {
             const core::error error = swapchain.get_error();
             mServices->device.reset();
-            return make_error(
+            return core::make_error(
               engine_error::DEVICE_CREATE_FAILED,
               std::format("swapchain creation failed: {}", error.to_string())
             );

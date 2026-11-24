@@ -188,7 +188,7 @@ class CONJURE_API null_script_host final : public script_host
 <div class="function-declaration" id="function-set-load-result-1"><pre><code><span class="k">void</span> set_load_result(
     <a href="../../core/types.html#symbol-i32">i32</a> result) <span class="k">noexcept</span>;</code></pre></div>
 
-<p>The value <code>load_game_assembly</code> returns (0 = success; a <code><a href="../scripting-error.html#symbol-script-error">script_error</a></code> code models a failed load).</p>
+<p>The value <code>load_game_assembly</code> returns (0 = success; a <code><a href="../scripting-error.html#symbol-scripting-error">scripting_error</a></code> code models a failed load).</p>
 
 #### `set_phase_hook` {#function-set-phase-hook}
 

@@ -18,7 +18,7 @@ namespace {
     }
 
     [[nodiscard]] core::error load_failure(const core::error &inner) {
-        return assets::make_asset_error(assets::asset_error_code::LOAD_FAILED, inner.to_string());
+        return core::make_error(assets::assets_error::LOAD_FAILED, inner.to_string());
     }
 }
 

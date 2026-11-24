@@ -113,7 +113,7 @@ namespace conjure::modules::testing {
                     return canDetachResult;
                 }
                 if (policy == unload_policy::REFUSE_IF_IN_USE && liveUses > 0) {
-                    return make_module_error(
+                    return core::make_error(
                       module_error::IN_USE,
                       "consumer '{}' has {} live use(s) of module {}",
                       mTag,

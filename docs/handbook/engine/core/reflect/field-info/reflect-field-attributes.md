@@ -38,6 +38,7 @@ struct field_attributes
 <tr><td>public</td><td><code class="signature">readOnly</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">step</code></td><td><code class="signature"><a href="../../types.html#symbol-f64">f64</a></code></td><td><code class="signature"><span class="mi">0.0</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">tooltip</code></td><td><code class="signature">std::string</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">unit</code></td><td><code class="signature"><a href="../field-info.html#symbol-reflect-field-unit">field_unit</a></code></td><td><code class="signature">field_unit::NONE</code></td><td></td></tr>
 </tbody>
 </table>
 

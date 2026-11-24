@@ -297,13 +297,13 @@ namespace conjure::ecs {
                 using plain_type = std::remove_cvref_t<ComponentType>;
                 const component_id id = mRegistry->id_of<plain_type>();
                 if (!id.is_valid()) {
-                    return make_error(ecs_error::UNKNOWN_COMPONENT, "component type is not registered");
+                    return core::make_error(ecs_error::UNKNOWN_COMPONENT, "component type is not registered");
                 }
                 if (!is_alive(target)) {
-                    return make_error(ecs_error::ENTITY_NOT_ALIVE, "set on a dead entity");
+                    return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "set on a dead entity");
                 }
                 if (!has_raw(target, id)) {
-                    return make_error(ecs_error::COMPONENT_NOT_PRESENT, "set on a missing component");
+                    return core::make_error(ecs_error::COMPONENT_NOT_PRESENT, "set on a missing component");
                 }
                 if constexpr (!std::is_empty_v<plain_type>) {
                     plain_type *object = static_cast<plain_type *>(get_raw(target, id, true));

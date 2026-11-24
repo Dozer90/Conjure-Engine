@@ -107,8 +107,8 @@ core::result<std::vector<std::byte>> import_context::read_side_file(std::string_
 
     core::result<std::vector<std::byte>> bytes = mFileSystem->read_file(filePath);
     if (!bytes.has_value()) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot read side file '{}' of '{}': {}", relativePath, mAssetPath, bytes.get_error().message())
         );
     }

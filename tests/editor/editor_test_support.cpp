@@ -2,6 +2,7 @@
 
 #include "conjure/testing/test_environment.h"
 
+#include "conjure/assets/asset_manager.h"
 #include "conjure/core/hash.h"
 #include "conjure/core/image.h"
 #include "conjure/core/json/writer.h"
@@ -43,6 +44,9 @@
 #endif
 #ifndef CONJURE_EDITOR_TEST_SCRIPTS_DIR
     #define CONJURE_EDITOR_TEST_SCRIPTS_DIR ""
+#endif
+#ifndef CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR
+    #define CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR ""
 #endif
 
 using namespace conjure;
@@ -308,6 +312,66 @@ namespace editor_test {
         }
         const core::json::document result = ok("entity.create", std::move(args));
         return std::string(result.root()["guid"].as_string());
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
+    // release_probe_task
+
+    release_probe_task::release_probe_task(int *releases, bool *assetsAlive) :
+        mReleases(releases),
+        mAssetsAlive(assetsAlive) {}
+
+    release_probe_task::~release_probe_task() = default;
+
+    bool release_probe_task::tick(editor::editor_context &context) {
+        (void) context;
+        return false;
+    }
+
+    void release_probe_task::release_engine(editor::editor_context &context) {
+        ++*mReleases;
+        *mAssetsAlive = context.assets() != nullptr && !context.assets()->is_shut_down();
+    }
+
+    /*===========================================================================*/
+    /*===========================================================================*/
+    // parked_client
+
+    parked_client::parked_client(headless_editor &editor) :
+        mEditor(&editor) {
+        mClientId = editor.context().events().register_client([this](const editor::protocol_event &event) {
+            mEvents.push_back(event);
+        });
+        editor.context().register_response_sink(mClientId, [this](const editor::protocol_response &response) {
+            mReply = response;
+        });
+    }
+
+    parked_client::~parked_client() {
+        mEditor->context().unregister_response_sink(mClientId);
+        mEditor->context().events().unregister_client(mClientId);
+    }
+
+    std::optional<editor::protocol_response> parked_client::dispatch(
+      std::string_view command,
+      core::json::document args
+    ) {
+        editor::protocol_request request = {};
+        request.id = editor::make_id(mNextId++);
+        request.command = std::string(command);
+        request.args = std::move(args);
+        request.clientId = mClientId;
+        mReply.reset();
+        return mEditor->context().dispatcher().dispatch(request);
+    }
+
+    editor::protocol_response parked_client::wait(u32 maxFrames) {
+        for (u32 frame = 0; frame < maxFrames && !mReply.has_value(); ++frame) {
+            mEditor->pump(1);
+        }
+        REQUIRE_MESSAGE(mReply.has_value(), std::format("no reply within {} frames", maxFrames));
+        return *mReply;
     }
 
     /*===========================================================================*/
@@ -631,6 +695,22 @@ namespace editor_test {
 
     std::filesystem::path managed_directory() {
         return std::filesystem::path(CONJURE_EDITOR_TEST_MANAGED_DIR);
+    }
+
+    std::filesystem::path managed_export_directory() {
+        return std::filesystem::path(CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR);
+    }
+
+    std::filesystem::path install_managed_export(const std::filesystem::path &editorDirectory) {
+        const std::filesystem::path source = managed_export_directory();
+        REQUIRE_MESSAGE(!source.empty(), "this build published no export-flavoured SDK");
+        const std::filesystem::path installed = editorDirectory / "managed";
+        std::error_code error = {};
+        std::filesystem::create_directories(editorDirectory, error);
+        REQUIRE_MESSAGE(!error, "creating the stand-in editor folder: " << error.message());
+        std::filesystem::copy(source, installed, std::filesystem::copy_options::recursive, error);
+        REQUIRE_MESSAGE(!error, "copying the export-flavoured SDK: " << error.message());
+        return installed;
     }
 
     std::filesystem::path test_scripts_assembly() {

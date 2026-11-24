@@ -173,7 +173,7 @@ TEST_SUITE("scene/register") {
         CHECK(importers.find_for_extension(".prefab.json") == importers.find(scene::PREFAB_IMPORTER_ID));
         // Registering again is refused by the registries.
         CONJURE_CHECK_ERROR(scene::register_asset_types(fixture.assets.types(), importers, fixture.registry),
-          assets::asset_error_code::TYPE_DUPLICATE);
+          assets::assets_error::TYPE_DUPLICATE);
     }
 
     TEST_CASE("register_components - fails cleanly on a conflicting registry") {

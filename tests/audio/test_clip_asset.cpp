@@ -467,7 +467,7 @@ TEST_SUITE("audio/clip_asset") {
           {}
         );
         const core::result<assets::import_output> failed = importer.import(badContext);
-        CONJURE_CHECK_ERROR(failed, assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(failed, assets::assets_error::IMPORT_FAILED);
         CHECK(failed.get_error().message().find("UNSUPPORTED_FORMAT") != std::string::npos);
         CHECK(failed.get_error().message().find("bad.wav") != std::string::npos);
     }

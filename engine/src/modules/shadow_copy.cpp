@@ -34,7 +34,7 @@ namespace {
           failure
         );
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::BINARY_COPY_FAILED,
               "cannot copy '{}' to '{}': {}",
               source.generic_string(),
@@ -53,7 +53,7 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
   u32 copyIndex
 ) {
     if (cacheDirectory.empty()) {
-        return make_module_error(
+        return core::make_error(
           module_error::BINARY_COPY_FAILED,
           "cannot shadow copy '{}': module_manager_desc::shadowCopyDirectory is empty",
           binaryPath.generic_string()
@@ -64,7 +64,7 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
     std::error_code failure = {};
     std::filesystem::create_directories(modules::detail::extend_path(targetDirectory), failure);
     if (failure) {
-        return make_module_error(
+        return core::make_error(
           module_error::BINARY_COPY_FAILED,
           "cannot create shadow copy directory '{}': {}",
           targetDirectory.generic_string(),
@@ -80,7 +80,7 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
       failure
     );
     if (failure) {
-        return make_module_error(
+        return core::make_error(
           module_error::BINARY_COPY_FAILED,
           "cannot copy '{}' to '{}': {}",
           binaryPath.generic_string(),

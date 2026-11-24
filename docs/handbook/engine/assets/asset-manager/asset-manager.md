@@ -95,7 +95,7 @@ class CONJURE_API asset_manager
 #### `failed_ids` {#function-failed-ids}
 
 <div class="function-declaration" id="function-failed-ids-1"><pre><code>[[<span class="na">nodiscard</span>]] std::vector&lt;<a href="../asset-types.html#symbol-asset-id">asset_id</a>&gt; failed_ids(
-    <a href="../assets-error.html#symbol-asset-error-code">asset_error_code</a> code) <span class="k">const</span>;</code></pre></div>
+    <a href="../assets-error.html#symbol-assets-error">assets_error</a> code) <span class="k">const</span>;</code></pre></div>
 
 <p>Slots that are <code>FAILED</code> with the given code (the hot reload controller repairs <code>CACHE_MISS</code>). Main thread.</p>
 
@@ -169,9 +169,10 @@ class CONJURE_API asset_manager
 #### `load_blocking` {#function-load-blocking}
 
 <div class="function-declaration" id="function-load-blocking-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<a href="../asset-ref/asset-handle.html">asset_handle</a>&gt; load_blocking(
-    <span class="k">const</span> <a href="../asset-types.html#symbol-asset-id">asset_id</a> &amp;id);</code></pre></div>
+    <span class="k">const</span> <a href="../asset-types.html#symbol-asset-id">asset_id</a> &amp;id,
+    <a href="../asset-manager.html#symbol-blocking-load-warning">blocking_load_warning</a> warning = blocking_load_warning::WARN_INSIDE_FRAME);</code></pre></div>
 
-<p>Main thread. Runs the whole pipeline inline, dependencies first, and returns the <code>LOADED</code> handle or the failure (the slot is then <code>FAILED</code>). Waits for an in-flight job up to <code>blockingTimeoutSeconds</code> (<code>TIMEOUT</code>; the slot then stays with the async pipeline, which finishes it on a later <code><a href="#function-update-1">update</a>()</code>). Inside a frame it logs one <code>WARN</code> per frame.</p>
+<p>Main thread. Runs the whole pipeline inline, dependencies first, and returns the <code>LOADED</code> handle or the failure (the slot is then <code>FAILED</code>). Waits for an in-flight job up to <code>blockingTimeoutSeconds</code> (<code>TIMEOUT</code>; the slot then stays with the async pipeline, which finishes it on a later <code><a href="#function-update-1">update</a>()</code>). Inside a frame it logs one <code>WARN</code> per frame unless <code>warning</code> is <code>blocking_load_warning::EXPECTED</code>; an <code>EXPECTED</code> call does not use up the frame&#x27;s <code>WARN</code>.</p>
 
 #### `make_handle` {#function-make-handle}
 

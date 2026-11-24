@@ -67,7 +67,7 @@ TEST_SUITE("assets/asset_pack") {
         );
         cooked_blob corrupt = make_test_blob(test_id(2), "c");
         corrupt.payload.push_back(std::byte{1});
-        CONJURE_CHECK_ERROR(writer.add(std::move(corrupt), "assets://c.ta"), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(writer.add(std::move(corrupt), "assets://c.ta"), assets_error::CACHE_CORRUPT);
         CHECK(writer.size() == 1);
     }
 
@@ -153,28 +153,28 @@ TEST_SUITE("assets/asset_pack") {
 
         std::vector<std::byte> badMagic = good;
         badMagic[1] = std::byte{'x'};
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(badMagic), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(badMagic), assets_error::PACK_CORRUPT);
 
         std::vector<std::byte> badVersion = good;
         badVersion[4] = std::byte{9};
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(badVersion), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(badVersion), assets_error::PACK_CORRUPT);
 
         std::vector<std::byte> flipped = good;
         flipped.back() = static_cast<std::byte>(static_cast<u8>(flipped.back()) ^ 0x80);
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(flipped), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(flipped), assets_error::PACK_CORRUPT);
 
         std::vector<std::byte> truncated = good;
         truncated.resize(truncated.size() - 2);
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(truncated), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(truncated), assets_error::PACK_CORRUPT);
 
         const std::vector<std::byte> tiny(16, std::byte{0});
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(tiny), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(tiny), assets_error::PACK_CORRUPT);
 
         CONJURE_REQUIRE_OK(fileSystem.write_file("out/bad.cpak", flipped));
         pack_reader fromFile = {};
-        CONJURE_CHECK_ERROR(fromFile.open(fileSystem, "out/bad.cpak"), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(fromFile.open(fileSystem, "out/bad.cpak"), assets_error::PACK_CORRUPT);
         CHECK_FALSE(fromFile.is_open());
-        CONJURE_CHECK_ERROR(fromFile.open(fileSystem, "out/missing.cpak"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fromFile.open(fileSystem, "out/missing.cpak"), assets_error::NOT_FOUND);
     }
 
     TEST_CASE("regression - a TOC payload range that wraps past the end of the pack is rejected at open") {
@@ -188,13 +188,13 @@ TEST_SUITE("assets/asset_pack") {
         poke_u64(wrapped, FIRST_BLOB_OFFSET, ~u64{0} - 15);
         poke_u64(wrapped, FIRST_BLOB_SIZE, 32);
         resign(wrapped);
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(wrapped), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(wrapped), assets_error::PACK_CORRUPT);
 
         // A size that runs past the end without wrapping is rejected the same way.
         std::vector<std::byte> tooLong = good;
         poke_u64(tooLong, FIRST_BLOB_SIZE, good.size());
         resign(tooLong);
-        CONJURE_CHECK_ERROR(pack_reader().open_bytes(tooLong), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(pack_reader().open_bytes(tooLong), assets_error::PACK_CORRUPT);
 
         // The re-signing itself is sound: the untouched pack still opens after resign().
         std::vector<std::byte> resigned = good;
@@ -247,6 +247,6 @@ TEST_SUITE("assets/asset_pack") {
 
     TEST_CASE("pack_reader - read on a closed reader fails") {
         const pack_reader reader = {};
-        CONJURE_CHECK_ERROR(reader.read(pack_toc_entry{}), asset_error_code::PACK_CORRUPT);
+        CONJURE_CHECK_ERROR(reader.read(pack_toc_entry{}), assets_error::PACK_CORRUPT);
     }
 }

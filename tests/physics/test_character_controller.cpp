@@ -3,18 +3,32 @@
 #include "conjure/testing/log_capture.h"
 #include "physics_test_fixture.h"
 
+#include "conjure/core/json/document.h"
+#include "conjure/core/json/writer.h"
 #include "conjure/core/math/ray.h"
 #include "conjure/core/math/transform.h"
+#include "conjure/core/reflect/field_info.h"
+#include "conjure/core/reflect/type_info.h"
+#include "conjure/ecs/entity_archive.h"
 #include "conjure/physics/character_controller.h"
 #include "conjure/physics/components.h"
 #include "conjure/physics/physics_error.h"
 #include "conjure/scene/components.h"
+#include "conjure/scene/scene_serializer.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
+#include <memory>
+#include <numbers>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 using namespace conjure;
 using namespace physics_test;
@@ -151,6 +165,44 @@ namespace {
         REQUIRE(controller != nullptr);
         return *controller;
     }
+
+    /// <summary>
+    /// The character_controller of archive entry 'entry'.
+    /// </summary>
+    [[nodiscard]] physics::character_controller controller_in(const ecs::entity_archive &archive, u32 entry) {
+        const ecs::component_id id = archive.registry().id_of<physics::character_controller>();
+        const std::span<const std::byte> bytes = archive.component_bytes(entry, id);
+        REQUIRE(bytes.size() == sizeof(physics::character_controller));
+        physics::character_controller controller = {};
+        std::memcpy(&controller, bytes.data(), sizeof(controller));
+        return controller;
+    }
+
+    /// <summary>
+    /// The archive of a file written before the slope limit was stored in radians, three characters: 30
+    /// degrees with a radius, an infinite limit (what the archive writes for one), and an entity that also
+    /// has the current field.
+    /// </summary>
+    constexpr std::string_view OLD_ARCHIVE = R"("archive":{"entities":[
+        {"components":{"conjure.physics.character_controller":{"radius":0.5,"maxSlopeAngleDegrees":30.0}}},
+        {"components":{"conjure.physics.character_controller":{"maxSlopeAngleDegrees":"inf"}}},
+        {"components":{"conjure.physics.character_controller":{"maxSlopeAngleDegrees":60,"maxSlopeAngleRadians":0.25}}}
+    ]})";
+
+    /// <summary>
+    /// A whole file of the given format around OLD_ARCHIVE.
+    /// </summary>
+    [[nodiscard]] core::json::document old_file(std::string_view format) {
+        const std::string text = std::string(R"({"format":")") + std::string(format) + R"(","version":1,"name":"old",)"
+          + std::string(OLD_ARCHIVE) + "}";
+        core::result<core::json::document> parsed = core::json::document::parse(text);
+        REQUIRE(parsed.has_value());
+        return std::move(parsed.value());
+    }
+
+    [[nodiscard]] f64 radians_of(f64 degrees) noexcept {
+        return degrees * std::numbers::pi / 180.0;
+    }
 }
 
 TEST_SUITE("physics/character_controller") {
@@ -169,6 +221,25 @@ TEST_SUITE("physics/character_controller") {
         CHECK(has_flag(controller.flags, physics::character_flags::STICK_TO_FLOOR));
         CHECK(controller.groundEntity.is_null());
         CHECK(to_underlying(physics::character_flags::APPLY_GRAVITY) == 4);
+    }
+
+    TEST_CASE("character_controller - the slope limit is reflected as an angle in radians, the capsule has no unit") {
+        const core::reflect::type_info info = core::reflect::describe_struct<physics::character_controller>();
+        CHECK(info.find_field("maxSlopeAngleDegrees") == nullptr);
+        const core::reflect::field_info *slope = info.find_field("maxSlopeAngleRadians");
+        REQUIRE(slope != nullptr);
+        CHECK(slope->attributes.unit == core::reflect::field_unit::RADIANS);
+        CHECK(slope->attributes.min == doctest::Approx(0.0));
+        CHECK(slope->attributes.max == doctest::Approx(std::numbers::pi / 2.0));
+        CHECK(physics::character_controller{}.maxSlopeAngleRadians == doctest::Approx(0.7853982));
+        for (const core::reflect::field_info &field : info.fields) {
+            if (field.name == "maxSlopeAngleRadians") {
+                continue;
+            }
+            CAPTURE(field.name);
+            CHECK(field.attributes.unit == core::reflect::field_unit::NONE);
+        }
+        CHECK(core::reflect::validate_layout(info).has_value());
     }
 
     TEST_CASE("character_controller - walks up a 30 degree slope and reports ON_GROUND on it") {
@@ -205,6 +276,86 @@ TEST_SUITE("physics/character_controller") {
         // The character slid down or stayed; it never climbed above its start.
         CHECK(fixture.position_of(character).y < 1.0f + 0.05f);
         CHECK(fixture.position_of(character).x < 1.0f);
+    }
+
+    TEST_CASE("character_controller - maxSlopeAngleRadians is radians: a 70 degree limit walks a 60 degree slope") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs);
+        const ecs::entity slope = spawn_slope(fixture, 60.0f);
+        physics::character_controller settings = {};
+        settings.maxSlopeAngleRadians = math::radians(70.0f);
+        const ecs::entity character = fixture.spawn_character(math::vec3(0.0f, 0.05f, 0.0f), settings);
+        drive(fixture, character, math::vec3(0.5f, 0.0f, 0.0f), 30);
+        CHECK(controller_of(fixture, character).ground == physics::ground_state::ON_GROUND);
+        CHECK(controller_of(fixture, character).groundEntity == slope);
+    }
+
+    TEST_CASE("character_controller - an old scene file's maxSlopeAngleDegrees loads as maxSlopeAngleRadians") {
+        ecs::component_registry registry = {};
+        register_physics_test_components(registry);
+        const core::json::document file = old_file(scene::SCENE_FORMAT_NAME);
+        const core::result<scene::scene_document> document =
+          scene::scene_serializer::parse_document(file.root(), registry);
+        CONJURE_REQUIRE_OK(document);
+        const ecs::entity_archive &archive = *document.value().archive;
+        REQUIRE(archive.entity_count() == 3);
+        CHECK(controller_in(archive, 0).maxSlopeAngleRadians == doctest::Approx(radians_of(30.0)).epsilon(1.0e-6));
+        CHECK(controller_in(archive, 0).radius == 0.5f);
+        CHECK(std::isinf(controller_in(archive, 1).maxSlopeAngleRadians));
+        CHECK(controller_in(archive, 1).maxSlopeAngleRadians > 0.0f);
+        // The current name wins over the old one.
+        CHECK(controller_in(archive, 2).maxSlopeAngleRadians == 0.25f);
+
+        // Written back, only the current name remains.
+        core::json::writer out = {};
+        CONJURE_REQUIRE_OK(scene::scene_serializer::write_document(document.value(), out));
+        const std::string written = out.finish();
+        CHECK(written.find("maxSlopeAngleRadians") != std::string::npos);
+        CHECK(written.find("maxSlopeAngleDegrees") == std::string::npos);
+    }
+
+    TEST_CASE("character_controller - an old prefab file's maxSlopeAngleDegrees loads as maxSlopeAngleRadians") {
+        ecs::component_registry registry = {};
+        register_physics_test_components(registry);
+        // A prefab has a single root: keep the first entity only.
+        core::json::document file = old_file(scene::PREFAB_FORMAT_NAME);
+        core::json::document entities = core::json::document::array();
+        entities.push_back(file.root()["archive"]["entities"][0]);
+        REQUIRE(file.set_pointer("/archive/entities", entities));
+        const core::result<scene::prefab_document> document =
+          scene::scene_serializer::parse_prefab(file.root(), registry);
+        CONJURE_REQUIRE_OK(document);
+        CHECK(
+          controller_in(*document.value().archive, 0).maxSlopeAngleRadians
+          == doctest::Approx(radians_of(30.0)).epsilon(1.0e-6)
+        );
+    }
+
+    TEST_CASE("character_controller - maxSlopeAngleRadians round trips through a scene file") {
+        ecs::component_registry registry = {};
+        register_physics_test_components(registry);
+        ecs::world world(registry);
+        const core::result<ecs::entity> created = world.create_entity();
+        CONJURE_REQUIRE_OK(created);
+        physics::character_controller authored = {};
+        authored.maxSlopeAngleRadians = 0.5f;
+        CONJURE_REQUIRE_OK(world.add<physics::character_controller>(created.value(), authored));
+        const std::vector<ecs::entity> entities = {created.value()};
+        core::result<ecs::entity_archive> captured = ecs::entity_archive::capture(world, entities);
+        CONJURE_REQUIRE_OK(captured);
+        scene::scene_document document = {};
+        document.archive = std::make_shared<const ecs::entity_archive>(std::move(captured.value()));
+        core::json::writer out = {};
+        CONJURE_REQUIRE_OK(scene::scene_serializer::write_document(document, out));
+        const std::string written = out.finish();
+        CHECK(written.find(R"("maxSlopeAngleRadians":0.5)") != std::string::npos);
+
+        const core::result<core::json::document> parsed = core::json::document::parse(written);
+        REQUIRE(parsed.has_value());
+        const core::result<scene::scene_document> reread =
+          scene::scene_serializer::parse_document(parsed.value().root(), registry);
+        CONJURE_REQUIRE_OK(reread);
+        CHECK(controller_in(*reread.value().archive, 0).maxSlopeAngleRadians == 0.5f);
     }
 
     TEST_CASE("character_controller - walking into a wall stops within padding plus a centimetre") {

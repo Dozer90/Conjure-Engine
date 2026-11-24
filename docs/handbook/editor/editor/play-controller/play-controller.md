@@ -61,6 +61,7 @@ class CONJURE_API play_controller
 <tr><td>private</td><td><code class="signature">m<wbr>Simulation<wbr>Frames</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mSnapshot</code></td><td><code class="signature">std::<wbr>optional&lt;<wbr><a href="../../../engine/scene/scene-snapshot/scene-snapshot.html">scene::<wbr>scene_<wbr>snapshot</a>&gt;</code></td><td><code class="signature">std::nullopt</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mState</code></td><td><code class="signature"><a href="../play-controller.html#symbol-play-state">play_state</a></code></td><td><code class="signature">play_<wbr>state::<wbr>EDITING</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>State<wbr>Changes</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Warned<wbr>File<wbr>Edit</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Warned<wbr>Unrecorded<wbr>Edit</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 </tbody>
@@ -150,6 +151,12 @@ class CONJURE_API play_controller
 #### `state` {#function-state}
 
 <div class="function-declaration" id="function-state-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../play-controller.html#symbol-play-state">play_state</a> state() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+#### `state_changes` {#function-state-changes}
+
+<div class="function-declaration" id="function-state-changes-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/core/types.html#symbol-u64">u64</a> state_changes() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>How many state transitions <code><a href="#function-start-1">start</a>()</code>, <code><a href="#function-stop-1">stop</a>()</code>, <code><a href="#function-pause-1">pause</a>()</code> and <code><a href="#function-resume-1">resume</a>()</code> made so far (failed calls do not count). An asynchronous command compares it at completion with the value at dispatch: equal values mean the play state never changed in between, even across a stop and a start that ended in the state it began in.</p>
 
 #### `step` {#function-step}
 

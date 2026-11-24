@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -149,7 +150,12 @@ core::result<scene_document> scene_serializer::parse_document(
     if (!archive.is_object()) {
         return core::make_error(scene_error::BAD_FORMAT, "the file has no \"archive\" object");
     }
-    CONJURE_TRY_ASSIGN(ecs::entity_archive parsed, ecs::read_archive_json(archive, registry));
+    // Fields renamed since the file was written move to their current names first.
+    const std::optional<core::json::document> migrated = detail::migrate_renamed_fields(archive);
+    CONJURE_TRY_ASSIGN(
+      ecs::entity_archive parsed,
+      ecs::read_archive_json(migrated.has_value() ? migrated->root() : archive, registry)
+    );
     const u32 unknown = detail::count_unresolved(parsed);
     if (unknown > 0) {
         CONJURE_LOG_WARN(LOG_SCENE, "scene '{}' preserves {} unknown component(s)", document.name, unknown);
@@ -170,7 +176,12 @@ core::result<prefab_document> scene_serializer::parse_prefab(
     if (!archive.is_object()) {
         return core::make_error(scene_error::BAD_FORMAT, "the file has no \"archive\" object");
     }
-    CONJURE_TRY_ASSIGN(ecs::entity_archive parsed, ecs::read_archive_json(archive, registry));
+    // Fields renamed since the file was written move to their current names first.
+    const std::optional<core::json::document> migrated = detail::migrate_renamed_fields(archive);
+    CONJURE_TRY_ASSIGN(
+      ecs::entity_archive parsed,
+      ecs::read_archive_json(migrated.has_value() ? migrated->root() : archive, registry)
+    );
     const scene_component_ids ids = scene_component_ids::resolve(registry);
     CONJURE_TRY(detail::check_prefab_roots(parsed, ids, "prefab '{}'", document.name));
     // Entry guids are the identities prefab_link points at: two entries sharing one would make diff and

@@ -11,7 +11,7 @@ kind: header
 | File Path | `engine/include/conjure/editor/editor_error.h` |
 | API ↗ | [The AI control protocol](../../../api/editor/ai-protocol.md), [The editor](../../../api/editor/index.md) |
 
-<p>The editor error category. The protocol&#x27;s stable error strings and the editor&#x27;s own <code><a href="../../engine/core/error/error.html">core::error</a></code> codes are one enumeration: a handler returns <code>make_editor_error(code, message)</code> and the dispatcher writes <code>to_string(code)</code> into the response. Errors of other modules (ecs, scene, assets, core) that reach a response are mapped through <code>classify_error()</code>.</p>
+<p>The editor error category. The protocol&#x27;s stable error strings and the editor&#x27;s own <code><a href="../../engine/core/error/error.html">core::error</a></code> codes are one enumeration: a handler returns <code>core::make_error(code, message)</code> and the dispatcher writes <code>to_string(code)</code> into the response. Errors of other modules (ecs, scene, assets, core) that reach a response are mapped through <code>classify_error()</code>.</p>
 
 ## Enumerations
 
@@ -43,6 +43,8 @@ enum class protocol_error_code : u16 {
                             // (the client is disconnected); a later hello with a wrong token; a command the
                             // client's token does not open (details {required, granted}; the client stays)
     PROJECT_NOT_TRUSTED,    // nobody answered for the project on this machine; project.trust comes first
+    STALE_STATE,            // an asynchronous command found the scene, the play state or its target changed
+                            // between dispatch and completion; it changed nothing
     INTERNAL,               // an invariant failed; the message says which
     COUNT
 };
@@ -81,14 +83,6 @@ CONJURE_DECLARE_ERROR_CATEGORY( conjure::editor::protocol_error_code, "editor", 
     <a href="editor-error.html#symbol-protocol-error-code">protocol_error_code</a> code) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>The enumerator name for the error category (same text as <code>to_string</code>).</p>
-
-#### `make_editor_error` {#function-make-editor-error}
-
-<div class="function-declaration" id="function-make-editor-error-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">inline</span> <a href="../../engine/core/error/error.html">core::error</a> make_editor_error(
-    <a href="editor-error.html#symbol-protocol-error-code">protocol_error_code</a> code,
-    std::string message = {});</code></pre></div>
-
-<p>Builds an error of the editor category.</p>
 
 #### `parse_error_code` {#function-parse-error-code}
 
@@ -132,6 +126,8 @@ CONJURE_DECLARE_ERROR_CATEGORY( conjure::editor::protocol_error_code, "editor", 
 <a id="direct-header-dependencies"></a>
 <a id="editor_error_name"></a>
 <a id="extension-points"></a>
+<a id="function-make-editor-error"></a>
+<a id="function-make-editor-error-1"></a>
 <a id="internals-and-algorithms"></a>
 <a id="make_editor_error"></a>
 <a id="other-declarations"></a>

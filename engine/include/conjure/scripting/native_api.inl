@@ -11,7 +11,7 @@
 // and never reordered (a reorder or signature change bumps CONJURE_NATIVE_API_VERSION).
 //
 // Status convention of the core entries: an int32_t result >= 0 is a success (0, a count, a bool or a
-// needed length) and < 0 is -script_error; uint64_t entries return 0 on failure; uint32_t entries
+// needed length) and < 0 is -scripting_error; uint64_t entries return 0 on failure; uint32_t entries
 // return 0 on failure.
 //
 // Entries before the marker line are implemented by conjure_scripting (native_api_core.cpp, R26/R64);

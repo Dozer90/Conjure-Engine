@@ -82,7 +82,7 @@ namespace conjure::editor {
         }
 
         [[nodiscard]] core::error protocol_failure(protocol_error_code code, std::string message) {
-            return make_editor_error(code, std::move(message));
+            return core::make_error(code, std::move(message));
         }
 
         [[nodiscard]] bool is_valid_id(const value &id) noexcept {

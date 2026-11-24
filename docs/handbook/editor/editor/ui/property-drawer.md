@@ -17,7 +17,7 @@ kind: header
 
 | File | Description |
 |---|---|
-| [`ui::property_draw_context`](property-drawer/ui-property-draw-context.md) | What a drawer receives: the field description (attributes drive ranges and tooltips) and the value. |
+| [`ui::property_draw_context`](property-drawer/ui-property-draw-context.md) | What a drawer receives: the field description (attributes drive ranges, units and tooltips) and the value. |
 
 ## Classes
 

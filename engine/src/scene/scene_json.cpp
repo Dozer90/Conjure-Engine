@@ -5,10 +5,41 @@
 
 #include "conjure/core/json/document.h"
 
+#include <array>
+#include <format>
+#include <numbers>
 #include <utility>
 
 using namespace conjure;
 using namespace conjure::scene;
+
+namespace {
+
+    /// <summary>
+    /// A component field renamed since files were written: an old file's value under oldName is multiplied
+    /// by scale and stored under newName. The names hold no '/' or '~', so they need no JSON Pointer escaping.
+    /// </summary>
+    struct renamed_field {
+        std::string_view component;
+        std::string_view oldName;
+        std::string_view newName;
+        f64 scale = 1.0;
+    };
+
+    // Code sweep F628: the slope limit is stored in radians like every other authored angle.
+    constexpr std::array<renamed_field, 1> RENAMED_FIELDS = {
+        renamed_field{
+          "conjure.physics.character_controller",
+          "maxSlopeAngleDegrees",
+          "maxSlopeAngleRadians",
+          std::numbers::pi_v<f64> / 180.0
+        },
+    };
+
+    [[nodiscard]] bool needs_migration(const core::json::value &component, const renamed_field &field) noexcept {
+        return component.is_object() && component.contains(field.oldName) && !component.contains(field.newName);
+    }
+}
 
 core::result<detail::file_header> conjure::scene::detail::read_header(
   const core::json::value &in,
@@ -63,6 +94,36 @@ void conjure::scene::detail::write_header(core::json::writer &out, std::string_v
     out.value(SCENE_FORMAT_VERSION);
     out.key("name");
     out.value(name);
+}
+
+std::optional<core::json::document> conjure::scene::detail::migrate_renamed_fields(
+  const core::json::value &archive
+) {
+    std::optional<core::json::document> migrated = std::nullopt;
+    usize entityIndex = 0;
+    for (const core::json::value entity : archive["entities"]) {
+        const core::json::value components = entity["components"];
+        for (const renamed_field &field : RENAMED_FIELDS) {
+            const core::json::value component = components[field.component];
+            if (!needs_migration(component, field)) {
+                continue;
+            }
+            core::json::document updated = core::json::document::from_value(component);
+            const core::json::value old = component[field.oldName];
+            if (old.is_number()) {
+                updated.set(field.newName, old.as_f64() * field.scale);
+            } else {
+                updated.set(field.newName, old);
+            }
+            updated.erase(field.oldName);
+            if (!migrated.has_value()) {
+                migrated = core::json::document::from_value(archive);
+            }
+            migrated->set_pointer(std::format("/entities/{}/components/{}", entityIndex, field.component), updated);
+        }
+        ++entityIndex;
+    }
+    return migrated;
 }
 
 std::string conjure::scene::detail::canonical_settings(const core::json::document &settings) {

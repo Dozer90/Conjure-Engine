@@ -34,6 +34,12 @@ namespace conjure::editor {
     /// built-in command, and the editor drops READ_ONLY from a module command that also says MUTATES. The editor
     /// cannot check a module's promise; a module that flags a command which changes something hands that change
     /// to every inspect-only client.
+    /// ASYNC commands may not run inside editor.batch (the registry adds NOT_IN_BATCH) unless they also carry
+    /// SYNC_IN_BATCH: the promise that the handler completes its reply before it returns whenever the dispatcher
+    /// asks for it (command_dispatcher::requires_synchronous_completion(): a batch child, an undo or redo step, a
+    /// batch rollback). The prefab commands that load their asset over frames are such commands (code sweep F736).
+    /// SYNC_IN_BATCH needs ASYNC and excludes NOT_IN_BATCH (the registry refuses anything else), and the editor
+    /// drops it from a module command, whose handler cannot answer later at all.
     /// </summary>
     enum class command_flags : u16 {
         NONE = 0,
@@ -47,7 +53,8 @@ namespace conjure::editor {
         NOT_IN_BATCH = 1 << 7,
         NO_UNDO = 1 << 8,
         ON_DISK = 1 << 9,
-        READ_ONLY = 1 << 10
+        READ_ONLY = 1 << 10,
+        SYNC_IN_BATCH = 1 << 11
     };
     CONJURE_ENUM_FLAGS(command_flags);
 

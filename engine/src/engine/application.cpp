@@ -133,7 +133,7 @@ application::~application() {
 
 core::result<void> application::initialise() {
     if (mState != application_state::CREATED && mState != application_state::STOPPED) {
-        return make_error(
+        return core::make_error(
           engine_error::ALREADY_INITIALISED,
           std::format("initialise() while {}", to_string(mState))
         );
@@ -350,7 +350,7 @@ core::result<void> application::start_core() {
     jobsDesc.workerCount = resolve_worker_count(config.jobs);
     const core::result<void> jobsStarted = services.jobs.start(jobsDesc);
     if (!jobsStarted.has_value()) {
-        return make_error(
+        return core::make_error(
           engine_error::JOBS_START_FAILED,
           std::format("job system failed to start: {}", jobsStarted.get_error().to_string())
         );
@@ -374,7 +374,7 @@ core::result<void> application::start_core() {
     if (loaded != nullptr) {
         const std::filesystem::path &root = loaded->root_directory();
         if (!std::filesystem::is_directory(root, ignored)) {
-            return make_error(
+            return core::make_error(
               engine_error::PROJECT_NOT_FOUND,
               std::format("project directory '{}' does not exist", root.generic_string())
             );
@@ -384,7 +384,7 @@ core::result<void> application::start_core() {
         if (services.cooked) {
             const std::filesystem::path cookedRoot = loaded->cooked_directory();
             if (!std::filesystem::is_directory(cookedRoot, ignored)) {
-                return make_error(
+                return core::make_error(
                   engine_error::PROJECT_NOT_FOUND,
                   std::format("cooked root '{}' does not exist", cookedRoot.generic_string())
                 );
@@ -516,7 +516,7 @@ core::result<void> application::start_subsystems() {
         }
         const core::result<void> finalised = services.scheduler->finalise();
         if (!finalised.has_value()) {
-            return make_error(
+            return core::make_error(
               engine_error::SCHEDULER_CONFLICT,
               std::format("scheduler rejected the registered systems: {}", finalised.get_error().to_string())
             );
@@ -594,12 +594,12 @@ core::result<void> application::load_startup_scene() {
     const bool importFailed = id.has_value() && mServices->assetDatabase != nullptr
       && mServices->assetDatabase->status_of(*id) == assets::asset_record_status::IMPORT_FAILED;
     if (!id.has_value()) {
-        failure = make_error(
+        failure = core::make_error(
           engine_error::STARTUP_SCENE_FAILED,
           std::format("startup scene '{}' is not a known asset", assetPath)
         );
     } else if (importFailed && !config.editor) {
-        failure = make_error(
+        failure = core::make_error(
           engine_error::STARTUP_SCENE_FAILED,
           std::format(
             "startup scene '{}' failed to import; refusing the stale cached copy (the import error is logged above)",
@@ -609,7 +609,7 @@ core::result<void> application::load_startup_scene() {
     } else {
         const core::result<scene::scene_id> loaded = mServices->scenes->load(*id, scene::load_mode::REPLACE);
         if (!loaded.has_value()) {
-            failure = make_error(
+            failure = core::make_error(
               engine_error::STARTUP_SCENE_FAILED,
               std::format("startup scene '{}' failed to load: {}", assetPath, loaded.get_error().to_string())
             );
@@ -631,11 +631,11 @@ core::result<void> application::load_startup_scene() {
 core::result<void> application::run_frame(std::optional<f64> deltaOverride) {
     CONJURE_ASSERT(mState == application_state::RUNNING, "step_frame() on an application that is not RUNNING");
     if (mState != application_state::RUNNING || mFrameLoop == nullptr) {
-        return make_error(engine_error::NOT_INITIALISED, std::format("step_frame() while {}", to_string(mState)));
+        return core::make_error(engine_error::NOT_INITIALISED, std::format("step_frame() while {}", to_string(mState)));
     }
     CONJURE_ASSERT(!mInFrame, "step_frame() re-entered");
     if (mInFrame) {
-        return make_error(engine_error::NOT_INITIALISED, "step_frame() re-entered from inside a frame");
+        return core::make_error(engine_error::NOT_INITIALISED, "step_frame() re-entered from inside a frame");
     }
     mInFrame = true;
     const core::result<void> result = mFrameLoop->run_frame(deltaOverride);

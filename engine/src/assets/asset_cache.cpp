@@ -19,8 +19,8 @@ namespace {
     constexpr std::string_view TEMPORARY_SUFFIX = ".tmp";
 
     core::error io_error(std::string_view what, std::string_view path, const core::error &cause) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot {} '{}': {}", what, path, cause.message())
         );
     }
@@ -62,7 +62,7 @@ core::result<cooked_blob_header> asset_cache::read_header(const asset_id &id) co
     core::result<std::unique_ptr<core::vfs::file>> opened = mFileSystem->open_read(path);
     if (!opened.has_value()) {
         if (opened.get_error().generic_code() == core::error_code::NOT_FOUND) {
-            return make_asset_error(asset_error_code::CACHE_MISS, std::format("no blob for {}", id));
+            return core::make_error(assets_error::CACHE_MISS, std::format("no blob for {}", id));
         }
         return io_error("open blob", path, opened.get_error());
     }
@@ -79,8 +79,8 @@ core::result<cooked_blob_header> asset_cache::read_header(const asset_id &id) co
         return header;
     }
     if (header.value().id != id) {
-        return make_asset_error(
-          asset_error_code::CACHE_CORRUPT,
+        return core::make_error(
+          assets_error::CACHE_CORRUPT,
           std::format("blob of {} names {}", id, header.value().id)
         );
     }
@@ -92,7 +92,7 @@ core::result<cooked_blob> asset_cache::read(const asset_id &id) const {
     core::result<std::vector<std::byte>> bytes = mFileSystem->read_file(path);
     if (!bytes.has_value()) {
         if (bytes.get_error().generic_code() == core::error_code::NOT_FOUND) {
-            return make_asset_error(asset_error_code::CACHE_MISS, std::format("no blob for {}", id));
+            return core::make_error(assets_error::CACHE_MISS, std::format("no blob for {}", id));
         }
         return io_error("read blob", path, bytes.get_error());
     }
@@ -102,8 +102,8 @@ core::result<cooked_blob> asset_cache::read(const asset_id &id) const {
         return blob;
     }
     if (blob.value().header.id != id) {
-        return make_asset_error(
-          asset_error_code::CACHE_CORRUPT,
+        return core::make_error(
+          assets_error::CACHE_CORRUPT,
           std::format("blob of {} names {}", id, blob.value().header.id)
         );
     }

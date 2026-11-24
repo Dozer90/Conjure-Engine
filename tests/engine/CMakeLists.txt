@@ -19,6 +19,7 @@ set(CONJURE_ENGINE_TEST_SOURCES
     test_builtin_modules.cpp
     test_command_line.cpp
     test_debug_overlay_layer.cpp
+    test_dotnet_sdk.cpp
     test_engine_config.cpp
     test_engine_context.cpp
     test_engine_error.cpp
@@ -98,6 +99,17 @@ endif()
 if(CONJURE_IS_MULTI_CONFIG)
     target_compile_definitions(conjure_engine_tests PRIVATE CONJURE_TEST_MULTI_CONFIG=1)
 endif()
+
+# test_dotnet_sdk.cpp (owner decision OWN-INSTALL) compares the baked-in SDK version with global.json, and it and
+# test_export.cpp stand in for a dotnet without an SDK with conjure_process_child (tests/core/system), which answers
+# --version with its usage line and exit code 2, or with a copy of it that replays a fixed mode.
+file(READ "${PROJECT_SOURCE_DIR}/global.json" engineTestGlobalJson)
+string(JSON engineTestDotnetSdk GET "${engineTestGlobalJson}" sdk version)
+add_dependencies(conjure_engine_tests conjure_process_child)
+target_compile_definitions(conjure_engine_tests PRIVATE
+    CONJURE_ENGINE_TEST_GLOBAL_JSON_SDK="${engineTestDotnetSdk}"
+    CONJURE_ENGINE_TEST_PROCESS_CHILD="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_process_child>>"
+)
 
 # The [dotnet][slow] export cases of test_export.cpp run export step 3 with the real dotnet over copies of the
 # engine's managed projects. The first (follow-up FU-PDB) exports the game template and checks the managed

@@ -31,9 +31,12 @@ struct pending_request
 <table class="variable-table">
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td>public</td><td><code class="signature">args</code></td><td><code class="signature"><a href="../../../engine/core/json/document/json-document.html">core::json::document</a></code></td><td><code class="signature">core::<wbr>json::<wbr>document::<wbr>object()</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">clientId</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">coalesceKey</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">command</code></td><td><code class="signature">std::string</code></td><td><code class="signature"><span class="s">""</span></code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">deadline<wbr>Seconds</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-f64">f64</a></code></td><td><code class="signature"><span class="mi">0.0</span></code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">flags</code></td><td><code class="signature"><a href="../command-desc.html#symbol-command-flags">command_flags</a></code></td><td><code class="signature">command_<wbr>flags::<wbr>NONE</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">id</code></td><td><code class="signature"><a href="../../../engine/core/json/document/json-document.html">core::json::document</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">ticket</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 </tbody>

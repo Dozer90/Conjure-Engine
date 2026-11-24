@@ -273,7 +273,7 @@ TEST_SUITE("renderer/material_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badContext), assets::assets_error::IMPORT_FAILED);
         const std::vector<std::byte> garbage = bytes_of("{{{");
         assets::import_context garbageContext(
           fileSystem,
@@ -286,7 +286,7 @@ TEST_SUITE("renderer/material_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(garbageContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(garbageContext), assets::assets_error::IMPORT_FAILED);
     }
 
     TEST_CASE("material_importer - unknown keys such as baseColorFactor are reported as import warnings") {

@@ -87,7 +87,7 @@ class CONJURE_API managed_build_runner
     <span class="k">const</span> <a href="build-request.html">build_request</a> &amp;request,
     std::string_view dotnet);</code></pre></div>
 
-<p>The process description a request turns into: dotnet build &lt;project&gt; -c &lt;configuration&gt; [-o &lt;output&gt;] --nologo -clp:NoSummary [-p:Name=Value...]. Paths are passed as UTF-8; the output directory and every property value go through <code>msbuild_escape()</code>. It never adds ContinuousIntegrationBuild, so the debug information keeps the real source paths and the built scripts can be debugged; a caller that wants it passes it in <code>build_request::properties</code>.</p>
+<p>The process description a request turns into: dotnet build &lt;project&gt; -c &lt;configuration&gt; [-o &lt;output&gt;] --nologo -clp:NoSummary [-p:Name=Value...], run in <code>build_request::workingDirectory</code>. Paths are passed as UTF-8; the output directory and every property value go through <code>msbuild_escape()</code>. It never adds ContinuousIntegrationBuild, so the debug information keeps the real source paths and the built scripts can be debugged; a caller that wants it passes it in <code>build_request::properties</code>.</p>
 
 #### `dotnet_executable` {#function-dotnet-executable}
 

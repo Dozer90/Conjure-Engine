@@ -159,7 +159,7 @@ core::result<void> modules_subsystem::startup(engine_context &context) {
             const core::result<modules::module_id> added = manager.add_manifest(entry.manifestPath);
             if (!added.has_value()) {
                 if (entry.required) {
-                    return make_error(
+                    return core::make_error(
                       engine_error::MODULE_LOAD_FAILED,
                       std::format(
                         "required module manifest '{}' was rejected: {}",
@@ -231,7 +231,7 @@ core::result<void> modules_subsystem::startup(engine_context &context) {
         const modules::module_id id = registry.find(core::string_id(std::string_view(required)));
         if (!id.is_valid() || registry.state(id) != modules::module_state::LOADED) {
             const std::string reason = id.is_valid() ? registry.last_error(id).to_string() : "not registered";
-            return make_error(
+            return core::make_error(
               engine_error::MODULE_LOAD_FAILED,
               std::format("required module '{}' did not load: {}", required, reason)
             );

@@ -31,7 +31,7 @@ core::result<void> entity_allocator::reserve(std::span<entity> out) {
     const usize fromFreeList = out.size() < mFreeList.size() ? out.size() : mFreeList.size();
     const usize fresh = out.size() - fromFreeList;
     if (fresh > 0 && (fresh > static_cast<usize>(MAX_ENTITY_INDEX) - mNextIndex + 1)) {
-        return make_error(ecs_error::ENTITY_LIMIT_REACHED, "the entity index space is exhausted");
+        return core::make_error(ecs_error::ENTITY_LIMIT_REACHED, "the entity index space is exhausted");
     }
 
     usize written = 0;

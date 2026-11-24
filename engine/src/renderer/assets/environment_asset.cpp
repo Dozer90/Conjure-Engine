@@ -455,15 +455,15 @@ core::json::document environment_importer::default_settings() const {
 core::result<assets::import_output> environment_importer::import(assets::import_context &context) const {
     core::result<environment_bake_options> options = environment_bake_options::from_json(context.settings());
     if (!options.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, options.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, options.get_error().message());
     }
     core::result<equirect_image> image = equirect_image::decode_hdr(context.source_bytes(), mJobs);
     if (!image.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, image.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, image.get_error().message());
     }
     core::result<environment_asset> baked = bake_environment(image.value(), options.value(), mJobs);
     if (!baked.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, baked.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, baked.get_error().message());
     }
     baked.value().set_name(std::string(core::vfs::path_utils::stem(context.source_path())));
 

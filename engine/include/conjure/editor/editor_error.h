@@ -6,11 +6,10 @@
 
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 
 // The editor error category (docs/design/04_editor.md 2.3, 6). The protocol's stable error strings and the
-// editor's own core::error codes are one enumeration: a handler returns make_editor_error(code, message) and
+// editor's own core::error codes are one enumeration: a handler returns core::make_error(code, message) and
 // the dispatcher writes to_string(code) into the response. Errors of other modules (ecs, scene, assets, core)
 // that reach a response are mapped through classify_error().
 
@@ -45,6 +44,8 @@ namespace conjure::editor {
                                 // (the client is disconnected); a later hello with a wrong token; a command the
                                 // client's token does not open (details {required, granted}; the client stays)
         PROJECT_NOT_TRUSTED,    // nobody answered for the project on this machine; project.trust comes first
+        STALE_STATE,            // an asynchronous command found the scene, the play state or its target changed
+                                // between dispatch and completion; it changed nothing (code sweep F736)
         INTERNAL,               // an invariant failed; the message says which
         COUNT
     };
@@ -77,13 +78,6 @@ CONJURE_DECLARE_ERROR_CATEGORY(
 );
 
 namespace conjure::editor {
-
-    /// <summary>
-    /// Builds an error of the editor category.
-    /// </summary>
-    [[nodiscard]] inline core::error make_editor_error(protocol_error_code code, std::string message = {}) {
-        return core::error::from(code, std::move(message));
-    }
 
     /// <summary>
     /// The protocol code of any core::error: editor errors map to their own code; scene GUID_NOT_FOUND and

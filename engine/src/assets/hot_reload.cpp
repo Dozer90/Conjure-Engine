@@ -96,7 +96,7 @@ void hot_reload_controller::update() {
 
     // IMPORT_FAILED means the import already ran for the current source state; a change to the
     // source, its meta or a side file puts the owner back into dirty through collect_dirty.
-    const std::vector<asset_id> cacheMisses = mManager->failed_ids(asset_error_code::CACHE_MISS);
+    const std::vector<asset_id> cacheMisses = mManager->failed_ids(assets_error::CACHE_MISS);
     for (const asset_id &failed : cacheMisses) {
         if (has_ok_record(*mDatabase, failed)) {
             dirty.push_back(failed);
@@ -220,8 +220,8 @@ void hot_reload_controller::collect_dirty(std::vector<asset_id> &outDirty) {
                 core::result<asset_id> added = mDatabase->add_file(assetPath);
                 if (added.has_value()) {
                     outDirty.push_back(added.value());
-                } else if (!added.get_error().is_category<asset_error_code>() ||
-                           !added.get_error().is(asset_error_code::NOT_FOUND)) {
+                } else if (!added.get_error().is_category<assets_error>() ||
+                           !added.get_error().is(assets_error::NOT_FOUND)) {
                     CONJURE_LOG_WARN(
                       LOG_ASSETS,
                       "hot reload cannot add '{}': {}",

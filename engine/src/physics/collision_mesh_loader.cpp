@@ -21,13 +21,13 @@ core::result<collision_mesh_asset> collision_mesh_loader::load_cpu_typed(
     CONJURE_UNUSED(context);
     core::result<collision_mesh_asset> parsed = collision_mesh_asset::from_payload(payloadBytes);
     if (!parsed.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::LOAD_FAILED, parsed.get_error().to_string());
+        return core::make_error(assets::assets_error::LOAD_FAILED, parsed.get_error().to_string());
     }
     collision_mesh_asset mesh = std::move(parsed).value();
 
     core::result<JPH::RefConst<JPH::Shape>> shape = build_mesh_shape(mesh);
     if (!shape.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::LOAD_FAILED, shape.get_error().to_string());
+        return core::make_error(assets::assets_error::LOAD_FAILED, shape.get_error().to_string());
     }
     std::shared_ptr<collision_mesh_shapes> shapes = std::make_shared<collision_mesh_shapes>();
     shapes->meshShape = std::move(shape).value();

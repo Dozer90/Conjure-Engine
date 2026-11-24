@@ -57,7 +57,7 @@ namespace conjure::editor {
           "4 graphics device lost.\n";
 
         [[nodiscard]] core::error bad_argument(std::string message) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, std::move(message));
+            return core::make_error(protocol_error_code::INVALID_ARGS, std::move(message));
         }
 
         [[nodiscard]] core::result<std::string_view> take_value(

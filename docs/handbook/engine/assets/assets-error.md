@@ -11,14 +11,14 @@ kind: header
 | File Path | `engine/include/conjure/assets/assets_error.h` |
 | API ↗ | [Assets](../../../api/assets/index.md) |
 
-<p>The assets error category. Every recoverable failure of the module is reported through <code><a href="../core/result/result.html">core::result</a></code> with one of these codes; the generic core codes are used only where the failure is not asset-specific (an invalid argument, a registry overflow).</p>
+<p>Failure conditions of the asset pipeline.</p>
 
 ## Enumerations
 
-### `asset_error_code` {#symbol-asset-error-code}
+### `assets_error` {#symbol-assets-error}
 
 ```cpp
-enum class asset_error_code : u16 {
+enum class assets_error : u16 {
     NONE = 0,
     NOT_FOUND,              // unknown uuid, or the source of a record is gone
     NO_IMPORTER,            // no importer registered for the source's extension
@@ -50,27 +50,19 @@ Failure conditions of the asset pipeline.
 ### `CONJURE_DECLARE_ERROR_CATEGORY` {#symbol-conjure-declare-error-category}
 
 ```cpp
-CONJURE_DECLARE_ERROR_CATEGORY(conjure::assets::asset_error_code, "assets", conjure::assets::asset_error_code_name)
+CONJURE_DECLARE_ERROR_CATEGORY(conjure::assets::assets_error, "assets", conjure::assets::assets_error_name)
 ```
 
 ## Functions
 
 ### Public
 
-#### `asset_error_code_name` {#function-asset-error-code-name}
+#### `assets_error_name` {#function-assets-error-name}
 
-<div class="function-declaration" id="function-asset-error-code-name-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view asset_error_code_name(
-    <a href="assets-error.html#symbol-asset-error-code">asset_error_code</a> code) <span class="k">noexcept</span>;</code></pre></div>
+<div class="function-declaration" id="function-assets-error-name-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view assets_error_name(
+    <a href="assets-error.html#symbol-assets-error">assets_error</a> code) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>Stable upper-case name of a code (&quot;<code>CACHE_MISS</code>&quot;); &quot;&quot; for values outside the enumeration.</p>
-
-#### `make_asset_error` {#function-make-asset-error}
-
-<div class="function-declaration" id="function-make-asset-error-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/error/error.html">core::error</a> make_asset_error(
-    <a href="assets-error.html#symbol-asset-error-code">asset_error_code</a> code,
-    std::string message = {});</code></pre></div>
-
-<p>Builds an error in the assets category.</p>
 
 <!-- doc-content:notes:start -->
 
@@ -120,11 +112,16 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::assets::asset_error_code, "assets", conj
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
+<a id="function-asset-error-code-name"></a>
+<a id="function-asset-error-code-name-1"></a>
+<a id="function-make-asset-error"></a>
+<a id="function-make-asset-error-1"></a>
 <a id="internals-and-algorithms"></a>
 <a id="make_asset_error"></a>
 <a id="other-declarations"></a>
 <a id="structs"></a>
 <a id="structs-and-types"></a>
+<a id="symbol-asset-error-code"></a>
 <a id="tests"></a>
 <a id="threading-model"></a>
 <a id="variables-and-properties"></a>

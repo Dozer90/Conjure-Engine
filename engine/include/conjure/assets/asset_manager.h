@@ -65,6 +65,18 @@ namespace conjure::assets {
     using asset_event_callback = std::function<void(const asset_event &event)>;
 
     /// <summary>
+    /// Whether asset_manager::load_blocking logs its once-per-frame hitch WARN when it is called inside a frame
+    /// (R23). WARN_INSIDE_FRAME is the default and the right choice for game code, where a blocking load is a
+    /// mistake worth seeing. EXPECTED is for a tool whose contract is to finish inside the call (the editor's
+    /// prefab commands inside editor.batch and in undo and redo replays, code sweep F736): the load still blocks
+    /// the frame, it is only not reported. Outside a frame neither logs anything.
+    /// </summary>
+    enum class blocking_load_warning : u8 {
+        WARN_INSIDE_FRAME = 0,
+        EXPECTED
+    };
+
+    /// <summary>
     /// Token returned by subscribe(); 0 is invalid.
     /// </summary>
     struct asset_subscription {
@@ -237,9 +249,13 @@ namespace conjure::assets {
             /// Main thread. Runs the whole pipeline inline, dependencies first, and returns the
             /// LOADED handle or the failure (the slot is then FAILED). Waits for an in-flight job
             /// up to blockingTimeoutSeconds (TIMEOUT; the slot then stays with the async pipeline, which
-            /// finishes it on a later update()). Inside a frame it logs one WARN per frame (R23).
+            /// finishes it on a later update()). Inside a frame it logs one WARN per frame (R23) unless 'warning'
+            /// is blocking_load_warning::EXPECTED; an EXPECTED call does not use up the frame's WARN.
             /// </summary>
-            [[nodiscard]] core::result<asset_handle> load_blocking(const asset_id &id);
+            [[nodiscard]] core::result<asset_handle> load_blocking(
+              const asset_id &id,
+              blocking_load_warning warning = blocking_load_warning::WARN_INSIDE_FRAME
+            );
 
             /// <summary>
             /// LOADED -> RELOADING through the normal pipeline; the old payload stays published
@@ -298,7 +314,7 @@ namespace conjure::assets {
             /// Slots that are FAILED with the given code (the hot reload controller repairs
             /// CACHE_MISS). Main thread.
             /// </summary>
-            [[nodiscard]] std::vector<asset_id> failed_ids(asset_error_code code) const;
+            [[nodiscard]] std::vector<asset_id> failed_ids(assets_error code) const;
 
             /*---------------------------------------------------------------*/
             // Frame

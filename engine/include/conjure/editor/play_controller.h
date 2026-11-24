@@ -63,6 +63,7 @@ namespace conjure::editor {
             u64 mSessionStartFixedStep = 0;
             f64 mSessionStartFixedTime = 0.0;
             u64 mEndedFixedSteps = 0;
+            u64 mStateChanges = 0;
             f64 mEndedSimulationTime = 0.0;
             bool mWarnedUnrecordedEdit = false;
             bool mWarnedFileEdit = false;
@@ -148,6 +149,16 @@ namespace conjure::editor {
 
             [[nodiscard]] bool is_editing() const noexcept {
                 return mState == play_state::EDITING;
+            }
+
+            /// <summary>
+            /// How many state transitions start(), stop(), pause() and resume() made so far (failed calls do not
+            /// count). An asynchronous command compares it at completion with the value at dispatch: equal values
+            /// mean the play state never changed in between, even across a stop and a start that ended in the
+            /// state it began in (code sweep F736).
+            /// </summary>
+            [[nodiscard]] u64 state_changes() const noexcept {
+                return mStateChanges;
             }
 
             /// <summary>

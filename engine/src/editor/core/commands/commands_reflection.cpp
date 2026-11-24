@@ -48,6 +48,11 @@ namespace conjure::editor::support {
             if (!attributes.category.empty()) {
                 result.set("category", std::string_view(attributes.category));
             }
+            // The unit the value, min, max and step are stored and written in ("radians", "degrees"); a plain
+            // number has none.
+            if (attributes.unit != core::reflect::field_unit::NONE) {
+                result.set("unit", core::reflect::to_string(attributes.unit));
+            }
             return result;
         }
 
@@ -241,7 +246,7 @@ namespace conjure::editor::support {
                 });
                 return outcome;
             }
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::TYPE_NOT_FOUND,
               std::format("no component, struct or enumeration named '{}'", name)
             );

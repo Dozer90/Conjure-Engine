@@ -17,15 +17,18 @@
 #include "conjure/core/log.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
+#include "conjure/core/string_utils.h"
 #include "conjure/core/uuid.h"
 #include "conjure/core/vfs/native_file_system.h"
 #include "conjure/modules/module_abi.h"
 #include "conjure/modules/module_manager.h"
 #include "conjure/modules/module_manifest.h"
+#include "conjure/scripting/native_api_hash.h"
 
 #include <algorithm>
 #include <array>
 #include <format>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -51,8 +54,24 @@ namespace {
     // Microsoft does not allow it to be redistributed, so step 5 leaves it behind and says so (06 D14).
     constexpr char MSVC_DEBUG_RUNTIME_MARK = 'd';
 
+    // The manifest of a prebuilt SDK (export_pipeline::MANAGED_SDK_MANIFEST_NAME, owner decision OWN-INSTALL) as the
+    // build target conjure_managed_sdk_export writes it (managed/CMakeLists.txt): the schema, the kind and the host
+    // mode it describes. A self-contained prebuilt SDK would carry the .NET runtime of one platform; none is built.
+    constexpr i64 MANAGED_SDK_MANIFEST_SCHEMA = 1;
+    constexpr std::string_view MANAGED_SDK_KIND = "conjure_managed_sdk_export";
+    constexpr std::string_view MANAGED_SDK_HOST_MODE = "framework_dependent";
+    // What the .NET host needs in a managed directory (the anchors of scripting::validate_managed_directory).
+    constexpr std::array<std::string_view, 3> MANAGED_SDK_FILES = {
+        "Conjure.Bootstrap.dll",
+        "Conjure.Bootstrap.runtimeconfig.json",
+        "Conjure.Managed.dll",
+    };
+    constexpr std::string_view DEBUG_SYMBOLS_EXTENSION = ".pdb";
+    // How long step 3 waits for `dotnet --version` (find_dotnet_sdk) at most; a smaller process timeout wins.
+    constexpr f64 DOTNET_PROBE_TIMEOUT_SECONDS = 120.0;
+
     [[nodiscard]] core::error export_error(std::string_view step, std::string_view detail) {
-        return make_error(engine_error::EXPORT_FAILED, std::format("export step '{}' failed: {}", step, detail));
+        return core::make_error(engine_error::EXPORT_FAILED, std::format("export step '{}' failed: {}", step, detail));
     }
 
     [[nodiscard]] core::error export_error(std::string_view step, const core::error &cause) {
@@ -403,7 +422,7 @@ namespace {
         const bool isRoot = std::filesystem::exists(output, ignored)
           && std::filesystem::equivalent(output, loaded.root_directory(), ignored);
         if (isRoot) {
-            return make_error(
+            return core::make_error(
               engine_error::BAD_ARGUMENTS,
               std::format(
                 "export output '{}' is the project directory; choose a separate folder",
@@ -412,7 +431,7 @@ namespace {
             );
         }
         if (lies_inside(output, loaded.assets_directory())) {
-            return make_error(
+            return core::make_error(
               engine_error::BAD_ARGUMENTS,
               std::format(
                 "export output '{}' lies inside the assets root '{}'; the exported files would be imported as assets",
@@ -444,7 +463,7 @@ namespace {
       const project &loaded
     ) {
         if (lies_inside(artifacts, output)) {
-            return make_error(
+            return core::make_error(
               engine_error::BAD_ARGUMENTS,
               std::format(
                 "export artifacts directory '{}' lies inside the output '{}'; the intermediates would ship with the "
@@ -455,7 +474,7 @@ namespace {
             );
         }
         if (lies_inside(artifacts, loaded.assets_directory())) {
-            return make_error(
+            return core::make_error(
               engine_error::BAD_ARGUMENTS,
               std::format(
                 "export artifacts directory '{}' lies inside the assets root '{}'; the intermediates would be imported "
@@ -511,6 +530,240 @@ namespace {
           )
         );
     }
+
+    /// <summary>
+    /// EXPORT_FAILED naming step 3 unless 'directory' holds a prebuilt SDK this engine can ship (owner decision
+    /// OWN-INSTALL): the manifest export_pipeline::MANAGED_SDK_MANIFEST_NAME of the kind, schema and host mode the
+    /// build target conjure_managed_sdk_export writes, naming this engine's native API hash (Conjure.Managed.dll
+    /// carries it, and the exported runtime's handshake refuses any other), and the files the .NET host needs. A
+    /// self-contained export is refused as well: the prebuilt SDK is framework-dependent.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_prebuilt_managed_sdk(
+      const std::filesystem::path &directory,
+      const scripting_settings &scripting
+    ) {
+        const std::string_view step = export_pipeline::STEP_NAMES[2];
+        if (scripting.exportMode == script_export_mode::SELF_CONTAINED) {
+            return export_error(
+              step,
+              std::format(
+                "the prebuilt SDK in '{}' is framework-dependent and cannot make a self-contained export; set the "
+                "project's scripting.export_mode to \"{}\", or export with an editor built from the engine's source",
+                display_utf8(directory),
+                to_string(script_export_mode::FRAMEWORK_DEPENDENT)
+              )
+            );
+        }
+        const std::filesystem::path manifestPath = directory / export_pipeline::MANAGED_SDK_MANIFEST_NAME;
+        std::error_code probe = {};
+        if (!std::filesystem::is_regular_file(manifestPath, probe)) {
+            return export_error(
+              step,
+              std::format(
+                "'{}' holds no {}, so it is no prebuilt SDK of an export (the build target conjure_managed_sdk_export "
+                "publishes one into <build>/bin/managed_export)",
+                display_utf8(directory),
+                export_pipeline::MANAGED_SDK_MANIFEST_NAME
+              )
+            );
+        }
+        const core::result<core::json::document> parsed = core::json::document::parse_file(manifestPath);
+        if (!parsed.has_value()) {
+            return export_error(
+              step,
+              std::format("reading '{}': {}", display_utf8(manifestPath), parsed.get_error().message())
+            );
+        }
+        const core::json::value root = parsed.value().root();
+        const core::json::value schema = root["schema_version"];
+        const bool known = root["kind"].as_string() == MANAGED_SDK_KIND && schema.is_integer()
+          && schema.as_i64() == MANAGED_SDK_MANIFEST_SCHEMA;
+        if (!known) {
+            return export_error(
+              step,
+              std::format(
+                "'{}' is no manifest of schema {} written by conjure_managed_sdk_export",
+                display_utf8(manifestPath),
+                MANAGED_SDK_MANIFEST_SCHEMA
+              )
+            );
+        }
+        const std::string_view hostMode = root["host_mode"].as_string();
+        if (hostMode != MANAGED_SDK_HOST_MODE) {
+            return export_error(
+              step,
+              std::format(
+                "'{}' describes a '{}' SDK; an export copies only a {} one",
+                display_utf8(manifestPath),
+                hostMode,
+                MANAGED_SDK_HOST_MODE
+              )
+            );
+        }
+        const std::string_view hashText = root["native_api_hash"].as_string();
+        const std::optional<u64> hash = core::str::parse_uint(hashText, 16);
+        if (!hash.has_value() || *hash != CONJURE_NATIVE_API_HASH) {
+            return export_error(
+              step,
+              std::format(
+                "the prebuilt SDK in '{}' was built for the native API hash '{}' and this engine's is 0x{:016X}; the "
+                "exported runtime would refuse it, so ship the managed_export folder of the build that produced this "
+                "engine",
+                display_utf8(directory),
+                hashText,
+                CONJURE_NATIVE_API_HASH
+              )
+            );
+        }
+        for (const std::string_view name : MANAGED_SDK_FILES) {
+            if (!std::filesystem::is_regular_file(directory / name, probe)) {
+                return export_error(
+                  step,
+                  std::format("the prebuilt SDK in '{}' has no {}", display_utf8(directory), name)
+                );
+            }
+        }
+        return core::result<void>::success();
+    }
+
+    /// <summary>
+    /// True when the file name 'name' is 'expected' (lower-case ASCII) with ASCII letters compared without case.
+    /// </summary>
+    [[nodiscard]] bool is_name_ignoring_case(
+      std::basic_string_view<std::filesystem::path::value_type> name,
+      std::string_view expected
+    ) {
+        return name.size() == expected.size() && has_affixes_ignoring_case(name, expected, "");
+    }
+
+    /// <summary>
+    /// Copies every regular file directly in the prebuilt SDK 'source' into 'destination' (created when missing),
+    /// but its manifest and, unless 'withDebugSymbols', its .pdb files, both named without regard to ASCII case.
+    /// Subfolders are not copied: the SDK conjure_managed_sdk_export publishes has none. A folder that cannot be
+    /// created or listed, or a file that cannot be copied, is EXPORT_FAILED naming step 3; the files copied before it
+    /// stay.
+    /// </summary>
+    [[nodiscard]] core::result<void> copy_prebuilt_managed_sdk(
+      const std::filesystem::path &source,
+      const std::filesystem::path &destination,
+      bool withDebugSymbols
+    ) {
+        const std::string_view step = export_pipeline::STEP_NAMES[2];
+        std::error_code error = {};
+        std::filesystem::create_directories(destination, error);
+        if (error) {
+            return export_error(step, std::format("creating '{}': {}", display_utf8(destination), error.message()));
+        }
+        // The explicit iterator: the range-for increments with the throwing operator++ (CONVENTIONS 3).
+        std::filesystem::directory_iterator walker(source, error);
+        const std::filesystem::directory_iterator end = {};
+        while (!error && walker != end) {
+            std::error_code status = {};
+            const std::filesystem::path name = walker->path().filename();
+            const bool manifest = is_name_ignoring_case(name.native(), export_pipeline::MANAGED_SDK_MANIFEST_NAME);
+            const bool symbols = has_affixes_ignoring_case(name.native(), "", DEBUG_SYMBOLS_EXTENSION);
+            const bool shipped = !manifest && (withDebugSymbols || !symbols);
+            if (shipped && walker->is_regular_file(status)) {
+                std::filesystem::copy_file(
+                  walker->path(),
+                  destination / name,
+                  std::filesystem::copy_options::overwrite_existing,
+                  error
+                );
+                if (error) {
+                    return export_error(
+                      step,
+                      std::format("copying '{}': {}", display_utf8(walker->path()), error.message())
+                    );
+                }
+            }
+            walker.increment(error);
+        }
+        if (error) {
+            return export_error(step, std::format("reading '{}': {}", display_utf8(source), error.message()));
+        }
+        return core::result<void>::success();
+    }
+
+    /// <summary>
+    /// The dotnet commands of step 3 (managed_export_commands): the publish of the bootstrap unless 'prebuilt' names
+    /// the SDK the step copied, then the build of the game's scripts, all into 'managed'. 'artifacts' is the
+    /// caller's artifacts directory, resolved, or empty for one in the staging directory. EXPORT_FAILED naming the
+    /// step when no usable .NET SDK answers (find_dotnet_sdk) or a command fails.
+    /// </summary>
+    [[nodiscard]] core::result<void> build_managed(
+      const export_settings &settings,
+      const scripting_settings &scripting,
+      const project &loaded,
+      const std::filesystem::path &managed,
+      const std::filesystem::path &artifacts,
+      const std::filesystem::path &prebuilt
+    ) {
+        const std::string_view step = export_pipeline::STEP_NAMES[2];
+        // The source roots file both commands import (follow-up FU-PDB) lives in a directory of its own below the
+        // system's temporary directory, outside the output that ships and outside every project, as do the
+        // intermediates when the settings name no artifacts directory. It is written anew by every export, which
+        // also makes MSBuild compile again instead of reusing assemblies an export without the mapping left in the
+        // same intermediates. 'staging' removes it when the step ends, whether it succeeded or failed; a removal
+        // that fails leaves it there with a warning.
+        std::error_code temporaryError = {};
+        std::filesystem::path temporary = std::filesystem::temp_directory_path(temporaryError);
+        // TMPDIR may be relative on POSIX, and managed_export_commands needs an absolute import: MSBuild would
+        // resolve a relative one against each project's directory and silently import nothing.
+        if (!temporaryError) {
+            temporary = std::filesystem::absolute(temporary, temporaryError);
+        }
+        if (temporaryError) {
+            return export_error(step, std::format("finding the temporary directory: {}", temporaryError.message()));
+        }
+        core::result<managed_export_staging> staged =
+          managed_export_staging::create(temporary / std::format("conjure_export_{}", core::uuid::generate()));
+        if (!staged.has_value()) {
+            return export_error(step, staged.get_error());
+        }
+        const managed_export_staging staging = std::move(staged).value();
+        CONJURE_LOG_INFO(
+          LOG_ENGINE,
+          "export: MSBuild staging directory '{}' (removed when the step ends)",
+          display_utf8(staging.directory())
+        );
+        // Without a folder of the caller's, the intermediates go with the staging directory: an export from a
+        // build tree used to compile the bootstrap into build/managed_artifacts of the engine's source tree, the
+        // default of managed/Directory.Build.props (follow-up FU-ARTIFACTS).
+        const std::filesystem::path artifactsDirectory = artifacts.empty() ? staging.artifacts_directory() : artifacts;
+        CONJURE_LOG_INFO(LOG_ENGINE, "export: managed artifacts directory '{}'", display_utf8(artifactsDirectory));
+        std::vector<std::vector<std::string>> commands = managed_export_commands(
+          settings,
+          scripting,
+          managed,
+          staging.source_roots_targets(),
+          artifactsDirectory,
+          prebuilt
+        );
+        // Owner decision OWN-INSTALL: the .NET SDK is an optional download, so a machine without one is told which
+        // version global.json asks for and where Microsoft offers it, instead of the exit code of a dotnet that has
+        // no SDK to run the command with.
+        const f64 probeTimeout = settings.processTimeoutSeconds > 0.0
+          ? std::min(settings.processTimeoutSeconds, DOTNET_PROBE_TIMEOUT_SECONDS)
+          : DOTNET_PROBE_TIMEOUT_SECONDS;
+        const core::result<std::string> sdk =
+          find_dotnet_sdk(settings.dotnetExecutable, loaded.root_directory(), probeTimeout);
+        if (!sdk.has_value()) {
+            return export_error(step, sdk.get_error().message());
+        }
+        CONJURE_LOG_INFO(LOG_ENGINE, "export: building managed code with the .NET SDK {}", sdk.value());
+        for (std::vector<std::string> &arguments : commands) {
+            CONJURE_TRY(run_tool(
+              step,
+              settings.dotnetExecutable,
+              std::move(arguments),
+              loaded.root_directory(),
+              settings.processTimeoutSeconds,
+              managed_export_environment()
+            ));
+        }
+        return core::result<void>::success();
+    }
 }
 
 /*===========================================================================*/
@@ -541,7 +794,7 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
         );
     }
     if (settings.outputDirectory.empty()) {
-        return make_error(engine_error::BAD_ARGUMENTS, "export needs an output directory");
+        return core::make_error(engine_error::BAD_ARGUMENTS, "export needs an output directory");
     }
     const engine_config &config = *mContext->config;
     std::error_code fsError = {};
@@ -568,6 +821,32 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             );
         }
     }
+    // Owner decision OWN-INSTALL: an installed editor names the prebuilt SDK of its install layout instead of a
+    // bootstrap project. Its folder is checked before anything is written, when step 3 is going to copy it.
+    if (!settings.bootstrapProject.empty() && !settings.prebuiltManagedDirectory.empty()) {
+        return core::make_error(
+          engine_error::BAD_ARGUMENTS,
+          std::format(
+            "export settings name both the bootstrap project '{}' and the prebuilt SDK '{}'; step 3 publishes one or "
+            "copies the other",
+            display_utf8(settings.bootstrapProject),
+            display_utf8(settings.prebuiltManagedDirectory)
+          )
+        );
+    }
+    std::filesystem::path prebuilt = {};
+    if (!settings.prebuiltManagedDirectory.empty()) {
+        prebuilt = std::filesystem::absolute(settings.prebuiltManagedDirectory, fsError).lexically_normal();
+        if (fsError) {
+            return export_error(
+              "prepare",
+              std::format("resolving '{}': {}", display_utf8(settings.prebuiltManagedDirectory), fsError.message())
+            );
+        }
+        if (config.scripting.enabled && settings.publishManaged) {
+            CONJURE_TRY(check_prebuilt_managed_sdk(prebuilt, config.scripting));
+        }
+    }
     const std::vector<std::filesystem::path> createdFolders = missing_folders(output);
     std::filesystem::create_directories(output, fsError);
     if (fsError) {
@@ -581,6 +860,19 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             remove_created_folders(createdFolders);
             return core::error(std::move(checked).get_error());
         }
+    }
+    // A prebuilt SDK inside the output (an export into the editor's own folder) would be copied onto itself.
+    const bool copiesPrebuilt = !prebuilt.empty() && config.scripting.enabled && settings.publishManaged;
+    if (copiesPrebuilt && lies_inside(prebuilt, output)) {
+        remove_created_folders(createdFolders);
+        return core::make_error(
+          engine_error::BAD_ARGUMENTS,
+          std::format(
+            "the prebuilt SDK '{}' lies inside the export output '{}'; export into a folder outside the editor's",
+            display_utf8(prebuilt),
+            display_utf8(output)
+          )
+        );
     }
 
     const auto announce = [&](usize index) {
@@ -675,64 +967,22 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
     // refused such an export unless the project disables scripting as well or the settings ask for no managed code.
     announce(2);
     if (config.scripting.enabled && settings.publishManaged) {
-        if (settings.bootstrapProject.empty()) {
+        if (settings.bootstrapProject.empty() && prebuilt.empty()) {
             report.warnings.emplace_back(
-              "scripting is enabled but no bootstrap project was given; managed code not published"
+              "scripting is enabled but neither a bootstrap project nor a prebuilt SDK was given; managed code not "
+              "published"
             );
         } else {
             const std::filesystem::path managed = output / MANAGED_DIRECTORY;
-            // The source roots file both commands import (follow-up FU-PDB) lives in a directory of its own below
-            // the system's temporary directory, outside the output that ships and outside every project, as do the
-            // intermediates when the settings name no artifacts directory. It is written anew by every export, which
-            // also makes MSBuild compile again instead of reusing assemblies an export without the mapping left in
-            // the same intermediates. 'staging' removes it when the step ends, whether it succeeded or failed; a
-            // removal that fails leaves it there with a warning.
-            std::error_code temporaryError = {};
-            std::filesystem::path temporary = std::filesystem::temp_directory_path(temporaryError);
-            // TMPDIR may be relative on POSIX, and managed_export_commands needs an absolute import: MSBuild would
-            // resolve a relative one against each project's directory and silently import nothing.
-            if (!temporaryError) {
-                temporary = std::filesystem::absolute(temporary, temporaryError);
+            // Owner decision OWN-INSTALL: the prebuilt SDK replaces the publish of the bootstrap. Only the game's
+            // scripts still need dotnet, so an export of a project without them runs no dotnet command at all.
+            if (!prebuilt.empty()) {
+                CONJURE_LOG_INFO(LOG_ENGINE, "export: copying the prebuilt SDK '{}'", display_utf8(prebuilt));
+                CONJURE_TRY(copy_prebuilt_managed_sdk(prebuilt, managed, config.scripting.exportDebugSymbols));
             }
-            if (temporaryError) {
-                return export_error(
-                  STEP_NAMES[2],
-                  std::format("finding the temporary directory: {}", temporaryError.message())
-                );
-            }
-            core::result<managed_export_staging> staged =
-              managed_export_staging::create(temporary / std::format("conjure_export_{}", core::uuid::generate()));
-            if (!staged.has_value()) {
-                return export_error(STEP_NAMES[2], staged.get_error());
-            }
-            const managed_export_staging staging = std::move(staged).value();
-            CONJURE_LOG_INFO(
-              LOG_ENGINE,
-              "export: MSBuild staging directory '{}' (removed when the step ends)",
-              display_utf8(staging.directory())
-            );
-            // Without a folder of the caller's, the intermediates go with the staging directory: an export from a
-            // build tree used to compile the bootstrap into build/managed_artifacts of the engine's source tree, the
-            // default of managed/Directory.Build.props (follow-up FU-ARTIFACTS).
-            const std::filesystem::path artifactsDirectory =
-              artifacts.empty() ? staging.artifacts_directory() : artifacts;
-            CONJURE_LOG_INFO(LOG_ENGINE, "export: managed artifacts directory '{}'", display_utf8(artifactsDirectory));
-            std::vector<std::vector<std::string>> commands = managed_export_commands(
-              settings,
-              config.scripting,
-              managed,
-              staging.source_roots_targets(),
-              artifactsDirectory
-            );
-            for (std::vector<std::string> &arguments : commands) {
-                CONJURE_TRY(run_tool(
-                  STEP_NAMES[2],
-                  settings.dotnetExecutable,
-                  std::move(arguments),
-                  loaded->root_directory(),
-                  settings.processTimeoutSeconds,
-                  managed_export_environment()
-                ));
+            const bool runsDotnet = prebuilt.empty() || !settings.scriptsProject.empty();
+            if (runsDotnet) {
+                CONJURE_TRY(build_managed(settings, config.scripting, *loaded, managed, artifacts, prebuilt));
             }
             report.managedPublished = true;
             report.copiedFiles.emplace_back(MANAGED_DIRECTORY);

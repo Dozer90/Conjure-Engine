@@ -112,17 +112,15 @@ CONJURE_REFLECT_ENUM(conjure::renderer::light_type, "conjure.renderer.light_type
 CONJURE_REFLECT_ENUM(conjure::renderer::shadow_filter, "conjure.renderer.shadow_filter", DEFAULT, HARD, PCF, PCSS);
 CONJURE_REFLECT_ENUM(conjure::renderer::sprite_space, "conjure.renderer.sprite_space", WORLD, SCREEN);
 CONJURE_REFLECT_STRUCT(conjure::renderer::camera, "conjure.renderer.camera_data",
-    CONJURE_FIELD(projection), CONJURE_FIELD(verticalFovRadians, .min = 0.01, .max = 3.1),
+    CONJURE_FIELD(projection),
+    CONJURE_FIELD(verticalFovRadians, .min = 0.01, .max = 3.1, .unit = conjure::core::reflect::field_unit::RADIANS),
     CONJURE_FIELD(orthographicHeight, .min = 0.001), CONJURE_FIELD(nearPlane, .min = 0.0001),
     CONJURE_FIELD(farPlane, .min = 0.001));
 CONJURE_REFLECT_STRUCT(conjure::renderer::light, "conjure.renderer.light_data",
     CONJURE_FIELD(type), CONJURE_FIELD(position), CONJURE_FIELD(direction), CONJURE_FIELD(colour),
     CONJURE_FIELD(intensity, .min = 0.0), CONJURE_FIELD(range, .min = 0.0),
-    CONJURE_FIELD(
-      innerConeRadians,
-      .min = 0.0,
-      .max = 1.5708
-    ), CONJURE_FIELD(outerConeRadians, .min = 0.0, .max = 1.5708),
+    CONJURE_FIELD(innerConeRadians, .min = 0.0, .max = 1.5708, .unit = conjure::core::reflect::field_unit::RADIANS),
+    CONJURE_FIELD(outerConeRadians, .min = 0.0, .max = 1.5708, .unit = conjure::core::reflect::field_unit::RADIANS),
     CONJURE_FIELD(sourceRadius, .min = 0.0), CONJURE_FIELD(castsShadows), CONJURE_FIELD(filter),
     CONJURE_FIELD(shadowResolution, .min = 256.0, .max = 1024.0));
 CONJURE_REFLECT_STRUCT(conjure::renderer::mesh_renderer_component, "conjure.renderer.mesh_renderer",
@@ -136,4 +134,5 @@ CONJURE_REFLECT_STRUCT(conjure::renderer::camera_component, "conjure.renderer.ca
     CONJURE_FIELD(postProcess));
 CONJURE_REFLECT_STRUCT(conjure::renderer::light_component, "conjure.renderer.light", CONJURE_FIELD(lightData));
 CONJURE_REFLECT_STRUCT(conjure::renderer::environment_component, "conjure.renderer.environment",
-    CONJURE_FIELD(environment), CONJURE_FIELD(intensity, .min = 0.0), CONJURE_FIELD(rotationRadians));
+    CONJURE_FIELD(environment), CONJURE_FIELD(intensity, .min = 0.0),
+    CONJURE_FIELD(rotationRadians, .unit = conjure::core::reflect::field_unit::RADIANS));

@@ -68,7 +68,7 @@ core::result<void> scripting_subsystem::startup(engine_context &context) {
     const bool useNullHost = config.scripting.useNullHost;
     if (!useNullHost && !scripting::is_runtime_available()) {
         if (config.scripting.required) {
-            return make_error(engine_error::SCRIPT_RUNTIME_NOT_FOUND, "no .NET runtime was found (hostfxr)");
+            return core::make_error(engine_error::SCRIPT_RUNTIME_NOT_FOUND, "no .NET runtime was found (hostfxr)");
         }
         CONJURE_LOG_WARN(LOG_ENGINE, "scripting: no .NET runtime found; scripting disabled");
         return core::result<void>::success();
@@ -134,10 +134,10 @@ core::result<void> scripting_subsystem::post_startup(engine_context &context) {
         if (config.scripting.required) {
             // A missing .NET runtime is SCRIPT_RUNTIME_NOT_FOUND (R27); a runtime that exists but failed its
             // handshake or version check is reported as what it is, with the original message.
-            const engine_error code = error.is(scripting::script_error::RUNTIME_NOT_FOUND)
+            const engine_error code = error.is(scripting::scripting_error::RUNTIME_NOT_FOUND)
               ? engine_error::SCRIPT_RUNTIME_NOT_FOUND
               : engine_error::SCRIPT_RUNTIME_INIT_FAILED;
-            return make_error(code, std::format("script runtime initialisation failed: {}", error.to_string()));
+            return core::make_error(code, "script runtime initialisation failed: {}", error.to_string());
         }
         CONJURE_LOG_WARN(LOG_ENGINE, "scripting: runtime unavailable, scripting disabled: {}", error.to_string());
         disable(context);
@@ -149,7 +149,7 @@ core::result<void> scripting_subsystem::post_startup(engine_context &context) {
         const core::result<void> loaded = mServices->scripting->load_game_assembly(assemblyPath);
         if (!loaded.has_value()) {
             if (config.scripting.required) {
-                return make_error(
+                return core::make_error(
                   engine_error::SCRIPT_ASSEMBLY_LOAD_FAILED,
                   std::format(
                     "game assembly '{}' did not load: {}",

@@ -51,7 +51,7 @@ core::result<entity_archive> entity_archive::capture(
   archive_options options
 ) {
     if (source.is_locked()) {
-        return make_error(ecs_error::STRUCTURE_LOCKED, "entity_archive::capture while the world is locked");
+        return core::make_error(ecs_error::STRUCTURE_LOCKED, "entity_archive::capture while the world is locked");
     }
     const component_registry &registry = source.registry();
     entity_archive archive(registry);
@@ -60,7 +60,7 @@ core::result<entity_archive> entity_archive::capture(
     localIndex.reserve(entities.size());
     for (usize index = 0; index < entities.size(); ++index) {
         if (!source.is_alive(entities[index])) {
-            return make_error(ecs_error::ENTITY_NOT_ALIVE, std::format("entity {} is not alive", entities[index]));
+            return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "entity {} is not alive", entities[index]);
         }
         localIndex.emplace(entities[index], static_cast<u32>(index));
     }
@@ -128,26 +128,26 @@ core::result<void> entity_archive::validate() const {
         component_mask seen = {};
         for (const archive_component &component : entry.components) {
             if (!mRegistry->is_registered(component.id)) {
-                return make_error(
+                return core::make_error(
                   ecs_error::ARCHIVE_CORRUPT,
                   std::format("entry {}: unregistered component id", index)
                 );
             }
             if (!entry.mask.test(component.id)) {
-                return make_error(
+                return core::make_error(
                   ecs_error::ARCHIVE_CORRUPT,
                   std::format("entry {}: component missing from the mask", index)
                 );
             }
             if (seen.test(component.id)) {
-                return make_error(ecs_error::ARCHIVE_CORRUPT, std::format("entry {}: duplicate component", index));
+                return core::make_error(ecs_error::ARCHIVE_CORRUPT, "entry {}: duplicate component", index);
             }
             seen.set(component.id);
 
             const component_info &info = mRegistry->info(component.id);
             const usize expected = info.is_tag() ? 0u : info.size;
             if (component.bytes.size() != expected) {
-                return make_error(
+                return core::make_error(
                   ecs_error::ARCHIVE_CORRUPT,
                   std::format(
                     "entry {}: payload of '{}' has {} bytes, expected {}",
@@ -162,7 +162,7 @@ core::result<void> entity_archive::validate() const {
                 entity reference = {};
                 std::memcpy(&reference, component.bytes.data() + offset, sizeof(entity));
                 if (reference.is_archive_local() && reference.index >= count) {
-                    return make_error(
+                    return core::make_error(
                       ecs_error::ARCHIVE_CORRUPT,
                       std::format(
                         "entry {}: local reference {} is outside the archive of {} entries",
@@ -175,7 +175,7 @@ core::result<void> entity_archive::validate() const {
             }
         }
         if (seen != entry.mask) {
-            return make_error(ecs_error::ARCHIVE_CORRUPT, std::format("entry {}: mask bit without a component", index));
+            return core::make_error(ecs_error::ARCHIVE_CORRUPT, "entry {}: mask bit without a component", index);
         }
     }
     return core::result<void>::success();

@@ -134,11 +134,35 @@ TEST_SUITE("editor/command_registry") {
         CHECK_FALSE(registry.remove("core.keep"));
     }
 
-    TEST_CASE("command_registry - async commands are never allowed inside a batch") {
+    TEST_CASE("command_registry - async commands are not allowed inside a batch unless they say sync_in_batch") {
         command_registry registry = {};
         CONJURE_REQUIRE_OK(registry.add(make("async.one", command_flags::ASYNC)));
         REQUIRE(registry.find("async.one") != nullptr);
         CHECK(has_command_flag(*registry.find("async.one"), command_flags::NOT_IN_BATCH));
+        CONJURE_REQUIRE_OK(registry.add(make(
+          "async.batchable",
+          command_flags::ASYNC | command_flags::MUTATES | command_flags::SYNC_IN_BATCH
+        )));
+        REQUIRE(registry.find("async.batchable") != nullptr);
+        CHECK_FALSE(has_command_flag(*registry.find("async.batchable"), command_flags::NOT_IN_BATCH));
+        CHECK(has_command_flag(*registry.find("async.batchable"), command_flags::SYNC_IN_BATCH));
+    }
+
+    TEST_CASE("regression - code sweep F736 command_registry refuses sync_in_batch without async or with "
+              "not_in_batch") {
+        command_registry registry = {};
+        const core::result<void> withoutAsync = registry.add(make("sync.only", command_flags::SYNC_IN_BATCH));
+        REQUIRE_FALSE(withoutAsync.has_value());
+        CHECK(withoutAsync.get_error().is(protocol_error_code::INVALID_ARGS));
+        CHECK(withoutAsync.get_error().message().find("sync_in_batch") != std::string::npos);
+        CONJURE_CHECK_ERROR(
+          registry.add(make(
+            "sync.contradiction",
+            command_flags::ASYNC | command_flags::SYNC_IN_BATCH | command_flags::NOT_IN_BATCH
+          )),
+          protocol_error_code::INVALID_ARGS
+        );
+        CHECK(registry.size() == 0);
     }
 
     TEST_CASE("command_registry - describe_all hides UI-only commands and reports events and codes") {

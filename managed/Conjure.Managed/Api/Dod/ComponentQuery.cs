@@ -93,7 +93,7 @@ public unsafe ref struct ComponentQuery
         return query;
     }
 
-    // The statuses are negated script_error codes (engine/include/conjure/scripting/scripting_error.h).
+    // The statuses are negated scripting_error codes (engine/include/conjure/scripting/scripting_error.h).
     private static string BeginFailure(int status) => (-status) switch
     {
         13 => "ComponentQuery.Begin must run on the main thread (WRONG_THREAD)",

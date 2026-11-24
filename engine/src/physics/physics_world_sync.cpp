@@ -274,7 +274,7 @@ void physics_world::state::push_changed_components(ecs::command_buffer &deferred
         }
         if (controller.radius != row->characterMirror.radius || controller.height != row->characterMirror.height
           || controller.layer != row->characterMirror.layer || controller.padding != row->characterMirror.padding
-          || controller.maxSlopeAngleDegrees != row->characterMirror.maxSlopeAngleDegrees
+          || controller.maxSlopeAngleRadians != row->characterMirror.maxSlopeAngleRadians
           || controller.stepHeight != row->characterMirror.stepHeight || controller.mass != row->characterMirror.mass
           || controller.maxStrength != row->characterMirror.maxStrength
           || controller.flags != row->characterMirror.flags) {

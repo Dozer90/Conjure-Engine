@@ -128,7 +128,7 @@ TEST_SUITE("scripting/script_class_registry") {
         );
         CONJURE_CHECK_ERROR(
           registry.stage_field(99, make_field("x", script_field_kind::FLOAT)),
-          script_error::CLASS_NOT_FOUND
+          scripting_error::CLASS_NOT_FOUND
         );
         registry.commit_staging();
 

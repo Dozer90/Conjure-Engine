@@ -224,9 +224,9 @@ TEST_SUITE("assets/asset_database") {
         CHECK(fixture.database->record_count() == 1);
         CHECK(fixture.database->stale_ids().empty());
 
-        CONJURE_CHECK_ERROR(fixture.database->move_asset(test_id(5), "assets://x.ta"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->move_asset(test_id(5), "assets://x.ta"), assets_error::NOT_FOUND);
         CONJURE_CHECK_ERROR(fixture.database->move_asset(id, "nowhere"), core::error_code::INVALID_ARGUMENT);
-        CONJURE_CHECK_ERROR(fixture.database->move_asset(id, "other://x.ta"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->move_asset(id, "other://x.ta"), assets_error::NOT_FOUND);
         CONJURE_CHECK_ERROR(
           fixture.database->move_asset(id, "assets://new/renamed.ta"),
           core::error_code::ALREADY_EXISTS
@@ -242,7 +242,7 @@ TEST_SUITE("assets/asset_database") {
         // A directory squats on the destination meta path: the meta rename fails before anything
         // moved, so the source, its meta and the record are untouched (the uuid stays reachable).
         CONJURE_REQUIRE_OK(fixture.fileSystem->create_directories("assets/new/renamed.ta.meta"));
-        CONJURE_CHECK_ERROR(fixture.database->move_asset(id, "assets://new/renamed.ta"), asset_error_code::IO_ERROR);
+        CONJURE_CHECK_ERROR(fixture.database->move_asset(id, "assets://new/renamed.ta"), assets_error::IO_ERROR);
         CHECK(fixture.fileSystem->exists("assets/old/a.ta"));
         CHECK(fixture.fileSystem->exists("assets/old/a.ta.meta"));
         CHECK_FALSE(fixture.fileSystem->exists("assets/new/renamed.ta"));
@@ -311,8 +311,8 @@ TEST_SUITE("assets/asset_database") {
         core::result<import_report> imported = fixture.database->import(std::vector<asset_id>{robot}, fixture.jobs);
         CONJURE_REQUIRE_OK(imported);
         CHECK(imported.value().sourcesSkipped == 1);
-        CONJURE_CHECK_ERROR(fixture.database->mark_source_present(robot), asset_error_code::NOT_FOUND);
-        CONJURE_CHECK_ERROR(fixture.database->mark_source_missing(test_id(99)), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->mark_source_present(robot), assets_error::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->mark_source_missing(test_id(99)), assets_error::NOT_FOUND);
 
         // Back with new content: OK again, the children follow and the changed source is stale.
         fixture.write_source("robot.ta", "sub Body\nrobot v2");
@@ -484,7 +484,7 @@ TEST_SUITE("assets/asset_database") {
         CHECK(fromMid.value().size() == 2);
         CONJURE_CHECK_ERROR(
           fixture.database->dependency_closure(std::vector<asset_id>{test_id(99)}),
-          asset_error_code::NOT_FOUND
+          assets_error::NOT_FOUND
         );
         core::result<std::vector<asset_id>> empty = fixture.database->dependency_closure({});
         CONJURE_REQUIRE_OK(empty);
@@ -608,9 +608,9 @@ TEST_SUITE("assets/asset_database") {
         pipeline_fixture fixture = {};
         CONJURE_REQUIRE_OK(fixture.database->scan());
         fixture.write_source("late.ta", "late");
-        CONJURE_CHECK_ERROR(fixture.database->add_file("assets://missing.ta"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->add_file("assets://missing.ta"), assets_error::NOT_FOUND);
         CONJURE_CHECK_ERROR(fixture.database->add_file("bogus"), core::error_code::INVALID_ARGUMENT);
-        CONJURE_CHECK_ERROR(fixture.database->add_file("other://late.ta"), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->add_file("other://late.ta"), assets_error::NOT_FOUND);
         core::result<asset_id> added = fixture.database->add_file("assets://late.ta");
         CONJURE_REQUIRE_OK(added);
         CHECK(fixture.id_of("late.ta") == added.value());
@@ -632,7 +632,7 @@ TEST_SUITE("assets/asset_database") {
         );
         CONJURE_CHECK_ERROR(
           fixture.database->create_asset("assets://made/x.ta", "conjure.test.nope", {}),
-          asset_error_code::NO_IMPORTER
+          assets_error::NO_IMPORTER
         );
         CONJURE_REQUIRE_OK(fixture.database->import_stale(fixture.jobs));
         CHECK(fixture.cache().contains(created.value()));
@@ -642,7 +642,7 @@ TEST_SUITE("assets/asset_database") {
         CHECK_FALSE(fixture.fileSystem->exists("assets/made/new.ta.meta"));
         CHECK_FALSE(fixture.cache().contains(created.value()));
         CHECK_FALSE(fixture.database->find(created.value()).has_value());
-        CONJURE_CHECK_ERROR(fixture.database->delete_asset(created.value()), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->delete_asset(created.value()), assets_error::NOT_FOUND);
     }
 
     TEST_CASE("asset_database - write_meta refreshes the settings hash and marks the source stale") {
@@ -662,8 +662,8 @@ TEST_SUITE("assets/asset_database") {
         CHECK(fixture.database->stale_ids() == std::vector<asset_id>{id});
         CONJURE_REQUIRE_OK(fixture.database->import_stale(fixture.jobs));
         CHECK(text_of(fixture.cache().read(id).value().payload) == "LOWER");
-        CONJURE_CHECK_ERROR(fixture.database->write_meta(test_id(9), edited), asset_error_code::NOT_FOUND);
-        CONJURE_CHECK_ERROR(fixture.database->read_meta(test_id(9)), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->write_meta(test_id(9), edited), assets_error::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.database->read_meta(test_id(9)), assets_error::NOT_FOUND);
     }
 
     TEST_CASE("asset_database - set_importer imports a source with an importer that does not claim its extension") {
@@ -702,10 +702,10 @@ TEST_SUITE("assets/asset_database") {
         CONJURE_REQUIRE_OK(fixture.database->scan());
         CHECK(fixture.database->find(id)->importerId == shout_importer::ID);
 
-        CONJURE_CHECK_ERROR(fixture.database->set_importer(id, "conjure.test.nope"), asset_error_code::NO_IMPORTER);
+        CONJURE_CHECK_ERROR(fixture.database->set_importer(id, "conjure.test.nope"), assets_error::NO_IMPORTER);
         CHECK(fixture.database->find(id)->importerId == shout_importer::ID);
         const core::result<void> unknownAsset = fixture.database->set_importer(test_id(9), shout_importer::ID);
-        CONJURE_CHECK_ERROR(unknownAsset, asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(unknownAsset, assets_error::NOT_FOUND);
     }
 
     TEST_CASE("asset_database - corrupt metas are never overwritten and loads of them fail") {

@@ -105,7 +105,7 @@ TEST_SUITE("scripting/native_api") {
 
     TEST_CASE("validate_native_api - fails on missing core entries and header drift") {
         conjure_native_api api = make_native_api(nullptr);
-        CONJURE_CHECK_ERROR(validate_native_api(api), script_error::NOT_INITIALISED);
+        CONJURE_CHECK_ERROR(validate_native_api(api), scripting_error::NOT_INITIALISED);
 
         fill_core_native_entries(api);
         CONJURE_CHECK_OK(validate_native_api(api));
@@ -113,7 +113,7 @@ TEST_SUITE("scripting/native_api") {
         SUBCASE("one core entry cleared") {
             api.component_get = nullptr;
             const core::result<void> validated = validate_native_api(api);
-            CONJURE_CHECK_ERROR(validated, script_error::NOT_INITIALISED);
+            CONJURE_CHECK_ERROR(validated, scripting_error::NOT_INITIALISED);
             CHECK(validated.get_error().message().find("component_get") != std::string::npos);
         }
         SUBCASE("bindings entries may stay null") {
@@ -122,36 +122,36 @@ TEST_SUITE("scripting/native_api") {
         }
         SUBCASE("size mismatch") {
             api.size = 4;
-            CONJURE_CHECK_ERROR(validate_native_api(api), script_error::ABI_MISMATCH);
+            CONJURE_CHECK_ERROR(validate_native_api(api), scripting_error::ABI_MISMATCH);
         }
         SUBCASE("version mismatch") {
             api.version = CONJURE_NATIVE_API_VERSION + 1;
-            CONJURE_CHECK_ERROR(validate_native_api(api), script_error::ABI_MISMATCH);
+            CONJURE_CHECK_ERROR(validate_native_api(api), scripting_error::ABI_MISMATCH);
         }
         SUBCASE("hash mismatch names both hashes") {
             api.layout_hash = 0x1234;
             const core::result<void> validated = validate_native_api(api);
-            CONJURE_CHECK_ERROR(validated, script_error::ABI_MISMATCH);
+            CONJURE_CHECK_ERROR(validated, scripting_error::ABI_MISMATCH);
             CHECK(validated.get_error().message().find("0x0000000000001234") != std::string::npos);
         }
     }
 
     TEST_CASE("validate_managed_api - checks header and every function") {
         conjure_managed_api api = {};
-        CONJURE_CHECK_ERROR(validate_managed_api(api), script_error::ABI_MISMATCH);
+        CONJURE_CHECK_ERROR(validate_managed_api(api), scripting_error::ABI_MISMATCH);
         api.size = sizeof(conjure_managed_api);
         api.version = CONJURE_NATIVE_API_VERSION;
         api.layout_hash = CONJURE_NATIVE_API_HASH;
-        CONJURE_CHECK_ERROR(validate_managed_api(api), script_error::ABI_MISMATCH);
+        CONJURE_CHECK_ERROR(validate_managed_api(api), scripting_error::ABI_MISMATCH);
 
         scripting_test::scripting_fixture fixture = {};
         CONJURE_CHECK_OK(validate_managed_api(fixture.runtime.host().managed_api()));
         conjure_managed_api partial = fixture.runtime.host().managed_api();
         partial.collect_garbage = nullptr;
-        CONJURE_CHECK_ERROR(validate_managed_api(partial), script_error::ABI_MISMATCH);
+        CONJURE_CHECK_ERROR(validate_managed_api(partial), scripting_error::ABI_MISMATCH);
         partial = fixture.runtime.host().managed_api();
         partial.layout_hash ^= 1;
-        CONJURE_CHECK_ERROR(validate_managed_api(partial), script_error::ABI_MISMATCH);
+        CONJURE_CHECK_ERROR(validate_managed_api(partial), scripting_error::ABI_MISMATCH);
     }
 
     TEST_CASE("find_native_entry - resolves names in both groups and rejects unknown ones") {

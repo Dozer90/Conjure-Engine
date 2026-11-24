@@ -605,7 +605,7 @@ core::result<assets::import_output> collision_mesh_importer::import(assets::impo
       ? parse_obj(text_of(context.source_bytes()))
       : parse_gltf(context);
     if (!geometry.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, geometry.get_error().to_string());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, geometry.get_error().to_string());
     }
 
     f32 weldDistance = DEFAULT_WELD_DISTANCE;
@@ -620,8 +620,8 @@ core::result<assets::import_output> collision_mesh_importer::import(assets::impo
       welded.indices
     );
     if (!mesh.has_value()) {
-        return assets::make_asset_error(
-          assets::asset_error_code::IMPORT_FAILED,
+        return core::make_error(
+          assets::assets_error::IMPORT_FAILED,
           std::format("{}: {}", context.source_path(), mesh.get_error().to_string())
         );
     }

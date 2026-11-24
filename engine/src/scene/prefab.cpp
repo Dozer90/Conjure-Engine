@@ -506,7 +506,7 @@ core::result<void> prefab_builder::add_component_json(
     }
     const ecs::component_id id = mRegistry->find(component);
     if (!id.is_valid() || id == detail::UNRESOLVED_COMPONENTS_ID) {
-        return ecs::make_error(
+        return core::make_error(
           ecs::ecs_error::UNKNOWN_COMPONENT,
           "component '" + component.to_string() + "' is not registered"
         );
@@ -549,7 +549,7 @@ core::result<void> prefab_builder::add_component_raw(
         return core::make_error(scene_error::BUILDER_INVALID, "node {} does not exist", node);
     }
     if (!mRegistry->is_registered(component) || component == detail::UNRESOLVED_COMPONENTS_ID) {
-        return ecs::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
+        return core::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (is_reserved(component)) {
         return core::make_error(scene_error::BUILDER_INVALID, "component {} is owned by the builder", component.value);
@@ -582,7 +582,7 @@ core::result<void> prefab_builder::add_tag(u32 node, ecs::component_id component
         return core::make_error(scene_error::BUILDER_INVALID, "node {} does not exist", node);
     }
     if (!mRegistry->is_registered(component) || component == detail::UNRESOLVED_COMPONENTS_ID) {
-        return ecs::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
+        return core::make_error(ecs::ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (is_reserved(component)) {
         return core::make_error(scene_error::BUILDER_INVALID, "component {} is owned by the builder", component.value);

@@ -38,7 +38,7 @@ namespace conjure::editor::support {
                 const core::result<ecs::component_id> cameraType =
                   access::resolve_component_type(context.components(), "camera", nullptr);
                 if (cameraType.has_value() && !context.scene().world().has_raw(entity, cameraType.value())) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::COMPONENT_NOT_FOUND,
                       "args.camera: the entity has no camera component"
                     );

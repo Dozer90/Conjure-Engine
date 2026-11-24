@@ -245,9 +245,9 @@ TEST_SUITE("assets/asset_manager_load") {
         CONJURE_REQUIRE_OK(fixture.manager().load_blocking(test_id(2)));
         CHECK(controls().loadCpuCalls.load() == 2);
 
-        CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(9)), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(9)), assets_error::NOT_FOUND);
         CHECK(fixture.manager().state_of(test_id(9)) == asset_state::FAILED);
-        CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(9)), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(9)), assets_error::NOT_FOUND);
         CONJURE_CHECK_ERROR(fixture.manager().load_blocking(asset_id()), core::error_code::INVALID_ARGUMENT);
     }
 
@@ -267,6 +267,34 @@ TEST_SUITE("assets/asset_manager_load") {
         CONJURE_REQUIRE_OK(fixture.manager().load_blocking(test_id(1)));
         CHECK(logs.count(core::log_level::WARN) == 2);
         fixture.manager().end_frame();
+    }
+
+    TEST_CASE("regression - code sweep F736 load_blocking that a tool expects logs no hitch and keeps the frame's "
+              "WARN for the next unexpected one") {
+        load_fixture fixture = {};
+        conjure::testing::log_capture logs = {};
+        fixture.add(test_id(1), "a");
+        fixture.add(test_id(2), "b");
+        fixture.add(test_id(3), "c");
+        fixture.manager().begin_frame(1);
+        const core::result<asset_handle> expected =
+          fixture.manager().load_blocking(test_id(1), blocking_load_warning::EXPECTED);
+        CONJURE_REQUIRE_OK(expected);
+        CHECK(expected.value().state() == asset_state::LOADED);
+        CHECK(expected.value().get<test_asset>()->content == "a");
+        CHECK(logs.count(core::log_level::WARN) == 0);
+        // The expected load did not use up the frame's WARN: the next default one still reports itself.
+        CONJURE_REQUIRE_OK(fixture.manager().load_blocking(test_id(2)));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CONJURE_REQUIRE_OK(fixture.manager().load_blocking(test_id(3), blocking_load_warning::WARN_INSIDE_FRAME));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        fixture.manager().end_frame();
+        // A failure is reported the same way whichever warning was asked for.
+        logs.allow_errors();
+        CONJURE_CHECK_ERROR(
+          fixture.manager().load_blocking(test_id(9), blocking_load_warning::EXPECTED),
+          assets_error::NOT_FOUND
+        );
     }
 
     TEST_CASE("load_blocking - takes over a queued load and waits for an in-flight job [parallel]") {
@@ -316,7 +344,7 @@ TEST_SUITE("assets/asset_manager_load") {
         asset_handle handle = manager->load(test_id(1));
         manager->update();
         REQUIRE(handle.state() == asset_state::LOADING);
-        CONJURE_CHECK_ERROR(manager->load_blocking(test_id(1)), asset_error_code::TIMEOUT);
+        CONJURE_CHECK_ERROR(manager->load_blocking(test_id(1)), assets_error::TIMEOUT);
         CHECK(handle.state() == asset_state::LOADING);
         controls().blockLoadCpu = false;
         manager->flush();
@@ -384,7 +412,7 @@ TEST_SUITE("assets/asset_manager_load") {
         controls().blockLoadCpu = true;
         manager.update();
         CHECK(manager.state_of(test_id(2)) == asset_state::LOADING);   // no REQUIRE: B's job must be released
-        CONJURE_CHECK_ERROR(manager.load_blocking(test_id(1)), asset_error_code::TIMEOUT);
+        CONJURE_CHECK_ERROR(manager.load_blocking(test_id(1)), assets_error::TIMEOUT);
         CHECK(dependent.state() == asset_state::FINALISING);
 
         // Once B lands, the normal pipeline finalises A.
@@ -409,10 +437,10 @@ TEST_SUITE("assets/asset_manager_load") {
         CHECK(handle.is_terminal());
         CHECK(handle.get<test_asset>() == nullptr);
         REQUIRE(fixture.manager().last_error(test_id(1)) != nullptr);
-        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::NOT_FOUND));
+        CHECK(fixture.manager().last_error(test_id(1))->is(assets_error::NOT_FOUND));
         REQUIRE(events.events.size() == 1);
         CHECK(events.events[0].kind == asset_event_kind::FAILED);
-        CHECK(events.errors[0].is(asset_error_code::NOT_FOUND));
+        CHECK(events.errors[0].is(assets_error::NOT_FOUND));
         CHECK(logs.count(core::log_level::ERR) == 1);
 
         fixture.manager().retry_failed(test_id(1));
@@ -447,8 +475,8 @@ TEST_SUITE("assets/asset_manager_load") {
         fixture.add(test_id(2), "wrong type");
         asset_handle mismatch = fixture.manager().load(test_id(2));
         fixture.manager().flush();
-        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::NO_LOADER));
-        CHECK(fixture.manager().last_error(test_id(2))->is(asset_error_code::TYPE_MISMATCH));
+        CHECK(fixture.manager().last_error(test_id(1))->is(assets_error::NO_LOADER));
+        CHECK(fixture.manager().last_error(test_id(2))->is(assets_error::TYPE_MISMATCH));
 
         fixture.add(test_id(3), "cpu fails");
         controls().failLoadCpu = true;
@@ -456,7 +484,7 @@ TEST_SUITE("assets/asset_manager_load") {
         fixture.manager().flush();
         controls().failLoadCpu = false;
         CHECK(cpu.state() == asset_state::FAILED);
-        CHECK(fixture.manager().last_error(test_id(3))->is(asset_error_code::LOAD_FAILED));
+        CHECK(fixture.manager().last_error(test_id(3))->is(assets_error::LOAD_FAILED));
 
         fixture.add(test_id(4), "finalise fails");
         controls().failFinalise = true;
@@ -464,7 +492,7 @@ TEST_SUITE("assets/asset_manager_load") {
         fixture.manager().flush();
         controls().failFinalise = false;
         CHECK(finalise.state() == asset_state::FAILED);
-        CHECK(fixture.manager().last_error(test_id(4))->is(asset_error_code::FINALISE_FAILED));
+        CHECK(fixture.manager().last_error(test_id(4))->is(assets_error::FINALISE_FAILED));
         CHECK(fixture.manager().stats().failed == 4);
         CHECK(logs.count(core::log_level::ERR) == 0);   // only NOT_FOUND is an ERROR; these WARN
     }
@@ -531,7 +559,7 @@ TEST_SUITE("assets/asset_manager_load") {
             fixture.add(test_id(3), "c", {test_id(1)});
             fixture.add(test_id(4), "outside", {test_id(1)});
             if (blocking) {
-                CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(1)), asset_error_code::CYCLIC_DEPENDENCY);
+                CONJURE_CHECK_ERROR(fixture.manager().load_blocking(test_id(1)), assets_error::CYCLIC_DEPENDENCY);
             } else {
                 asset_handle a = fixture.manager().load(test_id(1));
                 fixture.manager().flush();
@@ -541,7 +569,7 @@ TEST_SUITE("assets/asset_manager_load") {
                 CAPTURE(index);
                 CHECK(fixture.manager().state_of(test_id(index)) == asset_state::FAILED);
                 REQUIRE(fixture.manager().last_error(test_id(index)) != nullptr);
-                CHECK(fixture.manager().last_error(test_id(index))->is(asset_error_code::CYCLIC_DEPENDENCY));
+                CHECK(fixture.manager().last_error(test_id(index))->is(assets_error::CYCLIC_DEPENDENCY));
             }
             asset_handle outside = fixture.manager().load(test_id(4));
             fixture.manager().flush();
@@ -616,7 +644,7 @@ TEST_SUITE("assets/asset_manager_load") {
         CHECK(a.get<test_asset>()->content == "a");
         CHECK(b.get<test_asset>()->content == "b");
         REQUIRE(fixture.manager().last_error(test_id(1)) != nullptr);
-        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::CYCLIC_DEPENDENCY));
+        CHECK(fixture.manager().last_error(test_id(1))->is(assets_error::CYCLIC_DEPENDENCY));
         CHECK(fixture.manager().stats().jobsInFlight == 0);
         CHECK(fixture.manager().stats().pending == 0);
     }
@@ -751,7 +779,7 @@ TEST_SUITE("assets/asset_manager_load") {
         CHECK(ref.version() == 2);
         CHECK(events.count(asset_event_kind::RELOAD_FAILED) == 1);
         REQUIRE(fixture.manager().last_error(test_id(1)) != nullptr);
-        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::LOAD_FAILED));
+        CHECK(fixture.manager().last_error(test_id(1))->is(assets_error::LOAD_FAILED));
 
         fixture.manager().reload(test_id(9));   // unknown: ignored
         fixture.manager().retry_failed(test_id(1));   // not FAILED: ignored
@@ -777,7 +805,7 @@ TEST_SUITE("assets/asset_manager_load") {
         CHECK(handle.get<test_asset>()->content == "v1");
         CHECK(fixture.manager().stats().bytesResident == bytesBefore);
         REQUIRE(fixture.manager().last_error(test_id(1)) != nullptr);
-        CHECK(fixture.manager().last_error(test_id(1))->is(asset_error_code::FINALISE_FAILED));
+        CHECK(fixture.manager().last_error(test_id(1))->is(assets_error::FINALISE_FAILED));
 
         // A reload that succeeds commits the new size.
         fixture.manager().reload(test_id(1));

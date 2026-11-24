@@ -396,13 +396,13 @@ i32 null_script_host::load_game_assembly(std::string_view path) {
         const std::filesystem::path fixture = assemblyPath.parent_path() / fixtureName;
         const bool fixtureExists = std::filesystem::exists(fixture, probe);
         if (!exists && !fixtureExists) {
-            return status_of(script_error::ASSEMBLY_LOAD_FAILED);
+            return status_of(scripting_error::ASSEMBLY_LOAD_FAILED);
         }
         if (fixtureExists) {
             core::vfs::native_file_system files(fixture.parent_path(), true);
             const core::result<std::vector<std::byte>> bytes = files.read_file(detail::path_to_utf8(fixtureName));
             if (!bytes.has_value()) {
-                return status_of(script_error::ASSEMBLY_LOAD_FAILED);
+                return status_of(scripting_error::ASSEMBLY_LOAD_FAILED);
             }
             const std::string_view text(reinterpret_cast<const char *>(bytes.value().data()), bytes.value().size());
             core::result<std::vector<script_class_info>> parsed = parse_classes_fixture(text);
@@ -413,7 +413,7 @@ i32 null_script_host::load_game_assembly(std::string_view path) {
                   detail::path_to_utf8(fixture),
                   parsed.get_error()
                 );
-                return status_of(script_error::ASSEMBLY_LOAD_FAILED);
+                return status_of(scripting_error::ASSEMBLY_LOAD_FAILED);
             }
             for (script_class_info &info : parsed.value()) {
                 const auto sameClass = [&](const script_class_info &known) {
@@ -505,7 +505,7 @@ i32 null_script_host::run_phase(u8 phase, f32 deltaTime) {
     record.deltaTime = deltaTime;
     if (record.phase == script_phase::COUNT) {
         mRecorder.record_phase(record);
-        return status_of(script_error::NOT_SUPPORTED);
+        return status_of(scripting_error::NOT_SUPPORTED);
     }
     for (slot_state &state : mSlots) {
         if (!state.live) {
@@ -552,7 +552,7 @@ i32 null_script_host::apply_fields(i32 slot, const u8 *blob, i32 size) {
         mRecorder.record_apply(record);
     }
     if (!is_slot_live(slot)) {
-        return status_of(script_error::INSTANCE_NOT_FOUND);
+        return status_of(scripting_error::INSTANCE_NOT_FOUND);
     }
     mSlots[static_cast<usize>(slot)].fields.assign(blob, blob + size);
     return 0;
@@ -562,7 +562,7 @@ i32 null_script_host::collect_fields(i32 slot, u8 *buffer, i32 capacity) {
     mRecorder.record_call("collect_fields");
     mRecorder.record_collect_fields();
     if (!is_slot_live(slot)) {
-        return status_of(script_error::INSTANCE_NOT_FOUND);
+        return status_of(scripting_error::INSTANCE_NOT_FOUND);
     }
     const slot_state &state = mSlots[static_cast<usize>(slot)];
     const std::vector<u8> &source = state.collectOverride.has_value() ? *state.collectOverride : state.fields;
@@ -656,7 +656,7 @@ void null_script_host::free_slot(i32 slot) {
 
 i32 null_script_host::trampoline_load_game_assembly(const char *utf8Path, i32 length) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     const std::string_view path =
       utf8Path == nullptr ? std::string_view() : std::string_view(utf8Path, static_cast<usize>(length));
@@ -664,52 +664,55 @@ i32 null_script_host::trampoline_load_game_assembly(const char *utf8Path, i32 le
 }
 
 i32 null_script_host::trampoline_unload_game_assembly() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->unload_game_assembly();
+    return sActiveHost == nullptr ? status_of(scripting_error::NOT_INITIALISED) : sActiveHost->unload_game_assembly();
 }
 
 i32 null_script_host::trampoline_create_instances(conjure_create_request *requests, i32 count) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     return sActiveHost->create_instances(requests, count);
 }
 
 i32 null_script_host::trampoline_destroy_instances(const i32 *slots, i32 count, i32 callOnDestroy) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     return sActiveHost->destroy_instances(slots, count, callOnDestroy);
 }
 
 i32 null_script_host::trampoline_run_phase(u8 phase, f32 deltaTime) {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->run_phase(phase, deltaTime);
+    if (sActiveHost == nullptr) {
+        return status_of(scripting_error::NOT_INITIALISED);
+    }
+    return sActiveHost->run_phase(phase, deltaTime);
 }
 
 i32 null_script_host::trampoline_dispatch_collisions(const conjure_collision_record *records, i32 count) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     return sActiveHost->dispatch_collisions(records, count);
 }
 
 i32 null_script_host::trampoline_apply_fields(i32 slot, const u8 *blob, i32 size) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     return sActiveHost->apply_fields(slot, blob, size);
 }
 
 i32 null_script_host::trampoline_collect_fields(i32 slot, u8 *buffer, i32 capacity) {
     if (sActiveHost == nullptr) {
-        return status_of(script_error::NOT_INITIALISED);
+        return status_of(scripting_error::NOT_INITIALISED);
     }
     return sActiveHost->collect_fields(slot, buffer, capacity);
 }
 
 i32 null_script_host::trampoline_collect_garbage() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->collect_garbage();
+    return sActiveHost == nullptr ? status_of(scripting_error::NOT_INITIALISED) : sActiveHost->collect_garbage();
 }
 
 i32 null_script_host::trampoline_shutdown() {
-    return sActiveHost == nullptr ? status_of(script_error::NOT_INITIALISED) : sActiveHost->shutdown_managed();
+    return sActiveHost == nullptr ? status_of(scripting_error::NOT_INITIALISED) : sActiveHost->shutdown_managed();
 }

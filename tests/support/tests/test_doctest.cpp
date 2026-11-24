@@ -4,6 +4,7 @@
 #include "conjure/core/result.h"
 
 #include <string>
+#include <string_view>
 
 using namespace conjure;
 using namespace conjure::core;
@@ -25,6 +26,29 @@ namespace {
     [[deprecated("pinned by the deprecated-call marker case")]] [[nodiscard]] int former_answer() noexcept {
         return 42;
     }
+}
+
+// Probes for declares_own_make_error: one enumeration with a factory of its own beside it and one without.
+// The factory is only declared: the concept looks it up and never calls it.
+namespace factory_probe {
+    enum class bare_error : u16 {
+        NONE = 0
+    };
+
+    enum class own_error : u16 {
+        NONE = 0
+    };
+
+    [[nodiscard]] error make_error(own_error code, std::string_view detail);
+}
+
+namespace another_probe {
+    enum class unrelated_error : u16 {
+        NONE = 0
+    };
+
+    // A make_error beside one enumeration is not found for an enumeration of another namespace.
+    [[nodiscard]] error make_error(factory_probe::bare_error code, std::string_view detail);
 }
 
 TEST_SUITE("testing/doctest") {
@@ -79,6 +103,17 @@ TEST_SUITE("testing/doctest") {
 
         CHECK(std::string(doctest::toString(failure).c_str()) == "core.NOT_FOUND: missing.txt");
         CHECK(std::string(doctest::toString(error_code::TIMEOUT).c_str()) == "TIMEOUT");
+    }
+
+    TEST_CASE("declares_own_make_error - finds a make_error declared beside the enumeration and nothing else") {
+        CHECK(declares_own_make_error<factory_probe::own_error>);
+        CHECK(declares_own_make_error<error_code>);
+
+        // core::make_error is visible here through the using-directive, yet the concept sees only what
+        // argument-dependent lookup finds from the enumeration's own namespace.
+        CHECK_FALSE(declares_own_make_error<factory_probe::bare_error>);
+        CHECK_FALSE(declares_own_make_error<another_probe::unrelated_error>);
+        CHECK_FALSE(declares_own_make_error<int>);
     }
 
     TEST_CASE("environment - is reachable from every test") {

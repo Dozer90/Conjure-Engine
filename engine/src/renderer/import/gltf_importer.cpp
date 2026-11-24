@@ -1299,7 +1299,7 @@ core::json::document gltf_asset_importer::default_settings() const {
 core::result<assets::import_output> gltf_asset_importer::import(assets::import_context &context) const {
     core::result<gltf_import_options> options = gltf_import_options_from_json(context.settings());
     if (!options.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, options.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, options.get_error().message());
     }
     const gltf_file_reader reader = [&context](std::string_view relativePath) {
         return context.read_side_file(relativePath);
@@ -1307,7 +1307,7 @@ core::result<assets::import_output> gltf_asset_importer::import(assets::import_c
     const gltf_importer importer = {};
     core::result<gltf_import_result> imported = importer.import_bytes(context.source_bytes(), options.value(), reader);
     if (!imported.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, imported.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, imported.get_error().message());
     }
     gltf_import_result &result = imported.value();
     for (const std::string &warning : result.warnings) {

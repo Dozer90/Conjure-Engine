@@ -42,4 +42,9 @@ TEST_SUITE("rhi/rhi_error") {
         CONJURE_CHECK_ERROR(failed, rhi_error::INVALID_DESC);
         CHECK_FALSE(failed.has_value());
     }
+
+    TEST_CASE("rhi_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<rhi_error>);
+    }
 }

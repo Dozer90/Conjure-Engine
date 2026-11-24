@@ -29,8 +29,8 @@ namespace {
     }
 
     [[nodiscard]] core::error import_failure(const assets::import_context &context, const core::error &inner) {
-        return assets::make_asset_error(
-          assets::asset_error_code::IMPORT_FAILED,
+        return core::make_error(
+          assets::assets_error::IMPORT_FAILED,
           std::format("{}: {}", context.source_path(), inner.to_string())
         );
     }

@@ -25,7 +25,7 @@ TEST_SUITE("engine/engine_error") {
     }
 
     TEST_CASE("engine_error - make_error builds an error of the engine category with the message") {
-        const core::error error = make_error(engine_error::PROJECT_NOT_FOUND, "no project.json");
+        const core::error error = core::make_error(engine_error::PROJECT_NOT_FOUND, "no project.json");
         CHECK(error.is(engine_error::PROJECT_NOT_FOUND));
         CHECK_FALSE(error.is(engine_error::PROJECT_INVALID));
         CHECK(error.category_name() == "engine");
@@ -35,9 +35,13 @@ TEST_SUITE("engine/engine_error") {
     }
 
     TEST_CASE("engine_error - a result carrying an engine error reports it") {
-        const core::result<int> failed = make_error(engine_error::NOT_INITIALISED);
+        const core::result<int> failed = core::make_error(engine_error::NOT_INITIALISED);
         CHECK_FALSE(failed.has_value());
         CHECK(failed.get_error().is(engine_error::NOT_INITIALISED));
         CONJURE_CHECK_ERROR(failed, engine_error::NOT_INITIALISED);
+    }
+
+    TEST_CASE("regression - code sweep F625 engine_error has no factory beside core::make_error") {
+        CHECK_FALSE(testing::declares_own_make_error<engine_error>);
     }
 }

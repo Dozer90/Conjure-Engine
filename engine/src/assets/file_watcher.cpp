@@ -200,8 +200,8 @@ polling_file_watcher::stat_roots() const {
           }
         );
         if (!enumerated.has_value()) {
-            return make_asset_error(
-              asset_error_code::IO_ERROR,
+            return core::make_error(
+              assets_error::IO_ERROR,
               std::format("cannot enumerate watched root '{}': {}", root, enumerated.get_error().message())
             );
         }

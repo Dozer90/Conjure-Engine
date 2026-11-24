@@ -64,14 +64,6 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::ecs::ecs_error, "ecs", conjure::ecs::ecs
 
 <p>The stable upper-case enumerator name of a code (&quot;<code>ENTITY_NOT_ALIVE</code>&quot;); &quot;&quot; for unknown values.</p>
 
-#### `make_error` {#function-make-error}
-
-<div class="function-declaration" id="function-make-error-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">inline</span> <a href="../core/error/error.html">core::error</a> make_error(
-    <a href="ecs-error.html#symbol-ecs-error">ecs_error</a> code,
-    std::string_view detail = {});</code></pre></div>
-
-<p>Builds an error of the ecs category with an optional fixed detail message.</p>
-
 <!-- doc-content:notes:start -->
 
 <!-- doc-content:notes:end -->
@@ -120,6 +112,8 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::ecs::ecs_error, "ecs", conjure::ecs::ecs
 <a id="ecs_errorunsupported_field"></a>
 <a id="ecs_errorwrong_thread"></a>
 <a id="extension-points"></a>
+<a id="function-make-error"></a>
+<a id="function-make-error-1"></a>
 <a id="internals-and-algorithms"></a>
 <a id="make_error"></a>
 <a id="other-declarations"></a>

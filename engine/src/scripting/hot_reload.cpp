@@ -92,7 +92,7 @@ void hot_reload_controller::perform_reload() {
         // A watched build may still be writing the .dll or the .pdb, or hold them locked, when the change is
         // seen: the load is tried again one debounce window later, a few times, before the failure stands.
         const bool retry = mWatchTriggered && mWatchRetriesLeft > 0 &&
-          mLastResult.get_error().is(script_error::ASSEMBLY_LOAD_FAILED);
+          mLastResult.get_error().is(scripting_error::ASSEMBLY_LOAD_FAILED);
         if (retry) {
             --mWatchRetriesLeft;
             CONJURE_LOG_WARN(

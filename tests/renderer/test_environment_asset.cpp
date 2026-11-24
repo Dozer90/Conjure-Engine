@@ -699,7 +699,7 @@ TEST_SUITE("renderer/environment_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badContext), assets::assets_error::IMPORT_FAILED);
         const core::json::document badSettings = core::json::object({{"skySize", 12}});
         assets::import_context badSettingsContext(
           fileSystem,
@@ -712,7 +712,7 @@ TEST_SUITE("renderer/environment_asset") {
           subAssets,
           {}
         );
-        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(importer.import(badSettingsContext), assets::assets_error::IMPORT_FAILED);
     }
 
     TEST_CASE("environment_importer - bakes a float JPEG XL equirect exactly like the same .hdr") {
@@ -771,7 +771,7 @@ TEST_SUITE("renderer/environment_asset") {
 
         // A truncated JPEG XL fails the import.
         const std::span<const std::byte> truncated = std::span<const std::byte>(jxl).first(jxl.size() / 2);
-        CONJURE_CHECK_ERROR(cook(importer, "cut.jxl", truncated), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(cook(importer, "cut.jxl", truncated), assets::assets_error::IMPORT_FAILED);
     }
 
     TEST_CASE("environment_loader - loads a blob and falls back to the uniform grey environment") {

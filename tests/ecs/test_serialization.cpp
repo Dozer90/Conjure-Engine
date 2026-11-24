@@ -370,7 +370,7 @@ TEST_SUITE("ecs/serialization") {
             u32 value = 0;
         };
         static constexpr auto writeHook = [](const void *, core::json::writer &) -> core::result<void> {
-            return make_error(ecs_error::SERIALIZATION_FAILED, "this component refuses to serialise");
+            return core::make_error(ecs_error::SERIALIZATION_FAILED, "this component refuses to serialise");
         };
         static constexpr auto readHook = [](void *, const core::json::value &) -> core::result<void> {
             return core::result<void>::success();

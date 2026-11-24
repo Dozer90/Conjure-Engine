@@ -21,7 +21,7 @@ namespace {
     constexpr usize MIN_RECORD_BYTES = 113;
 
     core::error corrupt(std::string message) {
-        return make_asset_error(asset_error_code::CACHE_CORRUPT, std::move(message));
+        return core::make_error(assets_error::CACHE_CORRUPT, std::move(message));
     }
 }
 

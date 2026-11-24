@@ -18,7 +18,7 @@ namespace conjure::editor::support {
                 return invalid_args("args.count: expected at least 1");
             }
             if (stack.frozen()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::WRONG_PLAY_STATE,
                   "the undo stack is frozen while playing"
                 );
@@ -28,7 +28,7 @@ namespace conjure::editor::support {
             if (stack.has_open_transaction()) {
                 // Ending any client's transaction pushes its entry at the cursor, which would drop what this
                 // step moves into the redo tail (D4).
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_REQUEST,
                   std::format("{} is refused while a transaction is open; end it first", command)
                 );
@@ -57,7 +57,7 @@ namespace conjure::editor::support {
                         {"cmd", command},
                       })
                     );
-                    return make_editor_error(protocol_error_code::INTERNAL, done.get_error().message());
+                    return core::make_error(protocol_error_code::INTERNAL, done.get_error().message());
                 }
                 labels.push_back(std::string_view(entry->label));
                 ++applied;
@@ -120,7 +120,7 @@ namespace conjure::editor::support {
         core::result<command_outcome> history_clear(command_invocation &invocation) {
             undo_stack &stack = invocation.context.undo();
             if (stack.has_open_transaction()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_REQUEST,
                   "history.clear is refused while a transaction is open; end it first"
                 );

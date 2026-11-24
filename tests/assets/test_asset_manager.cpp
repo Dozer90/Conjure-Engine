@@ -203,9 +203,9 @@ TEST_SUITE("assets/asset_manager") {
         settle(*fixture.manager);
         CHECK(fixture.manager->state_of(test_id(1)) == asset_state::FAILED);
         REQUIRE(fixture.manager->last_error(test_id(1)) != nullptr);
-        CHECK(fixture.manager->last_error(test_id(1))->is(asset_error_code::NOT_FOUND));
-        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == std::vector<asset_id>{test_id(1)});
-        CHECK(fixture.manager->failed_ids(asset_error_code::CACHE_MISS).empty());
+        CHECK(fixture.manager->last_error(test_id(1))->is(assets_error::NOT_FOUND));
+        CHECK(fixture.manager->failed_ids(assets_error::NOT_FOUND) == std::vector<asset_id>{test_id(1)});
+        CHECK(fixture.manager->failed_ids(assets_error::CACHE_MISS).empty());
         CHECK(fixture.manager->stats().failed == 1);
     }
 
@@ -256,8 +256,8 @@ TEST_SUITE("assets/asset_manager") {
         asset_handle late = fixture.manager->load(test_id(2));
         CHECK(late.state() == asset_state::FAILED);
         REQUIRE(fixture.manager->last_error(test_id(2)) != nullptr);
-        CHECK(fixture.manager->last_error(test_id(2))->is(asset_error_code::SHUTTING_DOWN));
-        CONJURE_CHECK_ERROR(fixture.manager->load_blocking(test_id(2)), asset_error_code::SHUTTING_DOWN);
+        CHECK(fixture.manager->last_error(test_id(2))->is(assets_error::SHUTTING_DOWN));
+        CONJURE_CHECK_ERROR(fixture.manager->load_blocking(test_id(2)), assets_error::SHUTTING_DOWN);
         fixture.manager->reload(test_id(1));
         CHECK(loaded.state() == asset_state::LOADED);
         CHECK(loaded.get<test_asset>()->content == "one");
@@ -278,21 +278,21 @@ TEST_SUITE("assets/asset_manager") {
         asset_handle three = fixture.manager->load(test_id(3));
         settle(*fixture.manager);
         const std::vector<asset_id> bothMissing = {test_id(1), test_id(3)};
-        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
+        CHECK(fixture.manager->failed_ids(assets_error::NOT_FOUND) == bothMissing);
 
         // Failing again after a retry lists the slot once.
         fixture.manager->retry_failed(test_id(1));
         settle(*fixture.manager);
-        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
-        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == bothMissing);
+        CHECK(fixture.manager->failed_ids(assets_error::NOT_FOUND) == bothMissing);
+        CHECK(fixture.manager->failed_ids(assets_error::NOT_FOUND) == bothMissing);
 
         // A slot that loads leaves the list; the others keep their slot order.
         source->add(make_test_blob(test_id(1), "one"));
         fixture.manager->retry_failed(test_id(1));
         settle(*fixture.manager);
         CHECK(one.state() == asset_state::LOADED);
-        CHECK(fixture.manager->failed_ids(asset_error_code::NOT_FOUND) == std::vector<asset_id>{test_id(3)});
-        CHECK(fixture.manager->failed_ids(asset_error_code::CACHE_MISS).empty());
+        CHECK(fixture.manager->failed_ids(assets_error::NOT_FOUND) == std::vector<asset_id>{test_id(3)});
+        CHECK(fixture.manager->failed_ids(assets_error::CACHE_MISS).empty());
         CHECK(fixture.manager->stats().failed == 1);
     }
 

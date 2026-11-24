@@ -296,7 +296,7 @@ TEST_SUITE("scripting/script_hot_reload") {
         const script_entry_id variant = fixture.add_script(fixture.create_entity(), VARIANT_PROBE);
         CONJURE_CHECK_ERROR(
           fixture.runtime.reload_game_assembly(test_scripts_assembly("v1").parent_path() / "Missing.dll"),
-          script_error::ASSEMBLY_LOAD_FAILED
+          scripting_error::ASSEMBLY_LOAD_FAILED
         );
         CHECK(fixture.runtime.entry(variant)->is_live());
         CHECK(fixture.field_i64(variant, "Variant") == 1);

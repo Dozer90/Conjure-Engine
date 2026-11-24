@@ -15,7 +15,7 @@ using namespace conjure::assets;
 
 namespace {
     core::error corrupt(std::string message) {
-        return make_asset_error(asset_error_code::CACHE_CORRUPT, std::move(message));
+        return core::make_error(assets_error::CACHE_CORRUPT, std::move(message));
     }
 
     void write_header(detail::byte_writer &out, const cooked_blob_header &header) {

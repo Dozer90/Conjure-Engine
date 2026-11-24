@@ -184,7 +184,7 @@ TEST_SUITE("modules/module_manager_static") {
     TEST_CASE("module_manager - a consumer veto is returned unchanged and nothing detaches") {
         chain_fixture fixture = {};
         CONJURE_REQUIRE_OK(fixture.host.manager.load(fixture.alphaId));
-        fixture.consumer.canDetachResult = make_module_error(module_error::UNLOAD_BLOCKED, "play mode is active");
+        fixture.consumer.canDetachResult = core::make_error(module_error::UNLOAD_BLOCKED, "play mode is active");
 
         const result<void> blocked = fixture.host.manager.unload(fixture.alphaId, unload_policy::REMOVE_INSTANCES);
         CONJURE_CHECK_ERROR(blocked, module_error::UNLOAD_BLOCKED);

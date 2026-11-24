@@ -395,19 +395,19 @@ TEST_SUITE("physics/collision_mesh_asset") {
           broken,
           fileSystem
         );
-        CONJURE_CHECK_ERROR(failed, assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(failed, assets::assets_error::IMPORT_FAILED);
         if (!failed.has_value()) {
             CHECK(failed.get_error().message().find("line 3") != std::string::npos);
         }
         const std::vector<std::byte> noTriangles = bytes_of("v 0 0 0\nv 1 0 0\nv 2 0 0\nf 1 2 3\n");
         CONJURE_CHECK_ERROR(
           import_bytes("assets://physics/flat.obj", noTriangles, fileSystem),
-          assets::asset_error_code::IMPORT_FAILED
+          assets::assets_error::IMPORT_FAILED
         );
         const std::vector<std::byte> garbage = bytes_of("not a gltf file at all, long enough to pass the size check");
         CONJURE_CHECK_ERROR(
           import_bytes("assets://physics/garbage.gltf", garbage, fileSystem),
-          assets::asset_error_code::IMPORT_FAILED
+          assets::assets_error::IMPORT_FAILED
         );
     }
 
@@ -429,7 +429,7 @@ TEST_SUITE("physics/collision_mesh_asset") {
           bytes_of(obj),
           fileSystem
         );
-        CONJURE_CHECK_ERROR(failed, assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(failed, assets::assets_error::IMPORT_FAILED);
         if (!failed.has_value()) {
             CHECK(failed.get_error().message().find("line 71") != std::string::npos);
             CHECK(failed.get_error().message().find("too many") != std::string::npos);
@@ -508,7 +508,7 @@ TEST_SUITE("physics/collision_mesh_asset") {
         const ramp_source oversized = make_ramp_glb(layout);
         CONJURE_CHECK_ERROR(
           import_bytes("assets://physics/oversized.glb", oversized.glb, fileSystem),
-          assets::asset_error_code::IMPORT_FAILED
+          assets::assets_error::IMPORT_FAILED
         );
     }
 
@@ -530,7 +530,7 @@ TEST_SUITE("physics/collision_mesh_asset") {
           bytes_of(json),
           fileSystem
         );
-        CONJURE_CHECK_ERROR(imported, assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(imported, assets::assets_error::IMPORT_FAILED);
         if (!imported.has_value()) {
             CHECK(imported.get_error().message().find("short.bin") != std::string::npos);
         }
@@ -549,7 +549,7 @@ TEST_SUITE("physics/collision_mesh_asset") {
           ragged.glb,
           fileSystem
         );
-        CONJURE_CHECK_ERROR(imported, assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(imported, assets::assets_error::IMPORT_FAILED);
         if (!imported.has_value()) {
             CHECK(imported.get_error().message().find("multiple of three") != std::string::npos);
         }

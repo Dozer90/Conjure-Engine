@@ -50,8 +50,8 @@ namespace {
     }
 
     core::error io_error(std::string_view what, std::string_view path, const core::error &cause) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot {} '{}': {}", what, path, cause.message())
         );
     }
@@ -414,7 +414,7 @@ core::result<scan_report> asset_database::scan() {
         bool metaCreated = false;
         if (metaRead.has_value()) {
             meta = std::move(metaRead).value();
-        } else if (metaRead.get_error().is(asset_error_code::NOT_FOUND)) {
+        } else if (metaRead.get_error().is(assets_error::NOT_FOUND)) {
             asset_meta fresh = {};
             fresh.id = asset_id::generate();
             const asset_importer *importer = mImporters->find_for_path(source.relativePath);
@@ -762,8 +762,8 @@ core::result<import_report> asset_database::import(std::span<const asset_id> ids
         job.subAssets = std::make_unique<sub_asset_table>(job.meta.subAssets);
         job.importer = job.meta.importerId.empty() ? nullptr : mImporters->find(job.meta.importerId);
         if (job.importer == nullptr) {
-            job.failure = make_asset_error(
-              asset_error_code::NO_IMPORTER,
+            job.failure = core::make_error(
+              assets_error::NO_IMPORTER,
               std::format("importer '{}' named by the meta is not registered", job.meta.importerId)
             );
             continue;
@@ -802,8 +802,8 @@ core::result<import_report> asset_database::import(std::span<const asset_id> ids
         job.warnings.assign(context.warnings().begin(), context.warnings().end());
         job.sideFiles.assign(context.side_files().begin(), context.side_files().end());
         if (!output.has_value()) {
-            job.failure = make_asset_error(
-              asset_error_code::IMPORT_FAILED,
+            job.failure = core::make_error(
+              assets_error::IMPORT_FAILED,
               std::format("importer '{}' failed: {}", job.importer->id(), output.get_error().to_string())
             );
             return;
@@ -815,8 +815,8 @@ core::result<import_report> asset_database::import(std::span<const asset_id> ids
                 ++primaries;
             }
             if (mTypes->find(asset.type) == nullptr) {
-                job.failure = make_asset_error(
-                  asset_error_code::TYPE_UNKNOWN,
+                job.failure = core::make_error(
+                  assets_error::TYPE_UNKNOWN,
                   std::format(
                     "importer '{}' produced unregistered type {:#x}",
                     job.importer->id(),
@@ -827,8 +827,8 @@ core::result<import_report> asset_database::import(std::span<const asset_id> ids
             }
         }
         if (primaries != 1) {
-            job.failure = make_asset_error(
-              asset_error_code::IMPORT_FAILED,
+            job.failure = core::make_error(
+              assets_error::IMPORT_FAILED,
               std::format("importer '{}' produced {} primary assets instead of one", job.importer->id(), primaries)
             );
             return;
@@ -912,7 +912,7 @@ core::result<void> asset_database::apply_import_results(std::vector<source_job> 
         if (job.failure.has_value()) {
             // A meta naming an unknown importer is a configuration state, not a broken import:
             // the record becomes NO_IMPORTER (browsable, not loadable) like at scan.
-            const bool noImporter = job.failure->is(asset_error_code::NO_IMPORTER);
+            const bool noImporter = job.failure->is(assets_error::NO_IMPORTER);
             const asset_record_status status = noImporter
               ? asset_record_status::NO_IMPORTER
               : asset_record_status::IMPORT_FAILED;
@@ -1087,7 +1087,7 @@ core::result<asset_id> asset_database::add_file(std::string_view assetPath) {
     }
     const std::optional<u32> mountIndex = mount_index(parts->mount);
     if (!mountIndex.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
+        return core::make_error(assets_error::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
     const std::string relative = path_utils::normalize(parts->relativePath);
     if (!stays_in_mount(relative)) {
@@ -1099,7 +1099,7 @@ core::result<asset_id> asset_database::add_file(std::string_view assetPath) {
     const std::string filePath = file_path_for(*mountIndex, relative);
     core::result<core::vfs::file_stat> stat = mFileSystem->stat(filePath);
     if (!stat.has_value() || !stat.value().isRegular) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("no source file at '{}'", assetPath));
+        return core::make_error(assets_error::NOT_FOUND, std::format("no source file at '{}'", assetPath));
     }
 
     bool metaCreated = false;
@@ -1131,7 +1131,7 @@ core::result<asset_id> asset_database::create_asset(
     }
     const std::optional<u32> mountIndex = mount_index(parts->mount);
     if (!mountIndex.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
+        return core::make_error(assets_error::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
     const std::string relative = path_utils::normalize(parts->relativePath);
     if (!stays_in_mount(relative)) {
@@ -1145,8 +1145,8 @@ core::result<asset_id> asset_database::create_asset(
     }
     const asset_importer *importer = mImporters->find(importerId);
     if (importer == nullptr) {
-        return make_asset_error(
-          asset_error_code::NO_IMPORTER,
+        return core::make_error(
+          assets_error::NO_IMPORTER,
           std::format("importer '{}' is not registered", importerId)
         );
     }
@@ -1206,14 +1206,14 @@ core::result<asset_id> asset_database::register_source(
 
     core::result<core::vfs::file_stat> stat = mFileSystem->stat(filePath);
     if (!stat.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("no source file at '{}'", filePath));
+        return core::make_error(assets_error::NOT_FOUND, std::format("no source file at '{}'", filePath));
     }
 
     core::result<asset_meta> metaRead = read_asset_meta(*mFileSystem, metaPath);
     asset_meta meta = {};
     if (metaRead.has_value()) {
         meta = std::move(metaRead).value();
-    } else if (metaRead.get_error().is(asset_error_code::NOT_FOUND)) {
+    } else if (metaRead.get_error().is(assets_error::NOT_FOUND)) {
         meta.id = asset_id::generate();
         const asset_importer *byExtension = mImporters->find_for_path(relativePath);
         if (byExtension != nullptr) {
@@ -1243,8 +1243,8 @@ core::result<asset_id> asset_database::register_source(
     {
         const std::shared_lock lock(mMutex);
         if (find_entry_locked(meta.id) != nullptr) {
-            return make_asset_error(
-              asset_error_code::DUPLICATE_UUID,
+            return core::make_error(
+              assets_error::DUPLICATE_UUID,
               std::format("uuid {} of '{}' is already in use", meta.id, filePath)
             );
         }
@@ -1289,7 +1289,7 @@ core::result<void> asset_database::move_asset(const asset_id &id, std::string_vi
     }
     const std::optional<u32> mountIndex = mount_index(parts->mount);
     if (!mountIndex.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
+        return core::make_error(assets_error::NOT_FOUND, std::format("unknown mount '{}'", parts->mount));
     }
     const std::string newRelative = path_utils::normalize(parts->relativePath);
     if (!stays_in_mount(newRelative)) {
@@ -1305,7 +1305,7 @@ core::result<void> asset_database::move_asset(const asset_id &id, std::string_vi
     }
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
     }
     if (record->is_sub_asset()) {
         return core::error(core::error_code::INVALID_ARGUMENT, "sub-assets move with their primary");
@@ -1383,7 +1383,7 @@ core::result<void> asset_database::delete_asset(const asset_id &id) {
 
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
     }
     if (record->is_sub_asset()) {
         return core::error(core::error_code::INVALID_ARGUMENT, "sub-assets are deleted with their primary");
@@ -1429,12 +1429,12 @@ core::result<void> asset_database::delete_asset(const asset_id &id) {
 core::result<asset_meta> asset_database::read_meta(const asset_id &id) const {
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
     }
     if (record->is_sub_asset()) {
         record = find(record->parentId);
         if (!record.has_value()) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("primary of {} is unknown", id));
+            return core::make_error(assets_error::NOT_FOUND, std::format("primary of {} is unknown", id));
         }
     }
     return read_asset_meta(*mFileSystem, meta_path_of(file_path_for(record->mountIndex, record->relativePath)));
@@ -1444,7 +1444,7 @@ core::result<void> asset_database::write_meta(const asset_id &id, const asset_me
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_database::write_meta is main-thread only");
     std::optional<asset_record> record = find(id);
     if (!record.has_value()) {
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
     }
     if (record->is_sub_asset()) {
         return core::error(core::error_code::INVALID_ARGUMENT, "sub-assets share their primary's meta");
@@ -1473,7 +1473,7 @@ core::result<void> asset_database::write_meta(const asset_id &id, const asset_me
         const std::unique_lock lock(mMutex);
         entry *primary = find_entry_locked(id);
         if (primary == nullptr) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+            return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
         }
         // A blob header names no importer, so the stale rule cannot see a switch between two
         // importers of the same version: the flag keeps the primary stale until it is imported.
@@ -1530,8 +1530,8 @@ core::result<void> asset_database::set_importer(const asset_id &id, std::string_
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_database::set_importer is main-thread only");
     const asset_importer *importer = mImporters->find(importerId);
     if (importer == nullptr) {
-        return make_asset_error(
-          asset_error_code::NO_IMPORTER,
+        return core::make_error(
+          assets_error::NO_IMPORTER,
           std::format("importer '{}' is not registered", importerId)
         );
     }
@@ -1588,7 +1588,7 @@ core::result<void> asset_database::load_snapshot() {
     const std::string path = path_utils::join(mCacheRoot, SNAPSHOT_FILE);
     core::result<std::vector<std::byte>> bytes = mFileSystem->read_file(path);
     if (!bytes.has_value()) {
-        return make_asset_error(asset_error_code::CACHE_MISS, std::format("no snapshot at '{}'", path));
+        return core::make_error(assets_error::CACHE_MISS, std::format("no snapshot at '{}'", path));
     }
     core::result<detail::database_snapshot> parsed = detail::parse_database_snapshot(bytes.value());
     if (!parsed.has_value()) {
@@ -1596,12 +1596,12 @@ core::result<void> asset_database::load_snapshot() {
     }
     const detail::database_snapshot &snapshot = parsed.value();
     if (snapshot.mountNames.size() != mMounts.size()) {
-        return make_asset_error(asset_error_code::CACHE_CORRUPT, "snapshot mounts differ from the configured mounts");
+        return core::make_error(assets_error::CACHE_CORRUPT, "snapshot mounts differ from the configured mounts");
     }
     for (usize index = 0; index < mMounts.size(); ++index) {
         if (snapshot.mountNames[index] != mMounts[index].name) {
-            return make_asset_error(
-              asset_error_code::CACHE_CORRUPT,
+            return core::make_error(
+              assets_error::CACHE_CORRUPT,
               "snapshot mounts differ from the configured mounts"
             );
         }
@@ -1769,7 +1769,7 @@ core::result<std::vector<asset_id>> asset_database::dependency_closure(std::span
     for (const asset_id &root : roots) {
         const entry *found = find_entry_locked(root);
         if (found == nullptr) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("closure root {} is unknown", root));
+            return core::make_error(assets_error::NOT_FOUND, std::format("closure root {} is unknown", root));
         }
         stack.push_back(static_cast<usize>(found - mEntries.data()));
     }
@@ -1872,7 +1872,7 @@ core::result<void> asset_database::set_source_status(const asset_id &id, bool pr
             primary = find_entry_locked(primary->record.parentId);
         }
         if (primary == nullptr) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is unknown", id));
+            return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is unknown", id));
         }
         if (is_transient(primary->record.status)) {
             return core::error(
@@ -1888,7 +1888,7 @@ core::result<void> asset_database::set_source_status(const asset_id &id, bool pr
             const std::string filePath = file_path_for(primary->record.mountIndex, primary->record.relativePath);
             core::result<core::vfs::file_stat> stat = mFileSystem->stat(filePath);
             if (!stat.has_value() || !stat.value().isRegular) {
-                return make_asset_error(asset_error_code::NOT_FOUND, std::format("no source file at '{}'", filePath));
+                return core::make_error(assets_error::NOT_FOUND, std::format("no source file at '{}'", filePath));
             }
             const asset_importer *importer = mImporters->find(primary->record.importerId);
             status = importer != nullptr ? asset_record_status::OK : asset_record_status::NO_IMPORTER;

@@ -9,7 +9,8 @@ instead of being dropped) and writes:
   engine/include/conjure/scripting/native_api_hash.h     CONJURE_NATIVE_API_HASH and the entry counts
   managed/Conjure.Managed/Generated/NativeApi.g.cs       struct NativeApi (delegate* unmanaged fields in table
                                                          order), the NativeFunction enum and the entry names
-  docs/generated/native_api_manifest.json                { hash, version, coreEntryCount, entries[...] }
+  docs/generated/native_api_manifest.json                { hash, version, coreEntryCount, entries[...],
+                                                         records[...] }
   managed/Conjure.Managed/Interop/BindingStatus.g.cs     enum BindingStatus from the CONJURE_BINDINGS_STATUS
                                                          lines of conjure/bindings/bindings_error.inl
                                                          (15_bindings.md 3.6; skipped when that file is absent)
@@ -21,9 +22,19 @@ entries with (15_bindings.md B2).
 
 The layout hash is FNV-1a 64 over one line per entry, "<group>_<name> <return> <arguments>\\n", after the
 signature normalisation native_entry_descriptors() applies on the C++ side (whitespace collapsed to single
-spaces, '*' hugging the parameter name, no space before ',' or ')' and after '('). Both sides therefore
-agree on the hash from the same text, and a stale generated file is reported by --check, which the CTest
-entry conjure_scripting_api_generated_up_to_date runs.
+spaces, '*' hugging the parameter name, no space before ',' or ')' and after '('), followed by the lines of
+every conjure_* record and enumeration of engine/include/conjure/scripting/native_api.h in header order
+(sweep F445): the declaration ("struct alignas(64) conjure_frame_block {"), one line per member in order
+("uint8_t pad[3];", padding members included, a default member initialiser dropped because it is no part of
+the layout; "FORCE," per enumerator, an explicit value kept), then "};", each normalised the same way and ended
+by "\\n". conjure_native_api contributes its header members (its entries are the lines above) and
+conjure_managed_api its function pointers, so a stale Conjure.Managed.dll fails the handshake with
+ABI_MISMATCH after a record, enumeration or callback-table change too. The hash header lists those lines in
+CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE(X), from which compute_native_api_hash() folds the same text at
+runtime, so both sides agree on the hash, and a stale generated file is reported by --check, which the CTest
+entry conjure_scripting_api_generated_up_to_date runs. The hand-written C# mirrors of the records
+(Interop/Records.cs) and of the managed table (Interop/ManagedApi.cs) are not read: the hash catches a stale
+build of them, not a mirror that was never updated.
 
 Usage:
     python tools/generate_native_api.py            # regenerate the four outputs
@@ -66,6 +77,14 @@ COMMENT_PATTERN = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 CONST_QUALIFIER_PATTERN = re.compile(r"\bconst\b")
 VERSION_PATTERN = re.compile(r"#define\s+CONJURE_NATIVE_API_VERSION\s+(\d+)")
 STATUS_PATTERN = re.compile(r"CONJURE_BINDINGS_STATUS\(\s*([A-Z][A-Z0-9_]*)\s*\)")
+# Every struct, union or enum definition of native_api.h: the keyword and the text up to its opening brace.
+DEFINITION_PATTERN = re.compile(r"\b(struct|union|enum)\b([^;{}]*)\{")
+# The name in a definition head, after an optional 'class' and alignas(...); group 4 is the rest (": uint8_t").
+DEFINITION_HEAD_PATTERN = re.compile(r"^(class\s+)?(alignas\s*\([^()]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)(.*)$", re.DOTALL)
+# The records the hash must contain whatever else the header holds: a parse that misses them is a failure.
+REQUIRED_RECORDS = ("conjure_native_api", "conjure_managed_api")
+# A keyword before a member's '{' makes it a nested definition rather than a braced initialiser.
+NESTED_KEYWORD_PATTERN = re.compile(r"\b(struct|union|enum|class)\b")
 
 # C scalar types -> C# (blittable) types.
 SCALAR_TYPES = {
@@ -193,10 +212,133 @@ def parse_entries(inl_text: str) -> tuple[list[entry], int]:
     return entries, core_count
 
 
-def layout_hash(entries: list[entry]) -> int:
+class record:
+    """One conjure_* struct or enumeration of native_api.h as the layout hash reads it (sweep F445)."""
+
+    def __init__(self, name: str, declaration: str, members: list[str]) -> None:
+        self.name = name
+        self.declaration = declaration
+        self.members = members
+
+    @property
+    def hashed_lines(self) -> list[str]:
+        """The declaration, one line per member and the closing line, each without its '\\n'."""
+        return [self.declaration, *self.members, "};"]
+
+
+def split_top_level(text: str, separator: str) -> list[str]:
+    """'text' split at every 'separator' outside parentheses and braces."""
+    pieces: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(text):
+        if character in "({":
+            depth += 1
+        elif character in ")}":
+            depth -= 1
+        elif character == separator and depth == 0:
+            pieces.append(text[start:index])
+            start = index + 1
+    pieces.append(text[start:])
+    return pieces
+
+
+def strip_default_initialiser(member: str) -> str:
+    """'member' without its default member initialiser ('= nullptr', '= {}', '{}'); an '=' inside parentheses
+    (a function pointer's parameters) is kept."""
+    depth = 0
+    for index, character in enumerate(member):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character in "={" and depth == 0:
+            return member[:index].rstrip()
+    return member
+
+
+def find_record_end(code: str, start: int) -> int:
+    """Index of the '}' that closes the body starting at 'start' (braces of initialisers skipped), or -1."""
+    depth = 0
+    for index in range(start, len(code)):
+        character = code[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            if depth == 0:
+                return index
+            depth -= 1
+    return -1
+
+
+def parse_record_body(keyword: str, name: str, body: str) -> list[str]:
+    """The normalised member lines of a struct body ("float x;") or enumerator lines of an enum body ("X,")."""
+    if keyword == "enum":
+        if "{" in body:
+            raise SystemExit(f"native_api.h: enum {name} holds a nested definition the generator cannot read")
+        pieces = [piece.strip() for piece in body.split(",")]
+        if pieces and not pieces[-1]:
+            pieces.pop()
+        if any(not piece for piece in pieces):
+            raise SystemExit(f"native_api.h: enum {name} has an empty enumerator")
+        return [normalise(piece) + "," for piece in pieces]
+    statements = split_top_level(body, ";")
+    if statements[-1].strip():
+        raise SystemExit(f"native_api.h: struct {name} ends with '{statements[-1].strip()}' and no ';'")
+    members: list[str] = []
+    for statement in statements[:-1]:
+        text = statement.strip()
+        if not text:
+            raise SystemExit(f"native_api.h: struct {name} has an empty member declaration")
+        brace = text.find("{")
+        if brace >= 0 and NESTED_KEYWORD_PATTERN.search(text[:brace]):
+            raise SystemExit(f"native_api.h: struct {name} holds a nested definition the generator cannot read")
+        members.append(normalise(strip_default_initialiser(text)) + ";")
+    return members
+
+
+def parse_records(header_text: str) -> list[record]:
+    """Every conjure_* struct and enumeration of native_api.h in header order. A conjure_* union, an anonymous
+    definition or a nested definition inside a record fails the run instead of being left out of the hash."""
+    # Comments and preprocessor directives are blanked first: conjure_native_api's X-macro #define and #include
+    # are no members (its entries are hashed from native_api.inl).
+    code = COMMENT_PATTERN.sub(lambda found: re.sub(r"[^\n]", " ", found.group(0)), header_text)
+    code = blank_directives(code)
+    records: list[record] = []
+    for match in DEFINITION_PATTERN.finditer(code):
+        keyword = match.group(1)
+        head = " ".join(match.group(2).split())
+        head_match = DEFINITION_HEAD_PATTERN.match(head)
+        if head_match is None:
+            raise SystemExit(f"native_api.h: an anonymous {keyword} the generator cannot read")
+        name = head_match.group(3)
+        if not name.startswith("conjure_"):
+            continue
+        if keyword == "union":
+            raise SystemExit(f"native_api.h: union {name} is an ABI record the generator cannot read")
+        close = find_record_end(code, match.end())
+        if close < 0:
+            raise SystemExit(f"native_api.h: {keyword} {name} is not closed")
+        declaration = normalise(f"{keyword} {head}") + " {"
+        records.append(record(name, declaration, parse_record_body(keyword, name, code[match.end():close])))
+    names = [item.name for item in records]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise SystemExit(f"native_api.h defines {', '.join(duplicates)} twice")
+    missing = [name for name in REQUIRED_RECORDS if name not in names]
+    if missing:
+        raise SystemExit(f"native_api.h: no definition of {', '.join(missing)} found")
+    return records
+
+
+def layout_hash(entries: list[entry], records: list[record]) -> int:
+    """FNV-1a 64 over every entry line, then over every record line (see the module comment)."""
     value = FNV1A64_OFFSET_BASIS
     for item in entries:
         value = fnv1a64(item.hashed_line.encode("utf-8"), value)
+    for item in records:
+        for line in item.hashed_lines:
+            value = fnv1a64((line + "\n").encode("utf-8"), value)
     return value
 
 
@@ -241,19 +383,24 @@ def split_literal(text: str, width: int) -> list[str]:
     return pieces
 
 
-def generate_hash_header(entries: list[entry], core_count: int, hash_value: int) -> str:
+def generate_hash_header(entries: list[entry], records: list[record], core_count: int, hash_value: int) -> str:
     lines = [
         "#pragma once",
         "",
-        "// Generated by tools/generate_native_api.py from native_api.inl. Do not edit; regenerate instead.",
-        "// CONJURE_NATIVE_API_HASH is the FNV-1a 64 of every normalised entry line (see the generator); the",
-        "// managed side bakes the same value into NativeApi.g.cs and the handshake compares them.",
+        "// Generated by tools/generate_native_api.py from native_api.inl and the records of native_api.h. Do not",
+        "// edit; regenerate instead.",
+        "// CONJURE_NATIVE_API_HASH is the FNV-1a 64 of every normalised entry line, then of every line of the",
+        "// conjure_* records, enumerations and the two tables' members (see the generator); the managed side bakes",
+        "// the same value into NativeApi.g.cs and the handshake compares them.",
         "// CONJURE_NATIVE_API_FOR_EACH_ENTRY(X) invokes X(group, name, \"<return> <arguments>\") per entry in",
         "// table order: the descriptor table native_entry_descriptors() is built from it.",
+        "// CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE(X) invokes X(\"<line>\") per record line in header order:",
+        "// compute_native_api_hash() folds them after the entries.",
         "",
         f"#define CONJURE_NATIVE_API_HASH 0x{hash_value:016X}ull",
         f"#define CONJURE_NATIVE_API_ENTRY_COUNT {len(entries)}",
         f"#define CONJURE_NATIVE_API_CORE_ENTRY_COUNT {core_count}",
+        f"#define CONJURE_NATIVE_API_RECORD_LINE_COUNT {sum(len(item.hashed_lines) for item in records)}",
         "",
         "// clang-format off",
         "#define CONJURE_NATIVE_API_FOR_EACH_ENTRY(X) \\",
@@ -282,6 +429,22 @@ def generate_hash_header(entries: list[entry], core_count: int, hash_value: int)
     lines.append("#define CONJURE_NATIVE_API_FOR_EACH_BINDINGS_ENTRY(X) \\")
     lines.extend(typed_macro_lines(entries[core_count:]))
     lines.append("    /* end of table */")
+    lines.append("")
+    lines.append("// X(\"<line>\") per hashed line of the conjure_* records and enumerations of native_api.h")
+    lines.append("// (sweep F445).")
+    lines.append("#define CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE(X) \\")
+    for item in records:
+        for line in item.hashed_lines:
+            text = line.replace("\\", "\\\\").replace('"', '\\"')
+            pieces = split_literal(text, 110)
+            if len(pieces) == 1:
+                lines.append(f'    X("{pieces[0]}") \\')
+                continue
+            lines.append(f'    X("{pieces[0]}" \\')
+            for piece in pieces[1:-1]:
+                lines.append(f'      "{piece}" \\')
+            lines.append(f'      "{pieces[-1]}") \\')
+    lines.append("    /* end of records */")
     lines.append("// clang-format on")
     lines.append("")
     return "\n".join(lines)
@@ -328,7 +491,8 @@ def split_arguments(arguments: str, width: int) -> list[str]:
 def generate_cs(entries: list[entry], core_count: int, hash_value: int, version: int) -> str:
     lines: list[str] = []
     lines.append("// <auto-generated>")
-    lines.append("// Generated by tools/generate_native_api.py from engine/include/conjure/scripting/native_api.inl.")
+    lines.append("// Generated by tools/generate_native_api.py from engine/include/conjure/scripting/native_api.inl")
+    lines.append("// and the records of native_api.h (ExpectedLayoutHash covers both, sweep F445).")
     lines.append("// Do not edit; regenerate instead. The CTest entry conjure_scripting_api_generated_up_to_date diffs it.")
     lines.append("// </auto-generated>")
     lines.append("#nullable enable")
@@ -461,7 +625,9 @@ def generate_status_cs(statuses: list[str]) -> str:
     return "\n".join(lines)
 
 
-def generate_manifest(entries: list[entry], core_count: int, hash_value: int, version: int) -> str:
+def generate_manifest(
+    entries: list[entry], records: list[record], core_count: int, hash_value: int, version: int
+) -> str:
     manifest = {
         "hash": f"0x{hash_value:016X}",
         "version": version,
@@ -477,6 +643,9 @@ def generate_manifest(entries: list[entry], core_count: int, hash_value: int, ve
                 "signature": item.signature,
             }
             for item in entries
+        ],
+        "records": [
+            {"name": item.name, "declaration": item.declaration, "members": item.members} for item in records
         ],
     }
     return json.dumps(manifest, indent=2) + "\n"
@@ -494,7 +663,9 @@ def write_if_changed(path: pathlib.Path, content: str) -> bool:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--inl", default=str(DEFAULT_INL), help="native_api.inl to read")
-    parser.add_argument("--header", default=str(DEFAULT_HEADER), help="native_api.h (CONJURE_NATIVE_API_VERSION)")
+    parser.add_argument(
+        "--header", default=str(DEFAULT_HEADER), help="native_api.h (CONJURE_NATIVE_API_VERSION and the records)"
+    )
     parser.add_argument("--out-hash", default=str(DEFAULT_OUT_HASH), help="generated native_api_hash.h")
     parser.add_argument("--out-cs", default=str(DEFAULT_OUT_CS), help="generated NativeApi.g.cs")
     parser.add_argument("--out-manifest", default=str(DEFAULT_OUT_MANIFEST), help="generated manifest JSON")
@@ -508,13 +679,14 @@ def main(argv: list[str]) -> int:
     inl_text = pathlib.Path(args.inl).read_text(encoding="utf-8")
     header_text = pathlib.Path(args.header).read_text(encoding="utf-8")
     entries, core_count = parse_entries(inl_text)
+    records = parse_records(header_text)
     version = parse_version(header_text)
-    hash_value = layout_hash(entries)
+    hash_value = layout_hash(entries, records)
 
     outputs = {
-        pathlib.Path(args.out_hash): generate_hash_header(entries, core_count, hash_value),
+        pathlib.Path(args.out_hash): generate_hash_header(entries, records, core_count, hash_value),
         pathlib.Path(args.out_cs): generate_cs(entries, core_count, hash_value, version),
-        pathlib.Path(args.out_manifest): generate_manifest(entries, core_count, hash_value, version),
+        pathlib.Path(args.out_manifest): generate_manifest(entries, records, core_count, hash_value, version),
     }
     status_path = pathlib.Path(args.status)
     if status_path.exists():
@@ -531,13 +703,15 @@ def main(argv: list[str]) -> int:
             for path in stale:
                 print(f"{path}: out of date; run python tools/generate_native_api.py", file=sys.stderr)
             return 1
-        print(f"native API generated files are up to date ({len(entries)} entries, hash 0x{hash_value:016X})")
+        print(f"native API generated files are up to date ({len(entries)} entries, {len(records)} records, "
+              f"hash 0x{hash_value:016X})")
         return 0
 
     for path, content in outputs.items():
         changed = write_if_changed(path, content)
         print(f"{'wrote' if changed else 'unchanged'} {path}")
-    print(f"{len(entries)} entries ({core_count} core), version {version}, hash 0x{hash_value:016X}")
+    print(f"{len(entries)} entries ({core_count} core), {len(records)} records, version {version}, "
+          f"hash 0x{hash_value:016X}")
     return 0
 
 

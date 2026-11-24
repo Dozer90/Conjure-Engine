@@ -19,8 +19,21 @@
 // snake_case fields, the documented C-ABI exception to the camelCase rule (R31). conjure_native_api is
 // the X-macro expansion of native_api.inl: native fills it (this module the core entries, bindings the
 // rest), managed validates size, version and layout hash before calling anything.
+//
+// CONJURE_NATIVE_API_HASH covers the entries of native_api.inl and, after them, every conjure_* struct and
+// enumeration below as text: the declaration, each member in order (padding members included), the header
+// members of conjure_native_api and the members of conjure_managed_api (sweep F445). Reordering, renaming,
+// retyping, adding or removing a member, or changing an enumeration, therefore changes the hash, and a
+// Conjure.Managed.dll built before the change fails the handshake with ABI_MISMATCH; regenerate with
+// tools/generate_native_api.py. Default member initialisers are no part of the hash. The generator reads
+// one member declaration per ';' (one enumerator per ','), with no nested definition and no conjure_* union.
+// The hash does not read the hand-written C# mirrors (Interop/Records.cs, Interop/ManagedApi.cs): a record
+// mirror that drifts within one build is caught only by the handshake's size check (RecordSizes) and the
+// field offset test of tests/bindings (sweep F670), and a drifted ManagedApi.cs only by the managed table size
+// check of validate_managed_api (a same-size reorder or retype is not caught).
 
-#define CONJURE_NATIVE_API_VERSION 1
+// Version 2: the layout hash also covers the records and the managed table (sweep F445).
+#define CONJURE_NATIVE_API_VERSION 2
 
 // The X-macro table. It is expanded once per translation unit (the struct below); the descriptor table
 // of native_entry_descriptors() comes from CONJURE_NATIVE_API_FOR_EACH_ENTRY in the generated
@@ -511,8 +524,11 @@ namespace conjure::scripting {
     [[nodiscard]] CONJURE_API std::span<const native_entry_descriptor> native_entry_descriptors() noexcept;
 
     /// <summary>
-    /// FNV-1a 64 over "<group>_<name> <signature>\n" per descriptor, the generator's algorithm run at
-    /// runtime; equals CONJURE_NATIVE_API_HASH, which proves both implementations agree.
+    /// FNV-1a 64 over "<group>_<name> <signature>\n" per descriptor, then over "<line>\n" per line of
+    /// CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE (the conjure_* records, enumerations and table members of this
+    /// header): the generator's algorithm run at runtime over the text it generated. It equals
+    /// CONJURE_NATIVE_API_HASH, which proves both implementations agree; whether the generated text still
+    /// matches this header is checked by tools/generate_native_api.py --check, not here.
     /// </summary>
     [[nodiscard]] CONJURE_API u64 compute_native_api_hash() noexcept;
 

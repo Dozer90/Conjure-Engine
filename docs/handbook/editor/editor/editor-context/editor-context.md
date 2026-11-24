@@ -51,6 +51,7 @@ class CONJURE_API editor_context
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
 <tr><td>public</td><td><code class="signature">DEFAULT_<wbr>VIEWPORT_<wbr>ASPECT</code></td><td><code class="signature"><span class="k">static</span> <span class="k">constexpr</span> <a href="../../../engine/core/types.html#symbol-f32">f32</a></code></td><td><code class="signature"><span class="mi">16.0</span>f / <span class="mi">9.0</span>f</code></td><td>The width / height a view command assumes until a viewport panel reports its own (headless sessions keep it).</td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Bootstrap<wbr>Project</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mCamera</code></td><td><code class="signature"><a href="../editor-camera/editor-camera.html">editor_camera</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mConsole</code></td><td><code class="signature"><a href="../console-buffer/console-buffer.html">console_buffer</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Consumer<wbr>Installed</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
@@ -67,6 +68,7 @@ class CONJURE_API editor_context
 <tr><td>private</td><td><code class="signature">m<wbr>Last<wbr>Script<wbr>Configuration</code></td><td><code class="signature">std::string</code></td><td><code class="signature"><span class="s">"Debug"</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Module<wbr>Consumer</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../editor-module-consumer/editor-module-consumer.html">editor_<wbr>module_<wbr>consumer</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mPlay</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../play-controller/play-controller.html">play_<wbr>controller</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Prebuilt<wbr>Managed<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mProject</code></td><td><code class="signature">std::<wbr>optional&lt;<wbr><a href="../../../engine/engine/project/project.html">engine::<wbr>project</a>&gt;</code></td><td><code class="signature">std::nullopt</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mRegistry</code></td><td><code class="signature"><a href="../command-registry/command-registry.html">command_registry</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Requests<wbr>Per<wbr>Frame</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-usize">usize</a></code></td><td><code class="signature">protocol_<wbr>server::<wbr>DEFAULT_<wbr>REQUESTS_<wbr>PER_<wbr>FRAME</code></td><td></td></tr>
@@ -74,6 +76,7 @@ class CONJURE_API editor_context
 <tr><td>private</td><td><code class="signature">m<wbr>Response<wbr>Sinks</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr>std::<wbr>pair&lt;<wbr>u32,<wbr> <a href="../editor-context.html#symbol-editor-context-response-sink">response_<wbr>sink</a>&gt;&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mRevision</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mSceneDirty</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Scene<wbr>Generation</code></td><td><code class="signature"><a href="../../../engine/core/types.html#symbol-u64">u64</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mSceneOpen</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mScenePath</code></td><td><code class="signature">std::string</code></td><td><code class="signature"><span class="s">""</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mScreenshots</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../screenshot-service/screenshot-service.html">screenshot_<wbr>service</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
@@ -108,6 +111,12 @@ class CONJURE_API editor_context
 #### `assets` {#function-assets}
 
 <div class="function-declaration" id="function-assets-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/assets/asset-manager/asset-manager.html">assets::asset_manager</a> *assets() <span class="k">noexcept</span>;</code></pre></div>
+
+#### `bootstrap_project` {#function-bootstrap-project}
+
+<div class="function-declaration" id="function-bootstrap-project-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">const</span> std::filesystem::path &amp;bootstrap_project() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The <code>Conjure.Bootstrap</code> project of the engine source this editor was built from, which <code>project.export</code> publishes while the file exists and <code><a href="#function-prebuilt-managed-directory-1">prebuilt_managed_directory</a>()</code> holds no prebuilt SDK manifest (an editor run from its build tree); empty for an editor built without scripting. An installed editor keeps the path of the machine that built it and exports with <code><a href="#function-prebuilt-managed-directory-1">prebuilt_managed_directory</a>()</code>, which wins even where that path still exists (owner decision OWN-INSTALL).</p>
 
 #### `bump_revision` {#function-bump-revision}
 
@@ -297,6 +306,12 @@ class CONJURE_API editor_context
 
 <div class="function-declaration" id="function-play-2"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">const</span> <a href="../play-controller/play-controller.html">play_controller</a> &amp;play() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+#### `prebuilt_managed_directory` {#function-prebuilt-managed-directory}
+
+<div class="function-declaration" id="function-prebuilt-managed-directory-1"><pre><code>[[<span class="na">nodiscard</span>]] std::filesystem::path prebuilt_managed_directory() <span class="k">const</span>;</code></pre></div>
+
+<p>The folder <code>project.export</code> copies the prebuilt SDK from whenever it holds the manifest <code>export_pipeline::MANAGED_SDK_MANIFEST_NAME</code>, before it considers <code><a href="#function-bootstrap-project-1">bootstrap_project</a>()</code>: the one <code><a href="#function-set-prebuilt-managed-directory-1">set_prebuilt_managed_directory</a>()</code> named, otherwise <code><a href="#function-engine-1">engine</a>()</code>.<code>managed_directory()</code>, the managed/ folder beside the editor that an installed editor also runs its scripts from (owner decision OWN-INSTALL). <code>A</code> build tree&#x27;s development SDK (bin/managed) never holds the manifest.</p>
+
 #### `project` {#function-project}
 
 <div class="function-declaration" id="function-project-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/engine/project/project.html">engine::project</a> *project() <span class="k">noexcept</span>;</code></pre></div>
@@ -331,6 +346,12 @@ class CONJURE_API editor_context
 
 <div class="function-declaration" id="function-registry-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../command-registry/command-registry.html">command_registry</a> &amp;registry() <span class="k">noexcept</span>;</code></pre></div>
 
+#### `release_engine_work` {#function-release-engine-work}
+
+<div class="function-declaration" id="function-release-engine-work-1"><pre><code><span class="k">void</span> release_engine_work();</code></pre></div>
+
+<p>The engine is shutting down: every frame task&#x27;s <code>release_engine()</code> runs now, while the engine&#x27;s asset manager and database still exist. The editor&#x27;s frame layer calls it when the engine detaches it (<code>editor_application::engine_stopping</code>); the tasks themselves are destroyed later, by <code><a href="#function-rebind-1">rebind</a>()</code> or the destructor.</p>
+
 #### `renderer` {#function-renderer}
 
 <div class="function-declaration" id="function-renderer-1"><pre><code>[[<span class="na">nodiscard</span>]] renderer::renderer *renderer() <span class="k">noexcept</span>;</code></pre></div>
@@ -350,6 +371,12 @@ class CONJURE_API editor_context
 #### `scene_dirty` {#function-scene-dirty}
 
 <div class="function-declaration" id="function-scene-dirty-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> scene_dirty() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+#### `scene_generation` {#function-scene-generation}
+
+<div class="function-declaration" id="function-scene-generation-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/core/types.html#symbol-u64">u64</a> scene_generation() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>Advances whenever the scene the editor shows is replaced or closed: <code><a href="#function-set-scene-state-1">set_scene_state</a>()</code> (<code>scene.new</code>, <code>scene.open</code>, <code>scene.close</code>), an engine bound by <code><a href="#function-rebind-1">rebind</a>()</code> and the startup scene <code><a href="#function-bind-engine-1">bind_engine</a>()</code> adopts. An asynchronous command compares it at completion with the value at dispatch to tell that the scene it started on is gone. <code>A</code> play session restores its snapshot into the same scene without moving it: <code>play_controller::state_changes()</code> covers that.</p>
 
 #### `scene_manager` {#function-scene-manager}
 
@@ -391,6 +418,13 @@ class CONJURE_API editor_context
 
 <p>The protocol server the application runs, or <code>nullptr</code> (tests without one).</p>
 
+#### `set_bootstrap_project` {#function-set-bootstrap-project}
+
+<div class="function-declaration" id="function-set-bootstrap-project-1"><pre><code><span class="k">void</span> set_bootstrap_project(
+    std::filesystem::path project);</code></pre></div>
+
+<p>Replaces <code><a href="#function-bootstrap-project-1">bootstrap_project</a>()</code>; an empty path stands for an editor without a source tree (tests stand in for an installed editor so).</p>
+
 #### `set_dotnet_executable` {#function-set-dotnet-executable}
 
 <div class="function-declaration" id="function-set-dotnet-executable-1"><pre><code><span class="k">void</span> set_dotnet_executable(
@@ -403,6 +437,13 @@ class CONJURE_API editor_context
 
 <p>Records the configuration of a <code>script.compile</code> that succeeded (<code>compile_task</code> calls it); <code><a href="#function-rebind-1">rebind</a>()</code> resets it to &quot;Debug&quot;.</p>
 
+#### `set_prebuilt_managed_directory` {#function-set-prebuilt-managed-directory}
+
+<div class="function-declaration" id="function-set-prebuilt-managed-directory-1"><pre><code><span class="k">void</span> set_prebuilt_managed_directory(
+    std::filesystem::path directory);</code></pre></div>
+
+<p>Names the folder of <code><a href="#function-prebuilt-managed-directory-1">prebuilt_managed_directory</a>()</code>; empty restores the default.</p>
+
 #### `set_requests_per_frame` {#function-set-requests-per-frame}
 
 <div class="function-declaration" id="function-set-requests-per-frame-1"><pre><code><span class="k">void</span> set_requests_per_frame(
@@ -413,11 +454,20 @@ class CONJURE_API editor_context
 <div class="function-declaration" id="function-set-scene-dirty-1"><pre><code><span class="k">void</span> set_scene_dirty(
     <span class="k">bool</span> dirty) <span class="k">noexcept</span>;</code></pre></div>
 
+#### `set_scene_path` {#function-set-scene-path}
+
+<div class="function-declaration" id="function-set-scene-path-1"><pre><code><span class="k">void</span> set_scene_path(
+    std::string path);</code></pre></div>
+
+<p>The open scene was saved under another path (<code>scene.save_as</code>): sets the path and clears the dirty flag. The scene is the same one, so <code><a href="#function-scene-generation-1">scene_generation</a>()</code> does not move.</p>
+
 #### `set_scene_state` {#function-set-scene-state}
 
 <div class="function-declaration" id="function-set-scene-state-1"><pre><code><span class="k">void</span> set_scene_state(
     <span class="k">bool</span> open,
     std::string path);</code></pre></div>
+
+<p>The scene was opened, created or closed: sets whether one is open and its path, clears the dirty flag and advances <code><a href="#function-scene-generation-1">scene_generation</a>()</code>.</p>
 
 #### `set_script_compile_token` {#function-set-script-compile-token}
 

@@ -82,6 +82,12 @@ class CONJURE_API editor_application final : public editor_host
 
 <div class="function-declaration" id="function-engine-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/engine/application/application.html">engine::application</a> &amp;engine() <span class="k">noexcept</span>;</code></pre></div>
 
+#### `engine_stopping` {#function-engine-stopping}
+
+<div class="function-declaration" id="function-engine-stopping-1"><pre><code><span class="k">void</span> engine_stopping();</code></pre></div>
+
+<p>The engine is shutting down and has detached the editor&#x27;s frame layer (<code><a href="#function-shutdown-1">shutdown</a>()</code>, the restart of <code>project.open</code>, an engine that failed to initialise): the context&#x27;s frame tasks release what they hold of it (<code>editor_context::release_engine_work</code>) while its asset manager and database still exist. Called by the frame layer; nothing happens before a context exists.</p>
+
 #### `exit_code` {#function-exit-code}
 
 <div class="function-declaration" id="function-exit-code-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">int</span> exit_code() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>

@@ -33,7 +33,7 @@ namespace {
     }
 
     [[nodiscard]] core::error conflict(std::string_view module, std::string_view detail) {
-        return modules::make_module_error(
+        return core::make_error(
           modules::module_error::REGISTRATION_CONFLICT,
           "ecs: module '{}': {}",
           module,
@@ -290,7 +290,7 @@ core::result<void> ecs_module_consumer::can_detach(modules::module_id id, module
     if (uses == 0) {
         return core::result<void>::success();
     }
-    return modules::make_module_error(
+    return core::make_error(
       modules::module_error::IN_USE,
       "ecs: {} entity component(s) of module {} are still alive",
       uses,

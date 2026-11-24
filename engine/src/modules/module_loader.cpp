@@ -48,7 +48,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
   u32 copyIndex
 ) {
     if (!desc.allowSharedLibraries) {
-        return make_module_error(
+        return core::make_error(
           module_error::SHARED_LIBRARIES_DISABLED,
           "module '{}' needs the shared library '{}' but this host does not load shared libraries",
           manifest.name,
@@ -58,7 +58,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
 
     std::error_code ignored = {};
     if (!std::filesystem::is_regular_file(modules::detail::extend_path(binaryPath), ignored)) {
-        return make_module_error(
+        return core::make_error(
           module_error::BINARY_NOT_FOUND,
           "module '{}': binary '{}' does not exist",
           manifest.name,
@@ -83,7 +83,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
     result<dynamic_library> loaded = dynamic_library::load(extendedPath);
     if (!loaded.has_value()) {
         remove_shadow_copy(opened.loadedPath);
-        return make_module_error(
+        return core::make_error(
           module_error::BINARY_LOAD_FAILED,
           "module '{}': {}{}",
           manifest.name,
@@ -100,7 +100,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
           describe == nullptr ? CONJURE_MODULE_DESCRIBE_SYMBOL : CONJURE_MODULE_ENTRY_SYMBOL;
         opened.library.unload();
         remove_shadow_copy(opened.loadedPath);
-        return make_module_error(
+        return core::make_error(
           module_error::ENTRY_SYMBOL_MISSING,
           "module '{}': '{}' does not export {} (is it built with CONJURE_DECLARE_MODULE?)",
           manifest.name,
@@ -114,7 +114,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
     if (info == nullptr) {
         opened.library.unload();
         remove_shadow_copy(opened.loadedPath);
-        return make_module_error(
+        return core::make_error(
           module_error::ABI_MISMATCH,
           "module '{}': conjure_module_describe returned null",
           manifest.name
@@ -125,7 +125,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
     if (!compared.has_value()) {
         opened.library.unload();
         remove_shadow_copy(opened.loadedPath);
-        return make_module_error(
+        return core::make_error(
           module_error::ABI_MISMATCH,
           "module '{}': {}",
           manifest.name,
@@ -138,7 +138,7 @@ result<modules::detail::opened_binary> conjure::modules::detail::open_module_bin
     if (binaryName != manifest.name) {
         opened.library.unload();
         remove_shadow_copy(opened.loadedPath);
-        return make_module_error(
+        return core::make_error(
           module_error::NAME_MISMATCH,
           "module '{}': the binary describes itself as '{}'",
           manifest.name,

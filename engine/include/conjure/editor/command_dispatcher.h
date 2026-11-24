@@ -25,7 +25,11 @@
 // frozen: a scene edit is executed and not recorded, an ON_DISK command's inverse goes to the play controller,
 // which makes one undo entry of them at play.stop (D9, D21). Asynchronous handlers park
 // their request and answer through async_reply; resolve_completed() hands the finished responses back once per
-// frame and times the stale ones out. Main thread only.
+// frame and times the stale ones out. An asynchronous command that changes the scene (ASYNC | MUTATES, code sweep
+// F736) is recorded, dirties the scene, bumps the revision and emits scene.changed when it completes, not when it
+// is dispatched; inside a batch, an undo or redo step or a rollback it must complete inside its handler
+// (SYNC_IN_BATCH). Only a request left parked counts toward a client's cap of pending requests (BUSY beyond it):
+// one that must complete inside its handler is never refused for it. Main thread only.
 
 namespace conjure::editor {
 
@@ -51,7 +55,10 @@ namespace conjure::editor {
             struct pending_request {
                 core::json::document id = {};
                 std::string command = "";
+                core::json::document args = core::json::document::object();    // kept for MUTATES (the replay)
                 u64 ticket = 0;
+                u64 coalesceKey = 0;
+                command_flags flags = command_flags::NONE;
                 u32 clientId = 0;
                 f64 deadlineSeconds = 0.0;
             };
@@ -93,7 +100,8 @@ namespace conjure::editor {
 
             /// <summary>
             /// UI convenience: dispatches from client 0 and returns the result object or the error (the
-            /// error's code is the protocol code). An asynchronous command answers through on_local_response.
+            /// error's code is the protocol code). An asynchronous command answers through on_local_response;
+            /// when such a reply of client 0 fails, complete() also logs a WARN "ui: <command> failed: <message>".
             /// </summary>
             [[nodiscard]] core::result<core::json::document> execute(const command_request &request);
 
@@ -120,9 +128,21 @@ namespace conjure::editor {
             }
 
             /// <summary>
-            /// Completes a parked request (called by async_reply).
+            /// Completes a parked request (called by async_reply). A failure of client 0 (the UI, which does not
+            /// wait for its answers) is logged as a WARN naming the command.
             /// </summary>
             void complete(u64 ticket, protocol_response response);
+
+            /// <summary>
+            /// Completes the parked request of an ASYNC | MUTATES command with its outcome (called by
+            /// async_reply::succeed_mutation): records it the way a synchronous mutation is recorded at dispatch,
+            /// with the request's args, client and coalesce key (the undo stack, the client's transaction, the
+            /// running batch, or the play controller while frozen), marks the scene dirty unless NO_UNDO and,
+            /// outside an undo or redo step, bumps the revision, sets result.revision and emits scene.changed.
+            /// A completion inside the handler (a batch child, a replay) is recorded under the state it runs in.
+            /// Asserted: the ticket is pending and its command is MUTATES.
+            /// </summary>
+            void complete_mutation(u64 ticket, command_outcome outcome);
 
             /// <summary>
             /// True while the ticket is parked and not completed.
@@ -150,8 +170,28 @@ namespace conjure::editor {
             [[nodiscard]] core::result<void> dispatch_inverses(std::span<const command_inverse> inverses, u32 clientId);
             [[nodiscard]] core::result<void> dispatch_replays(std::span<const command_request> replays, u32 clientId);
 
+            /// <summary>
+            /// The most requests one client may leave parked. An ASYNC request beyond it answers BUSY, except one
+            /// that must complete inside its handler (requires_synchronous_completion()), which cannot stay parked
+            /// and is never refused. A SYNC_IN_BATCH request may also finish inside its handler elsewhere (a prefab
+            /// that is already loaded), so it is counted only when its handler leaves it parked: the dispatcher
+            /// answers BUSY then and drops its reply, and the handler checks exceeds_pending_limit() before it
+            /// starts waiting, so it can refuse with nothing changed.
+            /// </summary>
             void set_max_pending_per_client(u32 count) noexcept {
                 mMaxPendingPerClient = count;
+            }
+
+            [[nodiscard]] u32 max_pending_per_client() const noexcept {
+                return mMaxPendingPerClient;
+            }
+
+            /// <summary>
+            /// True when the client has more parked requests than max_pending_per_client(). Inside an ASYNC
+            /// handler the request being dispatched is parked already and counts.
+            /// </summary>
+            [[nodiscard]] bool exceeds_pending_limit(u32 clientId) const noexcept {
+                return pending_count(clientId) > mMaxPendingPerClient;
             }
 
             void set_async_timeout_seconds(f64 seconds) noexcept {
@@ -186,6 +226,16 @@ namespace conjure::editor {
             }
 
             /// <summary>
+            /// True while a request dispatched now must answer before its handler returns: inside a batch (its
+            /// children are recorded into one entry and rolled back together), an undo or redo step and a batch
+            /// rollback (replaying()). A SYNC_IN_BATCH handler checks it and completes its reply synchronously; an
+            /// ASYNC handler that does not is answered with INTERNAL and its reply is dropped.
+            /// </summary>
+            [[nodiscard]] bool requires_synchronous_completion() const noexcept {
+                return mBatch != nullptr || mSuppressRecording > 0;
+            }
+
+            /// <summary>
             /// Responses of asynchronous commands issued by client 0 (the UI).
             /// </summary>
             [[nodiscard]] core::event<const protocol_response &> &on_local_response() noexcept {
@@ -198,8 +248,9 @@ namespace conjure::editor {
               const command_descriptor &descriptor,
               core::json::document &details
             ) const;
-            void record_outcome(
-              const command_descriptor &descriptor,
+            void record_outcome(command_flags flags, const protocol_request &request, command_outcome &outcome);
+            [[nodiscard]] protocol_response conclude_mutation(
+              command_flags flags,
               const protocol_request &request,
               command_outcome &outcome
             );

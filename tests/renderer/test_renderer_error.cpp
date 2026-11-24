@@ -47,4 +47,9 @@ TEST_SUITE("renderer/renderer_error") {
         CHECK(testing::describe_error(failed).find("INVALID_ASSET") != std::string::npos);
         CHECK(testing::describe_error(failed).find("short read") != std::string::npos);
     }
+
+    TEST_CASE("renderer_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<renderer_error>);
+    }
 }

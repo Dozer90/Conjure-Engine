@@ -230,7 +230,7 @@ TEST_SUITE("modules/module_reload") {
 
     TEST_CASE("module_manager - a consumer veto anywhere in the cascade reloads nothing") {
         reload_fixture fixture = {};
-        fixture.ecs.canDetachResult = make_module_error(module_error::UNLOAD_BLOCKED, "play mode");
+        fixture.ecs.canDetachResult = core::make_error(module_error::UNLOAD_BLOCKED, "play mode");
         const result<void> blocked = fixture.host.manager.reload(fixture.alphaId, reload_scope::FULL);
         CONJURE_CHECK_ERROR(blocked, module_error::UNLOAD_BLOCKED);
         CHECK(fixture.log == std::vector<std::string>{"can_detach(remove):ecs:beta"});

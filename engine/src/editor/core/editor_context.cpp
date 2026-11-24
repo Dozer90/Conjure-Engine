@@ -52,6 +52,21 @@ namespace conjure::editor {
             const std::u8string relative(parts->relativePath.begin(), parts->relativePath.end());
             return project.assets_directory() / std::filesystem::path(relative);
         }
+
+        /// <summary>
+        /// The Conjure.Bootstrap project of the engine source this editor was built from: engine/src/editor/
+        /// CMakeLists.txt defines CONJURE_EDITOR_BOOTSTRAP_PROJECT in a build with scripting. Empty without it.
+        /// </summary>
+        [[nodiscard]] std::filesystem::path compiled_bootstrap_project() {
+#if defined(CONJURE_EDITOR_BOOTSTRAP_PROJECT)
+            // Through char8_t: the configure wrote the path as UTF-8, which a narrow path would read in the ANSI
+            // code page on Windows.
+            const std::string_view text = CONJURE_EDITOR_BOOTSTRAP_PROJECT;
+            return std::filesystem::path(std::u8string(text.begin(), text.end()));
+#else
+            return {};
+#endif
+        }
     }
 
     /*===========================================================================*/
@@ -63,6 +78,10 @@ namespace conjure::editor {
 
     frame_task::frame_task() = default;
     frame_task::~frame_task() = default;
+
+    void frame_task::release_engine(editor_context &context) {
+        (void) context;
+    }
 
     /*===========================================================================*/
     /*===========================================================================*/
@@ -86,6 +105,7 @@ namespace conjure::editor {
         mEngine(&engine),
         mHost(host),
         mDisplayMode(displayMode) {
+        mBootstrapProject = compiled_bootstrap_project();
         mConsole.install_sink();
         register_builtin_commands(mRegistry);
         mDispatcher = std::make_unique<command_dispatcher>(*this, mRegistry, mUndo);
@@ -180,6 +200,7 @@ namespace conjure::editor {
         mSceneOpen = false;
         mScenePath.clear();
         mSceneDirty = false;
+        ++mSceneGeneration;
         mInbound.clear();
         mResponses.clear();
         // Everything parked on the old engine answers CANCELLED now instead of TIMEOUT later; the frame tasks
@@ -272,6 +293,12 @@ namespace conjure::editor {
         mSceneOpen = open;
         mScenePath = std::move(path);
         mSceneDirty = false;
+        ++mSceneGeneration;
+    }
+
+    void editor_context::set_scene_path(std::string path) {
+        mScenePath = std::move(path);
+        mSceneDirty = false;
     }
 
     bool editor_context::names_asset(std::string_view assetPath, const assets::asset_id &id) {
@@ -345,6 +372,21 @@ namespace conjure::editor {
 
     void editor_context::set_dotnet_executable(std::string executable) {
         mDotnetExecutable = std::move(executable);
+    }
+
+    void editor_context::set_bootstrap_project(std::filesystem::path project) {
+        mBootstrapProject = std::move(project);
+    }
+
+    std::filesystem::path editor_context::prebuilt_managed_directory() const {
+        if (!mPrebuiltManagedDirectory.empty()) {
+            return mPrebuiltManagedDirectory;
+        }
+        return mEngine->managed_directory();
+    }
+
+    void editor_context::set_prebuilt_managed_directory(std::filesystem::path directory) {
+        mPrebuiltManagedDirectory = std::move(directory);
     }
 
     void editor_context::set_last_script_configuration(std::string configuration) {
@@ -421,6 +463,13 @@ namespace conjure::editor {
         std::erase_if(mResponseSinks, [clientId](const auto &entry) {
             return entry.first == clientId;
         });
+    }
+
+    void editor_context::release_engine_work() {
+        // By index: a task's release may complete a reply, and nothing it does adds or removes tasks.
+        for (usize index = 0; index < mFrameTasks.size(); ++index) {
+            mFrameTasks[index]->release_engine(*this);
+        }
     }
 
     void editor_context::add_frame_task(std::unique_ptr<frame_task> task) {
@@ -504,6 +553,7 @@ namespace conjure::editor {
                 mSceneOpen = true;
                 mScenePath = std::move(path);
                 mSceneDirty = false;
+                ++mSceneGeneration;
             }
         }
         install_module_consumer();

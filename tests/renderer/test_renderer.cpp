@@ -582,7 +582,7 @@ TEST_SUITE("renderer/renderer") {
         // Registering twice reports the type registry's duplicate error.
         CONJURE_CHECK_ERROR(
           renderer_type::register_asset_types(types, importers),
-          assets::asset_error_code::TYPE_DUPLICATE
+          assets::assets_error::TYPE_DUPLICATE
         );
         CHECK(types.size() == 5);
         CHECK(importers.importers().size() == 4);

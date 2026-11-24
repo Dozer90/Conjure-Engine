@@ -25,8 +25,8 @@ load_stage_result conjure::assets::detail::load_cpu_stage(
     stage.dependencies = std::move(blob.value().dependencies);
 
     if (expectedType != asset_type_id::INVALID && stage.header.type != expectedType) {
-        stage.output = make_asset_error(
-          asset_error_code::TYPE_MISMATCH,
+        stage.output = core::make_error(
+          assets_error::TYPE_MISMATCH,
           std::format(
             "asset {} is cooked as type {:#x} but the slot is bound to type {:#x}",
             id,
@@ -39,8 +39,8 @@ load_stage_result conjure::assets::detail::load_cpu_stage(
 
     const asset_loader *loader = types.find_loader(stage.header.type);
     if (loader == nullptr) {
-        stage.output = make_asset_error(
-          asset_error_code::NO_LOADER,
+        stage.output = core::make_error(
+          assets_error::NO_LOADER,
           std::format("no loader registered for type {:#x} of asset {}", static_cast<u64>(stage.header.type), id)
         );
         return stage;
@@ -53,11 +53,11 @@ load_stage_result conjure::assets::detail::load_cpu_stage(
     core::result<asset_payload> output = loader->load_cpu(context, blob.value().payload);
     if (!output.has_value()) {
         const core::error &failure = output.get_error();
-        if (failure.is_category<asset_error_code>()) {
+        if (failure.is_category<assets_error>()) {
             stage.output = failure;
         } else {
-            stage.output = make_asset_error(
-              asset_error_code::LOAD_FAILED,
+            stage.output = core::make_error(
+              assets_error::LOAD_FAILED,
               std::format("load_cpu of {} failed: {}", id, failure.to_string())
             );
         }

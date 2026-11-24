@@ -23,6 +23,8 @@
 #include <doctest/doctest.h>
 
 #include <string>
+#include <string_view>
+#include <type_traits>
 
 namespace conjure::testing {
 
@@ -45,6 +47,18 @@ namespace conjure::testing {
     [[nodiscard]] bool has_error(const core::result<ValueType> &value, EnumType code) noexcept {
         return !value.has_value() && value.get_error().is(code);
     }
+
+    /// <summary>
+    /// True when argument-dependent lookup finds a make_error(code, detail) in the namespace of the
+    /// enumeration, that is, when the module beside it declares an error factory of its own. Only core does
+    /// (core::make_error beside core::error_code); every other module builds its errors with core::make_error
+    /// (R63, code sweep F625), and its error test checks that this stays false. Nothing here declares a
+    /// make_error, so the unqualified call finds only what argument-dependent lookup finds.
+    /// </summary>
+    template <typename EnumType>
+    concept declares_own_make_error = std::is_enum_v<EnumType> && requires(EnumType code) {
+        make_error(code, std::string_view{});
+    };
 }
 
 // Result helpers. CONJURE_REQUIRE_OK stops the case; CONJURE_CHECK_OK continues;

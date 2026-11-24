@@ -14,6 +14,7 @@
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/export.h"
 #include "conjure/engine/project.h"
 #include "conjure/modules/module_abi.h"
 
@@ -470,17 +471,168 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(result.root()["warnings"].size() == 0);
     }
 
+#if defined(CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR)
+    // Compiled only where this build published the export-flavoured SDK (conjure_managed_sdk_export needs the .NET SDK
+    // at configure time), so no build registers a case that could only skip.
+    TEST_CASE("regression - code sweep OWN-INSTALL project.export of an installed editor copies the prebuilt SDK and "
+      "needs no .NET SDK for a project without game scripts") {
+        // An editor without the engine's source tree answered NOT_AVAILABLE for every export with managed code. An
+        // installed editor carries the export-flavoured SDK in the managed/ folder beside it: the stand-in editor
+        // folder holds a copy of what conjure_managed_sdk_export published, and the fixture's dotnet does not exist,
+        // so the export succeeds only when it copies that SDK without running dotnet.
+        const std::filesystem::path published = editor_test::managed_export_directory();
+        REQUIRE_MESSAGE(!published.empty(), "this build published no export-flavoured SDK");
+        testing::temp_directory directory("editor_installed_layout");
+        const std::filesystem::path installed = editor_test::install_managed_export(directory.path() / "editor");
+        editor_test::headless_editor editor = {};
+        std::filesystem::path bootstrap = {};
+        SUBCASE("an editor built without scripting knows no bootstrap project") {
+            bootstrap.clear();
+        }
+        SUBCASE("an installed editor names the bootstrap project of the machine that built it, where nothing lies") {
+            bootstrap = directory.path() / "build_machine" / "Conjure.Bootstrap" / "Conjure.Bootstrap.csproj";
+        }
+        SUBCASE("an editor packaged on the machine that built it finds its bootstrap project, and the SDK still wins") {
+            // Publishing the bootstrap from whatever revision that checkout holds now would skip the native API hash
+            // check of the prebuilt SDK; the fixture's dotnet does not exist, so a publish would fail the export.
+            bootstrap = directory.path() / "build_machine" / "Conjure.Bootstrap" / "Conjure.Bootstrap.csproj";
+            std::error_code error = {};
+            std::filesystem::create_directories(bootstrap.parent_path(), error);
+            REQUIRE_FALSE(error);
+            std::ofstream stream(bootstrap, std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+        }
+        editor.context().set_bootstrap_project(bootstrap);
+        editor.context().set_prebuilt_managed_directory(installed);
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = directory.path() / "exported";
+        const core::json::document result = editor.ok(
+          "project.export",
+          core::json::object({{"directory", output.generic_string()}, {"copyRuntime", false}})
+        );
+        CAPTURE(result.to_string());
+        for (const std::string_view name : {"Conjure.Bootstrap.dll", "Conjure.Bootstrap.runtimeconfig.json",
+               "Conjure.Managed.dll"}) {
+            CAPTURE(name);
+            const std::filesystem::path shipped = output / "managed" / std::filesystem::path(name);
+            REQUIRE(std::filesystem::is_regular_file(shipped));
+            CHECK(editor_test::read_text_file(shipped) == editor_test::read_text_file(installed / name));
+        }
+        CHECK_FALSE(std::filesystem::exists(output / "managed" / "conjure_managed_sdk.json"));
+        CHECK_FALSE(std::filesystem::exists(output / "managed" / "Conjure.Managed.pdb"));
+        CHECK(std::filesystem::is_regular_file(output / "project.json"));
+        CHECK(result.root()["warnings"].size() == 0);
+    }
+#endif
+
+    TEST_CASE("project.export - an editor with neither the engine source nor a prebuilt SDK answers NOT_AVAILABLE") {
+        // The reply names what is missing on both sides and how to export without managed code; nothing is written.
+        testing::temp_directory directory("editor_no_managed_sdk");
+        editor_test::headless_editor editor = {};
+        std::filesystem::path bootstrap = directory.path() / "gone" / "Conjure.Bootstrap.csproj";
+        std::string sourceNamed = "has no '" + bootstrap.generic_string() + "'";
+        const std::filesystem::path managed = directory.path() / "editor" / "managed";
+        SUBCASE("the source tree is gone and the managed folder is missing") {
+        }
+        SUBCASE("the source tree is gone and the managed folder holds a development SDK without the manifest") {
+            std::error_code error = {};
+            std::filesystem::create_directories(managed, error);
+            REQUIRE_FALSE(error);
+            std::ofstream stream(managed / "Conjure.Managed.dll", std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+            stream << "development build";
+        }
+        SUBCASE("the editor was built without scripting") {
+            bootstrap.clear();
+            sourceNamed = "built without scripting";
+        }
+        editor.context().set_bootstrap_project(bootstrap);
+        editor.context().set_prebuilt_managed_directory(managed);
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = directory.path() / "exported";
+        const protocol_response response = editor.send(
+          "project.export",
+          core::json::object({{"directory", output.generic_string()}, {"copyRuntime", false}})
+        );
+        REQUIRE_FALSE(response.ok);
+        CAPTURE(response.errorMessage);
+        CHECK(response.errorCode == protocol_error_code::NOT_AVAILABLE);
+        CHECK(response.errorMessage.find(sourceNamed) != std::string::npos);
+        CHECK(response.errorMessage.find(managed.generic_string()) != std::string::npos);
+        CHECK(response.errorMessage.find("conjure_managed_sdk.json") != std::string::npos);
+        CHECK(response.errorMessage.find("publishManaged false") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output));
+    }
+
+#if defined(CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR)
+    // Compiled only where this build published the export-flavoured SDK (conjure_managed_sdk_export needs the .NET SDK
+    // at configure time), so no build registers a case that could only skip.
+    TEST_CASE("project.export - an installed editor names the .NET SDK the game's scripts need when none is usable") {
+        // Owner decision OWN-INSTALL: the .NET SDK is an optional download that only projects with game scripts
+        // need. Without a usable one the reply names the version global.json asks for and Microsoft's download page,
+        // for a dotnet that cannot be started and for one that answers --version with an error, as a dotnet without
+        // an SDK does (conjure_process_child answers every command with exit code 2).
+        const std::filesystem::path published = editor_test::managed_export_directory();
+        REQUIRE_MESSAGE(!published.empty(), "this build published no export-flavoured SDK");
+        testing::temp_directory directory("editor_installed_no_sdk");
+        const std::filesystem::path installed = editor_test::install_managed_export(directory.path() / "editor");
+        editor_test::headless_editor editor = {};
+        std::string found = "could not be started";
+        SUBCASE("a dotnet that cannot be started") {
+            found = "could not be started";
+        }
+        SUBCASE("a dotnet without an SDK") {
+            editor.context().set_dotnet_executable(CONJURE_EDITOR_TEST_PROCESS_CHILD);
+            found = "--version' exited with 2";
+        }
+        editor.context().set_bootstrap_project({});
+        editor.context().set_prebuilt_managed_directory(installed);
+        const std::filesystem::path scripts = editor.project_directory() / "scripts";
+        std::error_code error = {};
+        std::filesystem::create_directories(scripts, error);
+        REQUIRE_FALSE(error);
+        std::ofstream stream(scripts / "Game.csproj", std::ios::binary | std::ios::trunc);
+        REQUIRE(stream.is_open());
+        stream << "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+        stream.close();
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = directory.path() / "exported";
+        const protocol_response response = editor.send(
+          "project.export",
+          core::json::object({{"directory", output.generic_string()}, {"copyRuntime", false}})
+        );
+        REQUIRE_FALSE(response.ok);
+        CAPTURE(response.errorMessage);
+        CHECK(response.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(response.errorMessage.find("publish_managed") != std::string::npos);
+        CHECK(response.errorMessage.find(found) != std::string::npos);
+        CHECK(response.errorMessage.find(std::string(engine::required_dotnet_sdk_version())) != std::string::npos);
+        CHECK(response.errorMessage.find(engine::dotnet_sdk_download_page()) != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output / "project.json"));
+    }
+#endif
+
 #if CONJURE_EDITOR_TEST_HAS_DOTNET && defined(CONJURE_EDITOR_TEST_RUNTIME_EXECUTABLE)
-    TEST_CASE("regression - follow-up FU-PDB project.export of a scripted project ships managed code that the exported "
-      "runtime runs [dotnet][slow]" * doctest::timeout(1800.0)) {
+    TEST_CASE("regression - follow-up FU-PDB and code sweep OWN-INSTALL project.export of a scripted project ships "
+      "managed code that the exported runtime runs [dotnet][slow]" * doctest::timeout(1800.0)) {
         // tests/assets/projects/scripted (the project the nightly exports) holds scripts/Game.csproj as
         // script.create writes it and a startup scene whose one entity carries Game.ExportProbe, which logs a line
         // when it is created. The editor exports a copy with the real dotnet and the runtime of this tree; the
         // exported runtime, started headless with scripting, runs the script from the assemblies the export shipped.
         // ExportProbe uses features of C# 14 (a setter through the field keyword, an extension property): a
         // LangVersion below 14 in the project file fails the export, and the second line shows what they computed.
+        // The editor publishes the bootstrap from the engine source it was built from, or, standing in for an
+        // installed editor without that source (owner decision OWN-INSTALL), copies the export-flavoured SDK of the
+        // managed/ folder of a stand-in editor folder and builds only the game's scripts against it.
         REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
         testing::temp_directory directory = {};
+        bool installed = false;
+        SUBCASE("from the engine source this editor was built from") {
+            installed = false;
+        }
+        SUBCASE("from the prebuilt SDK of an installed editor") {
+            installed = true;
+        }
         const std::filesystem::path project = directory.path() / "scripted";
         std::error_code copyError = {};
         std::filesystem::copy(
@@ -493,6 +645,14 @@ TEST_SUITE("editor/commands_scene_project") {
 
         editor_test::headless_editor editor = {};
         editor.context().set_dotnet_executable("dotnet");
+        if (installed) {
+            const std::filesystem::path published = editor_test::managed_export_directory();
+            REQUIRE_MESSAGE(!published.empty(), "this build published no export-flavoured SDK");
+            editor.context().set_bootstrap_project({});
+            editor.context().set_prebuilt_managed_directory(
+              editor_test::install_managed_export(directory.path() / "editor")
+            );
+        }
         editor.trust_project(project);
         (void) editor.ok("project.open", core::json::object({{"path", project.generic_string()}}));
         // The engine restarts into the project between frames.

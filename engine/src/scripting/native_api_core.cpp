@@ -210,7 +210,7 @@ namespace {
     int32_t entry_script_add(uint64_t entity, uint64_t classHash) {
         script_runtime *runtime = runtime_with_world();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALISED);
+            return status_of(scripting_error::NOT_INITIALISED);
         }
         const ecs::entity target = ecs::entity::from_u64(entity);
         const script_entry_id id = runtime->add_script(target, classHash, core::json::value());
@@ -221,15 +221,15 @@ namespace {
         // from one that refused (the script limit, or no script_component yet under the iteration lock) without
         // asking entity_is_alive, which answers false for an id reserved in the scope.
         if (!runtime->world()->is_alive(target) && !runtime->is_deferred_reserved(target)) {
-            return status_of(script_error::INSTANCE_NOT_FOUND);
+            return status_of(scripting_error::INSTANCE_NOT_FOUND);
         }
-        return status_of(script_error::NOT_SUPPORTED);
+        return status_of(scripting_error::NOT_SUPPORTED);
     }
 
     int32_t entry_script_get_slots(uint64_t entity, int32_t *slots, int32_t capacity) {
         script_runtime *runtime = runtime_with_world();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALISED);
+            return status_of(scripting_error::NOT_INITIALISED);
         }
         // The set is read in place: every GetScript<T>() lands here, and scripts_of() would build a vector.
         const ecs::world &world = *runtime->world();
@@ -574,10 +574,10 @@ namespace {
     int32_t entry_query_begin(const uint32_t *ids, int32_t count, conjure_query_scope *out) {
         script_runtime *runtime = active_runtime();
         if (runtime == nullptr) {
-            return status_of(script_error::NOT_INITIALISED);
+            return status_of(scripting_error::NOT_INITIALISED);
         }
         if (ids == nullptr || out == nullptr || count <= 0) {
-            return status_of(script_error::NOT_SUPPORTED);
+            return status_of(scripting_error::NOT_SUPPORTED);
         }
         const std::span<const u32> typeIds(ids, static_cast<usize>(count));
         const core::result<u32> opened = runtime->begin_query_scope(typeIds, *out);
@@ -585,11 +585,11 @@ namespace {
             return 0;
         }
         const core::error &failure = opened.get_error();
-        if (failure.is_category<script_error>()) {
+        if (failure.is_category<scripting_error>()) {
             return -static_cast<int32_t>(failure.code());
         }
         CONJURE_LOG_WARN(LOG_SCRIPTING, "query_begin: {}", failure);
-        return status_of(script_error::NOT_SUPPORTED);
+        return status_of(scripting_error::NOT_SUPPORTED);
     }
 
     void entry_query_end(uint32_t scopeId) {

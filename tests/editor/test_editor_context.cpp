@@ -387,6 +387,36 @@ TEST_SUITE("editor/editor_context") {
         CHECK(context.viewport_aspect() == doctest::Approx(1.5f));
     }
 
+    TEST_CASE("editor_context - the bootstrap project is the engine source's until replaced") {
+        // Owner decision OWN-INSTALL: an editor built with scripting knows the Conjure.Bootstrap project of the source
+        // it was built from (this checkout, so the file exists); one built without scripting knows none.
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+#if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+        CHECK(context.bootstrap_project().filename() == "Conjure.Bootstrap.csproj");
+        std::error_code probe = {};
+        CHECK(std::filesystem::is_regular_file(context.bootstrap_project(), probe));
+#else
+        CHECK(context.bootstrap_project().empty());
+#endif
+        const std::filesystem::path replacement = std::filesystem::path("elsewhere") / "Conjure.Bootstrap.csproj";
+        context.set_bootstrap_project(replacement);
+        CHECK(context.bootstrap_project() == replacement);
+        context.set_bootstrap_project({});
+        CHECK(context.bootstrap_project().empty());
+    }
+
+    TEST_CASE("editor_context - the prebuilt managed directory defaults to the engine's managed directory") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        CHECK(context.prebuilt_managed_directory() == context.engine().managed_directory());
+        const std::filesystem::path installed = std::filesystem::path("install") / "managed";
+        context.set_prebuilt_managed_directory(installed);
+        CHECK(context.prebuilt_managed_directory() == installed);
+        context.set_prebuilt_managed_directory({});
+        CHECK(context.prebuilt_managed_directory() == context.engine().managed_directory());
+    }
+
     TEST_CASE("regression - F727 an editor.wait_frames whose client disconnected leaves the frame tasks at once") {
         editor_test::headless_editor editor = {};
         editor_context &context = editor.context();
@@ -865,5 +895,76 @@ TEST_SUITE("editor/editor_context") {
           missing.errorMessage.find("'conjure_f187_no_such_folder/none.json'") != std::string::npos,
           missing.errorMessage
         );
+    }
+
+    TEST_CASE("editor_context - scene_generation moves when the scene is replaced or closed, not when it is saved") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        (void) editor.create_entity("Kept");
+        const u64 opened = context.scene_generation();
+        (void) editor.ok("scene.save");
+        CHECK(context.scene_generation() == opened);
+        (void) editor.ok("scene.save_as", core::json::object({{"path", "scenes/copy"}}));
+        CHECK(context.scene_generation() == opened);
+        CHECK(context.scene_path() == "assets://scenes/copy.scene.json");
+        CHECK_FALSE(context.scene_dirty());
+        // A play session restores into the same scene: play_controller::state_changes() tells that apart.
+        (void) editor.ok("play.start");
+        (void) editor.ok("play.stop");
+        CHECK(context.scene_generation() == opened);
+        (void) editor.ok("scene.open", core::json::object({{"path", "scenes/copy"}}));
+        CHECK(context.scene_generation() == opened + 1);
+        (void) editor.ok("scene.new", core::json::object({{"name", "fresh"}}));
+        CHECK(context.scene_generation() == opened + 2);
+        (void) editor.ok("scene.close", core::json::object({{"discard", true}}));
+        CHECK(context.scene_generation() == opened + 3);
+        CHECK_FALSE(context.has_scene());
+    }
+
+    TEST_CASE("editor_context - set_scene_path renames the open scene without replacing it") {
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        (void) editor.create_entity("Dirty");
+        REQUIRE(context.scene_dirty());
+        const u64 generation = context.scene_generation();
+        context.set_scene_path("assets://scenes/renamed.scene.json");
+        CHECK(context.scene_path() == "assets://scenes/renamed.scene.json");
+        CHECK_FALSE(context.scene_dirty());
+        CHECK(context.has_scene());
+        CHECK(context.scene_generation() == generation);
+        context.set_scene_state(true, "assets://scenes/other.scene.json");
+        CHECK(context.scene_generation() == generation + 1);
+    }
+
+    TEST_CASE("regression - code sweep F736 editor_context release_engine_work reaches every frame task while the "
+              "engine's assets still exist") {
+        // Declared before the editor: its shutdown reaches the tasks again, so what they write to must outlive it.
+        int releases = 0;
+        bool assetsAlive = false;
+        int ticks = 0;
+        editor_test::headless_editor editor = {};
+        editor_context &context = editor.context();
+        context.add_frame_task(std::make_unique<editor_test::release_probe_task>(&releases, &assetsAlive));
+        // A task that holds nothing keeps the default release, which does nothing.
+        context.add_frame_task(std::make_unique<counting_task>(&ticks, 1000));
+
+        SUBCASE("called directly") {
+            context.release_engine_work();
+            CHECK(releases == 1);
+            CHECK(assetsAlive);
+            CHECK(context.frame_task_count() == 2);
+        }
+        SUBCASE("by the restart of project.open, before the old engine's assets go") {
+            const std::filesystem::path other = editor.project_directory() / "second";
+            editor_test::write_project(other, "second");
+            editor.trust_project(other);
+            (void) editor.ok("project.open", core::json::object({{"path", other.generic_string()}}));
+            editor.pump(1);
+            REQUIRE(context.project()->description().name == "second");
+            CHECK(releases == 1);
+            CHECK(assetsAlive);
+            // rebind() destroyed the tasks of the old engine.
+            CHECK(context.frame_task_count() == 0);
+        }
     }
 }

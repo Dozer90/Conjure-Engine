@@ -178,7 +178,7 @@ struct asset_manager::state {
                 return source->read(id);
             }
         }
-        return make_asset_error(asset_error_code::NOT_FOUND, std::format("asset {} is not in any source", id));
+        return core::make_error(assets_error::NOT_FOUND, std::format("asset {} is not in any source", id));
     }
 
     [[nodiscard]] std::optional<asset_type_id> source_type_of(const asset_id &id) const {
@@ -346,8 +346,8 @@ struct asset_manager::state {
                 fail(
                   memberSlot,
                   memberData,
-                  make_asset_error(
-                    asset_error_code::CYCLIC_DEPENDENCY,
+                  core::make_error(
+                    assets_error::CYCLIC_DEPENDENCY,
                     std::format("asset {} is part of a dependency cycle", memberSlot.id)
                   )
                 );
@@ -473,8 +473,8 @@ struct asset_manager::state {
             fail(
               slot,
               data,
-              make_asset_error(
-                asset_error_code::NO_LOADER,
+              core::make_error(
+                assets_error::NO_LOADER,
                 std::format("no loader for type {:#x}", static_cast<u64>(type))
               )
             );
@@ -490,14 +490,14 @@ struct asset_manager::state {
         data.cpuOutput = make_null_payload();
         if (!finished.has_value()) {
             const core::error &failure = finished.get_error();
-            if (failure.is_category<asset_error_code>()) {
+            if (failure.is_category<assets_error>()) {
                 fail(slot, data, failure);
             } else {
                 fail(
                   slot,
                   data,
-                  make_asset_error(
-                    asset_error_code::FINALISE_FAILED,
+                  core::make_error(
+                    assets_error::FINALISE_FAILED,
                     std::format("finalise of {} failed: {}", slot.id, failure.to_string())
                   )
                 );
@@ -549,7 +549,7 @@ struct asset_manager::state {
             data.inFailedList = true;
             failedSlots.push_back(slot.index);
         }
-        if (failure.is(asset_error_code::NOT_FOUND)) {
+        if (failure.is(assets_error::NOT_FOUND)) {
             if (!data.notFoundLogged) {
                 data.notFoundLogged = true;
                 CONJURE_LOG_ERROR(LOG_ASSETS, "asset {} failed to load: {}", slot.id, failure.to_string());
@@ -637,7 +637,7 @@ struct asset_manager::state {
         const asset_state current = slot->state.load(std::memory_order_acquire);
         if (current == asset_state::UNLOADED) {
             if (shutDown) {
-                fail(*slot, data, make_asset_error(asset_error_code::SHUTTING_DOWN, "the asset manager is shut down"));
+                fail(*slot, data, core::make_error(assets_error::SHUTTING_DOWN, "the asset manager is shut down"));
             } else {
                 set_state(*slot, asset_state::QUEUED);
                 enqueue(*slot, data, priority);
@@ -676,15 +676,15 @@ struct asset_manager::state {
         enqueue(*slot, data, data.priority);
     }
 
-    [[nodiscard]] core::result<asset_handle> load_blocking(const asset_id &id) {
+    [[nodiscard]] core::result<asset_handle> load_blocking(const asset_id &id, blocking_load_warning warning) {
         if (shutDown) {
-            return make_asset_error(asset_error_code::SHUTTING_DOWN, "the asset manager is shut down");
+            return core::make_error(assets_error::SHUTTING_DOWN, "the asset manager is shut down");
         }
         asset_slot *slot = find_or_create(id);
         if (slot == nullptr) {
             return core::error(core::error_code::INVALID_ARGUMENT, "cannot load the null asset id");
         }
-        if (inFrame && !blockingWarnedThisFrame) {
+        if (inFrame && warning == blocking_load_warning::WARN_INSIDE_FRAME && !blockingWarnedThisFrame) {
             blockingWarnedThisFrame = true;
             CONJURE_LOG_WARN(
               LOG_ASSETS,
@@ -727,8 +727,8 @@ struct asset_manager::state {
     }
 
     [[nodiscard]] core::error cycle_error(const asset_slot &slot) const {
-        return make_asset_error(
-          asset_error_code::CYCLIC_DEPENDENCY,
+        return core::make_error(
+          assets_error::CYCLIC_DEPENDENCY,
           std::format("asset {} is part of a dependency cycle", slot.id)
         );
     }
@@ -751,8 +751,8 @@ struct asset_manager::state {
             }
             if (std::chrono::steady_clock::now() >= deadline) {
                 visiting.erase(slot.index);
-                return make_asset_error(
-                  asset_error_code::TIMEOUT,
+                return core::make_error(
+                  assets_error::TIMEOUT,
                   std::format("load_blocking of {} timed out", slot.id)
                 );
             }
@@ -766,7 +766,7 @@ struct asset_manager::state {
         }
         if (current == asset_state::FAILED) {
             visiting.erase(slot.index);
-            return data.lastError.value_or(make_asset_error(asset_error_code::LOAD_FAILED, "asset is FAILED"));
+            return data.lastError.value_or(core::make_error(assets_error::LOAD_FAILED, "asset is FAILED"));
         }
 
         if (current == asset_state::UNLOADED || current == asset_state::QUEUED ||
@@ -798,7 +798,7 @@ struct asset_manager::state {
                 continue;
             }
             core::result<void> dependencyLoaded = load_blocking_slot(*dependency, context);
-            if (!dependencyLoaded.has_value() && dependencyLoaded.get_error().is(asset_error_code::TIMEOUT)) {
+            if (!dependencyLoaded.has_value() && dependencyLoaded.get_error().is(assets_error::TIMEOUT)) {
                 // Still FINALISING/RELOADING: the async pipeline finalises it once the dependency lands.
                 const bool listed = std::find(finalising.begin(), finalising.end(), slot.index) != finalising.end();
                 if (data.awaitingFinalise && !listed) {
@@ -810,7 +810,7 @@ struct asset_manager::state {
             const bool insideCycle = context.cycleRoot.has_value() && visiting.contains(*context.cycleRoot);
             if (
               !dependencyLoaded.has_value() && dependencyLoaded.get_error().is(
-                asset_error_code::CYCLIC_DEPENDENCY
+                assets_error::CYCLIC_DEPENDENCY
               ) && insideCycle
             ) {
                 fail(slot, data, cycle_error(slot));
@@ -1186,9 +1186,9 @@ asset_load_batch asset_manager::load_batch(std::span<const asset_id> ids, asset_
     return asset_load_batch(std::move(handles));
 }
 
-core::result<asset_handle> asset_manager::load_blocking(const asset_id &id) {
+core::result<asset_handle> asset_manager::load_blocking(const asset_id &id, blocking_load_warning warning) {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_manager::load_blocking is main-thread only");
-    return mState->load_blocking(id);
+    return mState->load_blocking(id, warning);
 }
 
 void asset_manager::reload(const asset_id &id) {
@@ -1242,7 +1242,7 @@ asset_state asset_manager::state_of(const asset_id &id) const noexcept {
     return slot->state.load(std::memory_order_acquire);
 }
 
-std::vector<asset_id> asset_manager::failed_ids(asset_error_code code) const {
+std::vector<asset_id> asset_manager::failed_ids(assets_error code) const {
     CONJURE_ASSERT(core::jobs::is_main_thread(), "asset_manager::failed_ids is main-thread only");
     // The list holds every slot fail() moved to FAILED; the ones that left FAILED since (retried,
     // loaded) drop out here, so the hot reload controller's per-frame query never walks every slot.

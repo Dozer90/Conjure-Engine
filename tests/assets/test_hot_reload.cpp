@@ -262,7 +262,7 @@ TEST_SUITE("assets/hot_reload") {
         // load fails NOT_FOUND while the resident payload is untouched.
         CHECK(fixture.pipeline.database->find(fixture.texture)->status == asset_record_status::MISSING_SOURCE);
         CHECK(fixture.pipeline.database->find(spare)->status == asset_record_status::MISSING_SOURCE);
-        CONJURE_CHECK_ERROR(fixture.pipeline.manager->load_blocking(spare), asset_error_code::NOT_FOUND);
+        CONJURE_CHECK_ERROR(fixture.pipeline.manager->load_blocking(spare), assets_error::NOT_FOUND);
         fixture.pipeline.manager->reload(fixture.texture);
         fixture.pipeline.manager->flush();
         CHECK(fixture.textureHandle.get<test_asset>() == old);
@@ -468,7 +468,7 @@ TEST_SUITE("assets/hot_reload") {
         asset_handle handle = fixture.pipeline.manager->load(late);
         fixture.pipeline.manager->flush();
         REQUIRE(handle.state() == asset_state::FAILED);
-        CHECK(fixture.pipeline.manager->last_error(late)->is(asset_error_code::CACHE_MISS));
+        CHECK(fixture.pipeline.manager->last_error(late)->is(assets_error::CACHE_MISS));
 
         fixture.controller.update();
         fixture.pipeline.manager->flush();
@@ -489,7 +489,7 @@ TEST_SUITE("assets/hot_reload") {
         asset_handle handle = fixture.pipeline.manager->load(broken);
         fixture.pipeline.manager->flush();
         REQUIRE(handle.state() == asset_state::FAILED);
-        CHECK(fixture.pipeline.manager->last_error(broken)->is(asset_error_code::CACHE_MISS));
+        CHECK(fixture.pipeline.manager->last_error(broken)->is(assets_error::CACHE_MISS));
 
         // The first update tries the repair, which fails: the record says so.
         fixture.controller.update();

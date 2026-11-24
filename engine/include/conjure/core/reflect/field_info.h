@@ -200,6 +200,24 @@ namespace conjure::core::reflect {
     }
 
     /// <summary>
+    /// The unit a float field is stored in, as a display hint (field_attributes::unit). The value, its min, max
+    /// and step and its JSON form stay in this unit; the editor's inspector shows a RADIANS field in degrees and
+    /// converts what is typed back, and marks a DEGREES field as degrees. Only F32 and F64 fields (and arrays
+    /// of them) may carry a unit other than NONE (validate_layout).
+    /// </summary>
+    enum class field_unit : u8 {
+        NONE,
+        RADIANS,
+        DEGREES
+    };
+
+    /// <summary>
+    /// The lower-case name of a unit, as the editor protocol sends it in a field's attributes: "none", "radians"
+    /// or "degrees"; "unknown" for a value outside the enumeration.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string_view to_string(field_unit unit) noexcept;
+
+    /// <summary>
     /// Editor hints attached to a field. Set through the CONJURE_FIELD designated-initialiser list.
     /// </summary>
     struct field_attributes {
@@ -210,6 +228,7 @@ namespace conjure::core::reflect {
         bool hidden = false;
         bool readOnly = false;
         std::string category = {};
+        field_unit unit = field_unit::NONE;               // stored unit; min, max and step are in it too
 
         [[nodiscard]] bool operator==(const field_attributes &) const = default;
     };

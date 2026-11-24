@@ -71,14 +71,6 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::engine::engine_error, "engine", conjure:
 
 <p>The stable upper-case enumerator name of a code (&quot;<code>INVALID_CONFIG</code>&quot;); &quot;&quot; for unknown values.</p>
 
-#### `make_error` {#function-make-error}
-
-<div class="function-declaration" id="function-make-error-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">inline</span> <a href="../core/error/error.html">core::error</a> make_error(
-    <a href="engine-error.html#symbol-engine-error">engine_error</a> code,
-    std::string message = {});</code></pre></div>
-
-<p>Builds an error of the engine category with a fixed detail message (possibly empty).</p>
-
 <!-- doc-content:notes:start -->
 
 <!-- doc-content:notes:end -->
@@ -131,6 +123,8 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::engine::engine_error, "engine", conjure:
 <a id="engine_errorstartup_scene_failed"></a>
 <a id="engine_errorwindow_create_failed"></a>
 <a id="extension-points"></a>
+<a id="function-make-error"></a>
+<a id="function-make-error-1"></a>
 <a id="internals-and-algorithms"></a>
 <a id="make_error"></a>
 <a id="other-declarations"></a>

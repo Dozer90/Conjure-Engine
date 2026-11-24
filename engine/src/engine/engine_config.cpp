@@ -18,7 +18,7 @@ namespace {
     /// The INVALID_CONFIG error naming the offending field.
     /// </summary>
     [[nodiscard]] core::error invalid_field(std::string_view field, std::string_view reason) {
-        return make_error(engine_error::INVALID_CONFIG, std::format("engine_config.{}: {}", field, reason));
+        return core::make_error(engine_error::INVALID_CONFIG, std::format("engine_config.{}: {}", field, reason));
     }
 }
 
@@ -175,7 +175,7 @@ core::result<rhi_backend_choice> conjure::engine::parse_rhi_backend_choice(std::
     if (core::str::iequals(text, "null")) {
         return rhi_backend_choice::NULL_DEVICE;
     }
-    return make_error(engine_error::BAD_ARGUMENTS, std::format("unknown rhi backend '{}'", text));
+    return core::make_error(engine_error::BAD_ARGUMENTS, std::format("unknown rhi backend '{}'", text));
 }
 
 core::result<audio_backend_choice> conjure::engine::parse_audio_backend_choice(std::string_view text) {
@@ -188,7 +188,7 @@ core::result<audio_backend_choice> conjure::engine::parse_audio_backend_choice(s
     if (core::str::iequals(text, "null")) {
         return audio_backend_choice::NULL_DEVICE;
     }
-    return make_error(engine_error::BAD_ARGUMENTS, std::format("unknown audio backend '{}'", text));
+    return core::make_error(engine_error::BAD_ARGUMENTS, std::format("unknown audio backend '{}'", text));
 }
 
 core::result<script_export_mode> conjure::engine::parse_script_export_mode(std::string_view text) {
@@ -198,7 +198,7 @@ core::result<script_export_mode> conjure::engine::parse_script_export_mode(std::
     if (core::str::iequals(text, "self-contained")) {
         return script_export_mode::SELF_CONTAINED;
     }
-    return make_error(engine_error::BAD_ARGUMENTS, std::format("unknown script export mode '{}'", text));
+    return core::make_error(engine_error::BAD_ARGUMENTS, std::format("unknown script export mode '{}'", text));
 }
 
 core::result<gpu_validation_level> conjure::engine::parse_gpu_validation_level(std::string_view text) {
@@ -211,7 +211,7 @@ core::result<gpu_validation_level> conjure::engine::parse_gpu_validation_level(s
     if (core::str::iequals(text, "gpu_based")) {
         return gpu_validation_level::GPU_BASED;
     }
-    return make_error(
+    return core::make_error(
       engine_error::BAD_ARGUMENTS,
       std::format("unknown gpu validation level '{}' (expected off, debug_layer or gpu_based)", text)
     );

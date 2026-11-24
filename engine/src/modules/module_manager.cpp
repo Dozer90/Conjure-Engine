@@ -131,7 +131,7 @@ namespace {
             if (!std::filesystem::is_regular_file(status)) {
                 // A broken link, a device, a pipe or a socket: the game could not use it, and skipping
                 // it silently would hide a broken build output.
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot copy '{}': {}",
                   moduleName,
@@ -148,7 +148,7 @@ namespace {
               copyFailure
             );
             if (copyFailure) {
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot copy '{}' to '{}': {}",
                   moduleName,
@@ -160,7 +160,7 @@ namespace {
         }
         if (failure) {
             // A listing that fails halfway must not pass for a complete copy.
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot list '{}': {}",
               moduleName,
@@ -185,7 +185,7 @@ namespace {
         const std::filesystem::path canonicalSource =
           std::filesystem::canonical(modules::detail::extend_path(source), failure);
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot resolve '{}': {}",
               moduleName,
@@ -194,7 +194,7 @@ namespace {
             );
         }
         if (std::find(openFolders.begin(), openFolders.end(), canonicalSource) != openFolders.end()) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': '{}' links back to '{}', a folder that contains it",
               moduleName,
@@ -204,7 +204,7 @@ namespace {
         }
         std::filesystem::create_directories(modules::detail::extend_path(target), failure);
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot create '{}': {}",
               moduleName,
@@ -242,7 +242,7 @@ namespace {
             }
         }
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot list '{}': {}",
               moduleName,
@@ -254,7 +254,7 @@ namespace {
         for (const std::filesystem::path &byProduct : byProducts) {
             std::filesystem::remove_all(modules::detail::always_extended_path(byProduct), failure);
             if (failure) {
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot remove '{}' left by an earlier export: {}",
                   moduleName,
@@ -285,7 +285,7 @@ namespace {
         const std::filesystem::path canonicalSource =
           std::filesystem::canonical(modules::detail::extend_path(source), failure);
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot resolve '{}': {}",
               moduleName,
@@ -296,7 +296,7 @@ namespace {
         const std::filesystem::path canonicalTarget =
           std::filesystem::canonical(modules::detail::extend_path(target), failure);
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot resolve '{}': {}",
               moduleName,
@@ -376,7 +376,7 @@ result<module_id> module_manager::add_manifest(const std::filesystem::path &mani
 result<u32> module_manager::discover(const std::filesystem::path &searchDirectory) {
     std::error_code failure = {};
     if (!std::filesystem::is_directory(modules::detail::extend_path(searchDirectory), failure)) {
-        return make_module_error(
+        return core::make_error(
           module_error::MANIFEST_NOT_FOUND,
           "module search directory '{}' does not exist",
           searchDirectory.generic_string()
@@ -403,7 +403,7 @@ result<u32> module_manager::discover(const std::filesystem::path &searchDirector
     if (failure) {
         // An unreadable directory must not pass for an empty one: the project would silently
         // start without its plugins.
-        return make_module_error(
+        return core::make_error(
           module_error::MANIFEST_NOT_FOUND,
           "cannot list module search directory '{}': {}",
           searchDirectory.generic_string(),
@@ -496,10 +496,10 @@ result<void> module_manager::load(module_id id) {
     }
     CONJURE_TRY_ASSIGN(module_record *record, checked_record(id));
     if (record->state == module_state::LOADED) {
-        return make_module_error(module_error::ALREADY_LOADED, "module '{}' is already loaded", record->manifest.name);
+        return core::make_error(module_error::ALREADY_LOADED, "module '{}' is already loaded", record->manifest.name);
     }
     if (record->state == module_state::SKIPPED) {
-        return make_module_error(
+        return core::make_error(
           module_error::PLATFORM_UNSUPPORTED,
           "module '{}' does not support this platform ({})",
           record->manifest.name,
@@ -553,7 +553,7 @@ result<void> module_manager::unload(module_id id, unload_policy policy) {
     }
     CONJURE_TRY_ASSIGN(module_record *record, checked_record(id));
     if (record->state != module_state::LOADED) {
-        return make_module_error(
+        return core::make_error(
           module_error::NOT_LOADED,
           "module '{}' is {}, not LOADED",
           record->manifest.name,
@@ -574,7 +574,7 @@ result<void> module_manager::reload(module_id id, reload_scope scope) {
     }
     CONJURE_TRY_ASSIGN(module_record *record, checked_record(id));
     if (record->state != module_state::LOADED) {
-        return make_module_error(
+        return core::make_error(
           module_error::NOT_LOADED,
           "module '{}' is {}, not LOADED",
           record->manifest.name,
@@ -715,7 +715,7 @@ result<void> module_manager::export_layout(
         std::error_code failure = {};
         std::filesystem::create_directories(modules::detail::extend_path(targetRoot), failure);
         if (failure) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot create '{}': {}",
               manifest.name,
@@ -732,7 +732,7 @@ result<void> module_manager::export_layout(
         const result<void> written =
           exported.write_file(modules::detail::extend_path(targetRoot / MODULE_MANIFEST_FILE_NAME), true);
         if (!written.has_value()) {
-            return make_module_error(
+            return core::make_error(
               module_error::EXPORT_FAILED,
               "module '{}': cannot write its manifest: {}",
               manifest.name,
@@ -743,7 +743,7 @@ result<void> module_manager::export_layout(
         if (!manifest.binary.empty()) {
             const std::filesystem::path sourceBin = module_binary_directory(record.rootDirectory, triplet);
             if (!std::filesystem::is_directory(modules::detail::extend_path(sourceBin), failure)) {
-                return make_module_error(
+                return core::make_error(
                   module_error::BINARY_NOT_FOUND,
                   "module '{}': no {} binaries at '{}'; build the project in {} first",
                   manifest.name,
@@ -766,7 +766,7 @@ result<void> module_manager::export_layout(
             const std::filesystem::path source = record.rootDirectory / assembly;
             const std::filesystem::path target = targetRoot / assembly;
             if (!std::filesystem::is_regular_file(modules::detail::extend_path(source), failure)) {
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': managed assembly '{}' does not exist",
                   manifest.name,
@@ -775,7 +775,7 @@ result<void> module_manager::export_layout(
             }
             std::filesystem::create_directories(modules::detail::extend_path(target.parent_path()), failure);
             if (failure) {
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot create '{}': {}",
                   manifest.name,
@@ -790,7 +790,7 @@ result<void> module_manager::export_layout(
               failure
             );
             if (failure) {
-                return make_module_error(
+                return core::make_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot copy '{}' to '{}': {}",
                   manifest.name,
@@ -820,11 +820,11 @@ bool module_manager::check_sync_point(const char *operation) const {
 
 result<module_record *> module_manager::checked_record(module_id id) {
     if (!id.is_valid() || id.index >= mRegistry.size()) {
-        return make_module_error(module_error::INVALID_ID, "module id {} does not name a module", id);
+        return core::make_error(module_error::INVALID_ID, "module id {} does not name a module", id);
     }
     module_record &record = mRegistry.record_at(id.index);
     if (record.id.generation != id.generation) {
-        return make_module_error(
+        return core::make_error(
           module_error::STALE_ID,
           "module id {} is stale: module '{}' is now {}",
           id,
@@ -838,7 +838,7 @@ result<module_record *> module_manager::checked_record(module_id id) {
         if (record.lastError.is(module_error::FAULTED)) {
             return record.lastError;
         }
-        return make_module_error(
+        return core::make_error(
           module_error::FAULTED,
           "module '{}' is faulted: {}",
           record.manifest.name,
@@ -855,7 +855,7 @@ result<module_id> module_manager::register_manifest(
 ) {
     const string_id name(manifest.name);
     if (mRegistry.find(name).is_valid()) {
-        return make_module_error(
+        return core::make_error(
           module_error::DUPLICATE_NAME,
           "a module named '{}' is already registered",
           manifest.name
@@ -900,7 +900,7 @@ result<module_id> module_manager::register_manifest(
 result<void> module_manager::load_one(module_record &record) {
     CONJURE_ASSERT(record.is_loadable(), "load_one: module '{}' is {}", record.manifest.name, record.state);
     if (record.state == module_state::LOADED) {
-        return make_module_error(module_error::ALREADY_LOADED, "module '{}' is already loaded", record.manifest.name);
+        return core::make_error(module_error::ALREADY_LOADED, "module '{}' is already loaded", record.manifest.name);
     }
 
     conjure_module_entry_fn entry = nullptr;
@@ -954,7 +954,7 @@ result<void> module_manager::load_one(module_record &record) {
             if (reasons.empty()) {
                 reasons = std::format("the entry returned status {}", status);
             }
-            error failure = make_module_error(
+            error failure = core::make_error(
               module_error::ENTRY_FAILED,
               "module '{}' entry failed: {}",
               record.manifest.name,
@@ -969,7 +969,7 @@ result<void> module_manager::load_one(module_record &record) {
     for (module_consumer *consumer : mConsumers) {
         const result<void> validated = consumer->validate(record.id, record.registrations, mRegistry);
         if (!validated.has_value()) {
-            error failure = make_module_error(
+            error failure = core::make_error(
               module_error::REGISTRATION_CONFLICT,
               "consumer '{}' rejected module '{}': {}",
               consumer->name(),
@@ -1027,7 +1027,7 @@ result<void> module_manager::load_resolved(const std::vector<module_id> &order, 
         result<void> loaded = {};
         const module_record *failedDependency = failed_dependency_of(*record);
         if (failedDependency != nullptr) {
-            loaded = make_module_error(
+            loaded = core::make_error(
               module_error::DEPENDENCY_FAILED,
               "module '{}' depends on '{}', which failed to load: {}",
               record->manifest.name,
@@ -1154,7 +1154,7 @@ result<void> module_manager::precheck_unload(module_record &record, unload_polic
     for (const module_id dependent : record.dependents) {
         const module_record *dependentRecord = mRegistry.record(dependent);
         if (dependentRecord != nullptr && dependentRecord->state == module_state::LOADED) {
-            return make_module_error(
+            return core::make_error(
               module_error::HAS_DEPENDENTS,
               "module '{}' cannot unload: loaded module(s) depend on it ({})",
               record.manifest.name,
@@ -1195,7 +1195,7 @@ void module_manager::detach_record(module_record &record, bool reloading, reload
             continue;
         }
         record.state = module_state::FAULTED;
-        record.lastError = make_module_error(
+        record.lastError = core::make_error(
           module_error::FAULTED,
           "module '{}' is faulted: consumer '{}' kept {} live use(s) after detach; the binary stays resident",
           record.manifest.name,

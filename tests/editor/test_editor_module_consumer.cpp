@@ -250,6 +250,36 @@ TEST_SUITE("editor/editor_module_consumer") {
         CHECK(editor.context().registry().find("plugin.read_file") == nullptr);
     }
 
+    TEST_CASE("editor_module_consumer - a module command flagged SYNC_IN_BATCH is registered without the flag") {
+        editor_test::headless_editor editor = {};
+        editor_module_consumer consumer(editor.context().registry(), &editor.context().play());
+        const modules::module_id id = any_module(editor);
+        const modules::module_registry &moduleRegistry = editor.context().modules()->registry();
+        modules::module_context context(
+          id,
+          modules::module_host_kind::EDITOR,
+          modules::host_engine_version(),
+          moduleRegistry.manifest(id),
+          moduleRegistry.root_directory(id),
+          editor.context().modules()->services()
+        );
+        modules::module_registration_set set = {};
+        // The record's handler answers with a result only, never through an async reply: the promise of the flag
+        // cannot hold, so the command stays out of batches like any other asynchronous one.
+        command_desc batched = make_command("plugin.batched");
+        batched.flags = command_flags::ASYNC | command_flags::SYNC_IN_BATCH;
+        add_extension(set, batched);
+        CONJURE_REQUIRE_OK(consumer.validate(id, set, moduleRegistry));
+        consumer.attach(id, context, set);
+        const command_descriptor *descriptor = editor.context().registry().find("plugin.batched");
+        REQUIRE(descriptor != nullptr);
+        CHECK_FALSE(has_command_flag(*descriptor, command_flags::SYNC_IN_BATCH));
+        CHECK(has_command_flag(*descriptor, command_flags::ASYNC));
+        CHECK(has_command_flag(*descriptor, command_flags::NOT_IN_BATCH));
+        consumer.detach(id, nullptr);
+        CHECK(editor.context().registry().find("plugin.batched") == nullptr);
+    }
+
     TEST_CASE("editor_module_consumer - a module command keeps READ_ONLY unless it also says MUTATES") {
         editor_test::headless_editor editor = {};
         editor_module_consumer consumer(editor.context().registry(), &editor.context().play());

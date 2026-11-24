@@ -31,8 +31,9 @@ namespace conjure::editor {
             descriptor.summary = std::string(text_or(desc.summary, ""));
             descriptor.argsSchema = std::string(text_or(desc.argsSchema, "{}"));
             descriptor.resultSchema = std::string(text_or(desc.resultSchema, "{}"));
-            // ON_DISK promises an inverse to keep while playing; a module command has none (below).
-            descriptor.flags = desc.flags & ~command_flags::ON_DISK;
+            // ON_DISK promises an inverse to keep while playing; a module command has none (below). SYNC_IN_BATCH
+            // promises an answer through the async reply, which the record's handler never gives.
+            descriptor.flags = desc.flags & ~(command_flags::ON_DISK | command_flags::SYNC_IN_BATCH);
             if (has_flag(desc.flags, command_flags::MUTATES)) {
                 // The record's handler returns a result document only: it can never supply an inverse, so a
                 // module mutation bumps the revision but is not undoable. And a command that says it mutates
@@ -45,7 +46,7 @@ namespace conjure::editor {
             void *userData = desc.userData;
             descriptor.handler = [handler, userData](command_invocation &invocation) -> core::result<command_outcome> {
                 if (handler == nullptr) {
-                    return make_editor_error(protocol_error_code::NOT_AVAILABLE, "the module command has no handler");
+                    return core::make_error(protocol_error_code::NOT_AVAILABLE, "the module command has no handler");
                 }
                 core::result<core::json::document> result = handler(invocation.args, userData);
                 if (!result.has_value()) {
@@ -79,7 +80,7 @@ namespace conjure::editor {
     ) {
         const std::string_view moduleName = registry.manifest(id).name;
         if (moduleName == BUILTIN_OWNER) {
-            return modules::make_module_error(
+            return core::make_error(
               modules::module_error::REGISTRATION_CONFLICT,
               "editor: the module name 'editor' is reserved for the editor's built-in commands and panels"
             );
@@ -88,27 +89,27 @@ namespace conjure::editor {
         for (const command_desc *desc : commands) {
             const std::string_view commandName = text_or(desc->name, "");
             if (commandName.empty()) {
-                return modules::make_module_error(
+                return core::make_error(
                   modules::module_error::REGISTRATION_CONFLICT,
                   std::format("editor: module '{}' registers a command without a name", moduleName)
                 );
             }
             if (mRegistry->find(commandName) != nullptr) {
-                return modules::make_module_error(
+                return core::make_error(
                   modules::module_error::REGISTRATION_CONFLICT,
                   std::format("editor: command '{}' of module '{}' is already registered", commandName, moduleName)
                 );
             }
             const core::result<compiled_schema> args = compiled_schema::compile(text_or(desc->argsSchema, "{}"));
             if (!args.has_value()) {
-                return modules::make_module_error(
+                return core::make_error(
                   modules::module_error::REGISTRATION_CONFLICT,
                   std::format("editor: command '{}': {}", commandName, args.get_error().message())
                 );
             }
             const core::result<compiled_schema> result = compiled_schema::compile(text_or(desc->resultSchema, "{}"));
             if (!result.has_value()) {
-                return modules::make_module_error(
+                return core::make_error(
                   modules::module_error::REGISTRATION_CONFLICT,
                   std::format("editor: command '{}': result {}", commandName, result.get_error().message())
                 );
@@ -117,7 +118,7 @@ namespace conjure::editor {
         const core::small_vector<const panel_desc *, 8> panels = modules::extensions_of<panel_desc>(set);
         for (const panel_desc *desc : panels) {
             if (text_or(desc->title, "").empty()) {
-                return modules::make_module_error(
+                return core::make_error(
                   modules::module_error::REGISTRATION_CONFLICT,
                   std::format("editor: module '{}' registers a panel without a title", moduleName)
                 );
@@ -158,7 +159,7 @@ namespace conjure::editor {
     core::result<void> editor_module_consumer::can_detach(modules::module_id id, modules::unload_policy policy) {
         (void) policy;
         if (mPlay != nullptr && !mPlay->is_editing()) {
-            return modules::make_module_error(
+            return core::make_error(
               modules::module_error::UNLOAD_BLOCKED,
               std::format("editor: module {} cannot unload while the editor plays", modules::to_string(id))
             );

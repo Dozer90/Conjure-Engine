@@ -46,17 +46,17 @@ TEST_SUITE("assets/cooked_blob") {
         poke_u64(wrapped, PAYLOAD_SIZE_OFFSET, wrappedPayloadSize);
         probe.payloadSize = wrappedPayloadSize;
         CHECK(probe.total_size() == good.size());   // the wrap the old check fell for
-        CONJURE_CHECK_ERROR(parse_cooked_blob(wrapped), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(wrapped), assets_error::CACHE_CORRUPT);
 
         // One declared dependency on a blob that carries none: the list would run into the payload.
         std::vector<std::byte> oneDependency = good;
         poke_u32(oneDependency, DEPENDENCY_COUNT_OFFSET, 1);
-        CONJURE_CHECK_ERROR(parse_cooked_blob(oneDependency), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(oneDependency), assets_error::CACHE_CORRUPT);
 
         // A payload size alone that wraps past the end.
         std::vector<std::byte> hugePayload = good;
         poke_u64(hugePayload, PAYLOAD_SIZE_OFFSET, ~u64{0});
-        CONJURE_CHECK_ERROR(parse_cooked_blob(hugePayload), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(hugePayload), assets_error::CACHE_CORRUPT);
 
         // The header alone still parses: these fields are only validated against the body.
         CONJURE_CHECK_OK(parse_cooked_blob_header(wrapped));
@@ -144,33 +144,33 @@ TEST_SUITE("assets/cooked_blob") {
 
         std::vector<std::byte> badMagic = good;
         badMagic[0] = std::byte{'X'};
-        CONJURE_CHECK_ERROR(parse_cooked_blob(badMagic), asset_error_code::CACHE_CORRUPT);
-        CONJURE_CHECK_ERROR(parse_cooked_blob_header(badMagic), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(badMagic), assets_error::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob_header(badMagic), assets_error::CACHE_CORRUPT);
 
         std::vector<std::byte> badVersion = good;
         badVersion[4] = std::byte{9};
-        CONJURE_CHECK_ERROR(parse_cooked_blob(badVersion), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(badVersion), assets_error::CACHE_CORRUPT);
 
         std::vector<std::byte> flipped = good;
         flipped.back() = static_cast<std::byte>(static_cast<u8>(flipped.back()) ^ 0xFF);
-        CONJURE_CHECK_ERROR(parse_cooked_blob(flipped), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(flipped), assets_error::CACHE_CORRUPT);
 
         std::vector<std::byte> truncated = good;
         truncated.pop_back();
-        CONJURE_CHECK_ERROR(parse_cooked_blob(truncated), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(truncated), assets_error::CACHE_CORRUPT);
 
         std::vector<std::byte> extended = good;
         extended.push_back(std::byte{0});
-        CONJURE_CHECK_ERROR(parse_cooked_blob(extended), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(extended), assets_error::CACHE_CORRUPT);
 
         const std::vector<std::byte> tiny(10, std::byte{0});
-        CONJURE_CHECK_ERROR(parse_cooked_blob(tiny), asset_error_code::CACHE_CORRUPT);
-        CONJURE_CHECK_ERROR(parse_cooked_blob_header(tiny), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(tiny), assets_error::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob_header(tiny), assets_error::CACHE_CORRUPT);
 
         // The header alone parses even when the body is missing.
         const std::vector<std::byte> headerOnly(good.begin(), good.begin() + 80);
         CONJURE_CHECK_OK(parse_cooked_blob_header(headerOnly));
-        CONJURE_CHECK_ERROR(parse_cooked_blob(headerOnly), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(headerOnly), assets_error::CACHE_CORRUPT);
     }
 
     TEST_CASE("hash_bytes - agrees with core FNV-1a and differs for different content") {
@@ -195,10 +195,10 @@ TEST_SUITE("assets/cooked_blob") {
         // The same validation as the span overload.
         std::vector<std::byte> flipped = write_cooked_blob(blob);
         flipped.back() ^= std::byte{0x01};
-        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(flipped)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(flipped)), assets_error::CACHE_CORRUPT);
         std::vector<std::byte> truncated = write_cooked_blob(blob);
         truncated.resize(40);
-        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(truncated)), asset_error_code::CACHE_CORRUPT);
+        CONJURE_CHECK_ERROR(parse_cooked_blob(std::move(truncated)), assets_error::CACHE_CORRUPT);
         const cooked_blob empty = make_cooked_blob(cooked_blob_header{}, {}, {});
         core::result<cooked_blob> parsedEmpty = parse_cooked_blob(write_cooked_blob(empty));
         CONJURE_REQUIRE_OK(parsedEmpty);

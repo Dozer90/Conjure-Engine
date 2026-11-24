@@ -12,6 +12,13 @@
 using namespace conjure;
 using namespace conjure::editor;
 
+namespace {
+    // True again if the factory that code sweep F625 removed comes back: the editor builds its errors with
+    // core::make_error. The call is dependent, so the name need not exist for the concept to be false.
+    template <typename EnumType>
+    concept declares_make_editor_error = requires(EnumType code) { make_editor_error(code); };
+}
+
 TEST_SUITE("editor/editor_error") {
 
     TEST_CASE("protocol_error_code - every code has a unique wire name that parses back") {
@@ -35,14 +42,24 @@ TEST_SUITE("editor/editor_error") {
     TEST_CASE("protocol_error_code - PROJECT_NOT_TRUSTED is a code of its own that a client can branch on") {
         CHECK(to_string(protocol_error_code::PROJECT_NOT_TRUSTED) == "PROJECT_NOT_TRUSTED");
         CHECK(parse_error_code("PROJECT_NOT_TRUSTED") == protocol_error_code::PROJECT_NOT_TRUSTED);
-        const core::error refused = make_editor_error(protocol_error_code::PROJECT_NOT_TRUSTED, "not trusted");
+        const core::error refused = core::make_error(protocol_error_code::PROJECT_NOT_TRUSTED, "not trusted");
         CHECK(classify_error(refused) == protocol_error_code::PROJECT_NOT_TRUSTED);
         // INTERNAL stays the last code: it is the answer for everything no other code names.
         CHECK(all_error_codes().back() == protocol_error_code::INTERNAL);
     }
 
-    TEST_CASE("make_editor_error - carries the editor category, the code and the message") {
-        const core::error error = make_editor_error(protocol_error_code::ENTITY_NOT_FOUND, "no such entity");
+    TEST_CASE("protocol_error_code - STALE_STATE is a code of its own that a client can branch on") {
+        CHECK(to_string(protocol_error_code::STALE_STATE) == "STALE_STATE");
+        CHECK(parse_error_code("STALE_STATE") == protocol_error_code::STALE_STATE);
+        const core::error stale = core::make_error(protocol_error_code::STALE_STATE, "the scene changed");
+        CHECK(classify_error(stale) == protocol_error_code::STALE_STATE);
+        CHECK(stale.code_name() == "STALE_STATE");
+        // INTERNAL stays the last code.
+        CHECK(all_error_codes().back() == protocol_error_code::INTERNAL);
+    }
+
+    TEST_CASE("protocol_error_code - make_error carries the editor category, the code and the message") {
+        const core::error error = core::make_error(protocol_error_code::ENTITY_NOT_FOUND, "no such entity");
         CHECK(error.is(protocol_error_code::ENTITY_NOT_FOUND));
         CHECK(error.is_category<protocol_error_code>());
         CHECK(error.category_name() == "editor");
@@ -51,7 +68,7 @@ TEST_SUITE("editor/editor_error") {
     }
 
     TEST_CASE("classify_error - keeps editor codes and maps engine categories") {
-        CHECK(classify_error(make_editor_error(protocol_error_code::BUSY)) == protocol_error_code::BUSY);
+        CHECK(classify_error(core::make_error(protocol_error_code::BUSY)) == protocol_error_code::BUSY);
         CHECK(classify_error(core::error(core::error_code::NOT_FOUND)) == protocol_error_code::PATH_NOT_FOUND);
         CHECK(classify_error(core::error(core::error_code::INVALID_ARGUMENT)) == protocol_error_code::INVALID_ARGS);
         CHECK(classify_error(core::error(core::error_code::UNSUPPORTED)) == protocol_error_code::NOT_AVAILABLE);
@@ -69,7 +86,7 @@ TEST_SUITE("editor/editor_error") {
           classify_error(core::error::from(ecs::ecs_error::UNKNOWN_COMPONENT)) == protocol_error_code::TYPE_NOT_FOUND
         );
         CHECK(
-          classify_error(core::error::from(assets::asset_error_code::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
+          classify_error(core::error::from(assets::assets_error::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
         );
     }
 
@@ -81,7 +98,7 @@ TEST_SUITE("editor/editor_error") {
           ) == protocol_error_code::PATH_NOT_FOUND
         );
         CHECK(
-          classify_error(core::error::from(assets::asset_error_code::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
+          classify_error(core::error::from(assets::assets_error::NOT_FOUND)) == protocol_error_code::ASSET_NOT_FOUND
         );
         CHECK(
           classify_error(
@@ -94,5 +111,10 @@ TEST_SUITE("editor/editor_error") {
 
     TEST_CASE("classify_error - anything unknown is INTERNAL") {
         CHECK(classify_error(core::error(core::error_code::INVALID_STATE)) == protocol_error_code::INTERNAL);
+    }
+
+    TEST_CASE("regression - code sweep F625 protocol_error_code has no factory beside core::make_error") {
+        CHECK_FALSE(declares_make_editor_error<protocol_error_code>);
+        CHECK_FALSE(testing::declares_own_make_error<protocol_error_code>);
     }
 }

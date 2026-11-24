@@ -24,7 +24,7 @@ TEST_SUITE("ecs/ecs_error") {
     }
 
     TEST_CASE("ecs_error - make_error binds the ecs category") {
-        const core::error failure = make_error(ecs_error::STRUCTURE_LOCKED, "locked");
+        const core::error failure = core::make_error(ecs_error::STRUCTURE_LOCKED, "locked");
         CHECK(failure.is(ecs_error::STRUCTURE_LOCKED));
         CHECK_FALSE(failure.is(ecs_error::WRONG_THREAD));
         CHECK(failure.is_category<ecs_error>());
@@ -35,7 +35,7 @@ TEST_SUITE("ecs/ecs_error") {
         CHECK(failure.to_string() == "ecs.STRUCTURE_LOCKED: locked");
         CHECK(failure.generic_code() == core::error_code::NONE);
 
-        const core::error bare = make_error(ecs_error::ARCHIVE_CORRUPT);
+        const core::error bare = core::make_error(ecs_error::ARCHIVE_CORRUPT);
         CHECK(bare.message().empty());
         CHECK(bare.to_string() == "ecs.ARCHIVE_CORRUPT");
 
@@ -44,9 +44,13 @@ TEST_SUITE("ecs/ecs_error") {
     }
 
     TEST_CASE("ecs_error - travels through result") {
-        const core::result<int> failed = make_error(ecs_error::ENTITY_NOT_ALIVE, "gone");
+        const core::result<int> failed = core::make_error(ecs_error::ENTITY_NOT_ALIVE, "gone");
         CHECK_FALSE(failed.has_value());
         CONJURE_CHECK_ERROR(failed, ecs_error::ENTITY_NOT_ALIVE);
         CHECK(testing::describe_error(failed) == "ecs.ENTITY_NOT_ALIVE: gone");
+    }
+
+    TEST_CASE("regression - code sweep F625 ecs_error has no factory beside core::make_error") {
+        CHECK_FALSE(testing::declares_own_make_error<ecs_error>);
     }
 }

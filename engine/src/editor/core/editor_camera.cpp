@@ -14,13 +14,13 @@ namespace conjure::editor {
 
         [[nodiscard]] core::result<math::vec3> read_vec3(const core::json::value &value, std::string_view name) {
             if (!value.is_array() || value.size() != 3) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, std::string(name) + ": expected [x, y, z]");
+                return core::make_error(protocol_error_code::INVALID_ARGS, std::string(name) + ": expected [x, y, z]");
             }
             math::vec3 result = math::vec3(0.0f);
             for (usize index = 0; index < 3; ++index) {
                 const core::json::value component = value[index];
                 if (!component.is_number()) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::INVALID_ARGS,
                       std::string(name) + ": expected numbers"
                     );
@@ -28,7 +28,7 @@ namespace conjure::editor {
                 result[static_cast<glm::length_t>(index)] = component.as_f32();
             }
             if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::string(name) + ": components must be finite"
                 );
@@ -211,7 +211,7 @@ namespace conjure::editor {
 
     core::result<void> editor_camera::apply_json(const core::json::value &value) {
         if (!value.is_object()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "camera settings must be an object");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "camera settings must be an object");
         }
 
         // Every member is validated into a local first and the camera is written only once all of them passed,
@@ -233,7 +233,7 @@ namespace conjure::editor {
             // set_look_at would silently keep the old direction for coincident points; a client gets an error.
             const math::vec3 offset = target - position;
             if (!(glm::dot(offset, offset) >= MIN_DISTANCE * MIN_DISTANCE)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   "position and target must be at least 0.01 apart"
                 );
@@ -243,21 +243,21 @@ namespace conjure::editor {
             // The wire unit is degrees (the catalogue: "vertical fov (degrees)"); radians stay internal.
             const core::json::value fov = value["fov"];
             if (!fov.is_number() || !(fov.as_f32() > 0.0f) || !(fov.as_f32() < MAX_FOV_DEGREES)) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "fov: expected degrees in (0, 180)");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "fov: expected degrees in (0, 180)");
             }
             fovRadians = math::radians(fov.as_f32());
         }
         if (value.contains("orthographic")) {
             const core::json::value orthographicValue = value["orthographic"];
             if (!orthographicValue.is_bool()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "orthographic: expected a boolean");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "orthographic: expected a boolean");
             }
             orthographic = orthographicValue.as_bool();
         }
         if (value.contains("orthographicHeight")) {
             const core::json::value height = value["orthographicHeight"];
             if (!height.is_number() || !(height.as_f32() > 0.0f)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   "orthographicHeight: expected a positive number"
                 );
@@ -268,7 +268,7 @@ namespace conjure::editor {
             nearPlane = value.contains("near") ? value["near"].as_f32(mNearPlane) : mNearPlane;
             farPlane = value.contains("far") ? value["far"].as_f32(mFarPlane) : mFarPlane;
             if (!(nearPlane > 0.0f) || !(farPlane > nearPlane)) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "near/far: 0 < near < far is required");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "near/far: 0 < near < far is required");
             }
         }
 

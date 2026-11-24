@@ -11,14 +11,14 @@ kind: header
 | File Path | `engine/include/conjure/scripting/scripting_error.h` |
 | API ↗ | [Scripting](../../../api/scripting/index.md) |
 
-<p>Error codes of the scripting module. Built with the generic <code>core::make_error(script_error::X, detail)</code> and bound to the &quot;scripting&quot; category below. The codes start at 1 so the negated value the native table entries return (-code, <code>native_api.inl</code>) is never 0.</p>
+<p>Error codes of the scripting module. Built with the generic <code>core::make_error(scripting_error::X, detail)</code> and bound to the &quot;scripting&quot; category below. The codes start at 1 so the negated value the native table entries return (-code, <code>native_api.inl</code>) is never 0.</p>
 
 ## Enumerations
 
-### `script_error` {#symbol-script-error}
+### `scripting_error` {#symbol-scripting-error}
 
 ```cpp
-enum class script_error : u16 {
+enum class scripting_error : u16 {
     RUNTIME_NOT_FOUND = 1,      // hostfxr could not be located: no .NET runtime installed
     HOSTFXR_INCOMPATIBLE,       // hostfxr lacks a required export or delegate: older than .NET 10
     RUNTIME_CONFIG_INVALID,     // Conjure.Bootstrap.runtimeconfig.json missing or malformed
@@ -45,24 +45,24 @@ enum class script_error : u16 {
 ### `CONJURE_DECLARE_ERROR_CATEGORY` {#symbol-conjure-declare-error-category}
 
 ```cpp
-CONJURE_DECLARE_ERROR_CATEGORY(conjure::scripting::script_error, "scripting", conjure::scripting::script_error_name)
+CONJURE_DECLARE_ERROR_CATEGORY( conjure::scripting::scripting_error, "scripting", conjure::scripting::scripting_error_name )
 ```
 
 ## Functions
 
 ### Public
 
-#### `script_error_name` {#function-script-error-name}
+#### `scripting_error_name` {#function-scripting-error-name}
 
-<div class="function-declaration" id="function-script-error-name-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view script_error_name(
-    <a href="scripting-error.html#symbol-script-error">script_error</a> code) <span class="k">noexcept</span>;</code></pre></div>
+<div class="function-declaration" id="function-scripting-error-name-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view scripting_error_name(
+    <a href="scripting-error.html#symbol-scripting-error">scripting_error</a> code) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>The enumerator name of a code (&quot;<code>ABI_MISMATCH</code>&quot;); &quot;&quot; for unknown values.</p>
 
 #### `status_of` {#function-status-of}
 
 <div class="function-declaration" id="function-status-of-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">constexpr</span> <a href="../core/types.html#symbol-i32">i32</a> status_of(
-    <a href="scripting-error.html#symbol-script-error">script_error</a> code) <span class="k">noexcept</span>;</code></pre></div>
+    <a href="scripting-error.html#symbol-scripting-error">scripting_error</a> code) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>The negative status a native table entry returns for this error (-code).</p>
 
@@ -91,6 +91,8 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::scripting::script_error, "scripting", co
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
+<a id="function-script-error-name"></a>
+<a id="function-script-error-name-1"></a>
 <a id="internals-and-algorithms"></a>
 <a id="other-declarations"></a>
 <a id="script_error"></a>
@@ -116,6 +118,7 @@ CONJURE_DECLARE_ERROR_CATEGORY(conjure::scripting::script_error, "scripting", co
 <a id="status_of"></a>
 <a id="structs"></a>
 <a id="structs-and-types"></a>
+<a id="symbol-script-error"></a>
 <a id="tests"></a>
 <a id="threading-model"></a>
 <a id="variables-and-properties"></a>

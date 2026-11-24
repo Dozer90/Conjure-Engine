@@ -4,12 +4,15 @@
 
 #include "conjure/testing/log_capture.h"
 
+#include "conjure/assets/asset_cache.h"
+#include "conjure/assets/asset_database.h"
 #include "conjure/assets/asset_manager.h"
 #include "conjure/assets/asset_types.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/log.h"
 #include "conjure/core/result.h"
 #include "conjure/core/uuid.h"
+#include "conjure/editor/command_dispatcher.h"
 #include "conjure/editor/command_registry.h"
 #include "conjure/editor/editor_command.h"
 #include "conjure/editor/editor_error.h"
@@ -110,6 +113,66 @@ namespace {
           core::json::object({{"entity", entity}, {"path", "sprite.size"}})
         );
         return size.root()["value"][0].as_f32();
+    }
+
+    /// <summary>
+    /// The file of a prefab asset path under the editor's project ("prefabs/cell" -> assets/prefabs/cell.prefab.json).
+    /// </summary>
+    std::filesystem::path prefab_file(const editor_test::headless_editor &editor, std::string_view name) {
+        return editor.project_directory() / "assets" / std::filesystem::path(std::string(name) + ".prefab.json");
+    }
+
+    /// <summary>
+    /// The .meta file beside prefab_file().
+    /// </summary>
+    std::filesystem::path prefab_meta_file(const editor_test::headless_editor &editor, std::string_view name) {
+        return editor.project_directory() / "assets" / std::filesystem::path(std::string(name) + ".prefab.json.meta");
+    }
+
+    /// <summary>
+    /// The args of a component.set that makes the entity's sprite size x size.
+    /// </summary>
+    core::json::document sprite_size_args(std::string_view guid, f32 size) {
+        return core::json::object({
+          {"entity", guid},
+          {"path", "sprite.size"},
+          {"value", core::json::array({size, size})},
+        });
+    }
+
+    /// <summary>
+    /// True when the entity carries the prefab_instance marker.
+    /// </summary>
+    bool is_instance(editor_test::headless_editor &editor, std::string_view guid) {
+        const core::json::document info = editor.ok("entity.get", core::json::object({{"entity", guid}}));
+        return info.root()["components"].contains("conjure.scene.prefab_instance");
+    }
+
+    /// <summary>
+    /// An entity "Cell" with a 0.9 x 0.9 sprite, saved as the prefab 'name' (prefab.create waits for its load), and
+    /// then made non-resident: collect() unloads it, as nothing holds a handle on it, so the next prefab command
+    /// has to load it again over frames (code sweep F736). Returns the root's guid; 'outUuid' gets the prefab's.
+    /// </summary>
+    std::string unloaded_prefab(editor_test::headless_editor &editor, std::string_view name, std::string &outUuid) {
+        const std::string root = editor.create_entity("Cell");
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", root},
+            {"type", "sprite"},
+            {"value", core::json::object({{"size", core::json::array({0.9f, 0.9f})}})},
+          })
+        );
+        outUuid = std::string(
+          editor.ok("prefab.create", core::json::object({{"entity", root}, {"path", name}})).root()["uuid"].as_string()
+        );
+        const std::optional<core::uuid> id = core::uuid::parse(outUuid);
+        REQUIRE(id.has_value());
+        assets::asset_manager *manager = editor.context().assets();
+        REQUIRE(manager != nullptr);
+        (void) manager->collect();
+        REQUIRE(manager->state_of(*id) == assets::asset_state::UNLOADED);
+        return root;
     }
 }
 
@@ -482,90 +545,450 @@ TEST_SUITE("editor/commands_asset_prefab") {
         ) == protocol_error_code::INVALID_ARGS);
     }
 
-    TEST_CASE("regression - code sweep F736 prefab commands use a resident prefab without a blocking load") {
+    TEST_CASE("regression - code sweep F736 prefab commands load their prefab without a blocking load") {
         editor_test::headless_editor editor = {};
-        const std::string root = editor.create_entity("Cell");
-        (void) editor.ok(
-          "component.add",
-          core::json::object({
-            {"entity", root},
-            {"type", "sprite"},
-            {"value", core::json::object({{"size", core::json::array({0.9f, 0.9f})}})},
-          })
-        );
-        const std::string uuid = std::string(editor.ok(
-          "prefab.create",
-          core::json::object({{"entity", root}, {"path", "prefabs/cell"}})
-        ).root()["uuid"].as_string());
+        std::string uuid = "";
+        const std::string root = unloaded_prefab(editor, "prefabs/cell", uuid);
         const std::optional<core::uuid> id = core::uuid::parse(uuid);
         REQUIRE(id.has_value());
         assets::asset_manager *manager = editor.context().assets();
-        REQUIRE(manager != nullptr);
+        editor_test::parked_client client(editor);
+        const testing::log_capture logs = {};
 
-        SUBCASE("prefab.instantiate and prefab.apply of a resident prefab do not block") {
-            // prefab.create loaded the prefab, and nothing unloads it before collect() runs.
+        SUBCASE("a prefab that is not resident is loaded over frames and nothing changes before it is there") {
+            const usize entities = editor.scene().world().entity_count();
+            const u64 revision = editor.context().revision();
+            const usize entries = editor.context().undo().size();
+            std::optional<protocol_response> immediate = std::nullopt;
+            {
+                // Dispatched inside a frame, where a blocking load would log its hitch WARN.
+                const asset_frame_scope frame(*manager);
+                immediate = client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            }
+            CHECK_FALSE(immediate.has_value());
+            CHECK(manager->state_of(*id) != assets::asset_state::LOADED);
+            CHECK(editor.scene().world().entity_count() == entities);
+            CHECK(editor.context().revision() == revision);
+            CHECK(editor.context().undo().size() == entries);
+            const protocol_response answered = client.wait();
+            REQUIRE(answered.ok);
+            REQUIRE(answered.result.root()["guids"].size() == 1);
+            CHECK(answered.result.root()["revision"].as_u64() == revision + 1);
+            CHECK(sprite_width(editor, std::string(answered.result.root()["guids"][0].as_string())) ==
+              doctest::Approx(0.9f));
+            CHECK(editor.scene().world().entity_count() == entities + 1);
+            CHECK(editor.context().undo().size() == entries + 1);
+            CHECK(manager->state_of(*id) == assets::asset_state::LOADED);
+        }
+        SUBCASE("a resident prefab answers inside the dispatch") {
+            (void) editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
             REQUIRE(manager->state_of(*id) == assets::asset_state::LOADED);
             const asset_frame_scope frame(*manager);
-            const testing::log_capture logs = {};
-            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
-            REQUIRE(made.root()["guids"].size() == 1);
-            const std::string copy = std::string(made.root()["guids"][0].as_string());
-            (void) editor.ok(
-              "component.set",
-              core::json::object({
-                {"entity", copy},
-                {"path", "sprite.size"},
-                {"value", core::json::array({2.0f, 2.0f})},
-              })
-            );
-            (void) editor.ok("prefab.apply", core::json::object({{"entity", copy}}));
-            CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
+            const std::optional<protocol_response> made =
+              client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(made.has_value());
+            CHECK(made->ok);
+            (void) editor.ok("component.set", sprite_size_args(root, 2.0f));
+            const std::optional<protocol_response> applied =
+              client.dispatch("prefab.apply", core::json::object({{"entity", root}}));
+            REQUIRE(applied.has_value());
+            CHECK(applied->ok);
         }
-
         SUBCASE("a prefab reloading after prefab.apply is waited for, so the next instance holds the applied state") {
-            const asset_frame_scope frame(*manager);
-            const testing::log_capture logs = {};
-            (void) editor.ok(
-              "component.set",
-              core::json::object({
-                {"entity", root},
-                {"path", "sprite.size"},
-                {"value", core::json::array({2.0f, 2.0f})},
-              })
-            );
+            (void) editor.ok("component.set", sprite_size_args(root, 2.0f));
             (void) editor.ok("prefab.apply", core::json::object({{"entity", root}}));
             REQUIRE(manager->state_of(*id) == assets::asset_state::RELOADING);
-            CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
-            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
-            REQUIRE(made.root()["guids"].size() == 1);
-            CHECK(sprite_width(editor, std::string(made.root()["guids"][0].as_string())) == doctest::Approx(2.0f));
+            std::optional<protocol_response> immediate = std::nullopt;
+            {
+                const asset_frame_scope frame(*manager);
+                immediate = client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            }
+            CHECK_FALSE(immediate.has_value());
+            const protocol_response made = client.wait();
+            REQUIRE(made.ok);
+            REQUIRE(made.result.root()["guids"].size() == 1);
+            const std::string instance = std::string(made.result.root()["guids"][0].as_string());
+            CHECK(sprite_width(editor, instance) == doctest::Approx(2.0f));
             CHECK(manager->state_of(*id) == assets::asset_state::LOADED);
-            CHECK(logs.contains(core::log_level::WARN, "load_blocking"));
         }
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
+    }
 
-        SUBCASE("a prefab that is no longer resident is loaded synchronously and instantiated") {
-            // No command or instance holds a handle on the prefab, so collect() unloads it.
-            (void) manager->collect();
-            REQUIRE(manager->state_of(*id) == assets::asset_state::UNLOADED);
-            const asset_frame_scope frame(*manager);
-            const testing::log_capture logs = {};
-            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
-            REQUIRE(made.root()["guids"].size() == 1);
-            CHECK(sprite_width(editor, std::string(made.root()["guids"][0].as_string())) == doctest::Approx(0.9f));
-            CHECK(manager->state_of(*id) == assets::asset_state::LOADED);
-            CHECK(logs.contains(core::log_level::WARN, "load_blocking"));
+    TEST_CASE("prefab.instantiate - a shut-down asset manager refuses the command at once") {
+        editor_test::headless_editor editor = {};
+        std::string uuid = "";
+        (void) unloaded_prefab(editor, "prefabs/cell", uuid);
+        const usize entities = editor.scene().world().entity_count();
+        editor.context().assets()->shutdown();
+        const protocol_error_code refused = editor.fail("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+        CHECK(refused == protocol_error_code::INTERNAL);
+        CHECK(editor.scene().world().entity_count() == entities);
+        CHECK(editor.context().frame_task_count() == 0);
+    }
+
+    TEST_CASE("regression - code sweep F736 prefab.create answers once its prefab loaded and records the change then") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        editor_test::parked_client client(editor);
+        const u64 revision = editor.context().revision();
+        const usize entries = editor.context().undo().size();
+        CHECK_FALSE(client.dispatch(
+          "prefab.create",
+          core::json::object({{"entity", root}, {"path", "prefabs/cell"}})
+        ).has_value());
+        // The file is written and imported at dispatch; the instance is marked when the prefab has loaded.
+        CHECK(std::filesystem::is_regular_file(prefab_file(editor, "prefabs/cell")));
+        CHECK_FALSE(is_instance(editor, root));
+        CHECK(editor.context().revision() == revision);
+        CHECK(editor.context().undo().size() == entries);
+        const protocol_response answered = client.wait();
+        REQUIRE(answered.ok);
+        CHECK(answered.result.root()["guid"].as_string() == root);
+        CHECK(answered.result.root()["revision"].as_u64() == revision + 1);
+        CHECK(is_instance(editor, root));
+        REQUIRE(editor.context().undo().size() == entries + 1);
+        CHECK(editor.context().undo().entries().back()->label == "Create prefab 'assets://prefabs/cell.prefab.json'");
+        bool imported = false;
+        for (const protocol_event &event : client.events()) {
+            imported = imported || event.name == "asset.imported";
         }
+        CHECK(imported);
+    }
 
-        SUBCASE("a resident prefab is refused once the asset manager is shut down") {
-            // shutdown() leaves the LOADED slot LOADED; the command still goes through load_blocking, which
-            // refuses with SHUTTING_DOWN (an internal error on the protocol) instead of binding the payload.
-            manager->shutdown();
-            REQUIRE(manager->state_of(*id) == assets::asset_state::LOADED);
-            CHECK(
-              editor.fail("prefab.instantiate", core::json::object({{"prefab", uuid}})) ==
-              protocol_error_code::INTERNAL
+    TEST_CASE("regression - code sweep F736 a prefab.create whose world changed before its prefab loaded answers "
+              "STALE_STATE and removes its file") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        editor_test::parked_client client(editor);
+        CHECK_FALSE(client.dispatch(
+          "prefab.create",
+          core::json::object({{"entity", root}, {"path", "prefabs/stale"}})
+        ).has_value());
+        REQUIRE(std::filesystem::is_regular_file(prefab_file(editor, "prefabs/stale")));
+        bool rootRemains = true;
+
+        SUBCASE("the scene was replaced") {
+            (void) editor.ok("scene.new", core::json::object({{"name", "other"}}));
+            rootRemains = false;
+        }
+        SUBCASE("the play state changed") {
+            (void) editor.ok("play.start");
+        }
+        SUBCASE("the entity was destroyed") {
+            (void) editor.ok("entity.destroy", core::json::object({{"entity", root}}));
+            rootRemains = false;
+        }
+        SUBCASE("the entity's subtree changed") {
+            (void) editor.create_entity("Added", root);
+        }
+        const protocol_response answered = client.wait();
+        CHECK_FALSE(answered.ok);
+        CHECK(answered.errorCode == protocol_error_code::STALE_STATE);
+        CHECK(answered.errorMessage.find("nothing was changed") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(prefab_file(editor, "prefabs/stale")));
+        CHECK_FALSE(std::filesystem::exists(prefab_meta_file(editor, "prefabs/stale")));
+        CHECK_FALSE(editor.context().asset_database()->find_by_path("assets://prefabs/stale.prefab.json").has_value());
+        if (rootRemains) {
+            CHECK_FALSE(is_instance(editor, root));
+        }
+        if (!editor.context().play().is_editing()) {
+            (void) editor.ok("play.stop");
+        }
+    }
+
+    TEST_CASE("regression - code sweep F736 a prefab.instantiate or prefab.apply whose world changed before its "
+              "prefab loaded answers STALE_STATE and changes nothing") {
+        editor_test::headless_editor editor = {};
+        std::string uuid = "";
+        const std::string root = unloaded_prefab(editor, "prefabs/cell", uuid);
+        const std::string parent = editor.create_entity("Parent");
+        const std::string wanted = core::uuid::generate().to_string();
+        const std::string fileBefore = editor_test::read_text_file(prefab_file(editor, "prefabs/cell"));
+        editor_test::parked_client client(editor);
+        const auto dispatchInstantiate = [&client, &uuid, &parent, &wanted]() {
+            return client.dispatch(
+              "prefab.instantiate",
+              core::json::object({{"prefab", uuid}, {"parent", parent}, {"guids", core::json::array({wanted})}})
             );
+        };
+
+        SUBCASE("prefab.instantiate after the scene was closed") {
+            CHECK_FALSE(dispatchInstantiate().has_value());
+            (void) editor.ok("scene.close", core::json::object({{"discard", true}}));
         }
+        SUBCASE("prefab.instantiate after its parent was destroyed") {
+            CHECK_FALSE(dispatchInstantiate().has_value());
+            (void) editor.ok("entity.destroy", core::json::object({{"entity", parent}}));
+        }
+        SUBCASE("prefab.instantiate after a requested guid came into use") {
+            CHECK_FALSE(dispatchInstantiate().has_value());
+            (void) editor.ok("entity.create", core::json::object({{"name", "Taken"}, {"guid", wanted}}));
+        }
+        SUBCASE("prefab.instantiate after play stopped and started again") {
+            (void) editor.ok("play.start");
+            CHECK_FALSE(dispatchInstantiate().has_value());
+            (void) editor.ok("play.stop");
+            (void) editor.ok("play.start");
+        }
+        SUBCASE("prefab.apply after the entity left the instance") {
+            CHECK_FALSE(client.dispatch("prefab.apply", core::json::object({{"entity", root}})).has_value());
+            (void) editor.ok("prefab.unpack", core::json::object({{"entity", root}}));
+        }
+        const usize entities = editor.context().has_scene() ? editor.scene().world().entity_count() : 0;
+        const usize entries = editor.context().undo().size();
+        const u64 revision = editor.context().revision();
+        const protocol_response answered = client.wait();
+        CHECK_FALSE(answered.ok);
+        CHECK(answered.errorCode == protocol_error_code::STALE_STATE);
+        if (editor.context().has_scene()) {
+            CHECK(editor.scene().world().entity_count() == entities);
+        }
+        CHECK(editor.context().undo().size() == entries);
+        CHECK(editor.context().revision() == revision);
+        CHECK(editor_test::read_text_file(prefab_file(editor, "prefabs/cell")) == fileBefore);
+        if (!editor.context().play().is_editing()) {
+            (void) editor.ok("play.stop");
+        }
+    }
+
+    TEST_CASE("regression - code sweep F736 prefab.apply writes the instance as it is when its prefab has loaded") {
+        editor_test::headless_editor editor = {};
+        std::string uuid = "";
+        const std::string root = unloaded_prefab(editor, "prefabs/cell", uuid);
+        editor_test::parked_client client(editor);
+        CHECK_FALSE(client.dispatch("prefab.apply", core::json::object({{"entity", root}})).has_value());
+        // Edited after the dispatch, before the prefab has loaded: the edit is part of what is applied.
+        (void) editor.ok("component.set", sprite_size_args(root, 3.5f));
+        const protocol_response answered = client.wait();
+        REQUIRE(answered.ok);
+        CHECK(editor_test::read_text_file(prefab_file(editor, "prefabs/cell")).find("3.5") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep F736 prefab commands inside editor.batch and undo steps finish at once without "
+              "a hitch WARN") {
+        editor_test::headless_editor editor = {};
+        std::string uuid = "";
+        const std::string root = unloaded_prefab(editor, "prefabs/cell", uuid);
+        const std::string other = editor.create_entity("Other");
+        const std::string copy = core::uuid::generate().to_string();
+        (void) editor.ok("component.set", sprite_size_args(root, 2.0f));
+        const std::string fileBefore = editor_test::read_text_file(prefab_file(editor, "prefabs/cell"));
+        const usize entries = editor.context().undo().size();
+        assets::asset_manager *manager = editor.context().assets();
+        const core::json::document batch = core::json::object({
+          {"label", "Prefab work"},
+          {"commands", core::json::array({
+            core::json::object({
+              {"cmd", "prefab.instantiate"},
+              {"args", core::json::object({{"prefab", uuid}, {"guids", core::json::array({copy})}})},
+            }),
+            core::json::object({
+              {"cmd", "prefab.create"},
+              {"args", core::json::object({{"entity", other}, {"path", "prefabs/other"}})},
+            }),
+            core::json::object({{"cmd", "prefab.apply"}, {"args", core::json::object({{"entity", root}})}}),
+          })},
+        });
+        const testing::log_capture logs = {};
+        {
+            const asset_frame_scope frame(*manager);
+            editor_test::parked_client client(editor);
+            const std::optional<protocol_response> answered =
+              client.dispatch("editor.batch", core::json::document::from_value(batch.root()));
+            REQUIRE(answered.has_value());
+            REQUIRE_MESSAGE(answered->ok, answered->errorMessage);
+            CHECK(answered->result.root()["count"].as_u64() == 3);
+        }
+        CHECK(is_instance(editor, copy));
+        CHECK(is_instance(editor, other));
+        CHECK(std::filesystem::is_regular_file(prefab_file(editor, "prefabs/other")));
+        CHECK(editor_test::read_text_file(prefab_file(editor, "prefabs/cell")) != fileBefore);
+        REQUIRE(editor.context().undo().size() == entries + 1);
+        CHECK(editor.context().undo().entries().back()->label == "Prefab work");
+
+        // The undo and redo steps replay the prefab commands inside the step, also when the prefab is not resident.
+        (void) manager->collect();
+        {
+            const asset_frame_scope frame(*manager);
+            (void) editor.ok("history.undo");
+            CHECK_FALSE(std::filesystem::exists(prefab_file(editor, "prefabs/other")));
+            CHECK(editor_test::read_text_file(prefab_file(editor, "prefabs/cell")) == fileBefore);
+            const protocol_error_code missing = editor.fail("entity.get", core::json::object({{"entity", copy}}));
+            CHECK(missing == protocol_error_code::ENTITY_NOT_FOUND);
+            (void) editor.ok("history.redo");
+            CHECK(std::filesystem::is_regular_file(prefab_file(editor, "prefabs/other")));
+            CHECK(is_instance(editor, other));
+            CHECK(is_instance(editor, copy));
+        }
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
+    }
+
+    TEST_CASE("regression - code sweep F736 a prefab.create whose reply is gone before its prefab loaded leaves no "
+              "file behind") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        editor_test::parked_client client(editor);
+        const usize entries = editor.context().undo().size();
+        protocol_error_code expected = protocol_error_code::NONE;
+
+        SUBCASE("the request timed out") {
+            editor.context().dispatcher().set_async_timeout_seconds(0.0);
+            expected = protocol_error_code::TIMEOUT;
+            CHECK_FALSE(client.dispatch(
+              "prefab.create",
+              core::json::object({{"entity", root}, {"path", "prefabs/gone"}})
+            ).has_value());
+        }
+        SUBCASE("the engine restarted over another project") {
+            expected = protocol_error_code::CANCELLED;
+            CHECK_FALSE(client.dispatch(
+              "prefab.create",
+              core::json::object({{"entity", root}, {"path", "prefabs/gone"}})
+            ).has_value());
+            const std::filesystem::path second = editor.project_directory() / "second";
+            editor_test::write_project(second, "second");
+            editor.trust_project(second);
+            (void) editor.ok("project.open", core::json::object({{"path", second.generic_string()}}));
+        }
+        const std::filesystem::path file = prefab_file(editor, "prefabs/gone");
+        const protocol_response answered = client.wait();
+        CHECK(answered.errorCode == expected);
+        editor.pump(2);
+        CHECK_FALSE(std::filesystem::exists(file));
+        CHECK_FALSE(std::filesystem::exists(prefab_meta_file(editor, "prefabs/gone")));
+        CHECK(editor.context().frame_task_count() == 0);
+        if (editor.context().project()->description().name != "second") {
+            CHECK_FALSE(is_instance(editor, root));
+            CHECK(editor.context().undo().size() == entries);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F736 a parked prefab command whose prefab fails to load answers the load "
+              "error and changes nothing") {
+        editor_test::headless_editor editor = {};
+        editor_test::parked_client client(editor);
+        assets::asset_database *database = editor.context().asset_database();
+        REQUIRE(database != nullptr);
+
+        SUBCASE("prefab.instantiate") {
+            std::string uuid = "";
+            (void) unloaded_prefab(editor, "prefabs/cell", uuid);
+            const std::optional<core::uuid> id = core::uuid::parse(uuid);
+            REQUIRE(id.has_value());
+            const usize entities = editor.scene().world().entity_count();
+            const u64 revision = editor.context().revision();
+            const usize entries = editor.context().undo().size();
+            CHECK_FALSE(client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}})).has_value());
+            // The load is only queued until the next frame: without its cooked blob it ends FAILED (CACHE_MISS).
+            CONJURE_REQUIRE_OK(database->cache()->remove(*id));
+            const protocol_response answered = client.wait();
+            CHECK_FALSE(answered.ok);
+            CHECK(answered.errorCode == protocol_error_code::ASSET_NOT_FOUND);
+            CHECK(editor.scene().world().entity_count() == entities);
+            CHECK(editor.context().revision() == revision);
+            CHECK(editor.context().undo().size() == entries);
+        }
+        SUBCASE("prefab.create") {
+            const std::string root = editor.create_entity("Cell");
+            const u64 revision = editor.context().revision();
+            const usize entries = editor.context().undo().size();
+            CHECK_FALSE(client.dispatch(
+              "prefab.create",
+              core::json::object({{"entity", root}, {"path", "prefabs/failing"}})
+            ).has_value());
+            const std::optional<assets::asset_id> id = database->find_by_path("assets://prefabs/failing.prefab.json");
+            REQUIRE(id.has_value());
+            CONJURE_REQUIRE_OK(database->cache()->remove(*id));
+            const protocol_response answered = client.wait();
+            CHECK_FALSE(answered.ok);
+            CHECK(answered.errorCode == protocol_error_code::ASSET_NOT_FOUND);
+            CHECK_FALSE(std::filesystem::exists(prefab_file(editor, "prefabs/failing")));
+            CHECK_FALSE(std::filesystem::exists(prefab_meta_file(editor, "prefabs/failing")));
+            CHECK_FALSE(database->find_by_path("assets://prefabs/failing.prefab.json").has_value());
+            CHECK_FALSE(is_instance(editor, root));
+            CHECK(editor.context().revision() == revision);
+            CHECK(editor.context().undo().size() == entries);
+        }
+        editor.pump(1);
+        CHECK(editor.context().frame_task_count() == 0);
+    }
+
+    TEST_CASE("regression - code sweep F736 a client at its pending cap runs the prefab commands that finish at once "
+              "and is refused BUSY, with nothing changed, for one that would wait") {
+        editor_test::headless_editor editor = {};
+        std::string uuid = "";
+        const std::string root = unloaded_prefab(editor, "prefabs/cell", uuid);
+        const std::string other = editor.create_entity("Other");
+        assets::asset_manager *manager = editor.context().assets();
+        editor_test::parked_client client(editor);
+        for (u32 index = 0; index < command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT; ++index) {
+            CHECK_FALSE(client.dispatch("editor.wait_frames", core::json::object({{"frames", 100000}})).has_value());
+        }
+        const usize tasks = editor.context().frame_task_count();
+        const usize entities = editor.scene().world().entity_count();
+        const u64 revision = editor.context().revision();
+        const usize entries = editor.context().undo().size();
+
+        SUBCASE("a prefab command that would wait for its prefab") {
+            const std::optional<protocol_response> instantiated =
+              client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(instantiated.has_value());
+            CHECK(instantiated->errorCode == protocol_error_code::BUSY);
+            const std::optional<protocol_response> created =
+              client.dispatch("prefab.create", core::json::object({{"entity", other}, {"path", "prefabs/busy"}}));
+            REQUIRE(created.has_value());
+            CHECK(created->errorCode == protocol_error_code::BUSY);
+            // Refused before parking: no load task, and prefab.create's file is gone before the answer.
+            CHECK(editor.context().frame_task_count() == tasks);
+            CHECK_FALSE(std::filesystem::exists(prefab_file(editor, "prefabs/busy")));
+            CHECK_FALSE(std::filesystem::exists(prefab_meta_file(editor, "prefabs/busy")));
+            const assets::asset_database &database = *editor.context().asset_database();
+            CHECK_FALSE(database.find_by_path("assets://prefabs/busy.prefab.json").has_value());
+            CHECK_FALSE(is_instance(editor, other));
+            CHECK(editor.scene().world().entity_count() == entities);
+            CHECK(editor.context().revision() == revision);
+            CHECK(editor.context().undo().size() == entries);
+        }
+        SUBCASE("a resident prefab answers at once") {
+            (void) editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            const std::optional<protocol_response> instantiated =
+              client.dispatch("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(instantiated.has_value());
+            CHECK_MESSAGE(instantiated->ok, instantiated->errorMessage);
+            const std::optional<protocol_response> applied =
+              client.dispatch("prefab.apply", core::json::object({{"entity", root}}));
+            REQUIRE(applied.has_value());
+            CHECK_MESSAGE(applied->ok, applied->errorMessage);
+        }
+        SUBCASE("prefab commands inside editor.batch and their redo") {
+            const core::json::document batch = core::json::object({
+              {"commands", core::json::array({
+                core::json::object({
+                  {"cmd", "prefab.create"},
+                  {"args", core::json::object({{"entity", other}, {"path", "prefabs/other"}})},
+                }),
+                core::json::object({{"cmd", "prefab.instantiate"}, {"args", core::json::object({{"prefab", uuid}})}}),
+              })},
+            });
+            const std::optional<protocol_response> answered =
+              client.dispatch("editor.batch", core::json::document::from_value(batch.root()));
+            REQUIRE(answered.has_value());
+            REQUIRE_MESSAGE(answered->ok, answered->errorMessage);
+            CHECK(is_instance(editor, other));
+            (void) manager->collect();
+            const std::optional<protocol_response> undone = client.dispatch("history.undo");
+            REQUIRE(undone.has_value());
+            REQUIRE_MESSAGE(undone->ok, undone->errorMessage);
+            CHECK_FALSE(std::filesystem::exists(prefab_file(editor, "prefabs/other")));
+            const std::optional<protocol_response> redone = client.dispatch("history.redo");
+            REQUIRE(redone.has_value());
+            CHECK_MESSAGE(redone->ok, redone->errorMessage);
+            CHECK(is_instance(editor, other));
+            CHECK(editor.scene().world().entity_count() == entities + 1);
+        }
+        CHECK(editor.context().dispatcher().pending_count(client.client_id()) ==
+          command_dispatcher::DEFAULT_MAX_PENDING_PER_CLIENT);
+        editor.context().dispatcher().cancel_client(client.client_id());
     }
 
     TEST_CASE("regression - prefab.instantiate with a guid listed twice fails up front and leaves nothing behind") {
@@ -1127,7 +1550,7 @@ TEST_SUITE("editor/commands_asset_prefab") {
         refusing.resultSchema = R"({"type":"object"})";
         refusing.owner = "test";
         refusing.handler = [](command_invocation &) -> core::result<command_outcome> {
-            return make_editor_error(protocol_error_code::BUSY, "the stand-in never closes the scene");
+            return core::make_error(protocol_error_code::BUSY, "the stand-in never closes the scene");
         };
         CONJURE_REQUIRE_OK(registry.add(std::move(refusing)));
 

@@ -62,7 +62,7 @@ class CONJURE_API command_registry
 <div class="function-declaration" id="function-add-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../../engine/core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; add(
     <a href="../editor-command/command-descriptor.html">command_descriptor</a> descriptor);</code></pre></div>
 
-<p>Registers a command. <code>INVALID_ARGS</code> when the name is empty or taken, the handler is empty, a schema does not compile, or the flags contradict each other: <code>ON_DISK</code> needs <code>MUTATES</code> and excludes <code>NO_UNDO</code> (the flag promises an inverse to keep while playing), and <code>READ_ONLY</code> excludes <code>MUTATES</code> (the flag opens the command to inspect-only clients).</p>
+<p>Registers a command. <code>INVALID_ARGS</code> when the name is empty or taken, the handler is empty, a schema does not compile, or the flags contradict each other: <code>ON_DISK</code> needs <code>MUTATES</code> and excludes <code>NO_UNDO</code> (the flag promises an inverse to keep while playing), <code>READ_ONLY</code> excludes <code>MUTATES</code> (the flag opens the command to inspect-only clients), and <code>SYNC_IN_BATCH</code> needs <code>ASYNC</code> and excludes <code>NOT_IN_BATCH</code> (the flag promises an answer inside a batch). An <code>ASYNC</code> command without <code>SYNC_IN_BATCH</code> is registered with <code>NOT_IN_BATCH</code> added.</p>
 
 #### `args_schema` {#function-args-schema}
 

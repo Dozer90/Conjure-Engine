@@ -45,6 +45,17 @@ enum class asset_event_kind : u8 {
 
 What happened to a slot.
 
+### `blocking_load_warning` {#symbol-blocking-load-warning}
+
+```cpp
+enum class blocking_load_warning : u8 {
+    WARN_INSIDE_FRAME = 0,
+    EXPECTED
+};
+```
+
+Whether <code>asset_manager::load_blocking</code> logs its once-per-frame hitch <code>WARN</code> when it is called inside a frame. <code>WARN_INSIDE_FRAME</code> is the default and the right choice for game code, where a blocking load is a mistake worth seeing. <code>EXPECTED</code> is for a tool whose contract is to finish inside the call (the editor&#x27;s prefab commands inside <code>editor.batch</code> and in undo and redo replays): the load still blocks the frame, it is only not reported. Outside a frame neither logs anything.
+
 ## Type Aliases
 
 ### `asset_event_callback` {#symbol-asset-event-callback}

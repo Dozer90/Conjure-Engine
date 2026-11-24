@@ -536,7 +536,7 @@ namespace conjure::editor::support {
             const std::string_view space = string_or(invocation.args, "space", "local");
             const std::optional<math::transform> previousLocal = scene.local_transform_of(entity);
             if (!previousLocal.has_value()) {
-                return make_editor_error(protocol_error_code::COMPONENT_NOT_FOUND, "the entity has no transform");
+                return core::make_error(protocol_error_code::COMPONENT_NOT_FOUND, "the entity has no transform");
             }
             if (space == "world") {
                 const std::optional<math::transform> world = scene.world_transform_of(entity);

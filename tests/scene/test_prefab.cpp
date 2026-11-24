@@ -822,7 +822,7 @@ TEST_SUITE("scene/prefab") {
         CHECK(sceneImporter->extensions()[0] == ".scene.json");
         assets::import_context broken(fs, "assets://broken.scene.json", "assets/broken.scene.json", source,
           core::json::value(), "windows", test_uuid(301), subAssets, {});
-        CONJURE_CHECK_ERROR(sceneImporter->import(broken), assets::asset_error_code::IMPORT_FAILED);
+        CONJURE_CHECK_ERROR(sceneImporter->import(broken), assets::assets_error::IMPORT_FAILED);
         core::json::writer sceneOut = {};
         CONJURE_REQUIRE_OK(scene::scene_serializer::save_scene(target, sceneOut));
         const std::string sceneText = sceneOut.finish();
@@ -907,7 +907,7 @@ TEST_SUITE("scene/prefab") {
                 CHECK(badHandle.state() == assets::asset_state::FAILED);
                 const core::error *failure = manager.last_error(test_uuid(71));
                 REQUIRE(failure != nullptr);
-                CHECK(failure->is(assets::asset_error_code::LOAD_FAILED));
+                CHECK(failure->is(assets::assets_error::LOAD_FAILED));
                 CHECK(failure->message().find("UNSUPPORTED_VERSION") != std::string::npos);
                 badHandle.reset();
                 handle.reset();

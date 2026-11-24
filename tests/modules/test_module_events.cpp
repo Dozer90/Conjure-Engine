@@ -56,7 +56,7 @@ TEST_SUITE("modules/module_events") {
         bus.publish(module_loaded_event{module_id{1, 0}});
         bus.publish(module_unloading_event{module_id{1, 0}, true});
         bus.publish(module_unloaded_event{module_id{1, 0}, string_id("alpha")});
-        const error gone = make_module_error(module_error::BINARY_NOT_FOUND, "gone");
+        const error gone = core::make_error(module_error::BINARY_NOT_FOUND, "gone");
         bus.publish(module_load_failed_event{module_id{2, 0}, gone});
 
         REQUIRE(loaded.size() == 1);

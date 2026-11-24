@@ -373,7 +373,7 @@ std::span<const std::string_view> material_importer::extensions() const noexcept
 core::result<assets::import_output> material_importer::import(assets::import_context &context) const {
     core::result<material_asset> parsed = material_asset::parse_blob(context.source_bytes());
     if (!parsed.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, parsed.get_error().message());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, parsed.get_error().message());
     }
     report_unknown_keys(context.source_bytes(), context);
     material_asset &material = parsed.value();

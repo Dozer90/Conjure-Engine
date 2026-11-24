@@ -91,7 +91,7 @@ core::result<void> layer_stack::attach_all(engine_context &context) {
         for (usize undo = index; undo > 0; --undo) {
             mLayers[undo - 1]->on_detach(context);
         }
-        return make_error(
+        return core::make_error(
           engine_error::LAYER_ATTACH_FAILED,
           std::format("layer '{}' failed to attach: {}", mLayers[index]->name(), attached.get_error().to_string())
         );

@@ -49,7 +49,7 @@ See `engine/src/assets/README.md` for additional implementation notes.
 | [asset_type_registry.h](assets/asset-type-registry.md) | The set of registered asset types. | [`asset_type_desc`](assets/asset-type-registry/asset-type-desc.md)<br>[`asset_type_registry`](assets/asset-type-registry/asset-type-registry.md)<br>[`asset_type_registry_hooks`](assets/asset-type-registry/asset-type-registry-hooks.md) |
 | [asset_types.h](assets/asset-types.md) | Identity, states and constants shared by every asset header. |  |
 | [assets.h](assets/assets.md) | Umbrella header of the assets module (<code>conjure::assets</code>). |  |
-| [assets_error.h](assets/assets-error.md) | The assets error category. |  |
+| [assets_error.h](assets/assets-error.md) | Failure conditions of the asset pipeline. |  |
 | [binary_asset.h](assets/binary-asset.md) | The published payload: the source bytes as imported. | [`binary_asset`](assets/binary-asset/binary-asset.md)<br>[`binary_importer`](assets/binary-asset/binary-importer.md)<br>[`binary_loader`](assets/binary-asset/binary-loader.md) |
 | [cooked_blob.h](assets/cooked-blob.md) | <code>A</code> blob with its bytes. | [`cooked_blob`](assets/cooked-blob/cooked-blob.md)<br>[`cooked_blob_header`](assets/cooked-blob/cooked-blob-header.md) |
 | [file_watcher.h](assets/file-watcher.md) | Produces debounced file changes. | [`file_change`](assets/file-watcher/file-change.md)<br>[`file_watcher`](assets/file-watcher/file-watcher.md)<br>[`polling_file_watcher`](assets/file-watcher/polling-file-watcher.md)<br>[`polling_file_watcher::file_state`](assets/file-watcher/polling-file-watcher-file-state.md) |

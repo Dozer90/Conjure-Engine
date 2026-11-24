@@ -106,7 +106,7 @@ class CONJURE_API scene_serializer
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;in,
     <span class="k">const</span> <a href="../../ecs/component-registry/component-registry.html">ecs::component_registry</a> &amp;registry);</code></pre></div>
 
-<p>Validates the header (<code>BAD_FORMAT</code>, <code>UNSUPPORTED_VERSION</code>) and reads the archive against the registry (unknown components preserved, <code>SERIALIZATION_FAILED</code> for malformed ones).</p>
+<p>Validates the header (<code>BAD_FORMAT</code>, <code>UNSUPPORTED_VERSION</code>) and reads the archive against the registry (unknown components preserved, <code>SERIALIZATION_FAILED</code> for malformed ones). <code>A</code> component field renamed since the file was written is read under its current name first: an old file&#x27;s <code><a href="../../physics/character-controller/character-controller.html">character_controller</a></code> maxSlopeAngleDegrees becomes maxSlopeAngleRadians, converted to radians.</p>
 
 #### `parse_prefab` {#function-parse-prefab}
 

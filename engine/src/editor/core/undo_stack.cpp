@@ -102,7 +102,7 @@ namespace conjure::editor {
 
     core::result<void> undo_stack::begin_transaction(std::string_view label, u32 clientId) {
         if (find_transaction(clientId) != nullptr) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_REQUEST,
               std::format("client {} already has an open transaction", clientId)
             );
@@ -119,7 +119,7 @@ namespace conjure::editor {
             return pair.first == clientId;
         });
         if (position == mTransactions.end()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_REQUEST,
               std::format("client {} has no open transaction", clientId)
             );

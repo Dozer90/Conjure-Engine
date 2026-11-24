@@ -156,6 +156,14 @@ if(TARGET conjure_managed_sdk AND TARGET conjure_managed_test_scripts_v1)
         CONJURE_EDITOR_TEST_MANAGED_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_SDK_DIR}>"
         CONJURE_EDITOR_TEST_SCRIPTS_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_TEST_SCRIPTS_DIR}>"
     )
+    # The installed-layout cases of project.export (owner decision OWN-INSTALL) copy the export-flavoured SDK of this
+    # tree into a stand-in editor folder.
+    if(TARGET conjure_managed_sdk_export)
+        add_dependencies(conjure_editor_tests conjure_managed_sdk_export)
+        target_compile_definitions(conjure_editor_tests PRIVATE
+            CONJURE_EDITOR_TEST_MANAGED_EXPORT_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_SDK_EXPORT_DIR}>"
+        )
+    endif()
     # The [dotnet][slow] project.export case (follow-up FU-PDB) exports tests/assets/projects/scripted with the runtime
     # of this tree and runs the exported runtime.
     if(TARGET conjure_runtime)
@@ -169,6 +177,12 @@ if(TARGET conjure_managed_sdk AND TARGET conjure_managed_test_scripts_v1)
 else()
     target_compile_definitions(conjure_editor_tests PRIVATE CONJURE_EDITOR_TEST_HAS_DOTNET=0)
 endif()
+# script.compile and project.export meet a dotnet without an SDK in conjure_process_child (tests/core/system), which
+# answers every command, --version included, with its usage line and exit code 2.
+add_dependencies(conjure_editor_tests conjure_process_child)
+target_compile_definitions(conjure_editor_tests PRIVATE
+    CONJURE_EDITOR_TEST_PROCESS_CHILD="$<PATH:CMAKE_PATH,NORMALIZE,$<TARGET_FILE:conjure_process_child>>"
+)
 if(TARGET conjure_shaders)
     add_dependencies(conjure_editor_tests conjure_shaders)
     get_target_property(editorShaderDir conjure_shaders CONJURE_SHADER_OUTPUT_DIR)

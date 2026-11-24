@@ -44,7 +44,7 @@ CONJURE_REFLECT_ENUM(conjure::renderer::projection_type, "conjure.renderer.proje
 ### `CONJURE_REFLECT_STRUCT` {#symbol-conjure-reflect-struct}
 
 ```cpp
-CONJURE_REFLECT_STRUCT(conjure::renderer::camera, "conjure.renderer.camera_data", CONJURE_FIELD(projection), CONJURE_FIELD(verticalFovRadians, .min = 0.01, .max = 3.1), CONJURE_FIELD(orthographicHeight, .min = 0.001), CONJURE_FIELD(nearPlane, .min = 0.0001), CONJURE_FIELD(farPlane, .min = 0.001))
+CONJURE_REFLECT_STRUCT(conjure::renderer::camera, "conjure.renderer.camera_data", CONJURE_FIELD(projection), CONJURE_FIELD(verticalFovRadians, .min = 0.01, .max = 3.1, .unit = conjure::core::reflect::field_unit::RADIANS), CONJURE_FIELD(orthographicHeight, .min = 0.001), CONJURE_FIELD(nearPlane, .min = 0.0001), CONJURE_FIELD(farPlane, .min = 0.001))
 ```
 
 ## Functions

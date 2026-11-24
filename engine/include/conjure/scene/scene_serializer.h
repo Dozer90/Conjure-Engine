@@ -86,7 +86,9 @@ namespace conjure::scene {
 
             /// <summary>
             /// Validates the header (BAD_FORMAT, UNSUPPORTED_VERSION) and reads the archive against the
-            /// registry (unknown components preserved, SERIALIZATION_FAILED for malformed ones).
+            /// registry (unknown components preserved, SERIALIZATION_FAILED for malformed ones). A component
+            /// field renamed since the file was written is read under its current name first: an old file's
+            /// character_controller maxSlopeAngleDegrees becomes maxSlopeAngleRadians, converted to radians.
             /// </summary>
             [[nodiscard]] static core::result<scene_document> parse_document(
               const core::json::value &in,

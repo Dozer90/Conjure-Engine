@@ -86,7 +86,11 @@ core::result<void> script_class_registry::stage_field(u64 classHash, script_fiel
     }
     const auto found = mStaging.indexByHash.find(classHash);
     if (found == mStaging.indexByHash.end()) {
-        return core::make_error(script_error::CLASS_NOT_FOUND, "stage_field: class {:#018x} is not staged", classHash);
+        return core::make_error(
+          scripting_error::CLASS_NOT_FOUND,
+          "stage_field: class {:#018x} is not staged",
+          classHash
+        );
     }
     script_class_info &owner = mStaging.classes[found->second];
     for (const script_field_info &existing : owner.fields) {

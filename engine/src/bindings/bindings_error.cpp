@@ -94,10 +94,10 @@ bindings_error conjure::bindings::map_error(const core::error &failure) noexcept
     if (failure.is(ecs::ecs_error::COMPONENT_NOT_PRESENT)) {
         return bindings_error::COMPONENT_MISSING;
     }
-    if (failure.is(assets::asset_error_code::NOT_FOUND)) {
+    if (failure.is(assets::assets_error::NOT_FOUND)) {
         return bindings_error::NOT_FOUND;
     }
-    if (failure.is(assets::asset_error_code::TYPE_MISMATCH)) {
+    if (failure.is(assets::assets_error::TYPE_MISMATCH)) {
         return bindings_error::ASSET_TYPE_MISMATCH;
     }
     if (failure.is(scene::scene_error::INVALID_ENTITY)) {

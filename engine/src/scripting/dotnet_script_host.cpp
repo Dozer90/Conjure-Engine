@@ -29,7 +29,7 @@ dotnet_script_host::~dotnet_script_host() {
 core::result<void> dotnet_script_host::initialise(const script_host_config &config, conjure_native_api &nativeApi) {
     mStatus = script_host_status::DISABLED;
     if (!core::jobs::is_main_thread()) {
-        return core::make_error(script_error::WRONG_THREAD, "dotnet_script_host::initialise off the main thread");
+        return core::make_error(scripting_error::WRONG_THREAD, "dotnet_script_host::initialise off the main thread");
     }
 
     hostfxr_runtime &runtime = hostfxr_runtime::instance();
@@ -40,7 +40,7 @@ core::result<void> dotnet_script_host::initialise(const script_host_config &conf
     const int32_t handshake = runtime.initialise_entry()(&nativeApi, &mManagedApi);
     if (handshake != 0) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "managed Initialize rejected the native table (code {}): native hash {:#018x}, size {}, version {}; "
           "managed hash {:#018x}",
           handshake,

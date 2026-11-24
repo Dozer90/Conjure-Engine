@@ -30,6 +30,16 @@ namespace {
 #undef CONJURE_NATIVE_ENTRY
     }};
 
+    // The generated lines of the conjure_* records, enumerations and table members of native_api.h, which the
+    // layout hash folds after the entries (sweep F445).
+    constexpr std::array<std::string_view, CONJURE_NATIVE_API_RECORD_LINE_COUNT> RECORD_LINES = {{
+#define CONJURE_NATIVE_RECORD_LINE(line) std::string_view(line),
+        CONJURE_NATIVE_API_FOR_EACH_RECORD_LINE(CONJURE_NATIVE_RECORD_LINE)
+#undef CONJURE_NATIVE_RECORD_LINE
+    }};
+    // A list shorter than its count would leave empty lines at the end; a longer one does not compile.
+    static_assert(!RECORD_LINES.back().empty(), "native_api_hash.h is stale: run tools/generate_native_api.py");
+
     struct descriptor_table {
         std::array<std::string, CONJURE_NATIVE_API_ENTRY_COUNT> fullNames = {};
         std::array<native_entry_descriptor, CONJURE_NATIVE_API_ENTRY_COUNT> descriptors = {};
@@ -47,6 +57,10 @@ namespace {
 
                 const std::string line = fullNames[index] + " " + std::string(raw.signature) + "\n";
                 running = core::hash::fnv1a64(line, running);
+            }
+            for (const std::string_view recordLine : RECORD_LINES) {
+                running = core::hash::fnv1a64(recordLine, running);
+                running = core::hash::fnv1a64("\n", running);
             }
             hash = running;
         }
@@ -204,7 +218,7 @@ i32 conjure::scripting::find_native_entry(std::string_view fullName) noexcept {
 core::result<void> conjure::scripting::validate_native_api(const conjure_native_api &api) {
     if (api.size != sizeof(conjure_native_api)) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "native table size {} differs from {}",
           api.size,
           sizeof(conjure_native_api)
@@ -212,7 +226,7 @@ core::result<void> conjure::scripting::validate_native_api(const conjure_native_
     }
     if (api.version != CONJURE_NATIVE_API_VERSION) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "native table version {} differs from {}",
           api.version,
           static_cast<u32>(CONJURE_NATIVE_API_VERSION)
@@ -220,7 +234,7 @@ core::result<void> conjure::scripting::validate_native_api(const conjure_native_
     }
     if (api.layout_hash != CONJURE_NATIVE_API_HASH) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "native table layout hash {:#018x} differs from {:#018x}",
           api.layout_hash,
           static_cast<u64>(CONJURE_NATIVE_API_HASH)
@@ -231,7 +245,7 @@ core::result<void> conjure::scripting::validate_native_api(const conjure_native_
     for (u32 index = 0; index < CONJURE_NATIVE_API_CORE_ENTRY_COUNT; ++index) {
         if (slots[index] == nullptr) {
             return core::make_error(
-              script_error::NOT_INITIALISED,
+              scripting_error::NOT_INITIALISED,
               "core native entry '{}' is not filled",
               table().fullNames[index]
             );
@@ -243,7 +257,7 @@ core::result<void> conjure::scripting::validate_native_api(const conjure_native_
 core::result<void> conjure::scripting::validate_managed_api(const conjure_managed_api &api) {
     if (api.size != sizeof(conjure_managed_api)) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "managed table size {} differs from {}",
           api.size,
           sizeof(conjure_managed_api)
@@ -251,7 +265,7 @@ core::result<void> conjure::scripting::validate_managed_api(const conjure_manage
     }
     if (api.version != CONJURE_NATIVE_API_VERSION) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "managed table version {} differs from {}",
           api.version,
           static_cast<u32>(CONJURE_NATIVE_API_VERSION)
@@ -259,7 +273,7 @@ core::result<void> conjure::scripting::validate_managed_api(const conjure_manage
     }
     if (api.layout_hash != CONJURE_NATIVE_API_HASH) {
         return core::make_error(
-          script_error::ABI_MISMATCH,
+          scripting_error::ABI_MISMATCH,
           "managed table layout hash {:#018x} differs from {:#018x}",
           api.layout_hash,
           static_cast<u64>(CONJURE_NATIVE_API_HASH)
@@ -271,7 +285,7 @@ core::result<void> conjure::scripting::validate_managed_api(const conjure_manage
       api.dispatch_collisions != nullptr && api.apply_fields != nullptr && api.collect_fields != nullptr &&
       api.collect_garbage != nullptr && api.shutdown != nullptr;
     if (!complete) {
-        return core::make_error(script_error::ABI_MISMATCH, "managed table has an unfilled function");
+        return core::make_error(scripting_error::ABI_MISMATCH, "managed table has an unfilled function");
     }
     return core::result<void>::success();
 }

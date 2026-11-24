@@ -21,7 +21,12 @@
 //   1  build the native game module in Distribution (when <project>/module.json declares a binary)
 //   2  assets::asset_cooker::cook -> <dir>/cooked/content.cpak + manifest.json
 //   3  dotnet publish Conjure.Bootstrap + dotnet build the game scripts -> <dir>/managed (scripting enabled), both
-//      compiling in export_settings::artifactsDirectory, by default a folder the step removes when it ends. With
+//      compiling in export_settings::artifactsDirectory, by default a folder the step removes when it ends. An
+//      installed editor has no Conjure.Bootstrap project: it names the prebuilt SDK of its install layout instead
+//      (export_settings::prebuiltManagedDirectory, owner decision OWN-INSTALL), which the step copies, building only
+//      the game scripts against it, so a project without game scripts needs no .NET SDK at all. Before the first
+//      dotnet command the step asks dotnet for its SDK (find_dotnet_sdk() below) and fails
+//      naming the version global.json asks for and Microsoft's download page when there is no usable one. With
 //      scripting disabled in the configuration (--no-scripting) an export that asks for managed code of a project
 //      that enables scripting is refused before step 1 (EXPORT_FAILED naming this step), so nothing is written
 //   4  modules::module_manager::export_layout(<dir>, DISTRIBUTION)
@@ -51,6 +56,53 @@
 
 namespace conjure::engine {
 
+    // The .NET SDK the engine's managed code needs (owner decision OWN-INSTALL): the version global.json at the root
+    // of the engine's source names, baked in when the engine is configured so that an installed editor, which has no
+    // source tree, still knows it; Microsoft's download page for it; and the probe that export step 3 and the editor's
+    // script.compile run when they find no usable SDK. The SDK is an optional download: only an export of a project
+    // with game scripts, an export from an engine source tree and script.compile build managed code. Nothing here
+    // downloads anything.
+
+    /// <summary>
+    /// The SDK version global.json at the root of the engine's source names ("10.0.100"), as it read when the engine
+    /// was configured.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string_view required_dotnet_sdk_version() noexcept;
+
+    /// <summary>
+    /// Microsoft's official download page of the release that holds required_dotnet_sdk_version(), named by its
+    /// major and minor version ("https://dotnet.microsoft.com/download/dotnet/10.0").
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string dotnet_sdk_download_page();
+
+    /// <summary>
+    /// True when 'version', the text `dotnet --version` prints ("10.0.103", "11.0.100-preview.1"), names
+    /// required_dotnet_sdk_version() or a later SDK. Major, minor and patch compare as numbers, and a prerelease of
+    /// the required version itself is older than it. Whitespace around the text is ignored; text that does not start
+    /// with three dot-separated numbers, or that continues after them with anything but a '-' or '+' suffix, is false.
+    /// </summary>
+    [[nodiscard]] CONJURE_API bool is_usable_dotnet_sdk_version(std::string_view version) noexcept;
+
+    /// <summary>
+    /// The message for a build that found no usable SDK: 'detail' (what was found instead), the version required as
+    /// global.json names it and the download page. It never asks for anything to be fetched automatically.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string missing_dotnet_sdk_message(std::string_view detail);
+
+    /// <summary>
+    /// Runs `<dotnet> --version` in 'workingDirectory' (dotnet reads the global.json in it or above it from there)
+    /// and returns the version of the SDK it selects. DEPENDENCY_FAILURE (core) carrying missing_dotnet_sdk_message()
+    /// when dotnet could not be started, did not answer within 'timeoutSeconds' (0 waits without a limit), exited
+    /// with a code other than 0 (no SDK installed, or none that such a global.json accepts) or printed a version that
+    /// is_usable_dotnet_sdk_version() refuses. 'workingDirectory' must exist; empty runs in the current directory.
+    /// Blocks the calling thread while dotnet runs.
+    /// </summary>
+    [[nodiscard]] CONJURE_API core::result<std::string> find_dotnet_sdk(
+      std::string_view dotnet,
+      const std::filesystem::path &workingDirectory,
+      f64 timeoutSeconds
+    );
+
     /// <summary>
     /// Called before each step with its name and the fraction of steps completed so far.
     /// </summary>
@@ -69,6 +121,16 @@ namespace conjure::engine {
         bool publishManaged = true;
         std::string dotnetExecutable = "dotnet";
         std::filesystem::path bootstrapProject = {};            // managed/Conjure.Bootstrap/Conjure.Bootstrap.csproj
+        // Owner decision OWN-INSTALL: a folder holding the prebuilt, export-flavoured SDK (Conjure.Bootstrap and
+        // Conjure.Managed as the build target conjure_managed_sdk_export publishes them into
+        // <build>/bin/managed_export, with export_pipeline::MANAGED_SDK_MANIFEST_NAME), which an installed editor finds
+        // in the managed/ folder beside it. Set instead of bootstrapProject (both set is BAD_ARGUMENTS): step 3 copies
+        // every regular file directly in it into <dir>/managed but the manifest, the .pdb files only with
+        // scripting.exportDebugSymbols, then builds scriptsProject against it (without game scripts it runs no
+        // dotnet). It is framework-dependent and portable, so runtimeIdentifier does not apply to it and a
+        // self-contained export (scripting.exportMode) is refused. A relative path is resolved against the working
+        // directory.
+        std::filesystem::path prebuiltManagedDirectory = {};
         // <project>/scripts/Game.csproj as script.create writes it; empty = no game scripts.
         std::filesystem::path scriptsProject = {};
         // Where both dotnet commands of step 3 compile (--artifacts-path: their obj/ and bin/ trees, never the
@@ -119,6 +181,15 @@ namespace conjure::engine {
             /// </summary>
             static constexpr std::string_view NOTICES_FILE_NAME = "THIRD_PARTY_NOTICES.txt";
 
+            /// <summary>
+            /// The file that marks a folder as the prebuilt SDK of export_settings::prebuiltManagedDirectory. The build
+            /// target conjure_managed_sdk_export writes it after its publish succeeded: a JSON object with
+            /// "schema_version" 1, "kind" "conjure_managed_sdk_export", "host_mode" "framework_dependent" and
+            /// "native_api_hash", the CONJURE_NATIVE_API_HASH (conjure/scripting/native_api_hash.h) of the build, as
+            /// hexadecimal text ("0x...").
+            /// </summary>
+            static constexpr std::string_view MANAGED_SDK_MANIFEST_NAME = "conjure_managed_sdk.json";
+
         private:
             engine_context *mContext = nullptr;
 
@@ -144,7 +215,17 @@ namespace conjure::engine {
             /// removes the folders the export created for the output again, so it writes nothing).
             /// EXPORT_FAILED naming publish_managed, before the output directory is created, when publishManaged is
             /// set and the project enables scripting but the engine's configuration disables it (--no-scripting):
-            /// the exported runtime would start the .NET host and find no managed code. A
+            /// the exported runtime would start the .NET host and find no managed code. BAD_ARGUMENTS, before the
+            /// output directory is created, when the settings name both bootstrapProject and
+            /// prebuiltManagedDirectory, and, before step 1, when step 3 would copy a prebuilt SDK that lies inside
+            /// the output directory (an existing one, then, which keeps what it held). EXPORT_FAILED naming
+            /// publish_managed, before the output directory is created, when step 3 would copy a prebuilt SDK whose
+            /// folder lacks MANAGED_SDK_MANIFEST_NAME, holds one of another kind, schema, host mode or native API hash
+            /// than this engine's, misses Conjure.Bootstrap.dll, its runtimeconfig.json or Conjure.Managed.dll, or
+            /// when the export is self-contained. EXPORT_FAILED naming publish_managed and carrying
+            /// missing_dotnet_sdk_message() when step 3 is about to run dotnet and
+            /// find_dotnet_sdk() finds no usable SDK; steps 1 and 2 keep their output, and so does the copy of a
+            /// prebuilt SDK in <dir>/managed. A
             /// distribution directory without Visual C++ runtime DLLs is not an error: a pipeline built with MSVC
             /// against the DLL runtime reports it as a warning. Debug runtime DLLs in it are not copied and are
             /// named in a warning. Neither is a directory without NOTICES_FILE_NAME an error: the report warns

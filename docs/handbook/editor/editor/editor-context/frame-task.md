@@ -48,6 +48,13 @@ class CONJURE_API frame_task
 
 ### Public
 
+#### `release_engine` {#function-release-engine}
+
+<div class="function-declaration" id="function-release-engine-1"><pre><code><span class="k">virtual</span> <span class="k">void</span> release_engine(
+    <a href="editor-context.html">editor_context</a> &amp;context);</code></pre></div>
+
+<p>The engine is shutting down (editor shutdown, the restart of <code>project.open</code>): release every handle into it, undo what the task left half done, fail a pending reply with <code>CANCELLED</code> and report finished from the next <code><a href="#function-tick-1">tick</a>()</code>. The default holds nothing and does nothing. Called at most once per engine, possibly again for a later engine the task never saw: an implementation is idempotent.</p>
+
 #### `tick` {#function-tick}
 
 <div class="function-declaration" id="function-tick-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">virtual</span> <span class="k">bool</span> tick(

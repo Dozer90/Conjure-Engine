@@ -55,11 +55,11 @@ namespace {
     }
 
     core::error failed(std::string_view path, std::string_view detail) {
-        return make_error(ecs_error::SERIALIZATION_FAILED, std::format("{}: {}", path, detail));
+        return core::make_error(ecs_error::SERIALIZATION_FAILED, std::format("{}: {}", path, detail));
     }
 
     core::error wrap_reflect_error(const core::error &failure) {
-        return make_error(ecs_error::SERIALIZATION_FAILED, strip_field_prefix(failure.message()));
+        return core::make_error(ecs_error::SERIALIZATION_FAILED, strip_field_prefix(failure.message()));
     }
 
     bool handled_here(field_kind kind) noexcept {
@@ -429,7 +429,7 @@ namespace {
         keys.clear();
         for (const archive_component &component : entry.components) {
             if (!registry.is_registered(component.id)) {
-                return make_error(ecs_error::ARCHIVE_CORRUPT, "archive names an unregistered component id");
+                return core::make_error(ecs_error::ARCHIVE_CORRUPT, "archive names an unregistered component id");
             }
             const component_info &info = registry.info(component.id);
             if (info.is_transient()) {
@@ -543,7 +543,10 @@ core::result<void> conjure::ecs::write_component_json(
     if (info.reflection != nullptr) {
         return write_struct(*info.reflection, component, out, std::string());
     }
-    return make_error(ecs_error::SERIALIZATION_FAILED, "component '" + display_name(info) + "' cannot be serialised");
+    return core::make_error(
+      ecs_error::SERIALIZATION_FAILED,
+      "component '" + display_name(info) + "' cannot be serialised"
+    );
 }
 
 core::result<void> conjure::ecs::read_component_json(
@@ -560,7 +563,10 @@ core::result<void> conjure::ecs::read_component_json(
     if (info.reflection != nullptr) {
         return read_struct(*info.reflection, component, in, std::string());
     }
-    return make_error(ecs_error::SERIALIZATION_FAILED, "component '" + display_name(info) + "' cannot be deserialised");
+    return core::make_error(
+      ecs_error::SERIALIZATION_FAILED,
+      "component '" + display_name(info) + "' cannot be deserialised"
+    );
 }
 
 
@@ -606,11 +612,11 @@ core::result<entity_archive> conjure::ecs::read_archive_json(
   const component_registry &registry
 ) {
     if (!in.is_object()) {
-        return make_error(ecs_error::SERIALIZATION_FAILED, "archive root must be an object");
+        return core::make_error(ecs_error::SERIALIZATION_FAILED, "archive root must be an object");
     }
     const core::json::value entities = in["entities"];
     if (!entities.is_array()) {
-        return make_error(ecs_error::SERIALIZATION_FAILED, "archive needs an \"entities\" array");
+        return core::make_error(ecs_error::SERIALIZATION_FAILED, "archive needs an \"entities\" array");
     }
 
     entity_archive archive(registry);
@@ -618,14 +624,14 @@ core::result<entity_archive> conjure::ecs::read_archive_json(
     usize entityIndex = 0;
     for (const core::json::value entityValue : entities) {
         if (!entityValue.is_object()) {
-            return make_error(
+            return core::make_error(
               ecs_error::SERIALIZATION_FAILED,
               std::format("{}: entity must be an object", entityIndex)
             );
         }
         const core::json::value components = entityValue["components"];
         if (components.is_valid() && !components.is_object()) {
-            return make_error(
+            return core::make_error(
               ecs_error::SERIALIZATION_FAILED,
               std::format("{}/components: must be an object", entityIndex)
             );
@@ -648,7 +654,7 @@ core::result<entity_archive> conjure::ecs::read_archive_json(
             }
             if (entry.mask.test(id)) {
                 destroy_entry(registry, entry);
-                return make_error(
+                return core::make_error(
                   ecs_error::SERIALIZATION_FAILED,
                   std::format("{}/{}: component listed twice", entityIndex, member.key)
                 );
@@ -662,7 +668,7 @@ core::result<entity_archive> conjure::ecs::read_archive_json(
                 if (!read.has_value()) {
                     destroy_image(info, component.bytes);
                     destroy_entry(registry, entry);
-                    return make_error(
+                    return core::make_error(
                       ecs_error::SERIALIZATION_FAILED,
                       std::format("{}/{}/{}", entityIndex, member.key, read.get_error().message())
                     );
@@ -701,13 +707,13 @@ core::result<void> conjure::ecs::component_to_json(
 ) {
     const component_registry &registry = source.registry();
     if (!registry.is_registered(id)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (!source.is_alive(target)) {
-        return make_error(ecs_error::ENTITY_NOT_ALIVE, "component_to_json on a dead entity");
+        return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "component_to_json on a dead entity");
     }
     if (!source.has_raw(target, id)) {
-        return make_error(ecs_error::COMPONENT_NOT_PRESENT, "entity does not hold the component");
+        return core::make_error(ecs_error::COMPONENT_NOT_PRESENT, "entity does not hold the component");
     }
     return write_component_json(registry.info(id), source.get_raw(target, id), out);
 }
@@ -720,13 +726,13 @@ core::result<void> conjure::ecs::component_from_json(
 ) {
     const component_registry &registry = target.registry();
     if (!registry.is_registered(id)) {
-        return make_error(ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
+        return core::make_error(ecs_error::UNKNOWN_COMPONENT, "component id is not registered");
     }
     if (!target.is_alive(owner)) {
-        return make_error(ecs_error::ENTITY_NOT_ALIVE, "component_from_json on a dead entity");
+        return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "component_from_json on a dead entity");
     }
     if (!target.has_raw(owner, id)) {
-        return make_error(ecs_error::COMPONENT_NOT_PRESENT, "entity does not hold the component");
+        return core::make_error(ecs_error::COMPONENT_NOT_PRESENT, "entity does not hold the component");
     }
     return read_component_json(registry.info(id), target.get_raw(owner, id, true), in);
 }

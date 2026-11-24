@@ -163,8 +163,8 @@ TEST_SUITE("assets/file_watcher") {
     TEST_CASE("polling_file_watcher - an unreadable root returns an error") {
         watcher_fixture fixture = {};
         fixture.watcher.add_root("missing");
-        CONJURE_CHECK_ERROR(fixture.watcher.snapshot(), asset_error_code::IO_ERROR);
-        CONJURE_CHECK_ERROR(fixture.watcher.scan_now(), asset_error_code::IO_ERROR);
+        CONJURE_CHECK_ERROR(fixture.watcher.snapshot(), assets_error::IO_ERROR);
+        CONJURE_CHECK_ERROR(fixture.watcher.scan_now(), assets_error::IO_ERROR);
     }
 
     TEST_CASE("polling_file_watcher - poll runs the stat pass on the job system when the interval is due") {

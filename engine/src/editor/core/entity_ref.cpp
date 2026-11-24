@@ -16,7 +16,7 @@ namespace conjure::editor {
         ) {
             const std::vector<std::string_view> segments = core::str::split(path, '/', false);
             if (segments.empty()) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "an entity path must not be empty");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "an entity path must not be empty");
             }
             ecs::entity current = ecs::NULL_ENTITY;
             std::string walked = "";
@@ -41,7 +41,7 @@ namespace conjure::editor {
                 }
                 walked += std::string(segment);
                 if (matches.empty()) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::ENTITY_NOT_FOUND,
                       std::format("no entity '{}' (segment '{}' did not match)", path, segment)
                     );
@@ -55,7 +55,7 @@ namespace conjure::editor {
                         }
                         details->set("candidates", candidates);
                     }
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::INVALID_ARGS,
                       std::format("path '{}' is ambiguous: {} entities are named '{}'", walked, matches.size(), segment)
                     );
@@ -72,20 +72,20 @@ namespace conjure::editor {
       core::json::document *details
     ) {
         if (!reference.is_string()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               "an entity reference is a guid string or a hierarchy path"
             );
         }
         const std::string_view text = reference.as_string();
         if (text.empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "an entity reference must not be empty");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "an entity reference must not be empty");
         }
         const std::optional<core::uuid> guid = core::uuid::parse(text);
         if (guid.has_value()) {
             const ecs::entity found = target.find_guid(*guid);
             if (found.is_null() || !target.contains(found)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::ENTITY_NOT_FOUND,
                   std::format("no live entity carries guid {}", guid->to_string())
                 );
@@ -101,7 +101,7 @@ namespace conjure::editor {
       core::json::document *details
     ) {
         if (!references.is_array()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "expected an array of entity references");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "expected an array of entity references");
         }
         std::vector<ecs::entity> entities = {};
         entities.reserve(references.size());
@@ -114,14 +114,14 @@ namespace conjure::editor {
 
     core::result<core::uuid> entity_ref::guid_of(scene::scene &target, ecs::entity entity) {
         if (!target.contains(entity)) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::ENTITY_NOT_FOUND,
               std::format("entity {} is not alive", entity)
             );
         }
         const core::result<core::uuid> guid = target.ensure_guid(entity);
         if (!guid.has_value()) {
-            return make_editor_error(protocol_error_code::ENTITY_NOT_FOUND, guid.get_error().message());
+            return core::make_error(protocol_error_code::ENTITY_NOT_FOUND, guid.get_error().message());
         }
         return guid.value();
     }

@@ -63,6 +63,9 @@ namespace conjure::scripting {
         std::filesystem::path outputDirectory = {};                         // -o when set
         std::vector<std::pair<std::string, std::string>> properties = {};   // -p:Name=Value
         f64 timeoutSeconds = 600.0;
+        // Where dotnet runs, and so where it starts looking for the global.json that picks its SDK; empty runs it in
+        // the current directory. Must exist when set.
+        std::filesystem::path workingDirectory = {};
     };
 
     /// <summary>
@@ -143,10 +146,10 @@ namespace conjure::scripting {
 
             /// <summary>
             /// The process description a request turns into: dotnet build <project> -c <configuration>
-            /// [-o <output>] --nologo -clp:NoSummary [-p:Name=Value...]. Paths are passed as UTF-8; the output
-            /// directory and every property value go through msbuild_escape(). It never adds
-            /// ContinuousIntegrationBuild, so the debug information keeps the real source paths and the built
-            /// scripts can be debugged; a caller that wants it passes it in build_request::properties.
+            /// [-o <output>] --nologo -clp:NoSummary [-p:Name=Value...], run in build_request::workingDirectory. Paths
+            /// are passed as UTF-8; the output directory and every property value go through msbuild_escape(). It
+            /// never adds ContinuousIntegrationBuild, so the debug information keeps the real source paths and the
+            /// built scripts can be debugged; a caller that wants it passes it in build_request::properties.
             /// </summary>
             [[nodiscard]] static core::process_desc command_line(const build_request &request, std::string_view dotnet);
 

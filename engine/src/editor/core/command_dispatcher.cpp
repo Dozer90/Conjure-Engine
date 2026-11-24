@@ -73,7 +73,7 @@ namespace conjure::editor {
             return core::json::document::object();
         }
         if (!response->ok) {
-            return make_editor_error(response->errorCode, response->errorMessage);
+            return core::make_error(response->errorCode, response->errorMessage);
         }
         return std::move(response->result);
     }
@@ -162,6 +162,12 @@ namespace conjure::editor {
             CONJURE_ASSERT(false, "command_dispatcher::complete: ticket {} is not pending", ticket);
             return;
         }
+        if (!response.ok && position->clientId == 0 && ticket != mDispatchingTicket) {
+            // The UI fires its commands and moves on: without this line a parked UI request that fails later, a
+            // prefab.instantiate from the asset browser among them, would fail silently. A failure inside the
+            // handler is returned synchronously, and ui::support::run_command logs that one the same way.
+            CONJURE_LOG_WARN(LOG_EDITOR, "ui: {} failed: {}", position->command, response.errorMessage);
+        }
         response.id = position->id;
         response.clientId = position->clientId;
         mPending.erase(position);
@@ -173,6 +179,34 @@ namespace conjure::editor {
             return;
         }
         mCompleted.push_back(std::move(response));
+    }
+
+    void command_dispatcher::complete_mutation(u64 ticket, command_outcome outcome) {
+        const auto position = std::find_if(mPending.begin(), mPending.end(), [ticket](const pending_request &pending) {
+            return pending.ticket == ticket;
+        });
+        if (position == mPending.end()) {
+            CONJURE_ASSERT(false, "command_dispatcher::complete_mutation: ticket {} is not pending", ticket);
+            return;
+        }
+        if (!has_flag(position->flags, command_flags::MUTATES)) {
+            // A programmer error in the handler: answer with the result, as succeed() would, and record nothing.
+            CONJURE_ASSERT(false, "command_dispatcher::complete_mutation: '{}' does not mutate", position->command);
+            protocol_response plain = {};
+            plain.ok = true;
+            plain.result = std::move(outcome.result);
+            complete(ticket, std::move(plain));
+            return;
+        }
+        protocol_request request = {};
+        request.id = position->id;
+        request.command = position->command;
+        request.args = position->args;
+        request.coalesceKey = position->coalesceKey;
+        request.clientId = position->clientId;
+        const command_flags flags = position->flags;
+        protocol_response response = conclude_mutation(flags, request, outcome);
+        complete(ticket, std::move(response));
     }
 
     bool command_dispatcher::is_pending(u64 ticket) const noexcept {
@@ -192,10 +226,10 @@ namespace conjure::editor {
       core::json::document &outDetails
     ) {
         if (mBatch != nullptr) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "editor.batch cannot be nested");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "editor.batch cannot be nested");
         }
         if (!commands.is_array()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "args.commands: expected an array");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "args.commands: expected an array");
         }
         // Reject children that may not run inside a batch before anything executes (D4).
         usize index = 0;
@@ -203,7 +237,7 @@ namespace conjure::editor {
             const core::json::value name = child["cmd"];
             if (!child.is_object() || !name.is_string()) {
                 outDetails.set("failedIndex", index);
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("args.commands[{}]: expected {{cmd, args}}", index)
                 );
@@ -211,14 +245,14 @@ namespace conjure::editor {
             const command_descriptor *descriptor = mRegistry->find(name.as_string());
             if (descriptor == nullptr) {
                 outDetails.set("failedIndex", index);
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::UNKNOWN_COMMAND,
                   std::format("args.commands[{}]: unknown command '{}'", index, echoed_name(name.as_string()))
                 );
             }
             if (has_flag(descriptor->flags, command_flags::NOT_IN_BATCH)) {
                 outDetails.set("failedIndex", index);
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("args.commands[{}]: '{}' cannot run inside a batch", index, name.as_string())
                 );
@@ -242,7 +276,8 @@ namespace conjure::editor {
             request.clientId = clientId;
             std::optional<protocol_response> response = dispatch_internal(request);
             if (!response.has_value()) {
-                // Cannot happen: NOT_IN_BATCH covers ASYNC; keep the batch consistent anyway.
+                // Cannot happen: NOT_IN_BATCH covers ASYNC, and dispatch_internal answers a SYNC_IN_BATCH child that
+                // did not complete inside its handler with INTERNAL; keep the batch consistent anyway.
                 response = make_error_response(request.id.root(), protocol_error_code::INTERNAL, "asynchronous child");
             }
             audit(request, response, true);
@@ -250,7 +285,7 @@ namespace conjure::editor {
             responses.push_back(std::move(*response));
             if (!ok) {
                 if (atomic) {
-                    failure = make_editor_error(responses.back().errorCode, responses.back().errorMessage);
+                    failure = core::make_error(responses.back().errorCode, responses.back().errorMessage);
                     outDetails = responses.back().errorDetails;
                     outDetails.set("failedIndex", index);
                     break;
@@ -319,7 +354,7 @@ namespace conjure::editor {
             request.clientId = clientId;
             const std::optional<protocol_response> response = dispatch_internal(request);
             if (response.has_value() && !response->ok) {
-                outcome = make_editor_error(
+                outcome = core::make_error(
                   protocol_error_code::INTERNAL,
                   std::format("undo of '{}' failed: {}", inverse.name, response->errorMessage)
                 );
@@ -343,7 +378,7 @@ namespace conjure::editor {
             request.clientId = clientId;
             const std::optional<protocol_response> response = dispatch_internal(request);
             if (response.has_value() && !response->ok) {
-                outcome = make_editor_error(
+                outcome = core::make_error(
                   protocol_error_code::INTERNAL,
                   std::format("redo of '{}' failed: {}", replay.name, response->errorMessage)
                 );
@@ -434,7 +469,7 @@ namespace conjure::editor {
         command_invocation invocation{*mContext, args.is_valid() ? args : emptyArgs.root(), request.clientId, {}, {}};
 
         if (has_flag(descriptor->flags, command_flags::ASYNC)) {
-            if (pending_count(request.clientId) >= mMaxPendingPerClient) {
+            const auto busy = [this, &id, &request]() {
                 return make_error_response(
                   id,
                   protocol_error_code::BUSY,
@@ -444,32 +479,50 @@ namespace conjure::editor {
                     mMaxPendingPerClient
                   )
                 );
+            };
+            // Only a request left parked counts toward the cap. One that must complete inside its handler (a batch
+            // child, a replay of an undo or redo step) cannot stay parked and is never refused; a SYNC_IN_BATCH
+            // request may finish inside its handler anywhere (a resident prefab) and is checked once it returns.
+            const bool syncInBatch = has_flag(descriptor->flags, command_flags::SYNC_IN_BATCH);
+            if (!requires_synchronous_completion() && !syncInBatch &&
+              pending_count(request.clientId) >= mMaxPendingPerClient) {
+                return busy();
             }
+            const u64 ticket = mNextTicket;
+            ++mNextTicket;
             pending_request pending = {};
             pending.id = request.id;
             pending.command = request.command;
-            pending.ticket = mNextTicket;
-            ++mNextTicket;
+            if (has_flag(descriptor->flags, command_flags::MUTATES)) {
+                // complete_mutation records the request as the replay unless the outcome names another one.
+                pending.args = request.args;
+            }
+            pending.ticket = ticket;
+            pending.coalesceKey = request.coalesceKey;
+            pending.flags = descriptor->flags;
             pending.clientId = request.clientId;
             pending.deadlineSeconds = now_seconds() + mAsyncTimeoutSeconds;
-            mPending.push_back(pending);
-            invocation.reply = async_reply(*this, pending.ticket);
-            // A handler may complete its reply before returning (project.export, a screenshot refused up
-            // front): complete() parks that response here instead of the queue. Saved and restored so a
-            // handler that dispatches further requests cannot disturb an outer one.
+            mPending.push_back(std::move(pending));
+            invocation.reply = async_reply(*this, ticket);
+            // A handler may complete its reply before returning (project.export, a screenshot refused up front, a
+            // prefab command inside a batch): complete() parks that response here instead of the queue. Saved and
+            // restored so a handler that dispatches further requests cannot disturb an outer one.
             const u64 outerTicket = mDispatchingTicket;
             std::optional<protocol_response> outerSynchronous = std::move(mSynchronousResponse);
-            mDispatchingTicket = pending.ticket;
+            mDispatchingTicket = ticket;
             mSynchronousResponse.reset();
             core::result<command_outcome> outcome = descriptor->handler(invocation);
             std::optional<protocol_response> synchronous = std::move(mSynchronousResponse);
             mDispatchingTicket = outerTicket;
             mSynchronousResponse = std::move(outerSynchronous);
-            if (!outcome.has_value()) {
-                // The handler failed before arming its reply: answer synchronously and free the slot.
-                std::erase_if(mPending, [ticket = pending.ticket](const pending_request &entry) {
+            const auto release = [this, ticket]() {
+                std::erase_if(mPending, [ticket](const pending_request &entry) {
                     return entry.ticket == ticket;
                 });
+            };
+            if (!outcome.has_value()) {
+                // The handler failed before arming its reply: answer synchronously and free the slot.
+                release();
                 return make_error_response(
                   id,
                   classify_error(outcome.get_error()),
@@ -477,16 +530,32 @@ namespace conjure::editor {
                   std::move(invocation.errorDetails)
                 );
             }
-            if (has_flag(descriptor->flags, command_flags::MUTATES)) {
-                if (mSuppressRevision == 0) {
-                    mContext->bump_revision();
-                }
-                if (!has_flag(descriptor->flags, command_flags::NO_UNDO)) {
-                    mContext->set_scene_dirty(true);
-                }
-            }
+            // The recording, the dirty flag, the revision and scene.changed of an ASYNC | MUTATES command belong to
+            // its completion (complete_mutation), which ran already when the handler answered synchronously.
             if (synchronous.has_value()) {
                 return synchronous;
+            }
+            if (requires_synchronous_completion()) {
+                // A batch child or a replay that answered later would land outside the entry, the rollback or the
+                // undo step it belongs to: its reply is dropped, so a later completion is ignored.
+                release();
+                CONJURE_LOG_ERROR(
+                  LOG_EDITOR,
+                  "{}: '{}' did not complete inside its handler in a batch or an undo / redo step",
+                  to_string(protocol_error_code::INTERNAL),
+                  request.command
+                );
+                return make_error_response(
+                  id,
+                  protocol_error_code::INTERNAL,
+                  std::format("'{}' must complete inside a batch or an undo / redo step", request.command)
+                );
+            }
+            if (syncInBatch && exceeds_pending_limit(request.clientId)) {
+                // Left parked beyond the cap: refused, and its reply dropped, as a timed-out one is (the handler
+                // changes nothing for a reply that is no longer valid). The prefab commands refuse before parking.
+                release();
+                return busy();
             }
             return std::nullopt;
         }
@@ -501,28 +570,11 @@ namespace conjure::editor {
             );
         }
         command_outcome &value = outcome.value();
+        if (has_flag(descriptor->flags, command_flags::MUTATES)) {
+            return conclude_mutation(descriptor->flags, request, value);
+        }
         if (!value.result.root().is_object()) {
             value.result = core::json::document::object();
-        }
-        if (has_flag(descriptor->flags, command_flags::MUTATES)) {
-            record_outcome(*descriptor, request, value);
-            if (!has_flag(descriptor->flags, command_flags::NO_UNDO)) {
-                mContext->set_scene_dirty(true);
-            }
-            if (mSuppressRevision > 0) {
-                // An undo or redo step: history.undo / redo bump the revision and announce the step once.
-                return make_ok_response(id, std::move(value.result));
-            }
-            const u64 revision = mContext->bump_revision();
-            value.result.set("revision", revision);
-            mContext->events().emit(
-              editor_event::SCENE_CHANGED,
-              core::json::object({
-                {"revision", revision},
-                {"label", std::string_view(value.label)},
-                {"cmd", std::string_view(request.command)},
-              })
-            );
         }
         return make_ok_response(id, std::move(value.result));
     }
@@ -549,12 +601,42 @@ namespace conjure::editor {
         return std::nullopt;
     }
 
-    void command_dispatcher::record_outcome(
-      const command_descriptor &descriptor,
+    protocol_response command_dispatcher::conclude_mutation(
+      command_flags flags,
       const protocol_request &request,
       command_outcome &outcome
     ) {
-        if (has_flag(descriptor.flags, command_flags::NO_UNDO) || outcome.skipRecording) {
+        const core::json::value id = request.id.root();
+        if (!outcome.result.root().is_object()) {
+            outcome.result = core::json::document::object();
+        }
+        record_outcome(flags, request, outcome);
+        if (!has_flag(flags, command_flags::NO_UNDO)) {
+            mContext->set_scene_dirty(true);
+        }
+        if (mSuppressRevision > 0) {
+            // An undo or redo step: history.undo / redo bump the revision and announce the step once.
+            return make_ok_response(id, std::move(outcome.result));
+        }
+        const u64 revision = mContext->bump_revision();
+        outcome.result.set("revision", revision);
+        mContext->events().emit(
+          editor_event::SCENE_CHANGED,
+          core::json::object({
+            {"revision", revision},
+            {"label", std::string_view(outcome.label)},
+            {"cmd", std::string_view(request.command)},
+          })
+        );
+        return make_ok_response(id, std::move(outcome.result));
+    }
+
+    void command_dispatcher::record_outcome(
+      command_flags flags,
+      const protocol_request &request,
+      command_outcome &outcome
+    ) {
+        if (has_flag(flags, command_flags::NO_UNDO) || outcome.skipRecording) {
             return;
         }
         if (!outcome.inverse.has_value()) {
@@ -564,7 +646,7 @@ namespace conjure::editor {
               LOG_EDITOR,
               "{}: mutating command '{}' returned no inverse; the edit is not recorded for undo",
               to_string(protocol_error_code::INTERNAL),
-              descriptor.name
+              request.command
             );
             return;
         }
@@ -577,14 +659,14 @@ namespace conjure::editor {
         }
         replay.clientId = request.clientId;
         replay.coalesceKey = request.coalesceKey;
-        const bool onDisk = has_flag(descriptor.flags, command_flags::ON_DISK);
+        const bool onDisk = has_flag(flags, command_flags::ON_DISK);
         // A running batch always collects its children's inverses, even while playing or while the batch itself
         // runs as an undo or redo step: its atomic rollback needs them. run_batch decides afterwards whether the
         // collected entry reaches the stack.
         if (mBatch != nullptr) {
             mBatch->entry.undo.push_back(std::move(*outcome.inverse));
             mBatch->entry.redo.push_back(std::move(replay));
-            mBatch->fileCommands.push_back(onDisk ? descriptor.name : std::string());
+            mBatch->fileCommands.push_back(onDisk ? request.command : std::string());
             if (mBatch->entry.label.empty()) {
                 mBatch->entry.label = outcome.label;
             }
@@ -597,7 +679,7 @@ namespace conjure::editor {
             // Playing: play.stop restores the scene, so a scene edit has nothing to undo, but it does not restore
             // the project's files, so a file edit keeps its inverse until then (D9, D21).
             if (onDisk) {
-                mContext->play().keep_file_edit(descriptor.name, std::move(replay), std::move(*outcome.inverse));
+                mContext->play().keep_file_edit(request.command, std::move(replay), std::move(*outcome.inverse));
                 return;
             }
             mContext->play().note_unrecorded_edit();

@@ -92,7 +92,7 @@ namespace conjure::ecs {
             /// </summary>
             [[nodiscard]] core::result<void> set(ComponentType value) {
                 if (mWorld == nullptr) {
-                    return make_error(ecs_error::ENTITY_NOT_ALIVE, "component_ref points at no world");
+                    return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "component_ref points at no world");
                 }
                 return mWorld->set<ComponentType>(mEntity, std::move(value));
             }
@@ -149,7 +149,7 @@ namespace conjure::ecs {
             template <typename ComponentType>
             [[nodiscard]] core::result<component_ref<ComponentType>> add(ComponentType value = {}) {
                 if (mWorld == nullptr) {
-                    return make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
+                    return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
                 }
                 CONJURE_TRY(mWorld->add<ComponentType>(mEntity, std::move(value)));
                 return component_ref<ComponentType>(*mWorld, mEntity);
@@ -180,7 +180,7 @@ namespace conjure::ecs {
             template <typename ComponentType>
             [[nodiscard]] core::result<void> remove() {
                 if (mWorld == nullptr) {
-                    return make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
+                    return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
                 }
                 return mWorld->remove<ComponentType>(mEntity);
             }
@@ -190,7 +190,7 @@ namespace conjure::ecs {
             /// </summary>
             [[nodiscard]] core::result<void> destroy() {
                 if (mWorld == nullptr) {
-                    return make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
+                    return core::make_error(ecs_error::ENTITY_NOT_ALIVE, "entity_handle points at no world");
                 }
                 return mWorld->destroy_entity(mEntity);
             }

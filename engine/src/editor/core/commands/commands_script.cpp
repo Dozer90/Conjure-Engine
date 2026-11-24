@@ -3,9 +3,13 @@
 
 #include "conjure/editor/log_category.h"
 
+#include "conjure/core/jobs/job_handle.h"
+#include "conjure/core/jobs/job_system.h"
+#include "conjure/core/jobs/main_thread.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/string_utils.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/export.h"
 
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
     #include "conjure/scripting/managed_build.h"
@@ -17,11 +21,15 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -107,7 +115,7 @@ namespace conjure::editor::support {
 
         core::result<std::filesystem::path> scripts_root(editor_context &context) {
             if (context.project() == nullptr) {
-                return make_editor_error(protocol_error_code::PROJECT_NOT_OPEN, "scripts live in a project");
+                return core::make_error(protocol_error_code::PROJECT_NOT_OPEN, "scripts live in a project");
             }
             return context.project()->root_directory() / std::filesystem::path(SCRIPTS_DIRECTORY);
         }
@@ -518,18 +526,57 @@ namespace conjure::editor::support {
         }
 
 #if defined(CONJURE_WITH_SCRIPTING) && CONJURE_WITH_SCRIPTING
+        // How long script.compile waits for `dotnet --version` after a build that failed the way a missing SDK fails.
+        constexpr f64 SDK_PROBE_TIMEOUT_SECONDS = 30.0;
+
         /// <summary>
-        /// Owns the build runner until the report arrived on the main thread, then answers the reply. The busy
-        /// token it holds keeps editor_context::script_compile_pending() true for exactly its lifetime (the
-        /// runner's destructor waits for the build, so no build outlives the token).
+        /// True for a build that failed the way one without a usable .NET SDK fails, so that script.compile asks
+        /// dotnet for its SDK before it answers: without any error diagnostic (a dotnet without an SDK prints "No
+        /// .NET SDKs were found", which is no diagnostic), or with an error of the SDK itself (NETSDK1045 "does not
+        /// support targeting .NET 10.0" from an older SDK, MSB4236 "the SDK 'Microsoft.NET.Sdk' could not be found").
+        /// A build that timed out is not.
+        /// </summary>
+        [[nodiscard]] bool suggests_missing_sdk(const scripting::build_report &report) {
+            if (report.succeeded || report.timedOut) {
+                return false;
+            }
+            if (report.error_count() == 0) {
+                return true;
+            }
+            return std::any_of(
+              report.diagnostics.begin(),
+              report.diagnostics.end(),
+              [](const scripting::build_diagnostic &diagnostic) {
+                  const std::string_view code = diagnostic.code;
+                  return diagnostic.isError && (code.starts_with("NETSDK") || code == "MSB4236");
+              }
+            );
+        }
+
+        /// <summary>
+        /// Owns the build runner until the report arrived on the main thread, then answers the reply. A build that
+        /// failed the way one without a usable SDK fails (suggests_missing_sdk) first asks dotnet for its SDK on a job
+        /// (find_dotnet_sdk), so the main thread never waits for dotnet. The probe runs where the build ran (the
+        /// scripts root, build_request::workingDirectory), so both read the same global.json and name the same SDK;
+        /// a probe run elsewhere could find a usable SDK the build could not use. The busy token it holds keeps
+        /// editor_context::script_compile_pending() true for exactly its lifetime (the runner's destructor waits for
+        /// the build and the task's for the probe, so neither outlives the token).
         /// </summary>
         class compile_task final : public frame_task {
             private:
+                using probe_slot = std::optional<core::result<std::string>>;
+
                 std::unique_ptr<scripting::managed_build_runner> mRunner = nullptr;
                 std::shared_ptr<std::optional<scripting::build_report>> mReport = nullptr;
                 std::shared_ptr<void> mBusyToken = nullptr;
                 std::string mConfiguration = "";
+                std::filesystem::path mWorkingDirectory = {};    // where dotnet build ran, and where the probe runs
                 async_reply mReply = {};
+                core::jobs::job_system *mJobs = nullptr;    // runs the SDK probe; nullptr runs it inline
+                std::shared_ptr<probe_slot> mProbe = std::make_shared<probe_slot>();
+                core::jobs::job_handle mProbeJob = {};
+                bool mProbeStarted = false;
+                bool mReleased = false;
 
             public:
                 compile_task(
@@ -537,15 +584,20 @@ namespace conjure::editor::support {
                   std::shared_ptr<std::optional<scripting::build_report>> report,
                   std::shared_ptr<void> busyToken,
                   std::string configuration,
+                  std::filesystem::path workingDirectory,
+                  core::jobs::job_system *jobs,
                   async_reply reply
                 ) :
                     mRunner(std::move(runner)),
                     mReport(std::move(report)),
                     mBusyToken(std::move(busyToken)),
                     mConfiguration(std::move(configuration)),
-                    mReply(reply) {}
+                    mWorkingDirectory(std::move(workingDirectory)),
+                    mReply(reply),
+                    mJobs(jobs) {}
 
                 ~compile_task() override {
+                    wait_for_probe();
                     if (mReply.is_valid()) {
                         mReply.fail(protocol_error_code::CANCELLED, "script.compile was dropped before it finished");
                     }
@@ -553,6 +605,9 @@ namespace conjure::editor::support {
 
             public:
                 bool tick(editor_context &context) override {
+                    if (mReleased) {
+                        return true;
+                    }
                     if (!mReport->has_value()) {
                         return false;
                     }
@@ -565,16 +620,87 @@ namespace conjure::editor::support {
                         return true;
                     }
                     const bool ran = report.launch.has_value() ||
-                      report.launch.get_error().is(scripting::script_error::BUILD_FAILED);
+                      report.launch.get_error().is(scripting::scripting_error::BUILD_FAILED);
+                    // Owner decision OWN-INSTALL: the .NET SDK is an optional download, so a machine without a usable
+                    // one is told the version global.json asks for and Microsoft's download page.
                     if (!ran) {
                         mReply.fail(
                           protocol_error_code::NOT_AVAILABLE,
-                          std::format("dotnet could not be started ({}): install the .NET 10 SDK or set the dotnet "
-                            "executable",
-                            report.launch.get_error().message())
+                          engine::missing_dotnet_sdk_message(std::format(
+                            "'{}' could not be started ({})",
+                            mRunner->dotnet_executable(),
+                            report.launch.get_error().message()
+                          ))
                         );
                         return true;
                     }
+                    if (suggests_missing_sdk(report)) {
+                        if (!mProbeStarted) {
+                            start_probe();
+                        }
+                        if (!mProbe->has_value()) {
+                            return false;
+                        }
+                        const core::result<std::string> &sdk = **mProbe;
+                        if (!sdk.has_value()) {
+                            mReply.fail(protocol_error_code::NOT_AVAILABLE, sdk.get_error().message());
+                            return true;
+                        }
+                    }
+                    answer(context, report);
+                    return true;
+                }
+
+                /// <summary>
+                /// Waits for the build and the SDK probe while the engine's job system still runs, then fails a
+                /// pending reply with CANCELLED; the next tick() reports the task finished.
+                /// </summary>
+                void release_engine(editor_context &context) override {
+                    (void) context;
+                    mRunner->wait();
+                    wait_for_probe();
+                    mReleased = true;
+                    if (mReply.is_valid()) {
+                        mReply.fail(protocol_error_code::CANCELLED, "the engine stopped before script.compile ended");
+                    }
+                }
+
+            private:
+                /// <summary>
+                /// Runs find_dotnet_sdk() on a job (inline without a running job system); its result reaches mProbe
+                /// on the main thread at the next drain of the main-thread queue, as the build report does.
+                /// </summary>
+                void start_probe() {
+                    mProbeStarted = true;
+                    const std::shared_ptr<probe_slot> probe = mProbe;
+                    const std::string dotnet = mRunner->dotnet_executable();
+                    const std::filesystem::path directory = mWorkingDirectory;
+                    auto work = [probe, dotnet, directory]() {
+                        const core::result<std::string> found =
+                          engine::find_dotnet_sdk(dotnet, directory, SDK_PROBE_TIMEOUT_SECONDS);
+                        core::jobs::post_to_main_thread([probe, found]() {
+                            *probe = found;
+                        });
+                    };
+                    if (mJobs == nullptr || !mJobs->is_running()) {
+                        work();
+                        return;
+                    }
+                    mProbeJob = mJobs->schedule(std::move(work), core::jobs::job_priority::LOW);
+                }
+
+                void wait_for_probe() {
+                    if (mJobs != nullptr && mProbeJob.is_valid()) {
+                        mJobs->wait(mProbeJob);
+                        mProbeJob.reset();
+                    }
+                }
+
+                /// <summary>
+                /// Emits SCRIPT_COMPILED with the build's verdict and answers with it: the result when it succeeded,
+                /// COMPILE_FAILED carrying it when it did not.
+                /// </summary>
+                void answer(editor_context &context, const scripting::build_report &report) {
                     core::json::document diagnostics = core::json::document::array();
                     for (const scripting::build_diagnostic &diagnostic : report.diagnostics) {
                         diagnostics.push_back(core::json::object({
@@ -606,10 +732,9 @@ namespace conjure::editor::support {
                           ),
                           std::move(result)
                         );
-                        return true;
+                        return;
                     }
                     mReply.succeed(std::move(result));
-                    return true;
                 }
         };
 #endif
@@ -626,13 +751,13 @@ namespace conjure::editor::support {
                 );
             }
             if (context.script_compile_pending()) {
-                return make_editor_error(protocol_error_code::BUSY, "a script.compile is still running");
+                return core::make_error(protocol_error_code::BUSY, "a script.compile is still running");
             }
             CONJURE_TRY_ASSIGN(const std::filesystem::path root, scripts_root(context));
             const std::filesystem::path project = root / std::filesystem::path(PROJECT_FILE_NAME);
             std::error_code ignored = {};
             if (!std::filesystem::exists(project, ignored)) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::PATH_NOT_FOUND,
                   "no scripts/Game.csproj: create a script first"
                 );
@@ -659,6 +784,9 @@ namespace conjure::editor::support {
                 );
             }
             request.timeoutSeconds = std::max(1.0, context.dispatcher().async_timeout_seconds() * 0.9);
+            // In the scripts root, not the editor's current directory: dotnet picks its SDK through the global.json
+            // in or above the directory it runs in, and a project's global.json is the one that should decide.
+            request.workingDirectory = root;
             using report_slot = std::optional<scripting::build_report>;
             std::shared_ptr<report_slot> report = std::make_shared<report_slot>();
             runner->build(request, [report](const scripting::build_report &finished) {
@@ -671,6 +799,8 @@ namespace conjure::editor::support {
               report,
               std::move(busyToken),
               std::string(configuration),
+              request.workingDirectory,
+              context.engine_context().jobs,
               invocation.reply
             ));
             return command_outcome{};
@@ -702,7 +832,7 @@ namespace conjure::editor::support {
                 // like the assembly) is IO_ERROR as in every other command (D20).
                 core::error unusable = unusable_path(assembly, "not a regular file");
                 if (unusable.is(protocol_error_code::PATH_NOT_FOUND)) {
-                    return make_editor_error(
+                    return core::make_error(
                       protocol_error_code::PATH_NOT_FOUND,
                       std::format("no game assembly at '{}': run script.compile first", assembly.generic_string())
                     );
@@ -714,7 +844,7 @@ namespace conjure::editor::support {
               : runtime->load_game_assembly(assembly);
             if (!reloaded.has_value()) {
                 // The file exists, so the build did its part: the runtime could not load what it produced.
-                return make_editor_error(protocol_error_code::IO_ERROR, reloaded.get_error().message());
+                return core::make_error(protocol_error_code::IO_ERROR, reloaded.get_error().message());
             }
             const scripting::script_runtime_stats stats = runtime->stats();
             core::json::document result = core::json::object({
@@ -890,7 +1020,8 @@ namespace conjure::editor::support {
           registry,
           make_command(
             "script.compile",
-            "Runs dotnet build on <project>/scripts/Game.csproj and answers with the diagnostics.",
+            "Runs dotnet build on <project>/scripts/Game.csproj and answers with the diagnostics. Without a usable "
+            ".NET SDK it answers NOT_AVAILABLE naming the version global.json asks for and Microsoft's download page.",
             R"({"type":"object","properties":{"configuration":{"type":"string"}}})",
             R"({"type":"object","properties":{"succeeded":{"type":"boolean"},"diagnostics":{"type":"array"},)"
             R"("durationMs":{"type":"number"}}})",

@@ -106,7 +106,7 @@ core::result<void> script_runtime::initialise(const script_runtime_config &confi
         return core::error(core::error_code::INVALID_STATE, "script_runtime is already initialised");
     }
     if (!core::jobs::is_main_thread()) {
-        return core::make_error(script_error::WRONG_THREAD, "script_runtime::initialise off the main thread");
+        return core::make_error(scripting_error::WRONG_THREAD, "script_runtime::initialise off the main thread");
     }
 
     fill_core_native_entries(mNativeApi);
@@ -499,15 +499,24 @@ void script_runtime::remove_script(ecs::entity entity, script_entry_id id) {
 core::result<void> script_runtime::set_field(script_entry_id id, u64 fieldHash, const core::json::value &value) {
     script_entry *entryValue = mStore.find_entry(id);
     if (entryValue == nullptr) {
-        return core::make_error(script_error::INSTANCE_NOT_FOUND, "no script entry for the id");
+        return core::make_error(scripting_error::INSTANCE_NOT_FOUND, "no script entry for the id");
     }
     const script_class_info *info = mClasses.find(entryValue->classHash);
     if (info == nullptr) {
-        return core::make_error(script_error::CLASS_NOT_FOUND, "class {:#018x} is not loaded", entryValue->classHash);
+        return core::make_error(
+          scripting_error::CLASS_NOT_FOUND,
+          "class {:#018x} is not loaded",
+          entryValue->classHash
+        );
     }
     const script_field_info *field = info->find_field(fieldHash);
     if (field == nullptr) {
-        return core::make_error(script_error::FIELD_NOT_FOUND, "'{}' has no field {:#018x}", info->fullName, fieldHash);
+        return core::make_error(
+          scripting_error::FIELD_NOT_FOUND,
+          "'{}' has no field {:#018x}",
+          info->fullName,
+          fieldHash
+        );
     }
     if (!is_value_compatible(field->kind, field->elementKind, value)) {
         return core::error(
@@ -532,7 +541,7 @@ core::result<void> script_runtime::set_field(script_entry_id id, u64 fieldHash, 
 core::result<core::json::document> script_runtime::collect_entry_fields(script_entry_id id) {
     script_entry *entryValue = mStore.find_entry(id);
     if (entryValue == nullptr) {
-        return core::make_error(script_error::INSTANCE_NOT_FOUND, "no script entry for the id");
+        return core::make_error(scripting_error::INSTANCE_NOT_FOUND, "no script entry for the id");
     }
     refresh_live_fields(*entryValue);
     return core::json::document(entryValue->fields);
@@ -540,7 +549,7 @@ core::result<core::json::document> script_runtime::collect_entry_fields(script_e
 
 core::result<core::json::document> script_runtime::serialize_entity_scripts(ecs::entity entity) {
     if (mWorld == nullptr || !mWorld->is_alive(entity)) {
-        return ecs::make_error(ecs::ecs_error::ENTITY_NOT_ALIVE, "serialize_entity_scripts on a dead entity");
+        return core::make_error(ecs::ecs_error::ENTITY_NOT_ALIVE, "serialize_entity_scripts on a dead entity");
     }
     core::json::writer out = {};
     const script_component *component = std::as_const(*mWorld).get<script_component>(entity);
@@ -550,7 +559,7 @@ core::result<core::json::document> script_runtime::serialize_entity_scripts(ecs:
 
 core::result<void> script_runtime::deserialize_entity_scripts(ecs::entity entity, const core::json::value &scripts) {
     if (mWorld == nullptr || !mWorld->is_alive(entity)) {
-        return ecs::make_error(ecs::ecs_error::ENTITY_NOT_ALIVE, "deserialize_entity_scripts on a dead entity");
+        return core::make_error(ecs::ecs_error::ENTITY_NOT_ALIVE, "deserialize_entity_scripts on a dead entity");
     }
     if (!scripts.is_object() || !scripts["scripts"].is_array()) {
         return core::error(core::error_code::INVALID_ARGUMENT, "expected {\"scripts\":[...]}");
@@ -760,13 +769,13 @@ bool script_runtime::note_mirror_mismatch(u64 nameHash) {
 core::result<u32> script_runtime::begin_query_scope(std::span<const u32> typeIds, conjure_query_scope &out) {
     out = {};
     if (!core::jobs::is_main_thread()) {
-        return core::make_error(script_error::WRONG_THREAD, "query_begin off the main thread");
+        return core::make_error(scripting_error::WRONG_THREAD, "query_begin off the main thread");
     }
     if (!is_ready()) {
-        return core::make_error(script_error::NOT_INITIALISED, "query_begin without a ready runtime");
+        return core::make_error(scripting_error::NOT_INITIALISED, "query_begin without a ready runtime");
     }
     if (mCurrentPhase == script_phase::COUNT) {
-        return core::make_error(script_error::NOT_IN_PHASE, "query_begin outside a script phase");
+        return core::make_error(scripting_error::NOT_IN_PHASE, "query_begin outside a script phase");
     }
     if (mWorld == nullptr) {
         return core::error(core::error_code::INVALID_ARGUMENT, "query_begin without an attached world");
@@ -1047,7 +1056,7 @@ bool script_runtime::is_ready() const noexcept {
 
 core::result<void> script_runtime::reload_internal(const std::filesystem::path &assemblyPath) {
     if (!is_ready()) {
-        return core::make_error(script_error::NOT_INITIALISED, "load_game_assembly without a ready runtime");
+        return core::make_error(scripting_error::NOT_INITIALISED, "load_game_assembly without a ready runtime");
     }
     const conjure_managed_api &managed = mHost->managed_api();
 
@@ -1063,7 +1072,7 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
     if (loaded != 0) {
         mClasses.discard_staging();
         return core::make_error(
-          script_error::ASSEMBLY_LOAD_FAILED,
+          scripting_error::ASSEMBLY_LOAD_FAILED,
           "'{}' did not load (managed status {})",
           utf8Path,
           loaded
@@ -1385,7 +1394,7 @@ void script_runtime::refresh_live_fields(script_entry &entryValue) {
 core::result<void> script_runtime::apply_entry_fields(script_entry &entryValue, const core::json::value &fields) {
     const script_class_info *info = mClasses.find(entryValue.classHash);
     if (info == nullptr) {
-        return core::make_error(script_error::CLASS_NOT_FOUND, "class {:#018x} is not loaded", entryValue.classHash);
+        return core::make_error(scripting_error::CLASS_NOT_FOUND, "class {:#018x} is not loaded", entryValue.classHash);
     }
     return apply_entry_fields_with(entryValue, *info, fields);
 }
@@ -1407,7 +1416,7 @@ core::result<void> script_runtime::apply_entry_fields_with(
     const i32 result = mHost->managed_api().apply_fields(entryValue.managedSlot, blob.data(), static_cast<i32>(needed));
     if (result < 0) {
         return core::make_error(
-          script_error::INSTANCE_NOT_FOUND,
+          scripting_error::INSTANCE_NOT_FOUND,
           "apply_fields(slot {}) returned {}",
           entryValue.managedSlot,
           result
@@ -1654,7 +1663,7 @@ void script_runtime::write_set_entries_json(script_set &set, core::json::writer 
 
 core::result<void> script_runtime::replace_set_entries(u32 handle, const core::json::value &in) {
     if (mStore.find(handle) == nullptr) {
-        return core::make_error(script_error::INSTANCE_NOT_FOUND, "replace_set_entries on an unknown set");
+        return core::make_error(scripting_error::INSTANCE_NOT_FOUND, "replace_set_entries on an unknown set");
     }
     const core::json::value scripts = in["scripts"];
     if (!in.is_object() || !scripts.is_array()) {
@@ -1710,7 +1719,7 @@ core::result<void> script_runtime::replace_set_entries(u32 handle, const core::j
     // set, so the set is resolved again rather than held across the call.
     script_set *set = mStore.find(handle);
     if (set == nullptr) {
-        return core::make_error(script_error::INSTANCE_NOT_FOUND, "the script set was freed by OnDestroy");
+        return core::make_error(scripting_error::INSTANCE_NOT_FOUND, "the script set was freed by OnDestroy");
     }
     set->entries = std::move(parsed);
     if (mMode == script_mode::PLAY) {

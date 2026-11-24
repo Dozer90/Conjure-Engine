@@ -365,13 +365,13 @@ core::json::document audio_clip_importer::default_settings() const {
 core::result<assets::import_output> audio_clip_importer::import(assets::import_context &context) const {
     const core::result<clip_import_settings> settings = clip_import_settings::from_json(context.settings());
     if (!settings.has_value()) {
-        return assets::make_asset_error(assets::asset_error_code::IMPORT_FAILED, settings.get_error().to_string());
+        return core::make_error(assets::assets_error::IMPORT_FAILED, settings.get_error().to_string());
     }
 
     core::result<std::vector<byte>> blob = cook_clip(context.source_bytes(), settings.value());
     if (!blob.has_value()) {
-        return assets::make_asset_error(
-          assets::asset_error_code::IMPORT_FAILED,
+        return core::make_error(
+          assets::assets_error::IMPORT_FAILED,
           std::format("{}: {}", context.source_path(), blob.get_error().to_string())
         );
     }

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <string>
@@ -28,6 +29,11 @@
 // "inf", -infinity the string "-inf" and NaN null. The float drawers read all four and write back what they read
 // for everything the user did not change, so an infinite or NaN value is shown as inf, -inf or nan and survives
 // an edit of a neighbouring component. They never add one: a non-finite value the user typed is not written.
+//
+// A float field's unit attribute (core::reflect::field_unit) changes only what is shown: a RADIANS field is shown
+// and typed in degrees, and its min, max and step, authored in radians, are converted with it; a DEGREES field is
+// shown as stored. Both carry a "deg" suffix. What is written back is in the stored unit, and only when the user
+// changed the value, so a field that is merely shown keeps its exact value.
 
 namespace conjure::editor::ui {
 
@@ -42,11 +48,46 @@ namespace conjure::editor::ui {
             return context.readOnly ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None;
         }
 
-        [[nodiscard]] f32 drag_speed(const property_draw_context &context) noexcept {
-            if (context.field != nullptr && context.field->attributes.step > 0.0) {
-                return static_cast<f32>(context.field->attributes.step);
+        /// <summary>
+        /// How a float field's unit is shown: the factor from the stored value to the shown one and the ImGui
+        /// formats that carry the unit. Only F32 and F64 fields (and their array elements) take a unit, as
+        /// validate_layout requires; any other field, a hand-built one included, is shown as a plain number.
+        /// </summary>
+        struct unit_display {
+            f64 scale = 1.0;
+            const char *singleFormat = "%.3f";
+            const char *doubleFormat = "%.6f";
+            bool isAngle = false;
+        };
+
+        // Degrees per pixel of a drag over an angle without a step: the rate of the rotation widget.
+        constexpr f32 ANGLE_DRAG_SPEED = 0.5f;
+
+        [[nodiscard]] unit_display unit_display_of(const property_draw_context &context) noexcept {
+            if (context.field == nullptr || !core::reflect::is_float_kind(context.field->value_kind())) {
+                return unit_display{};
             }
-            return 0.05f;
+            switch (context.field->attributes.unit) {
+                case core::reflect::field_unit::RADIANS:
+                    return unit_display{180.0 / std::numbers::pi_v<f64>, "%.3f deg", "%.6f deg", true};
+                case core::reflect::field_unit::DEGREES:
+                    return unit_display{1.0, "%.3f deg", "%.6f deg", true};
+                case core::reflect::field_unit::NONE:
+                    break;
+            }
+            return unit_display{};
+        }
+
+        /// <summary>
+        /// Value per pixel of a drag, in the shown unit: the field's step converted from the stored unit, or a
+        /// default (half a degree for an angle).
+        /// </summary>
+        [[nodiscard]] f32 drag_speed(const property_draw_context &context) noexcept {
+            const unit_display display = unit_display_of(context);
+            if (context.field != nullptr && context.field->attributes.step > 0.0) {
+                return static_cast<f32>(context.field->attributes.step * display.scale);
+            }
+            return display.isAngle ? ANGLE_DRAG_SPEED : 0.05f;
         }
 
         [[nodiscard]] std::optional<f64> minimum_of(const property_draw_context &context) noexcept {
@@ -228,46 +269,65 @@ namespace conjure::editor::ui {
         }
 
         bool draw_number(const property_draw_context &context, core::json::document &value, bool singlePrecision) {
-            // Each bound applies on its own; a missing or inverted one is open.
+            // Each bound applies on its own; a missing or inverted one is open. The bounds and the value are in the
+            // stored unit; the widget works on them in the shown unit (degrees for a RADIANS field).
             f64 lower = minimum_of(context).value_or(-std::numeric_limits<f64>::infinity());
             f64 upper = maximum_of(context).value_or(std::numeric_limits<f64>::infinity());
             if (lower > upper) {
                 lower = -std::numeric_limits<f64>::infinity();
                 upper = std::numeric_limits<f64>::infinity();
             }
-            f64 current = read_float(value.root(), 0.0);
+            const unit_display display = unit_display_of(context);
+            const f64 shownLower = lower * display.scale;
+            const f64 shownUpper = upper * display.scale;
+            f64 shown = read_float(value.root(), 0.0) * display.scale;
             // A slider needs both bounds within ImGui's float slider limits (half the float range) and a finite
             // value to place its grab at; otherwise the clamped drag takes the saturated bounds. The drag leaves
             // an infinity or a NaN alone until a number is typed over it, and shows it as inf, -inf or nan.
             const f64 sliderLimit = static_cast<f64>(std::numeric_limits<f32>::max()) / 2.0;
-            const bool sliderFits = std::isfinite(current) && std::isfinite(lower) && std::isfinite(upper) &&
-              lower < upper && lower >= -sliderLimit && upper <= sliderLimit;
+            const bool sliderFits = std::isfinite(shown) && std::isfinite(shownLower) && std::isfinite(shownUpper) &&
+              shownLower < shownUpper && shownLower >= -sliderLimit && shownUpper <= sliderLimit;
             ImGui::BeginDisabled(context.readOnly);
             bool changed = false;
             if (singlePrecision) {
-                f32 single = static_cast<f32>(current);
+                f32 single = static_cast<f32>(shown);
                 if (sliderFits) {
-                    changed = ImGui::SliderFloat(label_of(context), &single, float_bound(lower), float_bound(upper));
+                    changed = ImGui::SliderFloat(
+                      label_of(context),
+                      &single,
+                      float_bound(shownLower),
+                      float_bound(shownUpper),
+                      display.singleFormat
+                    );
                 } else {
                     changed = ImGui::DragFloat(
                       label_of(context),
                       &single,
                       drag_speed(context),
-                      float_bound(lower),
-                      float_bound(upper),
-                      "%.3f",
+                      float_bound(shownLower),
+                      float_bound(shownUpper),
+                      display.singleFormat,
                       ImGuiSliderFlags_AlwaysClamp
                     );
                 }
-                current = single;
+                shown = single;
             } else {
-                changed = ImGui::InputDouble(label_of(context), &current, 0.0, 0.0, "%.6f", input_flags(context));
+                changed = ImGui::InputDouble(
+                  label_of(context),
+                  &shown,
+                  0.0,
+                  0.0,
+                  display.doubleFormat,
+                  input_flags(context)
+                );
             }
             ImGui::EndDisabled();
             show_tooltip(context);
-            if (changed && std::isfinite(current)) {
-                current = std::clamp(current, lower, upper);
-                value = core::json::document::from_value(core::json::object({{"v", current}}).root()["v"]);
+            if (changed && std::isfinite(shown)) {
+                // Back in the stored unit, clamped there so that rounding through the shown unit cannot leave the
+                // authored range.
+                const f64 stored = std::clamp(shown / display.scale, lower, upper);
+                value = core::json::document::from_value(core::json::object({{"v", stored}}).root()["v"]);
                 return true;
             }
             return false;

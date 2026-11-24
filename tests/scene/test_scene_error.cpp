@@ -43,4 +43,9 @@ TEST_SUITE("scene/scene_error") {
         const core::error plain = core::make_error(scene_error::SELF_PARENT, "fixed detail");
         CHECK(plain.message() == "fixed detail");
     }
+
+    TEST_CASE("scene_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<scene_error>);
+    }
 }

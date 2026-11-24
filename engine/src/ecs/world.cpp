@@ -223,7 +223,7 @@ void world::unobserve(observer_id id) {
 core::result<void> world::set_owner_thread(std::thread::id thread) {
     if (is_locked()) {
         CONJURE_ASSERT(false, "world::set_owner_thread while the world is locked");
-        return make_error(ecs_error::STRUCTURE_LOCKED, "set_owner_thread while locked");
+        return core::make_error(ecs_error::STRUCTURE_LOCKED, "set_owner_thread while locked");
     }
     mOwnerThread = thread;
     return core::result<void>::success();
@@ -417,15 +417,15 @@ void world::clear() {
 core::result<void> world::check_structural() const {
     if (std::this_thread::get_id() != mOwnerThread) {
         CONJURE_ASSERT(false, "structural change to world '{}' from a thread that does not own it", mName);
-        return make_error(ecs_error::WRONG_THREAD, "structural change off the owner thread");
+        return core::make_error(ecs_error::WRONG_THREAD, "structural change off the owner thread");
     }
     if (is_locked()) {
         CONJURE_ASSERT(false, "structural change to world '{}' while it is locked for iteration", mName);
-        return make_error(ecs_error::STRUCTURE_LOCKED, "structural change while the world is locked");
+        return core::make_error(ecs_error::STRUCTURE_LOCKED, "structural change while the world is locked");
     }
     if (mInObserver) {
         CONJURE_ASSERT(false, "observer of world '{}' called a structural method; use the deferred buffer", mName);
-        return make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside an observer");
+        return core::make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside an observer");
     }
     if (mStructuralDepth > 0) {
         // The only code of a structural call that is not the world's own is a component's constructor or
@@ -436,7 +436,7 @@ core::result<void> world::check_structural() const {
           "structural change to world '{}' from inside a structural call (a component constructor or destructor)",
           mName
         );
-        return make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside a structural call");
+        return core::make_error(ecs_error::STRUCTURE_LOCKED, "structural change from inside a structural call");
     }
     return core::result<void>::success();
 }
@@ -481,7 +481,7 @@ core::result<void> world::ensure_records(u32 highestIndex) {
         return core::result<void>::success();
     }
     if (highestIndex >= MAX_ENTITY_INDEX) {
-        return make_error(ecs_error::ENTITY_LIMIT_REACHED, "entity index space exhausted");
+        return core::make_error(ecs_error::ENTITY_LIMIT_REACHED, "entity index space exhausted");
     }
     const usize oldSize = mRecords.size();
     const usize newSize = static_cast<usize>(highestIndex) + 1;

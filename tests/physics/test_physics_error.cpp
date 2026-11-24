@@ -59,4 +59,9 @@ TEST_SUITE("physics/physics_error") {
         CHECK(failure.message() == "maxJobs: must be at least 64");
         CHECK(failure.to_string() == "physics.INVALID_SETTINGS: maxJobs: must be at least 64");
     }
+
+    TEST_CASE("physics_error - errors are built with core::make_error, no factory of the module's own") {
+        // The error pattern of code sweep F625, which this module already followed: a guard, not a regression.
+        CHECK_FALSE(testing::declares_own_make_error<physics_error>);
+    }
 }

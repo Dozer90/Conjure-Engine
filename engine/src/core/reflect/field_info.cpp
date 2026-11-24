@@ -72,6 +72,18 @@ std::optional<field_kind> conjure::core::reflect::parse_field_kind(std::string_v
     return std::nullopt;
 }
 
+std::string_view conjure::core::reflect::to_string(field_unit unit) noexcept {
+    switch (unit) {
+        case field_unit::NONE:
+            return "none";
+        case field_unit::RADIANS:
+            return "radians";
+        case field_unit::DEGREES:
+            return "degrees";
+    }
+    return "unknown";
+}
+
 /*===========================================================================*/
 /*===========================================================================*/
 // enum_info

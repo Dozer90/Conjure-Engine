@@ -1,15 +1,13 @@
 #include "conjure/assets/assets_error.h"
 
 #include <array>
-#include <string>
 #include <string_view>
-#include <utility>
 
 using namespace conjure;
 using namespace conjure::assets;
 
 namespace {
-    constexpr std::array<std::string_view, static_cast<usize>(asset_error_code::COUNT)> CODE_NAMES = {
+    constexpr std::array<std::string_view, static_cast<usize>(assets_error::COUNT)> CODE_NAMES = {
         "NONE",
         "NOT_FOUND",
         "NO_IMPORTER",
@@ -33,14 +31,10 @@ namespace {
     };
 }
 
-std::string_view conjure::assets::asset_error_code_name(asset_error_code code) noexcept {
+std::string_view conjure::assets::assets_error_name(assets_error code) noexcept {
     const usize index = static_cast<usize>(code);
     if (index >= CODE_NAMES.size()) {
         return {};
     }
     return CODE_NAMES[index];
-}
-
-core::error conjure::assets::make_asset_error(asset_error_code code, std::string message) {
-    return core::error::from(code, std::move(message));
 }

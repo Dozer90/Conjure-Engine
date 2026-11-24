@@ -24,11 +24,11 @@ namespace conjure::editor {
         };
 
         [[nodiscard]] core::error schema_error(std::string_view pointer, std::string_view problem) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, std::format("schema {}: {}", pointer, problem));
+            return core::make_error(protocol_error_code::INVALID_ARGS, std::format("schema {}: {}", pointer, problem));
         }
 
         [[nodiscard]] core::error instance_error(std::string_view path, std::string_view problem) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, std::format("{}: {}", path, problem));
+            return core::make_error(protocol_error_code::INVALID_ARGS, std::format("{}: {}", path, problem));
         }
 
         [[nodiscard]] bool is_type_name(std::string_view name) noexcept {
@@ -329,7 +329,7 @@ namespace conjure::editor {
     core::result<compiled_schema> compiled_schema::compile(std::string_view schemaJson) {
         core::result<core::json::document> parsed = core::json::document::parse(schemaJson);
         if (!parsed.has_value()) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::INVALID_ARGS,
               std::format("schema does not parse: {}", parsed.get_error().message())
             );

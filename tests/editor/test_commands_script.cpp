@@ -2,6 +2,8 @@
 
 #include "editor_test_support.h"
 
+#include "conjure/testing/temp_directory.h"
+
 #include "conjure/core/json/document.h"
 #include "conjure/core/process.h"
 #include "conjure/editor/command_dispatcher.h"
@@ -9,10 +11,12 @@
 #include "conjure/editor/protocol/protocol_message.h"
 #include "conjure/editor/undo_stack.h"
 #include "conjure/engine/application.h"
+#include "conjure/engine/export.h"
 #include "conjure/engine/project.h"
 
 #include <cctype>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -419,28 +423,107 @@ TEST_SUITE("editor/commands_script") {
         CHECK(list.root()["scripts"][2]["className"].as_string() == "Studio.Game.RealName");
     }
 
-    TEST_CASE("script.compile - without dotnet the reply is NOT_AVAILABLE with a clear message") {
+    TEST_CASE("script.compile - without a usable .NET SDK the reply is NOT_AVAILABLE naming the SDK and where to get "
+      "it") {
+        // Owner decision OWN-INSTALL: the message names the version global.json asks for and Microsoft's download
+        // page, for a dotnet that cannot be started, for one that answers every command with an error, as a dotnet
+        // without an SDK does (conjure_process_child answers build and --version with exit code 2), whose build
+        // reports no compiler error, and for one with an older SDK only, whose build fails with NETSDK1045 (a copy
+        // of conjure_process_child that replays that line for build and an older version for --version).
         editor_test::headless_editor editor = {};
         CHECK(editor.fail("script.compile") == protocol_error_code::PATH_NOT_FOUND);
         (void) editor.ok("script.create", core::json::object({{"name", "Compiled"}}));
+        const testing::temp_directory tools("editor_script_compile_old_sdk");
+        std::string found = {};
+        SUBCASE("a dotnet that cannot be started") {
+            found = std::format("'{}' could not be started", editor_test::missing_dotnet_executable());
+        }
+        SUBCASE("a dotnet without an SDK") {
+            editor.context().set_dotnet_executable(CONJURE_EDITOR_TEST_PROCESS_CHILD);
+            found = "--version' exited with 2";
+        }
+        SUBCASE("a dotnet with an older SDK only") {
+            const core::result<std::filesystem::path> fake = testing::replaying_copy(
+              tools,
+              std::filesystem::path(CONJURE_EDITOR_TEST_PROCESS_CHILD),
+              "old_dotnet",
+              "when build echo-exit 1 /sdk/Microsoft.NET.TargetFrameworkInference.targets(166,5): error NETSDK1045: "
+              "The current .NET SDK does not support targeting .NET 10.0. [/project/scripts/Game.csproj]\n"
+              "echo 8.0.100\n"
+            );
+            CONJURE_REQUIRE_OK(fake);
+            const std::u8string fakeText = fake.value().u8string();
+            editor.context().set_dotnet_executable(std::string(fakeText.begin(), fakeText.end()));
+            found = "--version' reports the SDK '8.0.100'";
+        }
         const protocol_response response = editor.send("script.compile");
         REQUIRE_FALSE(response.ok);
+        CAPTURE(response.errorMessage);
         CHECK(response.errorCode == protocol_error_code::NOT_AVAILABLE);
-        CHECK(response.errorMessage.find("dotnet") != std::string::npos);
-        CHECK(response.errorMessage.find("install the .NET 10 SDK") != std::string::npos);
+        CHECK(response.errorMessage.find(found) != std::string::npos);
+        CHECK(response.errorMessage.find(std::string(engine::required_dotnet_sdk_version())) != std::string::npos);
+        CHECK(response.errorMessage.find(engine::dotnet_sdk_download_page()) != std::string::npos);
+        CHECK_FALSE(editor.context().script_compile_pending());
     }
 
-    TEST_CASE("regression - code sweep F084 script.compile builds against the managed SDK next to the executable"
-      * doctest::timeout(300)) {
-        std::error_code probe = {};
-        const bool sdkBuilt = std::filesystem::is_regular_file(
-          editor_test::managed_directory() / "Conjure.Managed.dll",
-          probe
+    TEST_CASE("regression - code sweep OWN-INSTALL script.compile builds and asks dotnet for its SDK in the scripts "
+      "root") {
+        // dotnet picks its SDK through the global.json in or above the directory it runs in. The build used to run in
+        // the editor's current directory and the probe in the scripts root, so the probe could find an SDK the failed
+        // build could not use and the reply was a COMPILE_FAILED without diagnostics. The fake dotnet fails the build
+        // without a diagnostic and answers --version with its current directory, which the message quotes.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Compiled"}}));
+        const testing::temp_directory tools("editor_script_compile_probe_directory");
+        const core::result<std::filesystem::path> fake = testing::replaying_copy(
+          tools,
+          std::filesystem::path(CONJURE_EDITOR_TEST_PROCESS_CHILD),
+          "cwd_dotnet",
+          "when build exit 1\ncwd\n"
         );
-        if (!editor_test::dotnet_available() || !sdkBuilt) {
-            MESSAGE("dotnet or Conjure.Managed.dll is missing: the real build runs only where both exist");
-            return;
-        }
+        CONJURE_REQUIRE_OK(fake);
+        const std::u8string fakeText = fake.value().u8string();
+        editor.context().set_dotnet_executable(std::string(fakeText.begin(), fakeText.end()));
+
+        const protocol_response response = editor.send("script.compile");
+        REQUIRE_FALSE(response.ok);
+        CAPTURE(response.errorMessage);
+        CHECK(response.errorCode == protocol_error_code::NOT_AVAILABLE);
+        const std::string_view opening = "reports the SDK '";
+        const usize start = response.errorMessage.find(opening);
+        REQUIRE(start != std::string::npos);
+        const usize first = start + opening.size();
+        const usize end = response.errorMessage.find('\'', first);
+        REQUIRE(end != std::string::npos);
+        const std::filesystem::path probed(response.errorMessage.substr(first, end - first));
+        std::error_code error = {};
+        CHECK(std::filesystem::equivalent(probed, editor.project_directory() / "scripts", error));
+        CHECK_FALSE(error);
+        CHECK_FALSE(editor.context().script_compile_pending());
+    }
+
+    TEST_CASE("script.compile - an editor configured with no managed directory uses the SDK next to the executable") {
+        // Code sweep F084: the editor is configured with no managed directory, as a shipped one is, so the SDK
+        // script.compile builds against is the one next to the executable, which for this test executable is the
+        // build's bin/managed. The [dotnet][slow] case below runs the real build against it.
+        editor_test::headless_editor editor = {};
+        const engine::application *app = editor.context().engine_context().app;
+        REQUIRE(app != nullptr);
+        CHECK(app->desc().config.scripting.managedDirectory.empty());
+        CHECK(app->managed_directory().is_absolute());
+        std::error_code error = {};
+        const std::filesystem::path used = std::filesystem::weakly_canonical(app->managed_directory(), error);
+        REQUIRE_FALSE(error);
+        const std::filesystem::path built = std::filesystem::weakly_canonical(editor_test::managed_directory(), error);
+        REQUIRE_FALSE(error);
+        CHECK(used == built);
+    }
+
+    TEST_CASE("regression - code sweep F084 script.compile builds against the managed SDK next to the executable "
+      "[dotnet][slow]" * doctest::timeout(600)) {
+        CONJURE_TEST_REQUIRE(testing::precondition::DOTNET_RUNTIME);
+        REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
+        std::error_code probe = {};
         editor_test::headless_editor editor = {};
         editor.context().set_dotnet_executable("dotnet");
         // The editor is configured with no managed directory, as a shipped one is: the SDK is the one next to
@@ -542,6 +625,22 @@ TEST_SUITE("editor/commands_script") {
         const core::json::document second = editor.ok("script.reload", args);
         CHECK(first.root()["assembly"].as_string() == assembly.generic_string());
         CHECK(second.root()["reloadCount"].as_u64() == first.root()["reloadCount"].as_u64() + 1);
+    }
+
+    TEST_CASE("script.compile - an engine that stops while a compile runs waits for it and cancels the reply") {
+        // The build, and the SDK probe after a failed one, run on the engine's job system: the task waits for them
+        // while that still runs, and the reply is CANCELLED instead of answered by an engine that is going away.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("script.create", core::json::object({{"name", "Compiled"}}));
+        editor_test::parked_client client(editor);
+        REQUIRE_FALSE(client.dispatch("script.compile").has_value());
+        REQUIRE(editor.context().script_compile_pending());
+        editor.context().release_engine_work();
+        const protocol_response reply = client.wait();
+        CHECK(reply.errorCode == protocol_error_code::CANCELLED);
+        CHECK_FALSE(editor.context().script_compile_pending());
+        // The engine of a headless_editor did not stop: the next compile runs (and fails for the missing dotnet).
+        CHECK(editor.fail("script.compile") == protocol_error_code::NOT_AVAILABLE);
     }
 
     TEST_CASE("regression - F511 script.compile refuses an unsafe configuration and answers BUSY while one runs") {

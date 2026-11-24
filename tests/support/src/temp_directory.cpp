@@ -164,3 +164,42 @@ std::filesystem::path conjure::testing::long_directory(const temp_directory &dir
     REQUIRE_MESSAGE(!failure, "temp_directory: cannot create " << deep.string() << ": " << failure.message());
     return deep;
 }
+
+conjure::core::result<std::filesystem::path> conjure::testing::replaying_copy(
+  const temp_directory &directory,
+  const std::filesystem::path &program,
+  std::string_view name,
+  std::string_view replay
+) {
+    std::filesystem::path copy = directory.file(name);
+    copy += program.extension();
+    std::error_code failure = {};
+    std::filesystem::copy_file(program, copy, std::filesystem::copy_options::overwrite_existing, failure);
+    if (failure) {
+        return conjure::core::make_error(
+          conjure::core::error_code::IO_FAILURE,
+          "cannot copy {} to {}: {}",
+          program.string(),
+          copy.string(),
+          failure.message()
+        );
+    }
+    // copy_file keeps the permissions with libstdc++ and libc++ alike; set them anyway, so the copy runs wherever
+    // the program does.
+    const std::filesystem::perms permissions = std::filesystem::status(program, failure).permissions();
+    if (!failure) {
+        std::filesystem::permissions(copy, permissions, std::filesystem::perm_options::replace, failure);
+    }
+    if (failure) {
+        return conjure::core::make_error(
+          conjure::core::error_code::IO_FAILURE,
+          "cannot give {} the permissions of {}: {}",
+          copy.string(),
+          program.string(),
+          failure.message()
+        );
+    }
+    const std::u8string fileName = copy.filename().u8string();
+    CONJURE_TRY(directory.write_text(std::string(fileName.begin(), fileName.end()) + ".replay", replay));
+    return copy;
+}

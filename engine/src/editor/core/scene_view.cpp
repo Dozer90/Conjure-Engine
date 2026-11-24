@@ -143,7 +143,7 @@ namespace conjure::editor {
                 core::result<core::image> capture(const screenshot_request &request) override {
                     (void) request;
                     if (!mView.is_valid()) {
-                        return make_editor_error(protocol_error_code::INTERNAL, "no render target to read back");
+                        return core::make_error(protocol_error_code::INTERNAL, "no render target to read back");
                     }
                     core::result<core::image> image = mRenderer->read_back(mView.target());
                     mView.release();
@@ -194,7 +194,7 @@ namespace conjure::editor {
             return make_editor_camera_view(context.camera(), target, !twoD);
         }
         if (!context.has_scene()) {
-            return make_editor_error(protocol_error_code::SCENE_NOT_OPEN, "no scene is open");
+            return core::make_error(protocol_error_code::SCENE_NOT_OPEN, "no scene is open");
         }
         ecs::world &world = context.world();
         const ecs::component_id cameraId = context.components().find(
@@ -203,7 +203,7 @@ namespace conjure::editor {
         if (camera == "game") {
             const std::optional<renderer::render_view> view = first_scene_camera_view(world, cameraId, target);
             if (!view.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::COMPONENT_NOT_FOUND,
                   "camera \"game\": the scene has no enabled camera"
                 );
@@ -218,7 +218,7 @@ namespace conjure::editor {
         const renderer::camera_component *component = camera_of(world, entity, cameraId);
         const scene::render_world_transform *transform = world.get<scene::render_world_transform>(entity);
         if (component == nullptr || transform == nullptr) {
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::COMPONENT_NOT_FOUND,
               std::format("camera '{}': the entity has no camera component", camera)
             );

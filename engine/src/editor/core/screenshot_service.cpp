@@ -54,7 +54,7 @@ namespace conjure::editor {
 #else
             (void) image;
             (void) jobs;
-            return make_editor_error(
+            return core::make_error(
               protocol_error_code::NOT_AVAILABLE,
               "JPEG XL screenshots need the renderer module, which this build leaves out"
             );
@@ -205,20 +205,20 @@ namespace conjure::editor {
         screenshot_request request = {};
         const core::json::value path = args["path"];
         if (!path.is_string() || path.as_string().empty()) {
-            return make_editor_error(protocol_error_code::INVALID_ARGS, "args.path: a file path is required");
+            return core::make_error(protocol_error_code::INVALID_ARGS, "args.path: a file path is required");
         }
         request.path = std::filesystem::path(std::string(path.as_string()));
         if (args.contains("width")) {
             const i64 width = args["width"].as_i64(-1);
             if (width <= 0 || width > MAX_SCREENSHOT_DIMENSION) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "args.width: expected 1..16384");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "args.width: expected 1..16384");
             }
             request.width = static_cast<u32>(width);
         }
         if (args.contains("height")) {
             const i64 height = args["height"].as_i64(-1);
             if (height <= 0 || height > MAX_SCREENSHOT_DIMENSION) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "args.height: expected 1..16384");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "args.height: expected 1..16384");
             }
             request.height = static_cast<u32>(height);
         }
@@ -227,7 +227,7 @@ namespace conjure::editor {
             // the scene and hands the service its guid.
             const std::string_view camera = args["camera"].as_string();
             if (camera.empty()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   "args.camera: expected \"editor\", \"game\" or an entity (guid, path or name)"
                 );
@@ -242,13 +242,13 @@ namespace conjure::editor {
             const std::string_view text = args["format"].as_string();
             const std::optional<screenshot_format> format = parse_screenshot_format(text);
             if (!format.has_value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format("args.format: expected \"png\" or \"jxl\" (got \"{}\")", text)
                 );
             }
             if (named.has_value() && named.value() != format.value()) {
-                return make_editor_error(
+                return core::make_error(
                   protocol_error_code::INVALID_ARGS,
                   std::format(
                     "args.format: \"{}\" contradicts the path's extension \"{}\"",
@@ -262,7 +262,7 @@ namespace conjure::editor {
         if (args.contains("waitFrames")) {
             const i64 waitFrames = args["waitFrames"].as_i64(-1);
             if (waitFrames < 0 || waitFrames > 100000) {
-                return make_editor_error(protocol_error_code::INVALID_ARGS, "args.waitFrames: expected 0..100000");
+                return core::make_error(protocol_error_code::INVALID_ARGS, "args.waitFrames: expected 0..100000");
             }
             request.waitFrames = static_cast<u32>(waitFrames);
         }
@@ -329,7 +329,7 @@ namespace conjure::editor {
             pending &entry = mPending.front();
             if (!entry.begun) {
                 const core::result<void> begun = mBackend == nullptr
-                  ? core::result<void>(make_editor_error(protocol_error_code::NOT_AVAILABLE, "no screenshot backend"))
+                  ? core::result<void>(core::make_error(protocol_error_code::NOT_AVAILABLE, "no screenshot backend"))
                   : mBackend->begin(entry.request);
                 if (!begun.has_value()) {
                     // Out of the queue before the reply: a completion may dispatch against this service.
@@ -360,7 +360,7 @@ namespace conjure::editor {
             const pending due = std::move(entry);
             mPending.erase(mPending.begin());
             core::result<core::image> captured = mBackend == nullptr
-              ? core::result<core::image>(make_editor_error(
+              ? core::result<core::image>(core::make_error(
                 protocol_error_code::NOT_AVAILABLE,
                 "no screenshot backend"
               ))

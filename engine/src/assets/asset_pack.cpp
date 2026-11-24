@@ -23,7 +23,7 @@ namespace {
     constexpr std::string_view TEMPORARY_SUFFIX = ".tmp";
 
     core::error corrupt(std::string message) {
-        return make_asset_error(asset_error_code::PACK_CORRUPT, std::move(message));
+        return core::make_error(assets_error::PACK_CORRUPT, std::move(message));
     }
 
     /// <summary>
@@ -36,8 +36,8 @@ namespace {
     }
 
     core::error io_error(std::string_view what, std::string_view path, const core::error &cause) {
-        return make_asset_error(
-          asset_error_code::IO_ERROR,
+        return core::make_error(
+          assets_error::IO_ERROR,
           std::format("cannot {} '{}': {}", what, path, cause.message())
         );
     }
@@ -111,8 +111,8 @@ pack_writer::~pack_writer() {}
 core::result<void> pack_writer::add(cooked_blob blob, std::string_view assetPath) {
     const u64 actualHash = hash_bytes(blob.payload);
     if (actualHash != blob.header.payloadHash || blob.header.payloadSize != blob.payload.size()) {
-        return make_asset_error(
-          asset_error_code::CACHE_CORRUPT,
+        return core::make_error(
+          assets_error::CACHE_CORRUPT,
           std::format("blob {} payload does not match its header", blob.header.id)
         );
     }
@@ -315,7 +315,7 @@ core::result<void> pack_reader::open(core::vfs::file_system &fileSystem, std::st
     core::result<std::unique_ptr<core::vfs::file>> opened = fileSystem.open_read(packPath);
     if (!opened.has_value()) {
         if (opened.get_error().generic_code() == core::error_code::NOT_FOUND) {
-            return make_asset_error(asset_error_code::NOT_FOUND, std::format("no pack at '{}'", packPath));
+            return core::make_error(assets_error::NOT_FOUND, std::format("no pack at '{}'", packPath));
         }
         return io_error("open pack", packPath, opened.get_error());
     }
@@ -363,7 +363,7 @@ const pack_toc_entry *pack_reader::find(const asset_id &id) const noexcept {
 
 core::result<cooked_blob> pack_reader::read(const pack_toc_entry &entry) const {
     if (!mOpen) {
-        return make_asset_error(asset_error_code::PACK_CORRUPT, "pack is not open");
+        return core::make_error(assets_error::PACK_CORRUPT, "pack is not open");
     }
     if (!range_fits(entry.blobOffset, entry.blobSize, mFileSize)) {
         return corrupt(std::format("entry {} points past the end of the pack", entry.id));

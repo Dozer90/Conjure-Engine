@@ -223,7 +223,11 @@ public struct CharacterControllerData : IComponent
 {
     public float Radius;
     public float Height;
-    public float MaxSlopeAngleDegrees;
+
+    /// <summary>
+    /// The steepest walkable ground, in radians (the editor shows it in degrees).
+    /// </summary>
+    public float MaxSlopeAngleRadians;
     public float StepHeight;
     public float Mass;
     public float MaxStrength;
@@ -244,7 +248,7 @@ public struct CharacterControllerData : IComponent
     {
         Radius = 0.3f,
         Height = 1.8f,
-        MaxSlopeAngleDegrees = 45.0f,
+        MaxSlopeAngleRadians = MathF.PI / 4.0f,
         StepHeight = 0.4f,
         Mass = 70.0f,
         MaxStrength = 100.0f,

@@ -120,6 +120,14 @@ namespace conjure::editor {
             void headless_tick();
 
             /// <summary>
+            /// The engine is shutting down and has detached the editor's frame layer (shutdown(), the restart of
+            /// project.open, an engine that failed to initialise): the context's frame tasks release what they
+            /// hold of it (editor_context::release_engine_work) while its asset manager and database still exist.
+            /// Called by the frame layer; nothing happens before a context exists.
+            /// </summary>
+            void engine_stopping();
+
+            /// <summary>
             /// Stops the server and shuts the engine down (idempotent).
             /// </summary>
             void shutdown();

@@ -36,7 +36,7 @@ core::result<void> platform_subsystem::startup(engine_context &context) {
     const platform::window_desc desc = make_window_desc(*context.config);
     core::result<std::unique_ptr<platform::window>> created = platform::create_window(desc);
     if (!created.has_value()) {
-        return make_error(
+        return core::make_error(
           engine_error::WINDOW_CREATE_FAILED,
           std::format("window creation failed: {}", created.get_error().to_string())
         );
