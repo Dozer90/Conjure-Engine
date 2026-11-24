@@ -189,7 +189,7 @@ namespace {
 
 TEST_SUITE("renderer/gpu") {
 
-    TEST_CASE("gpu - a lit sphere shades brightest at the centre, dark at the rim and black outside") {
+    TEST_CASE("gpu - a lit sphere shades brightest at the centre, dark at the rim and black outside [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -265,7 +265,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("gpu - a floor pixel under a cube is darker than one in the open under a shadowing sun") {
+    TEST_CASE("gpu - a floor pixel under a cube is darker than one in the open under a shadowing sun [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -333,7 +333,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - a tilted receiver facing the sun is not self-shadowed under the reverse-Z bias") {
+    TEST_CASE("regression - a tilted receiver facing the sun is not self-shadowed under the reverse-Z bias [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -389,7 +389,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - PCSS on the cascades filters differently from PCF and keeps the shadow") {
+    TEST_CASE("regression - PCSS on the cascades filters differently from PCF and keeps the shadow [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -451,7 +451,106 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("gpu - the post-processed frame of an emissive quad is non-black and the bloom chain runs") {
+    TEST_CASE("gpu - a view that hides the caster's layer gets its spot shadow from the shared atlas [gpu]") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // The frame's one local-light shadow atlas culls its casters with the union of the layer masks of every
+        // view that draws with shadows (F377 option A). View A renders only the floor's layer, view B the
+        // caster's as well; the cube above the floor shadows the floor's origin in both, in A through B's mask.
+        // Neither camera sees the cube at the origin: the sight line from (0, 3, 6) passes under it.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id targetA = make_target(*fixture, TARGET_SIZE);
+        const render_target_id targetB = make_target(*fixture, TARGET_SIZE);
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(1), mesh_asset::unit_cube());
+        const gpu_material_id material = fixture->upload_material(test_asset_id(2), white_rough());
+
+        constexpr u32 FLOOR_LAYER = 1u << 0;
+        constexpr u32 CASTER_LAYER = 1u << 1;
+        constexpr usize CASTER_INDEX = 1;
+        render_scene scene = {};
+        // A 10 x 0.1 x 10 m floor slab with its top at y = 0, and a unit cube centred 1.5 m above the origin.
+        mesh_instance floor = box_between(
+          cube,
+          material,
+          math::vec3(-5.0f, -0.1f, -5.0f),
+          math::vec3(5.0f, 0.0f, 5.0f)
+        );
+        floor.layerMask = FLOOR_LAYER | CASTER_LAYER;
+        scene.meshes.push_back(floor);
+        mesh_instance caster = box_between(
+          cube,
+          material,
+          math::vec3(-0.5f, 1.0f, -0.5f),
+          math::vec3(0.5f, 2.0f, 0.5f)
+        );
+        caster.layerMask = CASTER_LAYER;
+        scene.meshes.push_back(caster);
+        light spot = {};
+        spot.type = light_type::SPOT;
+        spot.position = math::vec3(0.0f, 5.0f, 0.0f);
+        spot.direction = math::vec3(0.0f, -1.0f, 0.0f);
+        spot.range = 10.0f;
+        spot.outerConeRadians = 0.6f;
+        spot.innerConeRadians = 0.5f;
+        // The light's own term at the floor's origin 5 m below: albedo / pi * I / d^2 * (1 - (d / range)^4)^2 = 0.5
+        // (Lambert before Fresnel; the BRDF's (1 - F) and the rough specular lobe bring it to about 0.49).
+        const f32 lightHeight = spot.position.y;   // the floor's top is at y = 0
+        const f32 rangeRatio = lightHeight / spot.range;
+        const f32 rangeFalloff = 1.0f - rangeRatio * rangeRatio * rangeRatio * rangeRatio;
+        const f32 rangeWindow = rangeFalloff * rangeFalloff;
+        spot.intensity = 0.5f * math::PI * lightHeight * lightHeight / rangeWindow;
+        spot.castsShadows = true;
+        spot.filter = shadow_filter::HARD;
+        spot.shadowResolution = 512;
+        scene.lights.push_back(spot);
+        // No sun and no environment (the grey fallback ambient of the other cases stays), no SSAO.
+        scene.ssao.enabled = false;
+        render_view viewA = look_at_view(math::vec3(0.0f, 3.0f, 6.0f), math::vec3(0.0f), targetA, 0.8f);
+        viewA.flags = view_flags::NO_POST_PROCESS;
+        viewA.layerMask = FLOOR_LAYER;
+        render_view viewB = viewA;
+        viewB.target = targetB;
+        viewB.layerMask = FLOOR_LAYER | CASTER_LAYER;
+        scene.views = {viewA, viewB};
+
+        const math::mat4 clipFromWorld = clip_from_world_of(viewA);
+        // Renders twice (the first frame flushes the uploads) and reads the floor's origin in A and in B.
+        const auto originLuminances = [&]() -> std::array<f32, 2> {
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            std::array<f32, 2> luminances = {};
+            for (usize index = 0; index < luminances.size(); ++index) {
+                CAPTURE(index);
+                core::result<core::image> readBack = fixture->read_back(scene.views[index].target);
+                CONJURE_REQUIRE_OK(readBack);
+                luminances[index] = linear_luminance(pixel_at(readBack.value(), clipFromWorld, math::vec3(0.0f)));
+            }
+            return luminances;
+        };
+
+        // Expected (measured on WARP: 0.745 and 0.254): the reference is the spot's ~0.49 plus the 0.25 fallback
+        // ambient (FALLBACK_ENVIRONMENT_RADIANCE), ~0.75, so the ambient alone lifts it over the 0.5 precondition;
+        // in the umbra only the ambient remains, ~0.25, a ratio of ~1/3 under the 0.6 bound of the sun cases.
+        // The reference: the same frame with the cube casting no shadow.
+        scene.meshes[CASTER_INDEX].castsShadows = false;
+        const std::array<f32, 2> reference = originLuminances();
+        CHECK(reference[0] > 0.5f);
+        CHECK(reference[1] > 0.5f);
+
+        scene.meshes[CASTER_INDEX].castsShadows = true;
+        const std::array<f32, 2> shadowed = originLuminances();
+        CHECK(fixture->stats().viewsRendered == 2);
+        CHECK(fixture->stats().shadowTilesAllocated == 1);
+        CHECK(fixture->stats().count("shadow_atlas") == 1);   // one atlas render serves both views
+        CHECK(shadowed[0] < 0.6f * reference[0]);              // A: the cube's layer reaches the atlas through B
+        CHECK(shadowed[1] < 0.6f * reference[1]);
+        CHECK(shadowed[0] > 0.05f);                            // the fallback ambient keeps the umbra from being black
+        CHECK(shadowed[1] > 0.05f);
+        CHECK(shadowed[0] == doctest::Approx(shadowed[1]).epsilon(0.05));   // both views sample the same atlas
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("gpu - the post-processed frame of an emissive quad is non-black and the bloom chain runs [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -511,7 +610,8 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - under the uniform fallback sky a smooth grey metal sphere reflects more than a rough one") {
+    TEST_CASE("regression - under the uniform fallback sky a smooth grey metal sphere reflects more than a rough "
+              "one [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -552,7 +652,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - GTAO darkens the floor beside a wall equally far along x and y on a 2:1 target") {
+    TEST_CASE("regression - GTAO darkens the floor beside a wall equally far along x and y on a 2:1 target [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         // The horizon search measured its step in units of the target's width along both axes, so on a 2:1
         // target it searched half as far vertically. The thickness heuristic, at most 1, ends the occlusion of
@@ -625,7 +725,8 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - a normal-mapped quad under non-uniform scale bends its normal along the world tangent") {
+    TEST_CASE("regression - a normal-mapped quad under non-uniform scale bends its normal along the world "
+              "tangent [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -970,7 +1071,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("gpu - a camera's manual EV100 override one stop lower renders its view twice as bright") {
+    TEST_CASE("gpu - a camera's manual EV100 override one stop lower renders its view twice as bright [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -1023,7 +1124,8 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("gpu - the ambient-occlusion debug view is dark beside a pillar, white on open floor and empty pixels") {
+    TEST_CASE("gpu - the ambient-occlusion debug view is dark beside a pillar, white on open floor and empty "
+              "pixels [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
@@ -1085,7 +1187,7 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("gpu - a camera's tonemap NONE override clips the emissive quad where ACES compresses it") {
+    TEST_CASE("gpu - a camera's tonemap NONE override clips the emissive quad where ACES compresses it [gpu]") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
