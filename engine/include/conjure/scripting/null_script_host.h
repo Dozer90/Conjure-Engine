@@ -198,7 +198,9 @@ namespace conjure::scripting {
     class CONJURE_API null_script_host final : public script_host {
         public:
             /// <summary>
-            /// Runs inside create_instances for every request once its slot is assigned: what OnCreate would do.
+            /// Runs inside create_instances once a request's slot is assigned. As the create hook, for a request
+            /// without CREATE_FLAG_ALREADY_CREATED: what OnCreate would do. As the reload hook, for a request with
+            /// it: what OnReload would do.
             /// </summary>
             using create_hook = std::function<void(const conjure_create_request &request, i32 slot)>;
 
@@ -241,6 +243,7 @@ namespace conjure::scripting {
             i32 mUnloadResult = 0;
             bool mAssemblyLoaded = false;
             create_hook mCreateHook = {};
+            create_hook mReloadHook = {};
             destroy_hook mDestroyHook = {};
             phase_hook mPhaseHook = {};
             collision_hook mCollisionHook = {};
@@ -308,6 +311,7 @@ namespace conjure::scripting {
             /// scripts, destroy entities, open query scopes through the native table.
             /// </summary>
             void set_create_hook(create_hook hook);
+            void set_reload_hook(create_hook hook);
             void set_destroy_hook(destroy_hook hook);
             void set_phase_hook(phase_hook hook);
             void set_collision_hook(collision_hook hook);

@@ -53,9 +53,9 @@ TEST_SUITE("bindings/call_counters") {
         CHECK(NATIVE_FUNCTION_COUNT == scripting::NATIVE_API_ENTRY_COUNT);
         CHECK(static_cast<u32>(native_function_id::log_write) == 0);
         CHECK(static_cast<u32>(native_function_id::transform_get_local) == CONJURE_NATIVE_API_CORE_ENTRY_COUNT);
-        CHECK(static_cast<u32>(native_function_id::modules_name) == NATIVE_FUNCTION_COUNT - 1);
+        CHECK(static_cast<u32>(native_function_id::entity_get_tag_text) == NATIVE_FUNCTION_COUNT - 1);
         CHECK(native_entry_descriptors().size() == NATIVE_FUNCTION_COUNT);
-        CHECK(BINDINGS_ENTRY_COUNT == 106);
+        CHECK(BINDINGS_ENTRY_COUNT == 107);
     }
 
     TEST_CASE("call_counters - descriptor order is the .inl order and matches scripting's table") {

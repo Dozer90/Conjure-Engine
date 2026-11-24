@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -12,7 +13,11 @@ namespace Conjure;
 /// are two native calls each (a get and a set); batch edits through Local. Forward, Right and Up are the
 /// local axes in parent space, WorldForward, WorldRight and WorldUp the same axes in world space. Every pose
 /// getter and setter, the axes and SetParent throw EntityNotAliveException on a dead entity (3.4); Parent,
-/// ChildCount and GetChildren answer Null / 0 (B11).
+/// ChildCount and GetChildren answer Null / 0 (B11). On an entity Entity.Create or Prefab.Instantiate reserved in
+/// the current ComponentQuery scope the writes (the pose setters, SetParent, Translate, Rotate and LookAt; also
+/// SetParent to such a parent) never throw: they are kept and made in call order once the scope closed and the
+/// entity exists, after every component request of the scope, so they see the pose those requests gave it. The
+/// getters and axes throw EntityNotAliveException until then.
 /// </summary>
 public readonly struct Transform
 {
@@ -38,6 +43,10 @@ public readonly struct Transform
         }
         set
         {
+            if (Defer((this, value), static state => state.Item1.Local = state.Item2))
+            {
+                return;
+            }
             NativeApi* api = NativeBridge.RequireApi();
             NativeBridge.Require(api->TransformSetLocal, NativeFunction.TransformSetLocal);
             NativeCheck.ThrowIfFailed(api->TransformSetLocal(Entity.Id, &value), NativeFunction.TransformSetLocal);
@@ -49,6 +58,10 @@ public readonly struct Transform
         get => Local.Position;
         set
         {
+            if (Defer((this, value), static state => state.Item1.Position = state.Item2))
+            {
+                return;
+            }
             TransformData local = Local;
             local.Position = value;
             Local = local;
@@ -60,6 +73,10 @@ public readonly struct Transform
         get => Local.Rotation;
         set
         {
+            if (Defer((this, value), static state => state.Item1.Rotation = state.Item2))
+            {
+                return;
+            }
             TransformData local = Local;
             local.Rotation = value;
             Local = local;
@@ -71,6 +88,10 @@ public readonly struct Transform
         get => Local.Scale;
         set
         {
+            if (Defer((this, value), static state => state.Item1.Scale = state.Item2))
+            {
+                return;
+            }
             TransformData local = Local;
             local.Scale = value;
             Local = local;
@@ -93,6 +114,10 @@ public readonly struct Transform
         }
         set
         {
+            if (Defer((this, value), static state => state.Item1.World = state.Item2))
+            {
+                return;
+            }
             NativeApi* api = NativeBridge.RequireApi();
             NativeBridge.Require(api->TransformSetWorld, NativeFunction.TransformSetWorld);
             NativeCheck.ThrowIfFailed(api->TransformSetWorld(Entity.Id, &value), NativeFunction.TransformSetWorld);
@@ -186,6 +211,14 @@ public readonly struct Transform
     /// </summary>
     public unsafe void SetParent(Entity parent, bool keepWorld = true, int index = -1)
     {
+        if (ReservedWrites.IsReserved(Entity) || ReservedWrites.IsReserved(parent))
+        {
+            ReservedWrites.Keep(
+                Entity,
+                (this, parent, keepWorld, index),
+                static state => state.Item1.SetParent(state.Item2, state.Item3, state.Item4));
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->TransformSetParentEx, NativeFunction.TransformSetParentEx);
         NativeCheck.ThrowIfFailed(
@@ -227,6 +260,10 @@ public readonly struct Transform
     /// </summary>
     public void Translate(Vector3 delta)
     {
+        if (Defer((this, delta), static state => state.Item1.Translate(state.Item2)))
+        {
+            return;
+        }
         TransformData local = Local;
         local.Position += delta;
         Local = local;
@@ -237,6 +274,10 @@ public readonly struct Transform
     /// </summary>
     public void Rotate(Quaternion rotation)
     {
+        if (Defer((this, rotation), static state => state.Item1.Rotate(state.Item2)))
+        {
+            return;
+        }
         TransformData local = Local;
         local.Rotation = Quaternion.Normalize(rotation * local.Rotation);
         Local = local;
@@ -249,6 +290,10 @@ public readonly struct Transform
     /// </summary>
     public void LookAt(Vector3 target, Vector3? up = null)
     {
+        if (Defer((this, target, up), static state => state.Item1.LookAt(state.Item2, state.Item3)))
+        {
+            return;
+        }
         TransformData world = World;
         Vector3 direction = target - world.Position;
         if (direction.LengthSquared() <= 1e-12f)
@@ -264,6 +309,12 @@ public readonly struct Transform
         world.Rotation = Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(basis));
         World = world;
     }
+
+    /// <summary>
+    /// Keeps a write for the end of the ComponentQuery scope that reserved the entity (ReservedWrites); false when
+    /// the entity is not reserved and the caller writes now.
+    /// </summary>
+    private bool Defer<TState>(TState state, Action<TState> write) => ReservedWrites.TryDefer(Entity, state, write);
 
     /// <summary>
     /// 'localAxis' carried into world space by WorldMatrix (one native call) and normalised; Vector3.Zero only

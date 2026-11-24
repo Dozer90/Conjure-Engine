@@ -19,7 +19,7 @@ public sealed class ScriptCatalog
     private static readonly string[] CallbackMethods =
     {
         "OnCreate", "OnStart", "OnFixedUpdate", "OnUpdate", "OnLateUpdate", "OnDestroy",
-        "OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit",
+        "OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit", "OnReload",
     };
 
     private readonly List<ScriptClassInfo> _classes;

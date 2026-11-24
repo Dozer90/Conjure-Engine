@@ -119,13 +119,17 @@ TEST_SUITE("integration/hot_reload") {
         CHECK(runtime->stats().reloadCount == 1);
         engine.step_frames(FRAMES_AFTER_RELOAD);
 
-        // Serialised state survived, the private state and OnCreate-only counters restarted on the new assembly,
-        // and the surviving scripts kept updating (Updates is public, so its count carried over the reload).
+        // Serialised state survived, the recreated instances ran OnReload on the new assembly instead of OnCreate
+        // (OnCreate runs once per entity lifetime), and the surviving scripts kept updating (Updates is public, so
+        // its count carried over the reload).
         REQUIRE(runtime->entry(probe) != nullptr);
         CHECK(runtime->entry(probe)->is_live());
         CHECK(field_i64(*runtime, probe, "Health") == 3);
         CHECK(field_i64(*runtime, probe, "OnlyInV2") == 7);
         CHECK(field_i64(*runtime, probe, "Updates") == FRAMES_BEFORE_RELOAD + FRAMES_AFTER_RELOAD);
+        CHECK(field_i64(*runtime, probe, "CreateCalls") == 1);
+        CHECK(field_i64(*runtime, probe, "ReloadCalls") == 1);
+        CHECK(field_i64(*runtime, probe, "StartCalls") == 1);
         CHECK(field_i64(*runtime, variant, "Variant") == 2);
 
         // The class that vanished in B: its entry is disabled, its JSON kept, exactly one WARN named it.

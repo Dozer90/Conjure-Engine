@@ -6,7 +6,7 @@ namespace Conjure.Runtime;
 /// <summary>
 /// Fault policy of the callbacks (D11): every exception is logged through native; the third consecutive
 /// fault of one callback on one instance disables that callback until reload; a success resets the
-/// counter; an exception inside OnCreate disables every callback of the instance.
+/// counter; an exception inside OnCreate or OnReload disables every callback of the instance.
 /// </summary>
 public static class Guard
 {
@@ -24,7 +24,7 @@ public static class Guard
         string className = instance.GetType().FullName ?? instance.GetType().Name;
         NativeBridge.Log(LogLevel.Error, className + "." + callback + " threw: " + exception);
 
-        if (callback == ScriptCallback.Create)
+        if (callback == ScriptCallback.Create || callback == ScriptCallback.Reload)
         {
             instance.DisabledMask = AllCallbacksMask;
             MarkFaulted(instance, callback);

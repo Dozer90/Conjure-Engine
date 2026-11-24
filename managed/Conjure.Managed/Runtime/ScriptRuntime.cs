@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure.Runtime;
@@ -12,11 +13,6 @@ namespace Conjure.Runtime;
 /// </summary>
 public static unsafe class ScriptRuntime
 {
-    private const int StatusOk = 0;
-    private const int StatusLoadFailed = -7;        // -script_error::ASSEMBLY_LOAD_FAILED
-    private const int StatusInstanceNotFound = -12; // -script_error::INSTANCE_NOT_FOUND
-    private const int StatusNotSupported = -17;     // -script_error::NOT_SUPPORTED
-
     private static readonly InstanceTable _instances = new InstanceTable();
     private static readonly List<ScriptBehaviour> _pendingStart = new List<ScriptBehaviour>();
 
@@ -38,12 +34,12 @@ public static unsafe class ScriptRuntime
         try
         {
             AssemblyLoader.Load(path);
-            return StatusOk;
+            return ScriptStatus.Ok;
         }
         catch (Exception exception)
         {
             NativeBridge.Log(LogLevel.Error, "game assembly '" + path + "' did not load: " + exception.Message);
-            return StatusLoadFailed;
+            return ScriptStatus.LoadFailed;
         }
     }
 
@@ -58,7 +54,28 @@ public static unsafe class ScriptRuntime
         return AssemblyLoader.UnloadPrevious();
     }
 
+    /// <summary>
+    /// Creates one instance per request, writes its slot (-1 when the class is unknown or its constructor threw),
+    /// applies the initial fields and then runs OnCreate, or OnReload for a request with FlagAlreadyCreated (an
+    /// instance a hot reload recreated). FlagAlreadyStarted marks it started; any other instance waits for its
+    /// OnStart. Returns the number of instances created.
+    /// </summary>
     public static int CreateInstances(CreateRequest* requests, int count)
+    {
+        // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
+        // entities is made first.
+        ReservedWrites.EnterManagedCall();
+        try
+        {
+            return CreateInstancesCore(requests, count);
+        }
+        finally
+        {
+            ReservedWrites.LeaveManagedCall();
+        }
+    }
+
+    private static int CreateInstancesCore(CreateRequest* requests, int count)
     {
         ScriptCatalog? catalog = Catalog;
         int created = 0;
@@ -111,7 +128,9 @@ public static unsafe class ScriptRuntime
                 }
             }
 
-            instance.Run(ScriptCallback.Create, 0.0f);
+            // OnCreate runs once per entity lifetime: an instance a hot reload recreated gets OnReload instead.
+            bool alreadyCreated = (request->Flags & CreateRequest.FlagAlreadyCreated) != 0;
+            instance.Run(alreadyCreated ? ScriptCallback.Reload : ScriptCallback.Create, 0.0f);
             if ((request->Flags & CreateRequest.FlagAlreadyStarted) != 0)
             {
                 instance.Started = true;
@@ -125,6 +144,21 @@ public static unsafe class ScriptRuntime
     }
 
     public static int DestroyInstances(int* slots, int count, bool callOnDestroy)
+    {
+        // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
+        // entities is made first.
+        ReservedWrites.EnterManagedCall();
+        try
+        {
+            return DestroyInstancesCore(slots, count, callOnDestroy);
+        }
+        finally
+        {
+            ReservedWrites.LeaveManagedCall();
+        }
+    }
+
+    private static int DestroyInstancesCore(int* slots, int count, bool callOnDestroy)
     {
         int destroyed = 0;
         for (int index = 0; index < count; ++index)
@@ -156,9 +190,24 @@ public static unsafe class ScriptRuntime
     /// </summary>
     public static int RunPhase(ScriptPhase phase, float deltaTime)
     {
+        // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
+        // entities is made first.
+        ReservedWrites.EnterManagedCall();
+        try
+        {
+            return RunPhaseCore(phase, deltaTime);
+        }
+        finally
+        {
+            ReservedWrites.LeaveManagedCall();
+        }
+    }
+
+    private static int RunPhaseCore(ScriptPhase phase, float deltaTime)
+    {
         if (phase >= ScriptPhase.Count)
         {
-            return StatusNotSupported;
+            return ScriptStatus.NotSupported;
         }
         if (phase == ScriptPhase.FixedUpdate || phase == ScriptPhase.Update)
         {
@@ -197,6 +246,21 @@ public static unsafe class ScriptRuntime
 
     public static int DispatchCollisions(CollisionRecord* records, int count)
     {
+        // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
+        // entities is made first.
+        ReservedWrites.EnterManagedCall();
+        try
+        {
+            return DispatchCollisionsCore(records, count);
+        }
+        finally
+        {
+            ReservedWrites.LeaveManagedCall();
+        }
+    }
+
+    private static int DispatchCollisionsCore(CollisionRecord* records, int count)
+    {
         int dispatched = 0;
         for (int index = 0; index < count; ++index)
         {
@@ -230,7 +294,7 @@ public static unsafe class ScriptRuntime
         ScriptBehaviour? instance = _instances[slot];
         if (instance == null || instance.ClassInfo == null)
         {
-            return StatusInstanceNotFound;
+            return ScriptStatus.InstanceNotFound;
         }
         instance.ClassInfo.ApplyFields(instance, blob, out int unknown);
         return unknown;
@@ -244,7 +308,7 @@ public static unsafe class ScriptRuntime
         ScriptBehaviour? instance = _instances[slot];
         if (instance == null || instance.ClassInfo == null)
         {
-            return StatusInstanceNotFound;
+            return ScriptStatus.InstanceNotFound;
         }
         return instance.ClassInfo.CollectFields(instance, buffer);
     }
@@ -275,6 +339,7 @@ public static unsafe class ScriptRuntime
         }
         _instances.Clear();
         _pendingStart.Clear();
+        ReservedWrites.Reset();
         int leaked = AssemblyLoader.UnloadAll();
         NativeBridge.Reset();
         return leaked;

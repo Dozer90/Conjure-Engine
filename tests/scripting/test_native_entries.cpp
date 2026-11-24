@@ -25,6 +25,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The core-owned entries of the native table (03_scripting.md 2.1, R26) driven directly through the
@@ -68,6 +69,28 @@ namespace {
             return core::reflect::type_info_of<test_position>()->layout_hash();
         }
     };
+
+    /// <summary>
+    /// Runs 'body' inside a query scope over test_position opened in an UPDATE phase, as a managed
+    /// ComponentQuery would; the scope closes, and the runtime flushes its deferred buffer, right after it.
+    /// </summary>
+    template <typename Body>
+    void run_in_scope(entries_fixture &fixture, Body body) {
+        const std::array<u32, 1> ids = {fixture.position_id()};
+        bool opened = false;
+        fixture.null_host().set_phase_hook([&fixture, &ids, &body, &opened](script_phase, f32) {
+            conjure_query_scope scope = {};
+            opened = fixture.api().query_begin(ids.data(), 1, &scope) == 0;
+            if (!opened) {
+                return;
+            }
+            body();
+            fixture.api().query_end(scope.scope_id);
+        });
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        fixture.null_host().set_phase_hook({});
+        CHECK(opened);
+    }
 
     [[nodiscard]] std::string schema_json(std::string_view fields) {
         return "{\"fields\":[" + std::string(fields) + "]}";
@@ -360,6 +383,162 @@ TEST_SUITE("scripting/native_entries") {
         CHECK_FALSE(fixture.world.is_locked());
         CHECK(logs.contains(core::log_level::WARN, "LATE_UPDATE"));
         CHECK(logs.contains(core::log_level::WARN, "force-closed"));
+    }
+
+    TEST_CASE("regression - code sweep OWN-P2 requests on an id entity_create reserved in a scope apply at its end") {
+        // Entity.Create inside a ComponentQuery scope reserves the id; component_add refused it (it tested
+        // is_alive first), so C# could not spawn with components through the deferred buffer (17_demo_games.md P2).
+        log_capture logs = {};
+        entries_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.registry.register_component<entries_tag>());
+        const conjure_native_api &api = fixture.api();
+        const u32 positionType = fixture.position_id();
+        const u32 velocityType = fixture.registry.id_of<test_velocity>().value;
+        const u32 tagType = fixture.registry.id_of<entries_tag>().value;
+        const test_position first = {1.0f, 2.0f, 3.0f};
+        const test_position second = {4.0f, 5.0f, 6.0f};
+        const test_velocity speed = {7.0f, 8.0f};
+        const u32 before = fixture.world.entity_count();
+        u64 reserved = 0;
+
+        SUBCASE("two components land with their values while reads inside the scope answer as for a dead entity") {
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create("spawned", 7);
+                CHECK(reserved != 0);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+                CHECK(api.component_add(reserved, velocityType, &speed) == 1);
+                test_position read = {};
+                CHECK(api.entity_is_alive(reserved) == 0);
+                CHECK(api.component_has(reserved, positionType) == 0);
+                CHECK(api.component_get(reserved, positionType, &read) == 0);
+                CHECK(fixture.runtime.is_deferred_reserved(ecs::entity::from_u64(reserved)));
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.is_alive(created));
+            CHECK(fixture.world.entity_count() == before + 1);
+            REQUIRE(fixture.world.has<test_position>(created));
+            CHECK(*std::as_const(fixture.world).get<test_position>(created) == first);
+            REQUIRE(fixture.world.has<test_velocity>(created));
+            CHECK(*std::as_const(fixture.world).get<test_velocity>(created) == speed);
+            CHECK(fixture.runtime.entity_name(created) == "spawned");
+            CHECK_FALSE(fixture.runtime.is_deferred_reserved(created));
+            // An ordinary entity after the flush: requests apply at once.
+            CHECK(api.component_remove(reserved, velocityType) == 1);
+            CHECK_FALSE(fixture.world.has<test_velocity>(created));
+        }
+        SUBCASE("add then remove leaves the removed component out") {
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+                CHECK(api.component_add(reserved, velocityType, &speed) == 1);
+                CHECK(api.component_remove(reserved, velocityType) == 1);
+                CHECK(api.component_remove(reserved, velocityType) == 0);       // nothing left to remove
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.is_alive(created));
+            CHECK(fixture.world.has<test_position>(created));
+            CHECK_FALSE(fixture.world.has<test_velocity>(created));
+        }
+        SUBCASE("a second add overwrites the first, as a set would") {
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+                CHECK(api.component_add(reserved, positionType, &second) == 1);
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.has<test_position>(created));
+            CHECK(*std::as_const(fixture.world).get<test_position>(created) == second);
+        }
+        SUBCASE("a set after the add writes its value") {
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+                CHECK(api.component_set(reserved, positionType, &second) == 1);
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.has<test_position>(created));
+            CHECK(*std::as_const(fixture.world).get<test_position>(created) == second);
+        }
+        SUBCASE("a set without an add never throws and is skipped; a remove with nothing added answers 0") {
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.component_set(reserved, positionType, &first) == 1);
+                CHECK(api.component_remove(reserved, velocityType) == 0);
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.is_alive(created));
+            CHECK_FALSE(fixture.world.has<test_position>(created));
+            CHECK_FALSE(fixture.world.has<test_velocity>(created));
+        }
+        SUBCASE("a tag is added and set like any component") {
+            std::array<std::byte, 4> scratch = {};
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.component_add(reserved, tagType, nullptr) == 1);
+                CHECK(api.component_set(reserved, tagType, scratch.data()) == 1);
+                CHECK(api.component_get(reserved, tagType, scratch.data()) == 0);
+            });
+            CHECK(fixture.world.has<entries_tag>(ecs::entity::from_u64(reserved)));
+        }
+        SUBCASE("script_add stages scripts the flush creates") {
+            std::array<int32_t, 8> slots = {};
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                CHECK(api.script_add(reserved, hash_of(PLAYER)) == 0);
+                CHECK(api.script_add(reserved, hash_of(PLAYER)) == 1);
+                CHECK(api.script_get_slots(reserved, slots.data(), 8) == 0);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+            });
+            const ecs::entity created = ecs::entity::from_u64(reserved);
+            REQUIRE(fixture.world.is_alive(created));
+            CHECK(fixture.world.has<test_position>(created));
+            CHECK(api.script_get_slots(reserved, slots.data(), 8) == 2);        // created by the phase's flush
+            CHECK(fixture.runtime.stats().liveInstances == 2);
+        }
+        SUBCASE("destroy wins over every request on the id, before or after it, and the id's name goes with it") {
+            const usize namesBefore = fixture.runtime.entity_name_count();
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create("doomed", 6);
+                CHECK(api.component_add(reserved, positionType, &first) == 1);
+                CHECK(api.script_add(reserved, hash_of(PLAYER)) == 0);
+                CHECK(api.entity_destroy(reserved) == 1);
+                CHECK(api.entity_destroy(reserved) == 1);                       // still reserved until the flush
+                CHECK(api.component_add(reserved, velocityType, &speed) == 1);
+            });
+            CHECK_FALSE(fixture.world.is_alive(ecs::entity::from_u64(reserved)));
+            CHECK(fixture.world.entity_count() == before);
+            CHECK(fixture.runtime.stats().liveInstances == 0);
+            CHECK(api.entity_destroy(reserved) == 0);
+            CHECK(api.entity_find_by_name("doomed", 6) == 0);
+            // The flush hands the id back without a destroyed observer: the runtime forgets the name itself.
+            CHECK(fixture.runtime.entity_name_count() == namesBefore);
+        }
+        SUBCASE("refusals keep their statuses: the script limit, a live entity without scripts, a dead id") {
+            const ecs::entity live = fixture.create_entity();
+            const ecs::entity dead = fixture.create_entity();
+            CONJURE_REQUIRE_OK(fixture.world.destroy_entity(dead));
+            run_in_scope(fixture, [&]() {
+                reserved = api.entity_create(nullptr, 0);
+                for (u32 index = 0; index < MAX_SCRIPTS_PER_ENTITY; ++index) {
+                    CAPTURE(index);
+                    CHECK(api.script_add(reserved, hash_of(PLAYER)) == static_cast<int32_t>(index));
+                }
+                CHECK(api.script_add(reserved, hash_of(PLAYER)) == status_of(script_error::NOT_SUPPORTED));
+                CHECK(api.script_add(live.to_u64(), hash_of(PLAYER)) == status_of(script_error::NOT_SUPPORTED));
+                CHECK(api.script_add(dead.to_u64(), hash_of(PLAYER)) == status_of(script_error::INSTANCE_NOT_FOUND));
+                CHECK(api.component_add(dead.to_u64(), positionType, &first) == 0);
+                CHECK(api.component_set(dead.to_u64(), positionType, &first) == 0);
+                CHECK(api.component_remove(dead.to_u64(), positionType) == 0);
+                CHECK(api.entity_destroy(dead.to_u64()) == 0);
+                CHECK(api.component_add(reserved, 0, &first) == 0);
+                CHECK(api.component_set(reserved, 0, &first) == 0);
+                CHECK(api.component_remove(reserved, 0) == 0);
+            });
+            CHECK(fixture.runtime.scripts_of(ecs::entity::from_u64(reserved)).size() == MAX_SCRIPTS_PER_ENTITY);
+            CHECK(fixture.runtime.scripts_of(live).empty());
+            CHECK(logs.contains(core::log_level::WARN, "locked for iteration"));
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("native entries - component_register_managed refuses native names and keeps equal layouts") {

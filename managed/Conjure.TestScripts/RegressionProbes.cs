@@ -217,3 +217,27 @@ public sealed class FacadeExistsProbe : ScriptBehaviour
         HasComponentThrows = ProbeSupport.Catch(() => Entity.HasComponent<AudioSourceData>());
     }
 }
+
+/// <summary>
+/// Calls AddScript from OnUpdate and records the exception (code sweep OWN-P2): with no world attached to the
+/// script runtime, script_add answers NOT_INITIALISED and AddScript says the runtime is not running.
+/// </summary>
+public sealed class AddScriptStatusProbe : ScriptBehaviour
+{
+    public string Caught = "";
+    public string Message = "";
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        try
+        {
+            Entity.AddScript<BindingIdleScript>();
+            Caught = "none";
+        }
+        catch (Exception exception)
+        {
+            Caught = exception.GetType().Name;
+            Message = exception.Message;
+        }
+    }
+}

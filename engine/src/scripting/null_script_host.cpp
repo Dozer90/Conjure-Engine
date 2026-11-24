@@ -249,6 +249,10 @@ void null_script_host::set_create_hook(create_hook hook) {
     mCreateHook = std::move(hook);
 }
 
+void null_script_host::set_reload_hook(create_hook hook) {
+    mReloadHook = std::move(hook);
+}
+
 void null_script_host::set_destroy_hook(destroy_hook hook) {
     mDestroyHook = std::move(hook);
 }
@@ -461,9 +465,11 @@ i32 null_script_host::create_instances(conjure_create_request *requests, i32 cou
             record.fields = state.fields;
             mRecorder.record_create(record);
         }
-        if (mCreateHook) {
-            // The hook may create or destroy slots (as OnCreate may): no reference into mSlots survives it.
-            mCreateHook(request, slot);
+        // The managed side runs OnReload instead of OnCreate on an instance a hot reload recreated. Either hook
+        // may create or destroy slots (as OnCreate may): no reference into mSlots survives it.
+        const create_hook &hook = (request.flags & CREATE_FLAG_ALREADY_CREATED) != 0 ? mReloadHook : mCreateHook;
+        if (hook) {
+            hook(request, slot);
         }
     }
     return count;

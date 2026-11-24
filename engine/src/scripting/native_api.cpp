@@ -130,6 +130,8 @@ std::string_view conjure::scripting::to_string(script_callback callback) noexcep
             return "TRIGGER_ENTER";
         case script_callback::TRIGGER_EXIT:
             return "TRIGGER_EXIT";
+        case script_callback::RELOAD:
+            return "RELOAD";
         case script_callback::COUNT:
             break;
     }

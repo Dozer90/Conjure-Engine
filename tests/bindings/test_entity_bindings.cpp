@@ -113,6 +113,65 @@ TEST_SUITE("bindings/entity_bindings") {
         CHECK(api.entity_get_tag(999) == 0);
     }
 
+    TEST_CASE("entity - get_tag_text returns the tag's text through the needed-length protocol") {
+        bare_fixture fixture = {};
+        conjure_native_api &api = fixture.api();
+        const ecs::entity enemy = fixture.create("enemy");
+        const uint64_t packed = enemy.to_u64();
+        const auto readTag = [&api, packed](char *buffer, int32_t capacity) {
+            return api.entity_get_tag_text(packed, buffer, capacity);
+        };
+        SUBCASE("an untagged entity answers the empty text") {
+            CHECK(api.entity_get_tag_text(packed, nullptr, 0) == 0);
+            CHECK(read_string(readTag).empty());
+        }
+        SUBCASE("a tagged entity answers its text, also into an exact buffer and as a length query") {
+            const utf8_argument tag = utf8("Enemy");
+            REQUIRE(api.entity_set_tag(packed, tag.data, tag.length) == 0);
+            CHECK(read_string(readTag) == "Enemy");
+            std::array<char, 5> exact = {};
+            CHECK(api.entity_get_tag_text(packed, exact.data(), 5) == 5);
+            CHECK(std::string_view(exact.data(), exact.size()) == "Enemy");
+            CHECK(api.entity_get_tag_text(packed, nullptr, 0) == 5);
+            CHECK(api.entity_get_tag_text(packed, nullptr, 8) == 5);
+        }
+        SUBCASE("a buffer that is too small gets the leading bytes and the full length") {
+            const utf8_argument tag = utf8("Enemy");
+            REQUIRE(api.entity_set_tag(packed, tag.data, tag.length) == 0);
+            std::array<char, 4> small = {'-', '-', '-', '-'};
+            CHECK(api.entity_get_tag_text(packed, small.data(), 2) == 5);
+            CHECK(std::string_view(small.data(), small.size()) == "En--");
+        }
+        SUBCASE("a text longer than the 256-byte first read comes back whole on the second") {
+            const std::string longTag = std::string(300, 'x') + "!";
+            const utf8_argument tag = utf8(longTag);
+            REQUIRE(api.entity_set_tag(packed, tag.data, tag.length) == 0);
+            CHECK(read_string(readTag) == longTag);
+        }
+        SUBCASE("a removed tag answers the empty text again") {
+            const utf8_argument tag = utf8("Enemy");
+            REQUIRE(api.entity_set_tag(packed, tag.data, tag.length) == 0);
+            REQUIRE(api.entity_set_tag(packed, nullptr, 0) == 0);
+            CHECK(api.entity_get_tag_text(packed, nullptr, 0) == 0);
+        }
+        SUBCASE("a tag hash without interned text is NOT_FOUND, while entity_get_tag still has the hash") {
+            // from_hash interns nothing; the text is spelled nowhere else in the engine or its tests.
+            const u64 hash = core::hash::fnv1a64("entity_bindings.tag_text.never_interned");
+            REQUIRE(core::string_id::from_hash(hash).view().empty());
+            REQUIRE(fixture.active().set_tag(enemy, core::string_id::from_hash(hash)).has_value());
+            std::array<char, 8> buffer = {};
+            CHECK(api.entity_get_tag_text(packed, buffer.data(), 8) == to_status(bindings_error::NOT_FOUND));
+            CHECK(last_error_code() == bindings_error::NOT_FOUND);
+            CHECK(api.entity_get_tag(packed) == hash);
+        }
+        SUBCASE("a negative capacity is INVALID_ARGUMENT and a dead entity ENTITY_NOT_ALIVE") {
+            std::array<char, 8> buffer = {};
+            CHECK(api.entity_get_tag_text(packed, buffer.data(), -1) == to_status(bindings_error::INVALID_ARGUMENT));
+            CHECK(api.entity_get_tag_text(999, buffer.data(), 8) == to_status(bindings_error::ENTITY_NOT_ALIVE));
+            CHECK(api.entity_get_tag_text(0, nullptr, 0) == to_status(bindings_error::ENTITY_NOT_ALIVE));
+        }
+    }
+
     TEST_CASE("entity - layer set, get and find") {
         bare_fixture fixture = {};
         conjure_native_api &api = fixture.api();

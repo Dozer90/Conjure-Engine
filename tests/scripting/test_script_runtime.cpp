@@ -6,9 +6,12 @@
 
 #include "conjure/core/json/document.h"
 #include "conjure/core/math/glm_types.h"
+#include "conjure/core/result.h"
 #include "conjure/core/vfs/native_file_system.h"
 #include "conjure/ecs/command_buffer.h"
+#include "conjure/ecs/component.h"
 #include "conjure/ecs/entity.h"
+#include "conjure/ecs/entity_archive.h"
 #include "conjure/ecs/world.h"
 #include "conjure/scripting/native_api.h"
 #include "conjure/scripting/null_script_host.h"
@@ -17,10 +20,13 @@
 #include "conjure/scripting/script_runtime.h"
 #include "conjure/scripting/scripting_error.h"
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -66,6 +72,44 @@ namespace {
             return entryValue == nullptr ? INVALID_SLOT : entryValue->managedSlot;
         }
     };
+
+    /// <summary>
+    /// The entities whose instance ran the create hook (OnCreate) and the reload hook (OnReload), in call order.
+    /// A case declares it before its fixture, so it outlives the hooks that point at it.
+    /// </summary>
+    struct lifecycle_tally {
+        std::vector<ecs::entity> created = {};
+        std::vector<ecs::entity> reloaded = {};
+
+        void install(null_script_host &host) {
+            host.set_create_hook([this](const conjure_create_request &request, i32) {
+                created.push_back(ecs::entity::from_u64(request.entity));
+            });
+            host.set_reload_hook([this](const conjure_create_request &request, i32) {
+                reloaded.push_back(ecs::entity::from_u64(request.entity));
+            });
+        }
+
+        [[nodiscard]] usize created_count(ecs::entity entity) const {
+            return static_cast<usize>(std::count(created.begin(), created.end(), entity));
+        }
+
+        [[nodiscard]] usize reloaded_count(ecs::entity entity) const {
+            return static_cast<usize>(std::count(reloaded.begin(), reloaded.end(), entity));
+        }
+    };
+
+    /// <summary>
+    /// The create request the recorder holds for an entity (nullptr when there is none).
+    /// </summary>
+    [[nodiscard]] const null_host_recorder::create_record *create_of(const null_script_host &host, ecs::entity entity) {
+        for (const null_host_recorder::create_record &record : host.recorder().creates()) {
+            if (record.entity == entity.to_u64()) {
+                return &record;
+            }
+        }
+        return nullptr;
+    }
 }
 
 TEST_SUITE("scripting/script_runtime") {
@@ -417,6 +461,253 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK_FALSE(fixture.runtime.entry(fresh)->has_flag(script_entry_flags::STARTED));
     }
 
+    TEST_CASE("script_runtime - reload does not run OnCreate again") {
+        lifecycle_tally tally = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity entity = fixture.create_entity();
+        const script_entry_id created = fixture.runtime.add_script(entity, hash_of(PLAYER), {});
+        tally.install(fixture.null_host());
+        fixture.runtime.flush_pending();
+        REQUIRE(tally.created_count(entity) == 1);
+        REQUIRE(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+        REQUIRE(create_of(fixture.null_host(), entity) != nullptr);
+        REQUIRE((create_of(fixture.null_host(), entity)->flags & CREATE_FLAG_ALREADY_CREATED) == 0);
+
+        SUBCASE("a created entry is recreated with ALREADY_CREATED and a queued one still runs OnCreate") {
+            const ecs::entity queuedEntity = fixture.create_entity();
+            const script_entry_id queued = fixture.runtime.add_script(queuedEntity, hash_of(PLAYER), {});
+            REQUIRE_FALSE(fixture.runtime.entry(queued)->has_flag(script_entry_flags::CREATED));
+            fixture.null_host().reset_recorder();
+
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            const null_host_recorder::create_record *recreated = create_of(fixture.null_host(), entity);
+            const null_host_recorder::create_record *firstCreate = create_of(fixture.null_host(), queuedEntity);
+            REQUIRE(recreated != nullptr);
+            REQUIRE(firstCreate != nullptr);
+            CHECK((recreated->flags & CREATE_FLAG_ALREADY_CREATED) != 0);
+            CHECK((firstCreate->flags & CREATE_FLAG_ALREADY_CREATED) == 0);
+            CHECK(tally.created_count(entity) == 1);
+            CHECK(tally.reloaded_count(entity) == 1);
+            CHECK(tally.created_count(queuedEntity) == 1);
+            CHECK(tally.reloaded_count(queuedEntity) == 0);
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+            CHECK(fixture.runtime.entry(queued)->has_flag(script_entry_flags::CREATED));
+        }
+        SUBCASE("an entry whose class went missing keeps CREATED and returns with OnReload") {
+            log_capture logs = {};
+            REQUIRE(fixture.null_host().remove_fake_class(hash_of(PLAYER)));
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK_FALSE(fixture.runtime.entry(created)->is_live());
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+            CHECK(logs.contains(core::log_level::WARN, "is not in the loaded assembly"));
+
+            fixture.null_host().add_fake_class(player_class());
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(fixture.runtime.entry(created)->is_live());
+            CHECK(tally.created_count(entity) == 1);
+            CHECK(tally.reloaded_count(entity) == 1);
+        }
+        SUBCASE("an OnCreate that threw did not complete: the reload runs OnCreate once more, then OnStart") {
+            // Owner ruling 2026-11-24 (code sweep OWN-RELOAD): only an OnCreate that returned counts as run.
+            log_capture logs = {};
+            const ecs::entity faulting = fixture.create_entity();
+            const script_entry_id faulted = fixture.runtime.add_script(faulting, hash_of(PLAYER), {});
+            conjure_native_api &api = fixture.runtime.native_api();
+            fixture.null_host().set_create_hook([&tally, &api](const conjure_create_request &request, i32 slot) {
+                tally.created.push_back(ecs::entity::from_u64(request.entity));
+                // What the managed guard does when OnCreate throws; the slot is not mapped yet.
+                api.script_mark_faulted(slot, static_cast<uint8_t>(script_callback::CREATE));
+            });
+            fixture.runtime.flush_pending();
+            REQUIRE(fixture.runtime.entry(faulted) != nullptr);
+            CHECK(fixture.runtime.entry(faulted)->has_flag(script_entry_flags::FAULTED));
+            CHECK_FALSE(fixture.runtime.entry(faulted)->has_flag(script_entry_flags::CREATED));
+            CHECK(logs.contains(core::log_level::WARN, "OnCreate of"));
+            // The guard disabled OnStart with every other callback: it is never attempted, so not marked.
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            CHECK_FALSE(fixture.runtime.entry(faulted)->has_flag(script_entry_flags::STARTED));
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::STARTED));
+            tally.install(fixture.null_host());
+            fixture.null_host().reset_recorder();
+
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            const null_host_recorder::create_record *again = create_of(fixture.null_host(), faulting);
+            REQUIRE(again != nullptr);
+            CHECK(again->flags == 0);                      // neither ALREADY_CREATED nor ALREADY_STARTED
+            CHECK(tally.created_count(faulting) == 2);
+            CHECK(tally.reloaded_count(faulting) == 0);
+            CHECK(tally.reloaded_count(entity) == 1);
+            CHECK(fixture.runtime.entry(faulted)->is_live());
+            CHECK_FALSE(fixture.runtime.entry(faulted)->has_flag(script_entry_flags::FAULTED));
+            CHECK(fixture.runtime.entry(faulted)->has_flag(script_entry_flags::CREATED));
+
+            // That OnCreate returned: the next reload runs OnReload.
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(tally.created_count(faulting) == 2);
+            CHECK(tally.reloaded_count(faulting) == 1);
+        }
+        SUBCASE("an OnReload that threw keeps CREATED: the next reload runs OnReload again") {
+            log_capture logs = {};
+            conjure_native_api &api = fixture.runtime.native_api();
+            fixture.null_host().set_reload_hook([&tally, &api](const conjure_create_request &request, i32 slot) {
+                tally.reloaded.push_back(ecs::entity::from_u64(request.entity));
+                api.script_mark_faulted(slot, static_cast<uint8_t>(script_callback::RELOAD));
+            });
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::FAULTED));
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+            CHECK(logs.contains(core::log_level::WARN, "OnReload of"));
+            tally.install(fixture.null_host());
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(tally.created_count(entity) == 1);
+            CHECK(tally.reloaded_count(entity) == 2);
+        }
+        SUBCASE("leaving play ends the lifetime: the next PLAY runs OnCreate") {
+            fixture.runtime.set_mode(script_mode::EDIT);
+            CHECK_FALSE(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+            fixture.null_host().reset_recorder();
+            fixture.runtime.set_mode(script_mode::PLAY);
+            REQUIRE(create_of(fixture.null_host(), entity) != nullptr);
+            CHECK((create_of(fixture.null_host(), entity)->flags & CREATE_FLAG_ALREADY_CREATED) == 0);
+            CHECK(tally.created_count(entity) == 2);
+            CHECK(tally.reloaded_count(entity) == 0);
+            CHECK(fixture.runtime.entry(created)->has_flag(script_entry_flags::CREATED));
+        }
+        SUBCASE("a copy of the entity is a new entity and runs OnCreate") {
+            const std::array<ecs::entity, 1> captured = {entity};
+            core::result<ecs::entity_archive> archive = ecs::entity_archive::capture(fixture.world, captured);
+            CONJURE_REQUIRE_OK(archive);
+            const std::shared_ptr<const ecs::entity_archive> shared =
+              std::make_shared<const ecs::entity_archive>(std::move(archive).value());
+            const core::result<ecs::entity> copy = fixture.world.instantiate(shared);
+            CONJURE_REQUIRE_OK(copy);
+            fixture.null_host().reset_recorder();
+            fixture.runtime.flush_pending();
+            REQUIRE(create_of(fixture.null_host(), copy.value()) != nullptr);
+            CHECK((create_of(fixture.null_host(), copy.value())->flags & CREATE_FLAG_ALREADY_CREATED) == 0);
+            CHECK(tally.created_count(copy.value()) == 1);
+
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(tally.created_count(entity) == 1);
+            CHECK(tally.created_count(copy.value()) == 1);
+            CHECK(tally.reloaded_count(entity) == 1);
+            CHECK(tally.reloaded_count(copy.value()) == 1);
+        }
+    }
+
+    TEST_CASE("script_runtime - reload runs OnReload once per instance") {
+        lifecycle_tally tally = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const core::json::document fields = json(R"({"speed": 4.0})");
+        std::vector<ecs::entity> entities = {};
+        std::vector<script_entry_id> ids = {};
+        for (int index = 0; index < 3; ++index) {
+            entities.push_back(fixture.create_entity());
+            ids.push_back(fixture.runtime.add_script(entities.back(), hash_of(PLAYER), fields.root()));
+        }
+        fixture.runtime.flush_pending();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        tally.install(fixture.null_host());
+
+        SUBCASE("every instance runs it once per reload, after its fields and before any phase") {
+            std::vector<f64> speedAtReload = {};
+            std::vector<uint8_t> flagsAtReload = {};
+            null_script_host &host = fixture.null_host();
+            host.set_reload_hook([&](const conjure_create_request &request, i32 slot) {
+                tally.reloaded.push_back(ecs::entity::from_u64(request.entity));
+                const core::result<core::json::document> decoded = blob_to_json(player_class(), host.slot_fields(slot));
+                speedAtReload.push_back(decoded.has_value() ? decoded.value().root()["speed"].as_f64() : -1.0);
+                flagsAtReload.push_back(request.flags);
+            });
+            // No phase runs inside reload_game_assembly: every OnReload has run once it returns.
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            REQUIRE(tally.reloaded.size() == entities.size());
+            REQUIRE(speedAtReload.size() == entities.size());
+            for (usize index = 0; index < entities.size(); ++index) {
+                CAPTURE(index);
+                CHECK(tally.reloaded_count(entities[index]) == 1);
+                CHECK(speedAtReload[index] == doctest::Approx(4.0));
+                CHECK((flagsAtReload[index] & CREATE_FLAG_ALREADY_STARTED) != 0);
+            }
+
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            for (usize index = 0; index < entities.size(); ++index) {
+                CAPTURE(index);
+                CHECK(tally.reloaded_count(entities[index]) == 2);
+                CHECK(fixture.runtime.entry(ids[index])->is_live());
+            }
+            CHECK(tally.created.empty());
+            CHECK(fixture.runtime.stats().reloadCount == 2);
+        }
+        SUBCASE("a failed reload runs no OnReload") {
+            fixture.null_host().set_load_result(status_of(script_error::ASSEMBLY_LOAD_FAILED));
+            CONJURE_CHECK_ERROR(fixture.runtime.reload_game_assembly({}), script_error::ASSEMBLY_LOAD_FAILED);
+            CHECK(tally.reloaded.empty());
+            CHECK(tally.created.empty());
+        }
+        SUBCASE("an edit-mode reload creates no instance, so none reloads") {
+            fixture.runtime.set_mode(script_mode::EDIT);
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+            CHECK(tally.reloaded.empty());
+            CHECK(tally.created.empty());
+        }
+    }
+
+    TEST_CASE("script_runtime - an OnReload fault is flagged and logged with its own message") {
+        log_capture logs = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const script_entry_id id = fixture.runtime.add_script(fixture.create_entity(), hash_of(PLAYER), {});
+        fixture.runtime.flush_pending();
+        conjure_native_api &api = fixture.runtime.native_api();
+        fixture.null_host().set_reload_hook([&api](const conjure_create_request &, i32 slot) {
+            // What the managed guard does when OnReload throws; the slot is not mapped yet.
+            api.script_mark_faulted(slot, static_cast<uint8_t>(script_callback::RELOAD));
+        });
+        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+        fixture.null_host().set_reload_hook({});
+
+        REQUIRE(fixture.runtime.entry(id) != nullptr);
+        CHECK(fixture.runtime.entry(id)->is_live());
+        CHECK(fixture.runtime.entry(id)->has_flag(script_entry_flags::FAULTED));
+        CHECK(fixture.runtime.entry(id)->has_flag(script_entry_flags::CREATED));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+        CHECK(logs.contains(core::log_level::WARN, "OnReload of"));
+        CHECK(logs.contains(core::log_level::WARN, PLAYER));
+        CHECK(logs.contains(core::log_level::WARN, "every callback of the instance is disabled"));
+        CHECK_FALSE(logs.contains(core::log_level::WARN, "OnCreate"));
+
+        // The next reload recreates the instance clean; its OnReload succeeds this time.
+        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+        CHECK(fixture.runtime.entry(id)->is_live());
+        CHECK_FALSE(fixture.runtime.entry(id)->has_flag(script_entry_flags::FAULTED));
+        CHECK(logs.count(core::log_level::WARN) == 1);
+    }
+
+    TEST_CASE("regression - code sweep OWN-RELOAD a component OnCreate added and the script removed stays removed") {
+        log_capture logs = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity coin = fixture.create_entity();
+        static_cast<void>(fixture.runtime.add_script(coin, hash_of(PLAYER), {}));
+        // The blue coin: OnCreate adds a one-shot sound (test_velocity here) without a guard, as a script would.
+        fixture.null_host().set_create_hook([&fixture](const conjure_create_request &request, i32) {
+            CONJURE_CHECK_OK(fixture.world.add<test_velocity>(ecs::entity::from_u64(request.entity)));
+        });
+        fixture.runtime.flush_pending();
+        REQUIRE(fixture.world.has<test_velocity>(coin));
+
+        // The sound played and removed itself; then the game assembly is rebuilt and reloaded.
+        CONJURE_REQUIRE_OK(fixture.world.remove<test_velocity>(coin));
+        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly({}));
+        fixture.null_host().set_create_hook({});
+        CHECK_FALSE(fixture.world.has<test_velocity>(coin));
+        CHECK(fixture.runtime.stats().liveInstances == 1);
+        CHECK(logs.count(core::log_level::WARN) == 0);
+    }
+
     TEST_CASE("script_runtime - a failed reload keeps the old assembly running") {
         loaded_fixture fixture = {};
         fixture.runtime.set_mode(script_mode::PLAY);
@@ -573,6 +864,71 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(fixture.null_host().recorder().creates()[0].classHash == hash_of(ENEMY));
         CHECK((fixture.null_host().recorder().creates()[0].flags & CREATE_FLAG_ALREADY_STARTED) != 0);
         CHECK(fixture.runtime.stats().liveInstances == 1);
+    }
+
+    TEST_CASE("regression - code sweep OWN-RELOAD a snapshot restore or replace of a created set skips OnCreate") {
+        // The set JSON records "created" next to "started", so a play-mode snapshot restored through the serializer
+        // hook, or a replace from the same JSON, recreates the instance with OnReload: OnCreate ran once already.
+        lifecycle_tally tally = {};
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity entity = fixture.create_entity();
+        static_cast<void>(fixture.runtime.add_script(entity, hash_of(PLAYER), {}));
+        tally.install(fixture.null_host());
+        fixture.runtime.flush_pending();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        REQUIRE(tally.created_count(entity) == 1);
+        core::result<core::json::document> snapshot = fixture.runtime.serialize_entity_scripts(entity);
+        CONJURE_REQUIRE_OK(snapshot);
+        REQUIRE(snapshot.value().root()["scripts"].size() == 1);
+        CHECK(snapshot.value().root()["scripts"][0]["created"].as_bool(false));
+        CHECK(snapshot.value().root()["scripts"][0]["started"].as_bool(false));
+        fixture.null_host().reset_recorder();
+
+        SUBCASE("replace") {
+            CONJURE_REQUIRE_OK(fixture.runtime.deserialize_entity_scripts(entity, snapshot.value().root()));
+        }
+        SUBCASE("snapshot restore through the serializer hook") {
+            const script_component *component = std::as_const(fixture.world).get<script_component>(entity);
+            REQUIRE(component != nullptr);
+            const core::result<u32> restored =
+              fixture.runtime.read_set_json(component->setHandle, snapshot.value().root());
+            CONJURE_REQUIRE_OK(restored);
+            CHECK(restored.value() == component->setHandle);
+        }
+        fixture.runtime.flush_pending();
+        const null_host_recorder::create_record *recreated = create_of(fixture.null_host(), entity);
+        REQUIRE(recreated != nullptr);
+        CHECK((recreated->flags & CREATE_FLAG_ALREADY_CREATED) != 0);
+        CHECK((recreated->flags & CREATE_FLAG_ALREADY_STARTED) != 0);
+        CHECK(tally.created_count(entity) == 1);
+        CHECK(tally.reloaded_count(entity) == 1);
+        const std::vector<script_entry_id> ids = fixture.runtime.scripts_of(entity);
+        REQUIRE(ids.size() == 1);
+        CHECK(fixture.runtime.entry(ids[0])->has_flag(script_entry_flags::CREATED));
+    }
+
+    TEST_CASE("script_runtime - set JSON without \"created\" runs OnCreate, and an edit-mode set writes none") {
+        lifecycle_tally tally = {};
+        loaded_fixture fixture = {};
+        const ecs::entity entity = fixture.create_entity();
+        static_cast<void>(fixture.runtime.add_script(entity, hash_of(PLAYER), {}));
+        core::result<core::json::document> edited = fixture.runtime.serialize_entity_scripts(entity);
+        CONJURE_REQUIRE_OK(edited);
+        CHECK_FALSE(edited.value().root()["scripts"][0].contains("created"));
+
+        tally.install(fixture.null_host());
+        fixture.runtime.set_mode(script_mode::PLAY);
+        REQUIRE(tally.created_count(entity) == 1);
+        fixture.null_host().reset_recorder();
+        const core::json::document older = json(R"({"scripts":[{"class":"Game.Player","fields":{},"started":true}]})");
+        CONJURE_REQUIRE_OK(fixture.runtime.deserialize_entity_scripts(entity, older.root()));
+        fixture.runtime.flush_pending();
+        const null_host_recorder::create_record *recreated = create_of(fixture.null_host(), entity);
+        REQUIRE(recreated != nullptr);
+        CHECK((recreated->flags & CREATE_FLAG_ALREADY_CREATED) == 0);
+        CHECK(tally.created_count(entity) == 2);
+        CHECK(tally.reloaded_count(entity) == 0);
     }
 
     TEST_CASE("script_runtime - the frame block is 64-byte aligned and reachable through the table") {
@@ -1286,5 +1642,271 @@ TEST_SUITE("scripting/script_runtime") {
         CHECK(fixture.null_host().slot_entity(lastSlot) == original.to_u64());
         CHECK(logs.count(core::log_level::WARN) == 1);
         fixture.runtime.set_mode(script_mode::EDIT);
+    }
+
+    TEST_CASE("script_runtime - a reserved id takes component requests in order until the flush") {
+        loaded_fixture fixture = {};
+        const ecs::component_id positionId = fixture.registry.id_of<test_position>();
+        const ecs::component_id velocityId = fixture.registry.id_of<test_velocity>();
+        const test_position first = {1.0f, 2.0f, 3.0f};
+        const test_position second = {4.0f, 5.0f, 6.0f};
+        const std::span<const std::byte> firstBytes = std::as_bytes(std::span(&first, 1));
+        const std::span<const std::byte> secondBytes = std::as_bytes(std::span(&second, 1));
+        const ecs::entity live = fixture.create_entity();
+        const u32 before = fixture.world.entity_count();
+
+        // The lock a query scope holds: create_entity only reserves the id.
+        ecs::iteration_scope lock = fixture.world.lock_iteration();
+        const ecs::entity reserved = fixture.runtime.deferred_commands().create_entity();
+        REQUIRE_FALSE(reserved.is_null());
+        CHECK_FALSE(fixture.runtime.is_deferred_reserved(reserved));            // not noted yet
+        fixture.runtime.note_deferred_reserved(reserved);
+        CHECK(fixture.runtime.is_deferred_reserved(reserved));
+        CHECK_FALSE(fixture.world.is_alive(reserved));
+        const auto flush = [&fixture, &lock, reserved]() {
+            CHECK_FALSE(fixture.world.is_alive(reserved));                     // nothing applies before the flush
+            lock.release();
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);              // the phase end flushes the buffer
+            CHECK_FALSE(fixture.runtime.is_deferred_reserved(reserved));
+        };
+
+        SUBCASE("two components with their values") {
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, firstBytes));
+            CHECK(fixture.runtime.record_reserved_add(reserved, velocityId, {}));
+            flush();
+            REQUIRE(fixture.world.is_alive(reserved));
+            REQUIRE(fixture.world.has<test_position>(reserved));
+            CHECK(*std::as_const(fixture.world).get<test_position>(reserved) == first);
+            CHECK(fixture.world.has<test_velocity>(reserved));
+            CHECK(fixture.world.entity_count() == before + 1);
+        }
+        SUBCASE("a second add overwrites the first") {
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, firstBytes));
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, secondBytes));
+            flush();
+            REQUIRE(fixture.world.has<test_position>(reserved));
+            CHECK(*std::as_const(fixture.world).get<test_position>(reserved) == second);
+        }
+        SUBCASE("a set after the add writes its value") {
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, firstBytes));
+            CHECK(fixture.runtime.record_reserved_set(reserved, positionId, secondBytes));
+            flush();
+            REQUIRE(fixture.world.has<test_position>(reserved));
+            CHECK(*std::as_const(fixture.world).get<test_position>(reserved) == second);
+        }
+        SUBCASE("add then remove") {
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, firstBytes));
+            CHECK(fixture.runtime.record_reserved_add(reserved, velocityId, {}));
+            CHECK(fixture.runtime.record_reserved_remove(reserved, velocityId));
+            CHECK_FALSE(fixture.runtime.record_reserved_remove(reserved, velocityId));      // nothing left to remove
+            flush();
+            REQUIRE(fixture.world.is_alive(reserved));
+            CHECK(fixture.world.has<test_position>(reserved));
+            CHECK_FALSE(fixture.world.has<test_velocity>(reserved));
+        }
+        SUBCASE("a remove with nothing recorded and a set without an add change nothing") {
+            CHECK_FALSE(fixture.runtime.record_reserved_remove(reserved, velocityId));
+            CHECK(fixture.runtime.record_reserved_set(reserved, positionId, firstBytes));   // skipped at the flush
+            flush();
+            REQUIRE(fixture.world.is_alive(reserved));
+            CHECK_FALSE(fixture.world.has<test_position>(reserved));
+            CHECK_FALSE(fixture.world.has<test_velocity>(reserved));
+        }
+        SUBCASE("components the caller recorded with the note can be removed") {
+            fixture.runtime.deferred_commands().add_raw(reserved, velocityId);
+            const std::array<ecs::component_id, 1> recorded = {velocityId};
+            fixture.runtime.note_deferred_reserved(reserved, recorded);
+            CHECK(fixture.runtime.record_reserved_remove(reserved, velocityId));
+            flush();
+            REQUIRE(fixture.world.is_alive(reserved));
+            CHECK_FALSE(fixture.world.has<test_velocity>(reserved));
+        }
+        SUBCASE("a destroy wins over what was recorded before and after it") {
+            CHECK(fixture.runtime.record_reserved_add(reserved, positionId, firstBytes));
+            fixture.runtime.request_entity_destroy(reserved);
+            CHECK(fixture.runtime.record_reserved_add(reserved, velocityId, {}));
+            flush();
+            CHECK_FALSE(fixture.world.is_alive(reserved));
+            CHECK(fixture.world.entity_count() == before);
+        }
+        SUBCASE("other ids and unregistered components are not recorded") {
+            const u32 commands = fixture.runtime.deferred_commands().command_count();
+            CHECK_FALSE(fixture.runtime.record_reserved_add(live, positionId, firstBytes));
+            CHECK_FALSE(fixture.runtime.record_reserved_set(live, positionId, firstBytes));
+            CHECK_FALSE(fixture.runtime.record_reserved_remove(live, positionId));
+            CHECK_FALSE(fixture.runtime.record_reserved_add(ecs::NULL_ENTITY, positionId, {}));
+            CHECK_FALSE(fixture.runtime.record_reserved_add(reserved, ecs::component_id{}, {}));
+            CHECK_FALSE(fixture.runtime.record_reserved_set(reserved, ecs::component_id{}, {}));
+            CHECK_FALSE(fixture.runtime.record_reserved_remove(reserved, ecs::component_id{}));
+            CHECK(fixture.runtime.deferred_commands().command_count() == commands);
+            fixture.runtime.note_deferred_reserved(ecs::NULL_ENTITY);
+            fixture.runtime.note_deferred_instance(ecs::NULL_ENTITY);
+            CHECK_FALSE(fixture.runtime.is_deferred_reserved(ecs::NULL_ENTITY));
+            flush();
+            CHECK(fixture.world.is_alive(reserved));                           // the bare create still applies
+            CHECK_FALSE(fixture.world.has<test_position>(live));
+        }
+    }
+
+    TEST_CASE("script_runtime - add_script on a reserved id stages the scripts the flush creates") {
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::component_id scriptId = fixture.runtime.script_component_id();
+        const usize setsBefore = fixture.runtime.store().size();
+        ecs::iteration_scope lock = fixture.world.lock_iteration();
+        const ecs::entity reserved = fixture.runtime.deferred_commands().create_entity();
+        fixture.runtime.note_deferred_reserved(reserved);
+        const core::json::document speed = json(R"({"speed": 7})");
+        const script_entry_id first = fixture.runtime.add_script(reserved, hash_of(PLAYER), speed.root());
+        const script_entry_id second = fixture.runtime.add_script(reserved, hash_of(ENEMY), {});
+        REQUIRE(first.is_valid());
+        REQUIRE(second.is_valid());
+        CHECK(first.setHandle == second.setHandle);
+        CHECK(second.entryIndex == 1);
+        CHECK(fixture.runtime.stats().pendingCreates == 0);                    // nothing exists to create yet
+        fixture.null_host().reset_recorder();
+
+        SUBCASE("the flush places the entity with the staged set and creates both instances") {
+            lock.release();
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            REQUIRE(fixture.world.is_alive(reserved));
+            const std::vector<script_entry_id> scripts = fixture.runtime.scripts_of(reserved);
+            REQUIRE(scripts.size() == 2);
+            CHECK(scripts[0] == first);                                         // the staged set was adopted
+            CHECK(scripts[1] == second);
+            CHECK(fixture.null_host().recorder().creates().size() == 2);
+            CHECK(fixture.runtime.stats().liveInstances == 2);
+            CHECK(fixture.slot_of(first) != INVALID_SLOT);
+            const script_set *adopted = fixture.runtime.store().find(first.setHandle);
+            REQUIRE(adopted != nullptr);
+            CHECK(adopted->owner == reserved);
+            CHECK(fixture.runtime.store().size() == setsBefore + 1);
+        }
+        SUBCASE("a destroy recorded after the scripts drops them and frees the staged set") {
+            fixture.runtime.request_entity_destroy(reserved);
+            lock.release();
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            CHECK_FALSE(fixture.world.is_alive(reserved));
+            CHECK(fixture.null_host().recorder().creates().empty());
+            CHECK(fixture.runtime.store().size() == setsBefore);
+        }
+        SUBCASE("removing script_component drops the scripts staged before it, not those after") {
+            CHECK(fixture.runtime.record_reserved_remove(reserved, scriptId));
+            CHECK_FALSE(fixture.runtime.store().contains(first.setHandle));
+            CHECK_FALSE(fixture.runtime.record_reserved_remove(reserved, scriptId));
+            const script_entry_id later = fixture.runtime.add_script(reserved, hash_of(ENEMY), {});
+            REQUIRE(later.is_valid());
+            CHECK(later.entryIndex == 0);
+            lock.release();
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            REQUIRE(fixture.world.is_alive(reserved));
+            const std::vector<script_entry_id> scripts = fixture.runtime.scripts_of(reserved);
+            REQUIRE(scripts.size() == 1);
+            CHECK(scripts[0] == later);
+            REQUIRE(fixture.null_host().recorder().creates().size() == 1);
+            CHECK(fixture.null_host().recorder().creates()[0].classHash == hash_of(ENEMY));
+            CHECK(fixture.runtime.store().size() == setsBefore + 1);
+        }
+        SUBCASE("the script limit holds for a reserved id") {
+            for (u32 index = 2; index < MAX_SCRIPTS_PER_ENTITY; ++index) {
+                CAPTURE(index);
+                CHECK(fixture.runtime.add_script(reserved, hash_of(PLAYER), {}).is_valid());
+            }
+            CHECK_FALSE(fixture.runtime.add_script(reserved, hash_of(PLAYER), {}).is_valid());
+            lock.release();
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            CHECK(fixture.runtime.scripts_of(reserved).size() == MAX_SCRIPTS_PER_ENTITY);
+        }
+        SUBCASE("attaching another world frees the staged set with the buffer") {
+            lock.release();
+            ecs::world other(fixture.registry);
+            fixture.runtime.attach_world(&other);
+            CHECK_FALSE(fixture.runtime.is_deferred_reserved(reserved));
+            CHECK(fixture.runtime.store().size() == setsBefore);
+            fixture.runtime.attach_world(&fixture.world);
+            CHECK_FALSE(fixture.world.is_alive(reserved));
+        }
+    }
+
+    TEST_CASE("regression - code sweep OWN-P2 a destroy of a deferred instantiation root cancels the copy") {
+        // Owner ruling 2026-11-24: an entity accepts work as soon as it has an id, the destroy of a root
+        // Prefab.Instantiate reserved in the scope included. It is recorded in call order and the flush cancels the
+        // copy, so neither the root nor the archive's entities become alive and no script of either is created.
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity source = fixture.create_entity();
+        const ecs::entity inner = fixture.create_entity();
+        REQUIRE(fixture.runtime.add_script(source, hash_of(PLAYER), {}).is_valid());
+        const std::array<ecs::entity, 2> sources = {source, inner};
+        core::result<ecs::entity_archive> captured = ecs::entity_archive::capture(fixture.world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const ecs::entity_archive> archive =
+          std::make_shared<const ecs::entity_archive>(std::move(captured).value());
+        fixture.runtime.flush_pending();
+        fixture.null_host().reset_recorder();
+        const u32 entitiesBefore = fixture.world.entity_count();
+        const usize setsBefore = fixture.runtime.store().size();
+
+        ecs::iteration_scope lock = fixture.world.lock_iteration();
+        const core::result<ecs::entity> instantiated = fixture.runtime.deferred_commands().instantiate(archive);
+        CONJURE_REQUIRE_OK(instantiated);
+        const ecs::entity root = instantiated.value();
+        fixture.runtime.note_deferred_instance(root);
+        const test_velocity moving{1.0f, 2.0f};
+        CHECK(fixture.runtime.record_reserved_add(
+          root,
+          fixture.registry.id_of<test_velocity>(),
+          std::as_bytes(std::span<const test_velocity, 1>(&moving, 1))
+        ));
+        REQUIRE(fixture.runtime.add_script(root, hash_of(ENEMY), {}).is_valid());
+        fixture.runtime.request_entity_destroy(root);
+        CHECK(fixture.runtime.deferred_commands().command_count() == 4);    // instantiate, add, add, destroy
+        lock.release();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+
+        CHECK_FALSE(fixture.world.is_alive(root));
+        CHECK_FALSE(fixture.runtime.is_deferred_reserved(root));
+        CHECK(fixture.world.entity_count() == entitiesBefore);
+        CHECK(fixture.runtime.store().size() == setsBefore);             // the staged set went with the root
+        CHECK(fixture.null_host().recorder().creates().empty());
+        CONJURE_CHECK_OK(fixture.world.validate());
+    }
+
+    TEST_CASE("script_runtime - an instantiation root appends staged scripts to the set its archive brings") {
+        loaded_fixture fixture = {};
+        fixture.runtime.set_mode(script_mode::PLAY);
+        const ecs::entity source = fixture.create_entity();
+        REQUIRE(fixture.runtime.add_script(source, hash_of(PLAYER), {}).is_valid());
+        const std::array<ecs::entity, 1> sources = {source};
+        core::result<ecs::entity_archive> captured = ecs::entity_archive::capture(fixture.world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const ecs::entity_archive> archive =
+          std::make_shared<const ecs::entity_archive>(std::move(captured).value());
+        fixture.runtime.flush_pending();
+        fixture.null_host().reset_recorder();
+
+        ecs::iteration_scope lock = fixture.world.lock_iteration();
+        const core::result<ecs::entity> instantiated = fixture.runtime.deferred_commands().instantiate(archive);
+        CONJURE_REQUIRE_OK(instantiated);
+        const ecs::entity root = instantiated.value();
+        fixture.runtime.note_deferred_instance(root);
+        CHECK(fixture.runtime.is_deferred_reserved(root));
+        CHECK(fixture.runtime.is_deferred_instance(root));
+        // The archive's components are unknown before the flush: a remove is always recorded.
+        CHECK(fixture.runtime.record_reserved_remove(root, fixture.registry.id_of<test_velocity>()));
+        REQUIRE(fixture.runtime.add_script(root, hash_of(ENEMY), {}).is_valid());
+        lock.release();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+
+        REQUIRE(fixture.world.is_alive(root));
+        CHECK_FALSE(fixture.runtime.is_deferred_instance(root));
+        const std::vector<script_entry_id> scripts = fixture.runtime.scripts_of(root);
+        REQUIRE(scripts.size() == 2);
+        REQUIRE(fixture.runtime.entry(scripts[0]) != nullptr);
+        REQUIRE(fixture.runtime.entry(scripts[1]) != nullptr);
+        CHECK(fixture.runtime.entry(scripts[0])->classHash == hash_of(PLAYER));      // the archive's script first
+        CHECK(fixture.runtime.entry(scripts[1])->classHash == hash_of(ENEMY));
+        CHECK(fixture.null_host().recorder().creates().size() == 2);
+        CHECK(fixture.runtime.stats().liveInstances == 3);
     }
 }

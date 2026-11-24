@@ -6,9 +6,11 @@
 #include "conjure/scene/scene.h"
 #include "conjure/scripting/script_runtime.h"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 
 // The hierarchy half of entity_* (docs/design/15_bindings.md 2.3, 3.3, R64): names, parents, children,
@@ -43,6 +45,20 @@ namespace {
     [[nodiscard]] int32_t locked_refused(native_function_id id) noexcept {
         return fail_entry(id, bindings_error::STRUCTURE_LOCKED, "no deferred command buffer");
     }
+
+    /// <summary>
+    /// The entity when the scripting runtime reserved it in the open query scope (entity_create,
+    /// entity_create_many or a deferred instantiation), NULL_ENTITY otherwise. Such an id is not alive until the
+    /// flush, yet the name, tag, layer and enabled setters record their request on it behind the create, as the
+    /// core component_* entries do (17_demo_games.md P2).
+    /// </summary>
+    [[nodiscard]] ecs::entity reserved_in_scope(const marshal::structural_guard &guard, uint64_t packed) noexcept {
+        if (!guard.deferred() || !guard.can_defer()) {
+            return ecs::NULL_ENTITY;
+        }
+        const ecs::entity entity = marshal::to_entity(packed);
+        return guard.runtime->is_deferred_reserved(entity) ? entity : ecs::NULL_ENTITY;
+    }
 }
 
 int32_t conjure::bindings::entries::entity_set_name(uint64_t entity, const char *utf8, int32_t length) {
@@ -51,6 +67,17 @@ int32_t conjure::bindings::entries::entity_set_name(uint64_t entity, const char 
     const core::result<std::string_view> text = marshal::read_utf8(utf8, length);
     if (!text.has_value()) {
         return fail_entry(ID, text.get_error());
+    }
+    const marshal::structural_guard reserving = structural();
+    const ecs::entity reserved = reserved_in_scope(reserving, entity);
+    if (!reserved.is_null()) {
+        // Recorded behind the create; the runtime's table answers entity_find_by_name once the flush placed it.
+        const scene::name component{text->empty() ? core::string_id::null() : core::string_id(*text)};
+        static_cast<void>(
+          reserving.runtime->record_reserved_add(reserved, active_scene()->ids().name, bytes_of(component))
+        );
+        reserving.runtime->set_entity_name(reserved, *text);
+        return 0;
     }
     int32_t status = 0;
     const ecs::entity target = resolve_alive(ID, entity, status);
@@ -123,6 +150,16 @@ int32_t conjure::bindings::entries::entity_get_children(uint64_t entity, uint64_
 int32_t conjure::bindings::entries::entity_set_enabled(uint64_t entity, int32_t enabled) {
     constexpr native_function_id ID = native_function_id::entity_set_enabled;
     CONJURE_BINDINGS_GUARD_STATUS(ID);
+    const ecs::entity reserved = reserved_in_scope(structural(), entity);
+    if (!reserved.is_null()) {
+        // Applied after the flush that places the entity, like any deferred enable (skipped if a destroy won).
+        scene_fixup fixup = {};
+        fixup.operation = scene_fixup::kind::SET_ENABLED;
+        fixup.entity = reserved;
+        fixup.enabled = enabled != 0;
+        queue_fixup(fixup);
+        return 0;
+    }
     int32_t status = 0;
     const ecs::entity target = resolve_alive(ID, entity, status);
     if (target.is_null()) {
@@ -185,6 +222,16 @@ int32_t conjure::bindings::entries::entity_set_tag(uint64_t entity, const char *
     if (!text.has_value()) {
         return fail_entry(ID, text.get_error());
     }
+    const marshal::structural_guard reserving = structural();
+    const ecs::entity reserved = reserved_in_scope(reserving, entity);
+    if (!reserved.is_null()) {
+        // An add overwrites at the flush, so the last tag set in the scope wins; a null tag reads as none.
+        const scene::tag component{text->empty() ? core::string_id::null() : core::string_id(*text)};
+        static_cast<void>(
+          reserving.runtime->record_reserved_add(reserved, active_scene()->ids().tag, bytes_of(component))
+        );
+        return 0;
+    }
     int32_t status = 0;
     const ecs::entity target = resolve_alive(ID, entity, status);
     if (target.is_null()) {
@@ -212,6 +259,31 @@ int32_t conjure::bindings::entries::entity_set_tag(uint64_t entity, const char *
     return 0;
 }
 
+int32_t conjure::bindings::entries::entity_get_tag_text(uint64_t entity, char *utf8, int32_t capacity) {
+    constexpr native_function_id ID = native_function_id::entity_get_tag_text;
+    CONJURE_BINDINGS_GUARD_STATUS(ID);
+    if (capacity < 0) {
+        return fail_entry(ID, bindings_error::INVALID_ARGUMENT, "capacity");
+    }
+    int32_t status = 0;
+    const ecs::entity target = resolve_alive(ID, entity, status);
+    if (target.is_null()) {
+        return status;
+    }
+    const core::string_id tag = active_scene()->tag_of(target);
+    if (tag.is_null()) {
+        return 0;
+    }
+    // entity_set_tag and a scene file that spells the tag intern the text. A hash without a spelling (a C#
+    // StringId.Of mirror write, a scene value stored as "#<hex>" or as a number) has none to return, and that
+    // must not read as "no tag": the caller still has the hash through entity_get_tag.
+    const std::string_view text = tag.view();
+    if (text.empty()) {
+        return fail_entry(ID, bindings_error::NOT_FOUND, "the tag hash has no interned text");
+    }
+    return marshal::write_utf8(text, utf8, capacity);
+}
+
 int32_t conjure::bindings::entries::entity_get_layer(uint64_t entity) {
     constexpr native_function_id ID = native_function_id::entity_get_layer;
     CONJURE_BINDINGS_GUARD_STATUS(ID);
@@ -229,12 +301,21 @@ int32_t conjure::bindings::entries::entity_set_layer(uint64_t entity, int32_t la
     if (layer < 0 || layer >= static_cast<int32_t>(scene::layer_table::LAYER_COUNT)) {
         return fail_entry(ID, bindings_error::INVALID_ARGUMENT, "layer must be 0..31");
     }
+    const u8 index = static_cast<u8>(layer);
+    const marshal::structural_guard reserving = structural();
+    const ecs::entity reserved = reserved_in_scope(reserving, entity);
+    if (!reserved.is_null()) {
+        const scene::layer component{index};
+        static_cast<void>(
+          reserving.runtime->record_reserved_add(reserved, active_scene()->ids().layer, bytes_of(component))
+        );
+        return 0;
+    }
     int32_t status = 0;
     const ecs::entity target = resolve_alive(ID, entity, status);
     if (target.is_null()) {
         return status;
     }
-    const u8 index = static_cast<u8>(layer);
     scene::scene &active = *active_scene();
     if (active.world().has<scene::layer>(target)) {
         active.world().get<scene::layer>(target)->index = index;
@@ -388,14 +469,18 @@ int32_t conjure::bindings::entries::entity_create_many(int32_t count, uint64_t p
             return locked_refused(ID);
         }
         // The ids are real now; the entities exist at the flush and the scene adopts them (roots or children
-        // of 'parent', companions from the local_transform observer) through the fixups of query_end.
+        // of 'parent', companions from the local_transform observer) through the fixups of query_end. The
+        // runtime remembers each id, so the core component_* / script_add / entity_destroy entries record their
+        // requests on it behind the create (17_demo_games.md P2).
         ecs::command_buffer &commands = guard.commands();
+        const std::array<ecs::component_id, 1> recorded = {active.ids().localTransform};
         for (int32_t index = 0; index < count; ++index) {
             const ecs::entity created = commands.create_entity();
             if (created.is_null()) {
                 return fail_entry(ID, bindings_error::INTERNAL, "entity id space exhausted");
             }
             commands.add_raw(created, active.ids().localTransform);
+            guard.runtime->note_deferred_reserved(created, recorded);
             scene_fixup fixup = {};
             fixup.operation = scene_fixup::kind::ATTACH;
             fixup.entity = created;

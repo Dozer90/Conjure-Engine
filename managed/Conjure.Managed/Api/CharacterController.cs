@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Conjure.Components;
 using Conjure.Dod;
@@ -9,7 +10,10 @@ namespace Conjure;
 /// The character controller facade of an entity (docs/design/15_bindings.md 2.5): the desired velocity and
 /// the step's ground report through physics_character_*, which need a physics.character_controller on the
 /// entity (ConjureNativeException(ComponentMissing) otherwise; Data goes through Entity.GetComponent /
-/// SetComponent and throws InvalidOperationException instead). IsGrounded never throws (B11).
+/// SetComponent and throws InvalidOperationException instead). IsGrounded never throws (B11). On an entity
+/// Entity.Create or Prefab.Instantiate reserved in the current ComponentQuery scope Move and the Data setter never
+/// throw: they are kept and made in call order once the scope closed and the entity exists (a failure then is
+/// logged at ERROR); Velocity and the Data getter throw EntityNotAliveException until then.
 /// </summary>
 public readonly struct CharacterController
 {
@@ -35,6 +39,10 @@ public readonly struct CharacterController
     /// </summary>
     public unsafe void Move(Vector3 velocity)
     {
+        if (Defer((this, velocity), static state => state.Item1.Move(state.Item2)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsCharacterMove, NativeFunction.PhysicsCharacterMove);
         NativeCheck.ThrowIfFailed(api->PhysicsCharacterMove(Entity.Id, &velocity), NativeFunction.PhysicsCharacterMove);
@@ -84,6 +92,19 @@ public readonly struct CharacterController
     public CharacterControllerData Data
     {
         get => Entity.GetComponent<CharacterControllerData>();
-        set => Entity.SetComponent(in value);
+        set
+        {
+            if (Defer((this, value), static state => state.Item1.Data = state.Item2))
+            {
+                return;
+            }
+            Entity.SetComponent(in value);
+        }
     }
+
+    /// <summary>
+    /// Keeps a write for the end of the ComponentQuery scope that reserved the entity (ReservedWrites); false when
+    /// the entity is not reserved and the caller writes now.
+    /// </summary>
+    private bool Defer<TState>(TState state, Action<TState> write) => ReservedWrites.TryDefer(Entity, state, write);
 }

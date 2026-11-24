@@ -15,6 +15,7 @@
 #include "bindings/entry_support.h"
 
 #include <array>
+#include <utility>
 #include <vector>
 
 // The R5 routing (docs/design/15_bindings.md 3.3, B7): structural requests made inside a DOD query scope land
@@ -171,10 +172,13 @@ TEST_SUITE("bindings/span_scope_routing") {
         fixture.inside_scope([&](conjure_query_scope &) {
             CHECK(api.entity_create_many(3, 0, first.data()) == 3);
             CHECK(api.entity_create_many(2, 0, second.data()) == 2);
-            // A reserved id is not alive until the flush: the entity entries refuse it like a dead one.
+            // A reserved id is not alive until the flush, yet the entity setters record on it behind the create,
+            // as the core component_* / script_add / entity_destroy entries do (code sweep OWN-P2).
             const utf8_argument tag = utf8("First");
-            CHECK(api.entity_set_tag(first[0], tag.data, tag.length) == to_status(bindings_error::ENTITY_NOT_ALIVE));
+            CHECK(api.entity_set_tag(first[0], tag.data, tag.length) == 0);
+            CHECK(api.entity_get_tag(first[0]) == 0);
         });
+        CHECK(fixture.base.active().tag_of(marshal::to_entity(first[0])) == core::string_id("First"));
         const std::span<const scene::root_entry> roots = fixture.base.active().roots();
         REQUIRE(roots.size() == rootsBefore + 5);
         CHECK(roots[rootsBefore].entity == marshal::to_entity(first[0]));
@@ -237,6 +241,132 @@ TEST_SUITE("bindings/span_scope_routing") {
         CHECK(read.position.z == 3.0f);
         fixture.base.step();
         CHECK(fixture.base.active().tree().children_of(instance).size() == 1);
+    }
+
+    TEST_CASE("regression - code sweep OWN-P2 ids create_many and instantiate reserve take the core requests") {
+        // The bindings reserve ids in the runtime's deferred buffer too: the core component_* / script_add /
+        // entity_destroy entries record their requests on them behind the create, as on an Entity.Create id.
+        log_capture logs = {};
+        routing_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const u32 layerType = fixture.base.registry.id_of<scene::layer>().value;
+        const u32 tagType = fixture.base.registry.id_of<scene::tag>().value;
+        const u32 transformType = fixture.transformIds[0];
+        const scene::layer third = {3};
+        const scene::layer fifth = {5};
+        const u64 scriptClass = 0x5C21u;
+
+        SUBCASE("create_many ids") {
+            std::array<uint64_t, 2> created = {};
+            fixture.inside_scope([&](conjure_query_scope &) {
+                REQUIRE(api.entity_create_many(2, 0, created.data()) == 2);
+                CHECK(fixture.base.runtime->is_deferred_reserved(marshal::to_entity(created[0])));
+                CHECK(api.component_add(created[0], layerType, &third) == 1);
+                CHECK(api.script_add(created[0], scriptClass) == 0);
+                CHECK(api.component_remove(created[1], layerType) == 0);        // nothing recorded to remove
+                CHECK(api.component_add(created[1], layerType, &fifth) == 1);
+                CHECK(api.component_remove(created[1], layerType) == 1);
+                CHECK(api.component_remove(created[1], transformType) == 1);    // added by create_many itself
+                CHECK(api.component_add(created[1], transformType, nullptr) == 1);
+                CHECK(api.entity_destroy(created[1]) == 1);
+            });
+            const ecs::entity kept = marshal::to_entity(created[0]);
+            REQUIRE(fixture.base.world.is_alive(kept));
+            REQUIRE(fixture.base.world.has<scene::layer>(kept));
+            CHECK(*std::as_const(fixture.base.world).get<scene::layer>(kept) == third);
+            CHECK(fixture.base.runtime->scripts_of(kept).size() == 1);
+            CHECK(fixture.base.active().root_owner(kept).has_value());           // the ATTACH fixup still applied
+            CHECK_FALSE(fixture.base.world.is_alive(marshal::to_entity(created[1])));
+            CHECK(bindings::detail::pending_fixup_count() == 0);
+        }
+        SUBCASE("a deferred instantiation root") {
+            const conjure_uuid prefab = uuid_of(fixture.prefab);
+            uint64_t root = 0;
+            conjure_transform moved = {};
+            moved.position = {4.0f, 5.0f, 6.0f};
+            moved.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+            moved.scale = {1.0f, 1.0f, 1.0f};
+            const scene::local_transform movedLocal =
+              scene::local_transform::from_transform(marshal::to_transform(moved));
+            fixture.inside_scope([&](conjure_query_scope &) {
+                REQUIRE(api.prefab_instantiate(&prefab, 0, nullptr, &root) == 0);
+                CHECK(fixture.base.runtime->is_deferred_reserved(marshal::to_entity(root)));
+                CHECK(api.component_add(root, layerType, &fifth) == 1);
+                CHECK(api.component_set(root, transformType, &movedLocal) == 1);
+                CHECK(api.component_remove(root, tagType) == 1);                // the archive's components are unknown
+                CHECK(api.script_add(root, scriptClass) == 0);
+            });
+            const ecs::entity instance = marshal::to_entity(root);
+            REQUIRE(fixture.base.world.is_alive(instance));
+            REQUIRE(fixture.base.world.has<scene::layer>(instance));
+            CHECK(*std::as_const(fixture.base.world).get<scene::layer>(instance) == fifth);
+            conjure_transform read = {};
+            CHECK(api.transform_get_local(root, &read) == 0);
+            CHECK(read.position.y == 5.0f);
+            CHECK(fixture.base.runtime->scripts_of(instance).size() == 1);
+            CHECK(api.prefab_is_instance_root(root) == 1);
+        }
+        SUBCASE("the name, tag, layer and enabled setters record on a reserved id") {
+            std::array<uint64_t, 2> created = {};
+            const utf8_argument name = utf8("spawned_name");
+            const utf8_argument tag = utf8("Spawned");
+            const utf8_argument doomedName = utf8("doomed_name");
+            const usize namesBefore = fixture.base.runtime->entity_name_count();
+            fixture.inside_scope([&](conjure_query_scope &) {
+                REQUIRE(api.entity_create_many(2, 0, created.data()) == 2);
+                CHECK(api.entity_set_name(created[0], name.data, name.length) == 0);
+                CHECK(api.entity_set_tag(created[0], tag.data, tag.length) == 0);
+                CHECK(api.entity_set_layer(created[0], 4) == 0);
+                CHECK(api.entity_set_enabled(created[0], 0) == 0);
+                CHECK(api.entity_set_layer(created[0], 32) == to_status(bindings_error::INVALID_ARGUMENT));
+                // Reads keep answering as for a dead entity until the flush.
+                CHECK(api.entity_get_tag(created[0]) == 0);
+                CHECK(api.entity_get_layer(created[0]) == to_status(bindings_error::ENTITY_NOT_ALIVE));
+                // A destroy recorded later wins over the setters, and the name goes with the id.
+                CHECK(api.entity_set_name(created[1], doomedName.data, doomedName.length) == 0);
+                CHECK(api.entity_set_enabled(created[1], 0) == 0);
+                CHECK(api.entity_destroy(created[1]) == 1);
+            });
+            const ecs::entity kept = marshal::to_entity(created[0]);
+            REQUIRE(fixture.base.world.is_alive(kept));
+            REQUIRE(fixture.base.world.has<scene::name>(kept));
+            CHECK(std::as_const(fixture.base.world).get<scene::name>(kept)->value == core::string_id("spawned_name"));
+            CHECK(fixture.base.runtime->entity_name(kept) == "spawned_name");
+            CHECK(fixture.base.active().tag_of(kept) == core::string_id("Spawned"));
+            CHECK(fixture.base.active().layer_of(kept) == 4);
+            CHECK_FALSE(fixture.base.active().is_enabled(kept));
+            CHECK_FALSE(fixture.base.world.is_alive(marshal::to_entity(created[1])));
+            CHECK(fixture.base.runtime->entity_name_count() == namesBefore + 1);
+            CHECK(bindings::detail::pending_fixup_count() == 0);
+            CONJURE_CHECK_OK(fixture.base.active().validate());
+        }
+        SUBCASE("a deferred instantiation root takes a destroy in call order: no part of the instance is created") {
+            // Owner ruling 2026-11-24: the destroy is recorded behind the instantiation and the requests on the
+            // root, and the flush cancels the copy, so the child does not outlive its root (the scene links the
+            // inner entities to the root only after the flush) and the root's ATTACH fixup finds nothing to adopt.
+            const conjure_uuid prefab = uuid_of(fixture.prefab);
+            const u32 entitiesBefore = fixture.base.world.entity_count();
+            const usize rootsBefore = fixture.base.active().roots().size();
+            uint64_t root = 0;
+            uint64_t kept = 0;
+            fixture.inside_scope([&](conjure_query_scope &) {
+                REQUIRE(api.prefab_instantiate(&prefab, 0, nullptr, &root) == 0);
+                CHECK(fixture.base.runtime->is_deferred_instance(marshal::to_entity(root)));
+                CHECK(api.component_add(root, layerType, &fifth) == 1);
+                CHECK(api.entity_destroy(root) == 1);
+                REQUIRE(api.prefab_instantiate(&prefab, 0, nullptr, &kept) == 0);
+            });
+            CHECK_FALSE(fixture.base.world.is_alive(marshal::to_entity(root)));
+            REQUIRE(fixture.base.world.is_alive(marshal::to_entity(kept)));
+            CHECK(fixture.base.world.entity_count() == entitiesBefore + 2);       // the kept instance only
+            CHECK(fixture.base.active().roots().size() == rootsBefore + 1);
+            CHECK(bindings::detail::pending_fixup_count() == 0);
+            fixture.base.step();
+            CHECK(fixture.base.active().tree().children_of(marshal::to_entity(kept)).size() == 1);
+            CONJURE_CHECK_OK(fixture.base.active().validate());
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        CONJURE_CHECK_OK(fixture.base.world.validate());
     }
 
     TEST_CASE("span routing - a request on an entity dead at the flush is skipped") {

@@ -135,9 +135,15 @@ TEST_SUITE("scripting/dotnet_script_host") {
         CHECK(probe->has_callback(script_callback::LATE_UPDATE));
         CHECK(probe->has_callback(script_callback::DESTROY));
         CHECK_FALSE(probe->has_callback(script_callback::COLLISION_ENTER));
+        CHECK_FALSE(probe->has_callback(script_callback::RELOAD));
         REQUIRE(probe->find_field("Updates") != nullptr);
         CHECK(probe->find_field("Updates")->kind == script_field_kind::INT32);
         CHECK(probe->find_field("Updates")->defaultValue.root().as_i64() == 0);
+
+        // OnReload is detected like the other callbacks (code sweep OWN-RELOAD).
+        const script_class_info *reloadProbe = classes.find("Conjure.TestScripts.ReloadProbe");
+        REQUIRE(reloadProbe != nullptr);
+        CHECK(reloadProbe->has_callback(script_callback::RELOAD));
 
         const script_class_info *mover = classes.find("Conjure.TestScripts.Mover");
         REQUIRE(mover != nullptr);

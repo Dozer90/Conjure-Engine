@@ -47,7 +47,7 @@ Runs inside <code>dispatch_collisions</code> for every record: what OnCollisionE
 using create_hook = std::function<void(const conjure_create_request &request, i32 slot)>;
 ```
 
-Runs inside <code>create_instances</code> for every request once its slot is assigned: what OnCreate would do.
+Runs inside <code>create_instances</code> once a request&#x27;s slot is assigned. As the create hook, for a request without <code>CREATE_FLAG_ALREADY_CREATED</code>: what OnCreate would do. As the reload hook, for a request with it: what OnReload would do.
 
 ### `null_script_host::destroy_hook` {#symbol-null-script-host-destroy-hook}
 

@@ -67,6 +67,20 @@ TEST_SUITE("scripting/native_api") {
         }
     }
 
+    TEST_CASE("native_entry_descriptors - entity_get_tag_text is appended last with the string-out signature") {
+        // Appended rather than placed beside entity_get_tag: entries are never reordered within a version, so
+        // every index before it keeps its value and only the layout hash changes.
+        const std::span<const native_entry_descriptor> entries = native_entry_descriptors();
+        REQUIRE(entries.size() == NATIVE_API_ENTRY_COUNT);
+        const native_entry_descriptor &last = entries[NATIVE_API_ENTRY_COUNT - 1];
+        CHECK(last.group == "entity");
+        CHECK(last.name == "get_tag_text");
+        CHECK(last.signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)");
+        CHECK(last.signature == entries[static_cast<usize>(find_native_entry("entity_get_name"))].signature);
+        CHECK(offsetof(conjure_native_api, entity_get_tag_text) == 24 + (NATIVE_API_ENTRY_COUNT - 1) * sizeof(void *));
+        CHECK(find_native_entry("modules_name") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 2);
+    }
+
     TEST_CASE("make_native_api - all entries are null before fill and the header is set") {
         conjure_frame_block frame = {};
         const conjure_native_api api = make_native_api(&frame);
@@ -144,7 +158,7 @@ TEST_SUITE("scripting/native_api") {
         CHECK(find_native_entry("log_write") == 0);
         CHECK(find_native_entry("query_end") == static_cast<i32>(NATIVE_API_CORE_ENTRY_COUNT) - 1);
         CHECK(find_native_entry("transform_get_local") == static_cast<i32>(NATIVE_API_CORE_ENTRY_COUNT));
-        CHECK(find_native_entry("modules_name") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 1);
+        CHECK(find_native_entry("entity_get_tag_text") == static_cast<i32>(NATIVE_API_ENTRY_COUNT) - 1);
         CHECK(find_native_entry("physics_raycast") > 0);
         CHECK(find_native_entry("no_such_entry") == -1);
         CHECK(find_native_entry("") == -1);
@@ -184,8 +198,18 @@ TEST_SUITE("scripting/native_api") {
         }
         CHECK(parse_script_callback("UPDATE") == script_callback::UPDATE);
         CHECK(parse_script_callback("nope") == script_callback::COUNT);
+        // RELOAD was appended: the older callbacks keep the bits ScriptCallback in C# mirrors.
+        CHECK(to_string(script_callback::RELOAD) == "RELOAD");
+        CHECK(static_cast<u8>(script_callback::TRIGGER_EXIT) == 9);
+        CHECK(static_cast<u8>(script_callback::RELOAD) == 10);
         CHECK(to_string(script_phase::LATE_UPDATE) == "LATE_UPDATE");
         CHECK(to_string(script_phase::COUNT) == "COUNT");
+    }
+
+    TEST_CASE("conjure_create_request - the create flags are distinct single bits") {
+        CHECK(CREATE_FLAG_ALREADY_STARTED == 1);
+        CHECK(CREATE_FLAG_ALREADY_CREATED == 2);
+        CHECK((CREATE_FLAG_ALREADY_STARTED & CREATE_FLAG_ALREADY_CREATED) == 0);
     }
 
     TEST_CASE("conjure_frame_block - is 64-byte aligned with the documented offsets") {

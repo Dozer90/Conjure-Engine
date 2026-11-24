@@ -215,7 +215,8 @@ TEST_SUITE("scripting/script_component") {
         const u32 source = store.create_set(ecs::entity{1, 1});
         const script_entry_id id = store.add_entry(source, make_entry(7, R"({"hp": 3})"));
         store.map_slot(4, id);
-        store.find_entry(id)->flags = script_entry_flags::STARTED | script_entry_flags::CLASS_MISSING;
+        store.find_entry(id)->flags =
+          script_entry_flags::CREATED | script_entry_flags::STARTED | script_entry_flags::CLASS_MISSING;
 
         const u32 copy = store.clone_set(source, ecs::entity{2, 1});
         REQUIRE(copy != INVALID_SET_HANDLE);
@@ -229,6 +230,7 @@ TEST_SUITE("scripting/script_component") {
         CHECK_FALSE(cloned->entries[0].is_live());
         CHECK(cloned->entries[0].has_flag(script_entry_flags::CLASS_MISSING));
         CHECK_FALSE(cloned->entries[0].has_flag(script_entry_flags::STARTED));
+        CHECK_FALSE(cloned->entries[0].has_flag(script_entry_flags::CREATED));     // a copy runs OnCreate
         CHECK(store.find_entry(id)->is_live());
         CHECK(store.clone_set(INVALID_SET_HANDLE) == INVALID_SET_HANDLE);
 

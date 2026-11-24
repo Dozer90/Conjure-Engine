@@ -126,11 +126,12 @@ enum class script_callback : uint8_t {
     COLLISION_EXIT,
     TRIGGER_ENTER,
     TRIGGER_EXIT,
+    RELOAD,
     COUNT
 };
 ```
 
-Bit index of <code>conjure_script_class_desc::callback_mask</code> and index of the fault counters.
+Bit index of <code>conjure_script_class_desc::callback_mask</code> and index of the fault counters. <code>RELOAD</code> (OnReload, which runs instead of OnCreate on an instance a hot reload recreated) comes last, so the older callbacks keep their bits.
 
 ### `script_field_kind` {#symbol-script-field-kind}
 
@@ -174,6 +175,7 @@ The three callback phases <code>run_phase</code> takes.
 
 | Name | Type | Value | Description |
 |---|---|---|---|
+| <a id="variable-CREATE_FLAG_ALREADY_CREATED"></a><code>CREATE_FLAG_ALREADY_CREATED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">2</span></code> | <code>conjure_create_request::flags</code> bit: the entry&#x27;s OnCreate already returned in this entity&#x27;s lifetime, so the recreated instance runs OnReload instead of OnCreate, after its fields were applied (hot reload, and a snapshot restore or set replace from JSON whose entry says &quot;created&quot;). |
 | <a id="variable-CREATE_FLAG_ALREADY_STARTED"></a><code>CREATE_FLAG_ALREADY_STARTED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">1</span></code> | <code>conjure_create_request::flags</code> bit: the entry already ran OnStart (reload, snapshot restore). |
 | <a id="variable-NATIVE_API_CORE_ENTRY_COUNT"></a><code>NATIVE_API_CORE_ENTRY_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>CORE_<wbr>ENTRY_<wbr>COUNT</span></code> | Entries this module implements (everything before the bindings marker in <code>native_api.inl</code>). |
 | <a id="variable-NATIVE_API_ENTRY_COUNT"></a><code>NATIVE_API_ENTRY_COUNT</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> <a href="../core/types.html#symbol-u32">u32</a></code> | <code class="signature"><span class="na">CONJURE_<wbr>NATIVE_<wbr>API_<wbr>ENTRY_<wbr>COUNT</span></code> | Entries in the table, core and bindings together. |

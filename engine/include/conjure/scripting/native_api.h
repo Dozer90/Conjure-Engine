@@ -404,7 +404,9 @@ namespace conjure::scripting {
     };
 
     /// <summary>
-    /// Bit index of conjure_script_class_desc::callback_mask and index of the fault counters.
+    /// Bit index of conjure_script_class_desc::callback_mask and index of the fault counters. RELOAD (OnReload,
+    /// which runs instead of OnCreate on an instance a hot reload recreated) comes last, so the older callbacks
+    /// keep their bits.
     /// </summary>
     enum class script_callback : uint8_t {
         CREATE,
@@ -417,6 +419,7 @@ namespace conjure::scripting {
         COLLISION_EXIT,
         TRIGGER_ENTER,
         TRIGGER_EXIT,
+        RELOAD,
         COUNT
     };
 
@@ -435,6 +438,13 @@ namespace conjure::scripting {
     /// conjure_create_request::flags bit: the entry already ran OnStart (reload, snapshot restore).
     /// </summary>
     inline constexpr uint8_t CREATE_FLAG_ALREADY_STARTED = 1;
+
+    /// <summary>
+    /// conjure_create_request::flags bit: the entry's OnCreate already returned in this entity's lifetime, so the
+    /// recreated instance runs OnReload instead of OnCreate, after its fields were applied (hot reload, and a
+    /// snapshot restore or set replace from JSON whose entry says "created").
+    /// </summary>
+    inline constexpr uint8_t CREATE_FLAG_ALREADY_CREATED = 2;
 
     /// <summary>
     /// Column slots of a conjure_chunk_view.

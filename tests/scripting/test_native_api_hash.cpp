@@ -9,7 +9,7 @@ using namespace conjure::scripting;
 TEST_SUITE("scripting/native_api_hash") {
 
     TEST_CASE("native_api_hash - the generated constants describe the table") {
-        CHECK(CONJURE_NATIVE_API_ENTRY_COUNT == 126);
+        CHECK(CONJURE_NATIVE_API_ENTRY_COUNT == 127);
         CHECK(CONJURE_NATIVE_API_CORE_ENTRY_COUNT == 20);
         CHECK(NATIVE_API_ENTRY_COUNT == CONJURE_NATIVE_API_ENTRY_COUNT);
         CHECK(NATIVE_API_CORE_ENTRY_COUNT == CONJURE_NATIVE_API_CORE_ENTRY_COUNT);

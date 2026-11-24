@@ -15,12 +15,15 @@
 #include "conjure/bindings/call_counters.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
+#include "conjure/core/json/writer.h"
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/system_phase.h"
 #include "conjure/engine/application.h"
+#include "conjure/scene/components.h"
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/scene.h"
 #include "conjure/scene/scene_manager.h"
+#include "conjure/scene/scene_serializer.h"
 #include "conjure/scripting/script_class_registry.h"
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_runtime.h"
@@ -33,8 +36,10 @@
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The C# facades (docs/design/15_bindings.md 2.5, 2.6, 10) driven through Conjure.TestScripts over the real CLR
@@ -66,7 +71,11 @@ namespace {
     constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
     constexpr std::string_view ENTITY_FAILURE_PROBE = "Conjure.TestScripts.EntityFailureProbe";
     constexpr std::string_view ENTITY_NAME_PROBE = "Conjure.TestScripts.EntityNameProbe";
+    constexpr std::string_view ENTITY_TAG_PROBE = "Conjure.TestScripts.EntityTagProbe";
     constexpr std::string_view WORLD_AXIS_PROBE = "Conjure.TestScripts.WorldAxisProbe";
+    constexpr std::string_view RESERVED_FACADE_PROBE = "Conjure.TestScripts.ReservedFacadeProbe";
+    constexpr std::string_view RESERVED_PREFAB_DESTROY_PROBE = "Conjure.TestScripts.ReservedPrefabDestroyProbe";
+    constexpr std::string_view LAMP_PREFAB_PATH = "assets://prefabs/lamp.prefab";
     constexpr std::string_view CLIP_PATH = "assets://audio/tone.wav";
     constexpr std::string_view OTHER_PREFAB_PATH = "assets://prefabs/other.prefab";
 
@@ -154,6 +163,10 @@ namespace {
 
         [[nodiscard]] std::string field_string(scripting::script_entry_id id, std::string_view name) {
             return std::string(fields_of(id).root()[name].as_string());
+        }
+
+        [[nodiscard]] f64 field_f64(scripting::script_entry_id id, std::string_view name) {
+            return fields_of(id).root()[name].as_f64(-1.0);
         }
     };
 
@@ -713,9 +726,28 @@ TEST_SUITE("bindings/bindings_managed") {
             CHECK(fixture.field_i64(probe, "ScopeLayerAfter") == 6);
             CHECK(fixture.runtime().open_query_scope_count() == 0);
         }
-        SUBCASE("inside a query scope an entity Create reserved refuses the add, and is alive once the scope closes") {
-            CHECK(fixture.field_string(probe, "ScopeAddReserved") == "EntityNotAliveException");
+        SUBCASE("inside a query scope an entity Create reserved takes the add and has the component once it closes") {
+            CHECK(fixture.field_string(probe, "ScopeAddReserved") == "none");
             CHECK(fixture.field_i64(probe, "ScopeReservedAlive") == 1);
+            CHECK(fixture.field_i64(probe, "ScopeReservedLayer") == 7);
+        }
+        SUBCASE("inside a query scope an entity Create reserved takes scripts up to the maximum, then refuses one") {
+            // The refusal is InvalidOperationException, not EntityNotAliveException: the entity exists at the flush
+            // and refused (script_add's status says which), although IsAlive answers false for it in the scope.
+            CHECK(fixture.field_string(probe, "ScopeReservedScripts") == "none");
+            CHECK(fixture.field_string(probe, "ScopeReservedPastMax") == "InvalidOperationException");
+            const i64 packed = fixture.field_i64(probe, "ScopeReservedId");
+            const ecs::entity reserved = ecs::entity::from_u64(static_cast<u64>(packed));
+            CHECK(fixture.runtime().scripts_of(reserved).size() == scripting::MAX_SCRIPTS_PER_ENTITY);
+        }
+        SUBCASE("inside a query scope the Name, Tag, Layer and Enabled setters record on an entity Create reserved") {
+            CHECK(fixture.field_string(probe, "ScopeReservedSetters") == "none");
+            CHECK(fixture.field_string(probe, "ScopeSpawnedTagInside").empty());
+            CHECK(fixture.field_i64(probe, "ScopeSpawnedLayerInside") == -1);
+            CHECK(fixture.field_string(probe, "ScopeSpawnedName") == "scope_spawned");
+            CHECK(fixture.field_string(probe, "ScopeSpawnedTag") == "scope_tag");
+            CHECK(fixture.field_i64(probe, "ScopeSpawnedLayer") == 9);
+            CHECK(fixture.field_i64(probe, "ScopeSpawnedEnabled") == 0);
         }
         SUBCASE("inside a query scope a first AddScript is refused, a further one joins the set") {
             // The first script needs the script component, which the locked world cannot add: add_script keeps
@@ -724,8 +756,9 @@ TEST_SUITE("bindings/bindings_managed") {
             CHECK(logs.contains(core::log_level::WARN, "add_script: no script_component"));
             CHECK(fixture.field_string(probe, "ScopeAddScriptHolder") == "none");
         }
-        // The two WARNs are the refused AddScripts' (past the maximum, and a first script in a locked scope).
-        CHECK(logs.count(core::log_level::WARN) == 2);
+        // The three WARNs are the refused AddScripts' (past the maximum on a live and on a reserved entity, and a
+        // first script in a locked scope).
+        CHECK(logs.count(core::log_level::WARN) == 3);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
@@ -747,6 +780,157 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(fixture.field_string(probe, "DeadGetter").empty());           // a getter never throws for it
         CHECK(call_count(native_function_id::entity_set_name) >= 5);
         CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - code sweep OWN-TAG: Entity.Tag reads and writes the text, TagId keeps the hash [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        reset_call_counters();
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), ENTITY_TAG_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        SUBCASE("an untagged live entity reads \"\" and StringId.Null") {
+            CHECK(fixture.field_string(probe, "Untagged").empty());
+            CHECK(fixture.field_i64(probe, "UntaggedIdNull") == 1);
+        }
+        SUBCASE("the setter tags the entity and the getter returns the text, also past the stack scratch") {
+            CHECK(fixture.field_string(probe, "AfterSet") == "Enemy");
+            CHECK(fixture.field_i64(probe, "IdMatchesText") == 1);
+            CHECK(fixture.field_i64(probe, "HasTagAfterSet") == 1);
+            CHECK(fixture.field_i64(probe, "FoundByTag") == 1);
+            CHECK(fixture.field_i64(probe, "LongRoundTrip") == 1);
+        }
+        SUBCASE("SetTag stays as a forward to the setter") {
+            CHECK(fixture.field_string(probe, "AfterForward") == "forwarded");
+        }
+        SUBCASE("\"\" and null remove the tag") {
+            CHECK(fixture.field_i64(probe, "ClearedByEmpty") == 1);
+            CHECK(fixture.field_i64(probe, "ClearedByNull") == 1);
+        }
+        SUBCASE("a StringId.Of value written into the Tag component reads \"\" while TagId keeps it") {
+            CHECK(fixture.field_string(probe, "Unspelled").empty());
+            CHECK(fixture.field_i64(probe, "UnspelledIdKept") == 1);
+        }
+        SUBCASE("a dead entity: the setter and the forward throw, the getters answer \"\" and StringId.Null") {
+            CHECK(fixture.field_string(probe, "DeadSetter") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "DeadForward") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "DeadGetter").empty());
+            CHECK(fixture.field_i64(probe, "DeadIdNull") == 1);
+        }
+        CHECK(call_count(native_function_id::entity_get_tag_text) >= 8);
+        CHECK(call_count(native_function_id::entity_set_tag) >= 7);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - code sweep OWN-P2 the component facades take writes on an entity a query scope reserved "
+      "[dotnet]" *
+      doctest::timeout(120)
+    ) {
+        // Owner ruling 2026-11-24: an entity accepts work as soon as it has an id. The Transform and AudioSource
+        // writes on an entity Entity.Create reserved never throw; they are made in call order once the scope closed,
+        // after the flush that created the entity, while the reads still throw as for a dead entity.
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        reset_call_counters();
+        ecs::world &world = *fixture.app->context().world;
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), RESERVED_FACADE_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        SUBCASE("inside the scope the writes are kept and the reads throw") {
+            CHECK(fixture.field_string(probe, "InsideWrites") == "none");
+            CHECK(fixture.field_string(probe, "InsidePositionRead") == "EntityNotAliveException");
+            CHECK(fixture.field_string(probe, "InsideVolumeRead") == "EntityNotAliveException");
+            CHECK(fixture.field_i64(probe, "InsidePlaying") == 0);
+        }
+        SUBCASE("once the scope closed the writes were made in call order on the created entity") {
+            CHECK(fixture.field_f64(probe, "PositionX") == doctest::Approx(11.0));     // Position, then Translate
+            CHECK(fixture.field_f64(probe, "PositionY") == doctest::Approx(2.0));
+            CHECK(fixture.field_f64(probe, "ScaleX") == doctest::Approx(2.0));
+            CHECK(fixture.field_f64(probe, "Volume") == doctest::Approx(0.5));
+            const ecs::entity spawned = ecs::entity::from_u64(static_cast<u64>(fixture.field_i64(probe, "SpawnedId")));
+            REQUIRE(world.is_alive(spawned));
+            const scene::local_transform *local = std::as_const(world).get<scene::local_transform>(spawned);
+            REQUIRE(local != nullptr);
+            CHECK(local->position.x == doctest::Approx(11.0f));
+            CHECK(local->scale.y == doctest::Approx(2.0f));
+            const audio::audio_source *source = std::as_const(world).get<audio::audio_source>(spawned);
+            REQUIRE(source != nullptr);
+            CHECK(source->volume == doctest::Approx(0.5f));
+            CHECK(call_count(native_function_id::audio_play) == 1);                    // the doomed Play was dropped
+        }
+        SUBCASE("a Destroy recorded in the scope drops the writes kept for the entity") {
+            CHECK(fixture.field_string(probe, "DoomedWrites") == "none");
+            const ecs::entity doomed = ecs::entity::from_u64(static_cast<u64>(fixture.field_i64(probe, "DoomedId")));
+            CHECK_FALSE(world.is_alive(doomed));
+        }
+        SUBCASE("a scope left open: the next managed call makes the write once native force-closed it") {
+            const ecs::entity leaked = ecs::entity::from_u64(static_cast<u64>(fixture.field_i64(probe, "LeakedId")));
+            REQUIRE(world.is_alive(leaked));
+            const scene::local_transform *local = std::as_const(world).get<scene::local_transform>(leaked);
+            REQUIRE(local != nullptr);
+            CHECK(local->position.x == doctest::Approx(7.0f));
+            CHECK(logs.contains(core::log_level::WARN, "force-closed"));
+        }
+        CHECK(logs.count(core::log_level::WARN) == 1);           // the leaked scope's force-close
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - code sweep OWN-P2 Destroy on a prefab root instantiated in the same query scope cancels it "
+      "[dotnet]" *
+      doctest::timeout(120)
+    ) {
+        // Owner ruling 2026-11-24: the destroy is recorded in call order and the flush cancels the instantiation, so
+        // neither the root nor the prefab's child is ever created.
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        scene::scene &active = fixture.app->context().scenes->active();
+        const ecs::entity source = fixture.create("lamp_root");
+        const core::result<ecs::entity> child = active.create_entity(core::string_id("lamp_child"), source);
+        CONJURE_REQUIRE_OK(child);
+        const core::result<scene::prefab_document> document = scene::prefab::build_document(active, source, "lamp");
+        CONJURE_REQUIRE_OK(document);
+        core::json::writer out = {};
+        CONJURE_REQUIRE_OK(scene::scene_serializer::write_prefab(document.value(), out));
+        const std::string text = out.finish();
+        const assets::asset_id lamp = test_uuid(5);
+        assets::cooked_blob_header header = {};
+        header.type = assets::asset_type_traits<scene::prefab_asset>::id();
+        header.typeVersion = 1;
+        header.importerVersion = 1;
+        header.id = lamp;
+        std::unique_ptr<assets::memory_asset_source> owned = std::make_unique<assets::memory_asset_source>();
+        const std::span<const std::byte> bytes = std::as_bytes(std::span<const char>(text.data(), text.size()));
+        owned->add(
+          assets::make_cooked_blob(header, {}, std::vector<std::byte>(bytes.begin(), bytes.end())),
+          LAMP_PREFAB_PATH
+        );
+        fixture.app->context().assets->add_source(std::move(owned));
+        const core::result<assets::asset_handle> loaded = fixture.app->context().assets->load_blocking(lamp);
+        CONJURE_REQUIRE_OK(loaded);
+        fixture.app->context().assets->pin(lamp, true);
+        CONJURE_REQUIRE_OK(active.destroy_now(source));
+
+        ecs::world &world = *fixture.app->context().world;
+        const ecs::entity holder = fixture.create("probe");
+        const u32 entitiesBefore = world.entity_count();
+        const scripting::script_entry_id probe = fixture.attach(holder, RESERVED_PREFAB_DESTROY_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "AliveInside") == 0);
+        CHECK(fixture.field_i64(probe, "DestroyResult") == 1);
+        CHECK(fixture.field_i64(probe, "AliveAfter") == 0);
+        const ecs::entity root = ecs::entity::from_u64(static_cast<u64>(fixture.field_i64(probe, "RootId")));
+        CHECK_FALSE(root.is_null());
+        CHECK_FALSE(world.is_alive(root));
+        CHECK(world.entity_count() == entitiesBefore);
+        CONJURE_CHECK_OK(active.validate());
+        CHECK(logs.count(core::log_level::ERR) == 0);
+        fixture.app->context().assets->pin(lamp, false);
     }
 
     TEST_CASE(

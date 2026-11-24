@@ -59,6 +59,7 @@ class CONJURE_API script_runtime
 <tr><td>private</td><td><code class="signature">m<wbr>Creating<wbr>Instances</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Current<wbr>Phase</code></td><td><code class="signature"><a href="../native-api.html#symbol-script-phase">script_phase</a></code></td><td><code class="signature">script_<wbr>phase::<wbr>COUNT</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Deferred<wbr>Commands</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../../ecs/command-buffer/command-buffer.html">ecs::<wbr>command_<wbr>buffer</a>&gt;</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Deferred<wbr>Reserved</code></td><td><code class="signature"><a href="../../core/containers/flat-hash-map/flat-hash-map.html">core::<wbr>flat_<wbr>hash_<wbr>map</a>&lt;<wbr>ecs::<wbr>entity,<wbr> <a href="script-runtime-deferred-reservation.html">deferred_<wbr>reservation</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Destroyed<wbr>Observer</code></td><td><code class="signature"><a href="../../ecs/observer/observer-id.html">ecs::observer_id</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mEntityNames</code></td><td><code class="signature">std::<wbr>unordered_<wbr>map&lt;<wbr>ecs::<wbr>entity,<wbr> std::<wbr>string&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Faulted<wbr>Before<wbr>Mapped</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="script-runtime-faulted-slot.html">faulted_<wbr>slot</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
@@ -108,7 +109,7 @@ class CONJURE_API script_runtime
     <a href="../../core/types.html#symbol-u64">u64</a> classHash,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;fields);</code></pre></div>
 
-<p>Adds a <code><a href="../script-component/script-component.html">script_component</a></code> when missing, appends an entry with the given JSON fields (an object; invalid = defaults) and, in <code>PLAY</code> mode, queues its creation for the next flush. An invalid id when the entity is dead, the world detached or the entity already carries <code>MAX_SCRIPTS_PER_ENTITY</code> scripts, and (with a <code>WARN</code>) when the entity has no <code><a href="../script-component/script-component.html">script_component</a></code> yet while the world is locked for iteration: adding that component is a structural change.</p>
+<p>Adds a <code><a href="../script-component/script-component.html">script_component</a></code> when missing, appends an entry with the given JSON fields (an object; invalid = defaults) and, in <code>PLAY</code> mode, queues its creation for the next flush. An invalid id when the entity is dead, the world detached or the entity already carries <code>MAX_SCRIPTS_PER_ENTITY</code> scripts, and (with a <code>WARN</code>) when the entity has no <code><a href="../script-component/script-component.html">script_component</a></code> yet while the world is locked for iteration: adding that component is a structural change. An id <code><a href="#function-is-deferred-reserved-1">is_deferred_reserved</a>()</code> answers <code>true</code> for takes the script anyway: the entry is staged in a set of its own and the <code><a href="../script-component/script-component.html">script_component</a></code> is recorded in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> behind the earlier commands on the id, so the flush places the entity with the set and queues the creation (a destroy or a removal of <code><a href="../script-component/script-component.html">script_component</a></code> recorded later drops the staged scripts, as it drops the component). The returned id names the entry in that set; when the entity already holds a <code><a href="../script-component/script-component.html">script_component</a></code> at the flush (a deferred instantiation root whose archive carries scripts), the staged entries are appended to its set instead and the id goes stale; entries that would take that set past <code>MAX_SCRIPTS_PER_ENTITY</code> are dropped at the flush with a <code>WARN</code>. On a reserved id the result is invalid only when the staged set already holds <code>MAX_SCRIPTS_PER_ENTITY</code> scripts or the registry has no <code><a href="../script-component/script-component.html">script_component</a></code> type.</p>
 
 #### `assembly_path` {#function-assembly-path}
 
@@ -176,7 +177,7 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-deferred-commands-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../ecs/command-buffer/command-buffer.html">ecs::command_buffer</a> &amp;deferred_commands() <span class="k">noexcept</span>;</code></pre></div>
 
-<p>The buffer bindings record structural requests into while <code>world::is_locked()</code>; flushed at <code>query_end</code> and at the phase-end force-close. Valid while a world is attached.</p>
+<p>The buffer bindings record structural requests into while <code>world::is_locked()</code>; flushed at <code>query_end</code> and at the phase-end force-close, when the world is not locked by anything else then. Valid while a world is attached. An id reserved here is passed to <code>note_deferred_reserved</code> / <code>note_deferred_instance</code> so later requests on it are recorded too.</p>
 
 #### `deserialize_entity_scripts` {#function-deserialize-entity-scripts}
 
@@ -184,14 +185,14 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;scripts);</code></pre></div>
 
-<p>Replaces the entity&#x27;s scripts from the <code>serialize_entity_scripts</code> form (live instances destroyed first, new ones queued in <code>PLAY</code> mode). <code>INVALID_ARGUMENT</code> for malformed JSON.</p>
+<p>Replaces the entity&#x27;s scripts from the <code>serialize_entity_scripts</code> form (live instances destroyed first, new ones queued in <code>PLAY</code> mode). An entry with &quot;created&quot; is recreated with OnReload instead of OnCreate, one with &quot;started&quot; without OnStart; without them (older JSON) both run. <code>INVALID_ARGUMENT</code> for malformed JSON.</p>
 
 #### `destroy_all` {#function-destroy-all}
 
 <div class="function-declaration" id="function-destroy-all-1"><pre><code><span class="k">void</span> destroy_all(
     <span class="k">bool</span> callOnDestroy);</code></pre></div>
 
-<p>Destroys every live instance (OnDestroy when asked) and clears the pending queues; entries keep their JSON with <code>INVALID_SLOT</code>.</p>
+<p>Destroys every live instance (OnDestroy when asked) and clears the pending queues; entries keep their JSON with <code>INVALID_SLOT</code> and lose their <code>CREATED</code>, <code>STARTED</code> and <code>FAULTED</code> flags.</p>
 
 #### `dispatch_collision_events` {#function-dispatch-collision-events}
 
@@ -245,7 +246,7 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-flush-pending-1"><pre><code><span class="k">void</span> flush_pending();</code></pre></div>
 
-<p>Processes the pending destroys (OnDestroy, entity destruction) and creates (one <code>create_instances</code> call, OnCreate) until the queues are empty or <code>MAX_FLUSH_ITERATIONS</code> passed.</p>
+<p>Processes the pending destroys (OnDestroy, entity destruction) and creates (one <code>create_instances</code> call: OnCreate, or OnReload for an entry a hot reload recreates) until the queues are empty or <code>MAX_FLUSH_ITERATIONS</code> passed.</p>
 
 #### `frame_block` {#function-frame-block}
 
@@ -275,6 +276,20 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-is-assembly-loaded-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_assembly_loaded() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+#### `is_deferred_instance` {#function-is-deferred-instance}
+
+<div class="function-declaration" id="function-is-deferred-instance-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_deferred_instance(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True for a root <code>note_deferred_instance</code> remembered that no flush has applied yet. Such a root takes component, script and destroy requests like any reserved id; <code>record_reserved_remove</code> cannot tell what its archive holds, so it always records for it.</p>
+
+#### `is_deferred_reserved` {#function-is-deferred-reserved}
+
+<div class="function-declaration" id="function-is-deferred-reserved-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_deferred_reserved(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True for an id <code>note_deferred_reserved</code> or <code>note_deferred_instance</code> remembered that no flush of <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> has applied yet (the world&#x27;s <code>is_alive</code> answers <code>false</code> for it).</p>
+
 #### `load_game_assembly` {#function-load-game-assembly}
 
 <div class="function-declaration" id="function-load-game-assembly-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; load_game_assembly(
@@ -288,7 +303,7 @@ class CONJURE_API script_runtime
     <a href="../../core/types.html#symbol-i32">i32</a> slot,
     <a href="../native-api.html#symbol-script-callback">script_callback</a> callback);</code></pre></div>
 
-<p><code>script_mark_faulted</code>: records the <code>FAULTED</code> flag on the entry of a slot with a <code>WARN</code> (an OnCreate fault disables every callback of the instance, any other callback is disabled after three consecutive faults). <code>A</code> fault reported inside <code>create_instances</code>, before the slot is mapped, is applied and logged once the slot is.</p>
+<p><code>script_mark_faulted</code>: records the <code>FAULTED</code> flag on the entry of a slot with a <code>WARN</code> (an OnCreate or OnReload fault disables every callback of the instance, any other callback is disabled after three consecutive faults). <code>A</code> fault reported inside <code>create_instances</code>, before the slot is mapped, is applied and logged once the slot is.</p>
 
 #### `mode` {#function-mode}
 
@@ -297,6 +312,21 @@ class CONJURE_API script_runtime
 #### `native_api` {#function-native-api}
 
 <div class="function-declaration" id="function-native-api-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../native-api/conjure-native-api.html">conjure_native_api</a> &amp;native_api() <span class="k">noexcept</span>;</code></pre></div>
+
+#### `note_deferred_instance` {#function-note-deferred-instance}
+
+<div class="function-declaration" id="function-note-deferred-instance-1"><pre><code><span class="k">void</span> note_deferred_instance(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> root);</code></pre></div>
+
+<p>Remembers the root <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code>.<code>instantiate()</code> returned, until the flush. Its archive gives it components the runtime does not see, so <code>record_reserved_remove</code> always records for it. <code>A</code> <code>null</code> id is ignored.</p>
+
+#### `note_deferred_reserved` {#function-note-deferred-reserved}
+
+<div class="function-declaration" id="function-note-deferred-reserved-1"><pre><code><span class="k">void</span> note_deferred_reserved(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
+    std::span&lt;<span class="k">const</span> ecs::component_id&gt; recorded = {});</code></pre></div>
+
+<p>Remembers an id <code>create_entity()</code> of <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> reserved, until the flush that makes it alive or releases it. <code>recorded</code> are the components the caller already added to it in the buffer. <code>A</code> <code>null</code> id is ignored; noting an id twice adds the components to the first note.</p>
 
 #### `note_mirror_mismatch` {#function-note-mirror-mismatch}
 
@@ -311,7 +341,7 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
     <a href="../script-component/script-component.html">script_component</a> &amp;component);</code></pre></div>
 
-<p>Called by the <code>ADDED</code> observer: adopts the set (owner = entity, creating an empty set for a zero handle) and queues creates in <code>PLAY</code> mode.</p>
+<p>Called by the <code>ADDED</code> observer: adopts the set (owner = entity; for a zero handle the scripts <code>add_script</code> staged on a reserved id, or else an empty set) and queues creates in <code>PLAY</code> mode.</p>
 
 #### `on_component_removed` {#function-on-component-removed}
 
@@ -331,7 +361,33 @@ class CONJURE_API script_runtime
     <a href="../../core/types.html#symbol-u32">u32</a> handle,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;in);</code></pre></div>
 
-<p><code>serializer.readJson</code>: replaces the entries of a set from the {&quot;scripts&quot;:[...]} object; creates the set when <code>handle</code> is <code>INVALID_SET_HANDLE</code> and returns the handle to store.</p>
+<p><code>serializer.readJson</code>: replaces the entries of a set from the {&quot;scripts&quot;:[...]} object (&quot;started&quot; and &quot;created&quot; restore their flags, as in <code>deserialize_entity_scripts</code>); creates the set when <code>handle</code> is <code>INVALID_SET_HANDLE</code> and returns the handle to store.</p>
+
+#### `record_reserved_add` {#function-record-reserved-add}
+
+<div class="function-declaration" id="function-record-reserved-add-1"><pre><code><span class="k">bool</span> record_reserved_add(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
+    ecs::component_id id,
+    std::span&lt;<span class="k">const</span> std::byte&gt; payload);</code></pre></div>
+
+<p><code>component_add</code> on a reserved id: records <code>add_raw</code> in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> and returns <code>true</code>; <code>false</code> (nothing recorded) for any other id or an unregistered component id. At the flush a second add of a component with a value overwrites the first, as a set would; an add without a payload gives the default value only when no earlier add on the id carried one, and otherwise keeps that value.</p>
+
+#### `record_reserved_remove` {#function-record-reserved-remove}
+
+<div class="function-declaration" id="function-record-reserved-remove-1"><pre><code><span class="k">bool</span> record_reserved_remove(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
+    ecs::component_id id);</code></pre></div>
+
+<p><code>component_remove</code> on a reserved id: records <code>remove_raw</code> in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> (cancelling the earlier adds and sets of the component on it) and returns <code>true</code> when the commands recorded so far give it the component, and always for an instantiation root. False, with nothing recorded, when there is nothing to remove, for any other id and for an unregistered component id. Removing <code><a href="../script-component/script-component.html">script_component</a></code> also drops the scripts <code>add_script</code> staged on the id.</p>
+
+#### `record_reserved_set` {#function-record-reserved-set}
+
+<div class="function-declaration" id="function-record-reserved-set-1"><pre><code><span class="k">bool</span> record_reserved_set(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
+    ecs::component_id id,
+    std::span&lt;<span class="k">const</span> std::byte&gt; payload);</code></pre></div>
+
+<p><code>component_set</code> on a reserved id: records <code>set_raw</code> in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> and returns <code>true</code>; <code>false</code> for any other id or an unregistered component id. <code>A</code> set the flush finds no component for (no add of the component on the id is left at the flush: none was recorded, or a later remove took it) is skipped and counted in the flush&#x27;s <code>DEBUG</code> line. <code>A</code> tag has no value to write: nothing is recorded and the call still returns <code>true</code>.</p>
 
 #### `registry` {#function-registry}
 
@@ -342,7 +398,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-reload-game-assembly-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; reload_game_assembly(
     <span class="k">const</span> std::filesystem::path &amp;assemblyPath);</code></pre></div>
 
-<p>Hot reload: load new -&gt; collect fields -&gt; destroy -&gt; unload -&gt; swap registries -&gt; recreate (OnCreate again, OnStart not). <code>A</code> failed load leaves the running game untouched; a leaked load context is a <code>WARN</code> (<code>ASSEMBLY_LEAKED</code> is logged, not returned).</p>
+<p>Hot reload: load new -&gt; collect fields -&gt; destroy -&gt; unload -&gt; swap registries -&gt; recreate. OnCreate runs once per entity lifetime: an entry whose OnCreate returned (the <code>CREATED</code> flag) is recreated with <code>CREATE_FLAG_ALREADY_CREATED</code> and runs OnReload after its fields are restored, an entry whose create was still queued, or whose OnCreate threw, runs OnCreate, and OnStart does not run again (an entry whose OnCreate threw never attempted it: it runs after that OnCreate). <code>A</code> failed load leaves the running game untouched; a leaked load context is a <code>WARN</code> (<code>ASSEMBLY_LEAKED</code> is logged, not returned).</p>
 
 #### `remap_entity_fields` {#function-remap-entity-fields}
 
@@ -373,7 +429,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-request-entity-destroy-1"><pre><code><span class="k">void</span> request_entity_destroy(
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity);</code></pre></div>
 
-<p><code>Entity.Destroy()</code> from <code>C</code>#: an entity with live scripts is destroyed at the next flush, after OnDestroy ran with the entity alive (even when requested inside a query scope); one without is destroyed now, or through <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> while the world is locked.</p>
+<p><code>Entity.Destroy()</code> from <code>C</code>#: an entity with live scripts is destroyed at the next flush, after OnDestroy ran with the entity alive (even when requested inside a query scope); one without is destroyed now, or through <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> while the world is locked. An id <code><a href="#function-is-deferred-reserved-1">is_deferred_reserved</a>()</code> answers <code>true</code> for (it has no instance yet) records the destroy in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code>, where it wins over every command on the id: the id never becomes alive. On a root <code><a href="#function-is-deferred-instance-1">is_deferred_instance</a>()</code> answers <code>true</code> for, the flush cancels the whole copy, so the archive&#x27;s inner entities never become alive either. Anything else that is not alive is ignored.</p>
 
 #### `run_phase` {#function-run-phase}
 
@@ -399,7 +455,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-serialize-entity-scripts-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<a href="../../core/json/document/json-document.html">core::json::document</a>&gt; serialize_entity_scripts(
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity);</code></pre></div>
 
-<p>{&quot;scripts&quot;:[{&quot;class&quot;,&quot;hash&quot;,&quot;fields&quot;}]} of the entity&#x27;s set (live fields refreshed first); {&quot;scripts&quot;:[]} for an entity without scripts. <code>ENTITY_NOT_ALIVE</code> through the ecs category.</p>
+<p>{&quot;scripts&quot;:[{&quot;class&quot;,&quot;hash&quot;,&quot;fields&quot;}]} of the entity&#x27;s set (live fields refreshed first), each entry with &quot;started&quot;: <code>true</code> and &quot;created&quot;: <code>true</code> when its <code>STARTED</code> and <code>CREATED</code> flags are set; {&quot;scripts&quot;:[]} for an entity without scripts. <code>ENTITY_NOT_ALIVE</code> through the ecs category.</p>
 
 #### `set_collision_source` {#function-set-collision-source}
 
@@ -422,7 +478,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-set-mode-1"><pre><code><span class="k">void</span> set_mode(
     <a href="../script-runtime.html#symbol-script-mode">script_mode</a> mode);</code></pre></div>
 
-<p><code>EDIT</code> -&gt; <code>PLAY</code> creates every instance of the attached world&#x27;s entities (and flushes); <code>PLAY</code> -&gt; <code>EDIT</code> destroys them with OnDestroy and clears their <code>STARTED</code> and <code>FAULTED</code> flags, so the next <code>PLAY</code> runs OnStart again (the started flag is for hot reload only).</p>
+<p><code>EDIT</code> -&gt; <code>PLAY</code> creates every instance of the attached world&#x27;s entities (and flushes); <code>PLAY</code> -&gt; <code>EDIT</code> destroys them with OnDestroy and clears their <code>CREATED</code>, <code>STARTED</code> and <code>FAULTED</code> flags, so the next <code>PLAY</code> runs OnCreate and OnStart again (the created and started flags are for hot reload only).</p>
 
 #### `shutdown` {#function-shutdown}
 
@@ -460,7 +516,7 @@ class CONJURE_API script_runtime
     <a href="../../core/types.html#symbol-u32">u32</a> handle,
     <a href="../../core/json/writer/json-writer.html">core::json::writer</a> &amp;out);</code></pre></div>
 
-<p><code>serializer.writeJson</code>: the {&quot;scripts&quot;:[...]} object of a set (live fields refreshed first).</p>
+<p><code>serializer.writeJson</code>: the {&quot;scripts&quot;:[...]} object of a set (live fields refreshed first; the <code>serialize_entity_scripts</code> form, &quot;started&quot; and &quot;created&quot; included).</p>
 
 ### Private
 
@@ -494,10 +550,19 @@ class CONJURE_API script_runtime
     std::span&lt;<span class="k">const</span> <a href="../../core/types.html#symbol-i32">i32</a>&gt; slots,
     <span class="k">bool</span> callOnDestroy);</code></pre></div>
 
+#### `drop_deferred_reservations` {#function-drop-deferred-reservations}
+
+<div class="function-declaration" id="function-drop-deferred-reservations-1"><pre><code><span class="k">void</span> drop_deferred_reservations();</code></pre></div>
+
 #### `enter_phase` {#function-enter-phase}
 
 <div class="function-declaration" id="function-enter-phase-1"><pre><code><span class="k">void</span> enter_phase(
     <a href="../native-api.html#symbol-script-phase">script_phase</a> phase) <span class="k">noexcept</span>;</code></pre></div>
+
+#### `find_reservation` {#function-find-reservation}
+
+<div class="function-declaration" id="function-find-reservation-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="script-runtime-deferred-reservation.html">deferred_reservation</a> *find_reservation(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity) <span class="k">noexcept</span>;</code></pre></div>
 
 #### `flush_deferred_commands` {#function-flush-deferred-commands}
 
@@ -559,6 +624,18 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-replace-set-entries-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; replace_set_entries(
     <a href="../../core/types.html#symbol-u32">u32</a> handle,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;in);</code></pre></div>
+
+#### `settle_deferred_reservations` {#function-settle-deferred-reservations}
+
+<div class="function-declaration" id="function-settle-deferred-reservations-1"><pre><code><span class="k">void</span> settle_deferred_reservations();</code></pre></div>
+
+#### `stage_reserved_script` {#function-stage-reserved-script}
+
+<div class="function-declaration" id="function-stage-reserved-script-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../script-component/script-entry-id.html">script_entry_id</a> stage_reserved_script(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
+    <a href="script-runtime-deferred-reservation.html">deferred_reservation</a> &amp;reservation,
+    <a href="../../core/types.html#symbol-u64">u64</a> classHash,
+    <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;fields);</code></pre></div>
 
 #### `take_scope_state` {#function-take-scope-state}
 

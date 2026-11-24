@@ -53,9 +53,10 @@ namespace conjure::scripting {
 
     enum class script_entry_flags : u8 {
         NONE = 0,
-        STARTED = 1 << 0,           // OnStart ran (or the entry was created ALREADY_STARTED)
-        FAULTED = 1 << 1,           // a callback was disabled (three consecutive faults, or OnCreate threw)
-        CLASS_MISSING = 1 << 2      // no class for the hash in the active registry; JSON preserved
+        STARTED = 1 << 0,           // OnStart was attempted (or the entry was created ALREADY_STARTED)
+        FAULTED = 1 << 1,           // a callback was disabled (three consecutive faults, or OnCreate/OnReload threw)
+        CLASS_MISSING = 1 << 2,     // no class for the hash in the active registry; JSON preserved
+        CREATED = 1 << 3            // OnCreate returned this session (not threw); a reload then runs OnReload instead
     };
     CONJURE_ENUM_FLAGS(script_entry_flags);
 

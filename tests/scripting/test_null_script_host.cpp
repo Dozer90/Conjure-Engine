@@ -101,6 +101,52 @@ TEST_SUITE("scripting/null_script_host") {
         CHECK(fixture.host.recorder().destroys().size() == 3);
     }
 
+    TEST_CASE("null_script_host - an ALREADY_CREATED request runs the reload hook instead of the create hook") {
+        bare_host fixture = {};
+        std::vector<u64> created = {};
+        std::vector<u64> reloaded = {};
+        std::vector<i32> reloadedSlots = {};
+
+        SUBCASE("without hooks a create runs nothing") {
+            CHECK(fixture.create(1, 100) == 0);
+            CHECK(fixture.create(2, 100, CREATE_FLAG_ALREADY_CREATED) == 1);
+            CHECK(fixture.host.live_slot_count() == 2);
+        }
+        SUBCASE("each request runs exactly one of the two hooks") {
+            fixture.host.set_create_hook([&created](const conjure_create_request &request, i32) {
+                created.push_back(request.entity);
+            });
+            fixture.host.set_reload_hook([&reloaded, &reloadedSlots](const conjure_create_request &request, i32 slot) {
+                reloaded.push_back(request.entity);
+                reloadedSlots.push_back(slot);
+            });
+            static_cast<void>(fixture.create(1, 100));
+            const i32 reloadedSlot = fixture.create(2, 100, CREATE_FLAG_ALREADY_CREATED);
+            const i32 startedSlot = fixture.create(3, 100, CREATE_FLAG_ALREADY_STARTED);
+            const i32 bothSlot = fixture.create(4, 100, CREATE_FLAG_ALREADY_CREATED | CREATE_FLAG_ALREADY_STARTED);
+            CHECK(created == std::vector<u64>{1, 3});
+            CHECK(reloaded == std::vector<u64>{2, 4});
+            REQUIRE_FALSE(reloadedSlots.empty());
+            CHECK(reloadedSlots[0] == reloadedSlot);
+            CHECK(fixture.host.is_slot_live(reloadedSlot));       // the slot exists when the hook runs
+            CHECK(fixture.host.is_slot_started(startedSlot));
+            CHECK(fixture.host.is_slot_started(bothSlot));
+            CHECK_FALSE(fixture.host.is_slot_started(reloadedSlot));
+            REQUIRE(fixture.host.recorder().creates().size() == 4);
+            CHECK(fixture.host.recorder().creates()[1].flags == CREATE_FLAG_ALREADY_CREATED);
+        }
+        SUBCASE("a cleared reload hook runs nothing and never falls back to the create hook") {
+            fixture.host.set_create_hook([&created](const conjure_create_request &request, i32) {
+                created.push_back(request.entity);
+            });
+            fixture.host.set_reload_hook({});
+            static_cast<void>(fixture.create(7, 100, CREATE_FLAG_ALREADY_CREATED));
+            CHECK(created.empty());
+        }
+        fixture.host.set_create_hook({});
+        fixture.host.set_reload_hook({});
+    }
+
     TEST_CASE("null_script_host - collect_fields echoes apply_fields unless overridden") {
         bare_host fixture = {};
         const i32 slot = fixture.create(7, 100);

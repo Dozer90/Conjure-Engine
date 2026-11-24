@@ -7,6 +7,7 @@
 #include "conjure/scene/components.h"
 #include "conjure/scene/prefab.h"
 #include "conjure/scene/scene.h"
+#include "conjure/scripting/script_runtime.h"
 
 #include <atomic>
 #include <cstddef>
@@ -122,6 +123,9 @@ namespace {
         if (!root.has_value()) {
             return fail_entry(id, root.get_error());
         }
+        // The core component_* / script_add / entity_destroy entries record their requests on the root behind the
+        // instantiation (17_demo_games.md P2).
+        guard.runtime->note_deferred_instance(root.value());
         // The root is adopted (as a child of 'parent' or as a scene root) once the flush unlocked the world;
         // the inner entities carry their archive parents and scene.apply_hierarchy_changes links them.
         scene_fixup fixup = {};

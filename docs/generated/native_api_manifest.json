@@ -1,7 +1,7 @@
 {
-  "hash": "0x4B06362D38B412A6",
+  "hash": "0xC6292B87C84ABEB1",
   "version": 1,
-  "entryCount": 126,
+  "entryCount": 127,
   "coreEntryCount": 20,
   "entries": [
     {
@@ -2228,6 +2228,27 @@
         }
       ],
       "signature": "int32_t (int32_t index, char *utf8, int32_t capacity)"
+    },
+    {
+      "index": 126,
+      "group": "entity",
+      "name": "get_tag_text",
+      "returns": "int32_t",
+      "args": [
+        {
+          "type": "uint64_t",
+          "name": "entity"
+        },
+        {
+          "type": "char *",
+          "name": "utf8"
+        },
+        {
+          "type": "int32_t",
+          "name": "capacity"
+        }
+      ],
+      "signature": "int32_t (uint64_t entity, char *utf8, int32_t capacity)"
     }
   ]
 }

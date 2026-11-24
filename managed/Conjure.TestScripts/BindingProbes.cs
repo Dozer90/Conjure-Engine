@@ -77,7 +77,7 @@ public sealed class BindingFacadeProbe : ScriptBehaviour
             Conjure.Entity.CreateMany(2, children, self);
             ChildCount = transform.ChildCount;
 
-            self.SetTag("player");
+            self.Tag = "player";
             TagMatches = self.HasTag("player") ? 1 : 0;
 
             self.Layer = 5;
@@ -379,7 +379,7 @@ public sealed class BindingRecordSizeProbe : ScriptBehaviour
         AssetRefPrefab = Unsafe.SizeOf<AssetRef<PrefabAsset>>();
         NativeFunctionCount = Enum.GetValues(typeof(NativeFunction)).Length;
         EntryCount = NativeApi.EntryCount;
-        LastFunction = (int)NativeFunction.ModulesName;
+        LastFunction = (int)NativeFunction.EntityGetTagText;
     }
 
     // Field names are string literals, not nameof: several are pointers or fixed buffers, which this project
@@ -683,6 +683,17 @@ public sealed class EntityFailureProbe : ScriptBehaviour
     public string ScopeAddScriptHolder = "";
     public int ScopeLayerAfter = -1;
     public int ScopeReservedAlive = -1;
+    public int ScopeReservedLayer = -1;
+    public string ScopeReservedScripts = "";
+    public string ScopeReservedPastMax = "";
+    public long ScopeReservedId;
+    public string ScopeReservedSetters = "";
+    public string ScopeSpawnedTagInside = "unset";
+    public int ScopeSpawnedLayerInside;
+    public string ScopeSpawnedName = "";
+    public string ScopeSpawnedTag = "";
+    public int ScopeSpawnedLayer = -1;
+    public int ScopeSpawnedEnabled = -1;
     public int Ran;
 
     protected override void OnUpdate(float deltaTime)
@@ -785,14 +796,37 @@ public sealed class EntityFailureProbe : ScriptBehaviour
         Entity holder = Conjure.Entity.Create("scope_holder");
         holder.AddScript<BindingIdleScript>();
         Entity reserved = Conjure.Entity.Null;
+        Entity spawned = Conjure.Entity.Null;
         using (ComponentQuery query = ComponentQuery.Begin<LocalTransform>())
         {
             // Deferred to the scope end: the call cannot see that the entity already has a Layer.
             ScopeAddPresent = ProbeSupport.Catch(() => target.AddComponent(new Layer { Index = 6 }));
-            // A reserved entity is not alive until the scope closes, so the add is refused at the call.
+            // A reserved entity is not alive until the scope closes; the add is recorded behind its create and the
+            // entity is created with the component (code sweep OWN-P2).
             reserved = Conjure.Entity.Create("scope_reserved");
             Entity reservedCopy = reserved;
             ScopeAddReserved = ProbeSupport.Catch(() => reservedCopy.AddComponent(new Layer { Index = 7 }));
+            ScopeReservedScripts = ProbeSupport.Catch(() =>
+            {
+                for (int index = 0; index < 8; ++index)
+                {
+                    reservedCopy.AddScript<BindingIdleScript>();
+                }
+            });
+            // The status picks the exception, not IsAlive (false for a reserved entity): the entity refused.
+            ScopeReservedPastMax = ProbeSupport.Catch(() => reservedCopy.AddScript<BindingIdleScript>());
+            // The Entity setters record on a reserved entity too, while its getters answer as for a dead one.
+            spawned = Conjure.Entity.Create();
+            Entity spawnedCopy = spawned;
+            ScopeReservedSetters = ProbeSupport.Catch(() =>
+            {
+                spawnedCopy.Name = "scope_spawned";
+                spawnedCopy.Tag = "scope_tag";
+                spawnedCopy.Layer = 9;
+                spawnedCopy.Enabled = false;
+            });
+            ScopeSpawnedTagInside = spawned.Tag;
+            ScopeSpawnedLayerInside = spawned.Layer;
             // A first script needs the script component, a structural change the locked world refuses; a further
             // script only joins the set the entity already has.
             ScopeAddScriptFresh = ProbeSupport.Catch(() => fresh.AddScript<BindingIdleScript>());
@@ -800,6 +834,12 @@ public sealed class EntityFailureProbe : ScriptBehaviour
         }
         ScopeLayerAfter = target.GetComponent<Layer>().Index;
         ScopeReservedAlive = reserved.IsAlive ? 1 : 0;
+        ScopeReservedLayer = reserved.TryGetComponent(out Layer reservedLayer) ? reservedLayer.Index : -1;
+        ScopeReservedId = (long)reserved.Id;
+        ScopeSpawnedName = spawned.Name;
+        ScopeSpawnedTag = spawned.Tag;
+        ScopeSpawnedLayer = spawned.Layer;
+        ScopeSpawnedEnabled = spawned.Enabled ? 1 : 0;
     }
 }
 
@@ -843,6 +883,98 @@ public sealed class EntityNameProbe : ScriptBehaviour
             Entity dead = ProbeSupport.Dead;
             DeadSetter = ProbeSupport.Catch(() => dead.Name = "ghost");
             DeadGetter = dead.Name;
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// The Tag property both ways, TagId and the obsolete SetTag forward (code sweep OWN-TAG).
+/// </summary>
+public sealed class EntityTagProbe : ScriptBehaviour
+{
+    /// <summary>
+    /// A text no native code interns: written as a StringId it has a hash and no spelling.
+    /// </summary>
+    private const string UnspelledText = "probe.own_tag.never_interned";
+
+    public string Errors = "";
+    public string Untagged = "unset";
+    public int UntaggedIdNull = -1;
+    public string AfterSet = "";
+    public int IdMatchesText = -1;
+    public int HasTagAfterSet = -1;
+    public int FoundByTag = -1;
+    public int LongRoundTrip = -1;
+    public string AfterForward = "";
+    public int ClearedByEmpty = -1;
+    public int ClearedByNull = -1;
+    public string Unspelled = "unset";
+    public int UnspelledIdKept = -1;
+    public string DeadSetter = "";
+    public string DeadForward = "";
+    public string DeadGetter = "unset";
+    public int DeadIdNull = -1;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Entity target = Conjure.Entity.Create("tagged");
+            Untagged = target.Tag;
+            UntaggedIdNull = target.TagId.IsNull ? 1 : 0;
+
+            target.Tag = "Enemy";
+            AfterSet = target.Tag;
+            IdMatchesText = target.TagId == StringId.Of("Enemy") ? 1 : 0;
+            HasTagAfterSet = target.HasTag("Enemy") ? 1 : 0;
+            Span<Entity> found = stackalloc Entity[2];
+            FoundByTag = Conjure.Entity.FindByTag("Enemy", found) == 1 && found[0] == target ? 1 : 0;
+
+            // Longer than Utf8Marshal.ScratchSize in UTF-8 bytes: the getter's second call into a heap buffer.
+            string longTag = new string('\u00e9', Utf8Marshal.ScratchSize) + "!";
+            target.Tag = longTag;
+            LongRoundTrip = target.Tag == longTag ? 1 : 0;
+
+#pragma warning disable CS0618 // SetTag is the obsolete forward under test.
+            target.SetTag("forwarded");
+#pragma warning restore CS0618
+            AfterForward = target.Tag;
+
+            target.Tag = "";
+            ClearedByEmpty = target.Tag.Length == 0 && target.TagId.IsNull ? 1 : 0;
+            target.Tag = "again";
+            target.Tag = null;
+            ClearedByNull = target.Tag.Length == 0 && target.TagId.IsNull ? 1 : 0;
+
+            Tag unspelled = new Tag { Value = StringId.Of(UnspelledText) };
+            if (target.HasComponent<Tag>())
+            {
+                target.SetComponent(unspelled);
+            }
+            else
+            {
+                target.AddComponent(unspelled);
+            }
+            Unspelled = target.Tag;
+            UnspelledIdKept = target.TagId == StringId.Of(UnspelledText) ? 1 : 0;
+
+            Entity dead = ProbeSupport.Dead;
+            DeadSetter = ProbeSupport.Catch(() => dead.Tag = "ghost");
+#pragma warning disable CS0618 // SetTag is the obsolete forward under test.
+            DeadForward = ProbeSupport.Catch(() => dead.SetTag("ghost"));
+#pragma warning restore CS0618
+            DeadGetter = dead.Tag;
+            DeadIdNull = dead.TagId.IsNull ? 1 : 0;
         }
         catch (Exception exception)
         {
@@ -927,5 +1059,152 @@ public sealed class WorldAxisProbe : ScriptBehaviour
     private static int Thousandths(float value)
     {
         return (int)MathF.Round(value * 1000.0f);
+    }
+}
+
+/// <summary>
+/// The component facades on entities a ComponentQuery scope reserved (owner ruling 2026-11-24, code sweep OWN-P2):
+/// the writes never throw, are kept in call order and made once the scope closed; the reads throw as for a dead
+/// entity; a Destroy recorded in the scope drops the kept writes. The second update leaks a scope, which native
+/// force-closes: the next managed call makes its kept write.
+/// </summary>
+public sealed class ReservedFacadeProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public string InsideWrites = "";
+    public string InsidePositionRead = "";
+    public string InsideVolumeRead = "";
+    public int InsidePlaying = -1;
+    public string DoomedWrites = "";
+    public long SpawnedId;
+    public long DoomedId;
+    public long LeakedId;
+    public float PositionX;
+    public float PositionY;
+    public float ScaleX;
+    public float Volume;
+    public int Updates;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        ++Updates;
+        try
+        {
+            if (Updates == 1)
+            {
+                RunClosedScope();
+            }
+            else if (Updates == 2)
+            {
+                RunLeakedScope();
+            }
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private void RunClosedScope()
+    {
+        Entity spawned = Conjure.Entity.Null;
+        using (ComponentQuery query = ComponentQuery.Begin<LocalTransform>())
+        {
+            // CreateMany gives the entity a local transform (Entity.Create makes a bare one).
+            Span<Entity> created = stackalloc Entity[1];
+            Conjure.Entity.CreateMany(1, created);
+            spawned = created[0];
+            Entity copy = spawned;
+            AudioSourceData source = AudioSourceData.Default;
+            source.Clip = AssetRef<AudioClipAsset>.Find("assets://audio/tone.wav");
+            source.PlayOnStart = false;
+            InsideWrites = ProbeSupport.Catch(() =>
+            {
+                // In call order after the flush: the pose the flush gave the entity, then each write on top of it.
+                Transform transform = copy.Transform;
+                transform.Position = new Vector3(1.0f, 2.0f, 3.0f);
+                transform.Translate(new Vector3(10.0f, 0.0f, 0.0f));
+                transform.Scale = new Vector3(2.0f, 2.0f, 2.0f);
+                // The component request lands at the flush, before the facade writes that need it.
+                copy.AddComponent(in source);
+                AudioSource speaker = copy.AudioSource;
+                speaker.Volume = 0.5f;
+                speaker.Play();
+            });
+            InsidePositionRead = ProbeSupport.Catch(() => _ = copy.Transform.Position);
+            InsideVolumeRead = ProbeSupport.Catch(() => _ = copy.AudioSource.Volume);
+            InsidePlaying = copy.AudioSource.IsPlaying ? 1 : 0;
+
+            Entity doomed = Conjure.Entity.Create("facade_doomed");
+            DoomedId = (long)doomed.Id;
+            DoomedWrites = ProbeSupport.Catch(() =>
+            {
+                Transform transform = doomed.Transform;
+                transform.Position = new Vector3(5.0f, 5.0f, 5.0f);
+                doomed.AudioSource.Play();
+                doomed.Destroy();
+            });
+        }
+        SpawnedId = (long)spawned.Id;
+        Vector3 position = spawned.Transform.Position;
+        PositionX = position.X;
+        PositionY = position.Y;
+        ScaleX = spawned.Transform.Scale.X;
+        Volume = spawned.AudioSource.Volume;
+    }
+
+    private void RunLeakedScope()
+    {
+        // Left open on purpose: native force-closes it with a WARN when this call returns, and flushes it.
+        ComponentQuery leaked = ComponentQuery.Begin<LocalTransform>();
+        Span<Entity> created = stackalloc Entity[1];
+        Conjure.Entity.CreateMany(1, created);
+        Entity spawned = created[0];
+        Transform transform = spawned.Transform;
+        transform.Position = new Vector3(7.0f, 0.0f, 0.0f);
+        LeakedId = (long)spawned.Id;
+        _ = leaked.ChunkCount;
+    }
+}
+
+/// <summary>
+/// Instantiates a prefab inside a ComponentQuery scope and destroys the root in the same scope (owner ruling
+/// 2026-11-24, code sweep OWN-P2): Destroy returns true and no part of the instance is ever created.
+/// </summary>
+public sealed class ReservedPrefabDestroyProbe : ScriptBehaviour
+{
+    public string Errors = "";
+    public string Path = "assets://prefabs/lamp.prefab";
+    public int DestroyResult = -1;
+    public int AliveInside = -1;
+    public int AliveAfter = -1;
+    public long RootId;
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Entity root = Conjure.Entity.Null;
+            using (ComponentQuery query = ComponentQuery.Begin<LocalTransform>())
+            {
+                root = Prefab.Find(Path).Instantiate();
+                AliveInside = root.IsAlive ? 1 : 0;
+                Transform transform = root.Transform;
+                transform.Position = new Vector3(3.0f, 0.0f, 0.0f);
+                DestroyResult = root.Destroy() ? 1 : 0;
+            }
+            RootId = (long)root.Id;
+            AliveAfter = root.IsAlive ? 1 : 0;
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
     }
 }

@@ -6,6 +6,7 @@
 #include "conjure/scripting/script_host.h"
 
 #include "conjure/core/api.h"
+#include "conjure/core/containers/flat_hash_map.h"
 #include "conjure/core/containers/flat_map.h"
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/delegate.h"
@@ -17,6 +18,7 @@
 #include "conjure/core/result.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/command_buffer.h"
+#include "conjure/ecs/component.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/entity.h"
 #include "conjure/ecs/observer.h"
@@ -24,6 +26,7 @@
 #include "conjure/ecs/world.h"
 
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -99,7 +102,7 @@ namespace conjure::scripting {
             };
 
             /// <summary>
-            /// A fault reported inside create_instances, before its slot was mapped (OnCreate threw).
+            /// A fault reported inside create_instances, before its slot was mapped (OnCreate or OnReload threw).
             /// </summary>
             struct faulted_slot {
                 i32 slot = -1;
@@ -111,6 +114,18 @@ namespace conjure::scripting {
                 ecs::iteration_scope lock = {};
                 core::small_vector<conjure_chunk_view, QUERY_SCOPE_INLINE_CHUNKS> chunks = {};
                 core::small_vector<ecs::component_id, static_cast<usize>(QUERY_MAX_COMPONENTS)> types = {};
+            };
+
+            /// <summary>
+            /// An id the scripting entries reserved through mDeferredCommands that no flush has applied yet
+            /// (17_demo_games.md P2). 'held' follows the components the commands recorded so far give it, so
+            /// component_remove can answer whether there is something to remove; an instantiation root gets
+            /// its archive's components at the flush, which the runtime cannot see ('heldKnown' false).
+            /// </summary>
+            struct deferred_reservation {
+                ecs::component_mask held = {};
+                u32 scriptSet = INVALID_SET_HANDLE;     // the scripts script_add staged on the id, until adopted
+                bool heldKnown = true;
             };
 
             /// <summary>
@@ -136,6 +151,8 @@ namespace conjure::scripting {
             std::vector<std::unique_ptr<query_scope_state>> mQueryScopes = {};
             std::vector<std::unique_ptr<query_scope_state>> mFreeQueryScopes = {};
             core::flat_map<query_cache_key, ecs::query> mQueryCache = {};      // one query per component set
+            // Ids reserved in mDeferredCommands, kept until the flush; clear() keeps the table's capacity.
+            core::flat_hash_map<ecs::entity, deferred_reservation> mDeferredReserved = {};
             core::memory::frame_allocator mScratch;                           // no default: sized by the constructor
             std::vector<u8> mBlobBuffer = {};
             script_mode mMode = script_mode::EDIT;
@@ -220,9 +237,12 @@ namespace conjure::scripting {
             [[nodiscard]] core::result<void> load_game_assembly(const std::filesystem::path &assemblyPath);
 
             /// <summary>
-            /// Hot reload: load new -> collect fields -> destroy -> unload -> swap registries -> recreate
-            /// (OnCreate again, OnStart not). A failed load leaves the running game untouched; a leaked load
-            /// context is a WARN (ASSEMBLY_LEAKED is logged, not returned).
+            /// Hot reload: load new -> collect fields -> destroy -> unload -> swap registries -> recreate. OnCreate
+            /// runs once per entity lifetime: an entry whose OnCreate returned (the CREATED flag) is recreated with
+            /// CREATE_FLAG_ALREADY_CREATED and runs OnReload after its fields are restored, an entry whose create
+            /// was still queued, or whose OnCreate threw, runs OnCreate, and OnStart does not run again (an entry
+            /// whose OnCreate threw never attempted it: it runs after that OnCreate). A failed load leaves the running
+            /// game untouched; a leaked load context is a WARN (ASSEMBLY_LEAKED is logged, not returned).
             /// </summary>
             [[nodiscard]] core::result<void> reload_game_assembly(const std::filesystem::path &assemblyPath);
 
@@ -231,8 +251,8 @@ namespace conjure::scripting {
 
             /// <summary>
             /// EDIT -> PLAY creates every instance of the attached world's entities (and flushes); PLAY -> EDIT
-            /// destroys them with OnDestroy and clears their STARTED and FAULTED flags, so the next PLAY runs
-            /// OnStart again (the started flag is for hot reload only, D8).
+            /// destroys them with OnDestroy and clears their CREATED, STARTED and FAULTED flags, so the next PLAY
+            /// runs OnCreate and OnStart again (the created and started flags are for hot reload only).
             /// </summary>
             void set_mode(script_mode mode);
 
@@ -247,7 +267,8 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Processes the pending destroys (OnDestroy, entity destruction) and creates (one
-            /// create_instances call, OnCreate) until the queues are empty or MAX_FLUSH_ITERATIONS passed.
+            /// create_instances call: OnCreate, or OnReload for an entry a hot reload recreates) until the queues
+            /// are empty or MAX_FLUSH_ITERATIONS passed.
             /// </summary>
             void flush_pending();
 
@@ -260,7 +281,7 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Destroys every live instance (OnDestroy when asked) and clears the pending queues; entries
-            /// keep their JSON with INVALID_SLOT.
+            /// keep their JSON with INVALID_SLOT and lose their CREATED, STARTED and FAULTED flags.
             /// </summary>
             void destroy_all(bool callOnDestroy);
 
@@ -273,6 +294,16 @@ namespace conjure::scripting {
             /// when the entity is dead, the world detached or the entity already carries
             /// MAX_SCRIPTS_PER_ENTITY scripts, and (with a WARN) when the entity has no script_component yet
             /// while the world is locked for iteration: adding that component is a structural change.
+            /// An id is_deferred_reserved() answers true for takes the script anyway: the entry is staged in a
+            /// set of its own and the script_component is recorded in deferred_commands() behind the earlier
+            /// commands on the id, so the flush places the entity with the set and queues the creation (a
+            /// destroy or a removal of script_component recorded later drops the staged scripts, as it drops
+            /// the component). The returned id names the entry in that set; when the entity already holds a
+            /// script_component at the flush (a deferred instantiation root whose archive carries scripts), the
+            /// staged entries are appended to its set instead and the id goes stale; entries that would take that
+            /// set past MAX_SCRIPTS_PER_ENTITY are dropped at the flush with a WARN. On a reserved id the result
+            /// is invalid only when the staged set already holds MAX_SCRIPTS_PER_ENTITY scripts or the registry
+            /// has no script_component type.
             /// </summary>
             [[nodiscard]] script_entry_id add_script(
               ecs::entity entity,
@@ -303,14 +334,17 @@ namespace conjure::scripting {
             [[nodiscard]] core::result<core::json::document> collect_entry_fields(script_entry_id id);
 
             /// <summary>
-            /// {"scripts":[{"class","hash","fields"}]} of the entity's set (live fields refreshed first);
+            /// {"scripts":[{"class","hash","fields"}]} of the entity's set (live fields refreshed first), each
+            /// entry with "started": true and "created": true when its STARTED and CREATED flags are set;
             /// {"scripts":[]} for an entity without scripts. ENTITY_NOT_ALIVE through the ecs category.
             /// </summary>
             [[nodiscard]] core::result<core::json::document> serialize_entity_scripts(ecs::entity entity);
 
             /// <summary>
             /// Replaces the entity's scripts from the serialize_entity_scripts form (live instances destroyed
-            /// first, new ones queued in PLAY mode). INVALID_ARGUMENT for malformed JSON.
+            /// first, new ones queued in PLAY mode). An entry with "created" is recreated with OnReload instead of
+            /// OnCreate, one with "started" without OnStart; without them (older JSON) both run. INVALID_ARGUMENT
+            /// for malformed JSON.
             /// </summary>
             [[nodiscard]] core::result<void> deserialize_entity_scripts(
               ecs::entity entity,
@@ -345,21 +379,25 @@ namespace conjure::scripting {
             void on_component_removed(ecs::entity entity, const script_component &component);
 
             /// <summary>
-            /// Called by the ADDED observer: adopts the set (owner = entity, creating an empty set for a
-            /// zero handle) and queues creates in PLAY mode.
+            /// Called by the ADDED observer: adopts the set (owner = entity; for a zero handle the scripts
+            /// add_script staged on a reserved id, or else an empty set) and queues creates in PLAY mode.
             /// </summary>
             void on_component_added(ecs::entity entity, script_component &component);
 
             /// <summary>
             /// Entity.Destroy() from C#: an entity with live scripts is destroyed at the next flush, after
             /// OnDestroy ran with the entity alive (even when requested inside a query scope); one without
-            /// is destroyed now, or through deferred_commands() while the world is locked.
+            /// is destroyed now, or through deferred_commands() while the world is locked. An id
+            /// is_deferred_reserved() answers true for (it has no instance yet) records the destroy in
+            /// deferred_commands(), where it wins over every command on the id: the id never becomes alive. On a
+            /// root is_deferred_instance() answers true for, the flush cancels the whole copy, so the archive's
+            /// inner entities never become alive either. Anything else that is not alive is ignored.
             /// </summary>
             void request_entity_destroy(ecs::entity entity);
 
             /// <summary>
-            /// script_mark_faulted: records the FAULTED flag on the entry of a slot with a WARN (an OnCreate
-            /// fault disables every callback of the instance, any other callback is disabled after three
+            /// script_mark_faulted: records the FAULTED flag on the entry of a slot with a WARN (an OnCreate or
+            /// OnReload fault disables every callback of the instance, any other callback is disabled after three
             /// consecutive faults). A fault reported inside create_instances, before the slot is mapped, is
             /// applied and logged once the slot is.
             /// </summary>
@@ -436,6 +474,67 @@ namespace conjure::scripting {
             }
 
             /*---------------------------------------------------------------*/
+            // Ids reserved in deferred_commands() (17_demo_games.md P2)
+            //
+            // Entity.Create inside a query scope returns an id deferred_commands() reserved; the entity exists
+            // once the flush applies the buffer. Changes requested on such an id before that are recorded in
+            // the same buffer behind its create and applied in order. Until the flush the id is not alive:
+            // is_alive, component_has and component_get answer as for a dead entity.
+
+            /// <summary>
+            /// Remembers an id create_entity() of deferred_commands() reserved, until the flush that makes it
+            /// alive or releases it. 'recorded' are the components the caller already added to it in the buffer.
+            /// A null id is ignored; noting an id twice adds the components to the first note.
+            /// </summary>
+            void note_deferred_reserved(ecs::entity entity, std::span<const ecs::component_id> recorded = {});
+
+            /// <summary>
+            /// Remembers the root deferred_commands().instantiate() returned, until the flush. Its archive
+            /// gives it components the runtime does not see, so record_reserved_remove always records for it.
+            /// A null id is ignored.
+            /// </summary>
+            void note_deferred_instance(ecs::entity root);
+
+            /// <summary>
+            /// True for an id note_deferred_reserved or note_deferred_instance remembered that no flush of
+            /// deferred_commands() has applied yet (the world's is_alive answers false for it).
+            /// </summary>
+            [[nodiscard]] bool is_deferred_reserved(ecs::entity entity) const noexcept;
+
+            /// <summary>
+            /// True for a root note_deferred_instance remembered that no flush has applied yet. Such a root takes
+            /// component, script and destroy requests like any reserved id; record_reserved_remove cannot tell
+            /// what its archive holds, so it always records for it.
+            /// </summary>
+            [[nodiscard]] bool is_deferred_instance(ecs::entity entity) const noexcept;
+
+            /// <summary>
+            /// component_add on a reserved id: records add_raw in deferred_commands() and returns true; false
+            /// (nothing recorded) for any other id or an unregistered component id. At the flush a second add of
+            /// a component with a value overwrites the first, as a set would; an add without a payload gives the
+            /// default value only when no earlier add on the id carried one, and otherwise keeps that value.
+            /// </summary>
+            bool record_reserved_add(ecs::entity entity, ecs::component_id id, std::span<const std::byte> payload);
+
+            /// <summary>
+            /// component_set on a reserved id: records set_raw in deferred_commands() and returns true; false for
+            /// any other id or an unregistered component id. A set the flush finds no component for (no add of the
+            /// component on the id is left at the flush: none was recorded, or a later remove took it) is skipped
+            /// and counted in the flush's DEBUG line. A
+            /// tag has no value to write: nothing is recorded and the call still returns true.
+            /// </summary>
+            bool record_reserved_set(ecs::entity entity, ecs::component_id id, std::span<const std::byte> payload);
+
+            /// <summary>
+            /// component_remove on a reserved id: records remove_raw in deferred_commands() (cancelling the
+            /// earlier adds and sets of the component on it) and returns true when the commands recorded so far
+            /// give it the component, and always for an instantiation root. False, with nothing recorded, when
+            /// there is nothing to remove, for any other id and for an unregistered component id. Removing
+            /// script_component also drops the scripts add_script staged on the id.
+            /// </summary>
+            bool record_reserved_remove(ecs::entity entity, ecs::component_id id);
+
+            /*---------------------------------------------------------------*/
             // Accessors
 
             [[nodiscard]] conjure_native_api &native_api() noexcept {
@@ -483,7 +582,9 @@ namespace conjure::scripting {
 
             /// <summary>
             /// The buffer bindings record structural requests into while world::is_locked(); flushed at
-            /// query_end and at the phase-end force-close (R5, R54). Valid while a world is attached.
+            /// query_end and at the phase-end force-close (R5, R54), when the world is not locked by anything
+            /// else then. Valid while a world is attached. An id reserved here is passed to
+            /// note_deferred_reserved / note_deferred_instance so later requests on it are recorded too.
             /// </summary>
             [[nodiscard]] ecs::command_buffer &deferred_commands() noexcept;
 
@@ -546,13 +647,15 @@ namespace conjure::scripting {
             void free_set_from_destruct(u32 handle);
 
             /// <summary>
-            /// serializer.writeJson: the {"scripts":[...]} object of a set (live fields refreshed first).
+            /// serializer.writeJson: the {"scripts":[...]} object of a set (live fields refreshed first; the
+            /// serialize_entity_scripts form, "started" and "created" included).
             /// </summary>
             void write_set_json(u32 handle, core::json::writer &out);
 
             /// <summary>
-            /// serializer.readJson: replaces the entries of a set from the {"scripts":[...]} object; creates
-            /// the set when 'handle' is INVALID_SET_HANDLE and returns the handle to store.
+            /// serializer.readJson: replaces the entries of a set from the {"scripts":[...]} object ("started"
+            /// and "created" restore their flags, as in deserialize_entity_scripts); creates the set when 'handle'
+            /// is INVALID_SET_HANDLE and returns the handle to store.
             /// </summary>
             [[nodiscard]] core::result<u32> read_set_json(u32 handle, const core::json::value &in);
 
@@ -592,6 +695,15 @@ namespace conjure::scripting {
             [[nodiscard]] std::unique_ptr<query_scope_state> take_scope_state(usize chunkCount);
             void force_close_query_scopes();
             void flush_deferred_commands();
+            void settle_deferred_reservations();
+            void drop_deferred_reservations();
+            [[nodiscard]] deferred_reservation *find_reservation(ecs::entity entity) noexcept;
+            [[nodiscard]] script_entry_id stage_reserved_script(
+              ecs::entity entity,
+              deferred_reservation &reservation,
+              u64 classHash,
+              const core::json::value &fields
+            );
             void warn_missing_class_once(u64 classHash);
             void log_faulted(i32 slot, script_callback callback, const script_entry &entryValue) const;
             void write_set_entries_json(script_set &set, core::json::writer &out);

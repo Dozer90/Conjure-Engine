@@ -3,8 +3,9 @@
 
 Feeds small native_api.inl texts to parse_entries() and C types to cs_type() and asserts that every entry is
 read, commented entries are ignored (also when one comment kind holds the other's marker), an entry the generator
-cannot read fails the run instead of vanishing from the table, and 'const' is dropped only as a word. Runs as the
-CTest entry `native_api.generator_tool`; no third-party test framework is needed.
+cannot read fails the run instead of vanishing from the table, 'const' is dropped only as a word, and an entry of a
+core group appended after the bindings marker is a bindings entry (the real table ends with entity_get_tag_text).
+Runs as the CTest entry `native_api.generator_tool`; no third-party test framework is needed.
 """
 
 from __future__ import annotations
@@ -92,6 +93,33 @@ def unparseable_entry_fails(generator) -> None:
     raise AssertionError("an entry with a std::uint32_t return was dropped without an error")
 
 
+def core_group_entry_after_marker_is_bindings(generator) -> None:
+    # entity has core entries before the marker and bindings entries after it; an entry appended at the end of
+    # the table (entity_get_tag_text) is a bindings entry with the next index, whatever its group.
+    entries, core_count = generator.parse_entries(table(
+        "CONJURE_NATIVE_FN(entity, get_name, int32_t, (uint64_t entity, char *utf8, int32_t capacity))\n",
+        "CONJURE_NATIVE_FN(entity, get_tag, uint64_t, (uint64_t entity))\n"
+        "CONJURE_NATIVE_FN(modules, name, int32_t, (int32_t index, char *utf8, int32_t capacity))\n"
+        "CONJURE_NATIVE_FN(entity, get_tag_text, int32_t, (uint64_t entity, char *utf8, int32_t capacity))\n"))
+    names = [item.c_name for item in entries]
+    assert names == ["entity_get_name", "entity_get_tag", "modules_name", "entity_get_tag_text"], names
+    assert core_count == 1, core_count
+    assert entries[3].index == 3, entries[3].index
+    expected = "entity_get_tag_text int32_t (uint64_t entity, char *utf8, int32_t capacity)\n"
+    assert entries[3].hashed_line == expected, entries[3].hashed_line
+
+
+def real_table_ends_with_tag_text(generator) -> None:
+    inl_text = generator.DEFAULT_INL.read_text(encoding="utf-8")
+    entries, core_count = generator.parse_entries(inl_text)
+    last = entries[-1]
+    assert last.c_name == "entity_get_tag_text", last.c_name
+    assert last.index >= core_count, (last.index, core_count)
+    assert last.signature == "int32_t (uint64_t entity, char *utf8, int32_t capacity)", last.signature
+    parameters = [generator.cs_type(kind) for kind, _ in last.parameters()]
+    assert parameters == ["ulong", "byte*", "int"], parameters
+
+
 def const_removed_as_word(generator) -> None:
     cases = {
         "conjure_constraint_desc *": "ConstraintDesc*",
@@ -116,6 +144,11 @@ def main() -> int:
         ),
         ("generate_native_api - an unparseable entry fails instead of being dropped", unparseable_entry_fails),
         ("generate_native_api - const is removed only as a word", const_removed_as_word),
+        (
+            "generate_native_api - a core group's entry after the marker is a bindings entry",
+            core_group_entry_after_marker_is_bindings,
+        ),
+        ("generate_native_api - the real table ends with entity_get_tag_text", real_table_ends_with_tag_text),
     ]
     failures: list[str] = []
     for title, case in cases:

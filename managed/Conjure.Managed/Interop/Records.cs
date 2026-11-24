@@ -39,7 +39,8 @@ public enum ScriptPhase : byte
 }
 
 /// <summary>
-/// Bit index of the callback mask and index of the fault counters (conjure::scripting::script_callback).
+/// Bit index of the callback mask and index of the fault counters (conjure::scripting::script_callback). Reload
+/// (OnReload) comes last, so the older callbacks keep their bits.
 /// </summary>
 public enum ScriptCallback : byte
 {
@@ -53,6 +54,7 @@ public enum ScriptCallback : byte
     CollisionExit,
     TriggerEnter,
     TriggerExit,
+    Reload,
     Count,
 }
 
@@ -120,6 +122,12 @@ public readonly struct UuidData : System.IEquatable<UuidData>
 public unsafe struct CreateRequest
 {
     public const byte FlagAlreadyStarted = 1;
+
+    /// <summary>
+    /// CREATE_FLAG_ALREADY_CREATED: OnCreate already ran in the entity's lifetime (hot reload), so the new instance
+    /// runs OnReload instead.
+    /// </summary>
+    public const byte FlagAlreadyCreated = 2;
 
     public ulong Entity;
     public ulong ClassHash;

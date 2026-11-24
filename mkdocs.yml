@@ -1332,6 +1332,7 @@ nav:
                   - handbook/engine/scripting/script-runtime.md
                   - "collision_event": handbook/engine/scripting/script-runtime/collision-event.md
                   - "script_runtime": handbook/engine/scripting/script-runtime/script-runtime.md
+                  - "script_runtime::deferred_reservation": handbook/engine/scripting/script-runtime/script-runtime-deferred-reservation.md
                   - "script_runtime::faulted_slot": handbook/engine/scripting/script-runtime/script-runtime-faulted-slot.md
                   - "script_runtime::pending_create": handbook/engine/scripting/script-runtime/script-runtime-pending-create.md
                   - "script_runtime::query_scope_state": handbook/engine/scripting/script-runtime/script-runtime-query-scope-state.md

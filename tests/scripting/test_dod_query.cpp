@@ -10,6 +10,7 @@
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/component.h"
 #include "conjure/ecs/component_registry.h"
+#include "conjure/ecs/entity_archive.h"
 #include "conjure/ecs/world.h"
 #include "conjure/scripting/native_api.h"
 #include "conjure/scripting/null_script_host.h"
@@ -22,8 +23,11 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -38,6 +42,7 @@ namespace {
     constexpr std::string_view BAD_MIRROR_USER = "Conjure.TestScripts.BadMirrorUser";
     constexpr std::string_view FORGETFUL = "Conjure.TestScripts.ForgetfulQuery";
     constexpr std::string_view DEFERRED_CREATOR = "Conjure.TestScripts.DeferredCreator";
+    constexpr std::string_view DEFERRED_SPAWNER = "Conjure.TestScripts.DeferredSpawner";
     constexpr std::string_view SCORE_USER = "Conjure.TestScripts.ScoreUser";
     constexpr std::string_view UNGUARDED_SCORE_USER = "Conjure.TestScripts.UnguardedScoreUser";
     constexpr std::string_view FLAGS_USER = "Conjure.TestScripts.FlagsMirrorUser";
@@ -48,6 +53,26 @@ namespace {
     constexpr std::string_view SQUAD_USER = "Conjure.TestScripts.SquadUser";
     constexpr std::string_view DYNAMIC_SCHEMA_PROBE = "Conjure.TestScripts.DynamicSchemaProbe";
     constexpr std::string_view FACADE_EXISTS_PROBE = "Conjure.TestScripts.FacadeExistsProbe";
+
+    /// <summary>
+    /// The Score {int Value; float Bonus} an entity holds, read from its column; nullopt without one.
+    /// </summary>
+    struct score_value {
+        i32 value = 0;
+        f32 bonus = 0.0f;
+    };
+
+    [[nodiscard]] std::optional<score_value> score_of(const dotnet_fixture &fixture, ecs::entity entity) {
+        const ecs::component_id scoreId = fixture.registry.find(core::string_id("Conjure.TestScripts.Score"));
+        const void *raw = scoreId.is_valid() ? fixture.world.get_raw(entity, scoreId) : nullptr;
+        if (raw == nullptr) {
+            return std::nullopt;
+        }
+        score_value read = {};
+        std::memcpy(&read.value, raw, sizeof(read.value));
+        std::memcpy(&read.bonus, static_cast<const std::byte *>(raw) + sizeof(read.value), sizeof(read.bonus));
+        return read;
+    }
 }
 
 TEST_SUITE("scripting/dod_query") {
@@ -144,6 +169,86 @@ TEST_SUITE("scripting/dod_query") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
+    TEST_CASE(
+      "regression - code sweep OWN-P2 an entity created in a ComponentQuery scope takes components, scripts and a "
+      "destroy that apply when the scope closes [dotnet]" *
+      doctest::timeout(60)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        dotnet_fixture fixture = {};
+        CONJURE_REQUIRE_OK(fixture.world.add<test_position>(fixture.create_entity()));
+        const script_entry_id spawner = fixture.add_script(fixture.create_entity(), DEFERRED_SPAWNER);
+        const u32 before = fixture.world.entity_count();
+        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+        REQUIRE(fixture.field_i64(spawner, "Completed") == 1);         // no call inside the scope threw
+        const core::json::document fields = fixture.fields_of(spawner);
+        const auto entityField = [&fields](std::string_view name) {
+            return ecs::entity::from_u64(fields.root()[name].as_u64());
+        };
+
+        // Inside the scope the reserved entity read as not alive yet.
+        CHECK(fixture.field_i64(spawner, "AliveInside") == 0);
+        CHECK(fixture.field_i64(spawner, "HasInside") == 0);
+        CHECK(fixture.field_i64(spawner, "TryGetInside") == 0);
+        CHECK(fixture.field_i64(spawner, "NameInside") == 0);
+        CHECK(fixture.field_i64(spawner, "GetThrewNotAlive") == 1);
+        CHECK(fixture.field_i64(spawner, "RemovedAdded") == 1);
+        CHECK(fixture.field_i64(spawner, "RemovedMissing") == 0);
+        CHECK(fixture.field_i64(spawner, "DestroyAnswer") == 1);
+        CHECK(fixture.world.entity_count() == before + 6);             // seven created, one destroyed
+
+        SUBCASE("two components") {
+            const ecs::entity two = entityField("TwoComponents");
+            REQUIRE(fixture.world.is_alive(two));
+            const test_position *position = std::as_const(fixture.world).get<test_position>(two);
+            REQUIRE(position != nullptr);
+            CHECK(*position == test_position{1.0f, 2.0f, 3.0f});
+            const std::optional<score_value> score = score_of(fixture, two);
+            REQUIRE(score.has_value());
+            CHECK(score->value == 7);
+            CHECK(score->bonus == doctest::Approx(0.5f));
+            CHECK(fixture.runtime.entity_name(two) == "two");
+        }
+        SUBCASE("add then remove") {
+            const ecs::entity added = entityField("AddRemove");
+            REQUIRE(fixture.world.is_alive(added));
+            REQUIRE(fixture.world.has<test_position>(added));
+            CHECK(std::as_const(fixture.world).get<test_position>(added)->x == doctest::Approx(4.0f));
+            CHECK_FALSE(score_of(fixture, added).has_value());
+        }
+        SUBCASE("a second add overwrites the first and a set after an add writes") {
+            const std::optional<score_value> overwritten = score_of(fixture, entityField("Overwritten"));
+            REQUIRE(overwritten.has_value());
+            CHECK(overwritten->value == 2);
+            const std::optional<score_value> set = score_of(fixture, entityField("SetAfterAdd"));
+            REQUIRE(set.has_value());
+            CHECK(set->value == 3);
+            CHECK(set->bonus == doctest::Approx(1.5f));
+        }
+        SUBCASE("a set without an add did not throw and is skipped") {
+            const ecs::entity setOnly = entityField("SetOnly");
+            REQUIRE(fixture.world.is_alive(setOnly));
+            CHECK_FALSE(score_of(fixture, setOnly).has_value());
+        }
+        SUBCASE("a script added in the scope is created by the phase's flush") {
+            const ecs::entity scripted = entityField("Scripted");
+            REQUIRE(fixture.world.is_alive(scripted));
+            CHECK(fixture.world.has<test_position>(scripted));
+            const std::vector<script_entry_id> scripts = fixture.runtime.scripts_of(scripted);
+            REQUIRE(scripts.size() == 1);
+            CHECK(fixture.field_i64(scripts[0], "Created") == 1);
+            CHECK(fixture.runtime.stats().liveInstances == 2);         // the spawner and this marker
+        }
+        SUBCASE("a destroy wins: the entity never exists and its script is never created") {
+            const ecs::entity destroyed = entityField("Destroyed");
+            CHECK_FALSE(destroyed.is_null());
+            CHECK_FALSE(fixture.world.is_alive(destroyed));
+            CHECK(fixture.runtime.find_entity_by_name("destroyed").is_null());
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
     TEST_CASE("dod query - an [EcsComponent] struct becomes a dynamic component [dotnet]" * doctest::timeout(60)) {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
@@ -187,38 +292,57 @@ TEST_SUITE("scripting/dod_query") {
     }
 
     TEST_CASE(
-      "regression - sweep-2026-11-12 F631: an unguarded AddComponent in OnCreate throws on hot reload and the guard "
-      "disables the instance [dotnet]" *
+      "regression - sweep-2026-11-12 F631: an unguarded AddComponent in OnCreate survives a hot reload and only a "
+      "copy of the entity faults on it [dotnet]" *
       doctest::timeout(60)
     ) {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
-        logs.allow_errors();                                            // the reload's OnCreate throws on purpose
+        logs.allow_errors();                                            // the copy's OnCreate throws on purpose
         dotnet_fixture fixture = {};
         const ecs::component_id scoreId = fixture.registry.find(core::string_id("Conjure.TestScripts.Score"));
         REQUIRE(scoreId.is_valid());
         const ecs::entity entity = fixture.create_entity();
         const script_entry_id user = fixture.add_script(entity, UNGUARDED_SCORE_USER);
-        REQUIRE(fixture.world.has_raw(entity, scoreId));                // the first OnCreate added it
+        REQUIRE(fixture.world.has_raw(entity, scoreId));                // OnCreate added it
         fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
         REQUIRE(fixture.field_i64(user, "Updates") == 1);
         CHECK(logs.count(core::log_level::ERR) == 0);
 
-        // The reload runs OnCreate again on the entity that kept its Score: the add throws.
-        CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly(test_scripts_assembly("v2")));
-        CHECK(logs.contains(core::log_level::ERR, "UnguardedScoreUser.Create threw"));
-        CHECK(logs.contains(core::log_level::ERR, "already has Score"));
-        CHECK(logs.contains(core::log_level::WARN, "OnCreate of 'Conjure.TestScripts.UnguardedScoreUser'"));
-        CHECK(logs.contains(core::log_level::WARN, "every callback of the instance is disabled"));
+        SUBCASE("a hot reload recreates the instance without OnCreate: nothing throws and it keeps updating") {
+            CONJURE_REQUIRE_OK(fixture.runtime.reload_game_assembly(test_scripts_assembly("v2")));
+            CHECK(logs.count(core::log_level::ERR) == 0);
+            CHECK_FALSE(fixture.runtime.entry(user)->has_flag(script_entry_flags::FAULTED));
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            CHECK(fixture.field_i64(user, "Updates") == 2);
+            const std::optional<score_value> score = score_of(fixture, entity);
+            REQUIRE(score.has_value());
+            CHECK(score->value == 10);                                  // the Score OnCreate added, untouched
+        }
+        SUBCASE("a copy of the entity runs OnCreate on the Score it was copied with: the add throws") {
+            const std::array<ecs::entity, 1> captured = {entity};
+            core::result<ecs::entity_archive> archive = ecs::entity_archive::capture(fixture.world, captured);
+            CONJURE_REQUIRE_OK(archive);
+            const std::shared_ptr<const ecs::entity_archive> shared =
+              std::make_shared<const ecs::entity_archive>(std::move(archive).value());
+            const core::result<ecs::entity> copy = fixture.world.instantiate(shared);
+            CONJURE_REQUIRE_OK(copy);
+            fixture.runtime.flush_pending();
+            const std::vector<script_entry_id> copied = fixture.runtime.scripts_of(copy.value());
+            REQUIRE(copied.size() == 1);
+            const script_entry_id copyUser = copied[0];
+            CHECK(logs.contains(core::log_level::ERR, "UnguardedScoreUser.Create threw"));
+            CHECK(logs.contains(core::log_level::ERR, "already has Score"));
+            CHECK(logs.contains(core::log_level::WARN, "OnCreate of 'Conjure.TestScripts.UnguardedScoreUser'"));
+            CHECK(fixture.runtime.entry(copyUser)->has_flag(script_entry_flags::FAULTED));
 
-        // Every callback of the new instance is off, and the Score the entity kept is untouched.
-        fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
-        CHECK(fixture.field_i64(user, "Updates") == 1);
-        const void *raw = std::as_const(fixture.world).get_raw(entity, scoreId);
-        REQUIRE(raw != nullptr);
-        i32 value = 0;
-        std::memcpy(&value, raw, sizeof(value));
-        CHECK(value == 10);
+            // Every callback of the copy's instance is off; the original keeps updating.
+            const i64 copyUpdates = fixture.field_i64(copyUser, "Updates");
+            fixture.runtime.run_phase(script_phase::UPDATE, 0.1f);
+            CHECK(fixture.field_i64(copyUser, "Updates") == copyUpdates);
+            CHECK(fixture.field_i64(user, "Updates") == 2);
+            CHECK_FALSE(fixture.runtime.entry(user)->has_flag(script_entry_flags::FAULTED));
+        }
     }
 
     TEST_CASE(

@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Conjure;
 using Conjure.Dod;
+using Conjure.Interop;
 using Conjure.Runtime;
 
 namespace Conjure.TestScripts;
@@ -143,6 +144,97 @@ public sealed class DeferredCreator : ScriptBehaviour
 }
 
 /// <summary>
+/// Spawns entities inside one query scope and changes them before it closes (17_demo_games.md P2, code sweep
+/// OWN-P2): two components, add then remove, a second add, a set after an add, a set without an add, a script
+/// and a destroy. Records what the reads inside the scope answered; Completed is set only when no call threw.
+/// </summary>
+public sealed class DeferredSpawner : ScriptBehaviour
+{
+    public Entity TwoComponents;
+    public Entity AddRemove;
+    public Entity Overwritten;
+    public Entity SetAfterAdd;
+    public Entity SetOnly;
+    public Entity Scripted;
+    public Entity Destroyed;
+    public int AliveInside = -1;
+    public int HasInside = -1;
+    public int TryGetInside = -1;
+    public int NameInside = -1;
+    public int GetThrewNotAlive;
+    public int RemovedAdded;
+    public int RemovedMissing;
+    public int DestroyAnswer;
+    public int Completed;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Completed != 0)
+        {
+            return;
+        }
+        using ComponentQuery query = ComponentQuery.Begin<TestPosition>();
+
+        TwoComponents = Entity.Create("two");
+        TwoComponents.AddComponent(new TestPosition { X = 1.0f, Y = 2.0f, Z = 3.0f });
+        TwoComponents.AddComponent(new Score { Value = 7, Bonus = 0.5f });
+        AliveInside = TwoComponents.IsAlive ? 1 : 0;
+        HasInside = TwoComponents.HasComponent<TestPosition>() ? 1 : 0;
+        TryGetInside = TwoComponents.TryGetComponent(out TestPosition _) ? 1 : 0;
+        NameInside = TwoComponents.Name.Length;
+        try
+        {
+            TwoComponents.GetComponent<TestPosition>();
+        }
+        catch (EntityNotAliveException)
+        {
+            GetThrewNotAlive = 1;
+        }
+
+        AddRemove = Entity.Create();
+        AddRemove.AddComponent(new TestPosition { X = 4.0f });
+        AddRemove.AddComponent(new Score { Value = 1 });
+        RemovedAdded = AddRemove.RemoveComponent<Score>() ? 1 : 0;
+        RemovedMissing = AddRemove.RemoveComponent<Toggle>() ? 1 : 0;
+
+        Overwritten = Entity.Create();
+        Overwritten.AddComponent(new Score { Value = 1 });
+        Overwritten.AddComponent(new Score { Value = 2 });
+
+        SetAfterAdd = Entity.Create();
+        SetAfterAdd.AddComponent(new Score { Value = 1 });
+        SetAfterAdd.SetComponent(new Score { Value = 3, Bonus = 1.5f });
+
+        SetOnly = Entity.Create();
+        SetOnly.SetComponent(new Score { Value = 9 });
+
+        Scripted = Entity.Create("scripted");
+        Scripted.AddComponent(new TestPosition { X = 5.0f });
+        Scripted.AddScript<SpawnedMarker>();
+
+        Destroyed = Entity.Create("destroyed");
+        Destroyed.AddComponent(new TestPosition { X = 6.0f });
+        Destroyed.AddScript<SpawnedMarker>();
+        DestroyAnswer = Destroyed.Destroy() ? 1 : 0;
+
+        Completed = 1;
+    }
+}
+
+/// <summary>
+/// The script DeferredSpawner adds to an entity it reserved: OnCreate records that the instance came to life.
+/// </summary>
+public sealed class SpawnedMarker : ScriptBehaviour
+{
+    public int Created;
+
+    protected override void OnCreate()
+    {
+        Created = 1;
+    }
+}
+
+/// <summary>
 /// Resolves the bool-carrying mirror, flips its flag and bumps its weight through Get/SetComponent.
 /// </summary>
 public sealed class FlagsMirrorUser : ScriptBehaviour
@@ -183,7 +275,7 @@ public sealed class ToggleUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
-        // A hot reload runs OnCreate again on the entity that kept its Toggle: AddComponent would throw.
+        // A copy made by Entity.Duplicate, or a prefab instance, can already carry a Toggle: AddComponent would throw.
         if (HasComponent<Toggle>())
         {
             return;
@@ -215,7 +307,7 @@ public sealed class ScoreUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
-        // A hot reload runs OnCreate again on the entity that kept its Score: AddComponent would throw.
+        // A copy made by Entity.Duplicate, or a prefab instance, can already carry a Score: AddComponent would throw.
         if (HasComponent<Score>())
         {
             return;
@@ -236,8 +328,10 @@ public sealed class ScoreUser : ScriptBehaviour
 }
 
 /// <summary>
-/// ScoreUser without the HasComponent guard (code sweep F631): a hot reload runs OnCreate again on the entity
-/// that kept its Score, the add throws, and the fault guard disables every callback of the new instance.
+/// ScoreUser without the HasComponent guard (code sweep F631). A hot reload does not run OnCreate again (code
+/// sweep OWN-RELOAD), so the recreated instance keeps working. A copy of the entity (Entity.Duplicate, a prefab
+/// instance) runs OnCreate on an entity that already carries the Score: the add throws, and the fault guard
+/// disables every callback of the copy's instance.
 /// </summary>
 public sealed class UnguardedScoreUser : ScriptBehaviour
 {
@@ -355,7 +449,7 @@ public sealed class SquadUser : ScriptBehaviour
 
     protected override void OnCreate()
     {
-        // A hot reload runs OnCreate again on the entity that kept its Squad: AddComponent would throw.
+        // A copy made by Entity.Duplicate, or a prefab instance, can already carry a Squad: AddComponent would throw.
         if (HasComponent<Squad>())
         {
             return;

@@ -18,7 +18,8 @@ kind: header
 | File | Description |
 |---|---|
 | [`collision_event`](script-runtime/collision-event.md) | One contact the engine forwards from <code>physics_world::contact_events()</code>; dispatched to both participants&#x27; scripts with the normal flipped for b. |
-| [`script_runtime::faulted_slot`](script-runtime/script-runtime-faulted-slot.md) | <code>A</code> fault reported inside <code>create_instances</code>, before its slot was mapped (OnCreate threw). |
+| [`script_runtime::deferred_reservation`](script-runtime/script-runtime-deferred-reservation.md) | An id the scripting entries reserved through <code>mDeferredCommands</code> that no flush has applied yet. <code>held</code> follows the components the commands recorded so far give it, so <code>component_remove</code> can answer whether there is something to remove; an instantiation root gets its archive&#x27;s components at the flush, which the runtime cannot see (<code>heldKnown</code> <code>false</code>). |
+| [`script_runtime::faulted_slot`](script-runtime/script-runtime-faulted-slot.md) | <code>A</code> fault reported inside <code>create_instances</code>, before its slot was mapped (OnCreate or OnReload threw). |
 | [`script_runtime::pending_create`](script-runtime/script-runtime-pending-create.md) |  |
 | [`script_runtime::query_scope_state`](script-runtime/script-runtime-query-scope-state.md) |  |
 | [`script_runtime_config`](script-runtime/script-runtime-config.md) |  |

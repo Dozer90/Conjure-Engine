@@ -8,7 +8,7 @@ namespace Conjure;
 /// <summary>
 /// Per-callback consecutive fault counters (one byte per ScriptCallback).
 /// </summary>
-[InlineArray(10)]
+[InlineArray((int)ScriptCallback.Count)]
 public struct FaultCounters
 {
     private byte _element;
@@ -105,14 +105,31 @@ public abstract class ScriptBehaviour
     public void Destroy() => EntityValue.Destroy();
 
     /// <summary>
-    /// Runs once when the instance is created, and again on the new instance after every hot reload of the game
-    /// assembly (OnStart does not run again). The entity can already carry the component when OnCreate runs:
-    /// after a hot reload (it kept its components), on a copy made by Entity.Duplicate, or on a prefab or scene
-    /// instance authored with it. So an AddComponent here checks HasComponent first: adding one the entity
-    /// already has throws, and an exception in OnCreate disables every callback of the instance until the next
-    /// reload.
+    /// Runs once per entity lifetime, when the instance is created. A hot reload of the game assembly recreates
+    /// the instance without running OnCreate again (OnReload runs instead; OnStart does not run again either),
+    /// so a one-shot effect started here does not replay; an instance whose creation was still queued at the
+    /// reload runs OnCreate on the new assembly. The entity can already carry the component when OnCreate runs:
+    /// on a copy made by Entity.Duplicate, or on a prefab or scene instance authored with it. So an AddComponent
+    /// here checks HasComponent first: adding one the entity already has throws, and an exception in OnCreate
+    /// disables every callback of the instance until the next reload. An OnCreate that threw did not complete:
+    /// that reload (once the code is fixed) runs OnCreate once more instead of OnReload, and then OnStart, which
+    /// the disabled instance never ran.
     /// </summary>
     protected virtual void OnCreate()
+    {
+    }
+
+    /// <summary>
+    /// Runs on each instance a hot reload of the game assembly recreated, in place of OnCreate, when its OnCreate
+    /// completed (one whose OnCreate threw runs OnCreate again instead): after the serialised fields were
+    /// restored and before the next phase. A play-mode snapshot restore, or a replace of the entity's scripts
+    /// from JSON saved after OnCreate returned, recreates the instance the same way. The reload runs no script
+    /// phase, so a
+    /// ComponentQuery begun here is refused. Private and [NonSerialized] state starts from its initialisers, so
+    /// this is the place to rebuild caches; the entity kept its components. An exception here disables every
+    /// callback of the instance until the next reload, like one in OnCreate.
+    /// </summary>
+    protected virtual void OnReload()
     {
     }
 
@@ -182,6 +199,9 @@ public abstract class ScriptBehaviour
                     break;
                 case ScriptCallback.Destroy:
                     OnDestroy();
+                    break;
+                case ScriptCallback.Reload:
+                    OnReload();
                     break;
                 default:
                     return;

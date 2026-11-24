@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using Conjure.Components;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -7,7 +9,8 @@ namespace Conjure;
 /// <summary>
 /// The hierarchy, identity and enabled-state half of Entity (docs/design/15_bindings.md 2.5): the entity_*
 /// entries beyond the scripting core. Predicates and finders answer false / Null / 0 for a dead entity
-/// (B11); setters throw EntityNotAliveException.
+/// (B11); setters throw EntityNotAliveException, except that the Name, Enabled, Tag and Layer setters record
+/// their change on an entity reserved in the current ComponentQuery scope (see Entity).
 /// </summary>
 public readonly partial struct Entity
 {
@@ -19,7 +22,7 @@ public readonly partial struct Entity
 
     /// <summary>
     /// The Name setter: scene.name through entity_set_name ("" or null clears it); EntityNotAliveException for a
-    /// dead entity.
+    /// dead entity, recorded for one reserved in the current ComponentQuery scope.
     /// </summary>
     private unsafe void WriteName(string? name)
     {
@@ -71,7 +74,8 @@ public readonly partial struct Entity
 
     /// <summary>
     /// The self enabled state (scene.disabled absent); false for a dead entity. Setting it inside a query
-    /// scope is deferred to the scope end (R5).
+    /// scope is deferred to the scope end (R5), also on an entity reserved in that scope, which then exists
+    /// with the state; setting it on a dead entity throws EntityNotAliveException.
     /// </summary>
     public unsafe bool Enabled
     {
@@ -90,9 +94,39 @@ public readonly partial struct Entity
     }
 
     /// <summary>
-    /// The gameplay tag (StringId.Null without one or for a dead entity); set it with SetTag.
+    /// The gameplay tag's text: "" without a tag, for a dead entity, and for a tag that has a hash but no
+    /// interned text natively (one written as a StringId.Of value into the Tag component; TagId still tells
+    /// it apart). Setting it tags the entity (scene.tag; "" or null removes the tag) and throws
+    /// EntityNotAliveException for a dead entity; on an entity reserved in the current ComponentQuery scope the
+    /// tag is recorded and the getter answers "" until the scope closes. Compare TagId in hot loops: this getter
+    /// builds a string.
     /// </summary>
-    public unsafe StringId Tag
+    [AllowNull]
+    public unsafe string Tag
+    {
+        get
+        {
+            NativeApi* api = NativeBridge.RequireApi();
+            NativeBridge.Require(api->EntityGetTagText, NativeFunction.EntityGetTagText);
+            string text = Utf8Marshal.ReadNeeded(Id, static (ulong state, byte* buffer, int capacity) =>
+            {
+                return NativeBridge.Api->EntityGetTagText(state, buffer, capacity);
+            }, out int status);
+            if (NativeCheck.Is(status, BindingStatus.EntityNotAlive) || NativeCheck.Is(status, BindingStatus.NotFound))
+            {
+                return "";
+            }
+            NativeCheck.ThrowIfFailed(status, NativeFunction.EntityGetTagText);
+            return text;
+        }
+        set => WriteTag(value);
+    }
+
+    /// <summary>
+    /// The gameplay tag as an id, for comparisons that allocate nothing (StringId.Null without a tag or for a
+    /// dead entity).
+    /// </summary>
+    public unsafe StringId TagId
     {
         get
         {
@@ -103,9 +137,16 @@ public readonly partial struct Entity
     }
 
     /// <summary>
-    /// Sets the gameplay tag ("" removes it).
+    /// Sets the gameplay tag; the Tag property's setter does the same and is the one to use.
     /// </summary>
-    public unsafe void SetTag(string tag)
+    [Obsolete("use Tag")]
+    public void SetTag(string tag) => Tag = tag;
+
+    /// <summary>
+    /// The Tag setter: scene.tag through entity_set_tag ("" or null removes it); EntityNotAliveException for a
+    /// dead entity.
+    /// </summary>
+    private unsafe void WriteTag(string? tag)
     {
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->EntitySetTag, NativeFunction.EntitySetTag);
@@ -118,13 +159,16 @@ public readonly partial struct Entity
     }
 
     /// <summary>
-    /// True when the tag equals StringId.Of(tag).
+    /// True when TagId equals StringId.Of(tag); HasTag("") asks whether the entity has no tag (true for a dead
+    /// entity as well).
     /// </summary>
-    public bool HasTag(string tag) => Tag == StringId.Of(tag);
+    public bool HasTag(string tag) => TagId == StringId.Of(tag);
 
     /// <summary>
     /// The layer index 0..31 (0 without a layer component; -1 for a dead entity). The setter rejects values
-    /// outside 0..31 with ArgumentException.
+    /// outside 0..31 with ArgumentException and throws EntityNotAliveException for a dead entity; on an entity
+    /// reserved in the current ComponentQuery scope the layer is recorded and the getter answers -1 until the
+    /// scope closes.
     /// </summary>
     public unsafe int Layer
     {
@@ -226,7 +270,9 @@ public readonly partial struct Entity
     /// <summary>
     /// Creates 'count' entities with identity transforms under 'parent' (Null = roots) into 'entities',
     /// which must hold at least 'count'; returns the number created. Inside a query scope the ids are
-    /// reserved and the entities exist once the scope closes (R5).
+    /// reserved and the entities exist once the scope closes (R5); AddComponent, SetComponent, RemoveComponent,
+    /// AddScript and Destroy on them are recorded and applied in call order then, and the facade writes on them
+    /// are made right after, as for Entity.Create.
     /// </summary>
     public static unsafe int CreateMany(int count, Span<Entity> entities, Entity parent = default)
     {
@@ -240,6 +286,7 @@ public readonly partial struct Entity
         {
             int status = api->EntityCreateMany(count, parent.Id, (ulong*)pinned);
             NativeCheck.ThrowIfFailed(status, NativeFunction.EntityCreateMany);
+            ReservedWrites.NoteCreated(entities.Slice(0, status));
             return status;
         }
     }

@@ -6,8 +6,8 @@
 // CONJURE_NATIVE_API_FOR_EACH_ENTRY(X) invokes X(group, name, "<return> <arguments>") per entry in
 // table order: the descriptor table native_entry_descriptors() is built from it.
 
-#define CONJURE_NATIVE_API_HASH 0x4B06362D38B412A6ull
-#define CONJURE_NATIVE_API_ENTRY_COUNT 126
+#define CONJURE_NATIVE_API_HASH 0xC6292B87C84ABEB1ull
+#define CONJURE_NATIVE_API_ENTRY_COUNT 127
 #define CONJURE_NATIVE_API_CORE_ENTRY_COUNT 20
 
 // clang-format off
@@ -148,6 +148,7 @@
     X(modules, find, "int32_t (const char *utf8Name, int32_t length)") \
     X(modules, info, "int32_t (int32_t index, conjure_module_record *out)") \
     X(modules, name, "int32_t (int32_t index, char *utf8, int32_t capacity)") \
+    X(entity, get_tag_text, "int32_t (uint64_t entity, char *utf8, int32_t capacity)") \
     /* end of table */
 
 // X(group, name, return, (arguments)) per entry in table order: the typed form the bindings' filtered
@@ -290,6 +291,7 @@
     X(modules, find, int32_t, (const char *utf8Name, int32_t length)) \
     X(modules, info, int32_t, (int32_t index, conjure_module_record *out)) \
     X(modules, name, int32_t, (int32_t index, char *utf8, int32_t capacity)) \
+    X(entity, get_tag_text, int32_t, (uint64_t entity, char *utf8, int32_t capacity)) \
     /* end of table */
 
 // The same for the entries after the bindings marker only (the ten bindings groups, R26/R64).
@@ -411,5 +413,6 @@
     X(modules, find, int32_t, (const char *utf8Name, int32_t length)) \
     X(modules, info, int32_t, (int32_t index, conjure_module_record *out)) \
     X(modules, name, int32_t, (int32_t index, char *utf8, int32_t capacity)) \
+    X(entity, get_tag_text, int32_t, (uint64_t entity, char *utf8, int32_t capacity)) \
     /* end of table */
 // clang-format on

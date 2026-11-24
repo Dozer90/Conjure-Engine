@@ -183,6 +183,7 @@ void script_runtime::attach_world(ecs::world *world) {
         mDestroyedObserver = {};
         mQueryScopes.clear();
         mQueryCache.clear();        // the cached queries point into the old world's archetypes
+        drop_deferred_reservations();
         mDeferredCommands.reset();
         mEntityNames.clear();
         mWarnedMirrorNames.clear();
@@ -195,7 +196,8 @@ void script_runtime::attach_world(ecs::world *world) {
 
     mDeferredCommands = std::make_unique<ecs::command_buffer>(*mWorld);
     // Every destroy path (native, Entity.Destroy, command buffers, scene unload) fires this observer, so a name
-    // lives exactly as long as its entity; worlds without script_component are covered too.
+    // lives exactly as long as its entity; worlds without script_component are covered too. A reserved id that
+    // dies before it was placed fires none: settle_deferred_reservations forgets its name.
     mDestroyedObserver = mWorld->observe_destroyed([this](ecs::world &, ecs::entity target, ecs::command_buffer &) {
         mEntityNames.erase(target);
     });
@@ -407,11 +409,12 @@ void script_runtime::destroy_all(bool callOnDestroy) {
         }
     }
 
-    // The session is over: the next PLAY creates every instance afresh and runs OnStart again (D8
-    // reserves the started flag for hot reload), and a fault badge does not outlive its instance.
+    // The session is over: the next PLAY creates every instance afresh and runs OnCreate and OnStart again
+    // (the created and started flags are for hot reload only), and a fault badge does not outlive its instance.
     mStore.for_each_set([](u32, script_set &set) {
         for (script_entry &entryValue : set.entries) {
-            entryValue.flags &= ~(script_entry_flags::STARTED | script_entry_flags::FAULTED);
+            entryValue.flags &=
+              ~(script_entry_flags::CREATED | script_entry_flags::STARTED | script_entry_flags::FAULTED);
         }
     });
 }
@@ -422,7 +425,14 @@ void script_runtime::destroy_all(bool callOnDestroy) {
 // Scripts of an entity
 
 script_entry_id script_runtime::add_script(ecs::entity entity, u64 classHash, const core::json::value &fields) {
-    if (mWorld == nullptr || !mWorld->is_alive(entity)) {
+    if (mWorld == nullptr) {
+        return {};
+    }
+    deferred_reservation *reservation = find_reservation(entity);
+    if (reservation != nullptr) {
+        return stage_reserved_script(entity, *reservation, classHash, fields);
+    }
+    if (!mWorld->is_alive(entity)) {
         return {};
     }
     script_component *component = mWorld->get<script_component>(entity);
@@ -631,7 +641,14 @@ void script_runtime::on_component_removed(ecs::entity entity, const script_compo
 }
 
 void script_runtime::on_component_added(ecs::entity entity, script_component &component) {
+    deferred_reservation *reservation = nullptr;
     if (component.setHandle == INVALID_SET_HANDLE) {
+        reservation = find_reservation(entity);
+    }
+    if (reservation != nullptr && reservation->scriptSet != INVALID_SET_HANDLE) {
+        // The flush placed a reserved id with the script_component add_script recorded: the staged set is its set.
+        component.setHandle = std::exchange(reservation->scriptSet, INVALID_SET_HANDLE);
+    } else if (component.setHandle == INVALID_SET_HANDLE) {
         component.setHandle = mStore.create_set(entity);
     } else {
         script_set *set = mStore.find(component.setHandle);
@@ -648,7 +665,17 @@ void script_runtime::on_component_added(ecs::entity entity, script_component &co
 }
 
 void script_runtime::request_entity_destroy(ecs::entity entity) {
-    if (mWorld == nullptr || !mWorld->is_alive(entity)) {
+    if (mWorld == nullptr) {
+        return;
+    }
+    if (find_reservation(entity) != nullptr) {
+        // No instance exists before the flush, so nothing has to see the entity alive: the buffer's destroy wins
+        // over every command on the id and hands the id back. On an instantiation root it cancels the copy
+        // (world::flush): the archive's inner entities are never placed, so none outlives its root.
+        deferred_commands().destroy_entity(entity);
+        return;
+    }
+    if (!mWorld->is_alive(entity)) {
         return;
     }
     const script_component *component = std::as_const(*mWorld).get<script_component>(entity);
@@ -679,7 +706,7 @@ void script_runtime::mark_faulted(i32 slot, script_callback callback) {
     const std::optional<script_entry_id> id = mStore.resolve_slot(slot);
     script_entry *entryValue = id.has_value() ? mStore.find_entry(*id) : nullptr;
     if (entryValue == nullptr) {
-        // OnCreate runs inside create_instances, before the slot is mapped: remembered until it is.
+        // OnCreate and OnReload run inside create_instances, before the slot is mapped: remembered until it is.
         if (mCreatingInstances && slot >= 0) {
             faulted_slot faulted = {};
             faulted.slot = slot;
@@ -831,6 +858,75 @@ void script_runtime::end_query_scope(u32 scopeId) {
     if (mQueryScopes.empty()) {
         flush_deferred_commands();
     }
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
+// Ids reserved in deferred_commands()
+
+void script_runtime::note_deferred_reserved(ecs::entity entity, std::span<const ecs::component_id> recorded) {
+    if (entity.is_null()) {
+        return;
+    }
+    deferred_reservation &reservation = mDeferredReserved[entity];
+    for (const ecs::component_id id : recorded) {
+        reservation.held.set(id);
+    }
+}
+
+void script_runtime::note_deferred_instance(ecs::entity root) {
+    if (root.is_null()) {
+        return;
+    }
+    mDeferredReserved[root].heldKnown = false;
+}
+
+bool script_runtime::is_deferred_reserved(ecs::entity entity) const noexcept {
+    return mDeferredReserved.contains(entity);
+}
+
+bool script_runtime::is_deferred_instance(ecs::entity entity) const noexcept {
+    const auto found = mDeferredReserved.find(entity);
+    return found != mDeferredReserved.end() && !found->second.heldKnown;
+}
+
+bool script_runtime::record_reserved_add(ecs::entity entity, ecs::component_id id, std::span<const std::byte> payload) {
+    deferred_reservation *reservation = find_reservation(entity);
+    if (reservation == nullptr || !mWorld->registry().is_registered(id)) {
+        return false;
+    }
+    deferred_commands().add_raw(entity, id, payload);
+    reservation->held.set(id);
+    return true;
+}
+
+bool script_runtime::record_reserved_set(ecs::entity entity, ecs::component_id id, std::span<const std::byte> payload) {
+    deferred_reservation *reservation = find_reservation(entity);
+    if (reservation == nullptr || !mWorld->registry().is_registered(id)) {
+        return false;
+    }
+    // command_buffer::set_raw records nothing for a tag (there is no value to replace); the call still succeeds,
+    // as a set of a held tag does on a live entity.
+    deferred_commands().set_raw(entity, id, payload);
+    return true;
+}
+
+bool script_runtime::record_reserved_remove(ecs::entity entity, ecs::component_id id) {
+    deferred_reservation *reservation = find_reservation(entity);
+    if (reservation == nullptr || !mWorld->registry().is_registered(id)) {
+        return false;
+    }
+    if (reservation->heldKnown && !reservation->held.test(id)) {
+        return false;
+    }
+    deferred_commands().remove_raw(entity, id);
+    reservation->held.clear(id);
+    if (id == mScriptComponentId && reservation->scriptSet != INVALID_SET_HANDLE) {
+        // In order: the scripts staged before this removal leave with the component.
+        mStore.free_set(std::exchange(reservation->scriptSet, INVALID_SET_HANDLE));
+    }
+    return true;
 }
 
 
@@ -1002,8 +1098,10 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
         ++mReloadCount;
     }
 
-    // 5. Swap registries and recreate with the new schema (OnCreate again, OnStart not). The fault
-    // badges belong to the destroyed instances: the managed DisabledMask starts clean, so does the flag.
+    // 5. Swap registries and recreate with the new schema. OnCreate runs once per entity lifetime: an entry
+    // whose OnCreate returned is recreated with OnReload instead, and OnStart does not run again either; an entry
+    // whose create was still queued, or whose OnCreate threw, runs OnCreate. The fault badges belong to the
+    // destroyed instances: the managed DisabledMask starts clean, so does the flag.
     mClasses.commit_staging();
     mWarnedMissingClasses.clear();
     mWarnedMirrorNames.clear();         // a still-wrong mirror of the new assembly is reported again
@@ -1172,7 +1270,13 @@ void script_runtime::process_pending_creates() {
         request.class_hash = entryValue->classHash;
         request.fields = blob.data();
         request.fields_size = static_cast<int32_t>(blob.size());
-        request.flags = entryValue->has_flag(script_entry_flags::STARTED) ? CREATE_FLAG_ALREADY_STARTED : 0;
+        request.flags = 0;
+        if (entryValue->has_flag(script_entry_flags::STARTED)) {
+            request.flags |= CREATE_FLAG_ALREADY_STARTED;
+        }
+        if (entryValue->has_flag(script_entry_flags::CREATED)) {
+            request.flags |= CREATE_FLAG_ALREADY_CREATED;
+        }
         request.out_slot = INVALID_SLOT;
         requests.push_back(request);
         ids.push_back(item.id);
@@ -1194,18 +1298,26 @@ void script_runtime::process_pending_creates() {
             // OnCreate may have destroyed the entity (its own or another of the batch) or replaced the
             // set's entries: an instance whose entry is gone is destroyed by the next flush iteration
             // instead of living on, unreachable from native, on a dead entity.
-            const script_entry *entryValue = mStore.find_entry(ids[index]);
+            script_entry *entryValue = mStore.find_entry(ids[index]);
             if (entryValue == nullptr || entryValue->is_live() || entryValue->classHash != requests[index].class_hash) {
                 mPendingDestroySlots.push_back(slot);
                 continue;
             }
             mStore.map_slot(slot, ids[index]);
+            // OnCreate completed (or OnReload ran on an entry whose OnCreate had): a hot reload recreates this entry
+            // with OnReload instead. An OnCreate that threw takes the flag back below.
+            entryValue->flags |= script_entry_flags::CREATED;
         }
         for (const faulted_slot &faulted : mFaultedBeforeMapped) {
             const std::optional<script_entry_id> faultedId = mStore.resolve_slot(faulted.slot);
             script_entry *entryValue = faultedId.has_value() ? mStore.find_entry(*faultedId) : nullptr;
             if (entryValue != nullptr) {
                 entryValue->flags |= script_entry_flags::FAULTED;
+                if (faulted.callback == script_callback::CREATE) {
+                    // An OnCreate that threw did not complete (owner ruling, OWN-RELOAD): once the author fixed it,
+                    // the reload runs OnCreate once more, and OnReload only follows an OnCreate that returned.
+                    entryValue->flags &= ~script_entry_flags::CREATED;
+                }
                 log_faulted(faulted.slot, faulted.callback, *entryValue);
             }
         }
@@ -1307,7 +1419,9 @@ core::result<void> script_runtime::apply_entry_fields_with(
 void script_runtime::mark_started_entries() {
     mStore.for_each_set([](u32, script_set &set) {
         for (script_entry &entryValue : set.entries) {
-            if (entryValue.is_live()) {
+            // A live entry without CREATED is one whose OnCreate threw: the managed guard disabled every callback,
+            // so its OnStart is never attempted, and the OnCreate a reload runs again is followed by OnStart.
+            if (entryValue.is_live() && entryValue.has_flag(script_entry_flags::CREATED)) {
                 entryValue.flags |= script_entry_flags::STARTED;
             }
         }
@@ -1369,13 +1483,110 @@ void script_runtime::force_close_query_scopes() {
 }
 
 void script_runtime::flush_deferred_commands() {
-    if (mDeferredCommands == nullptr || mDeferredCommands->empty() || mWorld == nullptr || mWorld->is_locked()) {
+    if (mDeferredCommands == nullptr || mWorld == nullptr || mWorld->is_locked()) {
         return;
     }
-    const ecs::flush_report report = mWorld->flush(*mDeferredCommands);
-    if (report.skipped > 0) {
-        CONJURE_LOG_DEBUG(LOG_SCRIPTING, "deferred requests: {} applied, {} skipped", report.applied, report.skipped);
+    if (!mDeferredCommands->empty()) {
+        const ecs::flush_report report = mWorld->flush(*mDeferredCommands);
+        if (report.skipped > 0) {
+            CONJURE_LOG_DEBUG(
+              LOG_SCRIPTING,
+              "deferred requests: {} applied, {} skipped",
+              report.applied,
+              report.skipped
+            );
+        }
     }
+    settle_deferred_reservations();
+}
+
+void script_runtime::settle_deferred_reservations() {
+    if (mDeferredReserved.empty()) {
+        return;
+    }
+    for (auto &[entity, reservation] : mDeferredReserved) {
+        const bool alive = mWorld->is_alive(entity);
+        if (!alive) {
+            // A destroy won and the flush handed the id back through world::release_reserved, which fires no
+            // destroyed observer: the name entity_create gave the id goes here, or it would stay for good.
+            mEntityNames.erase(entity);
+        }
+        if (reservation.scriptSet == INVALID_SET_HANDLE) {
+            continue;
+        }
+        // Not adopted by on_component_added: the id is dead (a destroy won), or it already held a script_component
+        // when the flush reached the recorded one (an instantiation root whose archive carries scripts), whose
+        // set then takes the staged entries after its own.
+        const u32 staged = std::exchange(reservation.scriptSet, INVALID_SET_HANDLE);
+        const script_component *component = alive ? std::as_const(*mWorld).get<script_component>(entity) : nullptr;
+        script_set *stagedSet = mStore.find(staged);
+        if (component != nullptr && stagedSet != nullptr && mStore.contains(component->setHandle)) {
+            core::small_vector<script_entry, 2> entries = std::move(stagedSet->entries);
+            for (script_entry &entryValue : entries) {
+                const script_entry_id id = mStore.add_entry(component->setHandle, std::move(entryValue));
+                if (!id.is_valid()) {
+                    CONJURE_LOG_WARN(
+                      LOG_SCRIPTING,
+                      "add_script on {}: its set reached {} scripts at the flush; a staged script was dropped",
+                      entity,
+                      MAX_SCRIPTS_PER_ENTITY
+                    );
+                    continue;
+                }
+                if (mMode == script_mode::PLAY) {
+                    queue_create(id);
+                }
+            }
+        }
+        mStore.free_set(staged);
+    }
+    mDeferredReserved.clear();
+}
+
+void script_runtime::drop_deferred_reservations() {
+    for (auto &[entity, reservation] : mDeferredReserved) {
+        if (reservation.scriptSet != INVALID_SET_HANDLE) {
+            mStore.free_set(reservation.scriptSet);
+        }
+    }
+    mDeferredReserved.clear();
+}
+
+script_runtime::deferred_reservation *script_runtime::find_reservation(ecs::entity entity) noexcept {
+    const auto found = mDeferredReserved.find(entity);
+    return found == mDeferredReserved.end() ? nullptr : &found->second;
+}
+
+script_entry_id script_runtime::stage_reserved_script(
+  ecs::entity entity,
+  deferred_reservation &reservation,
+  u64 classHash,
+  const core::json::value &fields
+) {
+    if (!mScriptComponentId.is_valid()) {
+        return {};
+    }
+    if (reservation.scriptSet == INVALID_SET_HANDLE) {
+        reservation.scriptSet = mStore.create_set(entity);
+        if (reservation.scriptSet == INVALID_SET_HANDLE) {
+            return {};
+        }
+    }
+    script_entry entryValue = {};
+    entryValue.classHash = classHash;
+    entryValue.fields = fields.is_object() ? core::json::document::from_value(fields) : core::json::document::object();
+    const script_entry_id id = mStore.add_entry(reservation.scriptSet, std::move(entryValue));
+    if (!id.is_valid()) {
+        return {};
+    }
+    if (!reservation.held.test(mScriptComponentId)) {
+        // An empty payload: the flush places the id with a zero handle and the ADDED observer adopts the staged
+        // set. On an id that already holds the component then, the add keeps that value and fires nothing, and
+        // settle_deferred_reservations appends the staged entries instead.
+        deferred_commands().add_raw(entity, mScriptComponentId);
+        reservation.held.set(mScriptComponentId);
+    }
+    return id;
 }
 
 void script_runtime::warn_missing_class_once(u64 classHash) {
@@ -1394,11 +1605,13 @@ void script_runtime::warn_missing_class_once(u64 classHash) {
 void script_runtime::log_faulted(i32 slot, script_callback callback, const script_entry &entryValue) const {
     const script_class_info *info = mClasses.find(entryValue.classHash);
     const std::string_view className = info == nullptr ? std::string_view("?") : std::string_view(info->fullName);
-    if (callback == script_callback::CREATE) {
-        // The managed guard disables every callback of an instance whose OnCreate threw, on the first fault.
+    if (callback == script_callback::CREATE || callback == script_callback::RELOAD) {
+        // The managed guard disables every callback of an instance whose OnCreate or OnReload threw, on the
+        // first fault.
         CONJURE_LOG_WARN(
           LOG_SCRIPTING,
-          "OnCreate of '{}' (slot {}) threw: every callback of the instance is disabled",
+          "{} of '{}' (slot {}) threw: every callback of the instance is disabled",
+          callback == script_callback::CREATE ? std::string_view("OnCreate") : std::string_view("OnReload"),
           className,
           slot
         );
@@ -1424,6 +1637,12 @@ void script_runtime::write_set_entries_json(script_set &set, core::json::writer 
         out.value(entryValue.classHash);
         if (entryValue.has_flag(script_entry_flags::STARTED)) {
             out.key("started");
+            out.value(true);
+        }
+        // OnCreate runs once per entity lifetime: a snapshot restore or a replace of the set from this JSON must
+        // recreate the instance with OnReload, not replay OnCreate (the blue coin's chime, OWN-RELOAD).
+        if (entryValue.has_flag(script_entry_flags::CREATED)) {
+            out.key("created");
             out.value(true);
         }
         out.key("fields");
@@ -1468,6 +1687,10 @@ core::result<void> script_runtime::replace_set_entries(u32 handle, const core::j
           fieldsValue.is_object() ? core::json::document::from_value(fieldsValue) : core::json::document::object();
         if (item["started"].as_bool(false)) {
             entryValue.flags |= script_entry_flags::STARTED;
+        }
+        // JSON written before "created" existed reads as not created: its OnCreate runs.
+        if (item["created"].as_bool(false)) {
+            entryValue.flags |= script_entry_flags::CREATED;
         }
         parsed.push_back(std::move(entryValue));
     }

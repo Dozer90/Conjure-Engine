@@ -182,3 +182,6 @@ CONJURE_NATIVE_FN(modules,   count,                int32_t,   (void))
 CONJURE_NATIVE_FN(modules,   find,                 int32_t,   (const char *utf8Name, int32_t length))
 CONJURE_NATIVE_FN(modules,   info,                 int32_t,   (int32_t index, conjure_module_record *out))
 CONJURE_NATIVE_FN(modules,   name,                 int32_t,   (int32_t index, char *utf8, int32_t capacity))
+// Appended at the end, not beside entity_get_tag: entries are never reordered within CONJURE_NATIVE_API_VERSION
+// (only the layout hash changes). entity_get_tag_text, code sweep OWN-TAG.
+CONJURE_NATIVE_FN(entity,    get_tag_text,         int32_t,   (uint64_t entity, char *utf8, int32_t capacity))

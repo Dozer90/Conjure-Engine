@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using Conjure.Components;
 using Conjure.Dod;
@@ -16,7 +17,9 @@ namespace Conjure;
 /// entity that also carries a character controller. The kind is the one the rigid_body component describes
 /// now, so a motion type set this frame already counts; a body the engine has not created yet (added since the
 /// last fixed step) accepts every request and drops, with a count, what it cannot take. IsSleeping never
-/// throws (B11).
+/// throws (B11). On an entity Entity.Create or Prefab.Instantiate reserved in the current ComponentQuery scope the
+/// requests and setters never throw: they are kept and made in call order once the scope closed and the entity
+/// exists (a failure then is logged at ERROR); the getters throw EntityNotAliveException until then.
 /// </summary>
 public readonly struct Rigidbody
 {
@@ -45,6 +48,10 @@ public readonly struct Rigidbody
         }
         set
         {
+            if (Defer((this, value), static state => state.Item1.LinearVelocity = state.Item2))
+            {
+                return;
+            }
             NativeApi* api = NativeBridge.RequireApi();
             NativeBridge.Require(api->PhysicsSetLinearVelocity, NativeFunction.PhysicsSetLinearVelocity);
             NativeCheck.ThrowIfFailed(api->PhysicsSetLinearVelocity(Entity.Id, &value), NativeFunction.PhysicsSetLinearVelocity);
@@ -63,6 +70,10 @@ public readonly struct Rigidbody
         }
         set
         {
+            if (Defer((this, value), static state => state.Item1.AngularVelocity = state.Item2))
+            {
+                return;
+            }
             NativeApi* api = NativeBridge.RequireApi();
             NativeBridge.Require(api->PhysicsSetAngularVelocity, NativeFunction.PhysicsSetAngularVelocity);
             NativeCheck.ThrowIfFailed(api->PhysicsSetAngularVelocity(Entity.Id, &value), NativeFunction.PhysicsSetAngularVelocity);
@@ -75,6 +86,10 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void AddForce(Vector3 force, ForceMode mode = ForceMode.Force)
     {
+        if (Defer((this, force, mode), static state => state.Item1.AddForce(state.Item2, state.Item3)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsAddForce, NativeFunction.PhysicsAddForce);
         NativeCheck.ThrowIfFailed(api->PhysicsAddForce(Entity.Id, &force, (byte)mode), NativeFunction.PhysicsAddForce);
@@ -86,6 +101,12 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void AddForceAtPosition(Vector3 force, Vector3 worldPoint, ForceMode mode = ForceMode.Force)
     {
+        if (Defer(
+            (this, force, worldPoint, mode),
+            static state => state.Item1.AddForceAtPosition(state.Item2, state.Item3, state.Item4)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsAddForceAt, NativeFunction.PhysicsAddForceAt);
         NativeCheck.ThrowIfFailed(
@@ -99,6 +120,10 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void AddTorque(Vector3 torque, ForceMode mode = ForceMode.Force)
     {
+        if (Defer((this, torque, mode), static state => state.Item1.AddTorque(state.Item2, state.Item3)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsAddTorque, NativeFunction.PhysicsAddTorque);
         NativeCheck.ThrowIfFailed(api->PhysicsAddTorque(Entity.Id, &torque, (byte)mode), NativeFunction.PhysicsAddTorque);
@@ -111,6 +136,10 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void MoveKinematic(in TransformData target)
     {
+        if (Defer((this, target), static state => state.Item1.MoveKinematic(in state.Item2)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsMoveKinematic, NativeFunction.PhysicsMoveKinematic);
         fixed (TransformData* pinned = &target)
@@ -124,6 +153,10 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void Teleport(in TransformData target)
     {
+        if (Defer((this, target), static state => state.Item1.Teleport(in state.Item2)))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsTeleport, NativeFunction.PhysicsTeleport);
         fixed (TransformData* pinned = &target)
@@ -150,6 +183,10 @@ public readonly struct Rigidbody
     /// </summary>
     public unsafe void WakeUp()
     {
+        if (Defer(this, static facade => facade.WakeUp()))
+        {
+            return;
+        }
         NativeApi* api = NativeBridge.RequireApi();
         NativeBridge.Require(api->PhysicsWake, NativeFunction.PhysicsWake);
         NativeCheck.ThrowIfFailed(api->PhysicsWake(Entity.Id), NativeFunction.PhysicsWake);
@@ -163,8 +200,21 @@ public readonly struct Rigidbody
     public RigidBodyData Data
     {
         get => Entity.GetComponent<RigidBodyData>();
-        set => Entity.SetComponent(in value);
+        set
+        {
+            if (Defer((this, value), static state => state.Item1.Data = state.Item2))
+            {
+                return;
+            }
+            Entity.SetComponent(in value);
+        }
     }
+
+    /// <summary>
+    /// Keeps a request for the end of the ComponentQuery scope that reserved the entity (ReservedWrites); false
+    /// when the entity is not reserved and the caller makes the request now.
+    /// </summary>
+    private bool Defer<TState>(TState state, Action<TState> write) => ReservedWrites.TryDefer(Entity, state, write);
 }
 
 /// <summary>

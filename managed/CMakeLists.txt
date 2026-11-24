@@ -18,6 +18,7 @@ set(CONJURE_MANAGED_SDK_SOURCES
     Conjure.Managed/Interop/ManagedApi.cs
     Conjure.Managed/Interop/NativeBridge.cs
     Conjure.Managed/Interop/Records.cs
+    Conjure.Managed/Interop/ScriptStatus.cs
     Conjure.Managed/Runtime/AssemblyLoader.cs
     Conjure.Managed/Runtime/FieldBlob.cs
     Conjure.Managed/Runtime/GameAssemblyLoadContext.cs

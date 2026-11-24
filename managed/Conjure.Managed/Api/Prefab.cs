@@ -1,4 +1,5 @@
 using System;
+using Conjure.Dod;
 using Conjure.Interop;
 
 namespace Conjure;
@@ -7,7 +8,13 @@ namespace Conjure;
 /// A prefab asset and its instantiation through the prefab_* entries (docs/design/15_bindings.md 2.5). The
 /// asset must be resident (AssetNotLoadedException otherwise; Load it first and wait for IsLoaded).
 /// Instances exist at once and the roots carry PrefabInstance; inside a query scope the instantiation is
-/// deferred to the scope end and the returned ids become alive then (R5).
+/// deferred to the scope end and the returned ids become alive then (R5). AddComponent, SetComponent,
+/// RemoveComponent, AddScript, Destroy and the Name, Tag, Layer and Enabled setters on such a root are recorded
+/// behind the instantiation and applied in call order when the scope closes (RemoveComponent always returns true
+/// then: the prefab's components are not known before the flush). The scripts AddScript records join the ones
+/// the prefab brings, and those that would take the root past the maximum of 8 are dropped at the scope end with
+/// a warning. A Destroy cancels the instantiation: neither the root nor any entity of the prefab is created. The
+/// facade writes (Transform and the rest) on the root are made right after the scope closed, in call order.
 /// </summary>
 public readonly struct Prefab
 {
@@ -53,7 +60,9 @@ public readonly struct Prefab
             status = api->PrefabInstantiate(&id, parent.Id, null, &root);
         }
         NativeCheck.ThrowIfFailed(status, NativeFunction.PrefabInstantiate);
-        return new Entity(root);
+        Entity instance = new Entity(root);
+        ReservedWrites.NoteCreated(instance);
+        return instance;
     }
 
     /// <summary>
@@ -73,6 +82,7 @@ public readonly struct Prefab
         {
             int status = api->PrefabInstantiateMany(&id, parent.Id, count, (ulong*)pinned);
             NativeCheck.ThrowIfFailed(status, NativeFunction.PrefabInstantiateMany);
+            ReservedWrites.NoteCreated(roots.Slice(0, status));
             return status;
         }
     }

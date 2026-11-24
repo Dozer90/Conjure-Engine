@@ -60,6 +60,7 @@ class CONJURE_API null_script_host final : public script_host
 <tr><td>private</td><td><code class="signature">mNativeApi</code></td><td><code class="signature"><a href="../native-api/conjure-native-api.html">conjure_native_api</a> *</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mPhaseHook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-phase-hook">phase_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mRecorder</code></td><td><code class="signature"><a href="null-host-recorder.html">null_host_recorder</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">mReloadHook</code></td><td><code class="signature"><a href="../null-script-host.html#symbol-null-script-host-create-hook">create_hook</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mSlots</code></td><td><code class="signature">std::vector&lt;<a href="null-script-host-slot-state.html">slot_state</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mStatus</code></td><td><code class="signature"><a href="../script-host.html#symbol-script-host-status">script_host_status</a></code></td><td><code class="signature">script_<wbr>host_<wbr>status::<wbr>UNINITIALISED</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Unload<wbr>Result</code></td><td><code class="signature"><a href="../../core/types.html#symbol-i32">i32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
@@ -200,6 +201,11 @@ class CONJURE_API null_script_host final : public script_host
     <span class="k">bool</span> enabled) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>False makes the recorder record nothing (<code>null_host_recorder::set_enabled</code>) and the host build no record, so recording adds no allocation to a managed call: for long runs and allocation gates. Only the slot state the host keeps (a new slot, a slot&#x27;s fields) may still grow. Survives <code><a href="#function-reset-recorder-1">reset_recorder</a>()</code>. On by default.</p>
+
+#### `set_reload_hook` {#function-set-reload-hook}
+
+<div class="function-declaration" id="function-set-reload-hook-1"><pre><code><span class="k">void</span> set_reload_hook(
+    <a href="../null-script-host.html#symbol-null-script-host-create-hook">create_hook</a> hook);</code></pre></div>
 
 #### `set_unload_result` {#function-set-unload-result}
 

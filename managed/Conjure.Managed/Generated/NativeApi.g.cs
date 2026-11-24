@@ -16,8 +16,8 @@ namespace Conjure.Interop;
 public unsafe struct NativeApi
 {
     public const uint ExpectedVersion = 1;
-    public const ulong ExpectedLayoutHash = 0x4B06362D38B412A6UL;
-    public const int EntryCount = 126;
+    public const ulong ExpectedLayoutHash = 0xC6292B87C84ABEB1UL;
+    public const int EntryCount = 127;
     public const int CoreEntryCount = 20;
 
     public uint Size;
@@ -151,6 +151,7 @@ public unsafe struct NativeApi
     public delegate* unmanaged<byte*, int, int> ModulesFind;
     public delegate* unmanaged<int, ModuleRecord*, int> ModulesInfo;
     public delegate* unmanaged<int, byte*, int, int> ModulesName;
+    public delegate* unmanaged<ulong, byte*, int, int> EntityGetTagText;
 
     /// <summary>
     /// The function pointer of entry 'function' as an untyped pointer (null when native left it unfilled).
@@ -302,6 +303,7 @@ public enum NativeFunction
     ModulesFind = 123,
     ModulesInfo = 124,
     ModulesName = 125,
+    EntityGetTagText = 126,
 }
 
 /// <summary>
@@ -438,6 +440,7 @@ public static class NativeFunctionNames
         "modules_find",
         "modules_info",
         "modules_name",
+        "entity_get_tag_text",
     };
 
     public static string Of(NativeFunction function)

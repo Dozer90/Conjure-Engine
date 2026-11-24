@@ -28,6 +28,11 @@
 // script_*, the five entity_* that need only ecs, component_* and query_*. Every function acts on
 // script_runtime::active(); with no runtime alive they fail softly (0 / -NOT_INITIALISED). Every entry
 // but log_write is main-thread only (D10, 5): off the main thread it asserts and fails the same way.
+// Inside a query scope entity_create reserves the id in the runtime's deferred buffer; component_add,
+// component_set, component_remove, script_add and entity_destroy on such an id are recorded in that buffer
+// behind the create (17_demo_games.md P2), while entity_is_alive, component_has and component_get answer for
+// it as for a dead entity until the flush. The root of a deferred prefab instantiation takes the same requests;
+// entity_destroy on it is recorded too and the flush cancels the whole instantiation.
 
 using namespace conjure;
 using namespace conjure::scripting;
@@ -207,11 +212,18 @@ namespace {
         if (runtime == nullptr) {
             return status_of(script_error::NOT_INITIALISED);
         }
-        const script_entry_id id = runtime->add_script(ecs::entity::from_u64(entity), classHash, core::json::value());
-        if (!id.is_valid()) {
+        const ecs::entity target = ecs::entity::from_u64(entity);
+        const script_entry_id id = runtime->add_script(target, classHash, core::json::value());
+        if (id.is_valid()) {
+            return static_cast<int32_t>(id.entryIndex);
+        }
+        // INSTANCE_NOT_FOUND only when there is no entity to take a script, so managed can tell a dead entity
+        // from one that refused (the script limit, or no script_component yet under the iteration lock) without
+        // asking entity_is_alive, which answers false for an id reserved in the scope.
+        if (!runtime->world()->is_alive(target) && !runtime->is_deferred_reserved(target)) {
             return status_of(script_error::INSTANCE_NOT_FOUND);
         }
-        return static_cast<int32_t>(id.entryIndex);
+        return status_of(script_error::NOT_SUPPORTED);
     }
 
     int32_t entry_script_get_slots(uint64_t entity, int32_t *slots, int32_t capacity) {
@@ -251,8 +263,10 @@ namespace {
         ecs::world &world = *runtime->world();
         ecs::entity created = {};
         if (world.is_locked()) {
-            // Inside a DOD query scope the id is reserved now and the entity exists at query_end (R5).
+            // Inside a DOD query scope the id is reserved now and the entity exists at query_end (R5); the
+            // runtime remembers it so later requests on it are recorded behind the create (P2).
             created = runtime->deferred_commands().create_entity();
+            runtime->note_deferred_reserved(created);
         } else {
             core::result<ecs::entity> result = world.create_entity();
             if (!result.has_value()) {
@@ -274,7 +288,8 @@ namespace {
             return 0;
         }
         const ecs::entity target = ecs::entity::from_u64(entity);
-        if (!runtime->world()->is_alive(target)) {
+        // A reserved id takes the destroy, a deferred instantiation root included (the flush cancels its copy).
+        if (!runtime->world()->is_alive(target) && !runtime->is_deferred_reserved(target)) {
             return 0;
         }
         runtime->request_entity_destroy(target);
@@ -458,14 +473,20 @@ namespace {
         }
         ecs::world &world = *runtime->world();
         const ecs::component_id id = component_of(typeId, world.registry());
-        const ecs::entity target = ecs::entity::from_u64(entity);
-        if (!id.is_valid() || !world.is_alive(target)) {
+        if (!id.is_valid()) {
             return 0;
         }
+        const ecs::entity target = ecs::entity::from_u64(entity);
         const ecs::component_info &info = world.registry().info(id);
         const std::span<const std::byte> bytes = data == nullptr
           ? std::span<const std::byte>()
           : std::span<const std::byte>(static_cast<const std::byte *>(data), info.size);
+        if (runtime->record_reserved_add(target, id, bytes)) {
+            return 1;
+        }
+        if (!world.is_alive(target)) {
+            return 0;
+        }
         if (world.is_locked()) {
             runtime->deferred_commands().add_raw(target, id, bytes);
             return 1;
@@ -480,8 +501,14 @@ namespace {
         }
         ecs::world &world = *runtime->world();
         const ecs::component_id id = component_of(typeId, world.registry());
+        if (!id.is_valid()) {
+            return 0;
+        }
         const ecs::entity target = ecs::entity::from_u64(entity);
-        if (!id.is_valid() || !world.has_raw(target, id)) {
+        if (runtime->is_deferred_reserved(target)) {
+            return runtime->record_reserved_remove(target, id) ? 1 : 0;
+        }
+        if (!world.has_raw(target, id)) {
             return 0;
         }
         if (world.is_locked()) {
@@ -525,6 +552,10 @@ namespace {
             return 0;
         }
         const ecs::entity owner = ecs::entity::from_u64(entity);
+        const std::span<const std::byte> bytes(static_cast<const std::byte *>(data), world.registry().info(id).size);
+        if (runtime->record_reserved_set(owner, id, bytes)) {
+            return 1;
+        }
         if (world.registry().info(id).is_tag()) {
             // Nothing to write into a tag: setting one the entity holds succeeds, as C# SetComponent expects.
             return world.has_raw(owner, id) ? 1 : 0;

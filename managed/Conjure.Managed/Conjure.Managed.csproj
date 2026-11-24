@@ -18,6 +18,7 @@
     <Compile Include="Interop/ManagedApi.cs" />
     <Compile Include="Interop/NativeBridge.cs" />
     <Compile Include="Interop/Records.cs" />
+    <Compile Include="Interop/ScriptStatus.cs" />
     <Compile Include="Runtime/AssemblyLoader.cs" />
     <Compile Include="Runtime/FieldBlob.cs" />
     <Compile Include="Runtime/GameAssemblyLoadContext.cs" />
