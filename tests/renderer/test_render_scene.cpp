@@ -4,11 +4,13 @@
 #include "conjure/testing/assert_capture.h"
 
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_settings.h"
 
 #include "conjure/core/enum_flags.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
 
+#include <array>
 #include <span>
 
 // render_scene.h (docs/design/02_renderer.md 2.3, R4, R8): the extraction contract and the double
@@ -34,7 +36,7 @@ TEST_SUITE("renderer/render_scene") {
         CHECK(instance.receivesShadows);
     }
 
-    TEST_CASE("render_view - defaults target the swapchain with every layer and no flags") {
+    TEST_CASE("render_view - defaults target the swapchain with every layer, no flags and no settings of its own") {
         const render_view view = {};
         CHECK(view.cameraData == camera());
         CHECK(view.viewFromWorld == math::mat4(1.0f));
@@ -43,10 +45,61 @@ TEST_SUITE("renderer/render_scene") {
         CHECK_FALSE(view.target.is_valid());
         CHECK(view.flags == view_flags::NONE);
         CHECK(view.layerMask == 0xFFFFFFFFu);
+        CHECK(view.settingsOverride == view_settings_override_flags::NONE);
+        CHECK(view.debugMode == view_debug_mode::NONE);
+        CHECK(view.postProcess == post_process_settings());
+        CHECK(view.ssao == ssao_settings());
+        CHECK(static_cast<u8>(view_debug_mode::AMBIENT_OCCLUSION) == 1);
         const view_flags combined = view_flags::DRAW_DEBUG | view_flags::SKIP_SHADOWS;
         CHECK(has_flag(combined, view_flags::DRAW_DEBUG));
         CHECK(has_flag(combined, view_flags::SKIP_SHADOWS));
         CHECK_FALSE(has_flag(combined, view_flags::NO_POST_PROCESS));
+    }
+
+    TEST_CASE("effective_view_settings - each group the view names replaces the scene's, the others stay") {
+        post_process_settings scenePostProcess = {};
+        scenePostProcess.tonemap = tonemap_operator::REINHARD_EXTENDED;
+        scenePostProcess.bloomIntensity = 0.2f;
+        ssao_settings sceneSsao = {};
+        sceneSsao.radius = 3.0f;
+
+        render_view view = {};
+        view.postProcess.tonemap = tonemap_operator::NONE;
+        view.postProcess.exposure = exposure_mode::MANUAL;
+        view.ssao.enabled = false;
+
+        const std::array<view_settings_override_flags, 4> masks = {
+          view_settings_override_flags::NONE,
+          view_settings_override_flags::POST_PROCESS,
+          view_settings_override_flags::SSAO,
+          view_settings_override_flags::POST_PROCESS | view_settings_override_flags::SSAO,
+        };
+        for (const view_settings_override_flags mask : masks) {
+            CAPTURE(static_cast<u32>(mask));
+            view.settingsOverride = mask;
+            const view_render_settings settings = effective_view_settings(scenePostProcess, sceneSsao, view);
+            const bool ownPostProcess = has_flag(mask, view_settings_override_flags::POST_PROCESS);
+            const bool ownSsao = has_flag(mask, view_settings_override_flags::SSAO);
+            CHECK(settings.postProcess == (ownPostProcess ? view.postProcess : scenePostProcess));
+            CHECK(settings.ssao == (ownSsao ? view.ssao : sceneSsao));
+        }
+    }
+
+    TEST_CASE("effective_view_settings - the configured values come back unsanitised and without the view flags") {
+        // Turning post-processing off and the debug view are applied by the renderer, not here, and nothing
+        // is clamped: the result is what was configured.
+        render_view view = {};
+        view.flags = view_flags::NO_POST_PROCESS;
+        view.debugMode = view_debug_mode::AMBIENT_OCCLUSION;
+        view.settingsOverride = view_settings_override_flags::POST_PROCESS;
+        view.postProcess.bloomIntensity = 50.0f;
+        const view_render_settings settings = effective_view_settings(post_process_settings(), ssao_settings(), view);
+        CHECK(settings.postProcess.bloomIntensity == 50.0f);
+        CHECK(settings.ssao == ssao_settings());
+        view_render_settings other = settings;
+        CHECK(other == settings);
+        other.ssao.radius = 2.0f;
+        CHECK_FALSE(other == settings);
     }
 
     TEST_CASE("render_scene - allocate_meshes resizes once and hands out the whole span") {

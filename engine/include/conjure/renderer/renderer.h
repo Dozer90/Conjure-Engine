@@ -63,11 +63,12 @@ namespace conjure::renderer {
     /// <summary>
     /// What the last render() did. Fully populated on the null device too, which is how the tests
     /// observe the renderer. The counters of what a frame clamped (viewsSkipped, lightsDropped,
-    /// spritesDropped, shadowTilesDropped) are filled every frame. The log says less: the WARN about
-    /// views, lights or sprites beyond their budget or about an unknown render target is logged when
-    /// the problem starts and not again while it lasts (renderer::render), and dropped shadow tiles
-    /// are not logged at all. Read the counters to follow a problem that lasts. A frame whose back
-    /// buffer could not be acquired counts every view of the scene as skipped and fills nothing else.
+    /// spritesDropped, shadowTilesDropped, settingsClamped) are filled every frame. The log says less: the
+    /// WARN about views, lights or sprites beyond their budget, about an unknown render target or about a
+    /// settings group out of its range is logged when the problem starts and not again while it lasts
+    /// (renderer::render), and dropped shadow tiles are not logged at all. Read the counters to follow a
+    /// problem that lasts. A frame whose back buffer could not be acquired counts every view of the scene
+    /// as skipped and fills nothing else.
     /// </summary>
     struct CONJURE_API render_stats {
         u32 viewsRendered = 0;
@@ -88,6 +89,9 @@ namespace conjure::renderer {
         u32 shadowTilesAllocated = 0;
         u32 shadowTilesDropped = 0;
         u32 shadowTilesReused = 0;          // atlas tiles kept at last frame's coordinates (stable shadow maps)
+        // settings groups clamped into their ranges (sanitise): each of the scene's groups once per frame,
+        // however many views render it, plus each override group of a drawn view (render_view::settingsOverride)
+        u32 settingsClamped = 0;
         u32 spritesDrawn = 0;
         // sprites of the scene beyond MAX_SPRITES_PER_FRAME (both spaces, counted once per frame, not per view)
         u32 spritesDropped = 0;
@@ -234,12 +238,18 @@ namespace conjure::renderer {
             /// else is clamped and logged so a bad scene never aborts a frame. A problem that lasts is
             /// logged (WARN) by the frame in which it starts and not again until a frame has seen it end,
             /// whatever its size does in between: more views than MAX_VIEWS, more lights than
-            /// MAX_LIGHTS_PER_VIEW, more sprites than MAX_SPRITES_PER_FRAME; per view index, a camera
-            /// that had to be clamped or a render target the renderer does not know; a swapchain that
-            /// refuses the acquire (the frame is skipped) or the present. Only a frame that looks at a
-            /// problem can see it end: a frame skipped by a refused acquire looks at nothing else, the
-            /// per-view problems are looked at only while the scene has a view at that index (the
-            /// camera only when that view is drawn), and the light budget only when a view is drawn.
+            /// MAX_LIGHTS_PER_VIEW, more sprites than MAX_SPRITES_PER_FRAME; per settings group, a scene
+            /// group (render_scene::postProcess, shadows, ssao) out of its range; per view index and group,
+            /// a camera that had to be clamped, an override group out of its range
+            /// (render_view::settingsOverride) or a render target the renderer does not know; a swapchain
+            /// that refuses the acquire (the frame is skipped) or the present. Out-of-range settings are
+            /// clamped (sanitise): the scene's groups once per frame, a view's override groups once per
+            /// view. Only a frame that looks at a problem can see it end: a frame skipped by a refused
+            /// acquire looks at nothing else, the per-view problems are looked at only while the scene has
+            /// a view at that index (the camera and the override groups only when that view is drawn), and
+            /// the light budget only when a view is drawn. A view with debugMode AMBIENT_OCCLUSION renders
+            /// the SSAO term instead of its lit output; a view with any debugMode but NONE draws no shadows
+            /// (as SKIP_SHADOWS).
             /// A view targeting the swapchain of a renderer without one is logged once per renderer.
             /// stats() counts what every frame clamped.
             /// </summary>

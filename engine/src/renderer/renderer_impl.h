@@ -18,6 +18,7 @@
 
 #include "conjure/renderer/imgui_renderer.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_settings.h"
 #include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/renderer/sprite_batch.h"
@@ -41,6 +42,19 @@
 // steady-state frame allocates nothing (02_renderer.md "steady-state frames do not allocate").
 
 namespace conjure::renderer {
+
+    /// <summary>
+    /// The settings groups of the frame: the scene's groups as the frame renders them, copied from
+    /// render_scene and sanitised once at the start of the frame, and the warnings of the clamps. A clamp is
+    /// logged when it starts and not again until the group has been seen valid (R19).
+    /// </summary>
+    struct frame_settings {
+        render_settings settings = {};
+        // One per render_settings_group: the scene's group was clamped.
+        std::array<warn_latch, static_cast<usize>(render_settings_group::COUNT)> sceneClampWarnings = {};
+        view_warn_latch viewPostProcessClampWarning = {};   // per view index: its post-process override was clamped
+        view_warn_latch viewSsaoClampWarning = {};          // per view index: its SSAO override was clamped
+    };
 
     struct renderer_state {
         renderer_desc desc = {};
@@ -93,6 +107,9 @@ namespace conjure::renderer {
         warn_latch presentFailureWarning = {};                    // swapchain::present refused, device not lost
         view_warn_latch invalidCameraWarning = {};                // per view index: the camera was clamped
         view_warn_latch unknownTargetWarning = {};                // per view index: the render target is unknown
+        // Filled by renderer::render before the views are prepared; the frame path reads the scene's
+        // settings groups only from here, never from the render_scene. Holds the clamp warnings of R19.
+        frame_settings frameSettings = {};
         bool warnedNoSwapchain = false;                           // once: a headless renderer stays headless
 
         pass_shared shared = {};

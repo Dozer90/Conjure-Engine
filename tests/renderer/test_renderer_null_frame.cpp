@@ -25,6 +25,7 @@
 #include "conjure/rhi/device.h"
 #include "conjure/rhi/null_device_stats.h"
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <limits>
@@ -35,7 +36,8 @@
 
 // The whole frame on the null device (docs/design/02_renderer.md 10 "test_renderer_null_frame"):
 // 10k instances, 64 lights with shadow casters, every pass of the graph, the view flags that cull
-// passes, sprites, debug lines, the environment, blended materials and the blit for non-sRGB targets.
+// passes, sprites, debug lines, the environment, blended materials, the blit for non-sRGB targets, a view's
+// own settings groups and the ambient-occlusion debug view.
 // The null device records what was submitted (null_device_stats), the renderer what it did
 // (render_stats). The allocation gates at the end are the test counterparts of the benchmark rows
 // renderer.null_frame_10k and renderer.extract_10k (08_testing.md 7.1, allocs 0): after two warm-up
@@ -269,6 +271,36 @@ namespace {
         value.shadowResolution = 256;
         value.entityId = entityId;
         return value;
+    }
+
+    /// <summary>
+    /// The passes the view at 'viewOrdinal' (among the views drawn, in scene order) executed in the last
+    /// frame: every view's graph ends with its tonemap and the screen sprites and blit that may follow it.
+    /// </summary>
+    [[nodiscard]] std::vector<std::string_view> view_passes(const render_stats &stats, u32 viewOrdinal) {
+        std::vector<std::string_view> passes = {};
+        u32 ordinal = 0;
+        bool afterTonemap = false;
+        for (const char *name : stats.passNames) {
+            const std::string_view pass = name;
+            const bool tail = pass == "screen_sprites" || pass == "blit";
+            if (afterTonemap && !tail) {
+                ++ordinal;
+                afterTonemap = false;
+            }
+            if (ordinal == viewOrdinal) {
+                passes.push_back(pass);
+            }
+            afterTonemap = afterTonemap || pass == "tonemap";
+        }
+        return passes;
+    }
+
+    /// <summary>
+    /// True when 'pass' is among 'passes'.
+    /// </summary>
+    [[nodiscard]] bool ran(const std::vector<std::string_view> &passes, std::string_view pass) {
+        return std::find(passes.begin(), passes.end(), pass) != passes.end();
     }
 }
 
@@ -960,6 +992,189 @@ TEST_SUITE("renderer/null_frame") {
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().shadowTilesAllocated == 1);
         CHECK(fixture->stats().executed("shadow_atlas"));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L1B a view's override groups change that view's passes and no other's") {
+        // Every view rendered with the scene's post-process and SSAO groups; a view now renders each group
+        // it names in settingsOverride (a camera's post_process component) with its own values instead.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(128, 72));
+        render_scene scene = {};
+        fill_grid(scene, assets, 10);
+        scene.lights.push_back(sun_light(false));
+        scene.views.push_back(grid_view(target));
+        scene.views.push_back(grid_view(target));
+        render_view &overriding = scene.views[1];
+
+        SUBCASE("post-process: manual exposure without bloom") {
+            overriding.settingsOverride = view_settings_override_flags::POST_PROCESS;
+            overriding.postProcess.exposure = exposure_mode::MANUAL;
+            overriding.postProcess.bloomEnabled = false;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            const std::vector<std::string_view> scenePasses = view_passes(fixture->stats(), 0);
+            const std::vector<std::string_view> ownPasses = view_passes(fixture->stats(), 1);
+            CHECK(ran(scenePasses, "exposure_histogram"));
+            CHECK(ran(scenePasses, "exposure_adapt"));
+            CHECK(ran(scenePasses, "bloom_down_0"));
+            CHECK(ran(scenePasses, "bloom_up_0"));
+            CHECK_FALSE(ran(ownPasses, "exposure_histogram"));
+            CHECK_FALSE(ran(ownPasses, "exposure_adapt"));
+            CHECK_FALSE(ran(ownPasses, "bloom_down_0"));
+            CHECK_FALSE(ran(ownPasses, "bloom_up_0"));
+            CHECK(ran(scenePasses, "ssao_gtao"));
+            CHECK(ran(ownPasses, "ssao_gtao"));
+            CHECK(ran(ownPasses, "tonemap"));
+
+            // The view's own values without the flag are ignored.
+            overriding.settingsOverride = view_settings_override_flags::NONE;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CHECK(fixture->stats().count("exposure_histogram") == 2);
+            CHECK(fixture->stats().count("bloom_down_0") == 2);
+        }
+        SUBCASE("SSAO switched off") {
+            overriding.settingsOverride = view_settings_override_flags::SSAO;
+            overriding.ssao.enabled = false;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            const std::vector<std::string_view> scenePasses = view_passes(fixture->stats(), 0);
+            const std::vector<std::string_view> ownPasses = view_passes(fixture->stats(), 1);
+            for (const std::string_view pass : {"ssao_gtao", "ssao_blur_h", "ssao_blur_v"}) {
+                CAPTURE(pass);
+                CHECK(ran(scenePasses, pass));
+                CHECK_FALSE(ran(ownPasses, pass));
+            }
+            CHECK(ran(ownPasses, "exposure_histogram"));
+            CHECK(ran(ownPasses, "bloom_down_0"));
+        }
+        SUBCASE("both groups switched on over a scene that has them off") {
+            scene.ssao.enabled = false;
+            scene.postProcess.bloomEnabled = false;
+            overriding.settingsOverride =
+              view_settings_override_flags::POST_PROCESS | view_settings_override_flags::SSAO;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            const std::vector<std::string_view> scenePasses = view_passes(fixture->stats(), 0);
+            const std::vector<std::string_view> ownPasses = view_passes(fixture->stats(), 1);
+            CHECK_FALSE(ran(scenePasses, "ssao_gtao"));
+            CHECK_FALSE(ran(scenePasses, "bloom_down_0"));
+            CHECK(ran(ownPasses, "ssao_gtao"));
+            CHECK(ran(ownPasses, "bloom_down_0"));
+        }
+        SUBCASE("NO_POST_PROCESS keeps the overriding view's post-processing and SSAO off") {
+            overriding.settingsOverride =
+              view_settings_override_flags::POST_PROCESS | view_settings_override_flags::SSAO;
+            overriding.flags = view_flags::NO_POST_PROCESS;
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            const std::vector<std::string_view> ownPasses = view_passes(fixture->stats(), 1);
+            CHECK_FALSE(ran(ownPasses, "ssao_gtao"));
+            CHECK_FALSE(ran(ownPasses, "exposure_histogram"));
+            CHECK_FALSE(ran(ownPasses, "bloom_down_0"));
+            CHECK(ran(ownPasses, "tonemap"));
+        }
+        CHECK(fixture->stats().viewsRendered == 2);
+        CHECK(fixture->stats().settingsClamped == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("null_frame - the ambient-occlusion debug view runs only the passes that show the SSAO term") {
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(96, 64));
+        render_scene scene = {};
+        fill_grid(scene, assets, 10);
+        scene.meshes.push_back(
+          instance_at(assets.sphere, assets.blended, math::vec3(0.0f, 2.0f, -20.0f), assets.sphereBounds)
+        );
+        scene.lights.push_back(sun_light(true));
+        add_local_lights(scene, 3, 1);
+        scene.environment.environment = assets.environment;
+        for (const sprite_space space : {sprite_space::WORLD, sprite_space::SCREEN}) {
+            sprite value = {};
+            value.texture = assets.texture;
+            value.space = space;
+            value.size = math::vec2(32.0f);
+            scene.sprites.push_back(value);
+        }
+        scene.debugDraw.line(math::vec3(0.0f), math::vec3(1.0f), math::vec4(1.0f));
+        render_view view = grid_view(target);
+        view.flags = view_flags::DRAW_DEBUG;
+
+        // The same view lit runs every pass the debug view leaves out.
+        scene.views.push_back(view);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        const std::array<std::string_view, 10> litOnly = {
+          "shadow_cascade_0", "shadow_atlas",       "light_cull",     "skybox",       "forward_blend",
+          "world_sprites",    "exposure_histogram", "exposure_adapt", "bloom_down_0", "screen_sprites",
+        };
+        for (const std::string_view pass : litOnly) {
+            CAPTURE(pass);
+            CHECK(fixture->stats().executed(pass));
+        }
+
+        view.debugMode = view_debug_mode::AMBIENT_OCCLUSION;
+        std::vector<std::string_view> expected = {
+          "depth_prepass", "ssao_gtao", "ssao_blur_h", "ssao_blur_v", "forward_opaque", "debug_draw", "tonemap"
+        };
+        SUBCASE("SSAO on") {}
+        SUBCASE("SSAO switched off in the scene") {
+            scene.ssao.enabled = false;
+        }
+        SUBCASE("SSAO switched off by the view's override") {
+            view.settingsOverride = view_settings_override_flags::SSAO;
+            view.ssao.enabled = false;
+        }
+        SUBCASE("post-processing off") {
+            view.flags |= view_flags::NO_POST_PROCESS;
+        }
+        SUBCASE("without debug lines") {
+            view.flags = view_flags::NONE;
+            expected.erase(std::find(expected.begin(), expected.end(), "debug_draw"));
+        }
+        scene.views[0] = view;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        const render_stats &stats = fixture->stats();
+        const std::vector<std::string_view> executed(stats.passNames.begin(), stats.passNames.end());
+        CHECK(executed == expected);
+        CHECK(stats.viewsRendered == 1);
+        CHECK(stats.shadowCascadesRendered == 0);
+        CHECK(stats.spritesDrawn == 0);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("null_frame - a debug view stays out of the shadow atlas layer union as SKIP_SHADOWS does") {
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        const scene_assets assets = upload_assets(*fixture);
+        const render_target_id target = make_target(*fixture, math::uvec2(64, 64));
+        render_scene scene = {};
+        scene.views.push_back(grid_view(target));
+        scene.views.push_back(grid_view(target));
+        scene.views[0].layerMask = 1u << 2;   // sees half of the casters, which no other view renders
+        scene.views[1].layerMask = 1u << 1;   // lit: renders the atlas
+        fill_grid(scene, assets, 4);
+        for (usize index = 0; index < scene.meshes.size(); ++index) {
+            scene.meshes[index].layerMask = index % 2 == 0 ? 1u << 1 : 1u << 2;
+        }
+        scene.lights.push_back(caster_light(light_type::POINT, math::vec3(0.0f, 2.0f, -4.0f), 10.0f, 1));
+
+        scene.views[0].debugMode = view_debug_mode::AMBIENT_OCCLUSION;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().count("shadow_atlas") == 1);
+        const u32 debugDrawn = fixture->stats().instancesDrawn;
+
+        scene.views[0].flags = view_flags::SKIP_SHADOWS;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().count("shadow_atlas") == 1);
+        CHECK(fixture->stats().instancesDrawn == debugDrawn);
+
+        // Lit, the view draws the same meshes itself and widens the atlas casters to its layer.
+        scene.views[0].flags = view_flags::NONE;
+        scene.views[0].debugMode = view_debug_mode::NONE;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().count("shadow_atlas") == 1);
+        CHECK(fixture->stats().instancesDrawn > debugDrawn);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

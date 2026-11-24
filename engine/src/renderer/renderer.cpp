@@ -20,6 +20,7 @@
 #include <nvrhi/utils.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -785,6 +786,108 @@ namespace {
 
 void prepare_view(renderer_state &state, frame_view_state &stateOfView, const render_scene &scene);
 
+/// <summary>
+/// Copies the scene's settings groups into the frame's (renderer_state::frameSettings) and sanitises each one
+/// once, so every view of the frame reads the same clamped values and a group out of its range logs one
+/// WARN when that starts, however many views render it (R19).
+/// </summary>
+void prepare_frame_settings(renderer_state &state, const render_scene &scene) {
+    static_assert(static_cast<usize>(render_settings_group::COUNT) == 3, "a new settings group is sanitised here");
+    frame_settings &frameSettings = state.frameSettings;
+    frameSettings.settings.postProcess = scene.postProcess;
+    frameSettings.settings.shadows = scene.shadows;
+    frameSettings.settings.ssao = scene.ssao;
+    // Indexed by render_settings_group; a braced list is evaluated in order.
+    const std::array<std::string_view, static_cast<usize>(render_settings_group::COUNT)> clampedFields = {
+      sanitise(frameSettings.settings.postProcess),
+      sanitise(frameSettings.settings.shadows),
+      sanitise(frameSettings.settings.ssao),
+    };
+    for (usize group = 0; group < clampedFields.size(); ++group) {
+        const bool clamped = !clampedFields[group].empty();
+        if (clamped) {
+            ++state.stats.settingsClamped;
+        }
+        if (frameSettings.sceneClampWarnings[group].update(clamped)) {
+            CONJURE_LOG_WARN(
+              LOG_RENDERER,
+              "scene {} settings: {} is out of range and was clamped (logged once until the group is in range, "
+              "render_stats::settingsClamped counts every frame)",
+              to_string(static_cast<render_settings_group>(group)),
+              clampedFields[group]
+            );
+        }
+    }
+}
+
+/// <summary>
+/// Counts a view's override group that sanitise changed ('clampedField' is the field it names, or empty) and
+/// logs one WARN per view index and group when that starts.
+/// </summary>
+void report_view_settings_clamp(
+  renderer_state &state,
+  view_warn_latch &latch,
+  u32 viewIndex,
+  render_settings_group group,
+  std::string_view clampedField
+) {
+    const bool clamped = !clampedField.empty();
+    if (clamped) {
+        ++state.stats.settingsClamped;
+    }
+    if (latch.update(viewIndex, clamped)) {
+        CONJURE_LOG_WARN(
+          LOG_RENDERER,
+          "view {}: {} override: {} is out of range and was clamped (logged once until the view at this index "
+          "overrides the group in range, render_stats::settingsClamped counts every frame)",
+          viewIndex,
+          to_string(group),
+          clampedField
+        );
+    }
+}
+
+/// <summary>
+/// The post-process and SSAO groups a view renders with: the frame's sanitised groups, with each group the
+/// view names in settingsOverride replaced by the view's own and sanitised. A group the view does not
+/// override counts as in range for its latch.
+/// </summary>
+[[nodiscard]] view_render_settings resolve_view_settings(
+  renderer_state &state,
+  const render_view &view,
+  u32 viewIndex
+) {
+    frame_settings &frameSettings = state.frameSettings;
+    view_render_settings settings = effective_view_settings(
+      frameSettings.settings.postProcess,
+      frameSettings.settings.ssao,
+      view
+    );
+    std::string_view postProcessField = {};
+    if (has_flag(view.settingsOverride, view_settings_override_flags::POST_PROCESS)) {
+        postProcessField = sanitise(settings.postProcess);
+    }
+    std::string_view ssaoField = {};
+    if (has_flag(view.settingsOverride, view_settings_override_flags::SSAO)) {
+        ssaoField = sanitise(settings.ssao);
+    }
+    report_view_settings_clamp(
+      state,
+      frameSettings.viewPostProcessClampWarning,
+      viewIndex,
+      render_settings_group::POST_PROCESS,
+      postProcessField
+    );
+    report_view_settings_clamp(
+      state,
+      frameSettings.viewSsaoClampWarning,
+      viewIndex,
+      render_settings_group::SSAO,
+      ssaoField
+    );
+    return settings;
+}
+
 void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITexture *backBuffer) {
     state.preparedViewCount = 0;
     state.instanceData.clear();
@@ -852,18 +955,18 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
     // first view that draws with shadows (prepare_view). Its casters are culled with the union of the
     // layer masks of every view that draws with shadows, so the result does not depend on which view
     // renders it: each view sees at least its own casters' shadows, possibly also those of casters on
-    // layers it does not render itself.
+    // layers it does not render itself. A debug view draws no shadows (prepare_view), as SKIP_SHADOWS.
+    const shadow_settings &shadowSettings = state.frameSettings.settings.shadows;
     const math::vec3 primaryCamera = viewCount > 0 ? scene.views[0].cameraPosition : math::vec3(0.0f);
     state.atlasRequests.clear();
     state.atlasRequestLights.clear();
     state.atlasKeyOccurrences.clear();
     state.atlasRendered = false;
-    const bool shadowsEnabled = scene.shadows.enabled;
     state.atlasLayerMask = 0;
-    if (shadowsEnabled) {
+    if (shadowSettings.enabled) {
         for (u32 viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
             const render_view &view = scene.views[viewIndex];
-            if (!has_flag(view.flags, view_flags::SKIP_SHADOWS)) {
+            if (!has_flag(view.flags, view_flags::SKIP_SHADOWS) && view.debugMode == view_debug_mode::NONE) {
                 state.atlasLayerMask |= view.layerMask;
             }
         }
@@ -932,7 +1035,7 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
             record.params = math::vec4(
               texelUv,
               std::max(value.sourceRadius, 0.0f),
-              gpu::bits_as_float(shadow_filter_bits(value.filter, scene.shadows.defaultFilter)),
+              gpu::bits_as_float(shadow_filter_bits(value.filter, shadowSettings.defaultFilter)),
               2.0f * std::tan(fov * 0.5f) * texelUv
             );
             state.atlasTileData.push_back(record);
@@ -1051,12 +1154,26 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     const math::mat4 worldFromView = glm::inverse(view.viewFromWorld);
     stateOfView.frustum = frustum_from_clip(clipFromWorld);
 
-    const bool noPostProcess = has_flag(view.flags, view_flags::NO_POST_PROCESS);
+    // Settings: the frame's sanitised shadow group, and the view's post-process and SSAO groups.
+    const shadow_settings &shadowSettings = state.frameSettings.settings.shadows;
+    stateOfView.settings = resolve_view_settings(state, view, stateOfView.viewIndex);
+    const view_render_settings &settings = stateOfView.settings;
+
+    // The ambient-occlusion debug view (render_view::debugMode AMBIENT_OCCLUSION) shows the SSAO term alone:
+    // no shadows, automatic exposure or bloom, tonemapped as without post-processing (exposure 1, operator
+    // NONE), and SSAO on whatever the settings or NO_POST_PROCESS say, so the term can be tuned while it is
+    // off. Every debug mode draws without shadows, as SKIP_SHADOWS, and stays out of the atlas layer union
+    // (prepare_frame).
+    const bool debugView = view.debugMode != view_debug_mode::NONE;
+    const bool debugAmbientOcclusion = view.debugMode == view_debug_mode::AMBIENT_OCCLUSION;
+    const bool noPostProcess = has_flag(view.flags, view_flags::NO_POST_PROCESS) || debugAmbientOcclusion;
+    stateOfView.debugAmbientOcclusion = debugAmbientOcclusion;
+    stateOfView.hdrClear = debugAmbientOcclusion ? math::vec4(1.0f) : math::vec4(0.0f);
     stateOfView.postProcess = !noPostProcess;
-    stateOfView.autoExposure = stateOfView.postProcess && scene.postProcess.exposure == exposure_mode::AUTOMATIC;
-    stateOfView.bloom = stateOfView.postProcess && scene.postProcess.bloomEnabled;
-    stateOfView.ssao = scene.ssao.enabled && !noPostProcess;
-    stateOfView.shadows = scene.shadows.enabled && !has_flag(view.flags, view_flags::SKIP_SHADOWS);
+    stateOfView.autoExposure = stateOfView.postProcess && settings.postProcess.exposure == exposure_mode::AUTOMATIC;
+    stateOfView.bloom = stateOfView.postProcess && settings.postProcess.bloomEnabled;
+    stateOfView.ssao = debugAmbientOcclusion || (settings.ssao.enabled && !noPostProcess);
+    stateOfView.shadows = shadowSettings.enabled && !has_flag(view.flags, view_flags::SKIP_SHADOWS) && !debugView;
     stateOfView.drawDebug = has_flag(view.flags, view_flags::DRAW_DEBUG);
     if (scene.environment.environment.is_valid()) {
         stateOfView.environment = &state.resources->resolve_environment(scene.environment.environment);
@@ -1137,7 +1254,7 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
         } else if (stateOfView.shadows) {
             tileIndex = state.lightTileBase[sceneIndex];
         }
-        state.lightData.push_back(make_gpu_light(value, tileIndex, scene.shadows.defaultFilter));
+        state.lightData.push_back(make_gpu_light(value, tileIndex, shadowSettings.defaultFilter));
     }
     stateOfView.lightCount = lightCount;
     stateOfView.directionalLightCount = directionalCount;
@@ -1155,11 +1272,11 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
           worldFromView,
           aspect,
           sun.direction,
-          scene.shadows,
+          shadowSettings,
           state.frame.cascade_resolution()
         );
         stateOfView.cascadeCount = cascades.count;
-        const u32 filterBits = shadow_filter_bits(sun.filter, scene.shadows.defaultFilter);
+        const u32 filterBits = shadow_filter_bits(sun.filter, shadowSettings.defaultFilter);
         for (u32 index = 0; index < cascades.count; ++index) {
             const cascade &slice = cascades.cascades[index];
             shadow_draw_list &list = stateOfView.cascades[index];
@@ -1196,13 +1313,13 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
               state.visible,
               scene,
               slice.viewFromWorld,
-              2.0f * slice.radius + scene.shadows.casterPadding,
+              2.0f * slice.radius + shadowSettings.casterPadding,
               true,
               nullptr
             );
         }
         for (u32 index = cascades.count; index < MAX_SHADOW_CASCADES; ++index) {
-            stateOfView.constants.cascadeSplits[static_cast<glm::length_t>(index)] = scene.shadows.distance;
+            stateOfView.constants.cascadeSplits[static_cast<glm::length_t>(index)] = shadowSettings.distance;
         }
     }
 
@@ -1290,9 +1407,9 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
       1.0f / static_cast<f32>(stateOfView.targetSize.y)
     );
     f32 manualExposure = 1.0f;
-    if (stateOfView.postProcess && scene.postProcess.exposure == exposure_mode::MANUAL) {
+    if (stateOfView.postProcess && settings.postProcess.exposure == exposure_mode::MANUAL) {
         manualExposure = exposure::exposure_from_ev100(
-          scene.postProcess.manualEv100 + scene.postProcess.exposureCompensation
+          settings.postProcess.manualEv100 + settings.postProcess.exposureCompensation
         );
     }
     constants.nearFarExposure = math::vec4(
@@ -1314,13 +1431,14 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     flags |= stateOfView.hasEnvironment ? gpu::VIEW_FLAG_ENVIRONMENT : 0u;
     flags |= stateOfView.autoExposure ? gpu::VIEW_FLAG_AUTO_EXPOSURE : 0u;
     flags |= stateOfView.bloom ? gpu::VIEW_FLAG_BLOOM : 0u;
+    flags |= stateOfView.debugAmbientOcclusion ? gpu::VIEW_FLAG_DEBUG_AO : 0u;
     constants.flags = math::uvec4(
       flags,
       stateOfView.cascadeCount,
       static_cast<u32>(state.frameIndex & 0xFFFFFFFFu),
       directionalShadowLight
     );
-    constants.ssaoParams = math::vec4(scene.ssao.radius, scene.ssao.intensity, scene.ssao.thickness, 0.0f);
+    constants.ssaoParams = math::vec4(settings.ssao.radius, settings.ssao.intensity, settings.ssao.thickness, 0.0f);
     const gpu_environment &environment = stateOfView.environment != nullptr ? *stateOfView.environment
       : state.resources->fallback_environment();
     constants.environmentParams = math::vec4(
@@ -1331,17 +1449,17 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
     );
     constants.shadowParams = math::vec4(
       1.0f / static_cast<f32>(state.frame.cascade_resolution()),
-      scene.shadows.pcfRadiusTexels,
-      scene.shadows.normalOffsetTexels,
+      shadowSettings.pcfRadiusTexels,
+      shadowSettings.normalOffsetTexels,
       1.0f / static_cast<f32>(state.frame.atlas_resolution())
     );
     constants.shadowParams2 = math::vec4(directionalSourceRadius, 0.0f, 0.0f, 0.0f);
-    const tonemap_operator operatorValue = noPostProcess ? tonemap_operator::NONE : scene.postProcess.tonemap;
+    const tonemap_operator operatorValue = noPostProcess ? tonemap_operator::NONE : settings.postProcess.tonemap;
     constants.postProcess = math::vec4(
-      scene.postProcess.bloomIntensity,
+      settings.postProcess.bloomIntensity,
       static_cast<f32>(static_cast<u8>(operatorValue)),
-      scene.postProcess.reinhardWhitePoint,
-      scene.postProcess.agxLook
+      settings.postProcess.reinhardWhitePoint,
+      static_cast<f32>(static_cast<u8>(settings.postProcess.agxLook))
     );
     // SH9: nine vec3 packed into seven vec4 (27 floats in order).
     std::array<f32, 28> packed = {};
@@ -1359,12 +1477,12 @@ void prepare_view(renderer_state &state, frame_view_state &stateOfView, const re
         );
     }
     constants.exposureParams = math::vec4(
-      scene.postProcess.exposureCompensation,
-      scene.postProcess.adaptationSpeedUp,
-      scene.postProcess.adaptationSpeedDown,
-      scene.postProcess.minEv100
+      settings.postProcess.exposureCompensation,
+      settings.postProcess.adaptationSpeedUp,
+      settings.postProcess.adaptationSpeedDown,
+      settings.postProcess.minEv100
     );
-    constants.exposureParams2 = math::vec4(scene.postProcess.maxEv100, 0.0f, 0.0f, 0.0f);
+    constants.exposureParams2 = math::vec4(settings.postProcess.maxEv100, 0.0f, 0.0f, 0.0f);
 }
 
 // A pass added to this graph must be counted in MAX_PASSES_PER_VIEW (limits.h), which sizes render_stats::passNames.
@@ -1401,6 +1519,10 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
 
     const bool hasOpaque = stateOfView.opaqueBatchCount > 0;
     const bool hasBlended = stateOfView.main.batches.size() > stateOfView.opaqueBatchCount;
+    // The ambient-occlusion debug view (render_view::debugMode AMBIENT_OCCLUSION) draws only what shows the
+    // term: the depth prepass, SSAO, the opaque surfaces, the debug lines, the tonemap and the blit. Its
+    // shadows, exposure and bloom are already off (prepare_view).
+    const bool lit = !stateOfView.debugAmbientOcclusion;
 
     for (u32 cascade = 0; cascade < stateOfView.cascadeCount; ++cascade) {
         graph.add_pass(*state.cascadePasses[cascade]);
@@ -1410,7 +1532,7 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
     }
     if (hasOpaque) {
         graph.add_pass(*state.prepass);
-        if (stateOfView.localLightCount > 0) {
+        if (lit && stateOfView.localLightCount > 0) {
             graph.add_pass(*state.lightCull);
         }
         if (stateOfView.ssao) {
@@ -1420,10 +1542,10 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
         }
         graph.add_pass(*state.forwardOpaque);
     }
-    if (stateOfView.hasEnvironment) {
+    if (lit && stateOfView.hasEnvironment) {
         graph.add_pass(*state.skybox);
     }
-    if (hasBlended) {
+    if (lit && hasBlended) {
         if (!hasOpaque) {
             // Blended geometry alone still needs a depth buffer and lights: the prepass lays down
             // nothing but clears depth, and the culler builds list B.
@@ -1434,7 +1556,7 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
         }
         graph.add_pass(*state.forwardBlend);
     }
-    if (stateOfView.worldSprites) {
+    if (lit && stateOfView.worldSprites) {
         graph.add_pass(*state.worldSprites);
     }
     if (stateOfView.drawDebug && (stateOfView.debugDepthTestedVertices + stateOfView.debugOverlayVertices) > 0) {
@@ -1453,7 +1575,7 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
         }
     }
     graph.add_pass(*state.tonemap);
-    if (stateOfView.screenSprites) {
+    if (lit && stateOfView.screenSprites) {
         graph.add_pass(*state.screenSprites);
     }
     if (!shared.graph.ldrIsTarget) {
@@ -1545,6 +1667,9 @@ core::result<void> renderer::render(const render_scene &scene) {
     // 2. prepare and 3. the graphs. No cache lock is held here: resolve_* lock per call and the
     //    references they return live until the next collect(), so jobs the render thread helps with
     //    inside parallel_for may call upload_* / release_* without deadlocking (design 5).
+    //    The scene's settings groups are sanitised once here, before any view reads them; a frame skipped
+    //    above leaves them and their warnings as they were.
+    prepare_frame_settings(state, scene);
     prepare_frame(state, scene, backBuffer);
     for (frame_view_state &view : state.prepared_views()) {
         render_view_graph(state, view, scene);

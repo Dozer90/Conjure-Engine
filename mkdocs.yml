@@ -1037,6 +1037,11 @@ nav:
                   - "environment_component": handbook/engine/renderer/components/environment-component.md
                   - "light_component": handbook/engine/renderer/components/light-component.md
                   - "mesh_renderer_component": handbook/engine/renderer/components/mesh-renderer-component.md
+                  - "post_process_component": handbook/engine/renderer/components/post-process-component.md
+                  - "render_settings_component": handbook/engine/renderer/components/render-settings-component.md
+                  - "resolved_render_settings": handbook/engine/renderer/components/resolved-render-settings.md
+                  - "scene_settings_candidate": handbook/engine/renderer/components/scene-settings-candidate.md
+                  - "scene_settings_choice": handbook/engine/renderer/components/scene-settings-choice.md
                   - "sprite_component": handbook/engine/renderer/components/sprite-component.md
               - "debug_draw.h":
                   - handbook/engine/renderer/debug-draw.md
@@ -1106,10 +1111,15 @@ nav:
                   - "render_scene": handbook/engine/renderer/render-scene/render-scene.md
                   - "render_scene_pair": handbook/engine/renderer/render-scene/render-scene-pair.md
                   - "render_view": handbook/engine/renderer/render-scene/render-view.md
+                  - "view_render_settings": handbook/engine/renderer/render-scene/view-render-settings.md
               - "render_settings.h":
                   - handbook/engine/renderer/render-settings.md
                   - "environment_settings": handbook/engine/renderer/render-settings/environment-settings.md
                   - "post_process_settings": handbook/engine/renderer/render-settings/post-process-settings.md
+                  - "render_defaults": handbook/engine/renderer/render-settings/render-defaults.md
+                  - "render_settings": handbook/engine/renderer/render-settings/render-settings.md
+                  - "render_settings_problem": handbook/engine/renderer/render-settings/render-settings-problem.md
+                  - "render_settings_reading": handbook/engine/renderer/render-settings/render-settings-reading.md
                   - "shadow_settings": handbook/engine/renderer/render-settings/shadow-settings.md
                   - "ssao_settings": handbook/engine/renderer/render-settings/ssao-settings.md
               - "render_target.h":

@@ -34,6 +34,7 @@ namespace conjure::renderer::gpu {
     inline constexpr u32 VIEW_FLAG_ENVIRONMENT = 8;
     inline constexpr u32 VIEW_FLAG_AUTO_EXPOSURE = 16;
     inline constexpr u32 VIEW_FLAG_BLOOM = 32;
+    inline constexpr u32 VIEW_FLAG_DEBUG_AO = 64;              // render_view::debugMode AMBIENT_OCCLUSION
 
     inline constexpr u32 MATERIAL_FLAG_DOUBLE_SIDED = 1;
     inline constexpr u32 MATERIAL_FLAG_UNLIT = 2;

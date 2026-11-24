@@ -20,6 +20,9 @@ std::string_view conjure::renderer::renderer_error_name(renderer_error code) noe
         case renderer_error::INVALID_ASSET: {
             return "INVALID_ASSET";
         }
+        case renderer_error::INVALID_SETTINGS: {
+            return "INVALID_SETTINGS";
+        }
         case renderer_error::COUNT: {
             return "";
         }

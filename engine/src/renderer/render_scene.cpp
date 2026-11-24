@@ -7,6 +7,23 @@ using namespace conjure::renderer;
 
 /*===========================================================================*/
 /*===========================================================================*/
+// render_view
+
+view_render_settings conjure::renderer::effective_view_settings(
+  const post_process_settings &scenePostProcess,
+  const ssao_settings &sceneSsao,
+  const render_view &view
+) noexcept {
+    const bool ownPostProcess = has_flag(view.settingsOverride, view_settings_override_flags::POST_PROCESS);
+    const bool ownSsao = has_flag(view.settingsOverride, view_settings_override_flags::SSAO);
+    view_render_settings settings = {};
+    settings.postProcess = ownPostProcess ? view.postProcess : scenePostProcess;
+    settings.ssao = ownSsao ? view.ssao : sceneSsao;
+    return settings;
+}
+
+/*===========================================================================*/
+/*===========================================================================*/
 // render_scene
 
 std::span<mesh_instance> conjure::renderer::render_scene::allocate_meshes(u32 count) {

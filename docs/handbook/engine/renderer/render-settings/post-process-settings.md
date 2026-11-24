@@ -33,7 +33,7 @@ struct post_process_settings
 <tbody>
 <tr><td>public</td><td><code class="signature">adaptation<wbr>Speed<wbr>Down</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f32">f32</a></code></td><td><code class="signature"><span class="mi">1.0</span>f</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">adaptation<wbr>Speed<wbr>Up</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f32">f32</a></code></td><td><code class="signature"><span class="mi">3.0</span>f</code></td><td></td></tr>
-<tr><td>public</td><td><code class="signature">agxLook</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f32">f32</a></code></td><td><code class="signature"><span class="mi">0.0</span>f</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">agxLook</code></td><td><code class="signature"><a href="../render-settings.html#symbol-agx-look">agx_look</a></code></td><td><code class="signature">agx_<wbr>look::<wbr>DEFAULT</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">bloomEnabled</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">bloom<wbr>Intensity</code></td><td><code class="signature"><a href="../../core/types.html#symbol-f32">f32</a></code></td><td><code class="signature"><span class="mi">0.04</span>f</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">exposure</code></td><td><code class="signature"><a href="../render-settings.html#symbol-exposure-mode">exposure_mode</a></code></td><td><code class="signature">exposure_<wbr>mode::<wbr>AUTOMATIC</code></td><td></td></tr>

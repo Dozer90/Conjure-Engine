@@ -9,6 +9,7 @@
 #include "renderer/render_graph.h"
 
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_settings.h"
 #include "conjure/renderer/sprite_batch.h"
 
 #include "conjure/core/types.h"
@@ -90,7 +91,15 @@ namespace conjure::renderer {
         bool shadows = false;
         bool hasEnvironment = false;
         bool drawDebug = false;
+        // render_view::debugMode is AMBIENT_OCCLUSION: the view shows the SSAO term
+        bool debugAmbientOcclusion = false;
         const gpu_environment *environment = nullptr;
+        // The post-process and SSAO groups this view renders with: the frame's sanitised groups with the
+        // view's override groups (render_view::settingsOverride) sanitised over them.
+        view_render_settings settings = {};
+        // What the HDR target is cleared to before the first pass draws into it: black, or white in the
+        // ambient-occlusion debug view, where an empty pixel means "nothing occludes".
+        math::vec4 hdrClear = math::vec4(0.0f);
 
         draw_region main = {};                  // opaque and masked batches first, blended after
         u32 opaqueBatchCount = 0;
@@ -150,7 +159,10 @@ namespace conjure::renderer {
             shadows = false;
             hasEnvironment = false;
             drawDebug = false;
+            debugAmbientOcclusion = false;
             environment = nullptr;
+            settings = view_render_settings{};
+            hdrClear = math::vec4(0.0f);
             main.clear();
             opaqueBatchCount = 0;
             for (shadow_draw_list &cascade : cascades) {

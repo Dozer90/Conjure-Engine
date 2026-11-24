@@ -94,11 +94,12 @@ void pass_shared::clear_targets_once(
     }
     const nvrhi::FramebufferDesc &desc = framebuffer->getDesc();
     if (hdr && !view->hdrCleared && !desc.colorAttachments.empty()) {
+        const math::vec4 &clear = view->hdrClear;
         nvrhi::utils::ClearColorAttachment(
           &context.command_list(),
           framebuffer,
           0,
-          nvrhi::Color(0.0f, 0.0f, 0.0f, 0.0f)
+          nvrhi::Color(clear.x, clear.y, clear.z, clear.w)
         );
         view->hdrCleared = true;
     }

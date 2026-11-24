@@ -10,6 +10,7 @@
 #include "conjure/renderer/limits.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_settings.h"
 #include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/renderer/renderer_error.h"
@@ -28,9 +29,11 @@
 #include "conjure/rhi/texture_format.h"
 
 #include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 // The failure paths (docs/design/02_renderer.md 6, 10 "test_renderer_failures"): creation refusals
@@ -196,7 +199,7 @@ TEST_SUITE("renderer/failures") {
         CHECK(fixture->stats().viewsRendered == 1);
     }
 
-    TEST_CASE("failures - a bad scene is clamped: invalid bounds, zero-size viewports and NaN-free extremes") {
+    TEST_CASE("failures - a bad scene is clamped: invalid bounds, a viewport outside its target and a huge mesh") {
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer();
         render_target_desc desc = {};
@@ -223,24 +226,200 @@ TEST_SUITE("renderer/failures") {
           1.0e6f
         );
         scene.meshes.push_back(huge);
-        scene.shadows.cascadeCount = 0;
-        scene.shadows.distance = -5.0f;
-        scene.postProcess.manualEv100 = 1000.0f;
-        scene.postProcess.exposure = exposure_mode::MANUAL;
-        scene.ssao.radius = -1.0f;
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().viewsRendered == 1);
         CHECK(fixture->stats().instancesCulled == 1);   // the invalid box is never visible
         CHECK(fixture->stats().instancesDrawn >= 1);
         CHECK(logs.count(core::log_level::ERR) == 0);
-        // Settings at their extremes are clamped as well.
-        scene.shadows.cascadeCount = 99;
-        scene.shadows.splitLambda = 7.0f;
-        scene.shadows.casterPadding = -10.0f;
-        scene.postProcess.bloomIntensity = -1.0f;
+        // An environment rotated by a huge angle still renders.
         scene.environment.rotationRadians = 1.0e6f;
         CONJURE_REQUIRE_OK(fixture->render(scene));
         CHECK(fixture->stats().viewsRendered == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L1B settings out of range are clamped once per frame with one WARN") {
+        // Only cascadeCount was clamped, inside the cascade builder, once per view; every other value of the
+        // scene's settings groups reached the view constants as it came, and nothing was logged. The scene's
+        // groups are now sanitised once per frame and a view's override groups once per view, each group
+        // logged once when it starts to be out of range and counted in render_stats::settingsClamped.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(1), mesh_asset::unit_cube());
+        render_scene scene = {};
+        scene.meshes.push_back(
+          instance_at(cube, gpu_material_id(), math::vec3(0.0f), mesh_asset::unit_cube().bounds())
+        );
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.castsShadows = true;
+        scene.lights.push_back(sun);
+        const render_view valid = look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value());
+        for (u32 index = 0; index < 3; ++index) {
+            scene.views.push_back(valid);
+        }
+
+        // Each variant breaks one scene group and one override group of view 2; the texts are the WARNs.
+        std::function<void(render_scene &)> breakScene = {};
+        std::function<void(render_view &)> breakOverride = {};
+        std::string_view sceneWarning = {};
+        std::string_view overrideWarning = {};
+        SUBCASE("post-process group and an SSAO override") {
+            breakScene = [](render_scene &value) {
+                value.postProcess.exposure = exposure_mode::MANUAL;
+                value.postProcess.manualEv100 = 1000.0f;
+            };
+            breakOverride = [](render_view &value) {
+                value.settingsOverride = view_settings_override_flags::SSAO;
+                value.ssao.radius = std::numeric_limits<f32>::quiet_NaN();
+            };
+            sceneWarning = "scene post_process settings: manual_ev100 is out of range";
+            overrideWarning = "view 2: ssao override: radius is out of range";
+        }
+        SUBCASE("shadow group and a post-process override") {
+            breakScene = [](render_scene &value) {
+                value.shadows.distance = -5.0f;
+                value.shadows.cascadeCount = 99;
+                value.shadows.splitLambda = 7.0f;
+                value.shadows.casterPadding = -10.0f;
+            };
+            breakOverride = [](render_view &value) {
+                value.settingsOverride = view_settings_override_flags::POST_PROCESS;
+                value.postProcess.bloomIntensity = -1.0f;
+            };
+            sceneWarning = "scene shadows settings: distance is out of range";
+            overrideWarning = "view 2: post_process override: bloom_intensity is out of range";
+        }
+        SUBCASE("SSAO group and an inverted exposure range") {
+            breakScene = [](render_scene &value) {
+                value.ssao.radius = -1.0f;
+            };
+            breakOverride = [](render_view &value) {
+                value.settingsOverride = view_settings_override_flags::POST_PROCESS;
+                value.postProcess.minEv100 = 10.0f;
+                value.postProcess.maxEv100 = 0.0f;
+            };
+            sceneWarning = "scene ssao settings: radius is out of range";
+            overrideWarning = "view 2: post_process override: max_ev100 is out of range";
+        }
+        SUBCASE("enumerators outside their enums") {
+            breakScene = [](render_scene &value) {
+                value.postProcess.tonemap = static_cast<tonemap_operator>(200);
+            };
+            breakOverride = [](render_view &value) {
+                value.settingsOverride = view_settings_override_flags::POST_PROCESS;
+                value.postProcess.agxLook = static_cast<agx_look>(9);
+            };
+            sceneWarning = "scene post_process settings: tonemap is out of range";
+            overrideWarning = "view 2: post_process override: agx_look is out of range";
+        }
+        REQUIRE(breakScene);
+        const auto settingsWarnings = [&logs]() {
+            return warning_count(logs, "out of range and was clamped");
+        };
+
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().settingsClamped == 0);
+        CHECK(settingsWarnings() == 0);
+
+        // A bad scene group: one WARN and one clamp however many views render it. A view's own values without
+        // its override flag are not read.
+        breakScene(scene);
+        scene.views[1].postProcess.bloomIntensity = -1.0f;
+        scene.views[1].ssao.radius = -1.0f;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 3);
+        CHECK(fixture->stats().settingsClamped == 1);
+        CHECK(settingsWarnings() == 1);
+        CHECK(logs.contains(core::log_level::WARN, sceneWarning));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().settingsClamped == 1);
+        CHECK(settingsWarnings() == 1);
+
+        // A bad override group of view 2: one more WARN, for that view.
+        breakOverride(scene.views[2]);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 3);
+        CHECK(fixture->stats().settingsClamped == 2);
+        CHECK(settingsWarnings() == 2);
+        CHECK(logs.contains(core::log_level::WARN, overrideWarning));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().settingsClamped == 2);
+        CHECK(settingsWarnings() == 2);
+
+        // A clean frame re-arms both warnings.
+        scene.postProcess = post_process_settings();
+        scene.shadows = shadow_settings();
+        scene.ssao = ssao_settings();
+        scene.views[2].settingsOverride = view_settings_override_flags::NONE;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().settingsClamped == 0);
+        CHECK(settingsWarnings() == 2);
+        breakScene(scene);
+        breakOverride(scene.views[2]);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 3);
+        CHECK(fixture->stats().settingsClamped == 2);
+        CHECK(settingsWarnings() == 4);
+        CHECK(fixture->stats().instancesDrawn >= 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep W3-RS-L1B the cascades are built from the clamped scene shadow group") {
+        // The WARN and settingsClamped come from the frame's sanitise whatever the frame reads afterwards, so
+        // this case pins the reads: a frame whose shadow distance is out of range draws exactly the shadow
+        // casters of the frame with the value it is clamped to. A caster 30 km down the view is inside the
+        // first cascade only when the cascades reach 1000 km; at 10 km (MAX_SHADOW_DISTANCE) none reaches it.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const mesh_asset cubeMesh = mesh_asset::unit_cube();
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(1), cubeMesh);
+        render_scene scene = {};
+        const math::vec3 eye(0.0f, 1.0f, 0.0f);
+        scene.views.push_back(look_at_view(eye, math::vec3(0.0f, 1.0f, -1.0f), target.value()));
+        scene.meshes.push_back(instance_at(cube, gpu_material_id(), math::vec3(0.0f, 0.5f, -5.0f), cubeMesh.bounds()));
+        scene.meshes.push_back(
+          instance_at(cube, gpu_material_id(), math::vec3(0.0f, 0.5f, -30000.0f), cubeMesh.bounds())
+        );
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.direction = math::vec3(0.0f, -1.0f, 0.0f);
+        sun.castsShadows = true;
+        scene.lights.push_back(sun);
+
+        f32 inRange = 0.0f;
+        f32 outOfRange = 0.0f;
+        SUBCASE("a distance above the range renders as MAX_SHADOW_DISTANCE") {
+            inRange = MAX_SHADOW_DISTANCE;
+            outOfRange = 1.0e6f;
+        }
+        SUBCASE("a NaN distance renders as the default distance") {
+            inRange = shadow_settings().distance;
+            outOfRange = std::numeric_limits<f32>::quiet_NaN();
+        }
+        REQUIRE(inRange > 0.0f);
+
+        scene.shadows.distance = inRange;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        const u32 expectedDrawn = fixture->stats().instancesDrawn;
+        const u32 expectedCascades = fixture->stats().shadowCascadesRendered;
+        CHECK(fixture->stats().settingsClamped == 0);
+        CHECK(expectedCascades == MAX_SHADOW_CASCADES);
+
+        scene.shadows.distance = outOfRange;
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().settingsClamped == 1);
+        CHECK(fixture->stats().instancesDrawn == expectedDrawn);
+        CHECK(fixture->stats().shadowCascadesRendered == expectedCascades);
+        CHECK(warning_count(logs, "scene shadows settings: distance is out of range") == 1);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 

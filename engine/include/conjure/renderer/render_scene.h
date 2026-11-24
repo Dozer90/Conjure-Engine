@@ -45,6 +45,15 @@ namespace conjure::renderer {
     };
     CONJURE_ENUM_FLAGS(view_flags);
 
+    /// <summary>
+    /// A debug visualisation that replaces a view's output. A property of the view only (editor views,
+    /// screenshots and tests), never stored in a scene or project.
+    /// </summary>
+    enum class view_debug_mode : u8 {
+        NONE = 0,
+        AMBIENT_OCCLUSION                               // the SSAO term as grey, white = unoccluded
+    };
+
     struct render_view {
         camera cameraData = {};
         math::mat4 viewFromWorld = math::mat4(1.0f);
@@ -53,7 +62,36 @@ namespace conjure::renderer {
         render_target_id target = {};                   // invalid = swapchain
         view_flags flags = view_flags::NONE;
         u32 layerMask = 0xFFFFFFFFu;
+        // The groups of the two members below that replace the scene's for this view
+        // (effective_view_settings); a group not named here is ignored.
+        view_settings_override_flags settingsOverride = view_settings_override_flags::NONE;
+        // Not NONE: the renderer also draws the view without shadows and leaves it out of the shadow atlas
+        // casters, as SKIP_SHADOWS does.
+        view_debug_mode debugMode = view_debug_mode::NONE;
+        post_process_settings postProcess = {};
+        ssao_settings ssao = {};
     };
+
+    /// <summary>
+    /// The post-process and SSAO groups one view renders with.
+    /// </summary>
+    struct view_render_settings {
+        post_process_settings postProcess = {};
+        ssao_settings ssao = {};
+
+        [[nodiscard]] bool operator==(const view_render_settings &other) const noexcept = default;
+    };
+
+    /// <summary>
+    /// The given scene groups with each group the view names in settingsOverride replaced by the view's own,
+    /// unsanitised. Turning post-processing off (view_flags::NO_POST_PROCESS) and debugMode are not applied
+    /// here: the result is the configured values.
+    /// </summary>
+    [[nodiscard]] CONJURE_API view_render_settings effective_view_settings(
+      const post_process_settings &scenePostProcess,
+      const ssao_settings &sceneSsao,
+      const render_view &view
+    ) noexcept;
 
     struct CONJURE_API render_scene {
         u64 frameIndex = 0;
@@ -63,6 +101,10 @@ namespace conjure::renderer {
         std::vector<light> lights = {};
         std::vector<sprite> sprites = {};
         environment_settings environment = {};
+        // The scene-wide post-process, shadow and SSAO groups, shared by every view (the engine's extraction
+        // leaves them at their defaults; a hand-built scene sets them). A view's settingsOverride groups replace
+        // postProcess and ssao for that view. The renderer clamps them into their ranges (sanitise) on its own
+        // copy, so values out of range render clamped and never abort a frame.
         post_process_settings postProcess = {};
         shadow_settings shadows = {};
         ssao_settings ssao = {};

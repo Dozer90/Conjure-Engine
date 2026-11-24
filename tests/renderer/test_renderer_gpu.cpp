@@ -32,7 +32,9 @@
 
 // [gpu] cases (docs/design/02_renderer.md 10): the frame on the WARP D3D12 device with analytic
 // expectations read back from an off-screen target. Skipped (exit 77) where no software adapter
-// exists. Post-processing is disabled so the read-back is the linear shading encoded as sRGB.
+// exists. Most cases disable post-processing, or set a manual exposure without bloom or a tonemap curve, so
+// the read-back is the linear shading (times that exposure) encoded as sRGB; the ambient-occlusion debug view
+// reads back the AO term the same way.
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -132,6 +134,41 @@ namespace {
         }
         REQUIRE(count > 0);
         return sum / static_cast<f32>(count);
+    }
+
+    /// <summary>
+    /// The unit cube stretched into the world-space box from 'minimum' to 'maximum'.
+    /// </summary>
+    [[nodiscard]] mesh_instance box_between(
+      gpu_mesh_id cube,
+      gpu_material_id material,
+      const math::vec3 &minimum,
+      const math::vec3 &maximum
+    ) {
+        mesh_instance box = instance_at(cube, material, math::vec3(0.0f), mesh_asset::unit_cube().bounds());
+        const math::mat4 centred = glm::translate(math::mat4(1.0f), 0.5f * (minimum + maximum));
+        box.worldFromLocal = glm::scale(centred, maximum - minimum);
+        box.worldBounds.min = minimum;
+        box.worldBounds.max = maximum;
+        return box;
+    }
+
+    /// <summary>
+    /// A 1 x 2 x 1 m pillar of the unit cube standing on the floor with its base centred on 'base'.
+    /// </summary>
+    [[nodiscard]] mesh_instance pillar_at(gpu_mesh_id cube, gpu_material_id material, const math::vec3 &base) {
+        return box_between(cube, material, base + math::vec3(-0.5f, 0.0f, -0.5f), base + math::vec3(0.5f, 2.0f, 0.5f));
+    }
+
+    /// <summary>
+    /// A view straight down at the origin from 'height' metres with -Z up on screen: screen x is world x and
+    /// screen y is world z, with square pixels on a target of any aspect.
+    /// </summary>
+    [[nodiscard]] render_view top_down_view(f32 height, render_target_id target, f32 verticalFovRadians) {
+        const math::vec3 eye(0.0f, height, 0.0f);
+        render_view view = look_at_view(eye, math::vec3(0.0f), target, verticalFovRadians);
+        view.viewFromWorld = math::look_at(eye, math::vec3(0.0f), math::vec3(0.0f, 0.0f, -1.0f));
+        return view;
     }
 
     /// <summary>
@@ -515,11 +552,20 @@ TEST_SUITE("renderer/gpu") {
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
-    TEST_CASE("regression - GTAO darkens the floor beside a pillar equally far along x and y on a 2:1 target") {
+    TEST_CASE("regression - GTAO darkens the floor beside a wall equally far along x and y on a 2:1 target") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // The horizon search measured its step in units of the target's width along both axes, so on a 2:1
+        // target it searched half as far vertically. The thickness heuristic, at most 1, ends the occlusion of
+        // a wall about half a radius away, so a reach that only the full search has is shown through the
+        // projected radius's clamp (CONJURE_GTAO_MAX_RADIUS_PIXELS, 128 half-resolution pixels) instead: with
+        // a 10 m radius the search reaches 128 pixels, 0.5 m of floor in this view, while the falloff ends at
+        // 20 m. Walls 0.28 to 0.38 m from the floor patch at the centre lie beyond the 0.25 m the vertical
+        // search reached. One pair of walls stands across x and one across z, each read against the bare
+        // floor through the ambient-occlusion debug view. Measured on WARP: 0.505 along both; with the step
+        // measured in the width, 0.547 along x and 0 along z.
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        constexpr math::uvec2 WIDE = math::uvec2(256, 128);
+        constexpr math::uvec2 WIDE = math::uvec2(1024, 512);
         const render_target_id target = make_target(*fixture, WIDE);
         const mesh_asset floorMesh = floor_mesh();
         const mesh_asset cubeMesh = mesh_asset::unit_cube();
@@ -527,66 +573,55 @@ TEST_SUITE("renderer/gpu") {
         const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(2), cubeMesh);
         const gpu_material_id material = fixture->upload_material(test_asset_id(3), white_rough());
 
-        // Straight down with -Z up on screen: screen x is world x and screen y is world z, with square
-        // pixels, so equal floor distances along x and z cover equal pixel distances.
+        // From 6 m the view covers 0.5 m of floor above and below the centre: nearly orthographic, so the bare
+        // floor is unoccluded and the walls' faces hardly show.
         render_scene scene = {};
-        const math::vec3 eye(0.0f, 6.0f, 0.0f);
-        render_view view = look_at_view(eye, math::vec3(0.0f), target, 0.8f);
-        view.viewFromWorld = math::look_at(eye, math::vec3(0.0f), math::vec3(0.0f, 0.0f, -1.0f));
+        render_view view = top_down_view(6.0f, target, 2.0f * std::atan(0.5f / 6.0f));
+        view.debugMode = view_debug_mode::AMBIENT_OCCLUSION;
         scene.views.push_back(view);
-        // SSAO is part of post-processing; an exposure of 1 without bloom or a tonemap curve keeps the
-        // read-back the linear shading.
-        scene.postProcess.exposure = exposure_mode::MANUAL;
-        scene.postProcess.manualEv100 = -std::log2(1.2f);
-        scene.postProcess.bloomEnabled = false;
-        scene.postProcess.tonemap = tonemap_operator::NONE;
         scene.meshes.push_back(instance_at(floor, material, math::vec3(0.0f), floorMesh.bounds()));
-        // A 1 x 2 x 1 m pillar standing on the floor at the origin.
-        mesh_instance pillar = instance_at(cube, material, math::vec3(0.0f), cubeMesh.bounds());
-        pillar.worldFromLocal = glm::scale(
-          glm::translate(math::mat4(1.0f), math::vec3(0.0f, 1.0f, 0.0f)),
-          math::vec3(1.0f, 2.0f, 1.0f)
-        );
-        pillar.worldBounds.min = math::vec3(-0.5f, 0.0f, -0.5f);
-        pillar.worldBounds.max = math::vec3(0.5f, 2.0f, 0.5f);
         scene.shadows.enabled = false;
-        scene.ssao.enabled = true;
-        scene.ssao.radius = 1.0f;
-        scene.ssao.thickness = 9.0f;
+        scene.ssao.radius = MAX_SSAO_RADIUS;
+        scene.ssao.thickness = 1.0f;
         scene.ssao.intensity = 3.0f;
-
-        // The bare floor first: its own ambient occlusion varies with the distance from the image
-        // centre, so the pillar's share is the difference between the two frames at each place.
         const core::image bare = render_and_read(*fixture, scene, target);
-        scene.meshes.push_back(pillar);
-        const core::image occluded = render_and_read(*fixture, scene, target);
+
+        // 0.4 m high walls, 0.3 m thick and 1 m long, whose inner faces stand 0.33 m from the centre.
+        constexpr f32 NEAR_FACE = 0.33f;
+        constexpr f32 FAR_FACE = NEAR_FACE + 0.3f;
+        constexpr f32 HEIGHT = 0.4f;
+        constexpr f32 HALF_LENGTH = 0.5f;
+        const math::vec3 acrossX(FAR_FACE - NEAR_FACE, HEIGHT, 2.0f * HALF_LENGTH);
+        const math::vec3 acrossZ(2.0f * HALF_LENGTH, HEIGHT, FAR_FACE - NEAR_FACE);
+        const math::vec3 positiveX(NEAR_FACE, 0.0f, -HALF_LENGTH);
+        const math::vec3 negativeX(-FAR_FACE, 0.0f, -HALF_LENGTH);
+        const math::vec3 positiveZ(-HALF_LENGTH, 0.0f, NEAR_FACE);
+        const math::vec3 negativeZ(-HALF_LENGTH, 0.0f, -FAR_FACE);
+        scene.meshes.push_back(box_between(cube, material, positiveX, positiveX + acrossX));
+        scene.meshes.push_back(box_between(cube, material, negativeX, negativeX + acrossX));
+        const core::image wallsAcrossX = render_and_read(*fixture, scene, target);
         CHECK(fixture->stats().executed("ssao_gtao"));
+        scene.meshes.resize(1);
+        scene.meshes.push_back(box_between(cube, material, positiveZ, positiveZ + acrossZ));
+        scene.meshes.push_back(box_between(cube, material, negativeZ, negativeZ + acrossZ));
+        const core::image wallsAcrossZ = render_and_read(*fixture, scene, target);
 
         const f32 aspect = static_cast<f32>(WIDE.x) / static_cast<f32>(WIDE.y);
         const math::mat4 clipFromWorld = clip_from_view(view.cameraData, aspect) * view.viewFromWorld;
-        const auto darkening = [&](const math::vec2 &minimum, const math::vec2 &maximum) {
-            return floor_luminance(bare, clipFromWorld, minimum, maximum) -
-              floor_luminance(occluded, clipFromWorld, minimum, maximum);
-        };
-        // The pillar's top face covers the floor out to 0.75 m on screen. Bands 0.55 to 0.9 m beyond
-        // that lie inside the 1 m search radius but outside half of it, which is all the vertical
-        // search reached when the step was measured in units of the target's width.
-        constexpr f32 NEAR_EDGE = 1.3f;
-        constexpr f32 FAR_EDGE = 1.65f;
-        constexpr f32 HALF_WIDTH = 0.3f;
-        const f32 alongX = 0.5f * (
-          darkening(math::vec2(NEAR_EDGE, -HALF_WIDTH), math::vec2(FAR_EDGE, HALF_WIDTH)) +
-          darkening(math::vec2(-FAR_EDGE, -HALF_WIDTH), math::vec2(-NEAR_EDGE, HALF_WIDTH))
-        );
-        const f32 alongZ = 0.5f * (
-          darkening(math::vec2(-HALF_WIDTH, NEAR_EDGE), math::vec2(HALF_WIDTH, FAR_EDGE)) +
-          darkening(math::vec2(-HALF_WIDTH, -FAR_EDGE), math::vec2(HALF_WIDTH, -NEAR_EDGE))
-        );
+        // The read-back is the AO term as grey; the darkening is the bare floor's term minus the term with the
+        // walls, over the floor within 5 cm of the centre (the bound past 0.05 keeps the last row of samples).
+        const math::vec2 patchMinimum(-0.05f);
+        const math::vec2 patchMaximum(0.051f);
+        const f32 bareFloor = floor_luminance(bare, clipFromWorld, patchMinimum, patchMaximum);
+        const f32 alongX = bareFloor - floor_luminance(wallsAcrossX, clipFromWorld, patchMinimum, patchMaximum);
+        const f32 alongZ = bareFloor - floor_luminance(wallsAcrossZ, clipFromWorld, patchMinimum, patchMaximum);
+        CAPTURE(bareFloor);
         CAPTURE(alongX);
         CAPTURE(alongZ);
-        CHECK(alongX > 0.01f);
-        CHECK(alongZ > alongX * 0.75f);
-        CHECK(alongZ < alongX / 0.75f);
+        CHECK(bareFloor > 0.95f);
+        CHECK(alongX > 0.2f);
+        CHECK(alongZ > alongX * 0.8f);
+        CHECK(alongZ < alongX / 0.8f);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
@@ -932,6 +967,172 @@ TEST_SUITE("renderer/gpu") {
         swapchain.value().reset();
         shaders.reset();
         device.reset();
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("gpu - a camera's manual EV100 override one stop lower renders its view twice as bright") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id sceneTarget = make_target(*fixture, TARGET_SIZE);
+        const render_target_id overrideTarget = make_target(*fixture, TARGET_SIZE);
+        const mesh_asset floorMesh = floor_mesh();
+        const gpu_mesh_id floor = fixture->upload_mesh(test_asset_id(1), floorMesh);
+        const gpu_material_id material = fixture->upload_material(test_asset_id(2), white_rough());
+
+        // Manual exposure 0.5 (EV100 1 - log2(1.2)) without bloom or a tonemap curve: the read-back is half
+        // the linear shading, about 0.2 on the white floor (0.5 / pi of sun plus 0.25 of ambient).
+        render_scene scene = {};
+        scene.meshes.push_back(instance_at(floor, material, math::vec3(0.0f), floorMesh.bounds()));
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.direction = math::vec3(0.0f, -1.0f, 0.0f);
+        sun.intensity = 0.5f;
+        sun.castsShadows = false;
+        scene.lights.push_back(sun);
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = false;
+        scene.postProcess.exposure = exposure_mode::MANUAL;
+        scene.postProcess.manualEv100 = 1.0f - std::log2(1.2f);
+        scene.postProcess.bloomEnabled = false;
+        scene.postProcess.tonemap = tonemap_operator::NONE;
+        const render_view sceneView = look_at_view(math::vec3(0.0f, 6.0f, 6.0f), math::vec3(0.0f), sceneTarget, 0.8f);
+        render_view overrideView = sceneView;
+        overrideView.target = overrideTarget;
+        overrideView.settingsOverride = view_settings_override_flags::POST_PROCESS;
+        overrideView.postProcess = scene.postProcess;
+        overrideView.postProcess.manualEv100 -= 1.0f;
+        scene.views.push_back(sceneView);
+        scene.views.push_back(overrideView);
+
+        const core::image sceneImage = render_and_read(*fixture, scene, sceneTarget);
+        core::result<core::image> overrideImage = fixture->read_back(overrideTarget);
+        CONJURE_REQUIRE_OK(overrideImage);
+        CHECK(fixture->stats().viewsRendered == 2);
+        CHECK(fixture->stats().settingsClamped == 0);
+        const math::mat4 clipFromWorld = clip_from_world_of(sceneView);
+        const math::vec2 minimum(-1.0f, -1.0f);
+        const math::vec2 maximum(1.0f, 1.0f);
+        const f32 sceneLuminance = floor_luminance(sceneImage, clipFromWorld, minimum, maximum);
+        const f32 overrideLuminance = floor_luminance(overrideImage.value(), clipFromWorld, minimum, maximum);
+        CAPTURE(sceneLuminance);
+        CAPTURE(overrideLuminance);
+        CHECK(sceneLuminance > 0.1f);
+        CHECK(overrideLuminance < 0.9f);   // below the clip, so the ratio is the exposure's
+        CHECK(overrideLuminance / sceneLuminance == doctest::Approx(2.0f).epsilon(0.15));
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("gpu - the ambient-occlusion debug view is dark beside a pillar, white on open floor and empty pixels") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
+        const mesh_asset floorMesh = floor_mesh();
+        const mesh_asset cubeMesh = mesh_asset::unit_cube();
+        const gpu_mesh_id floor = fixture->upload_mesh(test_asset_id(1), floorMesh);
+        const gpu_mesh_id cube = fixture->upload_mesh(test_asset_id(2), cubeMesh);
+        const gpu_material_id material = fixture->upload_material(test_asset_id(3), white_rough());
+
+        // From 6 m the view covers about 3.3 m to each side of the centre and the floor, scaled to 5 x 5 m,
+        // 2.5 m: the corners of the image are empty. The pillar stands left of the centre with its face toward
+        // the centre visible, so the open floor is at the centre, where the view looks straight at it.
+        render_scene scene = {};
+        render_view view = top_down_view(6.0f, target, 1.0f);
+        view.debugMode = view_debug_mode::AMBIENT_OCCLUSION;
+        scene.views.push_back(view);
+        mesh_instance smallFloor = instance_at(floor, material, math::vec3(0.0f), floorMesh.bounds());
+        smallFloor.worldFromLocal = glm::scale(math::mat4(1.0f), math::vec3(0.125f, 1.0f, 0.125f));
+        smallFloor.worldBounds.min = math::vec3(-2.5f, 0.0f, -2.5f);
+        smallFloor.worldBounds.max = math::vec3(2.5f, 0.0f, 2.5f);
+        scene.meshes.push_back(smallFloor);
+        scene.meshes.push_back(pillar_at(cube, material, math::vec3(-1.5f, 0.0f, 0.0f)));
+        light sun = {};
+        sun.type = light_type::DIRECTIONAL;
+        sun.direction = math::vec3(0.0f, -1.0f, 0.0f);
+        sun.intensity = math::PI;
+        sun.castsShadows = true;
+        scene.lights.push_back(sun);
+        // The debug view shows the term although SSAO is off for the scene, and draws no shadows.
+        scene.ssao.enabled = false;
+        scene.ssao.radius = 1.0f;
+        scene.ssao.thickness = 1.0f;
+        scene.ssao.intensity = MAX_SSAO_INTENSITY;
+
+        const core::image image = render_and_read(*fixture, scene, target);
+        CHECK(fixture->stats().executed("ssao_gtao"));
+        CHECK(fixture->stats().shadowCascadesRendered == 0);
+        const math::mat4 clipFromWorld = clip_from_world_of(view);
+
+        // The floor read-back is grey, so its linear luminance is the decoded AO term: the floor within 3 cm of
+        // the pillar's face (x = -1) against the floor around the centre.
+        const auto ambientOcclusion = [&](const math::vec2 &minimum, const math::vec2 &maximum) {
+            return floor_luminance(image, clipFromWorld, minimum, maximum);
+        };
+        const f32 besidePillar = ambientOcclusion(math::vec2(-0.99f, -0.3f), math::vec2(-0.97f, 0.3f));
+        const f32 openFloor = ambientOcclusion(math::vec2(-0.3f, -0.3f), math::vec2(0.3f, 0.3f));
+        CAPTURE(besidePillar);
+        CAPTURE(openFloor);
+        CHECK(besidePillar < 0.8f);
+        CHECK(openFloor > 0.95f);
+        const core::rgba8 open = pixel_at(image, clipFromWorld, math::vec3(0.0f));
+        CHECK(open.r == open.g);
+        CHECK(open.g == open.b);
+        const core::rgba8 empty = image.pixel(1, 1);
+        CHECK(empty.r == 255);
+        CHECK(empty.g == 255);
+        CHECK(empty.b == 255);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("gpu - a camera's tonemap NONE override clips the emissive quad where ACES compresses it") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id sceneTarget = make_target(*fixture, TARGET_SIZE);
+        const render_target_id overrideTarget = make_target(*fixture, TARGET_SIZE);
+        const mesh_asset quadMesh = mesh_asset::quad(1.0f);
+        const gpu_mesh_id quad = fixture->upload_mesh(test_asset_id(1), quadMesh);
+        material_asset glowing = {};
+        glowing.desc().unlit = true;
+        glowing.desc().baseColourFactor = math::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        glowing.desc().emissiveFactor = math::vec3(1.0f, 0.5f, 0.0f);
+        glowing.desc().emissiveStrength = 4.0f;
+        const gpu_material_id material = fixture->upload_material(test_asset_id(2), glowing);
+
+        // Exposure 1 / 1.2 makes the quad (3.3, 1.7, 0): NONE clips red and green alike, ACES keeps them
+        // apart below white.
+        render_scene scene = {};
+        scene.meshes.push_back(instance_at(quad, material, math::vec3(0.0f), quadMesh.bounds()));
+        scene.postProcess.exposure = exposure_mode::MANUAL;
+        scene.postProcess.manualEv100 = 0.0f;
+        scene.postProcess.bloomEnabled = false;
+        scene.postProcess.tonemap = tonemap_operator::ACES_FITTED;
+        scene.ssao.enabled = false;
+        scene.shadows.enabled = false;
+        const render_view sceneView = look_at_view(math::vec3(0.0f, 0.0f, 3.0f), math::vec3(0.0f), sceneTarget, 0.9f);
+        render_view overrideView = sceneView;
+        overrideView.target = overrideTarget;
+        overrideView.settingsOverride = view_settings_override_flags::POST_PROCESS;
+        overrideView.postProcess = scene.postProcess;
+        overrideView.postProcess.tonemap = tonemap_operator::NONE;
+        scene.views.push_back(sceneView);
+        scene.views.push_back(overrideView);
+
+        const core::image sceneImage = render_and_read(*fixture, scene, sceneTarget);
+        core::result<core::image> overrideImage = fixture->read_back(overrideTarget);
+        CONJURE_REQUIRE_OK(overrideImage);
+        CHECK(fixture->stats().viewsRendered == 2);
+        const math::mat4 clipFromWorld = clip_from_world_of(sceneView);
+        const core::rgba8 compressed = pixel_at(sceneImage, clipFromWorld, math::vec3(0.0f));
+        const core::rgba8 clipped = pixel_at(overrideImage.value(), clipFromWorld, math::vec3(0.0f));
+        CAPTURE(static_cast<int>(compressed.r));
+        CAPTURE(static_cast<int>(compressed.g));
+        CHECK(clipped.r == 255);
+        CHECK(clipped.g == 255);
+        CHECK(clipped.b == 0);
+        CHECK(compressed.r > compressed.g);
+        CHECK(compressed.g < 250);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

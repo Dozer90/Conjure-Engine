@@ -20,6 +20,7 @@ kind: header
 | [`mesh_instance`](render-scene/mesh-instance.md) |  |
 | [`render_scene`](render-scene/render-scene.md) |  |
 | [`render_view`](render-scene/render-view.md) |  |
+| [`view_render_settings`](render-scene/view-render-settings.md) | The post-process and <code>SSAO</code> groups one view renders with. |
 
 ## Classes
 
@@ -28,6 +29,17 @@ kind: header
 | [`render_scene_pair`](render-scene/render-scene-pair.md) | Two scenes: one being written by extraction, one being read by the renderer. |
 
 ## Enumerations
+
+### `view_debug_mode` {#symbol-view-debug-mode}
+
+```cpp
+enum class view_debug_mode : u8 {
+    NONE = 0,
+    AMBIENT_OCCLUSION                               // the SSAO term as grey, white = unoccluded
+};
+```
+
+<code>A</code> debug visualisation that replaces a view&#x27;s output. <code>A</code> property of the view only (editor views, screenshots and tests), never stored in a scene or project.
 
 ### `view_flags` {#symbol-view-flags}
 
@@ -47,6 +59,19 @@ enum class view_flags : u8 {
 ```cpp
 CONJURE_ENUM_FLAGS(view_flags)
 ```
+
+## Functions
+
+### Public
+
+#### `effective_view_settings` {#function-effective-view-settings}
+
+<div class="function-declaration" id="function-effective-view-settings-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="render-scene/view-render-settings.html">view_render_settings</a> effective_view_settings(
+    <span class="k">const</span> <a href="render-settings/post-process-settings.html">post_process_settings</a> &amp;scenePostProcess,
+    <span class="k">const</span> <a href="render-settings/ssao-settings.html">ssao_settings</a> &amp;sceneSsao,
+    <span class="k">const</span> <a href="render-scene/render-view.html">render_view</a> &amp;view) <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The given scene groups with each group the view names in <code>settingsOverride</code> replaced by the view&#x27;s own, unsanitised. Turning post-processing off (<code>view_flags::NO_POST_PROCESS</code>) and <code>debugMode</code> are not applied here: the result is the configured values.</p>
 
 <!-- doc-content:notes:start -->
 
@@ -72,7 +97,6 @@ CONJURE_ENUM_FLAGS(view_flags)
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
-<a id="functions"></a>
 <a id="internals-and-algorithms"></a>
 <a id="mesh_instance"></a>
 <a id="mesh_instancecastsshadows"></a>

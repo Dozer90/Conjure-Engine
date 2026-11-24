@@ -19,6 +19,7 @@ namespace conjure::renderer {
         RESOURCE_CREATION_FAILED,       // the device refused a texture, buffer or sampler
         DECODE_FAILED,                  // an image or HDR file did not decode
         INVALID_ASSET,                  // a cooked blob failed validation
+        INVALID_SETTINGS,               // a rendering settings value (project.json "rendering.defaults") is invalid
         COUNT
     };
 

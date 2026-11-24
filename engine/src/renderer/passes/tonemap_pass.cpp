@@ -55,8 +55,14 @@ void tonemap_pass::execute(pass_context &context) {
     }
     nvrhi::ITexture *hdr = context.texture(mShared.graph.hdr);
     if (!mShared.view->hdrCleared && hdr != nullptr) {
-        // No pass wrote the HDR target this frame: clear it so the tonemap reads black.
-        context.command_list().clearTextureFloat(hdr, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+        // No pass wrote the HDR target this frame: clear it so the tonemap reads the view's clear colour
+        // (black, or white in the ambient-occlusion debug view).
+        const math::vec4 &clear = mShared.view->hdrClear;
+        context.command_list().clearTextureFloat(
+          hdr,
+          nvrhi::AllSubresources,
+          nvrhi::Color(clear.x, clear.y, clear.z, clear.w)
+        );
         mShared.view->hdrCleared = true;
     }
     nvrhi::ITexture *bloom = mShared.view->bloom ? context.texture(mShared.graph.bloomMips[0]) : nullptr;

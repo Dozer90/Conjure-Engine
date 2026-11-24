@@ -239,6 +239,8 @@ TEST_SUITE("renderer/gpu_types") {
         CHECK(value_of(defines, "CONJURE_VIEW_FLAG_ENVIRONMENT") == gpu::VIEW_FLAG_ENVIRONMENT);
         CHECK(value_of(defines, "CONJURE_VIEW_FLAG_AUTO_EXPOSURE") == gpu::VIEW_FLAG_AUTO_EXPOSURE);
         CHECK(value_of(defines, "CONJURE_VIEW_FLAG_BLOOM") == gpu::VIEW_FLAG_BLOOM);
+        CHECK(value_of(defines, "CONJURE_VIEW_FLAG_DEBUG_AO") == gpu::VIEW_FLAG_DEBUG_AO);
+        CHECK(gpu::VIEW_FLAG_DEBUG_AO == 64);
         CHECK(value_of(defines, "CONJURE_MATERIAL_DOUBLE_SIDED") == gpu::MATERIAL_FLAG_DOUBLE_SIDED);
         CHECK(value_of(defines, "CONJURE_MATERIAL_UNLIT") == gpu::MATERIAL_FLAG_UNLIT);
         CHECK(value_of(defines, "CONJURE_INSTANCE_RECEIVES_SHADOWS") == gpu::INSTANCE_FLAG_RECEIVES_SHADOWS);

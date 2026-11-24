@@ -216,6 +216,13 @@ float4 ps_main(forward_output input, bool isFrontFace : SV_IsFrontFace) : SV_Tar
     }
     baseColour.a = 1.0;
 #endif
+    // The ambient-occlusion debug view (render_view::debugMode AMBIENT_OCCLUSION): the screen-space term
+    // alone, as grey, without the material's occlusion and before the unlit branch so every surface shows
+    // it. The flag is the same for every pixel of a draw, so the branch is uniform and needs no permutation.
+    if ((gView.flags.x & CONJURE_VIEW_FLAG_DEBUG_AO) != 0) {
+        float occlusionTerm = sample_ambient_occlusion(input.position.xy, input.viewDepth);
+        return float4(occlusionTerm, occlusionTerm, occlusionTerm, 1.0);
+    }
     float3 emissive = gMaterial.emissive.rgb * gMaterial.emissive.w;
     if (material_has_texture(CONJURE_TEXTURE_EMISSIVE)) {
         emissive *= gEmissiveTexture.Sample(gMaterialSampler, material_uv(4, input.uv0, input.uv1)).rgb;
