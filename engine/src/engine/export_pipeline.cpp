@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -361,6 +362,36 @@ namespace {
     }
 
     /// <summary>
+    /// The folders of 'directory' that do not exist yet, 'directory' first and its outermost missing ancestor last:
+    /// what create_directories is about to create.
+    /// </summary>
+    [[nodiscard]] std::vector<std::filesystem::path> missing_folders(const std::filesystem::path &directory) {
+        std::vector<std::filesystem::path> missing = {};
+        std::error_code ignored = {};
+        std::filesystem::path candidate = directory;
+        while (!candidate.empty() && !std::filesystem::exists(candidate, ignored)) {
+            missing.push_back(candidate);
+            if (!candidate.has_relative_path()) {
+                break;
+            }
+            candidate = candidate.parent_path();
+        }
+        return missing;
+    }
+
+    /// <summary>
+    /// Removes again the folders missing_folders() listed, innermost first, for an export refused right after it
+    /// created them. std::filesystem::remove deletes only an empty folder, so one another program wrote into in the
+    /// meantime stays.
+    /// </summary>
+    void remove_created_folders(std::span<const std::filesystem::path> created) {
+        for (const std::filesystem::path &folder : created) {
+            std::error_code ignored = {};
+            std::filesystem::remove(folder, ignored);
+        }
+    }
+
+    /// <summary>
     /// BAD_ARGUMENTS for the project directory itself (step 6 would replace the source project.json with a
     /// cooked one) and for a folder inside the assets root (the next scan would import the exported files).
     /// </summary>
@@ -393,6 +424,50 @@ namespace {
         return core::result<void>::success();
     }
 
+    /// <summary>
+    /// The path with '/' separators as UTF-8, for the log and error messages: generic_string() would give the ANSI
+    /// code page on Windows.
+    /// </summary>
+    [[nodiscard]] std::string display_utf8(const std::filesystem::path &path) {
+        const std::u8string text = path.generic_u8string();
+        return std::string(text.begin(), text.end());
+    }
+
+    /// <summary>
+    /// BAD_ARGUMENTS for an artifacts directory inside the output directory (the intermediates would ship with the
+    /// game) or inside the assets root (the next scan would import them). The output directory must exist: the file
+    /// system decides whether two spellings name the same folder.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_artifacts_directory(
+      const std::filesystem::path &artifacts,
+      const std::filesystem::path &output,
+      const project &loaded
+    ) {
+        if (lies_inside(artifacts, output)) {
+            return make_error(
+              engine_error::BAD_ARGUMENTS,
+              std::format(
+                "export artifacts directory '{}' lies inside the output '{}'; the intermediates would ship with the "
+                "game",
+                display_utf8(artifacts),
+                display_utf8(output)
+              )
+            );
+        }
+        if (lies_inside(artifacts, loaded.assets_directory())) {
+            return make_error(
+              engine_error::BAD_ARGUMENTS,
+              std::format(
+                "export artifacts directory '{}' lies inside the assets root '{}'; the intermediates would be imported "
+                "as assets",
+                display_utf8(artifacts),
+                display_utf8(loaded.assets_directory())
+              )
+            );
+        }
+        return core::result<void>::success();
+    }
+
     [[nodiscard]] std::string build_preset_of(const project &loaded) {
         const core::json::value build = loaded.description().extensions.root()["build"];
         if (build.is_string()) {
@@ -402,6 +477,39 @@ namespace {
             return std::string(build["preset"].as_string());
         }
         return "";
+    }
+
+    /// <summary>
+    /// EXPORT_FAILED naming step 3 when the settings ask for managed code and the project enables scripting while
+    /// this engine's configuration disables it (--no-scripting). Step 3 publishes only while scripting is enabled,
+    /// and the exported runtime of such a project starts the .NET host, so the export would ship a game without the
+    /// managed code it needs (follow-up FU-NOSCRIPTING). A project that disables scripting needs none, and settings
+    /// that ask for none (publishManaged false) want none.
+    /// </summary>
+    [[nodiscard]] core::result<void> check_managed_publishable(
+      const export_settings &settings,
+      const scripting_settings &engineScripting,
+      const project &loaded
+    ) {
+        const bool unpublishable =
+          settings.publishManaged && !engineScripting.enabled && loaded.description().scripting.enabled;
+        if (!unpublishable) {
+            return core::result<void>::success();
+        }
+        const std::string scripts = settings.scriptsProject.empty()
+          ? std::string("it names no game scripts, and its runtime still starts the .NET host")
+          : std::format("its scripts '{}' would not be built", display_utf8(settings.scriptsProject));
+        return export_error(
+          export_pipeline::STEP_NAMES[2],
+          std::format(
+            "project '{}' enables scripting ({}), but this engine runs with scripting disabled (--no-scripting), so "
+            "the game's managed code cannot be published; export without --no-scripting, turn scripting off in the "
+            "project (\"scripting\": {{\"enabled\": false}}), or set publishManaged false to export without managed "
+            "code",
+            loaded.description().name,
+            scripts
+          )
+        );
     }
 }
 
@@ -446,9 +554,33 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
         );
     }
     CONJURE_TRY(check_output_directory(output, *loaded));
+    // Before the output directory is created: an export that cannot publish the managed code it was asked for
+    // writes nothing (follow-up FU-NOSCRIPTING).
+    CONJURE_TRY(check_managed_publishable(settings, config.scripting, *loaded));
+    // Empty: step 3 compiles in a folder of its staging directory (follow-up FU-ARTIFACTS).
+    std::filesystem::path artifacts = {};
+    if (!settings.artifactsDirectory.empty()) {
+        artifacts = std::filesystem::absolute(settings.artifactsDirectory, fsError).lexically_normal();
+        if (fsError) {
+            return export_error(
+              "prepare",
+              std::format("resolving '{}': {}", display_utf8(settings.artifactsDirectory), fsError.message())
+            );
+        }
+    }
+    const std::vector<std::filesystem::path> createdFolders = missing_folders(output);
     std::filesystem::create_directories(output, fsError);
     if (fsError) {
         return export_error("prepare", std::format("creating '{}': {}", output.generic_string(), fsError.message()));
+    }
+    if (!artifacts.empty()) {
+        // Once the output directory exists, so that the file system decides whether two spellings name the same
+        // folder; a refused export takes the folders it just created away again and so writes nothing.
+        core::result<void> checked = check_artifacts_directory(artifacts, output, *loaded);
+        if (!checked.has_value()) {
+            remove_created_folders(createdFolders);
+            return core::error(std::move(checked).get_error());
+        }
     }
 
     const auto announce = [&](usize index) {
@@ -539,7 +671,8 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
         report.steps.emplace_back(STEP_NAMES[1]);
     }
 
-    // 3. Managed.
+    // 3. Managed. With scripting disabled in the configuration the step publishes nothing: the check before step 1
+    // refused such an export unless the project disables scripting as well or the settings ask for no managed code.
     announce(2);
     if (config.scripting.enabled && settings.publishManaged) {
         if (settings.bootstrapProject.empty()) {
@@ -549,10 +682,11 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
         } else {
             const std::filesystem::path managed = output / MANAGED_DIRECTORY;
             // The source roots file both commands import (follow-up FU-PDB) lives in a directory of its own below
-            // the system's temporary directory, outside the output that ships and outside every project. It is
-            // written anew by every export, which also makes MSBuild compile again instead of reusing assemblies an
-            // export without the mapping left in the same intermediates. 'staging' removes it when the step ends,
-            // whether it succeeded or failed; a removal that fails leaves it there with a warning.
+            // the system's temporary directory, outside the output that ships and outside every project, as do the
+            // intermediates when the settings name no artifacts directory. It is written anew by every export, which
+            // also makes MSBuild compile again instead of reusing assemblies an export without the mapping left in
+            // the same intermediates. 'staging' removes it when the step ends, whether it succeeded or failed; a
+            // removal that fails leaves it there with a warning.
             std::error_code temporaryError = {};
             std::filesystem::path temporary = std::filesystem::temp_directory_path(temporaryError);
             // TMPDIR may be relative on POSIX, and managed_export_commands needs an absolute import: MSBuild would
@@ -572,15 +706,24 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
                 return export_error(STEP_NAMES[2], staged.get_error());
             }
             const managed_export_staging staging = std::move(staged).value();
-            // As UTF-8: generic_string() would give the ANSI code page on Windows.
-            const std::u8string stagingText = staging.directory().generic_u8string();
             CONJURE_LOG_INFO(
               LOG_ENGINE,
               "export: MSBuild staging directory '{}' (removed when the step ends)",
-              std::string(stagingText.begin(), stagingText.end())
+              display_utf8(staging.directory())
             );
-            std::vector<std::vector<std::string>> commands =
-              managed_export_commands(settings, config.scripting, managed, staging.source_roots_targets());
+            // Without a folder of the caller's, the intermediates go with the staging directory: an export from a
+            // build tree used to compile the bootstrap into build/managed_artifacts of the engine's source tree, the
+            // default of managed/Directory.Build.props (follow-up FU-ARTIFACTS).
+            const std::filesystem::path artifactsDirectory =
+              artifacts.empty() ? staging.artifacts_directory() : artifacts;
+            CONJURE_LOG_INFO(LOG_ENGINE, "export: managed artifacts directory '{}'", display_utf8(artifactsDirectory));
+            std::vector<std::vector<std::string>> commands = managed_export_commands(
+              settings,
+              config.scripting,
+              managed,
+              staging.source_roots_targets(),
+              artifactsDirectory
+            );
             for (std::vector<std::string> &arguments : commands) {
                 CONJURE_TRY(run_tool(
                   STEP_NAMES[2],
@@ -680,10 +823,14 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
     }
     report.steps.emplace_back(STEP_NAMES[4]);
 
-    // 6. project.json.
+    // 6. project.json. An export is a Distribution export (04_editor D19), which never enables GPU validation
+    // (code sweep F458): the shipped file says "off" whatever the project names, so project::apply_to cannot raise
+    // the runtime's OFF default for players. --gpu-validation on the shipped runtime still sets a level for one run.
     announce(5);
     {
-        core::json::document document = loaded->to_json();
+        project shipped = *loaded;
+        shipped.description().rendering.gpuValidation = gpu_validation_level::OFF;
+        core::json::document document = shipped.to_json();
         document.set("cooked", true);
         document.set("cooked_root", std::string_view(COOKED_DIRECTORY));
         const core::result<void> written = document.write_file(output / PROJECT_FILE_NAME, true);

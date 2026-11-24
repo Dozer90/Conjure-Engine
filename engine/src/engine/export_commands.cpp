@@ -28,13 +28,17 @@ namespace {
     // a project outside one kept every path. The export makes each project it builds import this file (MSBuild
     // imports CustomAfterMicrosoftCommonTargets at the end of the common targets, and the global property reaches
     // the projects the bootstrap references). Its target runs after source control filled SourceRoot and before
-    // the roots are mapped; it adds the project's directory and its intermediate directory only when no root came
-    // from source control, so a project in a repository keeps the mapping Source Link agrees with. The paths go
-    // through MSBuild's Escape so that the item Include takes them literally, never as a list or a wildcard.
+    // the roots are mapped; it adds the project's directory only when no root came from source control, so a
+    // project in a repository keeps the mapping Source Link agrees with. It adds the intermediate directory always
+    // (follow-up FU-ARTIFACTS): it lies below the export's artifacts directory, by default in the system's temporary
+    // directory outside every repository, where no root of source control covers the generated sources and the .pdb
+    // the CodeView entry names. The paths go through MSBuild's Escape so that the item Include takes them
+    // literally, never as a list or a wildcard.
     constexpr std::string_view SOURCE_ROOTS_TARGETS =
       "<Project>\n"
       "  <!-- Written by the Conjure export (engine/src/engine/export_commands.cpp) and imported into every project\n"
-      "       it builds: maps the source paths of a project that source control gives no source root. -->\n"
+      "       it builds: maps the source paths of a project that source control gives no source root, and those\n"
+      "       of its intermediate directory, which may lie outside every repository. -->\n"
       "  <Target Name=\"ConjureExportSourceRoots\" BeforeTargets=\"InitializeSourceRootMappedPaths\"\n"
       "          Condition=\"'$(DeterministicSourcePaths)' == 'true'\">\n"
       "    <ItemGroup>\n"
@@ -44,6 +48,8 @@ namespace {
       "    <ItemGroup Condition=\"'@(_ConjureExportControlledSourceRoot)' == ''\">\n"
       "      <SourceRoot Include=\"$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory("
       "'$(MSBuildProjectDirectory)'))))\" />\n"
+      "    </ItemGroup>\n"
+      "    <ItemGroup>\n"
       "      <SourceRoot Include=\"$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory("
       "'$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)'))))\" />\n"
       "    </ItemGroup>\n"
@@ -54,12 +60,15 @@ namespace {
 
     // The flag changes no input MSBuild's incremental check looks at, so a build sharing its intermediates with a
     // build without the flag reuses the assembly that one compiled: an export after a Release script.compile would
-    // ship the machine's paths, and a Release script.compile after an export would hand the debugger /_/ paths. The
-    // export therefore compiles into intermediates of its own. The bootstrap gets its own artifacts pivot below the
-    // ArtifactsPath of managed/Directory.Build.props; the game's scripts get an artifacts path inside their own
-    // obj/, which the template's compile items exclude. Both lie inside the directories the source roots cover:
-    // the git repository of the engine or the game, or, outside one, the roots SOURCE_ROOTS_TARGETS adds.
-    constexpr std::string_view EXPORT_INTERMEDIATES = "conjure_export";
+    // ship the machine's paths, and a Release script.compile after an export would hand the debugger /_/ paths
+    // (code sweep F776). Both commands therefore compile below the export's artifacts directory (follow-up
+    // FU-ARTIFACTS: before it the publish used managed/Directory.Build.props' default, build/managed_artifacts of
+    // the engine's source tree), and inside it into a pivot no build without the flag uses, in case the caller
+    // named a folder other builds use too. SOURCE_ROOTS_TARGETS maps the intermediate directories wherever they lie.
+    constexpr std::string_view EXPORT_PIVOT_PREFIX = "release_export_";
+
+    // The folder of the staging directory the commands compile in when the settings name no artifacts directory.
+    constexpr std::string_view STAGING_ARTIFACTS = "artifacts";
 
     /// <summary>
     /// The path as UTF-8, the encoding core::process takes; path::string() would give the ANSI code page on
@@ -208,6 +217,10 @@ std::filesystem::path managed_export_staging::source_roots_targets() const {
     return mDirectory / SOURCE_ROOTS_FILE_NAME;
 }
 
+std::filesystem::path managed_export_staging::artifacts_directory() const {
+    return mDirectory / STAGING_ARTIFACTS;
+}
+
 std::vector<std::pair<std::string, std::string>> conjure::engine::managed_export_environment() {
     return {{"DOTNET_CLI_TELEMETRY_OPTOUT", "1"}, {"DOTNET_NOLOGO", "1"}, {"MSBUILDNODEREUSE", "0"}};
 }
@@ -216,17 +229,31 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
   const export_settings &settings,
   const scripting_settings &scripting,
   const std::filesystem::path &managedDirectory,
-  const std::filesystem::path &sourceRootsTargets
+  const std::filesystem::path &sourceRootsTargets,
+  const std::filesystem::path &artifactsDirectory
 ) {
     // MSBuild resolves a relative property value against the directory of each project it builds, while dotnet
-    // resolves -o against its working directory: relative paths would send ConjureManagedDir and the import to a
-    // folder other than the one the publish wrote (the editor's script.compile had that defect, code sweep F084).
+    // resolves -o against its working directory: relative paths would send ConjureManagedDir, the import and the
+    // intermediates to a folder other than the one meant (the editor's script.compile had that defect, code sweep
+    // F084).
     CONJURE_ASSERT(managedDirectory.is_absolute(), "managed_export_commands: the managed directory must be absolute");
     CONJURE_ASSERT(
       sourceRootsTargets.is_absolute(),
       "managed_export_commands: the source roots file must be absolute"
     );
+    CONJURE_ASSERT(
+      artifactsDirectory.is_absolute(),
+      "managed_export_commands: the artifacts directory must be absolute"
+    );
     const bool selfContained = scripting.exportMode == script_export_mode::SELF_CONTAINED;
+    const std::string pivot = std::format(
+      "-p:ArtifactsPivots={}{}{}{}",
+      EXPORT_PIVOT_PREFIX,
+      selfContained ? "self_contained" : "framework_dependent",
+      settings.runtimeIdentifier.empty() ? "" : "_",
+      settings.runtimeIdentifier
+    );
+    const std::string artifacts = property_value(artifactsDirectory);
     std::vector<std::string> publish = {
         "publish",
         utf8(settings.bootstrapProject),
@@ -236,12 +263,9 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
         property_value(managedDirectory),
         "--self-contained",
         selfContained ? "true" : "false",
-        std::format(
-          "-p:ArtifactsPivots=release_export_{}{}{}",
-          selfContained ? "self_contained" : "framework_dependent",
-          settings.runtimeIdentifier.empty() ? "" : "_",
-          settings.runtimeIdentifier
-        ),
+        "--artifacts-path",
+        artifacts,
+        pivot,
     };
     map_source_roots(publish, sourceRootsTargets);
     if (!settings.runtimeIdentifier.empty()) {
@@ -269,7 +293,8 @@ std::vector<std::vector<std::string>> conjure::engine::managed_export_commands(
         "-o",
         property_value(managedDirectory),
         "--artifacts-path",
-        property_value(settings.scriptsProject.parent_path() / "obj" / EXPORT_INTERMEDIATES),
+        artifacts,
+        pivot,
         // Follow-up FU-MANAGEDDIR: the game template (managed/Conjure.Templates/Game and the project file the
         // editor's script.create writes) references Conjure.Managed.dll through this property and stops the build
         // without it. The publish above wrote the dll into the same directory.

@@ -408,6 +408,68 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(result.root()["warnings"].size() == 0);
     }
 
+    TEST_CASE("regression - code sweep FU-NOSCRIPTING project.export of a project that enables scripting fails in an "
+      "editor run with --no-scripting") {
+        // The default of publishManaged also required this editor's scripting, and the pipeline skipped step 3
+        // while scripting was disabled, so the export succeeded and shipped a game whose runtime starts the .NET host
+        // and finds no managed code. Now the reply carries the pipeline's refusal, which names --no-scripting and
+        // the project's scripts, and nothing is written.
+        editor_test::headless_editor_options options = {};
+        options.scripting = false;
+        editor_test::headless_editor editor(options);
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = editor.project_directory() / "exported";
+        core::json::document args = core::json::object({{"copyRuntime", false}});
+        args.set("directory", output.generic_string());
+        std::string scriptsNamed = "names no game scripts";
+        SUBCASE("the project has game scripts") {
+            const std::filesystem::path scripts = editor.context().project()->root_directory() / "scripts";
+            std::error_code error = {};
+            std::filesystem::create_directories(scripts, error);
+            REQUIRE_FALSE(error);
+            std::ofstream stream(scripts / "Game.csproj", std::ios::binary | std::ios::trunc);
+            REQUIRE(stream.is_open());
+            stream << "<Project Sdk=\"Microsoft.NET.Sdk\" />\n";
+            stream.close();
+            const std::u8string text = (scripts / "Game.csproj").generic_u8string();
+            scriptsNamed = std::string(text.begin(), text.end());
+        }
+        SUBCASE("the project has no game scripts") {
+        }
+        SUBCASE("publishManaged is true and the project has no game scripts") {
+            args.set("publishManaged", true);
+        }
+        const protocol_response response = editor.send("project.export", std::move(args));
+        REQUIRE_FALSE(response.ok);
+        CAPTURE(response.errorMessage);
+        CHECK(response.errorCode == protocol_error_code::IO_ERROR);
+        CHECK(response.errorMessage.find("publish_managed") != std::string::npos);
+        CHECK(response.errorMessage.find("--no-scripting") != std::string::npos);
+        CHECK(response.errorMessage.find(scriptsNamed) != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output));
+    }
+
+    TEST_CASE("project.export - an editor run with --no-scripting exports a project without scripting, or when told "
+      "not to publish managed code") {
+        editor_test::headless_editor_options options = {};
+        options.scripting = false;
+        core::json::document args = core::json::object({{"copyRuntime", false}});
+        SUBCASE("the project disables scripting") {
+            options.extraProjectJson = R"("scripting": {"enabled": false})";
+        }
+        SUBCASE("publishManaged is false") {
+            args.set("publishManaged", false);
+        }
+        editor_test::headless_editor editor(options);
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = editor.project_directory() / "exported";
+        args.set("directory", output.generic_string());
+        const core::json::document result = editor.ok("project.export", std::move(args));
+        CHECK(std::filesystem::is_regular_file(output / "project.json"));
+        CHECK_FALSE(std::filesystem::exists(output / "managed"));
+        CHECK(result.root()["warnings"].size() == 0);
+    }
+
 #if CONJURE_EDITOR_TEST_HAS_DOTNET && defined(CONJURE_EDITOR_TEST_RUNTIME_EXECUTABLE)
     TEST_CASE("regression - follow-up FU-PDB project.export of a scripted project ships managed code that the exported "
       "runtime runs [dotnet][slow]" * doctest::timeout(1800.0)) {

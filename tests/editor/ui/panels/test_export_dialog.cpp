@@ -93,6 +93,28 @@ TEST_SUITE("editor/ui/panels/export_dialog") {
         CHECK(editor.context().events().client_count() == clientsBefore);
     }
 
+    TEST_CASE("regression - code sweep FU-NOSCRIPTING the export dialog of an editor run with --no-scripting reports "
+      "that a project that enables scripting cannot be exported") {
+        // The export used to succeed without the game's managed code; the dialog now shows the refusal.
+        editor_test::headless_editor_options options = {};
+        options.scripting = false;
+        editor_test::headless_editor editor(options);
+        (void) editor.ok("scene.save");
+        export_dialog dialog = {};
+        const std::filesystem::path output = editor.project_directory() / "refused_export";
+        dialog.set_directory(output.generic_string());
+        dialog.start_export(editor.context());
+        for (u32 frame = 0; frame < 2000 && dialog.is_running(); ++frame) {
+            editor.pump(1);
+            dialog.update(editor.context());
+        }
+        REQUIRE_FALSE(dialog.is_running());
+        CAPTURE(dialog.status());
+        CHECK(dialog.status().starts_with("export failed:"));
+        CHECK(dialog.status().find("--no-scripting") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output));
+    }
+
     TEST_CASE("export_dialog - without a project it only shows a hint") {
         editor_test::headless_editor_options options = {};
         options.withProject = false;

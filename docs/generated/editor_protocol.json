@@ -2484,7 +2484,7 @@
         },
         {
             "name": "project.export",
-            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied. Relative directories are relative to the project root. publishManaged (default: the project enables scripting) publishes Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj when present; an editor without that source answers NOT_AVAILABLE.",
+            "summary": "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied runtime executable, null when the runtime was not copied. An export is always a Distribution export: distributionDirectory names the Distribution build whose runtime is copied. Relative directories are relative to the project root. publishManaged (default: the project enables scripting) publishes Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj when present; an editor without that source answers NOT_AVAILABLE, and an editor run with --no-scripting refuses a project that enables scripting.",
             "flags": [
                 "requires_project",
                 "async",
@@ -4081,5 +4081,5 @@
         "PROJECT_NOT_TRUSTED",
         "INTERNAL"
     ],
-    "schemaHash": "6ff63b495f09e48d"
+    "schemaHash": "d882ad5be2f11047"
 }

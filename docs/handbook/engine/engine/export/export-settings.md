@@ -32,6 +32,7 @@ struct export_settings
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
 <tr><td>public</td><td><code class="signature">always<wbr>Include</code></td><td><code class="signature">std::vector&lt;std::string&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">artifacts<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">bootstrap<wbr>Project</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">build<wbr>Native<wbr>Module</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">cmake<wbr>Executable</code></td><td><code class="signature">std::string</code></td><td><code class="signature"><span class="s">"cmake"</span></code></td><td></td></tr>

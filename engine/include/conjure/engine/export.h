@@ -20,12 +20,16 @@
 //
 //   1  build the native game module in Distribution (when <project>/module.json declares a binary)
 //   2  assets::asset_cooker::cook -> <dir>/cooked/content.cpak + manifest.json
-//   3  dotnet publish Conjure.Bootstrap + dotnet build the game scripts -> <dir>/managed (scripting enabled)
+//   3  dotnet publish Conjure.Bootstrap + dotnet build the game scripts -> <dir>/managed (scripting enabled), both
+//      compiling in export_settings::artifactsDirectory, by default a folder the step removes when it ends. With
+//      scripting disabled in the configuration (--no-scripting) an export that asks for managed code of a project
+//      that enables scripting is refused before step 1 (EXPORT_FAILED naming this step), so nothing is written
 //   4  modules::module_manager::export_layout(<dir>, DISTRIBUTION)
 //   5  copy the Distribution conjure_runtime, conjure_shared and shaders/ into <dir>, with THIRD_PARTY_NOTICES.txt
 //      (the licence notices the build wrote next to the runtime) and what an MSVC build placed there: nethost.dll
 //      and the Visual C++ runtime DLLs (every vcruntime140*.dll and msvcp140*.dll but those of the debug runtime)
-//   6  write <dir>/project.json with "cooked": true and cooked_root "cooked"
+//   6  write <dir>/project.json with "cooked": true, cooked_root "cooked" and rendering.gpu_validation "off" (a
+//      Distribution build never enables GPU validation, code sweep F458; --gpu-validation still sets it for a run)
 //
 // The exported folder runs standalone: conjure_runtime --project <dir>. On Windows that holds without the
 // Microsoft Visual C++ Redistributable when the distribution directory held the Visual C++ runtime DLLs, as the
@@ -60,11 +64,21 @@ namespace conjure::engine {
         std::vector<std::string> alwaysInclude = {};            // asset paths ("assets://...") cooked with the closure
         bool buildNativeModule = true;                          // step 1 (skipped without a native game module)
         std::string cmakeExecutable = "cmake";
-        bool publishManaged = true;                             // step 3 (skipped when scripting is disabled)
+        // Step 3. With scripting disabled in the engine's configuration it publishes nothing, and run() refuses the
+        // export unless the project disables scripting as well.
+        bool publishManaged = true;
         std::string dotnetExecutable = "dotnet";
         std::filesystem::path bootstrapProject = {};            // managed/Conjure.Bootstrap/Conjure.Bootstrap.csproj
         // <project>/scripts/Game.csproj as script.create writes it; empty = no game scripts.
         std::filesystem::path scriptsProject = {};
+        // Where both dotnet commands of step 3 compile (--artifacts-path: their obj/ and bin/ trees, never the
+        // assemblies that ship). Empty = a folder of the step's own staging directory below the system's temporary
+        // directory, removed with it when the step ends (a removal that fails leaves it there, with a warning in the
+        // log), so an export leaves no intermediates in the engine's or the game's folders. A folder named here is
+        // kept, and the export compiles into a pivot of its own in it (release_export_*), so no build without the
+        // export's CI flag shares its intermediates. A relative path is resolved against the working directory; one
+        // inside the output directory or the assets root is BAD_ARGUMENTS.
+        std::filesystem::path artifactsDirectory = {};
         std::string runtimeIdentifier = {};                     // dotnet -r; empty = the host's
         bool copyRuntime = true;                                // step 5
         bool copyShaders = true;
@@ -125,11 +139,16 @@ namespace conjure::engine {
             /// output, and step 5, which copies file by file, keeps the files it copied before the one that
             /// failed. INVALID_STATE (core) when the context has no project or no asset database (a cooked
             /// project cannot be exported again). BAD_ARGUMENTS for an empty output directory, the project
-            /// directory itself or a folder inside the assets root. A distribution directory without Visual C++
-            /// runtime DLLs is not an error: a pipeline built with MSVC against the DLL runtime reports it as a
-            /// warning. Debug runtime DLLs in it are not copied and are named in a warning. Neither is a
-            /// directory without NOTICES_FILE_NAME an error: the report warns that the game carries no licence
-            /// notices.
+            /// directory itself or a folder inside the assets root, and for an artifacts directory inside the output
+            /// directory or the assets root (checked once the output directory exists, before step 1; the refusal
+            /// removes the folders the export created for the output again, so it writes nothing).
+            /// EXPORT_FAILED naming publish_managed, before the output directory is created, when publishManaged is
+            /// set and the project enables scripting but the engine's configuration disables it (--no-scripting):
+            /// the exported runtime would start the .NET host and find no managed code. A
+            /// distribution directory without Visual C++ runtime DLLs is not an error: a pipeline built with MSVC
+            /// against the DLL runtime reports it as a warning. Debug runtime DLLs in it are not copied and are
+            /// named in a warning. Neither is a directory without NOTICES_FILE_NAME an error: the report warns
+            /// that the game carries no licence notices.
             /// </summary>
             [[nodiscard]] core::result<export_report> run(
               const export_settings &settings,

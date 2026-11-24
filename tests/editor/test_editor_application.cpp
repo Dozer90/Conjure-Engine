@@ -35,9 +35,12 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <streambuf>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -81,6 +84,36 @@ namespace {
         options.engineArguments = {"--log-level", "warn"};
         return options;
     }
+
+    /// <summary>
+    /// Sends what is written to a standard stream (std::cout, std::cerr) into a buffer of its own until destroyed,
+    /// so a case can read what conjure_editor's run() prints.
+    /// </summary>
+    class stream_capture {
+        private:
+            std::ostream *mStream = nullptr;
+            std::streambuf *mPrevious = nullptr;
+            std::ostringstream mBuffer = {};
+
+        public:
+            explicit stream_capture(std::ostream &stream) :
+                mStream(&stream),
+                mPrevious(stream.rdbuf()) {
+                mStream->rdbuf(mBuffer.rdbuf());
+            }
+
+            ~stream_capture() {
+                mStream->rdbuf(mPrevious);
+            }
+
+            stream_capture(const stream_capture &) = delete;
+            stream_capture &operator=(const stream_capture &) = delete;
+
+        public:
+            [[nodiscard]] std::string text() const {
+                return mBuffer.str();
+            }
+    };
 
     /// <summary>
     /// Runs a command as the editor's own client and returns its result or its error.
@@ -527,6 +560,54 @@ TEST_SUITE("editor/editor_application") {
         // run() would export and never look at the command file, so the missing file is not an error here.
         CONJURE_REQUIRE_OK(application.initialise(options, {}));
         application.shutdown();
+    }
+
+    TEST_CASE("regression - code sweep FU-NOSCRIPTING editor_application --no-scripting --export of a project that "
+      "enables scripting exits 1 naming --no-scripting and writes nothing") {
+        // The export used to succeed and ship the game without its managed code. A project that disables scripting
+        // needs none, and exports as before.
+        testing::log_capture logs = {};
+        testing::temp_directory directory = {};
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        const std::filesystem::path exported = directory.path() / "exported";
+        std::string extraMembers = {};
+        bool refused = true;
+        SUBCASE("the project enables scripting") {
+        }
+        SUBCASE("the project disables scripting") {
+            extraMembers = R"("scripting": {"enabled": false})";
+            refused = false;
+        }
+        write_project(directory.path() / "project", "no_scripting_export", extraMembers);
+        editor_options options = bare_options();
+        options.projectPath = directory.path() / "project";
+        options.trustProject = true;
+        options.exportDirectory = exported;
+        options.noScripting = true;
+        editor_application application = {};
+        CONJURE_REQUIRE_OK(application.initialise(options, {}));
+        int exitCode = -1;
+        std::string errors = {};
+        {
+            const stream_capture standardError(std::cerr);
+            const stream_capture standardOutput(std::cout);
+            exitCode = application.run();
+            errors = standardError.text();
+        }
+        application.shutdown();
+        CAPTURE(errors);
+        if (!refused) {
+            CHECK(exitCode == 0);
+            CHECK(errors.empty());
+            CHECK(std::filesystem::is_regular_file(exported / "project.json"));
+            CHECK_FALSE(std::filesystem::exists(exported / "managed"));
+            return;
+        }
+        CHECK(exitCode == 1);
+        CHECK(errors.starts_with("export failed: "));
+        CHECK(errors.find("publish_managed") != std::string::npos);
+        CHECK(errors.find("--no-scripting") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(exported));
     }
 
     TEST_CASE(

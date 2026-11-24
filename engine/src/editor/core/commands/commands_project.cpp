@@ -364,6 +364,20 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
+        /// The game's scripts/Game.csproj (the file script.create writes and script.compile builds), or an empty path
+        /// when the project has none.
+        /// </summary>
+        [[nodiscard]] std::filesystem::path game_scripts_project(editor_context &context) {
+            const std::filesystem::path scripts =
+              context.project()->root_directory() / std::filesystem::path(SCRIPTS_PROJECT);
+            std::error_code probe = {};
+            if (!std::filesystem::is_regular_file(scripts, probe)) {
+                return {};
+            }
+            return scripts;
+        }
+
+        /// <summary>
         /// Names the two projects export step 3 builds (follow-up FU-PDB): the engine's Conjure.Bootstrap, from the
         /// source tree this editor was built from (CONJURE_EDITOR_BOOTSTRAP_PROJECT, which
         /// engine/src/editor/CMakeLists.txt sets), and the game's scripts/Game.csproj when the project has one (the
@@ -396,12 +410,7 @@ namespace conjure::editor::support {
               "Conjure.Bootstrap project; pass publishManaged false to export without managed code"
             );
 #endif
-            const std::filesystem::path scripts =
-              context.project()->root_directory() / std::filesystem::path(SCRIPTS_PROJECT);
-            std::error_code scriptsProbe = {};
-            if (std::filesystem::is_regular_file(scripts, scriptsProbe)) {
-                settings.scriptsProject = scripts;
-            }
+            settings.scriptsProject = game_scripts_project(context);
             return core::result<void>::success();
         }
 
@@ -431,17 +440,22 @@ namespace conjure::editor::support {
             settings.buildNativeModule = bool_or(invocation.args, "buildNativeModule", false);
             // The default follows what the exported game needs, not how this editor runs its own scripts: a project
             // that enables scripting makes the runtime start the .NET host, which needs the managed directory, also
-            // when the editor runs the null host (a headless editor does unless --dotnet). The pipeline publishes
-            // only while scripting is enabled in this editor's configuration.
+            // when the editor runs the null host (a headless editor does unless --dotnet) or no script runtime at all
+            // (--no-scripting). The pipeline publishes only while scripting is enabled in this editor's
+            // configuration; with --no-scripting it refuses the export of such a project, and the reply carries its
+            // message, instead of shipping the game without its managed code (follow-up FU-NOSCRIPTING).
+            // publishManaged false exports without managed code.
             const engine::engine_config *config = context.engine_context().config;
             const bool scriptingEnabled = config != nullptr && config->scripting.enabled;
-            settings.publishManaged = bool_or(
-              invocation.args,
-              "publishManaged",
-              scriptingEnabled && context.project()->description().scripting.enabled
-            );
-            if (settings.publishManaged && scriptingEnabled) {
-                CONJURE_TRY(name_managed_projects(context, settings));
+            settings.publishManaged =
+              bool_or(invocation.args, "publishManaged", context.project()->description().scripting.enabled);
+            if (settings.publishManaged) {
+                if (scriptingEnabled) {
+                    CONJURE_TRY(name_managed_projects(context, settings));
+                } else {
+                    // Only so that the pipeline's refusal names the scripts that would be missing.
+                    settings.scriptsProject = game_scripts_project(context);
+                }
             }
             settings.dotnetExecutable = context.dotnet_executable();
 
@@ -633,7 +647,8 @@ namespace conjure::editor::support {
             "distributionDirectory names the Distribution build whose runtime is copied. Relative directories are "
             "relative to the project root. publishManaged (default: the project enables scripting) publishes "
             "Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj "
-            "when present; an editor without that source answers NOT_AVAILABLE.",
+            "when present; an editor without that source answers NOT_AVAILABLE, and an editor run with "
+            "--no-scripting refuses a project that enables scripting.",
             R"({"type":"object","properties":{"directory":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",

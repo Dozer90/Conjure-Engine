@@ -100,12 +100,15 @@ if(CONJURE_IS_MULTI_CONFIG)
 endif()
 
 # The [dotnet][slow] export cases of test_export.cpp run export step 3 with the real dotnet over copies of the
-# engine's managed projects. One (follow-up FU-PDB) exports the game template and checks the managed assemblies with
-# tools/check_distribution_paths.py, outside git and, with git, in a repository with a commit; the other (follow-up
-# FU-MANAGEDDIR) exports the scripts project the editor's script.create writes, read from the templates in its
-# source. They are compiled only where the build has a .NET SDK (the managed SDK target), so no build registers an
-# entry that could only skip; without Python the FU-PDB case checks the assemblies' own bytes and says that the .pdb
-# documents went unchecked, and without git it says that the repository SUBCASE went unchecked.
+# engine's managed projects. The first (follow-up FU-PDB) exports the game template and checks the managed
+# assemblies with tools/check_distribution_paths.py, outside git and, with git, in a repository with a commit; the
+# second (follow-up FU-MANAGEDDIR) exports the scripts project the editor's script.create writes, read from the
+# templates in its source; the third (follow-up FU-ARTIFACTS) exports the game template into the default artifacts
+# directory and into one the caller names, and checks that nothing lands in the staged engine's
+# build/managed_artifacts or the game's scripts/obj and bin. They are compiled only where the build has a .NET SDK
+# (the managed SDK target), so no build registers an entry that could only skip; without Python the FU-PDB case
+# checks the assemblies' own bytes and says that the .pdb documents went unchecked, and without git it says that the
+# repository SUBCASE went unchecked.
 if(TARGET conjure::scripting AND TARGET conjure_managed_sdk)
     if(NetHost_DOTNET_EXECUTABLE)
         set(engineTestDotnet "${NetHost_DOTNET_EXECUTABLE}")
