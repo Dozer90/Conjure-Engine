@@ -54,7 +54,8 @@ namespace conjure::scripting {
     };
 
     /// <summary>
-    /// Everything a build needs.
+    /// Everything a build needs. Property values are UTF-8 and literal: command_line escapes them with
+    /// msbuild_escape(), so a path holding '%', ';', ',' or '"' reaches MSBuild as itself.
     /// </summary>
     struct build_request {
         std::filesystem::path projectPath = {};                             // .csproj
@@ -63,6 +64,13 @@ namespace conjure::scripting {
         std::vector<std::pair<std::string, std::string>> properties = {};   // -p:Name=Value
         f64 timeoutSeconds = 600.0;
     };
+
+    /// <summary>
+    /// 'value' with the characters MSBuild treats specially in a command-line property value written as the %XX
+    /// escapes MSBuild decodes: '%' (which starts an escape itself), ';' and ',' (which separate properties) and '"'
+    /// (which quotes). dotnet hands -o to MSBuild as a property too. Every other byte, UTF-8 included, is kept.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string msbuild_escape(std::string_view value);
 
     class CONJURE_API managed_build_runner {
         private:
@@ -135,9 +143,10 @@ namespace conjure::scripting {
 
             /// <summary>
             /// The process description a request turns into: dotnet build <project> -c <configuration>
-            /// [-o <output>] --nologo -clp:NoSummary [-p:Name=Value...]. It never adds ContinuousIntegrationBuild,
-            /// so the debug information keeps the real source paths and the built scripts can be debugged; a
-            /// caller that wants it passes it in build_request::properties.
+            /// [-o <output>] --nologo -clp:NoSummary [-p:Name=Value...]. Paths are passed as UTF-8; the output
+            /// directory and every property value go through msbuild_escape(). It never adds
+            /// ContinuousIntegrationBuild, so the debug information keeps the real source paths and the built
+            /// scripts can be debugged; a caller that wants it passes it in build_request::properties.
             /// </summary>
             [[nodiscard]] static core::process_desc command_line(const build_request &request, std::string_view dotnet);
 

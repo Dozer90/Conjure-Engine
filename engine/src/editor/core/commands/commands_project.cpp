@@ -16,6 +16,8 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -27,6 +29,9 @@
 namespace conjure::editor::support {
 
     namespace {
+        // The game's scripts project below the project root, as script.create writes it (commands_script.cpp).
+        constexpr std::string_view SCRIPTS_PROJECT = "scripts/Game.csproj";
+
         core::json::document describe_project(const engine::project &project) {
             const engine::project_description &description = project.description();
             core::json::document layers = core::json::document::array();
@@ -358,6 +363,48 @@ namespace conjure::editor::support {
             return outcome;
         }
 
+        /// <summary>
+        /// Names the two projects export step 3 builds (follow-up FU-PDB): the engine's Conjure.Bootstrap, from the
+        /// source tree this editor was built from (CONJURE_EDITOR_BOOTSTRAP_PROJECT, which
+        /// engine/src/editor/CMakeLists.txt sets), and the game's scripts/Game.csproj when the project has one (the
+        /// file script.create writes and script.compile builds). An editor without that source tree, because it was
+        /// built without scripting or no longer lies next to its sources, is NOT_AVAILABLE naming what it misses:
+        /// exporting anyway would ship a game whose runtime starts the .NET host and finds no managed code. Where an
+        /// installed editor, which has no source tree, finds the bootstrap is not decided yet.
+        /// </summary>
+        [[nodiscard]] core::result<void> name_managed_projects(
+          editor_context &context,
+          engine::export_settings &settings
+        ) {
+#if defined(CONJURE_EDITOR_BOOTSTRAP_PROJECT)
+            const std::string_view bootstrapText = CONJURE_EDITOR_BOOTSTRAP_PROJECT;
+            const std::filesystem::path bootstrap(std::u8string(bootstrapText.begin(), bootstrapText.end()));
+            std::error_code probe = {};
+            if (!std::filesystem::is_regular_file(bootstrap, probe)) {
+                return not_available(std::format(
+                  "managed code cannot be exported: the engine source this editor was built from has no '{}' (an "
+                  "editor publishes Conjure.Bootstrap from its source tree); pass publishManaged false to export "
+                  "without managed code",
+                  bootstrap.generic_string()
+                ));
+            }
+            settings.bootstrapProject = bootstrap;
+#else
+            (void) settings;
+            return not_available(
+              "managed code cannot be exported: this editor was built without scripting and knows no "
+              "Conjure.Bootstrap project; pass publishManaged false to export without managed code"
+            );
+#endif
+            const std::filesystem::path scripts =
+              context.project()->root_directory() / std::filesystem::path(SCRIPTS_PROJECT);
+            std::error_code scriptsProbe = {};
+            if (std::filesystem::is_regular_file(scripts, scriptsProbe)) {
+                settings.scriptsProject = scripts;
+            }
+            return core::result<void>::success();
+        }
+
         core::result<command_outcome> project_export(command_invocation &invocation) {
             editor_context &context = invocation.context;
             CONJURE_TRY_ASSIGN(const std::string_view directoryText, require_string(invocation.args, "directory"));
@@ -382,12 +429,20 @@ namespace conjure::editor::support {
                 }
             }
             settings.buildNativeModule = bool_or(invocation.args, "buildNativeModule", false);
+            // The default follows what the exported game needs, not how this editor runs its own scripts: a project
+            // that enables scripting makes the runtime start the .NET host, which needs the managed directory, also
+            // when the editor runs the null host (a headless editor does unless --dotnet). The pipeline publishes
+            // only while scripting is enabled in this editor's configuration.
             const engine::engine_config *config = context.engine_context().config;
+            const bool scriptingEnabled = config != nullptr && config->scripting.enabled;
             settings.publishManaged = bool_or(
               invocation.args,
               "publishManaged",
-              config != nullptr && config->scripting.enabled && !config->scripting.useNullHost
+              scriptingEnabled && context.project()->description().scripting.enabled
             );
+            if (settings.publishManaged && scriptingEnabled) {
+                CONJURE_TRY(name_managed_projects(context, settings));
+            }
             settings.dotnetExecutable = context.dotnet_executable();
 
             const async_reply reply = invocation.reply;
@@ -576,7 +631,9 @@ namespace conjure::editor::support {
             "Runs the export pipeline into a directory (progress events while it runs); runtimePath names the copied "
             "runtime executable, null when the runtime was not copied. An export is always a Distribution export: "
             "distributionDirectory names the Distribution build whose runtime is copied. Relative directories are "
-            "relative to the project root.",
+            "relative to the project root. publishManaged (default: the project enables scripting) publishes "
+            "Conjure.Bootstrap from the engine source the editor was built from and builds scripts/Game.csproj "
+            "when present; an editor without that source answers NOT_AVAILABLE.",
             R"({"type":"object","properties":{"directory":{"type":"string"},)"
             R"("distributionDirectory":{"type":"string"},"copyRuntime":{"type":"boolean"},)"
             R"("buildNativeModule":{"type":"boolean"},"publishManaged":{"type":"boolean"}},"required":["directory"]})",

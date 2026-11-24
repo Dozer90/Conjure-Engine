@@ -650,7 +650,13 @@ namespace conjure::editor::support {
             // Without a directory the property is left out and the project's own check names what is missing.
             const std::filesystem::path managed = managed_directory(context);
             if (!managed.empty()) {
-                request.properties.emplace_back("ConjureManagedDir", managed.generic_string());
+                // As UTF-8, which the runner passes on (and escapes for MSBuild): generic_string() would give the
+                // ANSI code page on Windows.
+                const std::u8string managedText = managed.generic_u8string();
+                request.properties.emplace_back(
+                  "ConjureManagedDir",
+                  std::string(managedText.begin(), managedText.end())
+                );
             }
             request.timeoutSeconds = std::max(1.0, context.dispatcher().async_timeout_seconds() * 0.9);
             using report_slot = std::optional<scripting::build_report>;

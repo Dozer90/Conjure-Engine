@@ -1,5 +1,6 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/assert_capture.h"
 #include "conjure/testing/log_capture.h"
 #include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
@@ -9,6 +10,8 @@
 #include "conjure/core/dynamic_library.h"
 #include "conjure/core/json/document.h"
 #include "conjure/core/platform_detect.h"
+#include "conjure/core/process.h"
+#include "conjure/core/string_utils.h"
 #include "conjure/core/types.h"
 #include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
@@ -25,6 +28,8 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 // export.h (docs/design/06_engine_loop.md 3.6, R21): the six steps over a temp project with null backends,
@@ -120,6 +125,304 @@ namespace {
         };
         return static_cast<usize>(std::count_if(report.warnings.begin(), report.warnings.end(), names));
     }
+
+    /// <summary>
+    /// How often 'argument' appears in an argument list.
+    /// </summary>
+    [[nodiscard]] usize count_argument(const std::vector<std::string> &arguments, std::string_view argument) {
+        return static_cast<usize>(std::count(arguments.begin(), arguments.end(), argument));
+    }
+
+    /// <summary>
+    /// The arguments that start with 'prefix', in their order.
+    /// </summary>
+    [[nodiscard]] std::vector<std::string> arguments_with_prefix(
+      const std::vector<std::string> &arguments,
+      std::string_view prefix
+    ) {
+        std::vector<std::string> found = {};
+        for (const std::string &argument : arguments) {
+            if (argument.starts_with(prefix)) {
+                found.push_back(argument);
+            }
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// The argument that follows the first 'flag'; empty when the flag is missing or comes last.
+    /// </summary>
+    [[nodiscard]] std::string argument_after(const std::vector<std::string> &arguments, std::string_view flag) {
+        const auto found = std::find(arguments.begin(), arguments.end(), flag);
+        if (found == arguments.end() || found + 1 == arguments.end()) {
+            return {};
+        }
+        return *(found + 1);
+    }
+
+    /// <summary>
+    /// 'relative' below the root of the working directory's volume (C:\ on Windows, / elsewhere): the absolute path
+    /// managed_export_commands requires, for the cases that only build command lines and touch no file.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path absolute_path(const std::filesystem::path &relative) {
+        std::error_code error = {};
+        const std::filesystem::path current = std::filesystem::current_path(error);
+        REQUIRE_MESSAGE(!error, "reading the working directory: " << error.message());
+        return current.root_path() / relative;
+    }
+
+    /// <summary>
+    /// The application of an export with scripting on the null host, which needs no .NET runtime: step 3 runs
+    /// whenever the configuration enables scripting.
+    /// </summary>
+    [[nodiscard]] application_desc scripted_desc(project loaded, bool exportDebugSymbols) {
+        application_desc desc = project_desc(std::move(loaded), 0);
+        desc.config.scripting.enabled = true;
+        desc.config.scripting.required = false;
+        desc.config.scripting.useNullHost = true;
+        desc.config.scripting.hotReload = false;
+        desc.config.scripting.exportDebugSymbols = exportDebugSymbols;
+        return desc;
+    }
+
+#if CONJURE_ENGINE_TEST_HAS_DOTNET
+    // The limits of the [dotnet][slow] cases. The export gives up on a dotnet command after
+    // DOTNET_COMMAND_SECONDS and the case on a git command or the path check after TOOL_SECONDS, so one SUBCASE
+    // (two dotnet commands, at most four git commands and the check) ends within DOTNET_SUBCASE_SECONDS. A case
+    // carries that times its number of SUBCASEs as its doctest timeout, and tests/engine/CMakeLists.txt gives the
+    // CTest entries of the largest case a minute more, so a slow export fails naming the command that hung
+    // instead of being killed by CTest without a word.
+    constexpr f64 DOTNET_COMMAND_SECONDS = 360.0;
+    constexpr f64 TOOL_SECONDS = 60.0;
+    constexpr f64 DOTNET_SUBCASE_SECONDS = 2.0 * DOTNET_COMMAND_SECONDS + 5.0 * TOOL_SECONDS;
+
+    /// <summary>
+    /// The path as UTF-8, the encoding core::process takes; path::string() would give the ANSI code page on
+    /// Windows.
+    /// </summary>
+    [[nodiscard]] std::string utf8(const std::filesystem::path &path) {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
+    }
+
+    /// <summary>
+    /// Writes 'text' to 'path', creating its folders; temp_directory::write_text takes a narrow name, which cannot
+    /// spell a non-ASCII folder on Windows.
+    /// </summary>
+    void write_file(const std::filesystem::path &path, std::string_view text) {
+        std::error_code error = {};
+        std::filesystem::create_directories(path.parent_path(), error);
+        REQUIRE_MESSAGE(!error, "creating the folder of " << utf8(path) << ": " << error.message());
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        REQUIRE_MESSAGE(stream.is_open(), "opening " << utf8(path));
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+        stream.close();
+        REQUIRE_MESSAGE(static_cast<bool>(stream), "writing " << utf8(path));
+    }
+
+    /// <summary>
+    /// Copies a file or a folder (with everything in it) of the source tree to 'destination'.
+    /// </summary>
+    void copy_from_source(std::string_view relative, const std::filesystem::path &destination) {
+        const std::filesystem::path source = std::filesystem::path(CONJURE_ENGINE_TEST_SOURCE_DIR) / relative;
+        std::error_code error = {};
+        std::filesystem::create_directories(destination.parent_path(), error);
+        REQUIRE_MESSAGE(!error, "creating " << destination.parent_path().string() << ": " << error.message());
+        std::filesystem::copy(source, destination, std::filesystem::copy_options::recursive, error);
+        REQUIRE_MESSAGE(!error, "copying " << source.string() << ": " << error.message());
+    }
+
+    /// <summary>
+    /// True when 'data' holds 'root' as UTF-8 or as UTF-16LE text, with '/' or a backslash between its components and
+    /// ASCII letters compared without case: the spellings a compiler records a folder in. A narrow check of the
+    /// assembly bytes; tools/check_distribution_paths.py also reads the documents of a portable .pdb.
+    /// </summary>
+    [[nodiscard]] bool holds_root(std::string_view data, const std::filesystem::path &root) {
+        const std::u8string generic = root.generic_u8string();
+        const std::string forward(generic.begin(), generic.end());
+        std::string backward = forward;
+        std::replace(backward.begin(), backward.end(), '/', '\\');
+        const std::string lowered = core::str::to_lower(data);
+        for (const std::string &spelling : {forward, backward}) {
+            const std::string needle = core::str::to_lower(spelling);
+            std::string wide = {};
+            for (const char character : needle) {
+                wide += character;
+                wide += '\0';
+            }
+            if (lowered.find(needle) != std::string::npos || lowered.find(wide) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Lays out in 'directory' what the engine side of a [dotnet] export builds and returns the bootstrap project:
+    /// global.json, so that the SDK the repository pins builds it; an empty git repository, which gives no source
+    /// root as a folder outside git gives none, so the case behaves the same whether the build tree lies in a
+    /// checkout or not; and copies of managed/Directory.Build.props, Conjure.Bootstrap and Conjure.Managed below
+    /// engine/managed.
+    /// </summary>
+    [[nodiscard]] std::filesystem::path stage_engine_managed(const temp_directory &directory) {
+        CONJURE_REQUIRE_OK(directory.write_text(".git/HEAD", "ref: refs/heads/main\n"));
+        for (const std::string_view folder : {"objects", "refs/heads"}) {
+            CAPTURE(folder);
+            std::error_code error = {};
+            std::filesystem::create_directories(directory.path() / ".git" / std::filesystem::path(folder), error);
+            REQUIRE_FALSE(error);
+        }
+        copy_from_source("global.json", directory.path() / "global.json");
+        const std::filesystem::path engineManaged = directory.path() / "engine" / "managed";
+        copy_from_source("managed/Directory.Build.props", engineManaged / "Directory.Build.props");
+        copy_from_source("managed/Conjure.Bootstrap", engineManaged / "Conjure.Bootstrap");
+        copy_from_source("managed/Conjure.Managed", engineManaged / "Conjure.Managed");
+        return engineManaged / "Conjure.Bootstrap" / "Conjure.Bootstrap.csproj";
+    }
+
+    /// <summary>
+    /// Exports 'loaded' into 'outputDir' with the real dotnet and nothing but the managed step: the publish of
+    /// 'bootstrapProject', then the build of 'scriptsProject'.
+    /// </summary>
+    [[nodiscard]] core::result<export_report> export_managed(
+      const project &loaded,
+      bool exportDebugSymbols,
+      const std::filesystem::path &bootstrapProject,
+      const std::filesystem::path &scriptsProject,
+      const std::filesystem::path &outputDir
+    ) {
+        application app(scripted_desc(loaded, exportDebugSymbols));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        export_settings settings = {};
+        settings.outputDirectory = outputDir;
+        settings.buildNativeModule = false;
+        settings.copyRuntime = false;
+        settings.dotnetExecutable = CONJURE_ENGINE_TEST_DOTNET;
+        settings.bootstrapProject = bootstrapProject;
+        settings.scriptsProject = scriptsProject;
+        settings.processTimeoutSeconds = DOTNET_COMMAND_SECONDS;
+        core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+        return ran;
+    }
+
+    /// <summary>
+    /// Runs the git found at configure time in 'repository' and requires it to succeed. Neither the system's nor the
+    /// user's git configuration is read (no hook, signing or line-ending rule of the machine applies) and the
+    /// identity of the commit is given on the command line.
+    /// </summary>
+    void run_git(const std::filesystem::path &repository, const std::vector<std::string> &arguments) {
+        core::process_desc desc = {};
+        desc.executable = CONJURE_ENGINE_TEST_GIT;
+        desc.arguments = {
+            "-c",
+            "user.name=Conjure Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=.git/no_hooks",
+        };
+        desc.arguments.insert(desc.arguments.end(), arguments.begin(), arguments.end());
+        desc.workingDirectory = repository;
+        // A global configuration file that does not exist is read as empty.
+        desc.environment = {
+            {"GIT_CONFIG_NOSYSTEM", "1"},
+            {"GIT_CONFIG_GLOBAL", utf8(repository / ".git" / "no_global_config")},
+        };
+        desc.mergeStderr = true;
+        desc.timeoutSeconds = TOOL_SECONDS;
+        CAPTURE(arguments.front());
+        const core::result<core::process_result> ran = core::process::run(desc);
+        CONJURE_REQUIRE_OK(ran);
+        REQUIRE_FALSE(ran.value().timedOut);
+        REQUIRE_MESSAGE(ran.value().exitCode == 0, ran.value().standardOutput);
+    }
+
+    /// <summary>
+    /// Turns the stand-in .git of stage_engine_managed into a real repository holding one commit of everything in
+    /// 'directory', with a GitHub remote (never contacted) from which Source Link derives its URLs: the layout in
+    /// which source control gives the SDK a source root of its own.
+    /// </summary>
+    void commit_everything(const temp_directory &directory) {
+        std::error_code error = {};
+        std::filesystem::remove_all(directory.path() / ".git", error);
+        REQUIRE_MESSAGE(!error, "removing the stand-in .git: " << error.message());
+        run_git(directory.path(), {"init", "-q"});
+        run_git(directory.path(), {"add", "-A"});
+        run_git(directory.path(), {"commit", "-q", "-m", "export fixture"});
+        run_git(directory.path(), {"remote", "add", "origin", "https://github.com/conjure-engine/export-fixture.git"});
+    }
+
+    /// <summary>
+    /// The value of the 'constexpr std::string_view <name> =' constant of a C++ source: its adjacent string literals
+    /// joined, with the escapes \n, \t, \", \' and \\ decoded. Empty when the constant is missing or is written in
+    /// any other way (another escape, a raw string, a macro), so that a change in how the editor spells a template
+    /// fails the case reading it instead of letting it build something else.
+    /// </summary>
+    [[nodiscard]] std::string string_constant(std::string_view source, std::string_view name) {
+        const std::string declaration = "constexpr std::string_view " + std::string(name) + " =";
+        const usize start = source.find(declaration);
+        if (start == std::string_view::npos) {
+            return {};
+        }
+        std::string text = {};
+        bool inLiteral = false;
+        usize position = start + declaration.size();
+        while (position < source.size()) {
+            const char character = source[position];
+            ++position;
+            if (!inLiteral) {
+                if (character == ';') {
+                    return text;
+                }
+                if (character == '"') {
+                    inLiteral = true;
+                    continue;
+                }
+                if (character != ' ' && character != '\n' && character != '\r' && character != '\t') {
+                    return {};
+                }
+                continue;
+            }
+            if (character == '"') {
+                inLiteral = false;
+                continue;
+            }
+            if (character != '\\') {
+                text += character;
+                continue;
+            }
+            if (position == source.size()) {
+                return {};
+            }
+            const char escaped = source[position];
+            ++position;
+            switch (escaped) {
+                case 'n': {
+                    text += '\n';
+                    break;
+                }
+                case 't': {
+                    text += '\t';
+                    break;
+                }
+                case '"':
+                case '\'':
+                case '\\': {
+                    text += escaped;
+                    break;
+                }
+                default: {
+                    return {};
+                }
+            }
+        }
+        return {};
+    }
+#endif
 }
 
 TEST_SUITE("engine/export") {
@@ -613,55 +916,46 @@ TEST_SUITE("engine/export") {
     }
 
     TEST_CASE("export_pipeline - managed commands strip symbols and the apphost unless asked to keep them") {
-        const auto has = [](const std::vector<std::string> &arguments, std::string_view argument) {
-            return std::find(arguments.begin(), arguments.end(), argument) != arguments.end();
-        };
-        const auto hasPrefix = [](const std::vector<std::string> &arguments, std::string_view prefix) {
-            return std::any_of(arguments.begin(), arguments.end(), [prefix](const std::string &argument) {
-                return argument.starts_with(prefix);
-            });
-        };
-        const std::filesystem::path managed = std::filesystem::path("C:/out") / "managed";
+        const std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
+        const std::filesystem::path targets = absolute_path(std::filesystem::path("staging") / "roots.targets");
         export_settings settings = {};
         settings.bootstrapProject = "Boot.csproj";
         settings.scriptsProject = "Scripts/Game.csproj";
 
         // The defaults: framework-dependent, no debug symbols.
         const scripting_settings defaults = {};
-        const std::vector<std::vector<std::string>> stripped = managed_export_commands(settings, defaults, managed);
+        const std::vector<std::vector<std::string>> stripped =
+          managed_export_commands(settings, defaults, managed, targets);
         REQUIRE(stripped.size() == 2);
         CHECK(stripped[0].front() == "publish");
-        CHECK(has(stripped[0], "Boot.csproj"));
-        CHECK(has(stripped[0], managed.string()));
-        CHECK(has(stripped[0], "-p:DebugType=none"));
-        CHECK(has(stripped[0], "-p:DebugSymbols=false"));
-        CHECK(has(stripped[0], "-p:UseAppHost=false"));
+        CHECK(count_argument(stripped[0], "Boot.csproj") == 1);
+        CHECK(argument_after(stripped[0], "-o") == managed.string());
+        CHECK(count_argument(stripped[0], "-p:DebugType=none") == 1);
+        CHECK(count_argument(stripped[0], "-p:DebugSymbols=false") == 1);
+        CHECK(count_argument(stripped[0], "-p:UseAppHost=false") == 1);
         CHECK(stripped[1].front() == "build");
-        CHECK(has(stripped[1], "-p:DebugType=none"));
-        CHECK_FALSE(hasPrefix(stripped[1], "-p:UseAppHost"));
+        CHECK(count_argument(stripped[1], "-p:DebugType=none") == 1);
+        CHECK(arguments_with_prefix(stripped[1], "-p:UseAppHost").empty());
 
         scripting_settings symbols = {};
         symbols.exportDebugSymbols = true;
-        const std::vector<std::vector<std::string>> kept = managed_export_commands(settings, symbols, managed);
+        const std::vector<std::vector<std::string>> kept = managed_export_commands(settings, symbols, managed, targets);
         REQUIRE(kept.size() == 2);
-        CHECK_FALSE(hasPrefix(kept[0], "-p:DebugType"));
-        CHECK_FALSE(hasPrefix(kept[1], "-p:DebugType"));
+        CHECK(arguments_with_prefix(kept[0], "-p:DebugType").empty());
+        CHECK(arguments_with_prefix(kept[1], "-p:DebugType").empty());
 
         // A self-contained publish needs its apphost (NETSDK1067).
         scripting_settings selfContained = {};
         selfContained.exportMode = script_export_mode::SELF_CONTAINED;
         const std::vector<std::vector<std::string>> standalone =
-          managed_export_commands(settings, selfContained, managed);
+          managed_export_commands(settings, selfContained, managed, targets);
         REQUIRE_FALSE(standalone.empty());
-        CHECK_FALSE(hasPrefix(standalone[0], "-p:UseAppHost"));
-        const auto selfContainedFlag = std::find(standalone[0].begin(), standalone[0].end(), "--self-contained");
-        REQUIRE(selfContainedFlag != standalone[0].end());
-        REQUIRE(selfContainedFlag + 1 != standalone[0].end());
-        CHECK(*(selfContainedFlag + 1) == "true");
+        CHECK(arguments_with_prefix(standalone[0], "-p:UseAppHost").empty());
+        CHECK(argument_after(standalone[0], "--self-contained") == "true");
 
         // Without game scripts only the bootstrap is published.
         settings.scriptsProject.clear();
-        CHECK(managed_export_commands(settings, defaults, managed).size() == 1);
+        CHECK(managed_export_commands(settings, defaults, managed, targets).size() == 1);
     }
 
     TEST_CASE("regression - code sweep F776 every dotnet command of an export is a CI build") {
@@ -670,7 +964,7 @@ TEST_SUITE("engine/export") {
         // editor's own builds keep them for the debugger. MSBuild's incremental check does not see the flag, so each
         // command also compiles into intermediates no build without the flag shares: the publish into an artifacts
         // pivot of its own, the scripts build into an artifacts path inside the scripts project's obj/.
-        const std::filesystem::path managed = std::filesystem::path("out") / "managed";
+        const std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
         export_settings settings = {};
         settings.bootstrapProject = "Boot.csproj";
         settings.scriptsProject = std::filesystem::path("Scripts") / "Game.csproj";
@@ -703,31 +997,487 @@ TEST_SUITE("engine/export") {
             expectedCommands = 1;
         }
 
-        const std::vector<std::vector<std::string>> commands = managed_export_commands(settings, scripting, managed);
+        const std::vector<std::vector<std::string>> commands =
+          managed_export_commands(settings, scripting, managed, absolute_path("roots.targets"));
         REQUIRE(commands.size() == expectedCommands);
         for (usize index = 0; index < commands.size(); ++index) {
             CAPTURE(index);
-            const std::vector<std::string> &arguments = commands[index];
-            CHECK(std::count(arguments.begin(), arguments.end(), "-p:ContinuousIntegrationBuild=true") == 1);
+            CHECK(count_argument(commands[index], "-p:ContinuousIntegrationBuild=true") == 1);
         }
 
         const std::vector<std::string> &publish = commands.front();
-        const auto isPivot = [](const std::string &argument) {
-            return argument.starts_with("-p:ArtifactsPivots=");
-        };
-        CHECK(std::count_if(publish.begin(), publish.end(), isPivot) == 1);
-        CHECK(std::count(publish.begin(), publish.end(), expectedPivot) == 1);
-        CHECK(std::count(publish.begin(), publish.end(), "--artifacts-path") == 0);
+        CHECK(arguments_with_prefix(publish, "-p:ArtifactsPivots=").size() == 1);
+        CHECK(count_argument(publish, expectedPivot) == 1);
+        CHECK(count_argument(publish, "--artifacts-path") == 0);
         if (commands.size() < 2) {
             return;
         }
         const std::vector<std::string> &build = commands[1];
-        CHECK(std::count(build.begin(), build.end(), "--artifacts-path") == 1);
-        const auto artifacts = std::find(build.begin(), build.end(), "--artifacts-path");
-        REQUIRE(artifacts != build.end());
-        REQUIRE(artifacts + 1 != build.end());
-        CHECK(*(artifacts + 1) == expectedArtifacts.string());
+        CHECK(count_argument(build, "--artifacts-path") == 1);
+        CHECK(argument_after(build, "--artifacts-path") == expectedArtifacts.string());
     }
+
+    TEST_CASE("regression - code sweep FU-PDB every dotnet command of an export imports the source roots file") {
+        // A CI build maps the source paths the compiler records only for the source roots MSBuild knows, and source
+        // control supplies one only in a git repository with a commit: the managed assemblies of a project outside
+        // one shipped the folders of the exporting machine. Every command now imports the file that adds the
+        // project's own roots in that case.
+        const std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
+        const std::filesystem::path targets =
+          absolute_path(std::filesystem::path("staging") / "conjure_export_source_roots.targets");
+        export_settings settings = {};
+        settings.bootstrapProject = "Boot.csproj";
+        settings.scriptsProject = std::filesystem::path("Scripts") / "Game.csproj";
+        scripting_settings scripting = {};
+        usize expectedCommands = 2;
+
+        SUBCASE("framework-dependent without debug symbols") {
+            scripting.exportDebugSymbols = false;
+        }
+        SUBCASE("self-contained for a runtime identifier with debug symbols") {
+            scripting.exportMode = script_export_mode::SELF_CONTAINED;
+            scripting.exportDebugSymbols = true;
+            settings.runtimeIdentifier = "linux-x64";
+        }
+        SUBCASE("without game scripts") {
+            settings.scriptsProject.clear();
+            expectedCommands = 1;
+        }
+
+        const std::vector<std::vector<std::string>> commands =
+          managed_export_commands(settings, scripting, managed, targets);
+        REQUIRE(commands.size() == expectedCommands);
+        const std::vector<std::string> expected = {"-p:CustomAfterMicrosoftCommonTargets=" + targets.string()};
+        for (usize index = 0; index < commands.size(); ++index) {
+            CAPTURE(index);
+            CHECK(arguments_with_prefix(commands[index], "-p:CustomAfterMicrosoftCommonTargets=") == expected);
+        }
+    }
+
+    TEST_CASE("export_pipeline - the source roots file adds the project's roots only when source control gave none") {
+        const std::string_view targets = managed_export_source_roots_targets();
+        // Between source control filling SourceRoot and the SDK mapping the roots, and only in a build that maps.
+        CHECK(targets.find("BeforeTargets=\"InitializeSourceRootMappedPaths\"") != std::string_view::npos);
+        CHECK(targets.find("'$(DeterministicSourcePaths)' == 'true'") != std::string_view::npos);
+        CHECK(targets.find("'%(SourceRoot.SourceControl)' != ''") != std::string_view::npos);
+        // The project's directory and its intermediate directory (where the .pdb and the generated sources lie),
+        // escaped so that an item Include neither splits them at ';' nor expands a '*'.
+        CHECK(targets.find("$([MSBuild]::Escape($([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)'))))")
+              != std::string_view::npos);
+        CHECK(targets.find("'$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)'") != std::string_view::npos);
+        CHECK(targets.starts_with("<Project>"));
+        CHECK(targets.ends_with("</Project>\n"));
+    }
+
+    TEST_CASE("regression - code sweep FU-MANAGEDDIR the scripts build names the directory the publish fills") {
+        // The game template (managed/Conjure.Templates/Game, and the project file the editor's script.create writes)
+        // references Conjure.Managed.dll through ConjureManagedDir and stops its build without it, and the export
+        // never passed it: every export of a project with game scripts failed at the scripts build. The publish
+        // writes the dll into the managed directory first, so the build is pointed at the very directory of -o.
+        std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
+        export_settings settings = {};
+        settings.bootstrapProject = "Boot.csproj";
+        settings.scriptsProject = std::filesystem::path("Scripts") / "Game.csproj";
+        scripting_settings scripting = {};
+
+        SUBCASE("framework-dependent without debug symbols") {
+            scripting.exportDebugSymbols = false;
+        }
+        SUBCASE("self-contained for a runtime identifier with debug symbols") {
+            scripting.exportMode = script_export_mode::SELF_CONTAINED;
+            scripting.exportDebugSymbols = true;
+            settings.runtimeIdentifier = "win-x64";
+        }
+        SUBCASE("a scripts project in the working directory") {
+            settings.scriptsProject = "Game.csproj";
+        }
+        SUBCASE("a managed directory with spaces, which stays one argument without quotes of its own") {
+            managed = absolute_path(std::filesystem::path("My Game") / "export folder" / "managed");
+        }
+
+        const std::vector<std::vector<std::string>> commands =
+          managed_export_commands(settings, scripting, managed, absolute_path("roots.targets"));
+        REQUIRE(commands.size() == 2);
+        // Only the scripts build reads it: the bootstrap and Conjure.Managed are the engine's own projects.
+        CHECK(arguments_with_prefix(commands[0], "-p:ConjureManagedDir=").empty());
+        CHECK(argument_after(commands[0], "-o") == managed.string());
+        const std::vector<std::string> expected = {"-p:ConjureManagedDir=" + managed.string()};
+        CHECK(arguments_with_prefix(commands[1], "-p:ConjureManagedDir=") == expected);
+        CHECK(argument_after(commands[1], "-o") == managed.string());
+    }
+
+    TEST_CASE("export_pipeline - managed commands assert on a relative managed directory or source roots file") {
+        // MSBuild resolves a relative property value against each project's own directory and dotnet resolves -o
+        // against its working directory, so a relative path would name a folder the publish never wrote.
+        export_settings settings = {};
+        settings.bootstrapProject = "Boot.csproj";
+        settings.scriptsProject = std::filesystem::path("Scripts") / "Game.csproj";
+        std::filesystem::path managed = absolute_path(std::filesystem::path("out") / "managed");
+        std::filesystem::path targets = absolute_path("roots.targets");
+
+        SUBCASE("the managed directory is relative") {
+            managed = std::filesystem::path("out") / "managed";
+        }
+        SUBCASE("the managed directory is empty") {
+            managed.clear();
+        }
+        SUBCASE("the source roots file is relative") {
+            targets = "roots.targets";
+        }
+        SUBCASE("the source roots file is empty") {
+            targets.clear();
+        }
+
+        CONJURE_CHECK_ASSERTS((void) managed_export_commands(settings, scripting_settings{}, managed, targets));
+    }
+
+    TEST_CASE(
+      "regression - code sweep FU-PDB managed commands pass UTF-8 paths and escape what MSBuild reads as properties"
+    ) {
+        // dotnet hands -o and --artifacts-path to MSBuild as properties, where ';' and ',' separate properties, '"'
+        // quotes and '%' escapes; the project paths are positional and reach MSBuild as they are.
+        const std::string separator = CONJURE_PLATFORM_WINDOWS ? "\\" : "/";
+        // The root of the volume (C:\ or /) holds none of the characters MSBuild needs escaped.
+        const std::u8string rootText = absolute_path({}).u8string();
+        const std::string root(rootText.begin(), rootText.end());
+        const std::filesystem::path managed =
+          absolute_path(std::filesystem::path(u8"out,1;x%2\"q") / u8"Spiel\u00e4");
+        const std::filesystem::path targets = absolute_path(std::filesystem::path(u8"st;age,%") / "roots.targets");
+        export_settings settings = {};
+        settings.bootstrapProject = std::filesystem::path(u8"Boot,1;\u00e4.csproj");
+        settings.scriptsProject = std::filesystem::path(u8"Sc,ripts;\u00e4") / "Game.csproj";
+        const std::vector<std::vector<std::string>> commands =
+          managed_export_commands(settings, scripting_settings{}, managed, targets);
+        REQUIRE(commands.size() == 2);
+
+        const std::string escapedManaged = root + "out%2C1%3Bx%252%22q" + separator + "Spiel\xC3\xA4";
+        const std::string escapedTargets = root + "st%3Bage%2C%25" + separator + "roots.targets";
+        const std::vector<std::string> expectedTargets = {"-p:CustomAfterMicrosoftCommonTargets=" + escapedTargets};
+        for (usize index = 0; index < commands.size(); ++index) {
+            CAPTURE(index);
+            CHECK(argument_after(commands[index], "-o") == escapedManaged);
+            CHECK(arguments_with_prefix(commands[index], "-p:CustomAfterMicrosoftCommonTargets=") == expectedTargets);
+        }
+        CHECK(commands[0][1] == "Boot,1;\xC3\xA4.csproj");
+        CHECK(commands[1][1] == "Sc,ripts;\xC3\xA4" + separator + "Game.csproj");
+        CHECK(argument_after(commands[1], "--artifacts-path")
+              == "Sc%2Cripts%3B\xC3\xA4" + separator + "obj" + separator + "conjure_export");
+        const std::vector<std::string> expectedManagedDir = {"-p:ConjureManagedDir=" + escapedManaged};
+        CHECK(arguments_with_prefix(commands[1], "-p:ConjureManagedDir=") == expectedManagedDir);
+    }
+
+    TEST_CASE("managed_export_staging - writes the source roots file and removes its directory on destruction") {
+        temp_directory directory("engine_export_staging");
+        const std::filesystem::path staged = directory.path() / "staging";
+        {
+            core::result<managed_export_staging> created = managed_export_staging::create(staged);
+            CONJURE_REQUIRE_OK(created);
+            const managed_export_staging staging = std::move(created).value();
+            CHECK(staging.directory() == staged);
+            CHECK(staging.source_roots_targets().parent_path() == staged);
+            REQUIRE(std::filesystem::is_regular_file(staging.source_roots_targets()));
+            CHECK(file_text(staging.source_roots_targets()) == managed_export_source_roots_targets());
+        }
+        CHECK_FALSE(std::filesystem::exists(staged));
+        CHECK(std::filesystem::is_directory(directory.path()));
+    }
+
+    TEST_CASE("managed_export_staging - refuses a directory that exists and leaves it and its files alone") {
+        temp_directory directory("engine_export_staging_taken");
+        CONJURE_REQUIRE_OK(directory.write_text("taken/keep.txt", "mine"));
+        CONJURE_CHECK_ERROR(managed_export_staging::create(directory.file("taken")), core::error_code::ALREADY_EXISTS);
+        CHECK(file_text(directory.file("taken/keep.txt")) == "mine");
+    }
+
+    TEST_CASE("managed_export_staging - a directory that cannot be created is IO_FAILURE and nothing appears") {
+        temp_directory directory("engine_export_staging_uncreatable");
+        std::filesystem::path staged = {};
+        SUBCASE("the parent is missing") {
+            staged = directory.path() / "missing" / "staging";
+        }
+        SUBCASE("the parent is a file") {
+            CONJURE_REQUIRE_OK(directory.write_text("file", "x"));
+            staged = directory.path() / "file" / "staging";
+        }
+        CONJURE_CHECK_ERROR(managed_export_staging::create(staged), core::error_code::IO_FAILURE);
+        std::error_code ignored = {};
+        CHECK_FALSE(std::filesystem::exists(staged, ignored));
+        CHECK_FALSE(std::filesystem::exists(directory.path() / "missing", ignored));
+    }
+
+    TEST_CASE("managed_export_staging - a move hands the directory over and the moved-from object removes nothing") {
+        temp_directory directory("engine_export_staging_move");
+        const std::filesystem::path first = directory.path() / "first";
+        const std::filesystem::path second = directory.path() / "second";
+        core::result<managed_export_staging> createdFirst = managed_export_staging::create(first);
+        CONJURE_REQUIRE_OK(createdFirst);
+        core::result<managed_export_staging> createdSecond = managed_export_staging::create(second);
+        CONJURE_REQUIRE_OK(createdSecond);
+        {
+            managed_export_staging target = std::move(createdSecond).value();
+            {
+                managed_export_staging moved = std::move(createdFirst).value();
+                managed_export_staging constructed(std::move(moved));
+                CHECK(moved.directory().empty());
+                CHECK(constructed.directory() == first);
+                // Assigning over 'target' releases the directory it owned before.
+                target = std::move(constructed);
+                CHECK(constructed.directory().empty());
+                CHECK(target.directory() == first);
+                CHECK_FALSE(std::filesystem::exists(second));
+            }
+            // 'moved' and 'constructed' are gone and removed nothing.
+            CHECK(std::filesystem::is_regular_file(target.source_roots_targets()));
+        }
+        CHECK_FALSE(std::filesystem::exists(first));
+    }
+
+    TEST_CASE("export_pipeline - every dotnet command runs without telemetry, banner or lingering MSBuild nodes") {
+        // An MSBuild node that outlives the build inherits the command's output pipe and keeps it open, so the
+        // export waited for its process timeout.
+        const std::vector<std::pair<std::string, std::string>> environment = managed_export_environment();
+        const std::array<std::pair<std::string_view, std::string_view>, 3> expected = {{
+            {"DOTNET_CLI_TELEMETRY_OPTOUT", "1"},
+            {"DOTNET_NOLOGO", "1"},
+            {"MSBUILDNODEREUSE", "0"},
+        }};
+        CHECK(environment.size() == expected.size());
+        for (const std::pair<std::string_view, std::string_view> &variable : expected) {
+            const std::string_view name = variable.first;
+            CAPTURE(name);
+            const auto named = [name](const std::pair<std::string, std::string> &candidate) {
+                return candidate.first == name;
+            };
+            const auto found = std::find_if(environment.begin(), environment.end(), named);
+            REQUIRE(found != environment.end());
+            CHECK(found->second == variable.second);
+        }
+    }
+
+    TEST_CASE("export_pipeline - publish_managed fails naming a dotnet that cannot be started and stops there") {
+        // The step also removes the MSBuild staging directory it made below the system's temporary directory before
+        // the first command, on this way out as on success; the pipeline names it in an INFO line.
+        log_capture logs = {};
+        temp_directory directory("engine_export_no_dotnet");
+        const std::filesystem::path outputDir = directory.path() / "out";
+        project loaded = engine_test::write_project(directory.path() / "project", "no_dotnet");
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        application_desc desc = scripted_desc(loaded, false);
+        desc.config.logLevel = core::log_level::INFO;
+        application app(std::move(desc));
+        CONJURE_REQUIRE_OK(app.initialise());
+        export_pipeline pipeline(app.context());
+        export_settings settings = {};
+        settings.outputDirectory = outputDir;
+        settings.buildNativeModule = false;
+        settings.copyRuntime = false;
+        settings.bootstrapProject = directory.path() / "Boot.csproj";
+        settings.dotnetExecutable = directory.file("no_dotnet_here").string();
+        const core::result<export_report> ran = pipeline.run(settings);
+        app.shutdown();
+
+        REQUIRE_FALSE(ran.has_value());
+        const std::string message = ran.get_error().to_string();
+        CHECK(message.find("publish_managed") != std::string::npos);
+        CHECK(message.find("no_dotnet_here") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(outputDir / "managed"));
+        CHECK_FALSE(std::filesystem::exists(outputDir / "project.json"));
+
+        constexpr std::string_view STAGING_LINE = "export: MSBuild staging directory '";
+        std::vector<std::filesystem::path> staged = {};
+        for (const std::string &line : logs.messages(core::log_level::INFO)) {
+            const usize start = line.find(STAGING_LINE);
+            if (start == std::string::npos) {
+                continue;
+            }
+            const usize first = start + STAGING_LINE.size();
+            const usize last = line.find('\'', first);
+            REQUIRE(last != std::string::npos);
+            const std::string text = line.substr(first, last - first);
+            staged.emplace_back(std::u8string(text.begin(), text.end()));
+        }
+        REQUIRE(staged.size() == 1);
+        CAPTURE(staged.front().string());
+        CHECK(staged.front().is_absolute());
+        CHECK(staged.front().filename().string().starts_with("conjure_export_"));
+        std::error_code error = {};
+        CHECK_FALSE(std::filesystem::exists(staged.front(), error));
+        CHECK_FALSE(error);
+    }
+
+#if CONJURE_ENGINE_TEST_HAS_DOTNET
+    TEST_CASE(
+      "regression - code sweep FU-PDB an export ships managed assemblies naming no folder of the machine, outside git "
+      "and in a repository with a commit [dotnet][slow]" * doctest::timeout(3.0 * DOTNET_SUBCASE_SECONDS)
+    ) {
+        // The engine's managed projects, the game template and global.json are copied into a temp directory that
+        // holds an empty git repository: source control gives a repository without a commit no source root, as it
+        // gives none to a project outside git, and the case behaves the same whether the build tree lies in a
+        // checkout or not. Step 3 then runs the real dotnet, and nothing it wrote may name the temp directory, the
+        // checkout or the build tree. In a repository with a commit source control gives the root, and the export's
+        // source roots file must add none of its own: the SDK maps the repository to /_/, the path Source Link's
+        // URLs start from, and a root of the project's would take the longer match (/_1/... instead of /_/...).
+        log_capture logs = {};
+        temp_directory directory("engine_export_managed_paths");
+        bool exportDebugSymbols = false;
+        bool inRepositoryWithCommit = false;
+        SUBCASE("outside git, with debug symbols") {
+            exportDebugSymbols = true;
+        }
+        SUBCASE("outside git, without debug symbols") {
+            exportDebugSymbols = false;
+        }
+        SUBCASE("in a git repository with a commit, with debug symbols") {
+            // The CodeView PDB path the check below reads exists only with debug symbols.
+            exportDebugSymbols = true;
+            inRepositoryWithCommit = true;
+        }
+        const std::filesystem::path bootstrap = stage_engine_managed(directory);
+        const std::filesystem::path projectDir = directory.path() / "project";
+        copy_from_source("managed/Conjure.Templates/Game", projectDir / "scripts");
+        const project loaded = engine_test::write_project(projectDir, "managed_paths");
+        CONJURE_REQUIRE_OK(directory.write_text("project/assets/data/notes.bytes", "x"));
+        if (inRepositoryWithCommit) {
+            const std::string_view git = CONJURE_ENGINE_TEST_GIT;
+            if (git.empty()) {
+                MESSAGE("no git was found at configure time: the mapping inside a repository with a commit, which "
+                        "Source Link relies on, is not checked");
+                return;
+            }
+            commit_everything(directory);
+        }
+
+        const std::filesystem::path outputDir = directory.path() / "out";
+        const core::result<export_report> ran =
+          export_managed(loaded, exportDebugSymbols, bootstrap, projectDir / "scripts" / "Game.csproj", outputDir);
+        REQUIRE_MESSAGE(ran.has_value(), ran.get_error().to_string());
+        CHECK(ran.value().managedPublished);
+
+        const std::filesystem::path managed = outputDir / "managed";
+        std::vector<std::filesystem::path> binaries = {};
+        for (const std::string_view name : {"Conjure.Bootstrap", "Conjure.Managed", "Game"}) {
+            CAPTURE(name);
+            const std::filesystem::path assembly = managed / (std::string(name) + ".dll");
+            const std::filesystem::path symbols = managed / (std::string(name) + ".pdb");
+            REQUIRE(std::filesystem::is_regular_file(assembly));
+            binaries.push_back(assembly);
+            CHECK(std::filesystem::is_regular_file(symbols) == exportDebugSymbols);
+            if (exportDebugSymbols) {
+                binaries.push_back(symbols);
+            }
+        }
+        const std::vector<std::filesystem::path> roots = {
+            directory.path(),
+            std::filesystem::path(CONJURE_ENGINE_TEST_SOURCE_DIR),
+            std::filesystem::path(CONJURE_ENGINE_TEST_BINARY_DIR),
+        };
+        for (const std::filesystem::path &binary : binaries) {
+            CAPTURE(binary.string());
+            const std::string data = file_text(binary);
+            for (const std::filesystem::path &root : roots) {
+                CAPTURE(root.string());
+                CHECK_FALSE(holds_root(data, root));
+            }
+        }
+        if (inRepositoryWithCommit) {
+            // The .pdb lies in the scripts build's intermediates (--artifacts-path obj/conjure_export), and its
+            // CodeView path in Game.dll is mapped against the repository's root alone.
+            CHECK(file_text(managed / "Game.dll").find("/_/project/scripts/obj/conjure_export/") != std::string::npos);
+        }
+
+        const std::string_view python = CONJURE_ENGINE_TEST_PYTHON;
+        if (python.empty()) {
+            MESSAGE("no Python interpreter was found at configure time: the documents of the .pdb files are not "
+                    "checked by tools/check_distribution_paths.py");
+            return;
+        }
+        core::process_desc check = {};
+        check.executable = std::string(python);
+        check.arguments = {
+            "-I",
+            utf8(std::filesystem::path(CONJURE_ENGINE_TEST_SOURCE_DIR) / "tools" / "check_distribution_paths.py"),
+            "--root",
+            utf8(directory.path()),
+            "--root",
+            std::string(CONJURE_ENGINE_TEST_BINARY_DIR),
+        };
+        for (const std::filesystem::path &binary : binaries) {
+            check.arguments.emplace_back("--binary");
+            check.arguments.push_back(utf8(binary));
+        }
+        check.mergeStderr = true;
+        check.timeoutSeconds = TOOL_SECONDS;
+        const core::result<core::process_result> checked = core::process::run(check);
+        CONJURE_REQUIRE_OK(checked);
+        CHECK_MESSAGE(checked.value().exitCode == 0, checked.value().standardOutput);
+    }
+
+    TEST_CASE(
+      "regression - code sweep FU-MANAGEDDIR an export builds the scripts project the editor's script.create writes "
+      "[dotnet][slow]" * doctest::timeout(3.0 * DOTNET_SUBCASE_SECONDS)
+    ) {
+        // script.create writes scripts/Game.csproj and the script from the templates of the editor's
+        // commands_script.cpp; the case reads them from that source, so it builds what the editor writes today. The
+        // project file references Conjure.Managed.dll through ConjureManagedDir and stops the build without it,
+        // which every export of such a project did.
+        log_capture logs = {};
+        std::u8string projectFolder = u8"project";
+        std::u8string outputFolder = u8"out";
+        bool leftovers = false;
+        SUBCASE("a project only script.create has touched") {}
+        SUBCASE("a project whose bin/ and obj/ hold what a script.compile left") {
+            leftovers = true;
+        }
+        SUBCASE("a project and an output folder whose names hold spaces, separators, a '%' and a non-ASCII letter") {
+            // Every path the export hands to MSBuild (-o, --artifacts-path, ConjureManagedDir and the project
+            // directory the source roots file reads) reaches the real dotnet: one escaped too little splits a
+            // property (MSB1006 on the comma), one escaped twice lands the assemblies in a folder named "out%2C ...".
+            projectFolder = u8"projekt ä";
+            outputFolder = u8"out, 1;%ä";
+        }
+        temp_directory directory("engine_export_editor_scripts");
+        const std::filesystem::path bootstrap = stage_engine_managed(directory);
+        const std::string editorSource = file_text(
+          std::filesystem::path(CONJURE_ENGINE_TEST_SOURCE_DIR) / "engine" / "src" / "editor" / "core" / "commands"
+          / "commands_script.cpp"
+        );
+        const std::string csproj = string_constant(editorSource, "CSPROJ_TEMPLATE");
+        const std::string behaviour = string_constant(editorSource, "BEHAVIOUR_TEMPLATE");
+        REQUIRE_MESSAGE(!csproj.empty(), "CSPROJ_TEMPLATE is no longer a constant of adjacent string literals");
+        REQUIRE_MESSAGE(!behaviour.empty(), "BEHAVIOUR_TEMPLATE is no longer a constant of adjacent string literals");
+        // What script.create writes for {"name": "Mover"}: its default namespace is Game.
+        const std::string mover = core::str::replace_all(
+          core::str::replace_all(behaviour, "{NAMESPACE}", "Game"),
+          "{NAME}",
+          "Mover"
+        );
+        const std::filesystem::path projectDir = directory.path() / projectFolder;
+        write_file(projectDir / "scripts" / "Game.csproj", csproj);
+        write_file(projectDir / "scripts" / "Mover.cs", mover);
+        if (leftovers) {
+            // The project file compiles every .cs below it except bin/ and obj/, where the editor's own builds write
+            // and where the export's intermediates go (obj/conjure_export): none of this may reach the compiler.
+            write_file(projectDir / "scripts" / "obj" / "Debug" / "Game.AssemblyInfo.cs", "not C#");
+            write_file(projectDir / "scripts" / "bin" / "Debug" / "Stale.cs", "not C#");
+        }
+
+        const project loaded = engine_test::write_project(projectDir, "editor_scripts");
+        write_file(projectDir / "assets" / "data" / "notes.bytes", "x");
+        const std::filesystem::path outputDir = directory.path() / outputFolder;
+        const core::result<export_report> ran =
+          export_managed(loaded, false, bootstrap, projectDir / "scripts" / "Game.csproj", outputDir);
+        REQUIRE_MESSAGE(ran.has_value(), ran.get_error().to_string());
+        CHECK(ran.value().managedPublished);
+
+        // The scripts compiled against the Conjure.Managed the publish wrote beside them.
+        const std::filesystem::path managed = outputDir / "managed";
+        REQUIRE(std::filesystem::is_regular_file(managed / "Conjure.Managed.dll"));
+        REQUIRE(std::filesystem::is_regular_file(managed / "Game.dll"));
+        const std::string game = file_text(managed / "Game.dll");
+        CHECK(game.find("Mover") != std::string::npos);
+        CHECK(game.find("Conjure.Managed") != std::string::npos);
+    }
+#endif
 
     TEST_CASE("export_pipeline - a cooked project cannot be exported again") {
         log_capture logs = {};

@@ -19,7 +19,7 @@ kind: header
 |---|---|
 | [`build_diagnostic`](managed-build/build-diagnostic.md) | One <code>path(line,col): error\|warning CSxxxx: message</code> line of the build output. |
 | [`build_report`](managed-build/build-report.md) |  |
-| [`build_request`](managed-build/build-request.md) | Everything a build needs. |
+| [`build_request`](managed-build/build-request.md) | Everything a build needs. Property values are UTF-8 and literal: <code>command_line</code> escapes them with <code>msbuild_escape()</code>, so a path holding &#x27;%&#x27;, &#x27;;&#x27;, &#x27;,&#x27; or &#x27;&quot;&#x27; reaches MSBuild as itself. |
 | [`managed_build_runner::shared_state`](managed-build/managed-build-runner-shared-state.md) |  |
 
 ## Classes
@@ -27,6 +27,17 @@ kind: header
 | File | Description |
 |---|---|
 | [`managed_build_runner`](managed-build/managed-build-runner.md) |  |
+
+## Functions
+
+### Public
+
+#### `msbuild_escape` {#function-msbuild-escape}
+
+<div class="function-declaration" id="function-msbuild-escape-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string msbuild_escape(
+    std::string_view value);</code></pre></div>
+
+<p><code>value</code> with the characters MSBuild treats specially in a command-line property value written as the %XX escapes MSBuild decodes: &#x27;%&#x27; (which starts an escape itself), &#x27;;&#x27; and &#x27;,&#x27; (which separate properties) and &#x27;&quot;&#x27; (which quotes). dotnet hands -o to MSBuild as a property too. Every other <code><a href="../core/types.html#symbol-byte">byte</a></code>, UTF-8 included, is kept.</p>
 
 <!-- doc-content:notes:start -->
 
@@ -75,7 +86,6 @@ kind: header
 <a id="dependencies"></a>
 <a id="direct-header-dependencies"></a>
 <a id="extension-points"></a>
-<a id="functions"></a>
 <a id="internals-and-algorithms"></a>
 <a id="managed_build_runner"></a>
 <a id="managed_build_runnerbuild"></a>

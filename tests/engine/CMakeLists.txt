@@ -99,5 +99,62 @@ if(CONJURE_IS_MULTI_CONFIG)
     target_compile_definitions(conjure_engine_tests PRIVATE CONJURE_TEST_MULTI_CONFIG=1)
 endif()
 
+# The [dotnet][slow] export cases of test_export.cpp run export step 3 with the real dotnet over copies of the
+# engine's managed projects. One (follow-up FU-PDB) exports the game template and checks the managed assemblies with
+# tools/check_distribution_paths.py, outside git and, with git, in a repository with a commit; the other (follow-up
+# FU-MANAGEDDIR) exports the scripts project the editor's script.create writes, read from the templates in its
+# source. They are compiled only where the build has a .NET SDK (the managed SDK target), so no build registers an
+# entry that could only skip; without Python the FU-PDB case checks the assemblies' own bytes and says that the .pdb
+# documents went unchecked, and without git it says that the repository SUBCASE went unchecked.
+if(TARGET conjure::scripting AND TARGET conjure_managed_sdk)
+    if(NetHost_DOTNET_EXECUTABLE)
+        set(engineTestDotnet "${NetHost_DOTNET_EXECUTABLE}")
+    elseif(CONJURE_DOTNET_EXECUTABLE)
+        set(engineTestDotnet "${CONJURE_DOTNET_EXECUTABLE}")
+    else()
+        set(engineTestDotnet "dotnet")
+    endif()
+    # Normalised to '/' so that a Windows path is no string of escape sequences in the C++ literal.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    set(engineTestPython "")
+    if(Python3_Interpreter_FOUND)
+        set(engineTestPython "$<PATH:CMAKE_PATH,NORMALIZE,${Python3_EXECUTABLE}>")
+    endif()
+    find_package(Git QUIET)
+    set(engineTestGit "")
+    if(GIT_EXECUTABLE)
+        set(engineTestGit "$<PATH:CMAKE_PATH,NORMALIZE,${GIT_EXECUTABLE}>")
+    endif()
+    target_compile_definitions(conjure_engine_tests PRIVATE
+        CONJURE_ENGINE_TEST_HAS_DOTNET=1
+        CONJURE_ENGINE_TEST_DOTNET="$<PATH:CMAKE_PATH,NORMALIZE,${engineTestDotnet}>"
+        CONJURE_ENGINE_TEST_PYTHON="${engineTestPython}"
+        CONJURE_ENGINE_TEST_GIT="${engineTestGit}"
+        CONJURE_ENGINE_TEST_SOURCE_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${PROJECT_SOURCE_DIR}>"
+        CONJURE_ENGINE_TEST_BINARY_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${PROJECT_BINARY_DIR}>"
+    )
+else()
+    target_compile_definitions(conjure_engine_tests PRIVATE CONJURE_ENGINE_TEST_HAS_DOTNET=0)
+endif()
+
+# The [slow] cases take a minute: label them so the default presets, which exclude "slow", skip them and the nightly
+# presets run them. The [dotnet] exports spawn dotnet and get 3120 s instead of the module's 300: the doctest timeout
+# of the largest of them (three SUBCASEs of DOTNET_SUBCASE_SECONDS in test_export.cpp, 3060 s) and a minute more, so
+# that a hung command fails the case naming it before CTest kills the process. doctest's discovery already
+# registered every case; the side file adds the labels to the cases whose name carries the tag.
+set(engineTagLabelsFile "${CMAKE_CURRENT_BINARY_DIR}/conjure_engine_tests_tag_labels.cmake")
+file(WRITE "${engineTagLabelsFile}"
+    "if(DEFINED conjure_engine_tests_TESTS)\n"
+    "    foreach(entry IN LISTS conjure_engine_tests_TESTS)\n"
+    "        if(entry MATCHES \"\\\\[dotnet\\\\]\\\\[slow\\\\]\")\n"
+    "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;engine;dotnet;slow\" TIMEOUT 3120)\n"
+    "        elseif(entry MATCHES \"\\\\[slow\\\\]\")\n"
+    "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;engine;slow\")\n"
+    "        endif()\n"
+    "    endforeach()\n"
+    "endif()\n"
+)
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${engineTagLabelsFile}")
+
 # Every public header of the module must compile on its own (build-only check, part of ALL).
 conjure_header_check(conjure_engine)

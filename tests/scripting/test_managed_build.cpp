@@ -266,6 +266,38 @@ TEST_SUITE("scripting/managed_build") {
         CHECK(desc.arguments[5].starts_with(folderUtf8));
     }
 
+    TEST_CASE("msbuild_escape - escapes the characters MSBuild splits on or decodes and keeps every other byte") {
+        CHECK(msbuild_escape("") == "");
+        CHECK(msbuild_escape("C:/plain path/bin") == "C:/plain path/bin");
+        CHECK(msbuild_escape("a%b;c,d\"e") == "a%25b%3Bc%2Cd%22e");
+        // An escape already in the text is escaped again: the value is literal, never pre-escaped.
+        CHECK(msbuild_escape("%3B") == "%253B");
+        // "Jörg" as UTF-8 bytes passes unchanged.
+        CHECK(msbuild_escape("J\xC3\xB6rg") == "J\xC3\xB6rg");
+    }
+
+    TEST_CASE("regression - follow-up FU-MANAGEDDIR command_line escapes the output directory and property values") {
+        // Unescaped, MSBuild split a ',' or ';' in -o or a -p: value into further properties (MSB1006) and decoded a
+        // '%' followed by two hex digits; the editor's script.compile passes the managed directory as a property.
+        const std::string_view folderUtf8 = "out, 1;%J\xC3\xB6rg";
+        const std::u8string folder(folderUtf8.begin(), folderUtf8.end());
+        build_request request = {};
+        request.projectPath = "Game/Game.csproj";
+        request.configuration = "Debug";
+        request.outputDirectory = std::filesystem::path(folder) / "bin";
+        request.properties = {{"ConjureManagedDir", std::string(folderUtf8) + "/managed"}};
+        const core::process_desc desc = managed_build_runner::command_line(request, "dotnet");
+
+        const std::string escapedFolder = "out%2C 1%3B%25J\xC3\xB6rg";
+        const std::u8string outputUtf8 = request.outputDirectory.u8string();
+        const std::string output(outputUtf8.begin(), outputUtf8.end());
+        REQUIRE(desc.arguments.size() >= 6);
+        CHECK(desc.arguments[4] == "-o");
+        CHECK(desc.arguments[5] == msbuild_escape(output));
+        CHECK(desc.arguments[5].starts_with(escapedFolder));
+        CHECK(desc.arguments.back() == "-p:ConjureManagedDir=" + escapedFolder + "/managed");
+    }
+
     TEST_CASE("regression - code sweep F778 global.json pins the .NET SDK major the managed projects target") {
         // Without a global.json every dotnet build ran the newest SDK installed, so a machine with a newer SDK
         // than CI built (and judged warnings, which are errors here) differently. The pin, the projects' target

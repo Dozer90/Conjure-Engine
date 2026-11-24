@@ -153,6 +153,16 @@ if(TARGET conjure_managed_sdk AND TARGET conjure_managed_test_scripts_v1)
         CONJURE_EDITOR_TEST_MANAGED_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_SDK_DIR}>"
         CONJURE_EDITOR_TEST_SCRIPTS_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_MANAGED_TEST_SCRIPTS_DIR}>"
     )
+    # The [dotnet][slow] project.export case (follow-up FU-PDB) exports tests/assets/projects/scripted with the runtime
+    # of this tree and runs the exported runtime.
+    if(TARGET conjure_runtime)
+        add_dependencies(conjure_editor_tests conjure_runtime)
+        set(editorScriptedProject "${PROJECT_SOURCE_DIR}/tests/assets/projects/scripted")
+        target_compile_definitions(conjure_editor_tests PRIVATE
+            CONJURE_EDITOR_TEST_RUNTIME_EXECUTABLE="$<TARGET_FILE:conjure_runtime>"
+            CONJURE_EDITOR_TEST_SCRIPTED_PROJECT="$<PATH:CMAKE_PATH,NORMALIZE,${editorScriptedProject}>"
+        )
+    endif()
 else()
     target_compile_definitions(conjure_editor_tests PRIVATE CONJURE_EDITOR_TEST_HAS_DOTNET=0)
 endif()
@@ -167,12 +177,16 @@ endif()
 # The process cases spawn conjure_editor and the [slow] cases take seconds each (docs/handbook/testing.md):
 # label them so the default presets (which exclude "process" and "slow") skip them; CI's label step runs the
 # process cases and the nightly presets run both. doctest's discovery already registered every case; the side
-# file adds the label to the cases whose name carries the [process] or [slow] tag.
+# file adds the label to the cases whose name carries the [process] or [slow] tag. A [dotnet][slow] case runs a real
+# dotnet publish, minutes on a cold machine: it gets 1860 s instead of the module's 300, a minute more than its doctest
+# timeout, so that a hung command fails the case naming it before CTest kills the process.
 set(tagLabelsFile "${CMAKE_CURRENT_BINARY_DIR}/conjure_editor_tests_tag_labels.cmake")
 file(WRITE "${tagLabelsFile}"
     "if(DEFINED conjure_editor_tests_TESTS)\n"
     "    foreach(entry IN LISTS conjure_editor_tests_TESTS)\n"
-    "        if(entry MATCHES \"\\\\[process\\\\]\")\n"
+    "        if(entry MATCHES \"\\\\[dotnet\\\\]\\\\[slow\\\\]\")\n"
+    "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;editor;dotnet;slow\" TIMEOUT 1860)\n"
+    "        elseif(entry MATCHES \"\\\\[process\\\\]\")\n"
     "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;editor;process\")\n"
     "        elseif(entry MATCHES \"\\\\[slow\\\\]\")\n"
     "            set_tests_properties(\"\${entry}\" PROPERTIES LABELS \"unit;editor;slow\")\n"

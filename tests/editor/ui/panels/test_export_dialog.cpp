@@ -20,6 +20,19 @@ using namespace conjure;
 using namespace conjure::editor;
 using namespace conjure::editor::ui;
 
+namespace {
+    /// <summary>
+    /// The editor of the cases that export for real. Its project disables scripting: a project that enables it
+    /// gets its managed code published (follow-up FU-PDB), which needs the dotnet the fixture leaves out, and these
+    /// cases test the dialog, not the export.
+    /// </summary>
+    [[nodiscard]] editor_test::headless_editor_options exporting_editor() {
+        editor_test::headless_editor_options options = {};
+        options.extraProjectJson = R"("scripting": {"enabled": false})";
+        return options;
+    }
+}
+
 TEST_SUITE("editor/ui/panels/export_dialog") {
 
     TEST_CASE("export_dialog - constructs closed and idle") {
@@ -31,7 +44,7 @@ TEST_SUITE("editor/ui/panels/export_dialog") {
     }
 
     TEST_CASE("export_dialog - start_export runs project.export and reports the result") {
-        editor_test::headless_editor editor = {};
+        editor_test::headless_editor editor(exporting_editor());
         (void) editor.create_entity("exported");
         (void) editor.ok("scene.save");
         export_dialog dialog = {};
@@ -53,7 +66,7 @@ TEST_SUITE("editor/ui/panels/export_dialog") {
     }
 
     TEST_CASE("regression - an export dialog destroyed before its update releases its event client and response sink") {
-        editor_test::headless_editor editor = {};
+        editor_test::headless_editor editor(exporting_editor());
         (void) editor.create_entity("exported");
         (void) editor.ok("scene.save");
         const usize clientsBefore = editor.context().events().client_count();

@@ -7,6 +7,7 @@
 
 #include "conjure/core/dynamic_library.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/process.h"
 #include "conjure/editor/editor_application.h"
 #include "conjure/editor/editor_options.h"
 #include "conjure/editor/play_controller.h"
@@ -366,6 +367,109 @@ TEST_SUITE("editor/commands_scene_project") {
         CHECK(runtime.stem().generic_string() == "conjure_runtime");
         CHECK(std::filesystem::is_regular_file(runtime));
     }
+
+    TEST_CASE("regression - follow-up FU-PDB project.export publishes managed code by default for a project that "
+      "enables scripting") {
+        // project.export named no bootstrap project, so step 3 only warned and no export made through the editor
+        // shipped managed code; a headless editor, which runs the null host, did not even ask for it. The exported
+        // runtime of such a project starts the .NET host and found no managed directory. The fixture's project
+        // leaves scripting at its default (enabled) and its dotnet does not exist: an export that runs step 3 fails
+        // there, naming that dotnet, before it writes project.json.
+        editor_test::headless_editor editor = {};
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = editor.project_directory() / "exported";
+        const protocol_response response = editor.send(
+          "project.export",
+          core::json::object({{"directory", output.generic_string()}, {"copyRuntime", false}})
+        );
+        REQUIRE_FALSE(response.ok);
+        CHECK(response.errorMessage.find("publish_managed") != std::string::npos);
+        CHECK(response.errorMessage.find(editor_test::missing_dotnet_executable()) != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(output / "project.json"));
+    }
+
+    TEST_CASE("regression - follow-up FU-PDB project.export publishes no managed code for a project without scripting "
+      "or when told not to") {
+        editor_test::headless_editor_options options = {};
+        core::json::document args = core::json::object({{"copyRuntime", false}});
+        SUBCASE("the project disables scripting") {
+            options.extraProjectJson = R"("scripting": {"enabled": false})";
+        }
+        SUBCASE("publishManaged is false") {
+            args.set("publishManaged", false);
+        }
+        editor_test::headless_editor editor(options);
+        (void) editor.ok("scene.save");
+        const std::filesystem::path output = editor.project_directory() / "exported";
+        args.set("directory", output.generic_string());
+        const core::json::document result = editor.ok("project.export", std::move(args));
+        CHECK(std::filesystem::is_regular_file(output / "project.json"));
+        CHECK_FALSE(std::filesystem::exists(output / "managed"));
+        CHECK(result.root()["warnings"].size() == 0);
+    }
+
+#if CONJURE_EDITOR_TEST_HAS_DOTNET && defined(CONJURE_EDITOR_TEST_RUNTIME_EXECUTABLE)
+    TEST_CASE("regression - follow-up FU-PDB project.export of a scripted project ships managed code that the exported "
+      "runtime runs [dotnet][slow]" * doctest::timeout(1800.0)) {
+        // tests/assets/projects/scripted (the project the nightly exports) holds scripts/Game.csproj as
+        // script.create writes it and a startup scene whose one entity carries Game.ExportProbe, which logs a line
+        // when it is created. The editor exports a copy with the real dotnet and the runtime of this tree; the
+        // exported runtime, started headless with scripting, runs the script from the assemblies the export shipped.
+        REQUIRE_MESSAGE(editor_test::dotnet_available(), "no dotnet answers --version: the [dotnet] case cannot run");
+        testing::temp_directory directory = {};
+        const std::filesystem::path project = directory.path() / "scripted";
+        std::error_code copyError = {};
+        std::filesystem::copy(
+          std::filesystem::path(CONJURE_EDITOR_TEST_SCRIPTED_PROJECT),
+          project,
+          std::filesystem::copy_options::recursive,
+          copyError
+        );
+        REQUIRE_MESSAGE(!copyError, "copying the scripted project: " << copyError.message());
+
+        editor_test::headless_editor editor = {};
+        editor.context().set_dotnet_executable("dotnet");
+        editor.trust_project(project);
+        (void) editor.ok("project.open", core::json::object({{"path", project.generic_string()}}));
+        // The engine restarts into the project between frames.
+        editor.pump(1);
+        REQUIRE_FALSE(editor.application().has_pending_project_open());
+        REQUIRE(editor.context().project()->root_directory() == project);
+        const std::filesystem::path runtime(CONJURE_EDITOR_TEST_RUNTIME_EXECUTABLE);
+        const std::filesystem::path output = directory.path() / "exported";
+        const core::json::document result = editor.ok(
+          "project.export",
+          core::json::object({
+            {"directory", output.generic_string()},
+            {"distributionDirectory", runtime.parent_path().generic_string()},
+          })
+        );
+        CAPTURE(result.to_string());
+        for (const std::string_view name : {"Conjure.Bootstrap.dll", "Conjure.Managed.dll", "Game.dll"}) {
+            CAPTURE(name);
+            REQUIRE(std::filesystem::is_regular_file(output / "managed" / std::filesystem::path(name)));
+        }
+        REQUIRE(result.root()["runtimePath"].is_string());
+
+        const std::filesystem::path logFile = directory.path() / "runtime.log";
+        core::process_desc run = {};
+        run.executable = std::string(result.root()["runtimePath"].as_string());
+        run.arguments = {
+            "--project", output.generic_string(), "--headless", "--scripting", "--frames", "10",
+            "--log-level", "info", "--log-file", logFile.generic_string(),
+        };
+        run.captureStdout = true;
+        run.captureStderr = true;
+        run.mergeStderr = true;
+        run.timeoutSeconds = 120.0;
+        const core::result<core::process_result> ran = core::process::run(run);
+        REQUIRE_MESSAGE(ran.has_value(), testing::describe_error(ran));
+        CHECK_FALSE(ran.value().timedOut);
+        CHECK_MESSAGE(ran.value().exitCode == 0, ran.value().standardOutput);
+        const std::string log = editor_test::read_text_file(logFile);
+        CHECK_MESSAGE(log.find("ExportProbe ran in the exported game") != std::string::npos, log);
+    }
+#endif
 
     TEST_CASE("regression - F029 project.export without a distribution directory warns that the runtime was not "
       "copied") {

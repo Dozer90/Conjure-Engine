@@ -28,7 +28,10 @@
 #   runtime.distribution_symbols      tools/check_distribution_symbols.py over the Distribution conjure_runtime
 #                                     and conjure_shared
 #   runtime.distribution_paths        tools/check_distribution_paths.py over the same two binaries: neither names
-#                                     the source or build directory of the tree (code sweep F613)
+#                                     the source or build directory of the tree, nor Conjure's own when a parent
+#                                     project adds Conjure from outside them (code sweep F613, follow-up FU-ROOTS);
+#                                     the nightly distribution-export job checks its Distribution tree through
+#                                     this entry alone (follow-up FU-NIGHTLY)
 #
 # Every case spawns the executable, so the module carries the label "process" (08_testing.md 6.3 item 8,
 # docs/handbook/development/continuous-integration.md): the default test presets skip it and CI runs it explicitly

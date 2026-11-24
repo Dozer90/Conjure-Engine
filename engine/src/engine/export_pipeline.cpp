@@ -17,6 +17,7 @@
 #include "conjure/core/log.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/process.h"
+#include "conjure/core/uuid.h"
 #include "conjure/core/vfs/native_file_system.h"
 #include "conjure/modules/module_abi.h"
 #include "conjure/modules/module_manager.h"
@@ -25,9 +26,11 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -74,14 +77,16 @@ namespace {
     }
 
     /// <summary>
-    /// Runs a tool and turns a non-zero exit (or a timeout) into EXPORT_FAILED carrying its output.
+    /// Runs a tool, with 'environment' added to the inherited one, and turns a non-zero exit (or a timeout) into
+    /// EXPORT_FAILED carrying its output.
     /// </summary>
     [[nodiscard]] core::result<void> run_tool(
       std::string_view step,
       std::string executable,
       std::vector<std::string> arguments,
       const std::filesystem::path &workingDirectory,
-      f64 timeoutSeconds
+      f64 timeoutSeconds,
+      std::vector<std::pair<std::string, std::string>> environment
     ) {
         core::process_desc desc = {};
         desc.executable = std::move(executable);
@@ -89,6 +94,7 @@ namespace {
         desc.workingDirectory = workingDirectory;
         desc.timeoutSeconds = timeoutSeconds;
         desc.mergeStderr = true;
+        desc.environment = std::move(environment);
         core::result<core::process_result> ran = core::process::run(desc);
         if (!ran.has_value()) {
             return export_error(
@@ -473,7 +479,8 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
                   settings.cmakeExecutable,
                   {"--build", "--preset", preset, "--config", "Distribution"},
                   loaded->root_directory(),
-                  settings.processTimeoutSeconds
+                  settings.processTimeoutSeconds,
+                  {}
                 ));
                 report.nativeModuleBuilt = true;
             }
@@ -541,15 +548,47 @@ core::result<export_report> export_pipeline::run(const export_settings &settings
             );
         } else {
             const std::filesystem::path managed = output / MANAGED_DIRECTORY;
+            // The source roots file both commands import (follow-up FU-PDB) lives in a directory of its own below
+            // the system's temporary directory, outside the output that ships and outside every project. It is
+            // written anew by every export, which also makes MSBuild compile again instead of reusing assemblies an
+            // export without the mapping left in the same intermediates. 'staging' removes it when the step ends,
+            // whether it succeeded or failed; a removal that fails leaves it there with a warning.
+            std::error_code temporaryError = {};
+            std::filesystem::path temporary = std::filesystem::temp_directory_path(temporaryError);
+            // TMPDIR may be relative on POSIX, and managed_export_commands needs an absolute import: MSBuild would
+            // resolve a relative one against each project's directory and silently import nothing.
+            if (!temporaryError) {
+                temporary = std::filesystem::absolute(temporary, temporaryError);
+            }
+            if (temporaryError) {
+                return export_error(
+                  STEP_NAMES[2],
+                  std::format("finding the temporary directory: {}", temporaryError.message())
+                );
+            }
+            core::result<managed_export_staging> staged =
+              managed_export_staging::create(temporary / std::format("conjure_export_{}", core::uuid::generate()));
+            if (!staged.has_value()) {
+                return export_error(STEP_NAMES[2], staged.get_error());
+            }
+            const managed_export_staging staging = std::move(staged).value();
+            // As UTF-8: generic_string() would give the ANSI code page on Windows.
+            const std::u8string stagingText = staging.directory().generic_u8string();
+            CONJURE_LOG_INFO(
+              LOG_ENGINE,
+              "export: MSBuild staging directory '{}' (removed when the step ends)",
+              std::string(stagingText.begin(), stagingText.end())
+            );
             std::vector<std::vector<std::string>> commands =
-              managed_export_commands(settings, config.scripting, managed);
+              managed_export_commands(settings, config.scripting, managed, staging.source_roots_targets());
             for (std::vector<std::string> &arguments : commands) {
                 CONJURE_TRY(run_tool(
                   STEP_NAMES[2],
                   settings.dotnetExecutable,
                   std::move(arguments),
                   loaded->root_directory(),
-                  settings.processTimeoutSeconds
+                  settings.processTimeoutSeconds,
+                  managed_export_environment()
                 ));
             }
             report.managedPublished = true;

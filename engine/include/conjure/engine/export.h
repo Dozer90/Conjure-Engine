@@ -63,7 +63,8 @@ namespace conjure::engine {
         bool publishManaged = true;                             // step 3 (skipped when scripting is disabled)
         std::string dotnetExecutable = "dotnet";
         std::filesystem::path bootstrapProject = {};            // managed/Conjure.Bootstrap/Conjure.Bootstrap.csproj
-        std::filesystem::path scriptsProject = {};              // <project>/Scripts/*.csproj; empty = no game scripts
+        // <project>/scripts/Game.csproj as script.create writes it; empty = no game scripts.
+        std::filesystem::path scriptsProject = {};
         std::string runtimeIdentifier = {};                     // dotnet -r; empty = the host's
         bool copyRuntime = true;                                // step 5
         bool copyShaders = true;

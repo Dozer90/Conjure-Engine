@@ -419,7 +419,9 @@ TEST_SUITE("editor/editor_process") {
         testing::temp_directory directory = {};
         const std::filesystem::path project = directory.path() / "project";
         const std::filesystem::path workingDirectory = directory.path() / "started_here";
-        write_project(project);
+        // Without scripting: a project that enables it gets its managed code published (follow-up FU-PDB), which
+        // runs dotnet, and this case is about where the export lands.
+        editor_test::write_project(project, "process_test", R"("scripting": {"enabled": false})");
         std::filesystem::create_directories(workingDirectory);
         // project.export reads a relative directory against the project root; a path typed on a command line is
         // relative to where the command was typed, and --export must keep meaning that.

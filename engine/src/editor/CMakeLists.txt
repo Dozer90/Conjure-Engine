@@ -169,6 +169,15 @@ conjure_add_module(editor_core
     PRIVATE_DEFINES
         ${CONJURE_EDITOR_CORE_PRIVATE_DEFINES}
 )
+# project.export publishes Conjure.Bootstrap from the engine's own sources (follow-up FU-PDB): an editor run from a
+# build tree finds the project where this configure found it. Without scripting the definition is absent and an
+# export that asks for managed code is refused (commands_project.cpp).
+if(CONJURE_WITH_SCRIPTING AND TARGET conjure::scripting)
+    set(editorBootstrapProject "${PROJECT_SOURCE_DIR}/managed/Conjure.Bootstrap/Conjure.Bootstrap.csproj")
+    target_compile_definitions(conjure_editor_core PRIVATE
+        CONJURE_EDITOR_BOOTSTRAP_PROJECT="$<PATH:CMAKE_PATH,NORMALIZE,${editorBootstrapProject}>"
+    )
+endif()
 
 #------------------------------------------------------------------------------
 # conjure_editor_ui

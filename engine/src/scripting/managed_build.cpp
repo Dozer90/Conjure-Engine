@@ -87,6 +87,41 @@ namespace {
 
 /*===========================================================================*/
 /*===========================================================================*/
+// Free functions
+
+std::string conjure::scripting::msbuild_escape(std::string_view value) {
+    std::string escaped = {};
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        switch (character) {
+            case '%': {
+                escaped += "%25";
+                break;
+            }
+            case ';': {
+                escaped += "%3B";
+                break;
+            }
+            case ',': {
+                escaped += "%2C";
+                break;
+            }
+            case '"': {
+                escaped += "%22";
+                break;
+            }
+            default: {
+                escaped += character;
+                break;
+            }
+        }
+    }
+    return escaped;
+}
+
+
+/*===========================================================================*/
+/*===========================================================================*/
 // build_report
 
 u32 build_report::error_count() const noexcept {
@@ -199,7 +234,7 @@ core::process_desc managed_build_runner::command_line(const build_request &reque
     desc.arguments = {"build", detail::path_to_utf8(request.projectPath), "-c", request.configuration};
     if (!request.outputDirectory.empty()) {
         desc.arguments.push_back("-o");
-        desc.arguments.push_back(detail::path_to_utf8(request.outputDirectory));
+        desc.arguments.push_back(msbuild_escape(detail::path_to_utf8(request.outputDirectory)));
     }
     desc.arguments.push_back("--nologo");
     desc.arguments.push_back("-clp:NoSummary");
@@ -207,7 +242,7 @@ core::process_desc managed_build_runner::command_line(const build_request &reque
     // the .pdb to /_/, and the user must be able to step through the scripts this builds. Only an export passes it
     // (engine/src/engine/export_commands.cpp), into intermediates of its own.
     for (const auto &[name, value] : request.properties) {
-        desc.arguments.push_back("-p:" + name + "=" + value);
+        desc.arguments.push_back("-p:" + name + "=" + msbuild_escape(value));
     }
     desc.captureStdout = true;
     desc.captureStderr = true;

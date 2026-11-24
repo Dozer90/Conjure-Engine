@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "scripted",
+  "version": "0.1.0",
+  "assets_root": "assets",
+  "startup_scene": "scenes/main.scene.json",
+  "scripting": {
+    "enabled": true,
+    "assembly": "managed/Game.dll"
+  }
+}
