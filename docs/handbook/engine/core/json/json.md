@@ -23,11 +23,17 @@ kind: header
 
 <p>Parses strict JSON text into a new document. Same as <code>document::parse()</code>.</p>
 
+#### `json::to_canonical_string` {#function-json-to-canonical-string}
+
+<div class="function-declaration" id="function-json-to-canonical-string-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string to_canonical_string(<span class="k">const</span> <a href="value/json-value.html">value</a> &amp;source);</code></pre></div>
+
+<p>Serialises one value (any node of a document) in canonical form: object members sorted by key (<code><a href="../types.html#symbol-byte">byte</a></code> order) at every depth, minified, shortest round-trip reals. The same text <code>document::to_canonical_string()</code> gives for a root, and identical on every platform for the same content. Returns an empty string for an invalid value, and an empty string (with a logged warning) when a string in the value holds invalid UTF-8 or memory runs out.</p>
+
 #### `json::to_string` {#function-json-to-string}
 
-<div class="function-declaration" id="function-json-to-string-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string to_string(<span class="k">const</span> <a href="value/json-value.html">value</a> &amp;source, <span class="k">bool</span> canonical = false);</code></pre></div>
+<div class="function-declaration" id="function-json-to-string-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string to_string(<span class="k">const</span> <a href="value/json-value.html">value</a> &amp;source);</code></pre></div>
 
-<p>Serialises one value (any node of a document). Canonical output sorts object members by key; both forms are minified. An invalid value yields an empty string.</p>
+<p>Serialises one value (any node of a document) minified, with object members in their stored order; the same text <code>document::to_string()</code> gives for a root. Returns an empty string for an invalid value, and an empty string (with a logged warning) when a string in the value holds invalid UTF-8. Use <code>to_canonical_string()</code> for text that is hashed or compared.</p>
 
 <!-- doc-content:notes:start -->
 

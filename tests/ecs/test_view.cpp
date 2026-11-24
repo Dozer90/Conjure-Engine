@@ -10,6 +10,7 @@
 #include "conjure/ecs/world.h"
 
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace conjure;
@@ -88,6 +89,133 @@ TEST_SUITE("ecs/view") {
         CHECK(players.changed<position>(0).entity_count() == 1);
         CHECK(players.underlying().desc().with.test(fixture.id<player_tag>()));
         CHECK(players.underlying().desc().without.test(fixture.id<frozen_tag>()));
+    }
+
+    TEST_CASE("view - builders narrow a named view in place as statements") {
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag, frozen_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+
+        view<const position> players = world.view<const position>();
+        REQUIRE(players.entity_count() == 3);
+
+        SUBCASE("with") {
+            players.with<player_tag>();
+            CHECK(players.entity_count() == 2);
+            CHECK(players.underlying().desc().with.test(fixture.id<player_tag>()));
+            CHECK(&players.with<frozen_tag>() == &players);
+            CHECK(players.entity_count() == 1);
+        }
+        SUBCASE("without") {
+            players.without<frozen_tag>();
+            CHECK(players.entity_count() == 2);
+            CHECK(players.underlying().desc().without.test(fixture.id<frozen_tag>()));
+            CHECK(&players.without<player_tag>() == &players);
+            CHECK(players.entity_count() == 1);
+        }
+        SUBCASE("changed") {
+            players.changed<position>(world.version());
+            CHECK(players.entity_count() == 0);
+            CHECK(players.underlying().desc().changed.test(fixture.id<position>()));
+            CHECK(&players.changed<position>(0) == &players);
+            CHECK(players.underlying().desc().sinceVersion == 0);
+            CHECK(players.entity_count() == 3);
+        }
+        SUBCASE("an unregistered type makes the named view match nothing") {
+            testing::expect_assert guard = {};
+            players.without<unreflected_component>();
+            CHECK(guard.count() == 1 * ASSERTS_PER_VIOLATION);
+            CHECK_FALSE(players.is_valid());
+            CHECK(players.entity_count() == 0);
+            players.with<player_tag>();
+            CHECK(players.entity_count() == 0);
+            CHECK(guard.count() == 1 * ASSERTS_PER_VIOLATION);
+        }
+    }
+
+    TEST_CASE("view - builders on a temporary return the narrowed view by value") {
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag, frozen_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+
+        SUBCASE("with") {
+            // The chain is bound to a reference and used after the statement that built it ended: the result
+            // is a prvalue whose lifetime the reference extends.
+            auto &&refined = world.view<const position>().with<player_tag>();
+            static_assert(std::is_same_v<decltype(refined), view<const position> &&>);
+            CHECK(refined.is_valid());
+            CHECK(refined.entity_count() == 2);
+            CHECK(refined.underlying().desc().with.test(fixture.id<player_tag>()));
+        }
+        SUBCASE("without") {
+            auto &&refined = world.view<const position>().without<frozen_tag>();
+            static_assert(std::is_same_v<decltype(refined), view<const position> &&>);
+            CHECK(refined.entity_count() == 2);
+            CHECK(refined.underlying().desc().without.test(fixture.id<frozen_tag>()));
+        }
+        SUBCASE("changed") {
+            const u64 version = world.version();
+            auto &&refined = world.view<const position>().changed<position>(version);
+            static_assert(std::is_same_v<decltype(refined), view<const position> &&>);
+            CHECK(refined.entity_count() == 0);
+            CHECK(refined.underlying().desc().sinceVersion == version);
+        }
+        SUBCASE("a chain of all three keeps every refinement") {
+            view<const position> chained =
+              world.view<const position>().with<player_tag>().without<frozen_tag>().changed<position>(0);
+            CHECK(chained.entity_count() == 1);
+            const query_desc &desc = chained.underlying().desc();
+            CHECK(desc.with == fixture.mask<position, player_tag>());
+            CHECK(desc.without == fixture.mask<frozen_tag>());
+            CHECK(desc.changed == fixture.mask<position>());
+        }
+        SUBCASE("an unregistered type makes the returned view match nothing") {
+            testing::expect_assert guard = {};
+            view<const position> missing = world.view<const position>().with<unreflected_component>();
+            CHECK(guard.count() == 1 * ASSERTS_PER_VIOLATION);
+            CHECK_FALSE(missing.is_valid());
+            CHECK(missing.entity_count() == 0);
+        }
+    }
+
+    TEST_CASE("regression - code sweep F633 builders refine a named view as a statement") {
+        // with, without and changed were [[nodiscard]] view &, so 'enemies.without<T>();' on a named view was a
+        // build error under warnings as errors, and a refined temporary bound to a reference dangled. A named
+        // view now refines in place without [[nodiscard]]; a temporary returns the narrowed view by value.
+        using players_view = view<const position>;
+        constexpr bool NAMED_WITH_IS_REFERENCE =
+          std::is_same_v<decltype(std::declval<players_view &>().with<player_tag>()), players_view &>;
+        constexpr bool NAMED_WITHOUT_IS_REFERENCE =
+          std::is_same_v<decltype(std::declval<players_view &>().without<frozen_tag>()), players_view &>;
+        constexpr bool NAMED_CHANGED_IS_REFERENCE =
+          std::is_same_v<decltype(std::declval<players_view &>().changed<position>(0)), players_view &>;
+        constexpr bool TEMPORARY_WITH_IS_VALUE =
+          std::is_same_v<decltype(std::declval<players_view>().with<player_tag>()), players_view>;
+        constexpr bool TEMPORARY_WITHOUT_IS_VALUE =
+          std::is_same_v<decltype(std::declval<players_view>().without<frozen_tag>()), players_view>;
+        constexpr bool TEMPORARY_CHANGED_IS_VALUE =
+          std::is_same_v<decltype(std::declval<players_view>().changed<position>(0)), players_view>;
+        CHECK(NAMED_WITH_IS_REFERENCE);
+        CHECK(NAMED_WITHOUT_IS_REFERENCE);
+        CHECK(NAMED_CHANGED_IS_REFERENCE);
+        CHECK(TEMPORARY_WITH_IS_VALUE);
+        CHECK(TEMPORARY_WITHOUT_IS_VALUE);
+        CHECK(TEMPORARY_CHANGED_IS_VALUE);
+
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position, player_tag, frozen_tag>()));
+        CONJURE_REQUIRE_OK(world.create_entity(fixture.mask<position>()));
+        players_view players = world.view<const position>();
+        players.with<player_tag>();
+        players.without<frozen_tag>();
+        players.changed<position>(0);
+        CHECK(players.entity_count() == 1);
     }
 
     TEST_CASE("view - access masks derived from pack") {

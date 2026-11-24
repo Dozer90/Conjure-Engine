@@ -20,8 +20,20 @@ namespace conjure::core::json {
     [[nodiscard]] CONJURE_API result<document> parse(std::string_view text);
 
     /// <summary>
-    /// Serialises one value (any node of a document). Canonical output sorts object members by
-    /// key; both forms are minified. An invalid value yields an empty string.
+    /// Serialises one value (any node of a document) minified, with object members in their
+    /// stored order; the same text document::to_string() gives for a root. Returns an empty
+    /// string for an invalid value, and an empty string (with a logged warning) when a string
+    /// in the value holds invalid UTF-8. Use to_canonical_string() for text that is hashed or
+    /// compared.
     /// </summary>
-    [[nodiscard]] CONJURE_API std::string to_string(const value &source, bool canonical = false);
+    [[nodiscard]] CONJURE_API std::string to_string(const value &source);
+
+    /// <summary>
+    /// Serialises one value (any node of a document) in canonical form: object members sorted by
+    /// key (byte order) at every depth, minified, shortest round-trip reals. The same text
+    /// document::to_canonical_string() gives for a root, and identical on every platform for the
+    /// same content. Returns an empty string for an invalid value, and an empty string (with a
+    /// logged warning) when a string in the value holds invalid UTF-8 or memory runs out.
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string to_canonical_string(const value &source);
 }

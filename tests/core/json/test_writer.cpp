@@ -283,7 +283,7 @@ TEST_SUITE("core/writer") {
 
         const std::string written = out.finish();
         CHECK(written == doc.to_canonical_string());
-        CHECK(written == to_string(doc.root(), true));
+        CHECK(written == to_canonical_string(doc.root()));
         CHECK(written != doc.to_string());
 
         const result<document> reparsed = parse(written);

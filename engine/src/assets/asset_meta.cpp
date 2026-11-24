@@ -221,5 +221,5 @@ u64 conjure::assets::canonical_settings_hash(const core::json::value &settings) 
     if (!settings.is_valid()) {
         return detail::fnv1a64("{}");
     }
-    return detail::fnv1a64(core::json::to_string(settings, true));
+    return detail::fnv1a64(core::json::to_canonical_string(settings));
 }

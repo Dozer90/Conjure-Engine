@@ -1,5 +1,7 @@
 #include "conjure/testing/doctest.h"
 
+#include "conjure/testing/log_capture.h"
+
 #include "conjure/core/json/json.h"
 
 #include <array>
@@ -12,6 +14,10 @@ using namespace conjure::core;
 using namespace conjure::core::json;
 
 namespace {
+    // True while a json::to_string overload accepts a second, bool argument.
+    template <typename T>
+    concept callable_with_flag = requires(const T &item) { conjure::core::json::to_string(item, true); };
+
     document parse_or_fail(std::string_view text) {
         result<document> parsed = parse(text);
         const std::string failure = parsed.has_value() ? std::string() : parsed.get_error().to_string();
@@ -50,27 +56,102 @@ TEST_SUITE("core/json") {
         CHECK(badFree.get_error().generic_code() == error_code::PARSE_FAILURE);
     }
 
-    TEST_CASE("json - to_string serialises any node of a document") {
+    TEST_CASE("json - to_string serialises any node of a document in member order") {
         const document doc = parse_or_fail(R"({"outer":{"y":1,"x":[true,null,"s"]},"n":-2.5})");
         const value root = doc.root();
 
         CHECK(to_string(root) == R"({"outer":{"y":1,"x":[true,null,"s"]},"n":-2.5})");
-        CHECK(to_string(root, true) == R"({"n":-2.5,"outer":{"x":[true,null,"s"],"y":1}})");
+        CHECK(to_string(root) == doc.to_string());
         CHECK(to_string(root["outer"]) == R"({"y":1,"x":[true,null,"s"]})");
-        CHECK(to_string(root["outer"], true) == R"({"x":[true,null,"s"],"y":1})");
         CHECK(to_string(root["outer"]["x"]) == R"([true,null,"s"])");
         CHECK(to_string(root["outer"]["x"][2]) == R"("s")");
         CHECK(to_string(root["n"]) == "-2.5");
-        CHECK(to_string(root["outer"]["y"], true) == "1");
+        CHECK(to_string(root["outer"]["y"]) == "1");
     }
 
-    TEST_CASE("json - to_string of an invalid value is empty") {
+    TEST_CASE("json - to_canonical_string sorts the members of any node at every depth") {
+        const document doc = parse_or_fail(R"({"outer":{"y":1,"x":[{"b":2,"a":1},null,"s"]},"n":-2.5})");
+        const value root = doc.root();
+
+        CHECK(to_canonical_string(root) == R"({"n":-2.5,"outer":{"x":[{"a":1,"b":2},null,"s"],"y":1}})");
+        CHECK(to_canonical_string(root["outer"]) == R"({"x":[{"a":1,"b":2},null,"s"],"y":1})");
+        CHECK(to_canonical_string(root["outer"]["x"]) == R"([{"a":1,"b":2},null,"s"])");
+        CHECK(to_canonical_string(root["outer"]["x"][1]) == "null");
+        CHECK(to_canonical_string(root["outer"]["y"]) == "1");
+        CHECK(to_canonical_string(root["n"]) == "-2.5");
+    }
+
+    TEST_CASE("json - to_canonical_string of a root matches document::to_canonical_string") {
+        const std::array<std::string_view, 6> corpus = {
+            "null",
+            "[]",
+            "{}",
+            R"({"b":{"z":0.1,"a":[3,2,1]},"a":"x","é":true,"A":null})",
+            R"({"a":1,"a":2})",
+            "[1e21,-0.0,18446744073709551615,-9223372036854775808]",
+        };
+
+        for (const std::string_view text : corpus) {
+            CAPTURE(text);
+            const document doc = parse_or_fail(text);
+            CHECK(to_canonical_string(doc.root()) == doc.to_canonical_string());
+            CHECK(to_string(doc.root()) == doc.to_string());
+        }
+    }
+
+    TEST_CASE("json - to_string and to_canonical_string of an invalid value are empty") {
         const document doc = parse_or_fail("{}");
 
-        CHECK(to_string(value()).empty());
-        CHECK(to_string(value(), true).empty());
-        CHECK(to_string(doc.root()["missing"]).empty());
-        CHECK(to_string(doc.root()["missing"], true).empty());
+        SUBCASE("a default value") {
+            CHECK(to_string(value()).empty());
+            CHECK(to_canonical_string(value()).empty());
+        }
+        SUBCASE("a missing member") {
+            CHECK(to_string(doc.root()["missing"]).empty());
+            CHECK(to_canonical_string(doc.root()["missing"]).empty());
+        }
+        SUBCASE("an index into an object") {
+            CHECK(to_string(doc.root()[0]).empty());
+            CHECK(to_canonical_string(doc.root()[0]).empty());
+        }
+    }
+
+    TEST_CASE("json - to_string and to_canonical_string of a node holding invalid UTF-8 are empty") {
+        document doc = document::object();
+        doc.set("inner", object({{"bad", "\xFF\xFE"}}));
+        const std::array<std::pair<std::string_view, std::string (*)(const value &)>, 2> writers = {{
+          {"to_string", &json::to_string},
+          {"to_canonical_string", &json::to_canonical_string},
+        }};
+        const std::array<std::pair<std::string_view, value>, 2> nodes = {{
+          {"the object", doc.root()["inner"]},
+          {"the string", doc.root()["inner"]["bad"]},
+        }};
+        testing::log_capture logs = {};
+
+        // Each refusal logs exactly one warning, from the serialiser.
+        for (const auto &writer : writers) {
+            for (const auto &node : nodes) {
+                const std::string_view writerName = writer.first;
+                const std::string_view nodeName = node.first;
+                CAPTURE(writerName);
+                CAPTURE(nodeName);
+                logs.clear();
+                CHECK(writer.second(node.second).empty());
+                CHECK(logs.count(log_level::WARN) == 1);
+                CHECK(logs.contains(log_level::WARN, "serialisation failed"));
+            }
+        }
+    }
+
+    TEST_CASE("regression - code sweep F619 json::to_string takes no canonical flag") {
+        // The flag meant "canonical" here and "pretty" on document::to_string; a leftover
+        // to_string(x, true) must stop compiling instead of silently changing its output.
+        CHECK_FALSE(callable_with_flag<value>);
+
+        const document doc = parse_or_fail(R"({"b":1,"a":2})");
+        CHECK(to_string(doc.root()) == R"({"b":1,"a":2})");
+        CHECK(to_canonical_string(doc.root()) == R"({"a":2,"b":1})");
     }
 
     TEST_CASE("json - documents round trip through to_string and parse") {

@@ -70,10 +70,15 @@ template <typename... ComponentTypes> class view
 
 #### `changed` {#function-changed}
 
-<div class="function-declaration" id="function-changed-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> &amp;changed(
-    <a href="../../core/types.html#symbol-u64">u64</a> sinceVersion);</code></pre></div>
+<div class="function-declaration" id="function-changed-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; <a href="view.html">view</a> &amp;changed(
+    <a href="../../core/types.html#symbol-u64">u64</a> sinceVersion) &amp;;</code></pre></div>
 
-<p>Visits only chunks whose column of OtherType was stamped after <code>sinceVersion</code>.</p>
+<p>Visits only chunks whose column of OtherType was stamped after <code>sinceVersion</code>. Narrows this named <code><a href="view.html">view</a></code> in place and returns it for chaining.</p>
+
+<div class="function-declaration" id="function-changed-2"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> changed(
+    <a href="../../core/types.html#symbol-u64">u64</a> sinceVersion) &amp;&amp;;</code></pre></div>
+
+<p>Visits only chunks whose column of OtherType was stamped after <code>sinceVersion</code>. Narrows this temporary <code><a href="view.html">view</a></code> and returns it by value (a move), so binding the chain to a reference cannot dangle; discarding the result warns.</p>
 
 #### `entity_count` {#function-entity-count}
 
@@ -117,15 +122,23 @@ template <typename... ComponentTypes> class view
 
 #### `with` {#function-with}
 
-<div class="function-declaration" id="function-with-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> TagType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> &amp;with();</code></pre></div>
+<div class="function-declaration" id="function-with-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> TagType&gt; <a href="view.html">view</a> &amp;with() &amp;;</code></pre></div>
 
-<p>Requires a component (typically a tag) without reading it.</p>
+<p>Requires a component (typically a tag) without reading it. Narrows this named <code><a href="view.html">view</a></code> in place and returns it for chaining.</p>
+
+<div class="function-declaration" id="function-with-2"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> TagType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> with() &amp;&amp;;</code></pre></div>
+
+<p>Requires a component (typically a tag) without reading it. Narrows this temporary <code><a href="view.html">view</a></code> and returns it by value (a move), so binding the chain to a reference cannot dangle; discarding the result warns.</p>
 
 #### `without` {#function-without}
 
-<div class="function-declaration" id="function-without-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> &amp;without();</code></pre></div>
+<div class="function-declaration" id="function-without-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; <a href="view.html">view</a> &amp;without() &amp;;</code></pre></div>
 
-<p>Excludes entities holding a component.</p>
+<p>Excludes entities holding a component. Narrows this named <code><a href="view.html">view</a></code> in place and returns it for chaining.</p>
+
+<div class="function-declaration" id="function-without-2"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; [[<span class="na">nodiscard</span>]] <a href="view.html">view</a> without() &amp;&amp;;</code></pre></div>
+
+<p>Excludes entities holding a component. Narrows this temporary <code><a href="view.html">view</a></code> and returns it by value (a move), so binding the chain to a reference cannot dangle; discarding the result warns.</p>
 
 ### Private
 
@@ -135,12 +148,21 @@ template <typename... ComponentTypes> class view
     <a href="view-access.html">view_access</a> &amp;result,
     <a href="../../core/types.html#symbol-usize">usize</a> &amp;slot) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+#### `exclude` {#function-exclude}
+
+<div class="function-declaration" id="function-exclude-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; <span class="k">void</span> exclude();</code></pre></div>
+
 #### `fill_slot` {#function-fill-slot}
 
 <div class="function-declaration" id="function-fill-slot-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> PackType&gt; <span class="k">void</span> fill_slot(
     <span class="k">const</span> <a href="../component-registry/component-registry.html">component_registry</a> &amp;registry,
     <a href="../query/query-desc.html">query_desc</a> &amp;desc,
     <a href="../../core/types.html#symbol-usize">usize</a> &amp;slot);</code></pre></div>
+
+#### `filter_changed` {#function-filter-changed}
+
+<div class="function-declaration" id="function-filter-changed-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> OtherType&gt; <span class="k">void</span> filter_changed(
+    <a href="../../core/types.html#symbol-u64">u64</a> sinceVersion);</code></pre></div>
 
 #### `invoke_row` {#function-invoke-row}
 
@@ -150,6 +172,10 @@ template <typename... ComponentTypes> class view
     Columns &amp;columns,
     <a href="../../core/types.html#symbol-u32">u32</a> row,
     std::index_sequence&lt;Indices...&gt;);</code></pre></div>
+
+#### `require` {#function-require}
+
+<div class="function-declaration" id="function-require-1"><pre><code><span class="k">template</span> &lt;<span class="k">typename</span> TagType&gt; <span class="k">void</span> require();</code></pre></div>
 
 #### `require_unregistered` {#function-require-unregistered}
 

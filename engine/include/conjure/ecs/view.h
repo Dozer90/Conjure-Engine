@@ -24,9 +24,10 @@
 // optional and arrives as a pointer that is null when the archetype lacks it. A tag has no column, so
 // a tag in the pack (plain or maybe<Tag>) does not compile. Builder methods narrow the match:
 // with<Tag>() requires a tag, without<T>() excludes a component, changed<T>(since) visits only chunks
-// whose T column changed after 'since'. A required type (pack or builder) that is not registered
-// asserts naming the type and makes the view match nothing; an unregistered maybe<T> is simply absent
-// everywhere.
+// whose T column changed after 'since'. On a named view they narrow it in place and may stand alone as
+// statements; on a temporary they return the narrowed view by value and must be used. A required type
+// (pack or builder) that is not registered asserts naming the type and makes the view match nothing; an
+// unregistered maybe<T> is simply absent everywhere.
 
 namespace conjure::ecs {
 
@@ -136,53 +137,72 @@ namespace conjure::ecs {
             view &operator=(view &&) noexcept = default;
 
         public:
+            // Each builder comes as a pair. On a named view it narrows that view in place and returns it, so a
+            // refinement can stand alone as a statement ('enemies.without<scene::disabled>();'). On a temporary
+            // it narrows the temporary and moves it into the result, so a chain bound to a reference
+            // ('auto &&refined = world.view<A>().with<B>();') extends the lifetime of a whole view instead of
+            // dangling; [[nodiscard]] there keeps catching a refined temporary that is dropped unused.
+
             /// <summary>
-            /// Requires a component (typically a tag) without reading it.
+            /// Requires a component (typically a tag) without reading it. Narrows this named view in place and
+            /// returns it for chaining.
             /// </summary>
             template <typename TagType>
-            [[nodiscard]] view &with() {
-                const component_id id = mQuery.registry().id_of<TagType>();
-                if (!id.is_valid()) {
-                    require_unregistered<TagType>();
-                    return *this;
-                }
-                query_desc desc = mQuery.desc();
-                desc.with.set(id);
-                mQuery.reset(std::move(desc));
+            view &with() & {
+                require<TagType>();
                 return *this;
             }
 
             /// <summary>
-            /// Excludes entities holding a component.
+            /// Requires a component (typically a tag) without reading it. Narrows this temporary view and
+            /// returns it by value (a move), so binding the chain to a reference cannot dangle; discarding the
+            /// result warns.
+            /// </summary>
+            template <typename TagType>
+            [[nodiscard]] view with() && {
+                require<TagType>();
+                return std::move(*this);
+            }
+
+            /// <summary>
+            /// Excludes entities holding a component. Narrows this named view in place and returns it for
+            /// chaining.
             /// </summary>
             template <typename OtherType>
-            [[nodiscard]] view &without() {
-                const component_id id = mQuery.registry().id_of<OtherType>();
-                if (!id.is_valid()) {
-                    require_unregistered<OtherType>();
-                    return *this;
-                }
-                query_desc desc = mQuery.desc();
-                desc.without.set(id);
-                mQuery.reset(std::move(desc));
+            view &without() & {
+                exclude<OtherType>();
                 return *this;
             }
 
             /// <summary>
-            /// Visits only chunks whose column of OtherType was stamped after 'sinceVersion'.
+            /// Excludes entities holding a component. Narrows this temporary view and returns it by value (a
+            /// move), so binding the chain to a reference cannot dangle; discarding the result warns.
             /// </summary>
             template <typename OtherType>
-            [[nodiscard]] view &changed(u64 sinceVersion) {
-                const component_id id = mQuery.registry().id_of<OtherType>();
-                if (!id.is_valid()) {
-                    require_unregistered<OtherType>();
-                    return *this;
-                }
-                query_desc desc = mQuery.desc();
-                desc.changed.set(id);
-                desc.sinceVersion = sinceVersion;
-                mQuery.reset(std::move(desc));
+            [[nodiscard]] view without() && {
+                exclude<OtherType>();
+                return std::move(*this);
+            }
+
+            /// <summary>
+            /// Visits only chunks whose column of OtherType was stamped after 'sinceVersion'. Narrows this
+            /// named view in place and returns it for chaining.
+            /// </summary>
+            template <typename OtherType>
+            view &changed(u64 sinceVersion) & {
+                filter_changed<OtherType>(sinceVersion);
                 return *this;
+            }
+
+            /// <summary>
+            /// Visits only chunks whose column of OtherType was stamped after 'sinceVersion'. Narrows this
+            /// temporary view and returns it by value (a move), so binding the chain to a reference cannot
+            /// dangle; discarding the result warns.
+            /// </summary>
+            template <typename OtherType>
+            [[nodiscard]] view changed(u64 sinceVersion) && {
+                filter_changed<OtherType>(sinceVersion);
+                return std::move(*this);
             }
 
             /// <summary>
@@ -284,6 +304,43 @@ namespace conjure::ecs {
                 if constexpr (!traits::IS_CONST) {
                     desc.writes.set(id);
                 }
+            }
+
+            template <typename TagType>
+            void require() {
+                const component_id id = mQuery.registry().id_of<TagType>();
+                if (!id.is_valid()) {
+                    require_unregistered<TagType>();
+                    return;
+                }
+                query_desc desc = mQuery.desc();
+                desc.with.set(id);
+                mQuery.reset(std::move(desc));
+            }
+
+            template <typename OtherType>
+            void exclude() {
+                const component_id id = mQuery.registry().id_of<OtherType>();
+                if (!id.is_valid()) {
+                    require_unregistered<OtherType>();
+                    return;
+                }
+                query_desc desc = mQuery.desc();
+                desc.without.set(id);
+                mQuery.reset(std::move(desc));
+            }
+
+            template <typename OtherType>
+            void filter_changed(u64 sinceVersion) {
+                const component_id id = mQuery.registry().id_of<OtherType>();
+                if (!id.is_valid()) {
+                    require_unregistered<OtherType>();
+                    return;
+                }
+                query_desc desc = mQuery.desc();
+                desc.changed.set(id);
+                desc.sinceVersion = sinceVersion;
+                mQuery.reset(std::move(desc));
             }
 
             template <typename OtherType>
