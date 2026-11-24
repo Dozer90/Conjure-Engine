@@ -15,12 +15,14 @@
 
 #include "conjure/core/log.h"
 #include "conjure/platform/input.h"
+#include "conjure/scene/components.h"
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_host.h"
 #include "conjure/scripting/script_system.h"
 #include "conjure/scripting/scripting_error.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <format>
 #include <utility>
@@ -81,14 +83,32 @@ core::result<void> scripting_subsystem::startup(engine_context &context) {
     CONJURE_TRY(scripting::register_script_component(*mServices->components));
     mServices->scripting->attach_registry(mServices->components.get());
     mServices->scripting->attach_world(mServices->world.get());
+    // Scripts sleep while their entity is inactive (code sweep W3-CS-L4, owner option A): the runtime observes the
+    // scene's two activity tags itself, so the scripting module needs no scene code. The scene subsystem registered
+    // them; set_activity_tags drops an invalid id silently, so a missing one is reported here.
+    const std::array<ecs::component_id, 2> activityTags = {
+      mServices->components->id_of<scene::disabled>(),
+      mServices->components->id_of<scene::inactive>(),
+    };
+    if (!activityTags[0].is_valid() || !activityTags[1].is_valid()) {
+        CONJURE_LOG_WARN(
+          LOG_ENGINE,
+          "scripting: scene.disabled or scene.inactive is not registered; scripts keep running on inactive entities"
+        );
+    }
+    mServices->scripting->set_activity_tags(activityTags);
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
     if (mServices->physics != nullptr) {
         physics::physics_world *physicsWorld = mServices->physics.get();
         std::vector<scripting::collision_event> *buffer = &mCollisions;
+        const scripting::script_runtime *scripts = mServices->scripting.get();
         using collision_span = std::span<const scripting::collision_event>;
-        mServices->scripting->set_collision_source([physicsWorld, buffer]() -> collision_span {
-            convert_contacts(physicsWorld->contact_events(), *buffer);
+        mServices->scripting->set_collision_source([physicsWorld, buffer, scripts]() -> collision_span {
+            // A STAY per touching pair per fixed step is converted only while a loaded class overrides
+            // OnCollisionStay: without one it costs nothing.
+            const bool includeStay = scripts->any_class_has(scripting::script_callback::COLLISION_STAY);
+            scripting_subsystem::convert_contacts(physicsWorld->contact_events(), *buffer, includeStay);
             return *buffer;
         });
     }
@@ -288,11 +308,13 @@ void scripting_subsystem::write_frame_block(
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
 void scripting_subsystem::convert_contacts(
   std::span<const physics::contact_event> contacts,
-  std::vector<scripting::collision_event> &out
+  std::vector<scripting::collision_event> &out,
+  bool includeStay
 ) {
     out.clear();
     for (const physics::contact_event &contact : contacts) {
         scripting::collision_event event = {};
+        event.impulse = contact.impulse;
         switch (contact.kind) {
             case physics::contact_kind::ENTER:
                 event.kind = scripting::collision_kind::COLLISION_ENTER;
@@ -307,13 +329,17 @@ void scripting_subsystem::convert_contacts(
                 event.kind = scripting::collision_kind::TRIGGER_EXIT;
                 break;
             case physics::contact_kind::STAY:
-                continue;
+                if (!includeStay) {
+                    continue;
+                }
+                event.kind = scripting::collision_kind::COLLISION_STAY;
+                event.impulse = 0.0f;
+                break;
         }
         event.a = contact.a;
         event.b = contact.b;
         event.point = contact.point;
         event.normal = contact.normal;
-        event.impulse = contact.impulse;
         out.push_back(event);
     }
 }

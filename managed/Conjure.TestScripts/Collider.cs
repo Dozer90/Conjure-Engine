@@ -3,16 +3,19 @@ using Conjure;
 namespace Conjure.TestScripts;
 
 /// <summary>
-/// Records collision and trigger callbacks.
+/// Records collision and trigger callbacks; OnCollisionStay counts in Stays and keeps its last impulse in
+/// LastStayImpulse.
 /// </summary>
 public sealed class Collider : ScriptBehaviour
 {
     public int Enters;
     public int Exits;
+    public int Stays;
     public int TriggerEnters;
     public int TriggerExits;
     public Entity LastOther;
     public float LastImpulse;
+    public float LastStayImpulse;
     public float LastNormalX;
 
     protected override void OnCollisionEnter(in Collision collision)
@@ -27,6 +30,13 @@ public sealed class Collider : ScriptBehaviour
     {
         ++Exits;
         LastOther = collision.Other;
+    }
+
+    protected override void OnCollisionStay(in Collision collision)
+    {
+        ++Stays;
+        LastOther = collision.Other;
+        LastStayImpulse = collision.Impulse;
     }
 
     protected override void OnTriggerEnter(Entity other)

@@ -420,9 +420,8 @@ struct conjure_native_api {
 /// Functions managed provides to native, filled by Conjure.Interop.NativeBridge.Initialize. sample_memory fills
 /// a conjure_managed_memory and returns 0 (a negative status when it cannot). set_active(slots, count, active)
 /// tells the instances in 'slots' that their entity became active (1) or inactive (0) and returns how many of
-/// them changed state; a free slot is skipped. Not yet carried out end to end: script_runtime never calls
-/// set_active, and Conjure.Managed accepts the call and returns 0 without tracking activity; the null host
-/// tracks it for tests.
+/// them changed state (running OnDisable or OnEnable); a free slot is skipped. script_runtime calls it at the
+/// points where an activity change takes effect (script_runtime::set_activity_tags).
 /// </summary>
 struct conjure_managed_api {
     uint32_t size = 0;
@@ -535,9 +534,11 @@ namespace conjure::scripting {
     };
 
     /// <summary>
-    /// Bit index of conjure_script_class_desc::callback_mask and index of the fault counters. RELOAD (OnReload,
-    /// which runs instead of OnCreate on an instance a hot reload recreated) comes last, so the older callbacks
-    /// keep their bits.
+    /// Bit index of conjure_script_class_desc::callback_mask and index of the fault counters. Later callbacks are
+    /// appended, so the older ones keep their bits: RELOAD (OnReload, which runs instead of OnCreate on an
+    /// instance a hot reload recreated), then COLLISION_STAY (OnCollisionStay, every fixed step a solid contact
+    /// persists), ENABLE and DISABLE (OnEnable and OnDisable, when the entity becomes active or inactive).
+    /// COUNT stays within the 16 bits of the callback mask.
     /// </summary>
     enum class script_callback : uint8_t {
         CREATE,
@@ -551,17 +552,24 @@ namespace conjure::scripting {
         TRIGGER_ENTER,
         TRIGGER_EXIT,
         RELOAD,
+        COLLISION_STAY,
+        ENABLE,
+        DISABLE,
         COUNT
     };
 
+    static_assert(static_cast<unsigned>(script_callback::COUNT) <= 16, "callback_mask is 16 bits");
+
     /// <summary>
-    /// conjure_collision_record::kind.
+    /// conjure_collision_record::kind. COLLISION_STAY (a solid contact that persists through a fixed step) is
+    /// appended, so the older kinds keep their values; there is no trigger stay.
     /// </summary>
     enum class collision_kind : uint8_t {
         COLLISION_ENTER,
         COLLISION_EXIT,
         TRIGGER_ENTER,
         TRIGGER_EXIT,
+        COLLISION_STAY,
         COUNT
     };
 
@@ -578,9 +586,11 @@ namespace conjure::scripting {
     inline constexpr uint8_t CREATE_FLAG_ALREADY_CREATED = 2;
 
     /// <summary>
-    /// conjure_create_request::flags bit: the entity is inactive (it or an ancestor is disabled) when the instance
-    /// is created, so the instance starts inactive; conjure_managed_api::set_active reports later changes. Only
-    /// the null host honours it so far: script_runtime never sets it, and Conjure.Managed ignores it.
+    /// conjure_create_request::flags bit: the entity is inactive (it or an ancestor is disabled: it carries one of
+    /// the tags script_runtime::set_activity_tags named) when the instance is created, so the instance starts
+    /// inactive: it runs OnCreate (or OnReload) but no OnEnable, joins no phase and waits for its first
+    /// activation to run OnEnable and, when it never ran, OnStart. conjure_managed_api::set_active reports later
+    /// changes.
     /// </summary>
     inline constexpr uint8_t CREATE_FLAG_INACTIVE = 4;
 

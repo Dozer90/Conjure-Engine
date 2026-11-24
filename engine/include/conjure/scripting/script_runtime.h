@@ -40,8 +40,8 @@
 // The native side of script execution (docs/design/03_scripting.md 3.2-3.9, 4, 5). One script_runtime
 // per process (asserted; script_runtime::active() is what the component hooks and the core table entries
 // reach). It owns the host, the class registry, the store, the frame block, the pending queues and the
-// DOD query scopes; attach_world() wires the ADDED/REMOVED observers of script_component. Every method
-// runs on the main thread.
+// DOD query scopes; attach_world() wires the ADDED/REMOVED observers of script_component and of the activity
+// tags (set_activity_tags). Every method runs on the main thread.
 
 namespace conjure::scripting {
 
@@ -95,6 +95,7 @@ namespace conjure::scripting {
         u32 reloadCount = 0;
         u32 zombieAssemblies = 0;
         u32 cachedQueries = 0;      // ecs::query objects kept per (with, without) set pair for the DOD scopes
+        u32 pendingActivityChanges = 0;     // entities an activity tag observer recorded, not yet processed
     };
 
     class CONJURE_API script_runtime {
@@ -183,10 +184,20 @@ namespace conjure::scripting {
             ecs::observer_id mAddedObserver = {};
             ecs::observer_id mRemovedObserver = {};
             ecs::observer_id mDestroyedObserver = {};       // forgets the entity names
+            core::small_vector<ecs::component_id, 2> mActivityTags = {};     // set_activity_tags
+            std::vector<ecs::observer_id> mActivityObservers = {};          // ADDED and REMOVED per activity tag
+            // Entities whose activity may have changed, recorded by the tag observers in PLAY mode only; the second
+            // list is the one being processed (both keep their capacity).
+            std::vector<ecs::entity> mActivityChanges = {};
+            std::vector<ecs::entity> mActivityProcessing = {};
+            std::vector<i32> mActivitySlotsOff = {};       // process_activity_changes' set_active batches
+            std::vector<i32> mActivitySlotsOn = {};
+            u16 mClassCallbacks = 0;                       // the callback bits of every loaded class, OR-ed
             std::filesystem::path mAssemblyPath = {};
             bool mAssemblyLoaded = false;
             bool mInFlush = false;
             bool mCreatingInstances = false;    // inside managed create_instances (slots not yet mapped)
+            bool mProcessingActivity = false;   // inside process_activity_changes' set_active calls
             u32 mNextScopeId = 1;
             u32 mReloadCount = 0;
             u32 mZombieAssemblies = 0;
@@ -230,11 +241,13 @@ namespace conjure::scripting {
             void shutdown();
 
             /// <summary>
-            /// The world scripts act on (non-owning; nullptr detaches). Registers the script_component
-            /// observers on it and adopts the script sets its entities already carry (queuing their
+            /// The world scripts act on (non-owning; nullptr detaches). Registers the script_component and
+            /// activity tag observers on it and adopts the script sets its entities already carry (queuing their
             /// creates in PLAY mode); the owner must destroy_all() before destroying the world. Swapping
             /// to another world destroys the live instances of the old one without OnDestroy (WARN when
-            /// any exist): instances are bound to the ids of the world they were created on.
+            /// any exist): instances are bound to the ids of the world they were created on. The recorded
+            /// activity changes are forgotten; instances that outlived a detach from the same world are checked
+            /// against their entity's tags again in PLAY mode.
             /// </summary>
             void attach_world(ecs::world *world);
 
@@ -248,6 +261,47 @@ namespace conjure::scripting {
             /// The source scripting.collision_dispatch reads (the engine binds physics_world::contact_events).
             /// </summary>
             void set_collision_source(std::function<std::span<const collision_event>()> source);
+
+            /// <summary>
+            /// The component ids that make an entity inactive (the engine passes scene.disabled and scene.inactive,
+            /// so this module needs no scene code): an instance is active while its entity is alive and carries
+            /// none of them. Invalid ids are ignored; an empty span (the default) makes every instance active. The
+            /// runtime observes ADDED and REMOVED of each tag on the attached world (again after attach_world) and
+            /// records the entity only in PLAY mode, with a ready host, when it carries a script_component: nothing
+            /// is recorded in EDIT mode, and set_mode and attach_world forget what was recorded, because a PLAY
+            /// session creates every instance from its entity's current tags (CREATE_FLAG_INACTIVE). A recorded
+            /// change takes effect where a Destroy does, at the first of: a flush_pending (the end of the phase that
+            /// made it; for a change made outside a phase, also the flushes of frame_begin, frame_end and set_mode,
+            /// which run no phase, so a query scope OnEnable or OnDisable opens there is refused with NOT_IN_PHASE),
+            /// the start of the next run_phase, the start of dispatch_collision_events, and before a hot reload or a
+            /// set replace (deserialize_entity_scripts, read_set_json) recreates instances. There the live instances
+            /// whose state differs get one conjure_managed_api::set_active call for those that became inactive
+            /// (OnDisable), then one for those that became active (OnEnable, then OnStart before the next
+            /// FIXED_UPDATE or UPDATE when it never ran); a change undone before that point calls nothing. An
+            /// inactive instance joins no phase, gets no collision records and is not marked started. Changing the
+            /// tags in PLAY mode re-checks every entity with live scripts at the next of those points.
+            /// </summary>
+            void set_activity_tags(std::span<const ecs::component_id> tags);
+
+            /// <summary>
+            /// The ids set_activity_tags kept (the valid ones, in the order given).
+            /// </summary>
+            [[nodiscard]] std::span<const ecs::component_id> activity_tags() const noexcept {
+                return std::span<const ecs::component_id>(mActivityTags.data(), mActivityTags.size());
+            }
+
+            /// <summary>
+            /// True when the entity is alive in the attached world and carries none of the activity tags; false
+            /// without a world and for a dead entity.
+            /// </summary>
+            [[nodiscard]] bool is_entity_active(ecs::entity entity) const noexcept;
+
+            /// <summary>
+            /// True when a class of the loaded game assembly overrides the callback (the union of the callback
+            /// masks, computed when an assembly load commits its classes); false without an assembly and for COUNT.
+            /// The engine converts physics STAY contacts only while this answers true for COLLISION_STAY.
+            /// </summary>
+            [[nodiscard]] bool any_class_has(script_callback callback) const noexcept;
 
             /*---------------------------------------------------------------*/
             // Assemblies (3.8)
@@ -264,7 +318,9 @@ namespace conjure::scripting {
             /// runs once per entity lifetime: an entry whose OnCreate returned (the CREATED flag) is recreated with
             /// CREATE_FLAG_ALREADY_CREATED and runs OnReload after its fields are restored, an entry whose create
             /// was still queued, or whose OnCreate threw, runs OnCreate, and OnStart does not run again (an entry
-            /// whose OnCreate threw never attempted it: it runs after that OnCreate). A failed load leaves the running
+            /// whose OnCreate threw never attempted it: it runs after that OnCreate). The destroys and activity changes
+            /// still pending take effect first, on the old instances (OnDestroy, OnDisable, OnEnable); a recreated
+            /// instance then starts in its entity's state (CREATE_FLAG_INACTIVE). A failed load leaves the running
             /// game untouched; a leaked load context is a WARN (ASSEMBLY_LEAKED is logged, not returned).
             /// </summary>
             [[nodiscard]] core::result<void> reload_game_assembly(const std::filesystem::path &assemblyPath);
@@ -273,15 +329,18 @@ namespace conjure::scripting {
             // Frame flow (3.2-3.5)
 
             /// <summary>
-            /// EDIT -> PLAY creates every instance of the attached world's entities (and flushes); PLAY -> EDIT
-            /// destroys them with OnDestroy and clears their CREATED, STARTED and FAULTED flags, so the next PLAY
-            /// runs OnCreate and OnStart again (the created and started flags are for hot reload only).
+            /// EDIT -> PLAY creates every instance of the attached world's entities (and flushes), the instances of
+            /// an inactive entity with CREATE_FLAG_INACTIVE; PLAY -> EDIT destroys them (OnDisable for an active one,
+            /// then OnDestroy) and clears their CREATED, STARTED, FAULTED and INACTIVE flags, so the next PLAY runs
+            /// OnCreate and OnStart again (the created and started flags are for hot reload only). Both forget the
+            /// recorded activity changes.
             /// </summary>
             void set_mode(script_mode mode);
 
             /// <summary>
-            /// One managed call for the phase, then the open query scopes are force-closed (WARN), the
-            /// deferred commands flushed and flush_pending() run while the phase is still current (so
+            /// The recorded activity changes take effect first (set_activity_tags; their OnDisable and OnEnable run
+            /// in the phase), then one managed call for the phase, then the open query scopes are force-closed
+            /// (WARN), the deferred commands flushed and flush_pending() run while the phase is still current (so
             /// OnCreate/OnDestroy of that flush may open query scopes). Outside run_phase and
             /// dispatch_collision_events (FIXED_UPDATE) a query scope is refused with NOT_IN_PHASE: the
             /// flushes of frame_begin, frame_end and set_mode run no phase.
@@ -289,22 +348,25 @@ namespace conjure::scripting {
             void run_phase(script_phase phase, f32 deltaTime);
 
             /// <summary>
-            /// Processes the pending destroys (OnDestroy, entity destruction) and creates (one
-            /// create_instances call: OnCreate, or OnReload for an entry a hot reload recreates) until the queues
-            /// are empty or MAX_FLUSH_ITERATIONS passed.
+            /// Processes the pending destroys (OnDisable for an active instance, then OnDestroy, then entity
+            /// destruction), the creates (one create_instances call: OnCreate, or OnReload for an entry a hot reload
+            /// recreates, each with CREATE_FLAG_INACTIVE when its entity is inactive) and the recorded activity
+            /// changes (set_activity_tags) until all three are empty or MAX_FLUSH_ITERATIONS passed.
             /// </summary>
             void flush_pending();
 
             /// <summary>
-            /// Builds one conjure_collision_record per participating entry whose class overrides the
-            /// callback and sends them in one dispatch_collisions call. The record buffer is kept between
-            /// calls, so a warm dispatch allocates nothing.
+            /// Runs as the FIXED_UPDATE phase: the recorded activity changes take effect first (set_activity_tags),
+            /// then one conjure_collision_record is built per participating live, active entry whose class overrides
+            /// the callback of the event's kind (COLLISION_STAY included) and they go out in one dispatch_collisions
+            /// call. The record buffer is kept between calls, so a warm dispatch allocates nothing.
             /// </summary>
             void dispatch_collision_events(std::span<const collision_event> events);
 
             /// <summary>
-            /// Destroys every live instance (OnDestroy when asked) and clears the pending queues; entries
-            /// keep their JSON with INVALID_SLOT and lose their CREATED, STARTED and FAULTED flags.
+            /// Destroys every live instance (when asked, OnDisable for an active one, then OnDestroy) and clears the
+            /// pending queues and the recorded activity changes; entries keep their JSON with INVALID_SLOT and lose
+            /// their CREATED, STARTED, FAULTED and INACTIVE flags.
             /// </summary>
             void destroy_all(bool callOnDestroy);
 
@@ -335,8 +397,9 @@ namespace conjure::scripting {
             );
 
             /// <summary>
-            /// Destroys the entry's instance now (OnDestroy, entity alive) and removes the entry. Ignored (DEBUG
-            /// log) when the id does not belong to the entity's script set or no world is attached.
+            /// Destroys the entry's instance now (OnDisable when it is active, then OnDestroy, entity alive) and
+            /// removes the entry. Ignored (DEBUG log) when the id does not belong to the entity's script set or no
+            /// world is attached.
             /// </summary>
             void remove_script(ecs::entity entity, script_entry_id id);
 
@@ -366,8 +429,10 @@ namespace conjure::scripting {
             /// <summary>
             /// Replaces the entity's scripts from the serialize_entity_scripts form (live instances destroyed
             /// first, new ones queued in PLAY mode). An entry with "created" is recreated with OnReload instead of
-            /// OnCreate, one with "started" without OnStart; without them (older JSON) both run. INVALID_ARGUMENT
-            /// for malformed JSON.
+            /// OnCreate, one with "started" without OnStart; without them (older JSON) both run. A live instance
+            /// that such a "created" entry of its class brings back goes without OnDisable and OnDestroy, as on a
+            /// hot reload; every other live instance gets them (OnDisable when active). The activity changes still
+            /// pending take effect first, on the live instances. INVALID_ARGUMENT for malformed JSON.
             /// </summary>
             [[nodiscard]] core::result<void> deserialize_entity_scripts(
               ecs::entity entity,
@@ -397,7 +462,8 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Called by the REMOVED observer on script_component (and by ops.destruct for sets freed with live
-            /// instances): detaches the set's slots and defers their OnDestroy to the next flush.
+            /// instances): detaches the set's slots and defers their OnDestroy (after OnDisable for an active
+            /// instance) to the next flush.
             /// </summary>
             void on_component_removed(ecs::entity entity, const script_component &component);
 
@@ -409,7 +475,8 @@ namespace conjure::scripting {
 
             /// <summary>
             /// Entity.Destroy() from C#: an entity with live scripts is destroyed at the next flush, after
-            /// OnDestroy ran with the entity alive (even when requested inside a query scope); one without
+            /// OnDestroy (preceded by OnDisable for an active instance) ran with the entity alive (even when
+            /// requested inside a query scope); one without
             /// is destroyed now, or through deferred_commands() while the world is locked. An id
             /// is_deferred_reserved() answers true for (it has no instance yet) records the destroy in
             /// deferred_commands(), where it wins over every command on the id: the id never becomes alive. On a
@@ -686,7 +753,8 @@ namespace conjure::scripting {
             [[nodiscard]] u32 clone_set_for_copy(u32 handle);
 
             /// <summary>
-            /// ops.destruct: frees the set; live slots are detached and their OnDestroy deferred.
+            /// ops.destruct: frees the set; live slots are detached and their OnDestroy (after OnDisable for an
+            /// active instance) deferred.
             /// </summary>
             void free_set_from_destruct(u32 handle);
 
@@ -698,8 +766,9 @@ namespace conjure::scripting {
 
             /// <summary>
             /// serializer.readJson: replaces the entries of a set from the {"scripts":[...]} object ("started"
-            /// and "created" restore their flags, as in deserialize_entity_scripts); creates the set when 'handle'
-            /// is INVALID_SET_HANDLE and returns the handle to store.
+            /// and "created" restore their flags, and live instances are destroyed, as in
+            /// deserialize_entity_scripts); creates the set when 'handle' is INVALID_SET_HANDLE and returns the
+            /// handle to store.
             /// </summary>
             [[nodiscard]] core::result<u32> read_set_json(u32 handle, const core::json::value &in);
 
@@ -735,6 +804,11 @@ namespace conjure::scripting {
               const core::json::value &fields
             );
             void mark_started_entries();
+            void register_activity_observers();
+            void unregister_activity_observers();
+            void recheck_live_entities();
+            void note_activity_change(const ecs::world &owner, ecs::entity entity);
+            void process_activity_changes();
             [[nodiscard]] ecs::query &cached_query(const query_cache_key &key, const ecs::query_desc &desc);
             [[nodiscard]] std::unique_ptr<query_scope_state> take_scope_state(usize chunkCount);
             void force_close_query_scopes();

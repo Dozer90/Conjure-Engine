@@ -25,7 +25,7 @@ kind: header
 | [`conjure_frame_stats_block`](native-api/conjure-frame-stats-block.md) | The last committed <code><a href="../engine/frame-stats/frame-sample.html">engine::frame_sample</a></code>. The <code>managed_</code>* fields are its managed-heap figures (the main thread&#x27;s allocations, the heap size and the collections of that frame), 0 in a frame without a ready script host. |
 | [`conjure_gamepad_state`](native-api/conjure-gamepad-state.md) |  |
 | [`conjure_input_block`](native-api/conjure-input-block.md) |  |
-| [`conjure_managed_api`](native-api/conjure-managed-api.md) | Functions managed provides to native, filled by <code>Conjure.Interop.NativeBridge.Initialize</code>. <code>sample_memory</code> fills a <code><a href="native-api/conjure-managed-memory.html">conjure_managed_memory</a></code> and returns 0 (a negative status when it cannot). <code>set_active(slots, count, active)</code> tells the instances in <code>slots</code> that their entity became active (1) or inactive (0) and returns how many of them changed state; a free slot is skipped. Not yet carried out end to end: <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> never calls <code>set_active</code>, and <code>Conjure.Managed</code> accepts the call and returns 0 without tracking activity; the <code>null</code> host tracks it for tests. |
+| [`conjure_managed_api`](native-api/conjure-managed-api.md) | Functions managed provides to native, filled by <code>Conjure.Interop.NativeBridge.Initialize</code>. <code>sample_memory</code> fills a <code><a href="native-api/conjure-managed-memory.html">conjure_managed_memory</a></code> and returns 0 (a negative status when it cannot). <code>set_active(slots, count, active)</code> tells the instances in <code>slots</code> that their entity became active (1) or inactive (0) and returns how many of them changed state (running OnDisable or OnEnable); a free slot is skipped. <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> calls it at the points where an activity change takes effect (<code>script_runtime::set_activity_tags</code>). |
 | [`conjure_managed_component_desc`](native-api/conjure-managed-component-desc.md) | An [EcsComponent] struct: <code>schema_json</code> lists {&quot;fields&quot;:[{&quot;name&quot;,&quot;type&quot;,&quot;offset&quot;}]} with <code>core::reflect</code> type names. |
 | [`conjure_managed_memory`](native-api/conjure-managed-memory.md) | What <code>conjure_managed_api::sample_memory</code> reports: <code>thread_allocated_bytes</code> is <code>GC.GetAllocatedBytesForCurrentThread()</code> on the calling (main) thread, <code>heap_bytes</code> <code>GC.GetTotalMemory(false)</code>, and the collections <code>GC.CollectionCount(0)</code> and <code>GC.CollectionCount(2)</code>. Everything but <code>heap_bytes</code> is cumulative over the life of the managed runtime. |
 | [`conjure_mat4`](native-api/conjure-mat4.md) | Column-major 4x4 matrix. |
@@ -57,11 +57,12 @@ enum class collision_kind : uint8_t {
     COLLISION_EXIT,
     TRIGGER_ENTER,
     TRIGGER_EXIT,
+    COLLISION_STAY,
     COUNT
 };
 ```
 
-<code>conjure_collision_record::kind</code>.
+<code>conjure_collision_record::kind</code>. <code>COLLISION_STAY</code> (a solid contact that persists through a fixed step) is appended, so the older kinds keep their values; there is no trigger stay.
 
 ### `conjure_asset_load_priority` {#symbol-conjure-asset-load-priority}
 
@@ -153,11 +154,14 @@ enum class script_callback : uint8_t {
     TRIGGER_ENTER,
     TRIGGER_EXIT,
     RELOAD,
+    COLLISION_STAY,
+    ENABLE,
+    DISABLE,
     COUNT
 };
 ```
 
-Bit index of <code>conjure_script_class_desc::callback_mask</code> and index of the fault counters. <code>RELOAD</code> (OnReload, which runs instead of OnCreate on an instance a hot reload recreated) comes last, so the older callbacks keep their bits.
+Bit index of <code>conjure_script_class_desc::callback_mask</code> and index of the fault counters. Later callbacks are appended, so the older ones keep their bits: <code>RELOAD</code> (OnReload, which runs instead of OnCreate on an instance a hot reload recreated), then <code>COLLISION_STAY</code> (OnCollisionStay, every fixed step a solid contact persists), <code>ENABLE</code> and <code>DISABLE</code> (OnEnable and OnDisable, when the entity becomes active or inactive). <code>COUNT</code> stays within the 16 bits of the callback mask.
 
 ### `script_field_kind` {#symbol-script-field-kind}
 
@@ -203,7 +207,7 @@ The three callback phases <code>run_phase</code> takes.
 |---|---|---|---|
 | <a id="variable-CREATE_FLAG_ALREADY_CREATED"></a><code>CREATE_FLAG_ALREADY_CREATED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">2</span></code> | <code>conjure_create_request::flags</code> bit: the entry&#x27;s OnCreate already returned in this entity&#x27;s lifetime, so the recreated instance runs OnReload instead of OnCreate, after its fields were applied (hot reload, and a snapshot restore or set replace from JSON whose entry says &quot;created&quot;). |
 | <a id="variable-CREATE_FLAG_ALREADY_STARTED"></a><code>CREATE_FLAG_ALREADY_STARTED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">1</span></code> | <code>conjure_create_request::flags</code> bit: the entry already ran OnStart (reload, snapshot restore). |
-| <a id="variable-CREATE_FLAG_INACTIVE"></a><code>CREATE_FLAG_INACTIVE</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">4</span></code> | <code>conjure_create_request::flags</code> bit: the entity is inactive (it or an ancestor is disabled) when the instance is created, so the instance starts inactive; <code>conjure_managed_api::set_active</code> reports later changes. Only the <code>null</code> host honours it so far: <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> never sets it, and <code>Conjure.Managed</code> ignores it. |
+| <a id="variable-CREATE_FLAG_INACTIVE"></a><code>CREATE_FLAG_INACTIVE</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">4</span></code> | <code>conjure_create_request::flags</code> bit: the entity is inactive (it or an ancestor is disabled: it carries one of the tags <code>script_runtime::set_activity_tags</code> named) when the instance is created, so the instance starts inactive: it runs OnCreate (or OnReload) but no OnEnable, joins no phase and waits for its first activation to run OnEnable and, when it never ran, OnStart. <code>conjure_managed_api::set_active</code> reports later changes. |
 | <a id="variable-FRAME_WINDOW_FOCUSED"></a><code>FRAME_WINDOW_FOCUSED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">1</span></code> | <code>conjure_frame_block::window_state</code> bit: the window has the input focus. |
 | <a id="variable-FRAME_WINDOW_FULLSCREEN"></a><code>FRAME_WINDOW_FULLSCREEN</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">4</span></code> | <code>conjure_frame_block::window_state</code> bit: the window is (borderless) fullscreen. |
 | <a id="variable-FRAME_WINDOW_MINIMISED"></a><code>FRAME_WINDOW_MINIMISED</code> | <code class="signature"><span class="k">inline</span> <span class="k">constexpr</span> uint8_t</code> | <code class="signature"><span class="mi">2</span></code> | <code>conjure_frame_block::window_state</code> bit: the window is minimised (the screen is then 0 x 0). |

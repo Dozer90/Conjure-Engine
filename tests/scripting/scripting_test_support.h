@@ -165,6 +165,25 @@ namespace scripting_test {
     [[nodiscard]] conjure::core::json::document json(std::string_view text);
 
     /// <summary>
+    /// A collision event of 'kind' between 'a' and 'b' with normal (1, 0, 0), point 0 and 'impulse'.
+    /// </summary>
+    [[nodiscard]] conjure::scripting::collision_event collision_between(
+      conjure::ecs::entity a,
+      conjure::ecs::entity b,
+      conjure::scripting::collision_kind kind,
+      conjure::f32 impulse = 0.0f
+    );
+
+    /// <summary>
+    /// Sets the stand-in activity tags on a runtime: test_position plays scene.disabled and test_velocity plays
+    /// scene.inactive (the scripting module has no scene). The registry is the one register_test_components filled.
+    /// </summary>
+    void use_test_activity_tags(
+      const conjure::ecs::component_registry &registry,
+      conjure::scripting::script_runtime &runtime
+    );
+
+    /// <summary>
     /// Registry + world + runtime over the null host, initialised and READY in EDIT mode with the world
     /// and registry attached. The runtime is declared last so it detaches before the world dies.
     /// </summary>

@@ -5,8 +5,10 @@
 
 #include "conjure/core/hash.h"
 #include "conjure/core/log.h"
+#include "conjure/core/math/glm_types.h"
 #include "conjure/scripting/script_fields.h"
 
+#include <array>
 #include <filesystem>
 #include <utility>
 
@@ -151,6 +153,24 @@ core::json::document scripting_test::json(std::string_view text) {
     core::result<core::json::document> parsed = core::json::document::parse(text);
     REQUIRE_MESSAGE(parsed.has_value(), describe_error(parsed));
     return std::move(parsed).value();
+}
+
+collision_event scripting_test::collision_between(ecs::entity a, ecs::entity b, collision_kind kind, f32 impulse) {
+    collision_event event = {};
+    event.a = a;
+    event.b = b;
+    event.normal = math::vec3(1.0f, 0.0f, 0.0f);
+    event.impulse = impulse;
+    event.kind = kind;
+    return event;
+}
+
+void scripting_test::use_test_activity_tags(const ecs::component_registry &registry, script_runtime &runtime) {
+    const std::array<ecs::component_id, 2> tags = {
+      registry.id_of<test_position>(),
+      registry.id_of<test_velocity>(),
+    };
+    runtime.set_activity_tags(tags);
 }
 
 

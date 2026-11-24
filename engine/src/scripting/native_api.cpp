@@ -146,6 +146,12 @@ std::string_view conjure::scripting::to_string(script_callback callback) noexcep
             return "TRIGGER_EXIT";
         case script_callback::RELOAD:
             return "RELOAD";
+        case script_callback::COLLISION_STAY:
+            return "COLLISION_STAY";
+        case script_callback::ENABLE:
+            return "ENABLE";
+        case script_callback::DISABLE:
+            return "DISABLE";
         case script_callback::COUNT:
             break;
     }

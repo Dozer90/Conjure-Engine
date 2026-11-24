@@ -16,10 +16,12 @@ public sealed class ScriptCatalog
     // FieldAttributes.NotSerialized (0x80) is obsolete as an API but still the flag [NonSerialized] sets.
     private const int NotSerializedFlag = 0x80;
 
+    // Indexed by ScriptCallback: entry i is the method whose override sets bit i of the callback mask.
     private static readonly string[] CallbackMethods =
     {
         "OnCreate", "OnStart", "OnFixedUpdate", "OnUpdate", "OnLateUpdate", "OnDestroy",
         "OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit", "OnReload",
+        "OnCollisionStay", "OnEnable", "OnDisable",
     };
 
     private readonly List<ScriptClassInfo> _classes;

@@ -57,8 +57,10 @@ public static unsafe class ScriptRuntime
     /// <summary>
     /// Creates one instance per request, writes its slot (-1 when the class is unknown or its constructor threw),
     /// applies the initial fields and then runs OnCreate, or OnReload for a request with FlagAlreadyCreated (an
-    /// instance a hot reload recreated). FlagAlreadyStarted marks it started; any other instance waits for its
-    /// OnStart. Returns the number of instances created.
+    /// instance a hot reload recreated). An instance without FlagInactive joins its phases and, after OnCreate (not
+    /// after OnReload), runs OnEnable; one with FlagInactive joins no phase until SetActive activates it.
+    /// FlagAlreadyStarted marks it started; any other active instance waits for its OnStart, and an inactive one
+    /// waits for its first activation. Returns the number of instances created.
     /// </summary>
     public static int CreateInstances(CreateRequest* requests, int count)
     {
@@ -120,22 +122,27 @@ public static unsafe class ScriptRuntime
                 }
             }
 
-            for (int phase = 0; phase < (int)ScriptPhase.Count; ++phase)
+            // An instance of an inactive entity sleeps: no phase list, no OnEnable, no OnStart until it activates.
+            bool active = (request->Flags & CreateRequest.FlagInactive) == 0;
+            instance.Active = active;
+            if (active)
             {
-                if (info.Overrides(PhaseCallback(phase)))
-                {
-                    info.Lists[phase].Add(instance, phase);
-                }
+                AddToLists(instance);
             }
 
-            // OnCreate runs once per entity lifetime: an instance a hot reload recreated gets OnReload instead.
+            // OnCreate runs once per entity lifetime: an instance a hot reload recreated gets OnReload instead, and
+            // no OnEnable either (its state carries over).
             bool alreadyCreated = (request->Flags & CreateRequest.FlagAlreadyCreated) != 0;
             instance.Run(alreadyCreated ? ScriptCallback.Reload : ScriptCallback.Create, 0.0f);
+            if (active && !alreadyCreated)
+            {
+                instance.Run(ScriptCallback.Enable, 0.0f);
+            }
             if ((request->Flags & CreateRequest.FlagAlreadyStarted) != 0)
             {
                 instance.Started = true;
             }
-            else
+            else if (active)
             {
                 _pendingStart.Add(instance);
             }
@@ -143,6 +150,11 @@ public static unsafe class ScriptRuntime
         return created;
     }
 
+    /// <summary>
+    /// Destroys the instances of 'slots' (a free slot is skipped). With 'callOnDestroy' an active instance runs
+    /// OnDisable and then OnDestroy, an inactive one OnDestroy only; without it (hot reload, world swap) neither
+    /// runs. Returns the number of instances destroyed.
+    /// </summary>
     public static int DestroyInstances(int* slots, int count, bool callOnDestroy)
     {
         // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
@@ -168,8 +180,15 @@ public static unsafe class ScriptRuntime
             {
                 continue;
             }
+            // Cleared before the callbacks, as SetActive does: IsActive reads false inside OnDisable and OnDestroy.
+            bool wasActive = instance.Active;
+            instance.Active = false;
             if (callOnDestroy)
             {
+                if (wasActive)
+                {
+                    instance.Run(ScriptCallback.Disable, 0.0f);
+                }
                 instance.Run(ScriptCallback.Destroy, 0.0f);
             }
             RemoveFromLists(instance);
@@ -184,9 +203,9 @@ public static unsafe class ScriptRuntime
     }
 
     /// <summary>
-    /// One call per phase (D5): pending OnStart first (FIXED_UPDATE and UPDATE), then every class's list.
-    /// Instances not yet started (created by the flush after this frame's UPDATE) are skipped until their
-    /// OnStart ran. Returns the number of instances visited.
+    /// One call per phase (D5): pending OnStart first (FIXED_UPDATE and UPDATE), then every class's list, which
+    /// holds the active instances only. Instances not yet started (created by the flush after this frame's
+    /// UPDATE) are skipped until their OnStart ran. Returns the number of instances visited.
     /// </summary>
     public static int RunPhase(ScriptPhase phase, float deltaTime)
     {
@@ -244,6 +263,11 @@ public static unsafe class ScriptRuntime
         return visited;
     }
 
+    /// <summary>
+    /// Runs one collision callback per record (OnCollisionEnter, OnCollisionStay, OnCollisionExit, OnTriggerEnter
+    /// or OnTriggerExit by its kind). A free slot, an inactive instance and an unknown kind are skipped. Returns
+    /// the number of callbacks run.
+    /// </summary>
     public static int DispatchCollisions(CollisionRecord* records, int count)
     {
         // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
@@ -266,7 +290,8 @@ public static unsafe class ScriptRuntime
         {
             CollisionRecord* record = records + index;
             ScriptBehaviour? instance = _instances[record->Slot];
-            if (instance == null)
+            // Native builds no record for an inactive instance; this is the second guard.
+            if (instance == null || !instance.Active)
             {
                 continue;
             }
@@ -277,6 +302,7 @@ public static unsafe class ScriptRuntime
                 (byte)CollisionKind.CollisionExit => ScriptCallback.CollisionExit,
                 (byte)CollisionKind.TriggerEnter => ScriptCallback.TriggerEnter,
                 (byte)CollisionKind.TriggerExit => ScriptCallback.TriggerExit,
+                (byte)CollisionKind.CollisionStay => ScriptCallback.CollisionStay,
                 _ => ScriptCallback.Count,
             };
             if (callback == ScriptCallback.Count)
@@ -341,23 +367,71 @@ public static unsafe class ScriptRuntime
 
     /// <summary>
     /// Native reports that the entities of the instances in 'slots' became active or inactive (conjure_managed_api
-    /// set_active). Returns how many instances changed state. Instances do not track their entity's activity in
-    /// this version, so no instance changes state and the result is 0; the slots are not read.
+    /// set_active). An instance that becomes inactive leaves its phase lists and runs OnDisable; one that becomes
+    /// active joins them, runs OnEnable and, when its OnStart never ran, waits for it before the next FIXED_UPDATE
+    /// or UPDATE. A free slot and an instance already in that state are skipped. Returns how many instances changed
+    /// state.
     /// </summary>
     public static int SetActive(int* slots, int count, bool active)
     {
-        return 0;
+        // The managed calls that run callbacks: what a closed (or force-closed) scope left for its reserved
+        // entities is made first.
+        ReservedWrites.EnterManagedCall();
+        try
+        {
+            return SetActiveCore(slots, count, active);
+        }
+        finally
+        {
+            ReservedWrites.LeaveManagedCall();
+        }
+    }
+
+    private static int SetActiveCore(int* slots, int count, bool active)
+    {
+        int changed = 0;
+        for (int index = 0; index < count; ++index)
+        {
+            ScriptBehaviour? instance = _instances[slots[index]];
+            if (instance == null || instance.Active == active)
+            {
+                continue;
+            }
+            instance.Active = active;
+            ++changed;
+            if (!active)
+            {
+                RemoveFromLists(instance);
+                instance.Run(ScriptCallback.Disable, 0.0f);
+                continue;
+            }
+            AddToLists(instance);
+            instance.Run(ScriptCallback.Enable, 0.0f);
+            if (!instance.Started)
+            {
+                // DrainPendingStart skips an instance listed twice (disabled and enabled again before its OnStart).
+                _pendingStart.Add(instance);
+            }
+        }
+        return changed;
     }
 
     /// <summary>
-    /// Destroys every instance (OnDestroy), unloads every load context, clears the tables and forgets the
-    /// native table: the host that provided it may be freed right after this call, so nothing managed may
-    /// dereference it until the next handshake (a later log from a background thread is dropped).
+    /// Destroys every instance (OnDisable first for an active one, then OnDestroy), unloads every load context,
+    /// clears the tables and forgets the native table: the host that provided it may be freed right after this
+    /// call, so nothing managed may dereference it until the next handshake (a later log from a background thread
+    /// is dropped).
     /// </summary>
     public static int Shutdown()
     {
         foreach (ScriptBehaviour instance in _instances.Snapshot())
         {
+            bool wasActive = instance.Active;
+            instance.Active = false;
+            if (wasActive)
+            {
+                instance.Run(ScriptCallback.Disable, 0.0f);
+            }
             instance.Run(ScriptCallback.Destroy, 0.0f);
             RemoveFromLists(instance);
             instance.EntityValue = default;
@@ -376,17 +450,35 @@ public static unsafe class ScriptRuntime
         {
             return;
         }
-        // OnStart may create more instances; those start on a later phase.
+        // OnStart may create more instances; those start on a later phase. A destroyed instance, one already started
+        // (listed twice) and one disabled before its OnStart are dropped: SetActive lists the last again when it
+        // activates.
         ScriptBehaviour[] starting = _pendingStart.ToArray();
         _pendingStart.Clear();
         foreach (ScriptBehaviour instance in starting)
         {
-            if (instance.Slot < 0)
+            if (instance.Slot < 0 || instance.Started || !instance.Active)
             {
                 continue;
             }
             instance.Started = true;
             instance.Run(ScriptCallback.Start, 0.0f);
+        }
+    }
+
+    private static void AddToLists(ScriptBehaviour instance)
+    {
+        ScriptClassInfo? info = instance.ClassInfo;
+        if (info == null)
+        {
+            return;
+        }
+        for (int phase = 0; phase < (int)ScriptPhase.Count; ++phase)
+        {
+            if (info.Overrides(PhaseCallback(phase)))
+            {
+                info.Lists[phase].Add(instance, phase);
+            }
         }
     }
 

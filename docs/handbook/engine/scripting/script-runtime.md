@@ -11,7 +11,7 @@ kind: header
 | File Path | `engine/include/conjure/scripting/script_runtime.h` |
 | API ↗ | [Scripting](../../../api/scripting/index.md), [Scripts, components and the runtime](../../../api/scripting/scripts-and-components.md) |
 
-<p>The native side of script execution. One <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> per process (asserted; <code>script_runtime::active()</code> is what the component hooks and the core table entries reach). It owns the host, the class registry, the store, the frame block, the pending queues and the DOD query scopes; <code>attach_world()</code> wires the <code>ADDED</code>/<code>REMOVED</code> observers of <code><a href="script-component/script-component.html">script_component</a></code>. Every method runs on the main thread.</p>
+<p>The native side of script execution. One <code><a href="script-runtime/script-runtime.html">script_runtime</a></code> per process (asserted; <code>script_runtime::active()</code> is what the component hooks and the core table entries reach). It owns the host, the class registry, the store, the frame block, the pending queues and the DOD query scopes; <code>attach_world()</code> wires the <code>ADDED</code>/<code>REMOVED</code> observers of <code><a href="script-component/script-component.html">script_component</a></code> and of the activity tags (<code>set_activity_tags</code>). Every method runs on the main thread.</p>
 
 ## Structs
 

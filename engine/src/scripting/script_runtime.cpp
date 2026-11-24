@@ -41,6 +41,8 @@ namespace {
                 return script_callback::TRIGGER_ENTER;
             case collision_kind::TRIGGER_EXIT:
                 return script_callback::TRIGGER_EXIT;
+            case collision_kind::COLLISION_STAY:
+                return script_callback::COLLISION_STAY;
             case collision_kind::COUNT:
                 break;
         }
@@ -155,9 +157,11 @@ void script_runtime::shutdown() {
     mAssemblyLoaded = false;
     mAssemblyPath.clear();
     mClasses.clear();
+    mClassCallbacks = 0;
     mPendingCreates.clear();
     mPendingDestroySlots.clear();
     mPendingEntityDestroys.clear();
+    mActivityChanges.clear();
     mQueryScopes.clear();
     mWarnedMissingClasses.clear();
     mWarnedMirrorNames.clear();
@@ -180,6 +184,7 @@ void script_runtime::attach_world(ecs::world *world) {
         mWorld->unobserve(mAddedObserver);
         mWorld->unobserve(mRemovedObserver);
         mWorld->unobserve(mDestroyedObserver);
+        unregister_activity_observers();
         mAddedObserver = {};
         mRemovedObserver = {};
         mDestroyedObserver = {};
@@ -192,6 +197,8 @@ void script_runtime::attach_world(ecs::world *world) {
     }
     mWorld = world;
     mScriptComponentId = {};
+    // What was recorded names entities of the previous world; a PLAY session derives the state from the tags.
+    mActivityChanges.clear();
     if (mWorld == nullptr) {
         return;
     }
@@ -232,10 +239,13 @@ void script_runtime::attach_world(ecs::world *world) {
           }
       }
     );
+    register_activity_observers();
 
     // Components that arrived without this runtime observing (a world copied while detached, R29) are
     // adopted now, exactly as the ADDED observer would have done.
     adopt_world_sets(mMode == script_mode::PLAY);
+    // Instances that outlived a detach (attached again to the same world) missed the tag changes meanwhile.
+    recheck_live_entities();
 }
 
 void script_runtime::attach_registry(ecs::component_registry *registry) {
@@ -244,6 +254,39 @@ void script_runtime::attach_registry(ecs::component_registry *registry) {
 
 void script_runtime::set_collision_source(std::function<std::span<const collision_event>()> source) {
     mCollisionSource = std::move(source);
+}
+
+void script_runtime::set_activity_tags(std::span<const ecs::component_id> tags) {
+    unregister_activity_observers();
+    mActivityTags.clear();
+    for (const ecs::component_id tag : tags) {
+        const bool known = std::find(mActivityTags.begin(), mActivityTags.end(), tag) != mActivityTags.end();
+        if (tag.is_valid() && !known) {
+            mActivityTags.push_back(tag);
+        }
+    }
+    register_activity_observers();
+    // The live instances were created against the previous tags.
+    recheck_live_entities();
+}
+
+bool script_runtime::is_entity_active(ecs::entity entity) const noexcept {
+    if (mWorld == nullptr || !mWorld->is_alive(entity)) {
+        return false;
+    }
+    for (const ecs::component_id tag : mActivityTags) {
+        if (mWorld->has_raw(entity, tag)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool script_runtime::any_class_has(script_callback callback) const noexcept {
+    if (callback >= script_callback::COUNT) {
+        return false;
+    }
+    return (mClassCallbacks & callback_bit(callback)) != 0;
 }
 
 
@@ -270,6 +313,8 @@ void script_runtime::set_mode(script_mode mode) {
     }
     mMode = mode;
     mFrameBlock->in_play_mode = mode == script_mode::PLAY ? 1 : 0;
+    // Nothing is recorded in EDIT mode, and PLAY creates every instance from its entity's current tags.
+    mActivityChanges.clear();
     if (mode == script_mode::EDIT) {
         destroy_all(true);
         return;
@@ -283,8 +328,12 @@ void script_runtime::run_phase(script_phase phase, f32 deltaTime) {
         return;
     }
     enter_phase(phase);
+    // A change made since the last processing point (a native system, the editor) takes effect before the phase:
+    // an instance disabled meanwhile gets no callback of it, one enabled meanwhile gets OnEnable and joins it.
+    process_activity_changes();
     if (phase == script_phase::FIXED_UPDATE || phase == script_phase::UPDATE) {
-        // OnStart is attempted exactly once, whatever happens inside it (03_scripting.md 3.2).
+        // OnStart is attempted exactly once, whatever happens inside it (03_scripting.md 3.2); an inactive
+        // instance attempts it after its first activation.
         mark_started_entries();
     }
 
@@ -307,28 +356,48 @@ void script_runtime::flush_pending() {
     }
     mInFlush = true;
     u32 iterations = 0;
-    while (!mPendingDestroySlots.empty() || !mPendingEntityDestroys.empty() || !mPendingCreates.empty()) {
+    while (!mPendingDestroySlots.empty() || !mPendingEntityDestroys.empty() || !mPendingCreates.empty()
+           || !mActivityChanges.empty()) {
         if (iterations == MAX_FLUSH_ITERATIONS) {
             CONJURE_LOG_WARN(
               LOG_SCRIPTING,
-              "flush_pending stopped after {} iterations with {} creates and {} destroys still queued",
+              "flush_pending stopped after {} iterations with {} creates, {} destroys and {} activity changes still "
+              "queued",
               MAX_FLUSH_ITERATIONS,
               mPendingCreates.size(),
-              mPendingDestroySlots.size() + mPendingEntityDestroys.size()
+              mPendingDestroySlots.size() + mPendingEntityDestroys.size(),
+              mActivityChanges.size()
             );
             break;
         }
+        // Destroys first: an instance disabled and destroyed in the same phase still counts as active there, so it
+        // gets OnDisable and OnDestroy from destroy_instances; creates read the tags their entity has now.
         process_pending_destroys();
         process_pending_creates();
+        process_activity_changes();
         ++iterations;
     }
     mInFlush = false;
 }
 
 void script_runtime::dispatch_collision_events(std::span<const collision_event> events) {
-    if (!is_ready() || mWorld == nullptr || events.empty()) {
+    if (!is_ready() || mWorld == nullptr) {
         return;
     }
+    if (events.empty() && mActivityChanges.empty()) {
+        return;
+    }
+
+    // The collision callbacks run inside the FIXED_UPDATE phase (03_scripting.md 3.2): a query scope
+    // opened by OnCollisionEnter (or by the OnDisable and OnEnable below) is legal and closed at the end of the
+    // dispatch like at a phase end.
+    const bool enteredPhase = mCurrentPhase == script_phase::COUNT;
+    if (enteredPhase) {
+        enter_phase(script_phase::FIXED_UPDATE);
+    }
+    // A native system may have disabled an entity since the last phase: its OnDisable runs first and no record is
+    // built for it (the INACTIVE flag below).
+    process_activity_changes();
 
     // The member keeps its capacity, so a warm dispatch allocates nothing. Not re-entrant: only
     // scripting.collision_dispatch drives it, and no native entry leads back here from a callback.
@@ -346,7 +415,7 @@ void script_runtime::dispatch_collision_events(std::span<const collision_event> 
         }
         const script_callback callback = callback_of(event.kind);
         for (const script_entry &entryValue : set->entries) {
-            if (!entryValue.is_live()) {
+            if (!entryValue.is_live() || entryValue.has_flag(script_entry_flags::INACTIVE)) {
                 continue;
             }
             const script_class_info *info = mClasses.find(entryValue.classHash);
@@ -367,19 +436,11 @@ void script_runtime::dispatch_collision_events(std::span<const collision_event> 
         appendFor(event.a, event.b, event, 1.0f);
         appendFor(event.b, event.a, event, -1.0f);
     }
-    if (records.empty()) {
-        return;
-    }
-
-    // The collision callbacks run inside the FIXED_UPDATE phase (03_scripting.md 3.2): a query scope
-    // opened by OnCollisionEnter is legal and closed at the end of the dispatch like at a phase end.
-    const bool enteredPhase = mCurrentPhase == script_phase::COUNT;
-    if (enteredPhase) {
-        enter_phase(script_phase::FIXED_UPDATE);
-    }
-    const i32 result = mHost->managed_api().dispatch_collisions(records.data(), static_cast<i32>(records.size()));
-    if (result < 0) {
-        CONJURE_LOG_WARN(LOG_SCRIPTING, "dispatch_collisions returned {}", result);
+    if (!records.empty()) {
+        const i32 result = mHost->managed_api().dispatch_collisions(records.data(), static_cast<i32>(records.size()));
+        if (result < 0) {
+            CONJURE_LOG_WARN(LOG_SCRIPTING, "dispatch_collisions returned {}", result);
+        }
     }
     force_close_query_scopes();
     flush_deferred_commands();
@@ -400,6 +461,7 @@ void script_runtime::destroy_all(bool callOnDestroy) {
     slots.insert(slots.end(), mPendingDestroySlots.begin(), mPendingDestroySlots.end());
     mPendingDestroySlots.clear();
     mPendingCreates.clear();
+    mActivityChanges.clear();
     destroy_slots(slots, callOnDestroy);
 
     std::vector<ecs::entity> entities = std::exchange(mPendingEntityDestroys, {});
@@ -415,8 +477,8 @@ void script_runtime::destroy_all(bool callOnDestroy) {
     // (the created and started flags are for hot reload only), and a fault badge does not outlive its instance.
     mStore.for_each_set([](u32, script_set &set) {
         for (script_entry &entryValue : set.entries) {
-            entryValue.flags &=
-              ~(script_entry_flags::CREATED | script_entry_flags::STARTED | script_entry_flags::FAULTED);
+            entryValue.flags &= ~(script_entry_flags::CREATED | script_entry_flags::STARTED
+                                  | script_entry_flags::FAULTED | script_entry_flags::INACTIVE);
         }
     });
 }
@@ -996,6 +1058,7 @@ script_runtime_stats script_runtime::stats() const noexcept {
     result.reloadCount = mReloadCount;
     result.zombieAssemblies = mZombieAssemblies;
     result.cachedQueries = static_cast<u32>(mQueryCache.size());
+    result.pendingActivityChanges = static_cast<u32>(mActivityChanges.size());
     return result;
 }
 
@@ -1131,6 +1194,10 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
     // OnDestroy and on the assembly that created the instances: a slot detached from its entry would
     // otherwise survive step 3 and keep the retired load context alive.
     process_pending_destroys();
+    // Activity changes recorded earlier in the frame take effect the same way, on the instances that saw them: the
+    // recreated instances read their entity's tags, so a change still pending here would never reach a script
+    // (no OnDisable before it stops updating, or no OnEnable before it updates again).
+    process_activity_changes();
 
     // 1. New load context; classes go to the staging registry. Failure changes nothing.
     mClasses.begin_staging();
@@ -1179,6 +1246,10 @@ core::result<void> script_runtime::reload_internal(const std::filesystem::path &
     // whose create was still queued, or whose OnCreate threw, runs OnCreate. The fault badges belong to the
     // destroyed instances: the managed DisabledMask starts clean, so does the flag.
     mClasses.commit_staging();
+    mClassCallbacks = 0;
+    for (const script_class_info &info : mClasses.classes()) {
+        mClassCallbacks = static_cast<u16>(mClassCallbacks | info.callbackMask);
+    }
     mWarnedMissingClasses.clear();
     mWarnedMirrorNames.clear();         // a still-wrong mirror of the new assembly is reported again
     mAssemblyLoaded = true;
@@ -1353,6 +1424,11 @@ void script_runtime::process_pending_creates() {
         if (entryValue->has_flag(script_entry_flags::CREATED)) {
             request.flags |= CREATE_FLAG_ALREADY_CREATED;
         }
+        // The instance starts in its entity's current state; a change OnCreate makes is recorded and processed
+        // after this batch, against the INACTIVE flag the request sets below.
+        if (!is_entity_active(set->owner)) {
+            request.flags |= CREATE_FLAG_INACTIVE;
+        }
         request.out_slot = INVALID_SLOT;
         requests.push_back(request);
         ids.push_back(item.id);
@@ -1383,6 +1459,11 @@ void script_runtime::process_pending_creates() {
             // OnCreate completed (or OnReload ran on an entry whose OnCreate had): a hot reload recreates this entry
             // with OnReload instead. An OnCreate that threw takes the flag back below.
             entryValue->flags |= script_entry_flags::CREATED;
+            if ((requests[index].flags & CREATE_FLAG_INACTIVE) != 0) {
+                entryValue->flags |= script_entry_flags::INACTIVE;
+            } else {
+                entryValue->flags &= ~script_entry_flags::INACTIVE;
+            }
         }
         for (const faulted_slot &faulted : mFaultedBeforeMapped) {
             const std::optional<script_entry_id> faultedId = mStore.resolve_slot(faulted.slot);
@@ -1496,12 +1577,128 @@ void script_runtime::mark_started_entries() {
     mStore.for_each_set([](u32, script_set &set) {
         for (script_entry &entryValue : set.entries) {
             // A live entry without CREATED is one whose OnCreate threw: the managed guard disabled every callback,
-            // so its OnStart is never attempted, and the OnCreate a reload runs again is followed by OnStart.
-            if (entryValue.is_live() && entryValue.has_flag(script_entry_flags::CREATED)) {
+            // so its OnStart is never attempted, and the OnCreate a reload runs again is followed by OnStart. An
+            // inactive instance attempts OnStart after its first activation (managed keeps it out of the pending
+            // starts until then), so it is not marked either.
+            const bool attempts = entryValue.is_live() && entryValue.has_flag(script_entry_flags::CREATED)
+              && !entryValue.has_flag(script_entry_flags::INACTIVE);
+            if (attempts) {
                 entryValue.flags |= script_entry_flags::STARTED;
             }
         }
     });
+}
+
+void script_runtime::register_activity_observers() {
+    if (mWorld == nullptr || !mActivityObservers.empty()) {
+        return;
+    }
+    const auto record = [this](ecs::world &owner, ecs::entity target, ecs::component_id, ecs::command_buffer &) {
+        note_activity_change(owner, target);
+    };
+    for (const ecs::component_id tag : mActivityTags) {
+        mActivityObservers.push_back(mWorld->observe(tag, ecs::component_event::ADDED, record));
+        mActivityObservers.push_back(mWorld->observe(tag, ecs::component_event::REMOVED, record));
+    }
+}
+
+void script_runtime::recheck_live_entities() {
+    if (mMode != script_mode::PLAY || !is_ready() || mWorld == nullptr) {
+        return;
+    }
+    // Every entity with a live instance is checked at the next processing point, which calls set_active only for
+    // the instances whose state differs from their entity's tags.
+    mStore.for_each_set([this](u32, script_set &set) {
+        for (const script_entry &entryValue : set.entries) {
+            if (entryValue.is_live()) {
+                mActivityChanges.push_back(set.owner);
+                return;
+            }
+        }
+    });
+}
+
+void script_runtime::unregister_activity_observers() {
+    if (mWorld != nullptr) {
+        for (const ecs::observer_id observer : mActivityObservers) {
+            mWorld->unobserve(observer);
+        }
+    }
+    mActivityObservers.clear();
+}
+
+void script_runtime::note_activity_change(const ecs::world &owner, ecs::entity entity) {
+    // Only recorded: the managed calls happen at the processing points, never inside a world flush. Outside PLAY
+    // nothing is recorded, so EDIT mode and scene loads before Play cost nothing and the list cannot grow.
+    if (mMode != script_mode::PLAY || !is_ready() || !mScriptComponentId.is_valid()) {
+        return;
+    }
+    if (!owner.has_raw(entity, mScriptComponentId)) {
+        return;
+    }
+    mActivityChanges.push_back(entity);
+}
+
+void script_runtime::process_activity_changes() {
+    // Not re-entrant: managed set_active below reads the slot batches, so a call from inside its OnDisable or OnEnable
+    // (through a set replace) leaves what it would process to the next processing point.
+    if (mActivityChanges.empty() || mProcessingActivity) {
+        return;
+    }
+    if (!is_ready() || mWorld == nullptr || mMode != script_mode::PLAY) {
+        mActivityChanges.clear();
+        return;
+    }
+    // Swapped out: OnDisable and OnEnable may change activity again, which records into the emptied list and is
+    // processed by the next call.
+    std::swap(mActivityChanges, mActivityProcessing);
+    mActivitySlotsOff.clear();
+    mActivitySlotsOn.clear();
+    for (const ecs::entity target : mActivityProcessing) {
+        const script_component *component =
+          mWorld->is_alive(target) ? std::as_const(*mWorld).get<script_component>(target) : nullptr;
+        script_set *set = component == nullptr ? nullptr : mStore.find(component->setHandle);
+        if (set == nullptr) {
+            continue;
+        }
+        const bool inactive = !is_entity_active(target);
+        for (script_entry &entryValue : set->entries) {
+            // An entry without an instance takes its state when it is created; a repeated record of the same
+            // entity finds the flag already matching.
+            if (!entryValue.is_live() || entryValue.has_flag(script_entry_flags::INACTIVE) == inactive) {
+                continue;
+            }
+            if (inactive) {
+                entryValue.flags |= script_entry_flags::INACTIVE;
+                mActivitySlotsOff.push_back(entryValue.managedSlot);
+            } else {
+                entryValue.flags &= ~script_entry_flags::INACTIVE;
+                mActivitySlotsOn.push_back(entryValue.managedSlot);
+            }
+        }
+    }
+    mActivityProcessing.clear();
+
+    // The flags were updated before managed code runs: OnDisable and OnEnable may add, remove or destroy scripts.
+    const conjure_managed_api &managed = mHost->managed_api();
+    mProcessingActivity = true;
+    if (!mActivitySlotsOff.empty()) {
+        const i32 result = managed.set_active(mActivitySlotsOff.data(), static_cast<i32>(mActivitySlotsOff.size()), 0);
+        if (result < 0) {
+            CONJURE_LOG_WARN(LOG_SCRIPTING, "set_active(inactive) returned {}", result);
+        }
+    }
+    if (!mActivitySlotsOn.empty()) {
+        const i32 result = managed.set_active(mActivitySlotsOn.data(), static_cast<i32>(mActivitySlotsOn.size()), 1);
+        if (result < 0) {
+            CONJURE_LOG_WARN(LOG_SCRIPTING, "set_active(active) returned {}", result);
+        }
+    }
+    mProcessingActivity = false;
+    if (!mActivitySlotsOff.empty() || !mActivitySlotsOn.empty()) {
+        // A scope OnDisable or OnEnable left open would lock the world against what follows.
+        force_close_query_scopes();
+    }
 }
 
 ecs::query &script_runtime::cached_query(const query_cache_key &key, const ecs::query_desc &desc) {
@@ -1771,19 +1968,52 @@ core::result<void> script_runtime::replace_set_entries(u32 handle, const core::j
         parsed.push_back(std::move(entryValue));
     }
 
-    std::vector<i32> slots = {};
+    // A recorded activity change takes effect on the live instances first, as in reload_internal: the instances
+    // recreated below read their entity's tags, so a change still pending would never reach a script. Its
+    // OnDisable and OnEnable may change the store, so the set is resolved again.
+    process_activity_changes();
+    if (mStore.find(handle) == nullptr) {
+        return core::make_error(
+          scripting_error::INSTANCE_NOT_FOUND,
+          "the script set was freed by OnDisable or OnEnable"
+        );
+    }
+
+    // A live entry the JSON brings back as already created (a play-mode snapshot restore, or a replace from the
+    // set's own JSON) is recreated with OnReload, like a hot reload: its instance goes without OnDisable and
+    // OnDestroy, so neither a one-shot effect nor an unpaired OnDisable runs. Each parsed entry stands in for one
+    // live entry of its class; every other live entry is really removed (OnDisable when active, then OnDestroy).
+    std::vector<i32> recreatedSlots = {};
+    std::vector<i32> removedSlots = {};
+    std::vector<bool> parsedTaken(parsed.size(), false);
     for (const script_entry &entryValue : mStore.find(handle)->entries) {
-        if (entryValue.is_live()) {
-            slots.push_back(entryValue.managedSlot);
+        if (!entryValue.is_live()) {
+            continue;
+        }
+        bool recreated = false;
+        for (usize index = 0; index < parsed.size(); ++index) {
+            const bool match = !parsedTaken[index] && parsed[index].classHash == entryValue.classHash
+              && parsed[index].has_flag(script_entry_flags::CREATED);
+            if (match) {
+                parsedTaken[index] = true;
+                recreated = true;
+                break;
+            }
+        }
+        if (recreated) {
+            recreatedSlots.push_back(entryValue.managedSlot);
+        } else {
+            removedSlots.push_back(entryValue.managedSlot);
         }
     }
-    destroy_slots(slots, true);
+    destroy_slots(recreatedSlots, false);
+    destroy_slots(removedSlots, true);
     std::erase_if(mPendingCreates, [handle](const pending_create &pending) {
         return pending.id.setHandle == handle;
     });
 
-    // OnDestroy ran managed code: it may have added scripts (the store reallocated) or freed this very
-    // set, so the set is resolved again rather than held across the call.
+    // OnDisable and OnDestroy ran managed code: they may have added scripts (the store reallocated) or freed this
+    // very set, so the set is resolved again rather than held across the call.
     script_set *set = mStore.find(handle);
     if (set == nullptr) {
         return core::make_error(scripting_error::INSTANCE_NOT_FOUND, "the script set was freed by OnDestroy");

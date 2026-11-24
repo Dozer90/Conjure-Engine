@@ -16,6 +16,7 @@
 #include "conjure/scripting/script_runtime.h"
 
 #include <filesystem>
+#include <span>
 #include <vector>
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
@@ -32,7 +33,8 @@
 // Every frame (step 5) the subsystem writes the conjure_frame_block from engine_time, the input snapshot and the
 // game screen of the window (game_screen_of).
 // Before a scene unloads it runs destroy_all(true) so OnDestroy sees live entities (R29); physics contact
-// events become collision events for scripting.collision_dispatch.
+// events become collision events for scripting.collision_dispatch (STAY only while a loaded class overrides
+// OnCollisionStay), and the runtime is given scene.disabled and scene.inactive as its activity tags.
 
 namespace conjure::engine {
 
@@ -98,14 +100,25 @@ namespace conjure::engine {
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
             /// <summary>
-            /// Physics contacts as scripting collision events: STAY contacts are dropped, the four others map
-            /// one to one.
+            /// Physics contacts as scripting collision events, replacing what 'out' held (the body of the
+            /// collision source, which passes 'includeStay' only while a loaded class overrides OnCollisionStay).
+            /// STAY becomes COLLISION_STAY with impulse 0 when 'includeStay', and is dropped otherwise; the four
+            /// other kinds map one to one.
             /// </summary>
             static void convert_contacts(
               std::span<const physics::contact_event> contacts,
-              std::vector<scripting::collision_event> &out
+              std::vector<scripting::collision_event> &out,
+              bool includeStay
             );
 #endif
+
+            /// <summary>
+            /// The collision events the collision source converted for the last collision dispatch (empty
+            /// before the first one, without physics and after shutdown).
+            /// </summary>
+            [[nodiscard]] std::span<const scripting::collision_event> last_collisions() const noexcept {
+                return mCollisions;
+            }
 
         private:
             void disable(engine_context &context);

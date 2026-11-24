@@ -48,11 +48,18 @@ class CONJURE_API script_runtime
 <table class="variable-table">
 <thead><tr><th>Access</th><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Changes</code></td><td><code class="signature">std::vector&lt;<a href="../../ecs/entity/entity.html">ecs::entity</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Observers</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="../../ecs/observer/observer-id.html">ecs::<wbr>observer_<wbr>id</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Processing</code></td><td><code class="signature">std::vector&lt;<a href="../../ecs/entity/entity.html">ecs::entity</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Slots<wbr>Off</code></td><td><code class="signature">std::vector&lt;<a href="../../core/types.html#symbol-i32">i32</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Slots<wbr>On</code></td><td><code class="signature">std::vector&lt;<a href="../../core/types.html#symbol-i32">i32</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Activity<wbr>Tags</code></td><td><code class="signature"><a href="../../core/containers/small-vector/small-vector.html">core::<wbr>small_<wbr>vector</a>&lt;<wbr>ecs::<wbr>component_<wbr>id,<wbr> <span class="mi">2</span>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Added<wbr>Observer</code></td><td><code class="signature"><a href="../../ecs/observer/observer-id.html">ecs::observer_id</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Assembly<wbr>Loaded</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Assembly<wbr>Path</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">MAX_<wbr>FLUSH_<wbr>ITERATIONS</code></td><td><code class="signature"><span class="k">static</span> <span class="k">constexpr</span> <a href="../../core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">8</span></code></td><td>Loops <code>flush_pending()</code> runs for creates and destroys requested from inside OnCreate/OnDestroy.</td></tr>
 <tr><td>private</td><td><code class="signature">mBlobBuffer</code></td><td><code class="signature">std::vector&lt;<a href="../../core/types.html#symbol-u8">u8</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Class<wbr>Callbacks</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u16">u16</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mClasses</code></td><td><code class="signature"><a href="../script-class-registry/script-class-registry.html">script_class_registry</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Collision<wbr>Records</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="../native-api/conjure-collision-record.html">conjure_<wbr>collision_<wbr>record</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Collision<wbr>Source</code></td><td><code class="signature">std::<wbr>function&lt;<wbr>std::<wbr>span&lt;<wbr><span class="k">const</span> <a href="collision-event.html">collision_<wbr>event</a>&gt;()&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
@@ -75,6 +82,7 @@ class CONJURE_API script_runtime
 <tr><td>private</td><td><code class="signature">m<wbr>Pending<wbr>Creates</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr><a href="script-runtime-pending-create.html">pending_<wbr>create</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Pending<wbr>Destroy<wbr>Slots</code></td><td><code class="signature">std::vector&lt;<a href="../../core/types.html#symbol-i32">i32</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Pending<wbr>Entity<wbr>Destroys</code></td><td><code class="signature">std::vector&lt;<a href="../../ecs/entity/entity.html">ecs::entity</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Processing<wbr>Activity</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mQueryCache</code></td><td><code class="signature"><a href="../../core/containers/flat-map/flat-map.html">core::<wbr>flat_<wbr>map</a>&lt;<wbr>query_<wbr>cache_<wbr>key,<wbr> <a href="../../ecs/query/query.html">ecs::<wbr>query</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mQueryScopes</code></td><td><code class="signature">std::<wbr>vector&lt;<wbr>std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="script-runtime-query-scope-state.html">query_<wbr>scope_<wbr>state</a>&gt;&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mRegistry</code></td><td><code class="signature"><a href="../../ecs/component-registry/component-registry.html">ecs::<wbr>component_<wbr>registry</a> *</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
@@ -104,6 +112,12 @@ class CONJURE_API script_runtime
 
 <p>The single live runtime of the process, or <code>nullptr</code>.</p>
 
+#### `activity_tags` {#function-activity-tags}
+
+<div class="function-declaration" id="function-activity-tags-1"><pre><code>[[<span class="na">nodiscard</span>]] std::span&lt;<span class="k">const</span> ecs::component_id&gt; activity_tags() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The ids <code>set_activity_tags</code> kept (the valid ones, in the order given).</p>
+
 #### `add_script` {#function-add-script}
 
 <div class="function-declaration" id="function-add-script-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../script-component/script-entry-id.html">script_entry_id</a> add_script(
@@ -112,6 +126,13 @@ class CONJURE_API script_runtime
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;fields);</code></pre></div>
 
 <p>Adds a <code><a href="../script-component/script-component.html">script_component</a></code> when missing, appends an entry with the given JSON fields (an object; invalid = defaults) and, in <code>PLAY</code> mode, queues its creation for the next flush. An invalid id when the entity is dead, the world detached or the entity already carries <code>MAX_SCRIPTS_PER_ENTITY</code> scripts, and (with a <code>WARN</code>) when the entity has no <code><a href="../script-component/script-component.html">script_component</a></code> yet while the world is locked for iteration: adding that component is a structural change. An id <code><a href="#function-is-deferred-reserved-1">is_deferred_reserved</a>()</code> answers <code>true</code> for takes the script anyway: the entry is staged in a set of its own and the <code><a href="../script-component/script-component.html">script_component</a></code> is recorded in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> behind the earlier commands on the id, so the flush places the entity with the set and queues the creation (a destroy or a removal of <code><a href="../script-component/script-component.html">script_component</a></code> recorded later drops the staged scripts, as it drops the component). The returned id names the entry in that set; when the entity already holds a <code><a href="../script-component/script-component.html">script_component</a></code> at the flush (a deferred instantiation root whose archive carries scripts), the staged entries are appended to its set instead and the id goes stale; entries that would take that set past <code>MAX_SCRIPTS_PER_ENTITY</code> are dropped at the flush with a <code>WARN</code>. On a reserved id the result is invalid only when the staged set already holds <code>MAX_SCRIPTS_PER_ENTITY</code> scripts or the registry has no <code><a href="../script-component/script-component.html">script_component</a></code> type.</p>
+
+#### `any_class_has` {#function-any-class-has}
+
+<div class="function-declaration" id="function-any-class-has-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> any_class_has(
+    <a href="../native-api.html#symbol-script-callback">script_callback</a> callback) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True when a class of the loaded game assembly overrides the callback (the union of the callback masks, computed when an assembly load commits its classes); <code>false</code> without an assembly and for <code>COUNT</code>. The engine converts physics <code>STAY</code> contacts only while this answers <code>true</code> for <code>COLLISION_STAY</code>.</p>
 
 #### `assembly_path` {#function-assembly-path}
 
@@ -129,7 +150,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-attach-world-1"><pre><code><span class="k">void</span> attach_world(
     <a href="../../ecs/world/world.html">ecs::world</a> *world);</code></pre></div>
 
-<p>The world scripts act on (non-owning; <code>nullptr</code> detaches). Registers the <code><a href="../script-component/script-component.html">script_component</a></code> observers on it and adopts the script sets its entities already carry (queuing their creates in <code>PLAY</code> mode); the owner must <code><a href="#function-destroy-all-1">destroy_all</a>()</code> before destroying the world. Swapping to another world destroys the live instances of the old one without OnDestroy (<code>WARN</code> when any exist): instances are bound to the ids of the world they were created on.</p>
+<p>The world scripts act on (non-owning; <code>nullptr</code> detaches). Registers the <code><a href="../script-component/script-component.html">script_component</a></code> and activity tag observers on it and adopts the script sets its entities already carry (queuing their creates in <code>PLAY</code> mode); the owner must <code><a href="#function-destroy-all-1">destroy_all</a>()</code> before destroying the world. Swapping to another world destroys the live instances of the old one without OnDestroy (<code>WARN</code> when any exist): instances are bound to the ids of the world they were created on. The recorded activity changes are forgotten; instances that outlived a detach from the same world are checked against their entity&#x27;s tags again in <code>PLAY</code> mode.</p>
 
 #### `begin_query_scope` {#function-begin-query-scope}
 
@@ -194,21 +215,21 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;scripts);</code></pre></div>
 
-<p>Replaces the entity&#x27;s scripts from the <code>serialize_entity_scripts</code> form (live instances destroyed first, new ones queued in <code>PLAY</code> mode). An entry with &quot;created&quot; is recreated with OnReload instead of OnCreate, one with &quot;started&quot; without OnStart; without them (older JSON) both run. <code>INVALID_ARGUMENT</code> for malformed JSON.</p>
+<p>Replaces the entity&#x27;s scripts from the <code>serialize_entity_scripts</code> form (live instances destroyed first, new ones queued in <code>PLAY</code> mode). An entry with &quot;created&quot; is recreated with OnReload instead of OnCreate, one with &quot;started&quot; without OnStart; without them (older JSON) both run. <code>A</code> live instance that such a &quot;created&quot; entry of its class brings back goes without OnDisable and OnDestroy, as on a hot reload; every other live instance gets them (OnDisable when active). The activity changes still pending take effect first, on the live instances. <code>INVALID_ARGUMENT</code> for malformed JSON.</p>
 
 #### `destroy_all` {#function-destroy-all}
 
 <div class="function-declaration" id="function-destroy-all-1"><pre><code><span class="k">void</span> destroy_all(
     <span class="k">bool</span> callOnDestroy);</code></pre></div>
 
-<p>Destroys every live instance (OnDestroy when asked) and clears the pending queues; entries keep their JSON with <code>INVALID_SLOT</code> and lose their <code>CREATED</code>, <code>STARTED</code> and <code>FAULTED</code> flags.</p>
+<p>Destroys every live instance (when asked, OnDisable for an active one, then OnDestroy) and clears the pending queues and the recorded activity changes; entries keep their JSON with <code>INVALID_SLOT</code> and lose their <code>CREATED</code>, <code>STARTED</code>, <code>FAULTED</code> and <code>INACTIVE</code> flags.</p>
 
 #### `dispatch_collision_events` {#function-dispatch-collision-events}
 
 <div class="function-declaration" id="function-dispatch-collision-events-1"><pre><code><span class="k">void</span> dispatch_collision_events(
     std::span&lt;<span class="k">const</span> <a href="collision-event.html">collision_event</a>&gt; events);</code></pre></div>
 
-<p>Builds one <code><a href="../native-api/conjure-collision-record.html">conjure_collision_record</a></code> per participating entry whose class overrides the callback and sends them in one <code>dispatch_collisions</code> call. The record buffer is kept between calls, so a warm dispatch allocates nothing.</p>
+<p>Runs as the <code>FIXED_UPDATE</code> phase: the recorded activity changes take effect first (<code>set_activity_tags</code>), then one <code><a href="../native-api/conjure-collision-record.html">conjure_collision_record</a></code> is built per participating live, active entry whose class overrides the callback of the event&#x27;s kind (<code>COLLISION_STAY</code> included) and they go out in one <code>dispatch_collisions</code> call. The record buffer is kept between calls, so a warm dispatch allocates nothing.</p>
 
 #### `end_query_scope` {#function-end-query-scope}
 
@@ -255,7 +276,7 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-flush-pending-1"><pre><code><span class="k">void</span> flush_pending();</code></pre></div>
 
-<p>Processes the pending destroys (OnDestroy, entity destruction) and creates (one <code>create_instances</code> call: OnCreate, or OnReload for an entry a hot reload recreates) until the queues are empty or <code>MAX_FLUSH_ITERATIONS</code> passed.</p>
+<p>Processes the pending destroys (OnDisable for an active instance, then OnDestroy, then entity destruction), the creates (one <code>create_instances</code> call: OnCreate, or OnReload for an entry a hot reload recreates, each with <code>CREATE_FLAG_INACTIVE</code> when its entity is inactive) and the recorded activity changes (<code>set_activity_tags</code>) until all three are empty or <code>MAX_FLUSH_ITERATIONS</code> passed.</p>
 
 #### `frame_block` {#function-frame-block}
 
@@ -266,7 +287,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-free-set-from-destruct-1"><pre><code><span class="k">void</span> free_set_from_destruct(
     <a href="../../core/types.html#symbol-u32">u32</a> handle);</code></pre></div>
 
-<p><code>ops.destruct</code>: frees the set; live slots are detached and their OnDestroy deferred.</p>
+<p><code>ops.destruct</code>: frees the set; live slots are detached and their OnDestroy (after OnDisable for an active instance) deferred.</p>
 
 #### `host` {#function-host}
 
@@ -298,6 +319,13 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
 <p>True for an id <code>note_deferred_reserved</code> or <code>note_deferred_instance</code> remembered that no flush of <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> has applied yet (the world&#x27;s <code>is_alive</code> answers <code>false</code> for it).</p>
+
+#### `is_entity_active` {#function-is-entity-active}
+
+<div class="function-declaration" id="function-is-entity-active-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_entity_active(
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True when the entity is alive in the attached world and carries none of the activity tags; <code>false</code> without a world and for a dead entity.</p>
 
 #### `load_game_assembly` {#function-load-game-assembly}
 
@@ -358,7 +386,7 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
     <span class="k">const</span> <a href="../script-component/script-component.html">script_component</a> &amp;component);</code></pre></div>
 
-<p>Called by the <code>REMOVED</code> observer on <code><a href="../script-component/script-component.html">script_component</a></code> (and by <code>ops.destruct</code> for sets freed with live instances): detaches the set&#x27;s slots and defers their OnDestroy to the next flush.</p>
+<p>Called by the <code>REMOVED</code> observer on <code><a href="../script-component/script-component.html">script_component</a></code> (and by <code>ops.destruct</code> for sets freed with live instances): detaches the set&#x27;s slots and defers their OnDestroy (after OnDisable for an active instance) to the next flush.</p>
 
 #### `open_query_scope_count` {#function-open-query-scope-count}
 
@@ -370,7 +398,7 @@ class CONJURE_API script_runtime
     <a href="../../core/types.html#symbol-u32">u32</a> handle,
     <span class="k">const</span> <a href="../../core/json/value/json-value.html">core::json::value</a> &amp;in);</code></pre></div>
 
-<p><code>serializer.readJson</code>: replaces the entries of a set from the {&quot;scripts&quot;:[...]} object (&quot;started&quot; and &quot;created&quot; restore their flags, as in <code>deserialize_entity_scripts</code>); creates the set when <code>handle</code> is <code>INVALID_SET_HANDLE</code> and returns the handle to store.</p>
+<p><code>serializer.readJson</code>: replaces the entries of a set from the {&quot;scripts&quot;:[...]} object (&quot;started&quot; and &quot;created&quot; restore their flags, and live instances are destroyed, as in <code>deserialize_entity_scripts</code>); creates the set when <code>handle</code> is <code>INVALID_SET_HANDLE</code> and returns the handle to store.</p>
 
 #### `record_reserved_add` {#function-record-reserved-add}
 
@@ -407,7 +435,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-reload-game-assembly-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; reload_game_assembly(
     <span class="k">const</span> std::filesystem::path &amp;assemblyPath);</code></pre></div>
 
-<p>Hot reload: load new -&gt; collect fields -&gt; destroy -&gt; unload -&gt; swap registries -&gt; recreate. OnCreate runs once per entity lifetime: an entry whose OnCreate returned (the <code>CREATED</code> flag) is recreated with <code>CREATE_FLAG_ALREADY_CREATED</code> and runs OnReload after its fields are restored, an entry whose create was still queued, or whose OnCreate threw, runs OnCreate, and OnStart does not run again (an entry whose OnCreate threw never attempted it: it runs after that OnCreate). <code>A</code> failed load leaves the running game untouched; a leaked load context is a <code>WARN</code> (<code>ASSEMBLY_LEAKED</code> is logged, not returned).</p>
+<p>Hot reload: load new -&gt; collect fields -&gt; destroy -&gt; unload -&gt; swap registries -&gt; recreate. OnCreate runs once per entity lifetime: an entry whose OnCreate returned (the <code>CREATED</code> flag) is recreated with <code>CREATE_FLAG_ALREADY_CREATED</code> and runs OnReload after its fields are restored, an entry whose create was still queued, or whose OnCreate threw, runs OnCreate, and OnStart does not run again (an entry whose OnCreate threw never attempted it: it runs after that OnCreate). The destroys and activity changes still pending take effect first, on the old instances (OnDestroy, OnDisable, OnEnable); a recreated instance then starts in its entity&#x27;s state (<code>CREATE_FLAG_INACTIVE</code>). <code>A</code> failed load leaves the running game untouched; a leaked load context is a <code>WARN</code> (<code>ASSEMBLY_LEAKED</code> is logged, not returned).</p>
 
 #### `remap_entity_fields` {#function-remap-entity-fields}
 
@@ -431,14 +459,14 @@ class CONJURE_API script_runtime
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity,
     <a href="../script-component/script-entry-id.html">script_entry_id</a> id);</code></pre></div>
 
-<p>Destroys the entry&#x27;s instance now (OnDestroy, entity alive) and removes the entry. Ignored (<code>DEBUG</code> log) when the id does not belong to the entity&#x27;s script set or no world is attached.</p>
+<p>Destroys the entry&#x27;s instance now (OnDisable when it is active, then OnDestroy, entity alive) and removes the entry. Ignored (<code>DEBUG</code> log) when the id does not belong to the entity&#x27;s script set or no world is attached.</p>
 
 #### `request_entity_destroy` {#function-request-entity-destroy}
 
 <div class="function-declaration" id="function-request-entity-destroy-1"><pre><code><span class="k">void</span> request_entity_destroy(
     <a href="../../ecs/entity/entity.html">ecs::entity</a> entity);</code></pre></div>
 
-<p><code>Entity.Destroy()</code> from <code>C</code>#: an entity with live scripts is destroyed at the next flush, after OnDestroy ran with the entity alive (even when requested inside a query scope); one without is destroyed now, or through <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> while the world is locked. An id <code><a href="#function-is-deferred-reserved-1">is_deferred_reserved</a>()</code> answers <code>true</code> for (it has no instance yet) records the destroy in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code>, where it wins over every command on the id: the id never becomes alive. On a root <code><a href="#function-is-deferred-instance-1">is_deferred_instance</a>()</code> answers <code>true</code> for, the flush cancels the whole copy, so the archive&#x27;s inner entities never become alive either. Anything else that is not alive is ignored.</p>
+<p><code>Entity.Destroy()</code> from <code>C</code>#: an entity with live scripts is destroyed at the next flush, after OnDestroy (preceded by OnDisable for an active instance) ran with the entity alive (even when requested inside a query scope); one without is destroyed now, or through <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code> while the world is locked. An id <code><a href="#function-is-deferred-reserved-1">is_deferred_reserved</a>()</code> answers <code>true</code> for (it has no instance yet) records the destroy in <code><a href="#function-deferred-commands-1">deferred_commands</a>()</code>, where it wins over every command on the id: the id never becomes alive. On a root <code><a href="#function-is-deferred-instance-1">is_deferred_instance</a>()</code> answers <code>true</code> for, the flush cancels the whole copy, so the archive&#x27;s inner entities never become alive either. Anything else that is not alive is ignored.</p>
 
 #### `run_phase` {#function-run-phase}
 
@@ -446,7 +474,7 @@ class CONJURE_API script_runtime
     <a href="../native-api.html#symbol-script-phase">script_phase</a> phase,
     <a href="../../core/types.html#symbol-f32">f32</a> deltaTime);</code></pre></div>
 
-<p>One managed call for the phase, then the open query scopes are force-closed (<code>WARN</code>), the deferred commands flushed and <code><a href="#function-flush-pending-1">flush_pending</a>()</code> run while the phase is still current (so OnCreate/OnDestroy of that flush may open query scopes). Outside <code>run_phase</code> and <code>dispatch_collision_events</code> (<code>FIXED_UPDATE</code>) a query scope is refused with <code>NOT_IN_PHASE</code>: the flushes of <code>frame_begin</code>, <code>frame_end</code> and <code>set_mode</code> run no phase.</p>
+<p>The recorded activity changes take effect first (<code>set_activity_tags</code>; their OnDisable and OnEnable run in the phase), then one managed call for the phase, then the open query scopes are force-closed (<code>WARN</code>), the deferred commands flushed and <code><a href="#function-flush-pending-1">flush_pending</a>()</code> run while the phase is still current (so OnCreate/OnDestroy of that flush may open query scopes). Outside <code>run_phase</code> and <code>dispatch_collision_events</code> (<code>FIXED_UPDATE</code>) a query scope is refused with <code>NOT_IN_PHASE</code>: the flushes of <code>frame_begin</code>, <code>frame_end</code> and <code>set_mode</code> run no phase.</p>
 
 #### `sample_managed_memory` {#function-sample-managed-memory}
 
@@ -472,6 +500,13 @@ class CONJURE_API script_runtime
 
 <p>{&quot;scripts&quot;:[{&quot;class&quot;,&quot;hash&quot;,&quot;fields&quot;}]} of the entity&#x27;s set (live fields refreshed first), each entry with &quot;started&quot;: <code>true</code> and &quot;created&quot;: <code>true</code> when its <code>STARTED</code> and <code>CREATED</code> flags are set; {&quot;scripts&quot;:[]} for an entity without scripts. <code>ENTITY_NOT_ALIVE</code> through the ecs category.</p>
 
+#### `set_activity_tags` {#function-set-activity-tags}
+
+<div class="function-declaration" id="function-set-activity-tags-1"><pre><code><span class="k">void</span> set_activity_tags(
+    std::span&lt;<span class="k">const</span> ecs::component_id&gt; tags);</code></pre></div>
+
+<p>The component ids that make an entity inactive (the engine passes <code>scene.disabled</code> and <code>scene.inactive</code>, so this module needs no scene code): an instance is active while its entity is alive and carries none of them. Invalid ids are ignored; an empty span (the default) makes every instance active. The runtime observes <code>ADDED</code> and <code>REMOVED</code> of each tag on the attached world (again after <code>attach_world</code>) and records the entity only in <code>PLAY</code> mode, with a ready host, when it carries a <code><a href="../script-component/script-component.html">script_component</a></code>: nothing is recorded in <code>EDIT</code> mode, and <code>set_mode</code> and <code>attach_world</code> forget what was recorded, because a <code>PLAY</code> session creates every instance from its entity&#x27;s current tags (<code>CREATE_FLAG_INACTIVE</code>). <code>A</code> recorded change takes effect where a Destroy does, at the first of: a <code>flush_pending</code> (the end of the phase that made it; for a change made outside a phase, also the flushes of <code>frame_begin</code>, <code>frame_end</code> and <code>set_mode</code>, which run no phase, so a query scope OnEnable or OnDisable opens there is refused with <code>NOT_IN_PHASE</code>), the start of the next <code>run_phase</code>, the start of <code>dispatch_collision_events</code>, and before a hot reload or a set replace (<code>deserialize_entity_scripts</code>, <code>read_set_json</code>) recreates instances. There the live instances whose state differs get one <code>conjure_managed_api::set_active</code> call for those that became inactive (OnDisable), then one for those that became active (OnEnable, then OnStart before the next <code>FIXED_UPDATE</code> or <code>UPDATE</code> when it never ran); a change undone before that point calls nothing. An inactive instance joins no phase, gets no collision records and is not marked started. Changing the tags in <code>PLAY</code> mode re-checks every entity with live scripts at the next of those points.</p>
+
 #### `set_collision_source` {#function-set-collision-source}
 
 <div class="function-declaration" id="function-set-collision-source-1"><pre><code><span class="k">void</span> set_collision_source(
@@ -493,7 +528,7 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-set-mode-1"><pre><code><span class="k">void</span> set_mode(
     <a href="../script-runtime.html#symbol-script-mode">script_mode</a> mode);</code></pre></div>
 
-<p><code>EDIT</code> -&gt; <code>PLAY</code> creates every instance of the attached world&#x27;s entities (and flushes); <code>PLAY</code> -&gt; <code>EDIT</code> destroys them with OnDestroy and clears their <code>CREATED</code>, <code>STARTED</code> and <code>FAULTED</code> flags, so the next <code>PLAY</code> runs OnCreate and OnStart again (the created and started flags are for hot reload only).</p>
+<p><code>EDIT</code> -&gt; <code>PLAY</code> creates every instance of the attached world&#x27;s entities (and flushes), the instances of an inactive entity with <code>CREATE_FLAG_INACTIVE</code>; <code>PLAY</code> -&gt; <code>EDIT</code> destroys them (OnDisable for an active one, then OnDestroy) and clears their <code>CREATED</code>, <code>STARTED</code>, <code>FAULTED</code> and <code>INACTIVE</code> flags, so the next <code>PLAY</code> runs OnCreate and OnStart again (the created and started flags are for hot reload only). Both forget the recorded activity changes.</p>
 
 #### `shutdown` {#function-shutdown}
 
@@ -606,6 +641,16 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-mark-started-entries-1"><pre><code><span class="k">void</span> mark_started_entries();</code></pre></div>
 
+#### `note_activity_change` {#function-note-activity-change}
+
+<div class="function-declaration" id="function-note-activity-change-1"><pre><code><span class="k">void</span> note_activity_change(
+    <span class="k">const</span> <a href="../../ecs/world/world.html">ecs::world</a> &amp;owner,
+    <a href="../../ecs/entity/entity.html">ecs::entity</a> entity);</code></pre></div>
+
+#### `process_activity_changes` {#function-process-activity-changes}
+
+<div class="function-declaration" id="function-process-activity-changes-1"><pre><code><span class="k">void</span> process_activity_changes();</code></pre></div>
+
 #### `process_pending_creates` {#function-process-pending-creates}
 
 <div class="function-declaration" id="function-process-pending-creates-1"><pre><code><span class="k">void</span> process_pending_creates();</code></pre></div>
@@ -624,10 +669,18 @@ class CONJURE_API script_runtime
 <div class="function-declaration" id="function-queue-creates-of-set-1"><pre><code><span class="k">void</span> queue_creates_of_set(
     <a href="../../core/types.html#symbol-u32">u32</a> handle);</code></pre></div>
 
+#### `recheck_live_entities` {#function-recheck-live-entities}
+
+<div class="function-declaration" id="function-recheck-live-entities-1"><pre><code><span class="k">void</span> recheck_live_entities();</code></pre></div>
+
 #### `refresh_live_fields` {#function-refresh-live-fields}
 
 <div class="function-declaration" id="function-refresh-live-fields-1"><pre><code><span class="k">void</span> refresh_live_fields(
     <a href="../script-component/script-entry.html">script_entry</a> &amp;entryValue);</code></pre></div>
+
+#### `register_activity_observers` {#function-register-activity-observers}
+
+<div class="function-declaration" id="function-register-activity-observers-1"><pre><code><span class="k">void</span> register_activity_observers();</code></pre></div>
 
 #### `reload_internal` {#function-reload-internal}
 
@@ -656,6 +709,10 @@ class CONJURE_API script_runtime
 
 <div class="function-declaration" id="function-take-scope-state-1"><pre><code>[[<span class="na">nodiscard</span>]] std::unique_ptr&lt;<a href="script-runtime-query-scope-state.html">query_scope_state</a>&gt; take_scope_state(
     <a href="../../core/types.html#symbol-usize">usize</a> chunkCount);</code></pre></div>
+
+#### `unregister_activity_observers` {#function-unregister-activity-observers}
+
+<div class="function-declaration" id="function-unregister-activity-observers-1"><pre><code><span class="k">void</span> unregister_activity_observers();</code></pre></div>
 
 #### `warn_missing_class_once` {#function-warn-missing-class-once}
 

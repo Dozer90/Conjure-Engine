@@ -4,7 +4,9 @@
 #include "conjure/testing/temp_directory.h"
 #include "engine_test_support.h"
 
+#include "conjure/core/json/writer.h"
 #include "conjure/core/math.h"
+#include "conjure/core/string_id.h"
 #include "conjure/core/types.h"
 #include "conjure/ecs/component_registry.h"
 #include "conjure/ecs/scheduler.h"
@@ -16,17 +18,26 @@
 #include "conjure/engine/project.h"
 #include "conjure/platform/input_state.h"
 #include "conjure/platform/key.h"
+#include "conjure/scene/components.h"
+#include "conjure/scene/scene.h"
+#include "conjure/scene/scene_manager.h"
+#include "conjure/scene/scene_serializer.h"
 #include "conjure/scripting/native_api.h"
+#include "conjure/scripting/null_script_host.h"
+#include "conjure/scripting/script_class_registry.h"
 #include "conjure/scripting/script_component.h"
 #include "conjure/scripting/script_host.h"
 #include "conjure/scripting/script_runtime.h"
 #include "engine/subsystems/scripting_subsystem.h"
 
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    #include "conjure/physics/components.h"
     #include "conjure/physics/contact_events.h"
+    #include "conjure/physics/physics_world.h"
 #endif
 
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <span>
 #include <string>
@@ -36,8 +47,10 @@
 
 // scripting_subsystem (docs/design/06_engine_loop.md 3.4 steps 14 and 17, D12, R27, R29): the runtime over the
 // null host, the frame block written every frame from engine_time and the input snapshot, the contact to
-// collision conversion, the error paths of a missing runtime, and the headless opt-in: a headless run of a
-// scripted project starts the runtime only with --scripting and says so when it does not.
+// collision conversion and its STAY gate, the error paths of a missing runtime, and the headless opt-in: a headless
+// run of a scripted project starts the runtime only with --scripting and says so when it does not. Inactive
+// scripts sleep (code sweep W3-CS-L4): the subsystem hands the scene's two activity tags to the runtime, so
+// scene::set_enabled reaches the scripts of a whole subtree.
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -65,6 +78,108 @@ namespace {
 
     constexpr std::string_view HEADLESS_HINT = "unless --scripting is given";
     constexpr std::string_view PLAIN_DISABLED = "scripting: disabled by configuration";
+
+    constexpr std::string_view SLEEPER = "Game.Sleeper";
+    constexpr std::string_view BUMPER = "Game.Bumper";
+
+    /// <summary>
+    /// The null host behind the application's runtime (null_host_config).
+    /// </summary>
+    [[nodiscard]] scripting::null_script_host &null_host_of(scripting::script_runtime &runtime) {
+        REQUIRE(runtime.host().backend() == scripting::script_backend::NULL_HOST);
+        return static_cast<scripting::null_script_host &>(runtime.host());
+    }
+
+    /// <summary>
+    /// A fake class for the null host with the given callbacks and no fields.
+    /// </summary>
+    [[nodiscard]] scripting::script_class_info fake_class(
+      std::string_view fullName,
+      std::initializer_list<scripting::script_callback> callbacks
+    ) {
+        scripting::script_class_info info = {};
+        info.fullName = std::string(fullName);
+        info.hash = scripting::script_name_hash(fullName);
+        for (const scripting::script_callback callback : callbacks) {
+            info.callbackMask = static_cast<u16>(info.callbackMask | scripting::callback_bit(callback));
+        }
+        return info;
+    }
+
+    /// <summary>
+    /// Game.Sleeper: UPDATE, ENABLE and DISABLE.
+    /// </summary>
+    [[nodiscard]] scripting::script_class_info sleeper_class() {
+        return fake_class(
+          SLEEPER,
+          {scripting::script_callback::UPDATE, scripting::script_callback::ENABLE, scripting::script_callback::DISABLE}
+        );
+    }
+
+    /// <summary>
+    /// Adds one script of the class to the entity (default fields); the instance exists after the next flush.
+    /// </summary>
+    [[nodiscard]] scripting::script_entry_id add_fake_script(
+      scripting::script_runtime &runtime,
+      ecs::entity entity,
+      std::string_view fullName
+    ) {
+        const scripting::script_entry_id id = runtime.add_script(entity, scripting::script_name_hash(fullName), {});
+        REQUIRE(id.is_valid());
+        return id;
+    }
+
+    /// <summary>
+    /// The scene as scene_serializer::save_scene writes it.
+    /// </summary>
+    [[nodiscard]] std::string saved_scene(const scene::scene &source) {
+        core::json::writer out = {};
+        CONJURE_REQUIRE_OK(scene::scene_serializer::save_scene(source, out));
+        return out.finish();
+    }
+
+#if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
+    /// <summary>
+    /// A root entity with a box collider and a rigid body at 'position': static ground 20 x 1 x 20, or a dynamic
+    /// unit box that never sleeps. The physics subsystem creates the body at the next frame.
+    /// </summary>
+    [[nodiscard]] ecs::entity spawn_box(
+      scene::scene &target,
+      std::string_view name,
+      const math::vec3 &position,
+      bool staticGround
+    ) {
+        const core::result<ecs::entity> created = target.create_entity(core::string_id(name));
+        CONJURE_REQUIRE_OK(created);
+        scene::local_transform pose = {};
+        pose.position = position;
+        CONJURE_REQUIRE_OK(target.set_local_transform(created.value(), pose));
+        physics::rigid_body body = {};
+        physics::box_collider shape = {};
+        if (staticGround) {
+            body.motionType = physics::motion_type::STATIC;
+            shape.halfExtents = math::vec3(10.0f, 0.5f, 10.0f);
+        } else {
+            body.flags = physics::rigid_body_flags::NONE;
+        }
+        CONJURE_REQUIRE_OK(target.world().add<physics::rigid_body>(created.value(), body));
+        CONJURE_REQUIRE_OK(target.world().add<physics::box_collider>(created.value(), shape));
+        return created.value();
+    }
+
+    /// <summary>
+    /// The COLLISION_STAY events among 'events'.
+    /// </summary>
+    [[nodiscard]] usize count_stays(std::span<const scripting::collision_event> events) {
+        usize stays = 0;
+        for (const scripting::collision_event &event : events) {
+            if (event.kind == scripting::collision_kind::COLLISION_STAY) {
+                ++stays;
+            }
+        }
+        return stays;
+    }
+#endif
 
     /// <summary>
     /// The descriptor conjure_runtime would build for the arguments, over a base that picks the null script
@@ -304,8 +419,108 @@ TEST_SUITE("engine/scripting_subsystem") {
         CHECK(block.input.gamepads[0].connected == 0);
     }
 
+    TEST_CASE("regression - code sweep W3-CS-L4 the subsystem gives the runtime scene.disabled and scene.inactive") {
+        application app(engine_test::make_desc(null_host_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        scripting::script_runtime *runtime = app.context().scripting;
+        REQUIRE(runtime != nullptr);
+        const ecs::component_id disabledTag = app.context().components->id_of<scene::disabled>();
+        const ecs::component_id inactiveTag = app.context().components->id_of<scene::inactive>();
+        REQUIRE(disabledTag.is_valid());
+        REQUIRE(inactiveTag.is_valid());
+        const std::span<const ecs::component_id> tags = runtime->activity_tags();
+        REQUIRE(tags.size() == 2);
+        CHECK(tags[0] == disabledTag);
+        CHECK(tags[1] == inactiveTag);
+        app.shutdown();
+    }
+
+    TEST_CASE("scripting_subsystem - scene::set_enabled in PLAY tells a scripted child once") {
+        application app(engine_test::make_desc(null_host_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        scripting::script_runtime *runtime = app.context().scripting;
+        REQUIRE(runtime != nullptr);
+        REQUIRE(runtime->mode() == scripting::script_mode::PLAY);
+        scripting::null_script_host &host = null_host_of(*runtime);
+        host.add_fake_class(sleeper_class());
+        CONJURE_REQUIRE_OK(runtime->load_game_assembly({}));
+
+        scene::scene &active = app.context().scenes->active();
+        const core::result<ecs::entity> parent = active.create_entity(core::string_id("parent"));
+        CONJURE_REQUIRE_OK(parent);
+        const core::result<ecs::entity> child = active.create_entity(core::string_id("child"), parent.value());
+        CONJURE_REQUIRE_OK(child);
+        const scripting::script_entry_id id = add_fake_script(*runtime, child.value(), SLEEPER);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        const scripting::script_entry *entry = runtime->entry(id);
+        REQUIRE(entry != nullptr);
+        REQUIRE(entry->is_live());
+        const i32 slot = entry->managedSlot;
+        CHECK(host.is_slot_active(slot));
+        host.reset_recorder();
+
+        // The parent carries no script: the scene's inactive tag on the child is what reaches the runtime.
+        CONJURE_REQUIRE_OK(active.set_enabled(parent.value(), false));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        REQUIRE(host.recorder().activities().size() == 1);
+        CHECK(host.recorder().activities()[0].slot == slot);
+        CHECK_FALSE(host.recorder().activities()[0].active);
+        CHECK(host.recorder().activities()[0].changed);
+        CHECK(runtime->entry(id)->has_flag(scripting::script_entry_flags::INACTIVE));
+        CHECK_FALSE(host.is_slot_active(slot));
+
+        CONJURE_REQUIRE_OK(active.set_enabled(parent.value(), true));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        REQUIRE(host.recorder().activities().size() == 2);
+        CHECK(host.recorder().activities()[1].slot == slot);
+        CHECK(host.recorder().activities()[1].active);
+        CHECK(host.recorder().activities()[1].changed);
+        CHECK_FALSE(runtime->entry(id)->has_flag(scripting::script_entry_flags::INACTIVE));
+        CHECK(host.is_slot_active(slot));
+        app.shutdown();
+    }
+
+    TEST_CASE("scripting_subsystem - the saved scene of a disabled scripted entity is unchanged by a Play session") {
+        application app(engine_test::make_desc(null_host_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        scripting::script_runtime *runtime = app.context().scripting;
+        REQUIRE(runtime != nullptr);
+        null_host_of(*runtime).add_fake_class(sleeper_class());
+        CONJURE_REQUIRE_OK(runtime->load_game_assembly({}));
+        runtime->set_mode(scripting::script_mode::EDIT);
+
+        scene::scene &active = app.context().scenes->active();
+        const core::result<ecs::entity> entity = active.create_entity(core::string_id("sleeper"));
+        CONJURE_REQUIRE_OK(entity);
+        const scripting::script_entry_id id = add_fake_script(*runtime, entity.value(), SLEEPER);
+        const std::string before = saved_scene(active);
+        REQUIRE(before.find("Game.Sleeper") != std::string::npos);
+
+        // Disabled and enabled again during Play: the scene saved after Play is byte-identical.
+        runtime->set_mode(scripting::script_mode::PLAY);
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CONJURE_REQUIRE_OK(active.set_enabled(entity.value(), false));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        CONJURE_REQUIRE_OK(app.step_frame());
+        REQUIRE(runtime->entry(id)->has_flag(scripting::script_entry_flags::INACTIVE));
+        CONJURE_REQUIRE_OK(active.set_enabled(entity.value(), true));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        runtime->set_mode(scripting::script_mode::EDIT);
+        CHECK(saved_scene(active) == before);
+
+        // Play stopped while the entity is disabled, then enabled again in EDIT mode: the same bytes.
+        runtime->set_mode(scripting::script_mode::PLAY);
+        CONJURE_REQUIRE_OK(active.set_enabled(entity.value(), false));
+        CONJURE_REQUIRE_OK(app.step_frame());
+        REQUIRE(runtime->entry(id)->has_flag(scripting::script_entry_flags::INACTIVE));
+        runtime->set_mode(scripting::script_mode::EDIT);
+        CONJURE_REQUIRE_OK(active.set_enabled(entity.value(), true));
+        CHECK(saved_scene(active) == before);
+        app.shutdown();
+    }
+
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
-    TEST_CASE("scripting_subsystem - convert_contacts maps the four kinds and drops STAY") {
+    TEST_CASE("scripting_subsystem - convert_contacts maps the four kinds and drops STAY without includeStay") {
         std::vector<physics::contact_event> contacts(5);
         contacts[0].kind = physics::contact_kind::ENTER;
         contacts[0].a.index = 1;
@@ -316,8 +531,8 @@ TEST_SUITE("engine/scripting_subsystem") {
         contacts[2].kind = physics::contact_kind::EXIT;
         contacts[3].kind = physics::contact_kind::TRIGGER_ENTER;
         contacts[4].kind = physics::contact_kind::TRIGGER_EXIT;
-        std::vector<scripting::collision_event> events = {};
-        scripting_subsystem::convert_contacts(contacts, events);
+        std::vector<scripting::collision_event> events(2);      // replaced, not appended to
+        scripting_subsystem::convert_contacts(contacts, events, false);
         REQUIRE(events.size() == 4);
         CHECK(events[0].kind == scripting::collision_kind::COLLISION_ENTER);
         CHECK(events[0].a.index == 1);
@@ -327,6 +542,97 @@ TEST_SUITE("engine/scripting_subsystem") {
         CHECK(events[1].kind == scripting::collision_kind::COLLISION_EXIT);
         CHECK(events[2].kind == scripting::collision_kind::TRIGGER_ENTER);
         CHECK(events[3].kind == scripting::collision_kind::TRIGGER_EXIT);
+    }
+
+    TEST_CASE("scripting_subsystem - convert_contacts maps STAY to COLLISION_STAY with impulse 0 when asked") {
+        std::vector<physics::contact_event> contacts(2);
+        contacts[0].kind = physics::contact_kind::STAY;
+        contacts[0].a.index = 4;
+        contacts[0].b.index = 7;
+        contacts[0].impulse = 9.0f;
+        contacts[0].point = math::vec3(1.0f, 2.0f, 3.0f);
+        contacts[0].normal = math::vec3(0.0f, 1.0f, 0.0f);
+        contacts[1].kind = physics::contact_kind::ENTER;
+        contacts[1].impulse = 5.0f;
+        std::vector<scripting::collision_event> events = {};
+        scripting_subsystem::convert_contacts(contacts, events, true);
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].kind == scripting::collision_kind::COLLISION_STAY);
+        CHECK(events[0].impulse == 0.0f);
+        CHECK(events[0].a.index == 4);
+        CHECK(events[0].b.index == 7);
+        CHECK(events[0].point == math::vec3(1.0f, 2.0f, 3.0f));
+        CHECK(events[0].normal == math::vec3(0.0f, 1.0f, 0.0f));
+        CHECK(events[1].kind == scripting::collision_kind::COLLISION_ENTER);
+        CHECK(events[1].impulse == 5.0f);
+    }
+
+    TEST_CASE(
+      "regression - code sweep W3-CS-L4 the collision source converts STAY only while a class overrides OnCollisionStay"
+    ) {
+        application app(engine_test::make_desc(null_host_config()));
+        CONJURE_REQUIRE_OK(app.initialise());
+        scripting::script_runtime *runtime = app.context().scripting;
+        REQUIRE(runtime != nullptr);
+        REQUIRE(app.context().physics != nullptr);
+        const scripting_subsystem *subsystem = find_scripting_subsystem(app);
+        REQUIRE(subsystem != nullptr);
+        scripting::null_script_host &host = null_host_of(*runtime);
+        host.add_fake_class(fake_class(BUMPER, {scripting::script_callback::COLLISION_ENTER}));
+        CONJURE_REQUIRE_OK(runtime->load_game_assembly({}));
+        REQUIRE_FALSE(runtime->any_class_has(scripting::script_callback::COLLISION_STAY));
+
+        // A box resting on static ground, kept awake so the pair reports a STAY every fixed step; both are scripted.
+        scene::scene &active = app.context().scenes->active();
+        const ecs::entity ground = spawn_box(active, "ground", math::vec3(0.0f, -0.5f, 0.0f), true);
+        const ecs::entity box = spawn_box(active, "box", math::vec3(0.0f, 0.5f, 0.0f), false);
+        static_cast<void>(add_fake_script(*runtime, ground, BUMPER));
+        static_cast<void>(add_fake_script(*runtime, box, BUMPER));
+
+        constexpr u32 FRAMES = 30;
+        usize physicsStays = 0;
+        usize convertedStays = 0;
+        for (u32 frame = 0; frame < FRAMES; ++frame) {
+            CONJURE_REQUIRE_OK(app.step_frame());
+            for (const physics::contact_event &contact : app.context().physics->contact_events()) {
+                if (contact.kind == physics::contact_kind::STAY) {
+                    ++physicsStays;
+                }
+            }
+            convertedStays += count_stays(subsystem->last_collisions());
+        }
+        REQUIRE(physicsStays > 0);          // the gate below had something to drop
+        CHECK(convertedStays == 0);
+
+        // A class that overrides OnCollisionStay arrives with a reload: from the next fixed step one STAY per pair
+        // per participant per step reaches the scripts, with impulse 0.
+        REQUIRE(host.remove_fake_class(scripting::script_name_hash(BUMPER)));
+        host.add_fake_class(fake_class(
+          BUMPER,
+          {scripting::script_callback::COLLISION_ENTER, scripting::script_callback::COLLISION_STAY}
+        ));
+        CONJURE_REQUIRE_OK(runtime->reload_game_assembly({}));
+        REQUIRE(runtime->any_class_has(scripting::script_callback::COLLISION_STAY));
+        host.reset_recorder();
+        const u64 firstStep = app.time().fixedStepIndex;
+        for (u32 frame = 0; frame < FRAMES; ++frame) {
+            CONJURE_REQUIRE_OK(app.step_frame());
+            CHECK(count_stays(subsystem->last_collisions()) <= 1);
+            for (const scripting::collision_event &event : subsystem->last_collisions()) {
+                CHECK(event.impulse == 0.0f);
+            }
+        }
+        const u64 fixedSteps = app.time().fixedStepIndex - firstStep;
+        REQUIRE(fixedSteps > 0);
+        u64 stayRecords = 0;
+        for (const scripting::null_host_recorder::collision_record &record : host.recorder().collisions()) {
+            if (record.kind == scripting::collision_kind::COLLISION_STAY) {
+                ++stayRecords;
+                CHECK(record.impulse == 0.0f);
+            }
+        }
+        CHECK(stayRecords == 2 * fixedSteps);
+        app.shutdown();
     }
 #endif
 }

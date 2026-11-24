@@ -39,8 +39,9 @@ public enum ScriptPhase : byte
 }
 
 /// <summary>
-/// Bit index of the callback mask and index of the fault counters (conjure::scripting::script_callback). Reload
-/// (OnReload) comes last, so the older callbacks keep their bits.
+/// Bit index of the callback mask and index of the fault counters (conjure::scripting::script_callback). Later
+/// callbacks are appended, so the older ones keep their bits: Reload (OnReload), then CollisionStay
+/// (OnCollisionStay), Enable (OnEnable) and Disable (OnDisable). Count stays within the 16-bit mask.
 /// </summary>
 public enum ScriptCallback : byte
 {
@@ -55,11 +56,15 @@ public enum ScriptCallback : byte
     TriggerEnter,
     TriggerExit,
     Reload,
+    CollisionStay,
+    Enable,
+    Disable,
     Count,
 }
 
 /// <summary>
-/// conjure_collision_record::kind.
+/// conjure_collision_record::kind (conjure::scripting::collision_kind). CollisionStay is appended, so the older
+/// kinds keep their values.
 /// </summary>
 public enum CollisionKind : byte
 {
@@ -67,6 +72,7 @@ public enum CollisionKind : byte
     CollisionExit,
     TriggerEnter,
     TriggerExit,
+    CollisionStay,
 }
 
 /// <summary>
@@ -128,6 +134,12 @@ public unsafe struct CreateRequest
     /// runs OnReload instead.
     /// </summary>
     public const byte FlagAlreadyCreated = 2;
+
+    /// <summary>
+    /// CREATE_FLAG_INACTIVE: the entity is inactive when the instance is created, so the instance starts inactive
+    /// (no OnEnable, no phase, OnStart waits for its first activation).
+    /// </summary>
+    public const byte FlagInactive = 4;
 
     public ulong Entity;
     public ulong ClassHash;
