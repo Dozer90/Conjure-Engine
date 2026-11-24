@@ -5,9 +5,21 @@
 #include "platform_test_support.h"
 
 #include "conjure/platform/input.h"
+#include "conjure/platform/monitor.h"
 #include "conjure/platform/native_handle.h"
+#include "conjure/platform/null_backend.h"
 #include "conjure/platform/platform_error.h"
 #include "conjure/platform/window.h"
+
+#include "conjure/core/platform_detect.h"
+
+#if CONJURE_PLATFORM_HAS_GLFW
+    #include "platform/glfw/glfw_context.h"
+#endif
+
+#if CONJURE_PLATFORM_WINDOWS
+    #include <Windows.h>
+#endif
 
 #include <array>
 #include <memory>
@@ -81,12 +93,13 @@ namespace {
 
     /// <summary>
     /// What one pump delivered about the window itself: how many resizes (at most one, P10), the
-    /// size of the last one, and the last focus state announced, if any.
+    /// size of the last one, the last focus state announced, if any, and how many minimise_events.
     /// </summary>
     struct window_batch {
         u32 resizeCount = 0;
         math::uvec2 lastResize = math::uvec2(0);
         std::optional<bool> lastFocus = std::nullopt;
+        u32 minimiseCount = 0;
         usize eventCount = 0;
     };
 
@@ -101,6 +114,9 @@ namespace {
             }
             if (const focus_event *focus = event_as<focus_event>(value)) {
                 batch.lastFocus = focus->focused;
+            }
+            if (event_as<minimise_event>(value) != nullptr) {
+                ++batch.minimiseCount;
             }
         }
         return batch;
@@ -122,6 +138,77 @@ namespace {
             REQUIRE(batch.lastFocus.has_value());
         }
     }
+
+    /// <summary>
+    /// Checks that a fullscreen window covers 'monitor' (P12). Win32, X11 and the null backend measure windows
+    /// and video modes in pixels. macOS measures both in points, so there the window matches the mode and a
+    /// Retina framebuffer is larger. Wayland measures the window in logical units and the framebuffer in
+    /// pixels, and tells no client where its window is.
+    /// </summary>
+    void check_covers_monitor(window &target, const monitor_info &monitor) {
+        const native_handle_kind kind = target.native_handle().kind;
+        const math::uvec2 modeSize = math::uvec2(monitor.currentMode.width, monitor.currentMode.height);
+        if (kind == native_handle_kind::COCOA) {
+            CHECK(target.window_size() == modeSize);
+        } else {
+            CHECK(target.framebuffer_size() == modeSize);
+        }
+        if (kind != native_handle_kind::WAYLAND) {
+            CHECK(target.position() == monitor.position);
+        }
+    }
+
+#if CONJURE_PLATFORM_WINDOWS
+    /// <summary>
+    /// A plain Win32 window, shown and brought to the foreground, that takes the focus the way another application's
+    /// window would (v1 allows one live engine window per process). It goes with the object, also when a REQUIRE
+    /// leaves the case early.
+    /// </summary>
+    class focus_thief {
+        private:
+            HWND mHandle = nullptr;
+
+        public:
+            focus_thief() {
+                mHandle = CreateWindowExW(
+                  0,
+                  L"STATIC",
+                  L"Focus thief",
+                  WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                  0,
+                  0,
+                  320,
+                  200,
+                  nullptr,
+                  nullptr,
+                  GetModuleHandleW(nullptr),
+                  nullptr
+                );
+                if (mHandle != nullptr) {
+                    static_cast<void>(SetForegroundWindow(mHandle));
+                }
+            }
+
+            ~focus_thief() {
+                destroy();
+            }
+
+            focus_thief(const focus_thief &) = delete;
+            focus_thief &operator=(const focus_thief &) = delete;
+
+        public:
+            [[nodiscard]] bool exists() const noexcept {
+                return mHandle != nullptr;
+            }
+
+            void destroy() noexcept {
+                if (mHandle != nullptr) {
+                    static_cast<void>(DestroyWindow(mHandle));
+                    mHandle = nullptr;
+                }
+            }
+    };
+#endif
 
     [[nodiscard]] std::vector<input_event> conformance_sequence() {
         std::vector<input_event> sequence = {};
@@ -437,17 +524,25 @@ TEST_SUITE("platform/backend_conformance") {
         static_cast<void>(created->pump_events());
         const math::uvec2 windowedSize = created->window_size();
         const math::uvec2 windowedFramebuffer = created->framebuffer_size();
+        const math::ivec2 windowedPosition = created->position();
         REQUIRE_FALSE(created->monitors().empty());
-        const video_mode mode = created->monitors()[0].currentMode;
+        const monitor_info monitor = created->monitors()[0];
 
         CONJURE_CHECK_OK(created->set_fullscreen(true, 0));
         CHECK(created->is_fullscreen());
         const window_batch entered = pump_window_events(*created);
         CHECK(entered.resizeCount == 1);
-        CHECK(entered.lastResize == math::uvec2(mode.width, mode.height));
         CHECK(entered.lastResize == created->framebuffer_size());
+        check_covers_monitor(*created, monitor);
 
-        // Leaving fullscreen restores the size the OS last confirmed while windowed, as an event.
+        // Asking again for the monitor the window already covers changes nothing.
+        CONJURE_CHECK_OK(created->set_fullscreen(true, 0));
+        CHECK(created->is_fullscreen());
+        CHECK(pump_window_events(*created).resizeCount == 0);
+        check_covers_monitor(*created, monitor);
+
+        // Leaving fullscreen restores the size the OS last confirmed while windowed, as an event, and the
+        // position the window had (Wayland reports none: position() is what it was before on every backend).
         CONJURE_CHECK_OK(created->set_fullscreen(false));
         CHECK_FALSE(created->is_fullscreen());
         const window_batch left = pump_window_events(*created);
@@ -455,6 +550,152 @@ TEST_SUITE("platform/backend_conformance") {
         CHECK(left.lastResize == windowedFramebuffer);
         CHECK(created->window_size() == windowedSize);
         CHECK(created->framebuffer_size() == windowedFramebuffer);
+        CHECK(created->position() == windowedPosition);
+    }
+
+    TEST_CASE_TEMPLATE(
+      "backend_conformance - set_size and set_position while fullscreen leave the window covering its monitor",
+      Factory,
+      null_factory,
+      glfw_factory
+    ) {
+        // A borderless window is an ordinary window to the OS: passed through, either call would shrink it or move
+        // it off its monitor while is_fullscreen() still said true.
+        CONJURE_CONFORMANCE_BEGIN();
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        const std::unique_ptr<window> created = create_or_fail<Factory>();
+        static_cast<void>(created->pump_events());
+        const math::uvec2 windowedSize = created->window_size();
+        const math::ivec2 windowedPosition = created->position();
+        REQUIRE_FALSE(created->monitors().empty());
+        const monitor_info monitor = created->monitors()[0];
+        CONJURE_CHECK_OK(created->set_fullscreen(true, 0));
+        static_cast<void>(created->pump_events());
+
+        created->set_size(math::uvec2(320, 200));
+        const result<void> moved = created->set_position(windowedPosition + math::ivec2(50, 40));
+        if (!moved.has_value()) {
+            // Wayland: no client positions its window, fullscreen or not.
+            CONJURE_CHECK_ERROR(moved, platform_error::FEATURE_UNAVAILABLE);
+        }
+        CHECK(created->is_fullscreen());
+        CHECK(pump_window_events(*created).resizeCount == 0);
+        check_covers_monitor(*created, monitor);
+
+        // Neither request is remembered for later: the window returns to where it was before fullscreen.
+        CONJURE_CHECK_OK(created->set_fullscreen(false));
+        static_cast<void>(created->pump_events());
+        CHECK(created->window_size() == windowedSize);
+        CHECK(created->position() == windowedPosition);
+    }
+
+    TEST_CASE_TEMPLATE(
+      "regression - code sweep F281 a fullscreen window that loses focus stays fullscreen and is not minimised",
+      Factory,
+      null_factory,
+      glfw_factory
+    ) {
+        // Fullscreen attached the window to its monitor, and GLFW minimises such a window when it loses focus
+        // (GLFW_AUTO_ICONIFY), so switching to another application left the game minimised. Borderless fullscreen
+        // owns no monitor: when another window takes the focus, the fullscreen window stays shown, restored and over
+        // its monitor. GLFW also ignored hide() and show() for a monitor-attached window, which the end of the case
+        // checks.
+        CONJURE_CONFORMANCE_BEGIN();
+        window_desc desc = Factory::desc();
+        desc.flags = desc.flags | window_flags::VISIBLE;    // shown, and so focused, from the start
+        SUBCASE("entered through set_fullscreen") {
+            desc.fullscreen = false;
+        }
+        SUBCASE("created fullscreen") {
+            desc.fullscreen = true;
+        }
+        CAPTURE(desc.fullscreen);
+        // The guard after the SUBCASE selection, whose bookkeeping lives until the case ends (memory_guard.h). The
+        // CAPTURE before it only uses the context stack test_main pre-grew, so it allocates nothing the guard sees.
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        result<std::unique_ptr<window>> created = create_window(desc);
+        REQUIRE_MESSAGE(created.has_value(), testing::describe_error(created));
+        window &target = *created.value();
+        REQUIRE_FALSE(target.monitors().empty());
+        const monitor_info monitor = target.monitors()[0];
+        if (!desc.fullscreen) {
+            CONJURE_CHECK_OK(target.set_fullscreen(true, 0));
+        }
+        static_cast<void>(target.pump_events());
+        if (target.native_handle().kind == native_handle_kind::WAYLAND) {
+            MESSAGE("Wayland fullscreen is the compositor's, a window GLFW never hides: focus cannot be taken away");
+            return;
+        }
+        if (!target.is_focused()) {
+            MESSAGE("the OS did not give the shown window focus (focus stealing prevention), so it cannot lose it");
+            return;
+        }
+
+        // The null backend never moves focus by itself; its simulated focus change stands in for the OS. v1 allows one
+        // live window per process, so on Win32 a plain OS window takes the focus the way another application's would;
+        // elsewhere hiding the window is the one way a test can take its focus away.
+        null_backend *virtualWindow = target.as_null();
+        bool hiddenToLoseFocus = false;
+#if CONJURE_PLATFORM_WINDOWS
+        std::optional<focus_thief> thief = std::nullopt;
+#endif
+        if (virtualWindow != nullptr) {
+            virtualWindow->simulate_focus(false);
+        } else {
+#if CONJURE_PLATFORM_WINDOWS
+            thief.emplace();
+            REQUIRE(thief->exists());
+#else
+            target.hide();
+            hiddenToLoseFocus = true;
+#endif
+        }
+        const window_batch unfocused = pump_window_events(target);
+        if (target.is_focused()) {
+            MESSAGE("the OS left focus with the fullscreen window (focus stealing prevention, or an X11 window manager "
+                    "that moves it later), so it never lost it");
+            return;
+        }
+        REQUIRE(unfocused.lastFocus.has_value());
+        CHECK_FALSE(*unfocused.lastFocus);
+        CHECK(unfocused.minimiseCount == 0);
+        CHECK(target.is_visible() != hiddenToLoseFocus);
+        CHECK_FALSE(target.is_minimised());
+        CHECK(target.is_fullscreen());
+        check_covers_monitor(target, monitor);
+
+        // The other window goes, and showing the fullscreen window focuses it again (GLFW_FOCUS_ON_SHOW).
+        if (virtualWindow != nullptr) {
+            virtualWindow->simulate_focus(true);
+        } else {
+#if CONJURE_PLATFORM_WINDOWS
+            thief->destroy();
+#endif
+            target.show();
+        }
+        const window_batch refocused = pump_window_events(target);
+        REQUIRE(refocused.lastFocus.has_value());
+        CHECK(*refocused.lastFocus);
+        CHECK(target.is_focused());
+        CHECK(refocused.minimiseCount == 0);
+        CHECK(target.is_visible());
+        CHECK_FALSE(target.is_minimised());
+        CHECK(target.is_fullscreen());
+        check_covers_monitor(target, monitor);
+
+        // Hidden, the window is hidden, and showing it again finds it still fullscreen over its monitor.
+        target.hide();
+        static_cast<void>(target.pump_events());
+        CHECK_FALSE(target.is_visible());
+        target.show();
+        const window_batch shown = pump_window_events(target);
+        CHECK(shown.minimiseCount == 0);
+        CHECK(target.is_visible());
+        CHECK_FALSE(target.is_minimised());
+        CHECK(target.is_fullscreen());
+        check_covers_monitor(target, monitor);
     }
 
     TEST_CASE_TEMPLATE(
@@ -464,8 +705,8 @@ TEST_SUITE("platform/backend_conformance") {
       glfw_factory
     ) {
         // The glfw window restored itself at the monitor origin, the position GLFW reported while it covered the
-        // monitor, so Win32 put the title bar above the top of the screen. A glfw fullscreen window is shown and
-        // focused even though the factory clears VISIBLE.
+        // monitor, so Win32 put the title bar above the top of the screen. The factory clears VISIBLE, which a
+        // window created fullscreen honours everywhere but on Wayland (the compositor shows a fullscreen window).
         CONJURE_CONFORMANCE_BEGIN();
         testing::memory_guard guard = {};
         testing::log_capture logs = {};
@@ -478,6 +719,10 @@ TEST_SUITE("platform/backend_conformance") {
         REQUIRE(target.is_fullscreen());
         REQUIRE_FALSE(target.monitors().empty());
         const math::urect workArea = target.monitors()[0].workArea;
+        check_covers_monitor(target, target.monitors()[0]);
+        if (target.native_handle().kind != native_handle_kind::WAYLAND) {
+            CHECK(target.is_visible() == has_flag(desc.flags, window_flags::VISIBLE));
+        }
 
         CONJURE_CHECK_OK(target.set_fullscreen(false));
         static_cast<void>(target.pump_events());
@@ -500,6 +745,40 @@ TEST_SUITE("platform/backend_conformance") {
         if (Factory::KIND == backend_kind::NULL_BACKEND) {
             CHECK(restored == math::ivec2(640, 360));
         }
+    }
+
+    TEST_CASE_TEMPLATE(
+      "backend_conformance - a window created fullscreen without a size leaves fullscreen at its monitor's size",
+      Factory,
+      null_factory,
+      glfw_factory
+    ) {
+        // validate_window_desc lets a fullscreen description leave its size at zero. The glfw window kept that zero as
+        // its windowed size; like the null backend it now takes the size of the monitor it is created on.
+        CONJURE_CONFORMANCE_BEGIN();
+        testing::memory_guard guard = {};
+        testing::log_capture logs = {};
+        window_desc desc = Factory::desc();
+        desc.width = 0;
+        desc.height = 0;
+        desc.fullscreen = true;
+        result<std::unique_ptr<window>> created = create_window(desc);
+        REQUIRE_MESSAGE(created.has_value(), testing::describe_error(created));
+        window &target = *created.value();
+        REQUIRE_FALSE(target.monitors().empty());
+        const monitor_info monitor = target.monitors()[0];
+        const window_batch started = pump_window_events(target);
+        CHECK((started.resizeCount == 0 || started.lastResize != math::uvec2(0)));
+        REQUIRE(target.is_fullscreen());
+        check_covers_monitor(target, monitor);
+
+        // The windowed size is the video mode's size taken as a window size, in the unit window_size() reports on
+        // every platform (pixels on Win32, X11 and the null backend, points on macOS, logical units on Wayland).
+        CONJURE_CHECK_OK(target.set_fullscreen(false));
+        const window_batch left = pump_window_events(target);
+        CHECK_FALSE(target.is_fullscreen());
+        CHECK(target.window_size() == math::uvec2(monitor.currentMode.width, monitor.currentMode.height));
+        CHECK((left.resizeCount == 0 || left.lastResize != math::uvec2(0)));
     }
 
     TEST_CASE_TEMPLATE(
@@ -643,4 +922,117 @@ TEST_SUITE("platform/backend_conformance") {
         }
         CHECK(hasSurface);
     }
+
+#if CONJURE_PLATFORM_HAS_GLFW
+    TEST_CASE("regression - code sweep F281 [window] glfw fullscreen extras follow every shown unminimised window") {
+        // A borderless window keeps the display awake (Windows) and hides the menu bar and the Dock (macOS) itself.
+        // A minimised or hidden fullscreen window kept the display awake, where GLFW's monitor fullscreen let it
+        // sleep. The window's claim is what the OS calls follow (glfw_context.h).
+        CONJURE_TEST_REQUIRE(testing::precondition::REAL_WINDOW);
+        glfw_factory::warm_up();
+        testing::log_capture logs = {};
+        REQUIRE(glfw::fullscreen_extras_claims() == 0);
+        window_desc desc = glfw_factory::desc();
+        desc.fullscreen = true;
+        desc.flags = desc.flags | window_flags::VISIBLE;
+        result<std::unique_ptr<window>> createdFirst = create_window(desc);
+        REQUIRE_MESSAGE(createdFirst.has_value(), testing::describe_error(createdFirst));
+        std::unique_ptr<window> first = std::move(createdFirst).value();
+        static_cast<void>(first->pump_events());
+        if (first->native_handle().kind == native_handle_kind::WAYLAND) {
+            MESSAGE("Wayland fullscreen is the compositor's, which inhibits idle itself: no window claims the extras");
+            CHECK(glfw::fullscreen_extras_claims() == 0);
+            return;
+        }
+        CHECK(glfw::fullscreen_extras_claims() == 1);
+
+        // Entered again, the window still holds one claim.
+        CONJURE_CHECK_OK(first->set_fullscreen(true, 0));
+        CHECK(glfw::fullscreen_extras_claims() == 1);
+
+        SUBCASE("hiding releases them and showing claims them again") {
+            first->hide();
+            CHECK(glfw::fullscreen_extras_claims() == 0);
+            first->show();
+            CHECK(glfw::fullscreen_extras_claims() == 1);
+
+            // Hidden, leaving and entering fullscreen claims nothing.
+            first->hide();
+            CONJURE_CHECK_OK(first->set_fullscreen(false));
+            CONJURE_CHECK_OK(first->set_fullscreen(true, 0));
+            CHECK(glfw::fullscreen_extras_claims() == 0);
+            first->show();
+            CHECK(glfw::fullscreen_extras_claims() == 1);
+        }
+    #if CONJURE_PLATFORM_WINDOWS
+        SUBCASE("minimising releases them and restoring claims them again") {
+            // The window API has no minimise; the OS call is what the taskbar or Win+D does.
+            HWND handle = static_cast<HWND>(first->native_handle().window);
+            REQUIRE(handle != nullptr);
+            static_cast<void>(ShowWindow(handle, SW_MINIMIZE));
+            static_cast<void>(first->pump_events());
+            CHECK(first->is_minimised());
+            CHECK(glfw::fullscreen_extras_claims() == 0);
+            static_cast<void>(ShowWindow(handle, SW_RESTORE));
+            static_cast<void>(first->pump_events());
+            CHECK_FALSE(first->is_minimised());
+            CHECK(glfw::fullscreen_extras_claims() == 1);
+        }
+    #endif
+
+        CONJURE_CHECK_OK(first->set_fullscreen(false));
+        CHECK(glfw::fullscreen_extras_claims() == 0);
+        CONJURE_CHECK_OK(first->set_fullscreen(true, 0));
+        CHECK(glfw::fullscreen_extras_claims() == 1);
+        first.reset();
+        CHECK(glfw::fullscreen_extras_claims() == 0);
+    }
+
+    TEST_CASE("regression - code sweep F281 [window] glfw fullscreen extras turn off only with the last claim") {
+        // The display-awake request and the hidden menu bar belong to the process, so a window releasing its claim
+        // must not turn them off while another claim is held (v1 has one live window; the count does not rely on
+        // it). Under REAL_WINDOW because the claims call the OS.
+        CONJURE_TEST_REQUIRE(testing::precondition::REAL_WINDOW);
+        REQUIRE(glfw::fullscreen_extras_claims() == 0);
+        glfw::claim_fullscreen_extras();
+        glfw::claim_fullscreen_extras();
+        CHECK(glfw::fullscreen_extras_claims() == 2);
+        glfw::release_fullscreen_extras();
+        CHECK(glfw::fullscreen_extras_claims() == 1);
+        glfw::release_fullscreen_extras();
+        CHECK(glfw::fullscreen_extras_claims() == 0);
+    }
+
+    TEST_CASE("regression - code sweep F281 [window] glfw a fullscreen window created maximised leaves maximised") {
+        // A window created fullscreen is created as an ordinary window and then placed over its monitor, so
+        // window_flags::MAXIMISED made it maximised (WS_MAXIMIZE on Win32, the maximised state on X11) under the
+        // monitor rectangle, and leaving fullscreen placed the windowed rectangle on a window the OS still held
+        // maximised. Only Win32 lets the test ask the OS; elsewhere the case checks the placement alone.
+        CONJURE_TEST_REQUIRE(testing::precondition::REAL_WINDOW);
+        glfw_factory::warm_up();
+        testing::log_capture logs = {};
+        window_desc desc = glfw_factory::desc();
+        desc.fullscreen = true;
+        desc.flags = desc.flags | window_flags::MAXIMISED;
+        result<std::unique_ptr<window>> created = create_window(desc);
+        REQUIRE_MESSAGE(created.has_value(), testing::describe_error(created));
+        window &target = *created.value();
+        static_cast<void>(target.pump_events());
+        REQUIRE(target.is_fullscreen());
+        REQUIRE_FALSE(target.monitors().empty());
+        check_covers_monitor(target, target.monitors()[0]);
+    #if CONJURE_PLATFORM_WINDOWS
+        HWND handle = static_cast<HWND>(target.native_handle().window);
+        REQUIRE(handle != nullptr);
+        CHECK(IsZoomed(handle) == FALSE);
+    #endif
+
+        CONJURE_CHECK_OK(target.set_fullscreen(false));
+        static_cast<void>(target.pump_events());
+        CHECK_FALSE(target.is_fullscreen());
+    #if CONJURE_PLATFORM_WINDOWS
+        CHECK(IsZoomed(handle) != FALSE);
+    #endif
+    }
+#endif
 }

@@ -1,4 +1,5 @@
 #include "platform/glfw/glfw_context.h"
+#include "platform/glfw/glfw_native.h"
 #include "platform/glfw/glfw_window.h"
 #include "conjure/platform/log_category.h"
 #include "conjure/platform/platform_error.h"
@@ -23,6 +24,7 @@ namespace {
     std::string sLastErrorText = {};
     std::string sLastErrorSummary = {};
     glfw_window *sActiveWindow = nullptr;
+    u32 sFullscreenExtrasClaims = 0;
 
     void glfw_error_callback(int code, const char *description) {
         const char *text = description != nullptr ? description : "";
@@ -200,6 +202,28 @@ void conjure::platform::glfw::set_active_window(glfw_window *window) noexcept {
 
 glfw_window *conjure::platform::glfw::active_window() noexcept {
     return sActiveWindow;
+}
+
+void conjure::platform::glfw::claim_fullscreen_extras() noexcept {
+    ++sFullscreenExtrasClaims;
+    if (sFullscreenExtrasClaims == 1) {
+        set_fullscreen_extras(true);
+    }
+}
+
+void conjure::platform::glfw::release_fullscreen_extras() noexcept {
+    CONJURE_ASSERT(sFullscreenExtrasClaims > 0, "glfw::release_fullscreen_extras without a matching claim");
+    if (sFullscreenExtrasClaims == 0) {
+        return;
+    }
+    --sFullscreenExtrasClaims;
+    if (sFullscreenExtrasClaims == 0) {
+        set_fullscreen_extras(false);
+    }
+}
+
+u32 conjure::platform::glfw::fullscreen_extras_claims() noexcept {
+    return sFullscreenExtrasClaims;
 }
 
 std::string_view conjure::platform::glfw::version_string() noexcept {

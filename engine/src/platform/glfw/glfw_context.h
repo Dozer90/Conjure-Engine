@@ -66,6 +66,20 @@ namespace conjure::platform::glfw {
     [[nodiscard]] glfw_window *active_window() noexcept;
 
     /// <summary>
+    /// One window's claim on set_fullscreen_extras (glfw_native.h), whose effects belong to the process while any
+    /// number of glfw windows may want them: the first claim turns them on and the last release turns them off, so
+    /// one window leaving fullscreen keeps them on for another that is still fullscreen. A window holds at most one
+    /// claim, while it is borderless fullscreen, shown and not minimised. Releasing with no claim asserts.
+    /// </summary>
+    void claim_fullscreen_extras() noexcept;
+    void release_fullscreen_extras() noexcept;
+
+    /// <summary>
+    /// The claims claim_fullscreen_extras holds now; the extras are on exactly while it is above zero.
+    /// </summary>
+    [[nodiscard]] u32 fullscreen_extras_claims() noexcept;
+
+    /// <summary>
     /// glfwGetVersionString(): compile-time version and platform list; callable before glfwInit().
     /// </summary>
     [[nodiscard]] std::string_view version_string() noexcept;

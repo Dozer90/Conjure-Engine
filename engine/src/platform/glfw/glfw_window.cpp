@@ -129,6 +129,12 @@ glfw_window::~glfw_window() {
     if (active_window() == this) {
         set_active_window(nullptr);
     }
+    // The display-awake request and the hidden menu bar belong to the process and would outlive the window; another
+    // window's claim keeps them on.
+    if (mExtrasHeld) {
+        release_fullscreen_extras();
+        mExtrasHeld = false;
+    }
     if (mWindow != nullptr) {
         glfwDestroyWindow(mWindow);
         mWindow = nullptr;
@@ -170,6 +176,9 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
     // Cocoa windows show the application bundle's icon and Wayland ones the desktop file's; glfwSetWindowIcon
     // reports GLFW_FEATURE_UNAVAILABLE there, so set_icon answers without calling it.
     mIconSupported = glfwPlatform != GLFW_PLATFORM_COCOA && glfwPlatform != GLFW_PLATFORM_WAYLAND;
+    // Borderless fullscreen moves the window over its monitor, which a Wayland client cannot do.
+    mBorderlessFullscreen = glfwPlatform != GLFW_PLATFORM_WAYLAND;
+    const bool startBorderless = desc.fullscreen && mBorderlessFullscreen;
 
     glfwDefaultWindowHints();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // NVRHI owns the graphics API; never a GL context
@@ -177,16 +186,28 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
     glfwWindowHint(GLFW_DECORATED, glfw_bool(has_flag(desc.flags, window_flags::DECORATED)));
     glfwWindowHint(GLFW_VISIBLE, glfw_bool(has_flag(desc.flags, window_flags::VISIBLE)));
     glfwWindowHint(GLFW_FLOATING, glfw_bool(has_flag(desc.flags, window_flags::FLOATING)));
-    glfwWindowHint(GLFW_MAXIMIZED, glfw_bool(has_flag(desc.flags, window_flags::MAXIMISED)));
+    // A window created fullscreen is not maximised under its monitor: Win32 would create the borderless one with
+    // WS_MAXIMIZE and keep that state through the placement, and an X11 window manager would hold it maximised. It
+    // is maximised when it first leaves fullscreen instead (leave_fullscreen).
+    glfwWindowHint(GLFW_MAXIMIZED, glfw_bool(has_flag(desc.flags, window_flags::MAXIMISED) && !desc.fullscreen));
+    mMaximiseOnLeave = desc.fullscreen && has_flag(desc.flags, window_flags::MAXIMISED);
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, glfw_bool(has_flag(desc.flags, window_flags::SCALE_TO_MONITOR)));
     glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, glfw_bool(has_flag(desc.flags, window_flags::SCALE_FRAMEBUFFER)));
     glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_TRUE);
+    // GLFW minimises a window that owns a monitor as soon as it loses focus (code sweep F281). Only the compositor
+    // fullscreen of Wayland still owns one, and it stays put like the borderless window everywhere else.
+    glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+    if (startBorderless) {
+        // Hidden until it covers its monitor, so the decorated window never flashes at its windowed place.
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    }
     if (desc.position.has_value() && mPositionSupported) {
         glfwWindowHint(GLFW_POSITION_X, desc.position->x);
         glfwWindowHint(GLFW_POSITION_Y, desc.position->y);
     }
 
     GLFWmonitor *monitor = nullptr;
+    GLFWvidmode mode = {};
     int width = to_glfw_dimension(desc.width);
     int height = to_glfw_dimension(desc.height);
     if (desc.fullscreen) {
@@ -201,18 +222,36 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
             );
         }
         monitor = monitorList[desc.monitorIndex];
-        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
-        if (mode != nullptr) {
-            width = mode->width;
-            height = mode->height;
+        const GLFWvidmode *currentMode = glfwGetVideoMode(monitor);
+        if (currentMode == nullptr) {
+            return core::make_error(
+              platform_error::MONITOR_NOT_FOUND,
+              "monitor {} has no current video mode",
+              desc.monitorIndex
+            );
+        }
+        mode = *currentMode;
+        // validate_window_desc lets a fullscreen description leave its size at zero: like the null backend, the
+        // window then leaves fullscreen at its monitor's size.
+        if (width <= 0 || height <= 0) {
+            width = mode.width;
+            height = mode.height;
         }
         // The window never had a windowed size yet: the requested one is the best guess for leaving
         // fullscreen, and the size callback replaces it with the confirmed size as soon as it does.
-        mWindowedSize = math::uvec2(desc.width, desc.height);
+        mWindowedSize = math::uvec2(clamp_dimension(width), clamp_dimension(height));
+    }
+
+    // A borderless window starts windowed at its windowed size and is moved over its monitor once it exists; the
+    // compositor fullscreen of Wayland is created on its monitor at the monitor's size.
+    GLFWmonitor *createOn = startBorderless ? nullptr : monitor;
+    if (createOn != nullptr) {
+        width = mode.width;
+        height = mode.height;
     }
 
     clear_last_error();
-    mWindow = glfwCreateWindow(width, height, mTitle.c_str(), monitor, nullptr);
+    mWindow = glfwCreateWindow(width, height, mTitle.c_str(), createOn, nullptr);
     if (mWindow == nullptr) {
         return core::make_error(
           platform_error::WINDOW_CREATE_FAILED,
@@ -222,7 +261,8 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
           last_error_summary()
         );
     }
-    mFullscreen = monitor != nullptr;
+    mFullscreen = desc.fullscreen;
+    mWindowedDecorated = has_flag(desc.flags, window_flags::DECORATED);
 
     glfwSetWindowUserPointer(mWindow, this);
     install_callbacks();
@@ -242,7 +282,16 @@ core::result<void> glfw_window::initialise(const window_desc &desc) {
     if (!mFullscreen) {
         mWindowedSize = window_size();
     }
+    if (startBorderless) {
+        enter_fullscreen(monitor, mode);
+        if (has_flag(desc.flags, window_flags::VISIBLE)) {
+            show_covering_monitor();
+        }
+        // The size the window starts at is no change: the resizes its placement raised are not events.
+        mPendingResize.reset();
+    }
     mMinimised = glfwGetWindowAttrib(mWindow, GLFW_ICONIFIED) == GLFW_TRUE;
+    update_fullscreen_extras();
     // The scale at creation is the window's starting point, not a change: no event announces it.
     mContentScale.start(current_sizes());
 
@@ -352,6 +401,7 @@ std::span<const event> glfw_window::pump_events() {
         mPending.push_back(event(resized));
         mMinimised = resized.width == 0 || resized.height == 0;
         mPendingResize.reset();
+        update_fullscreen_extras();
     }
 
     std::swap(mPending, mDelivered);
@@ -463,6 +513,11 @@ core::result<void> glfw_window::set_icon(std::span<const core::image> images) {
 
 void glfw_window::set_size(math::uvec2 logicalSize) {
     assert_main_thread("set_size");
+    // A fullscreen window keeps covering its monitor: the borderless one would shrink, and GLFW would switch the
+    // video mode of a monitor a window owns (P12 rules mode switches out).
+    if (mFullscreen) {
+        return;
+    }
     // The OS may clamp the request (size limits, a compositor's refusal); on_window_size records
     // whatever it confirms, so nothing is assumed here.
     glfwSetWindowSize(mWindow, to_glfw_dimension(logicalSize.x), to_glfw_dimension(logicalSize.y));
@@ -473,12 +528,14 @@ core::result<void> glfw_window::set_position(math::ivec2 position) {
     if (!mPositionSupported) {
         return feature_unavailable(optional_feature::WINDOW_POSITION, "window positioning");
     }
-    glfwSetWindowPos(mWindow, position.x, position.y);
-    // GLFW ignores the call for a fullscreen window, so only a windowed position is remembered.
-    if (!mFullscreen) {
-        mWindowedPosition = position;
-        mWindowedPositionKnown = true;
+    // A fullscreen window keeps covering its monitor (the borderless one would move off it), and the position is
+    // not remembered for leaving fullscreen either: the window returns to where it was before.
+    if (mFullscreen) {
+        return core::result<void>::success();
     }
+    glfwSetWindowPos(mWindow, position.x, position.y);
+    mWindowedPosition = position;
+    mWindowedPositionKnown = true;
     return core::result<void>::success();
 }
 
@@ -495,30 +552,22 @@ math::ivec2 glfw_window::position() const noexcept {
 
 void glfw_window::show() {
     assert_main_thread("show");
-    glfwShowWindow(mWindow);
+    show_covering_monitor();
 }
 
 void glfw_window::hide() {
     assert_main_thread("hide");
     glfwHideWindow(mWindow);
+    update_fullscreen_extras();
 }
 
 core::result<void> glfw_window::set_fullscreen(bool fullscreen, u32 monitorIndex) {
     assert_main_thread("set_fullscreen");
 
     if (!fullscreen) {
-        if (!mFullscreen) {
-            return core::result<void>::success();
+        if (mFullscreen) {
+            leave_fullscreen();
         }
-        const int width = to_glfw_dimension(mWindowedSize.x);
-        const int height = to_glfw_dimension(mWindowedSize.y);
-        if (!mWindowedPositionKnown && mPositionSupported) {
-            mWindowedPosition = centred_on_work_area(width, height);
-            mWindowedPositionKnown = true;
-        }
-        // Windowed before the call: the size callback it raises records the confirmed windowed size.
-        mFullscreen = false;
-        glfwSetWindowMonitor(mWindow, nullptr, mWindowedPosition.x, mWindowedPosition.y, width, height, 0);
         return core::result<void>::success();
     }
 
@@ -545,11 +594,13 @@ core::result<void> glfw_window::set_fullscreen(bool fullscreen, u32 monitorIndex
     if (!mFullscreen) {
         mWindowedPosition = position();
         mWindowedPositionKnown = true;
+        mWindowedDecorated = glfwGetWindowAttrib(mWindow, GLFW_DECORATED) == GLFW_TRUE;
     }
-    // Fullscreen before the call: the size callback it raises must not take the monitor's size for
-    // the windowed one (mWindowedSize already holds the last confirmed windowed size).
+    // Fullscreen before the calls: the size callbacks they raise must not take the monitor's size for
+    // the windowed one (mWindowedSize already holds the last confirmed windowed size). Already fullscreen, the
+    // window moves to the named monitor.
     mFullscreen = true;
-    glfwSetWindowMonitor(mWindow, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    enter_fullscreen(monitor, *mode);
     return core::result<void>::success();
 }
 
@@ -857,14 +908,171 @@ void glfw_window::announce_content_scale() {
     mPending.push_back(event(changed));
 }
 
-math::ivec2 glfw_window::centred_on_work_area(int width, int height) const noexcept {
+void glfw_window::enter_fullscreen(GLFWmonitor *monitor, const GLFWvidmode &mode) {
+    if (!mBorderlessFullscreen) {
+        // Wayland: the compositor gives the window the whole output. GLFW_AUTO_ICONIFY is off (initialise), so it
+        // stays fullscreen and restored when focus moves away. GLFW keeps the display awake only when the compositor
+        // offers the idle-inhibit protocol (zwp_idle_inhibit_manager_v1); without it the display may sleep.
+        glfwSetWindowMonitor(mWindow, monitor, 0, 0, mode.width, mode.height, mode.refreshRate);
+        return;
+    }
+
+    // Decoration first: Cocoa keeps the frame when the style changes, so the placement after it sizes the content
+    // area that is left. Win32 and X11 keep the content area, which the placement moves anyway.
+    if (glfwGetWindowAttrib(mWindow, GLFW_DECORATED) == GLFW_TRUE) {
+        glfwSetWindowAttrib(mWindow, GLFW_DECORATED, GLFW_FALSE);
+    }
+    int monitorX = 0;
+    int monitorY = 0;
+    glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+    mFullscreenPosition = math::ivec2(monitorX, monitorY);
+    mFullscreenSize = math::uvec2(clamp_dimension(mode.width), clamp_dimension(mode.height));
+    place_content_area(mFullscreenPosition, mFullscreenSize);
+    update_fullscreen_extras();
+}
+
+void glfw_window::leave_fullscreen() {
+    // Asked while the window still covers its monitor: that is the monitor it returns to.
+    if (!mWindowedPositionKnown && mPositionSupported) {
+        mWindowedPosition = centred_on_work_area(mWindowedSize);
+        mWindowedPositionKnown = true;
+    }
+
+    if (!mBorderlessFullscreen) {
+        // Windowed before the call: the size callback it raises records the confirmed windowed size.
+        mFullscreen = false;
+        glfwSetWindowMonitor(
+          mWindow,
+          nullptr,
+          mWindowedPosition.x,
+          mWindowedPosition.y,
+          to_glfw_dimension(mWindowedSize.x),
+          to_glfw_dimension(mWindowedSize.y),
+          0
+        );
+        maximise_if_created_maximised();
+        return;
+    }
+
+    // Decoration while still fullscreen, so a size callback the restyle raises (Cocoa shrinks the content area under
+    // the returning title bar) is not taken for the windowed size; the placement's callback then records it.
+    if (mWindowedDecorated) {
+        glfwSetWindowAttrib(mWindow, GLFW_DECORATED, GLFW_TRUE);
+    }
+    mFullscreen = false;
+    place_content_area(mWindowedPosition, mWindowedSize);
+    update_fullscreen_extras();
+    maximise_if_created_maximised();
+}
+
+void glfw_window::place_content_area(math::ivec2 position, math::uvec2 size) {
+    CONJURE_ASSERT(mPositionSupported, "glfw_window places windows only where the display server lets it");
+    const int width = std::max(1, to_glfw_dimension(size.x));
+    const int height = std::max(1, to_glfw_dimension(size.y));
+    const math::uvec2 requestedSize = math::uvec2(clamp_dimension(width), clamp_dimension(height));
+
+    // One call moves and sizes the content area; GLFW adds the decoration around it for a window it has not
+    // attached to a monitor.
+    glfwSetWindowMonitor(mWindow, nullptr, position.x, position.y, width, height, 0);
+
+    // Crossing onto a monitor with another DPI makes Win32 send WM_DPICHANGED inside the move, and GLFW applies the
+    // rectangle Windows suggests for the new DPI (scaled by the DPI ratio for a SCALE_TO_MONITOR window), so the
+    // window can land elsewhere than asked. It has the target monitor's DPI by then, and a second request is not
+    // rescaled. On X11 the window manager may apply the first request later; the same request again is harmless.
+    if (this->position() == position && window_size() == requestedSize) {
+        return;
+    }
+    glfwSetWindowMonitor(mWindow, nullptr, position.x, position.y, width, height, 0);
+}
+
+void glfw_window::show_covering_monitor() {
+    glfwShowWindow(mWindow);
+    // X11: placing a hidden window goes through XMoveResizeWindow without the PPosition hint GLFW sets only in
+    // glfwSetWindowPos, so a window manager may place the window anew when it maps it, and a window hidden while
+    // fullscreen is mapped again by the same rules. Once shown it is put back over its monitor. Win32 and Cocoa keep
+    // the rectangle of a hidden window, so nothing moves there.
+    if (mFullscreen && mBorderlessFullscreen) {
+        const bool covering = position() == mFullscreenPosition && window_size() == mFullscreenSize;
+        if (!covering) {
+            place_content_area(mFullscreenPosition, mFullscreenSize);
+        }
+    }
+    update_fullscreen_extras();
+}
+
+void glfw_window::update_fullscreen_extras() {
+    // GLFW's monitor fullscreen dropped its display-awake request while the window was minimised; a hidden window
+    // shows nothing to stay awake for either, and on macOS the Dock must come back for the minimised window in it.
+    const bool visible = glfwGetWindowAttrib(mWindow, GLFW_VISIBLE) == GLFW_TRUE;
+    const bool wanted = mFullscreen && mBorderlessFullscreen && visible && !mMinimised;
+    if (wanted == mExtrasHeld) {
+        return;
+    }
+    mExtrasHeld = wanted;
+    if (wanted) {
+        claim_fullscreen_extras();
+    } else {
+        release_fullscreen_extras();
+    }
+}
+
+void glfw_window::maximise_if_created_maximised() {
+    // Once: the window is windowed now, and from here on the OS keeps its maximised state like any other window's.
+    if (!mMaximiseOnLeave) {
+        return;
+    }
+    mMaximiseOnLeave = false;
+    glfwMaximizeWindow(mWindow);
+}
+
+GLFWmonitor *glfw_window::covered_monitor() const noexcept {
+    // Wayland's compositor fullscreen attaches the window to its monitor; a borderless window is found by the
+    // monitor its centre is on.
+    GLFWmonitor *attached = glfwGetWindowMonitor(mWindow);
+    if (attached != nullptr) {
+        return attached;
+    }
+
+    int monitorCount = 0;
+    GLFWmonitor **monitorList = glfwGetMonitors(&monitorCount);
+    if (monitorList == nullptr) {
+        return nullptr;
+    }
+    const math::ivec2 origin = position();
+    const math::uvec2 size = window_size();
+    const i64 centreX = static_cast<i64>(origin.x) + static_cast<i64>(size.x / 2);
+    const i64 centreY = static_cast<i64>(origin.y) + static_cast<i64>(size.y / 2);
+    for (int index = 0; index < monitorCount; ++index) {
+        GLFWmonitor *candidate = monitorList[index];
+        const GLFWvidmode *mode = glfwGetVideoMode(candidate);
+        if (mode == nullptr) {
+            continue;
+        }
+        int monitorX = 0;
+        int monitorY = 0;
+        glfwGetMonitorPos(candidate, &monitorX, &monitorY);
+        const i64 left = static_cast<i64>(monitorX);
+        const i64 top = static_cast<i64>(monitorY);
+        const bool insideX = centreX >= left && centreX < left + static_cast<i64>(mode->width);
+        const bool insideY = centreY >= top && centreY < top + static_cast<i64>(mode->height);
+        if (insideX && insideY) {
+            return candidate;
+        }
+    }
+    // The OS moved the window off every monitor (its monitor was disconnected): the primary one takes it back.
+    return glfwGetPrimaryMonitor();
+}
+
+math::ivec2 glfw_window::centred_on_work_area(math::uvec2 size) const noexcept {
     // Asked while the window still covers its monitor. GLFW places the content area there and adds the
     // decorations around it, so a window smaller than the work area keeps its title bar on screen.
-    GLFWmonitor *monitor = glfwGetWindowMonitor(mWindow);
+    GLFWmonitor *monitor = covered_monitor();
     if (monitor == nullptr) {
         return mWindowedPosition;
     }
 
+    const int width = to_glfw_dimension(size.x);
+    const int height = to_glfw_dimension(size.y);
     int workX = 0;
     int workY = 0;
     int workWidth = 0;
@@ -1055,6 +1263,7 @@ void glfw_window::on_iconify(GLFWwindow *window, int iconified) {
         return;
     }
     self->mMinimised = iconified == GLFW_TRUE;
+    self->update_fullscreen_extras();
     minimise_event value = {};
     value.minimised = self->mMinimised;
     self->mPending.push_back(event(value));

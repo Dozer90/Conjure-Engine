@@ -71,6 +71,89 @@ TEST_SUITE("platform/input") {
         CHECK_FALSE(second.is_key_released(key::SPACE));
     }
 
+    TEST_CASE("regression - code sweep F637 mouse and gamepad buttons are pressed for one frame then held") {
+        input accumulator = {};
+        accumulator.inject(make_gamepad_connection(2, true));
+
+        SUBCASE("mouse button") {
+            accumulator.inject(make_mouse_button(mouse_button::RIGHT, button_action::PRESS));
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().is_mouse_button_pressed(mouse_button::RIGHT));
+            CHECK_FALSE(accumulator.snapshot().is_mouse_button_held(mouse_button::RIGHT));
+
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().is_mouse_button_down(mouse_button::RIGHT));
+            CHECK(accumulator.snapshot().is_mouse_button_held(mouse_button::RIGHT));
+
+            accumulator.inject(make_mouse_button(mouse_button::RIGHT, button_action::RELEASE));
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().is_mouse_button_released(mouse_button::RIGHT));
+            CHECK_FALSE(accumulator.snapshot().is_mouse_button_held(mouse_button::RIGHT));
+        }
+        SUBCASE("gamepad button") {
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::PRESS));
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().gamepad(2).is_pressed(gamepad_button::Y));
+            CHECK_FALSE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().gamepad(2).is_down(gamepad_button::Y));
+            CHECK(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::RELEASE));
+            accumulator.end_frame();
+            CHECK(accumulator.snapshot().gamepad(2).is_released(gamepad_button::Y));
+            CHECK_FALSE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+        }
+        SUBCASE("press and release in one frame are never held") {
+            accumulator.inject(make_mouse_button(mouse_button::RIGHT, button_action::PRESS));
+            accumulator.inject(make_mouse_button(mouse_button::RIGHT, button_action::RELEASE));
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::PRESS));
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::RELEASE));
+            accumulator.end_frame();
+            const input_state &tapped = accumulator.snapshot();
+            CHECK(tapped.is_mouse_button_pressed(mouse_button::RIGHT));
+            CHECK(tapped.is_mouse_button_released(mouse_button::RIGHT));
+            CHECK_FALSE(tapped.is_mouse_button_down(mouse_button::RIGHT));
+            CHECK_FALSE(tapped.is_mouse_button_held(mouse_button::RIGHT));
+            CHECK(tapped.gamepad(2).is_pressed(gamepad_button::Y));
+            CHECK(tapped.gamepad(2).is_released(gamepad_button::Y));
+            CHECK_FALSE(tapped.gamepad(2).is_down(gamepad_button::Y));
+            CHECK_FALSE(tapped.gamepad(2).is_held(gamepad_button::Y));
+
+            accumulator.end_frame();
+            CHECK_FALSE(accumulator.snapshot().is_mouse_button_held(mouse_button::RIGHT));
+            CHECK_FALSE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+        }
+        SUBCASE("losing focus ends the hold with a released edge") {
+            accumulator.inject(make_mouse_button(mouse_button::RIGHT, button_action::PRESS));
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::PRESS));
+            accumulator.end_frame();
+            accumulator.end_frame();
+            REQUIRE(accumulator.snapshot().is_mouse_button_held(mouse_button::RIGHT));
+            REQUIRE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+
+            CHECK_FALSE(accumulator.apply(event(make_focus(false))));
+            accumulator.end_frame();
+            const input_state &unfocused = accumulator.snapshot();
+            CHECK_FALSE(unfocused.is_mouse_button_held(mouse_button::RIGHT));
+            CHECK(unfocused.is_mouse_button_released(mouse_button::RIGHT));
+            CHECK_FALSE(unfocused.gamepad(2).is_held(gamepad_button::Y));
+            CHECK(unfocused.gamepad(2).is_released(gamepad_button::Y));
+        }
+        SUBCASE("disconnecting the gamepad ends the hold with a released edge") {
+            accumulator.inject(make_gamepad_button(2, gamepad_button::Y, button_action::PRESS));
+            accumulator.end_frame();
+            accumulator.end_frame();
+            REQUIRE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+
+            accumulator.inject(make_gamepad_connection(2, false));
+            accumulator.end_frame();
+            CHECK_FALSE(accumulator.snapshot().gamepad(2).is_held(gamepad_button::Y));
+            CHECK(accumulator.snapshot().gamepad(2).is_released(gamepad_button::Y));
+        }
+    }
+
     TEST_CASE("input - a released key is released for exactly one frame") {
         input accumulator = {};
         accumulator.inject(make_key(key::E, button_action::PRESS));

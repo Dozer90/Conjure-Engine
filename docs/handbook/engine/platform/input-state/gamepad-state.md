@@ -55,21 +55,28 @@ struct gamepad_state
 <div class="function-declaration" id="function-is-down-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_down(
     <a href="../gamepad.html#symbol-gamepad-button">gamepad_button</a> button) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
-<p>True while the button is held.</p>
+<p>True while the button is down, including the frame it was pressed in (<code>is_held</code> leaves that frame out); <code>false</code> for an invalid button.</p>
+
+#### `is_held` {#function-is-held}
+
+<div class="function-declaration" id="function-is-held-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_held(
+    <a href="../gamepad.html#symbol-gamepad-button">gamepad_button</a> button) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
+
+<p>True while the button is down and this is not the frame it was pressed in; <code>false</code> for an invalid button.</p>
 
 #### `is_pressed` {#function-is-pressed}
 
 <div class="function-declaration" id="function-is-pressed-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_pressed(
     <a href="../gamepad.html#symbol-gamepad-button">gamepad_button</a> button) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
-<p>True in the frame the button went down.</p>
+<p>True in the frame the button went down; <code>false</code> for an invalid button.</p>
 
 #### `is_released` {#function-is-released}
 
 <div class="function-declaration" id="function-is-released-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> is_released(
     <a href="../gamepad.html#symbol-gamepad-button">gamepad_button</a> button) <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
-<p>True in the frame the button came up.</p>
+<p>True in the frame the button came up; <code>false</code> for an invalid button.</p>
 
 ## Operator Overloads
 

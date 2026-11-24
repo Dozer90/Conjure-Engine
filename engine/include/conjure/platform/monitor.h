@@ -6,13 +6,13 @@
 #include <string>
 
 // Monitors as window::monitors() reports them (docs/design/11_platform.md 2.4, P12). Fullscreen is
-// windowed fullscreen on a monitor's current video mode; video_modes() exists so a settings UI can
+// borderless fullscreen on a monitor's current video mode; video_modes() exists so a settings UI can
 // list the alternatives even though v1 never switches modes.
 
 namespace conjure::platform {
 
     struct video_mode {
-        u32 width = 0;              // pixels
+        u32 width = 0;              // screen coordinates: pixels, but points on macOS
         u32 height = 0;
         u32 refreshRateHz = 0;
 

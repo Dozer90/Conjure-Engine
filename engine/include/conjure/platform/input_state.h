@@ -111,24 +111,33 @@ namespace conjure::platform {
         std::array<f32, GAMEPAD_AXIS_COUNT> axes = {};      // sticks [-1, 1], triggers [0, 1]
 
         /// <summary>
-        /// True while the button is held.
+        /// True while the button is down, including the frame it was pressed in (is_held leaves that frame
+        /// out); false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_down(gamepad_button button) const noexcept {
             return is_valid_gamepad_button(button) && (buttonsDown & (u32{1} << static_cast<u32>(button))) != 0;
         }
 
         /// <summary>
-        /// True in the frame the button went down.
+        /// True in the frame the button went down; false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_pressed(gamepad_button button) const noexcept {
             return is_valid_gamepad_button(button) && (buttonsPressed & (u32{1} << static_cast<u32>(button))) != 0;
         }
 
         /// <summary>
-        /// True in the frame the button came up.
+        /// True in the frame the button came up; false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_released(gamepad_button button) const noexcept {
             return is_valid_gamepad_button(button) && (buttonsReleased & (u32{1} << static_cast<u32>(button))) != 0;
+        }
+
+        /// <summary>
+        /// True while the button is down and this is not the frame it was pressed in; false for an invalid
+        /// button.
+        /// </summary>
+        [[nodiscard]] bool is_held(gamepad_button button) const noexcept {
+            return is_down(button) && !is_pressed(button);
         }
 
         /// <summary>
@@ -170,7 +179,7 @@ namespace conjure::platform {
         u32 textCount = 0;
 
         /// <summary>
-        /// True while the key is held (including the frame it was pressed).
+        /// True while the key is down, including the frame it was pressed in (is_key_held leaves that frame out).
         /// </summary>
         [[nodiscard]] bool is_key_down(key code) const noexcept {
             return keysDown.test(code);
@@ -198,24 +207,33 @@ namespace conjure::platform {
         }
 
         /// <summary>
-        /// True while the mouse button is held.
+        /// True while the mouse button is down, including the frame it was pressed in (is_mouse_button_held
+        /// leaves that frame out); false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_mouse_button_down(mouse_button button) const noexcept {
             return is_valid_mouse_button(button) && (mouseButtonsDown & (u32{1} << static_cast<u32>(button))) != 0;
         }
 
         /// <summary>
-        /// True in the frame the mouse button went down.
+        /// True in the frame the mouse button went down; false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_mouse_button_pressed(mouse_button button) const noexcept {
             return is_valid_mouse_button(button) && (mouseButtonsPressed & (u32{1} << static_cast<u32>(button))) != 0;
         }
 
         /// <summary>
-        /// True in the frame the mouse button came up.
+        /// True in the frame the mouse button came up; false for an invalid button.
         /// </summary>
         [[nodiscard]] bool is_mouse_button_released(mouse_button button) const noexcept {
             return is_valid_mouse_button(button) && (mouseButtonsReleased & (u32{1} << static_cast<u32>(button))) != 0;
+        }
+
+        /// <summary>
+        /// True while the mouse button is down and this is not the frame it was pressed in; false for an
+        /// invalid button.
+        /// </summary>
+        [[nodiscard]] bool is_mouse_button_held(mouse_button button) const noexcept {
+            return is_mouse_button_down(button) && !is_mouse_button_pressed(button);
         }
 
         /// <summary>

@@ -109,6 +109,30 @@ TEST_SUITE("platform/input_state") {
         CHECK_FALSE(pad.is_pressed(static_cast<gamepad_button>(31)));
     }
 
+    TEST_CASE("gamepad_state - is_held is down outside the frame it was pressed in") {
+        gamepad_state pad = {};
+        pad.buttonsDown = (u32{1} << static_cast<u32>(gamepad_button::A)) |
+          (u32{1} << static_cast<u32>(gamepad_button::DPAD_LEFT));
+        pad.buttonsPressed = u32{1} << static_cast<u32>(gamepad_button::A);
+        pad.buttonsReleased = u32{1} << static_cast<u32>(gamepad_button::B);
+
+        CHECK_FALSE(pad.is_held(gamepad_button::A));            // the press frame is not held
+        CHECK(pad.is_held(gamepad_button::DPAD_LEFT));
+        CHECK_FALSE(pad.is_held(gamepad_button::B));            // the release frame is not down
+        CHECK_FALSE(pad.is_held(gamepad_button::X));
+    }
+
+    TEST_CASE("gamepad_state - is_held rejects invalid buttons even when their bit is set") {
+        gamepad_state pad = {};
+        pad.buttonsDown = ~u32{0};
+        CHECK(pad.is_held(gamepad_button::DPAD_LEFT));          // the last valid button
+        CHECK_FALSE(pad.is_held(gamepad_button::COUNT));
+        CHECK_FALSE(pad.is_held(static_cast<gamepad_button>(31)));
+        CHECK_FALSE(pad.is_held(static_cast<gamepad_button>(255)));
+        const gamepad_state silent = {};
+        CHECK_FALSE(silent.is_held(gamepad_button::A));
+    }
+
     TEST_CASE("gamepad_state - axis reads the stored value and 0 for an invalid axis") {
         gamepad_state pad = {};
         pad.axes[static_cast<usize>(gamepad_axis::RIGHT_TRIGGER)] = 0.25f;
@@ -175,6 +199,30 @@ TEST_SUITE("platform/input_state") {
         CHECK_FALSE(state.is_mouse_button_down(mouse_button::RIGHT));
         CHECK_FALSE(state.is_mouse_button_down(mouse_button::COUNT));
         CHECK_FALSE(state.is_mouse_button_pressed(static_cast<mouse_button>(31)));
+    }
+
+    TEST_CASE("input_state - is_mouse_button_held is down outside the frame it was pressed in") {
+        input_state state = {};
+        state.mouseButtonsDown = (u32{1} << static_cast<u32>(mouse_button::LEFT)) |
+          (u32{1} << static_cast<u32>(mouse_button::MIDDLE));
+        state.mouseButtonsPressed = u32{1} << static_cast<u32>(mouse_button::LEFT);
+        state.mouseButtonsReleased = u32{1} << static_cast<u32>(mouse_button::RIGHT);
+
+        CHECK_FALSE(state.is_mouse_button_held(mouse_button::LEFT));     // the press frame is not held
+        CHECK(state.is_mouse_button_held(mouse_button::MIDDLE));
+        CHECK_FALSE(state.is_mouse_button_held(mouse_button::RIGHT));    // the release frame is not down
+        CHECK_FALSE(state.is_mouse_button_held(mouse_button::BUTTON_4));
+    }
+
+    TEST_CASE("input_state - is_mouse_button_held rejects invalid buttons even when their bit is set") {
+        input_state state = {};
+        state.mouseButtonsDown = ~u32{0};
+        CHECK(state.is_mouse_button_held(mouse_button::BUTTON_8));       // the last valid button
+        CHECK_FALSE(state.is_mouse_button_held(mouse_button::COUNT));
+        CHECK_FALSE(state.is_mouse_button_held(static_cast<mouse_button>(31)));
+        CHECK_FALSE(state.is_mouse_button_held(static_cast<mouse_button>(255)));
+        const input_state idle = {};
+        CHECK_FALSE(idle.is_mouse_button_held(mouse_button::LEFT));
     }
 
     TEST_CASE("input_state - gamepad(index) returns the slot and asserts out of range") {

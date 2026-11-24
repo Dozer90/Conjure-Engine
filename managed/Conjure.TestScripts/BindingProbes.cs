@@ -507,6 +507,102 @@ public sealed class BindingInputProbe : ScriptBehaviour
 }
 
 /// <summary>
+/// Presses a key, a mouse button and a gamepad button, keeps them down for a frame and releases them, and
+/// records Pressed, Down, Held and Released of each as four digits per frame ("1100 0110 0001" is the
+/// expected story). Aliased counts the queries with an out-of-range button or gamepad index that answered true
+/// while the real buttons were down; LastValid counts the Down and Held queries of the last mouse and gamepad
+/// buttons (Button8, DpadLeft) that answered true on the frame after their press, 4 when the range check keeps them.
+/// </summary>
+public sealed class BindingInputHeldProbe : ScriptBehaviour
+{
+    private const int Pad = 1;
+    private const MouseButton AliasOfRight = (MouseButton)33;
+    private const GamepadButton AliasOfY = (GamepadButton)35;
+
+    public string Errors = "";
+    public string KeyFrames = "";
+    public string MouseFrames = "";
+    public string GamepadFrames = "";
+    public int Aliased = -1;
+    public int LastValid = -1;
+    public int Updates;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        ++Updates;
+        try
+        {
+            if (Updates == 1)
+            {
+                Input.Inject.Key(Key.Space, ButtonAction.Press);
+                Input.Inject.MouseButton(MouseButton.Right, ButtonAction.Press);
+                Input.Inject.GamepadButton(Pad, GamepadButton.Y, ButtonAction.Press);
+                Input.Inject.MouseButton(MouseButton.Button8, ButtonAction.Press);
+                Input.Inject.GamepadButton(Pad, GamepadButton.DpadLeft, ButtonAction.Press);
+                return;
+            }
+            if (Updates > 4)
+            {
+                return;
+            }
+            Record();
+            if (Updates == 3)
+            {
+                Aliased = CountTrue(
+                    Input.IsMouseButtonDown(AliasOfRight),
+                    Input.IsMouseButtonHeld(AliasOfRight),
+                    Input.IsGamepadButtonDown(Pad, AliasOfY),
+                    Input.IsGamepadButtonHeld(Pad, AliasOfY),
+                    Input.IsGamepadButtonHeld(Input.GamepadCount, GamepadButton.Y),
+                    Input.IsGamepadButtonHeld(-1, GamepadButton.Y),
+                    Input.IsKeyHeld((Key)(512 + (int)Key.Space)));
+                LastValid = CountTrue(
+                    Input.IsMouseButtonDown(MouseButton.Button8),
+                    Input.IsMouseButtonHeld(MouseButton.Button8),
+                    Input.IsGamepadButtonDown(Pad, GamepadButton.DpadLeft),
+                    Input.IsGamepadButtonHeld(Pad, GamepadButton.DpadLeft));
+                Input.Inject.Key(Key.Space, ButtonAction.Release);
+                Input.Inject.MouseButton(MouseButton.Right, ButtonAction.Release);
+                Input.Inject.GamepadButton(Pad, GamepadButton.Y, ButtonAction.Release);
+                Input.Inject.MouseButton(MouseButton.Button8, ButtonAction.Release);
+                Input.Inject.GamepadButton(Pad, GamepadButton.DpadLeft, ButtonAction.Release);
+            }
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private void Record()
+    {
+        string separator = KeyFrames.Length == 0 ? "" : " ";
+        KeyFrames += separator + Digits(
+            Input.IsKeyPressed(Key.Space), Input.IsKeyDown(Key.Space),
+            Input.IsKeyHeld(Key.Space), Input.IsKeyReleased(Key.Space));
+        MouseFrames += separator + Digits(
+            Input.IsMouseButtonPressed(MouseButton.Right), Input.IsMouseButtonDown(MouseButton.Right),
+            Input.IsMouseButtonHeld(MouseButton.Right), Input.IsMouseButtonReleased(MouseButton.Right));
+        GamepadFrames += separator + Digits(
+            Input.IsGamepadButtonPressed(Pad, GamepadButton.Y), Input.IsGamepadButtonDown(Pad, GamepadButton.Y),
+            Input.IsGamepadButtonHeld(Pad, GamepadButton.Y), Input.IsGamepadButtonReleased(Pad, GamepadButton.Y));
+    }
+
+    private static int CountTrue(params bool[] answers)
+    {
+        int count = 0;
+        foreach (bool answer in answers)
+        {
+            count += answer ? 1 : 0;
+        }
+        return count;
+    }
+
+    private static string Digits(bool pressed, bool down, bool held, bool released) =>
+        (pressed ? "1" : "0") + (down ? "1" : "0") + (held ? "1" : "0") + (released ? "1" : "0");
+}
+
+/// <summary>
 /// Casts the same ray down onto the test's static box without a mask and with LayerMask.None.
 /// </summary>
 public sealed class BindingLayerMaskProbe : ScriptBehaviour

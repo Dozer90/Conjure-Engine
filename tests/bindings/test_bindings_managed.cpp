@@ -61,6 +61,7 @@ namespace {
     constexpr std::string_view BIND_PROBE = "Conjure.TestScripts.BindingAssetBindProbe";
     constexpr std::string_view MODULES_PROBE = "Conjure.TestScripts.BindingModulesProbe";
     constexpr std::string_view INPUT_PROBE = "Conjure.TestScripts.BindingInputProbe";
+    constexpr std::string_view INPUT_HELD_PROBE = "Conjure.TestScripts.BindingInputHeldProbe";
     constexpr std::string_view RECORD_SIZE_PROBE = "Conjure.TestScripts.BindingRecordSizeProbe";
     constexpr std::string_view LAYER_MASK_PROBE = "Conjure.TestScripts.BindingLayerMaskProbe";
     constexpr std::string_view AUDIO_FIELDS_PROBE = "Conjure.TestScripts.BindingAudioFieldsProbe";
@@ -477,6 +478,26 @@ TEST_SUITE("bindings/bindings_managed") {
         CHECK(fixture.field_i64(probe, "ReleasedLater") == 1);
         CHECK(fixture.field_string(probe, "Clipboard") == "managed clipboard");
         CHECK(fixture.field_i64(probe, "GamepadNameEmpty") == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE(
+      "regression - code sweep F637 C# keys, mouse and gamepad buttons are pressed for one frame then held "
+      "[dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), INPUT_HELD_PROBE, 5);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        // Pressed, Down, Held and Released per frame: the press frame, the frame after it, the release frame.
+        CHECK(fixture.field_string(probe, "KeyFrames") == "1100 0110 0001");
+        CHECK(fixture.field_string(probe, "MouseFrames") == "1100 0110 0001");
+        CHECK(fixture.field_string(probe, "GamepadFrames") == "1100 0110 0001");
+        CHECK(fixture.field_i64(probe, "Aliased") == 0);
+        // The range check ends at the last real button: Button8 and DpadLeft are down and held on the frame after.
+        CHECK(fixture.field_i64(probe, "LastValid") == 4);
         CHECK(logs.count(core::log_level::ERR) == 0);
     }
 

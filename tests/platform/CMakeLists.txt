@@ -32,3 +32,11 @@ conjure_add_test_module(platform
 )
 
 conjure_header_check(conjure_platform)
+
+# test_backend_conformance.cpp reads the glfw backend's private fullscreen-extras claim count when that backend is
+# built (CONJURE_PLATFORM_HAS_GLFW, as engine/src/platform/CMakeLists.txt defines it for the module).
+if(CONJURE_PLATFORM_GLFW)
+    target_compile_definitions(conjure_platform_tests PRIVATE CONJURE_PLATFORM_HAS_GLFW=1)
+else()
+    target_compile_definitions(conjure_platform_tests PRIVATE CONJURE_PLATFORM_HAS_GLFW=0)
+endif()

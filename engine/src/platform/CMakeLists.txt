@@ -48,6 +48,10 @@ if(CONJURE_PLATFORM_GLFW)
         glfw/glfw_window.h
     )
     set(CONJURE_PLATFORM_PRIVATE_DEPS conjure::thirdparty::glfw)
+    if(APPLE)
+        # glfw_native.cpp hides the menu bar of a borderless fullscreen window through the Objective-C runtime.
+        list(APPEND CONJURE_PLATFORM_PRIVATE_DEPS objc)
+    endif()
     set(CONJURE_PLATFORM_HAS_GLFW 1)
 endif()
 

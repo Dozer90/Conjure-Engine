@@ -84,7 +84,7 @@ namespace conjure::platform {
         u32 width = 1600;                                   // logical size; the engine passes window_settings
         u32 height = 900;
         window_flags flags = window_flags::DEFAULT;
-        bool fullscreen = false;                            // windowed fullscreen on monitorIndex (P12)
+        bool fullscreen = false;                            // borderless fullscreen on monitorIndex (P12)
         u32 monitorIndex = 0;
         std::optional<math::ivec2> position = std::nullopt; // nullopt = let the OS / centre on the monitor
         display_server_hint displayServer = display_server_hint::ANY;
@@ -172,13 +172,16 @@ namespace conjure::platform {
             [[nodiscard]] virtual core::result<void> set_icon(std::span<const core::image> images) = 0;
 
             /// <summary>
-            /// Resizes the window in logical coordinates; the framebuffer change arrives as an event.
+            /// Resizes the window in logical coordinates; the framebuffer change arrives as an event. Ignored
+            /// while fullscreen: the window keeps covering its monitor, and leaving fullscreen restores the
+            /// windowed size from before.
             /// </summary>
             virtual void set_size(math::uvec2 logicalSize) = 0;
 
             /// <summary>
             /// Moves the window on the virtual desktop. FEATURE_UNAVAILABLE where the display server
-            /// does not allow it (Wayland).
+            /// does not allow it (Wayland). Ignored while fullscreen (success, nothing moves): leaving
+            /// fullscreen restores the windowed position from before.
             /// </summary>
             [[nodiscard]] virtual core::result<void> set_position(math::ivec2 position) = 0;
 
@@ -187,14 +190,32 @@ namespace conjure::platform {
             /// </summary>
             [[nodiscard]] virtual math::ivec2 position() const noexcept = 0;
 
+            /// <summary>
+            /// Shows the window; it takes focus when the OS allows it. A fullscreen window too, except the compositor
+            /// fullscreen of Wayland, which GLFW never shows or hides.
+            /// </summary>
             virtual void show() = 0;
+
+            /// <summary>
+            /// Hides the window, and the OS moves focus elsewhere (the null backend's focus changes only through
+            /// simulate_focus). A fullscreen window too, except on Wayland (see show()).
+            /// </summary>
             virtual void hide() = 0;
 
             /// <summary>
-            /// Windowed fullscreen on monitors()[monitorIndex] with its current video mode (P12), or
-            /// back to the previous windowed size and position; a window created fullscreen without
-            /// window_desc::position is centred on its monitor's work area. MONITOR_NOT_FOUND leaves the
-            /// window unchanged.
+            /// Borderless fullscreen on monitors()[monitorIndex] with its current video mode (P12): the window
+            /// loses its decoration and covers the monitor without owning it, so losing focus neither minimises
+            /// it nor keeps it above other applications (an X11 window manager decides itself whether its panels
+            /// stay above). Called while fullscreen, the window moves to that monitor. false returns to the
+            /// previous windowed size, position and decoration; a window created fullscreen without
+            /// window_desc::position is centred on its monitor's work area. Wayland, where a window cannot be
+            /// placed, uses the compositor's fullscreen instead, which also stays on focus loss. While a
+            /// fullscreen window is shown and not minimised, the display stays awake on Windows and macOS hides the
+            /// menu bar and the Dock whenever the application is active; on Wayland the display stays awake while
+            /// fullscreen when the compositor supports the idle-inhibit protocol, and an X11 screen saver may still
+            /// start. A window created fullscreen is shown only with window_flags::VISIBLE, except on Wayland, and
+            /// window_flags::MAXIMISED maximises it only when it first leaves fullscreen (the null backend has no
+            /// maximised state). MONITOR_NOT_FOUND leaves the window unchanged.
             /// </summary>
             [[nodiscard]] virtual core::result<void> set_fullscreen(bool fullscreen, u32 monitorIndex = 0) = 0;
 

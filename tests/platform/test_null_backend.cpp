@@ -70,7 +70,7 @@ TEST_SUITE("platform/null_backend") {
         desc.fullscreen = true;
         const std::unique_ptr<null_backend> created = null_backend::create(desc);
 
-        // glfw ignores a position for a window on a monitor, so the window created fullscreen is still centred.
+        // A fullscreen window ignores a position, as on glfw, so the window created fullscreen is still centred.
         CONJURE_CHECK_OK(created->set_position(math::ivec2(100, 100)));
         CONJURE_CHECK_OK(created->set_fullscreen(false));
         CHECK(created->position() == math::ivec2(560, 240));

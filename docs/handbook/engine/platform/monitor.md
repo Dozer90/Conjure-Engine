@@ -11,7 +11,7 @@ kind: header
 | File Path | `engine/include/conjure/platform/monitor.h` |
 | API ↗ | [Windows and events](../../../api/platform/windows-and-events.md) |
 
-<p>Monitors as <code>window::monitors()</code> reports them. Fullscreen is windowed fullscreen on a monitor&#x27;s current video mode; <code>video_modes()</code> exists so a settings UI can list the alternatives even though v1 never switches modes.</p>
+<p>Monitors as <code>window::monitors()</code> reports them. Fullscreen is borderless fullscreen on a monitor&#x27;s current video mode; <code>video_modes()</code> exists so a settings UI can list the alternatives even though v1 never switches modes.</p>
 
 ## Structs
 

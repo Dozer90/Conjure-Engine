@@ -79,6 +79,10 @@ null_backend::null_backend(const window_desc &desc) :
     if (mWindowedPositionKnown) {
         mWindowedPosition = mPosition;
     }
+    // Like a borderless glfw window, a fullscreen one covers its monitor from the monitor's origin.
+    if (mFullscreen) {
+        mPosition = mMonitors[desc.monitorIndex < mMonitors.size() ? desc.monitorIndex : 0].position;
+    }
 
     // Capacity for a busy frame so the steady state never allocates (3.3 step 6 on the glfw side).
     mPending.reserve(256);
@@ -208,24 +212,24 @@ core::result<void> null_backend::set_icon(std::span<const core::image> images) {
 
 void null_backend::set_size(math::uvec2 logicalSize) {
     assert_main_thread("set_size");
-    if (logicalSize == mLogicalSize) {
+    // As on glfw, a fullscreen window keeps covering its monitor and leaving fullscreen restores the size before.
+    if (mFullscreen || logicalSize == mLogicalSize) {
         return;
     }
     mLogicalSize = logicalSize;
-    if (!mFullscreen) {
-        mWindowedSize = logicalSize;
-    }
+    mWindowedSize = logicalSize;
     queue_resize();
 }
 
 core::result<void> null_backend::set_position(math::ivec2 position) {
     assert_main_thread("set_position");
-    mPosition = position;
-    // As on glfw, only a windowed position is where the window returns when it leaves fullscreen.
-    if (!mFullscreen) {
-        mWindowedPosition = position;
-        mWindowedPositionKnown = true;
+    // As on glfw, a fullscreen window stays on its monitor and leaving fullscreen restores the position before.
+    if (mFullscreen) {
+        return core::result<void>::success();
     }
+    mPosition = position;
+    mWindowedPosition = position;
+    mWindowedPositionKnown = true;
     return core::result<void>::success();
 }
 
@@ -263,6 +267,7 @@ core::result<void> null_backend::set_fullscreen(bool fullscreen, u32 monitorInde
         mWindowedPosition = mPosition;
         mWindowedPositionKnown = true;
         mLogicalSize = math::uvec2(VIRTUAL_MONITOR_WIDTH, VIRTUAL_MONITOR_HEIGHT);
+        mPosition = mMonitors[monitorIndex].position;
     } else {
         mLogicalSize = mWindowedSize;
         // Created fullscreen without a position: like glfw, the window lands centred on the monitor

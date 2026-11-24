@@ -27,6 +27,10 @@
 // raises resize, focus and iconify callbacks synchronously inside setters on Win32 and Cocoa, so a
 // pending buffer that is never cleared at pump start is the only way those events survive until the
 // next pump. Everything runs on the main thread inside pump_events or a setter.
+// Fullscreen is borderless (P12): the window drops its decoration and covers its monitor's rectangle without owning
+// the monitor, so focus loss neither minimises it nor keeps it above the application the user switched to. Wayland
+// clients cannot place windows, so there the window owns the monitor through the compositor instead, with GLFW's
+// minimise-on-focus-loss turned off.
 
 namespace conjure::platform::glfw {
 
@@ -69,6 +73,12 @@ namespace conjure::platform::glfw {
             bool mPositionSupported = true;         // false on Wayland: clients never learn where they are
             bool mCursorWarpSupported = true;       // false on Wayland: glfwSetCursorPos is unavailable
             bool mIconSupported = true;             // false on Cocoa and Wayland: windows have no icon of their own
+            bool mBorderlessFullscreen = true;      // false on Wayland: fullscreen is the compositor's
+            bool mWindowedDecorated = true;         // decoration to restore when borderless fullscreen ends
+            bool mMaximiseOnLeave = false;          // created fullscreen with MAXIMISED: maximised when it first leaves
+            bool mExtrasHeld = false;               // holds one claim_fullscreen_extras claim (glfw_context.h)
+            math::ivec2 mFullscreenPosition = math::ivec2(0);   // monitor rectangle a borderless window covers
+            math::uvec2 mFullscreenSize = math::uvec2(0);
             math::ivec2 mWindowedPosition = math::ivec2(0);
             bool mWindowedPositionKnown = false;            // false: created fullscreen without a position
             math::uvec2 mWindowedSize = math::uvec2(0);     // last size the OS confirmed while windowed
@@ -153,7 +163,14 @@ namespace conjure::platform::glfw {
             void rebuild_monitors();
             [[nodiscard]] detail::scaled_sizes current_sizes() const noexcept;
             void announce_content_scale();
-            [[nodiscard]] math::ivec2 centred_on_work_area(int width, int height) const noexcept;
+            void enter_fullscreen(GLFWmonitor *monitor, const GLFWvidmode &mode);
+            void leave_fullscreen();
+            void place_content_area(math::ivec2 position, math::uvec2 size);
+            void show_covering_monitor();
+            void update_fullscreen_extras();
+            void maximise_if_created_maximised();
+            [[nodiscard]] GLFWmonitor *covered_monitor() const noexcept;
+            [[nodiscard]] math::ivec2 centred_on_work_area(math::uvec2 size) const noexcept;
             void patch_drop_spans() noexcept;
             void warn_feature_unavailable(optional_feature feature, std::string_view what);
             [[nodiscard]] core::result<void> feature_unavailable(optional_feature feature, std::string_view what);

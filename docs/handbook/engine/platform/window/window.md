@@ -112,6 +112,8 @@ class CONJURE_API window
 
 <div class="function-declaration" id="function-hide-1"><pre><code><span class="k">virtual</span> <span class="k">void</span> hide() = <span class="mi">0</span>;</code></pre></div>
 
+<p>Hides the <code><a href="window.html">window</a></code>, and the OS moves focus elsewhere (the <code>null</code> backend&#x27;s focus changes only through <code>simulate_focus</code>). <code>A</code> fullscreen <code><a href="window.html">window</a></code> too, except on Wayland (see <code><a href="#function-show-1">show</a>()</code>).</p>
+
 #### `is_focused` {#function-is-focused}
 
 <div class="function-declaration" id="function-is-focused-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">virtual</span> <span class="k">bool</span> is_focused() <span class="k">const</span> <span class="k">noexcept</span> = <span class="mi">0</span>;</code></pre></div>
@@ -191,7 +193,7 @@ class CONJURE_API window
     <span class="k">bool</span> fullscreen,
     <a href="../../core/types.html#symbol-u32">u32</a> monitorIndex = <span class="mi">0</span>) = <span class="mi">0</span>;</code></pre></div>
 
-<p>Windowed fullscreen on <code><a href="#function-monitors-1">monitors</a>()</code>[<code>monitorIndex</code>] with its current video mode, or back to the previous windowed size and position; a <code><a href="window.html">window</a></code> created fullscreen without <code>window_desc::position</code> is centred on its monitor&#x27;s work area. <code>MONITOR_NOT_FOUND</code> leaves the <code><a href="window.html">window</a></code> unchanged.</p>
+<p>Borderless fullscreen on <code><a href="#function-monitors-1">monitors</a>()</code>[<code>monitorIndex</code>] with its current video mode: the <code><a href="window.html">window</a></code> loses its decoration and covers the monitor without owning it, so losing focus neither minimises it nor keeps it above other applications (an <code>X11</code> <code><a href="window.html">window</a></code> manager decides itself whether its panels stay above). Called while fullscreen, the <code><a href="window.html">window</a></code> moves to that monitor. <code>false</code> returns to the previous windowed size, position and decoration; a <code><a href="window.html">window</a></code> created fullscreen without <code>window_desc::position</code> is centred on its monitor&#x27;s work area. Wayland, where a <code><a href="window.html">window</a></code> cannot be placed, uses the compositor&#x27;s fullscreen instead, which also stays on focus loss. While a fullscreen <code><a href="window.html">window</a></code> is shown and not minimised, the display stays awake on Windows and macOS hides the menu bar and the Dock whenever the application is active; on Wayland the display stays awake while fullscreen when the compositor supports the idle-inhibit protocol, and an <code>X11</code> screen saver may still start. <code>A</code> <code><a href="window.html">window</a></code> created fullscreen is shown only with <code>window_flags::VISIBLE</code>, except on Wayland, and <code>window_flags::MAXIMISED</code> maximises it only when it first leaves fullscreen (the <code>null</code> backend has no maximised state). <code>MONITOR_NOT_FOUND</code> leaves the <code><a href="window.html">window</a></code> unchanged.</p>
 
 #### `set_icon` {#function-set-icon}
 
@@ -205,7 +207,7 @@ class CONJURE_API window
 <div class="function-declaration" id="function-set-position-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">virtual</span> <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; set_position(
     <a href="../../core/math/glm-types.html#symbol-ivec2">math::ivec2</a> position) = <span class="mi">0</span>;</code></pre></div>
 
-<p>Moves the <code><a href="window.html">window</a></code> on the virtual desktop. <code>FEATURE_UNAVAILABLE</code> where the display server does not allow it (Wayland).</p>
+<p>Moves the <code><a href="window.html">window</a></code> on the virtual desktop. <code>FEATURE_UNAVAILABLE</code> where the display server does not allow it (Wayland). Ignored while fullscreen (success, nothing moves): leaving fullscreen restores the windowed position from before.</p>
 
 #### `set_raw_mouse_motion` {#function-set-raw-mouse-motion}
 
@@ -219,7 +221,7 @@ class CONJURE_API window
 <div class="function-declaration" id="function-set-size-1"><pre><code><span class="k">virtual</span> <span class="k">void</span> set_size(
     <a href="../../core/math/glm-types.html#symbol-uvec2">math::uvec2</a> logicalSize) = <span class="mi">0</span>;</code></pre></div>
 
-<p>Resizes the <code><a href="window.html">window</a></code> in logical coordinates; the framebuffer change arrives as an event.</p>
+<p>Resizes the <code><a href="window.html">window</a></code> in logical coordinates; the framebuffer change arrives as an event. Ignored while fullscreen: the <code><a href="window.html">window</a></code> keeps covering its monitor, and leaving fullscreen restores the windowed size from before.</p>
 
 #### `set_title` {#function-set-title}
 
@@ -237,6 +239,8 @@ class CONJURE_API window
 #### `show` {#function-show}
 
 <div class="function-declaration" id="function-show-1"><pre><code><span class="k">virtual</span> <span class="k">void</span> show() = <span class="mi">0</span>;</code></pre></div>
+
+<p>Shows the <code><a href="window.html">window</a></code>; it takes focus when the OS allows it. <code>A</code> fullscreen <code><a href="window.html">window</a></code> too, except the compositor fullscreen of Wayland, which <code>GLFW</code> never shows or hides.</p>
 
 #### `title` {#function-title}
 
