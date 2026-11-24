@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,48 @@ namespace {
             result[index] = static_cast<byte>(bytes[index]);
         }
         return result;
+    }
+
+    // What the F194 tones are known to be (tests/assets/audio/README.txt): FFmpeg's sine source at amplitude 1/8.
+    constexpr u32 TONE_SAMPLE_RATE = 48000;
+    constexpr u16 TONE_CHANNELS = 1;
+    constexpr f64 TONE_FREQUENCY = 440.0;
+    constexpr f64 TONE_FRAMES = 24000.0;
+    constexpr f32 TONE_AMPLITUDE = 0.125f;
+
+    struct tone_measurement {
+        f32 peak = 0.0f;
+        usize risingEdges = 0;
+        f64 frequency = 0.0;   // from the first to the last rising edge, so leading and trailing padding is ignored
+    };
+
+    // Rising edges through a hysteresis band of a quarter of the tone's amplitude, so codec noise near zero in
+    // padding or silence is not counted as a cycle.
+    tone_measurement measure_tone(std::span<const f32> samples, u32 sampleRate) {
+        constexpr f32 BAND = TONE_AMPLITUDE * 0.25f;
+        tone_measurement measurement = {};
+        bool low = false;
+        usize first = 0;
+        usize last = 0;
+        for (usize index = 0; index < samples.size(); ++index) {
+            const f32 sample = samples[index];
+            measurement.peak = std::max(measurement.peak, std::abs(sample));
+            if (sample < -BAND) {
+                low = true;
+            } else if (low && sample > BAND) {
+                low = false;
+                if (measurement.risingEdges == 0) {
+                    first = index;
+                }
+                last = index;
+                ++measurement.risingEdges;
+            }
+        }
+        if (measurement.risingEdges > 1 && last > first) {
+            measurement.frequency = static_cast<f64>(measurement.risingEdges - 1) * static_cast<f64>(sampleRate)
+                                    / static_cast<f64>(last - first);
+        }
+        return measurement;
     }
 }
 
@@ -400,29 +443,50 @@ TEST_SUITE("audio/decoder") {
         CONJURE_CHECK_ERROR(decoder.open({}, 500), audio_error::INVALID_CLIP);
     }
 
-    TEST_CASE("decoder - [downloaded] ogg, mp3 and flac decode to the expected length within 1 %") {
-        CONJURE_TEST_REQUIRE(testing::precondition::DOWNLOADED_ASSETS);
-        testing::log_capture logs = {};
-        const std::array<std::string, 3> names = {"audio/tone.ogg", "audio/tone.mp3", "audio/tone.flac"};
-        const std::array<clip_encoding, 3> encodings = {
-            clip_encoding::OGG_VORBIS, clip_encoding::MP3, clip_encoding::FLAC,
+    TEST_CASE("regression - code sweep F194 ogg, mp3 and flac decode to the known 0.5 s, 440 Hz, mono, 48 kHz tone") {
+        // Self-made tones committed under tests/assets/audio (their README.txt records how they were made), so the
+        // compressed decoders run on every leg and every fresh clone, with no download. The probe and the decode go
+        // through the same miniaudio decoder, so each is checked against what the file is known to hold, not only
+        // against the other.
+        struct tone_case {
+            const char *name = "";
+            clip_encoding encoding = clip_encoding::UNKNOWN;
+            u64 paddingFrames = 0;   // frames the codec may add to the 24000 the tone holds
         };
-        for (usize index = 0; index < names.size(); ++index) {
-            CAPTURE(names[index]);
-            const std::filesystem::path path = testing::downloaded_asset(names[index]);
-            // The downloaded set is present (precondition above), so a missing tone file means
-            // tools/test_assets.json does not list it: the Vorbis path would silently go untested.
-            REQUIRE_FALSE(path.empty());
+        // Vorbis and FLAC keep the exact length. miniaudio's MP3 decoder does not strip LAME's encoder delay and
+        // final-frame padding, which together stay under three 1152-frame MPEG frames (the file decodes to 23 MPEG
+        // frames, 26496 PCM frames).
+        const std::array<tone_case, 3> cases = {{
+            {"audio/tone.ogg", clip_encoding::OGG_VORBIS, 0},
+            {"audio/tone.mp3", clip_encoding::MP3, 3 * 1152},
+            {"audio/tone.flac", clip_encoding::FLAC, 0},
+        }};
+        testing::log_capture logs = {};
+        for (const tone_case &item : cases) {
+            const std::string name = item.name;   // captured as text: a const char * would log its address
+            CAPTURE(name);
+            const std::filesystem::path path = testing::repo_asset(item.name);
             REQUIRE(std::filesystem::exists(path));
             const std::vector<byte> bytes = read_whole_file(path);
             const core::result<clip_info> info = probe(bytes);
             CONJURE_REQUIRE_OK(info);
-            CHECK(info.value().encoding == encodings[index]);
-            CHECK(info.value().frameCount > 0);
+            CHECK(info.value().encoding == item.encoding);
+            CHECK(info.value().format.sampleRate == TONE_SAMPLE_RATE);
+            CHECK(info.value().format.channels == TONE_CHANNELS);
             const core::result<pcm_buffer> decoded = decode_to_pcm(bytes, decode_options{});
             CONJURE_REQUIRE_OK(decoded);
-            const f64 expectedFrames = static_cast<f64>(info.value().frameCount);
-            CHECK(static_cast<f64>(decoded.value().frame_count()) == doctest::Approx(expectedFrames).epsilon(0.01));
+            const pcm_buffer &pcm = decoded.value();
+            CHECK(pcm.format().sampleRate == TONE_SAMPLE_RATE);
+            CHECK(pcm.format().channels == TONE_CHANNELS);
+            CHECK(pcm.frame_count() == info.value().frameCount);
+            CHECK(static_cast<f64>(pcm.frame_count()) >= TONE_FRAMES);
+            CHECK(static_cast<f64>(pcm.frame_count()) <= TONE_FRAMES + static_cast<f64>(item.paddingFrames));
+            // 220 cycles give 219 rising edges: an edge is counted only after a trough, and the last trough has none.
+            const tone_measurement tone = measure_tone(pcm.samples(), pcm.format().sampleRate);
+            CHECK(tone.peak == doctest::Approx(TONE_AMPLITUDE).epsilon(0.1));
+            CHECK(tone.risingEdges >= 218);
+            CHECK(tone.risingEdges <= 220);
+            CHECK(tone.frequency == doctest::Approx(TONE_FREQUENCY).epsilon(0.005));
         }
     }
 }

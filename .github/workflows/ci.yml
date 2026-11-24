@@ -80,10 +80,10 @@ jobs:
           path: |
             tests/.downloaded
             tests/.assets_ready
-          key: test-assets-${{ hashFiles('tools/test_assets.json') }}
+          key: test-assets-${{ hashFiles('tools/test_assets.json', 'tools/test_assets.lock') }}
 
       - name: Download test assets
-        run: python tools/download_test_assets.py
+        run: python tools/download_test_assets.py --locked
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}

@@ -67,7 +67,7 @@ jobs:
           path: build/${{ matrix.preset }}/_deps
           key: deps-${{ matrix.name }}-${{ hashFiles('third_party/CMakeLists.txt', 'third_party/*.cmake') }}
       - name: Download test assets
-        run: python tools/download_test_assets.py
+        run: python tools/download_test_assets.py --locked
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
@@ -129,43 +129,108 @@ jobs:
           cmake --preset ${{ matrix.dist-preset }} || exit /b 1
           cmake --build --preset ${{ matrix.dist-preset }} --parallel || exit /b 1
       - name: Configure and build Development
+        id: build-dev
         shell: cmd
         run: |
           cmake --preset ${{ matrix.dev-preset }} || exit /b 1
           cmake --build --preset ${{ matrix.dev-preset }} --parallel ^
             --target conjure_editor conjure_runtime || exit /b 1
-      - name: Distribution symbol check and process tests
-        run: ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error
-      # Export tests/assets/projects/minimal (samples/feature_test once wave 5 lands it) with the Development
-      # editor and --distribution, the export path a user takes: step 5 copies the Distribution runtime,
-      # conjure_shared, nethost.dll when present, the Visual C++ runtime DLLs (06_engine_loop.md D14), the
-      # licence notices (D15) and shaders/ (engine/src/engine/export_pipeline.cpp). The step checks that the
-      # notices and vcruntime140.dll arrived, then runs that runtime headless for 300 frames (08_testing.md 7.3
-      # nightly table) and checks its exported symbols. Nobody on the runner answered for the copied project, so
-      # the export needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27).
-      - name: Export and run
+      # The process cases and the two checks of the Distribution binaries that tests/runtime/CMakeLists.txt registers
+      # in a Distribution tree when the configure found Python 3 (setup-python above provides it), both label process:
+      # runtime.distribution_symbols (no editor symbol in conjure_runtime or conjure_shared) and
+      # runtime.distribution_paths (follow-up FU-NIGHTLY: neither the source nor the build directory of the tree, nor
+      # Conjure's own checkout when it is a subproject, may appear in either binary, in a string, debug information or
+      # a PDB reference; code sweep F613, cmake/ConjureDistributionPaths.cmake). Runs whenever the Distribution build
+      # succeeded, so a red Development build does not hide it. --no-tests=error would not notice the two checks
+      # missing while other process cases match, so the step first requires both entries to be registered. Every case
+      # here may exit 77 (skipped), which ctest counts as a pass, so the run writes junit_dist_process.xml for the
+      # skip check below.
+      - name: Distribution symbol and path checks and process tests
+        id: process-tests
+        if: ${{ !cancelled() && steps.build-dist.outcome == 'success' }}
         shell: powershell
         run: |
-          Copy-Item -Recurse tests/assets/projects/minimal build/export_project
-          build/${{ matrix.dev-preset }}/bin/conjure_editor.exe --headless --project build/export_project `
+          $listed = ctest --test-dir build/${{ matrix.dist-preset }} -N -R '^runtime\.distribution_(paths|symbols)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($listed -match 'Total Tests: 2\s*$')) {
+            $listed | Write-Output
+            Write-Output "::error::runtime.distribution_symbols and runtime.distribution_paths are not both registered"
+            exit 1
+          }
+          ctest --test-dir build/${{ matrix.dist-preset }} --output-on-failure -L "process|runtime" --no-tests=error `
+            --output-junit junit_dist_process.xml
+          exit $LASTEXITCODE
+      # Export tests/assets/projects/scripted (samples/feature_test once wave 5 lands it) with the Development
+      # editor and --distribution, the export path a user takes: step 5 copies the Distribution runtime,
+      # conjure_shared, nethost.dll when present, the Visual C++ runtime DLLs (06_engine_loop.md D14), the
+      # licence notices (D15) and shaders/ (engine/src/engine/export_pipeline.cpp), and step 3 publishes
+      # Conjure.Bootstrap from this checkout and builds the project's scripts/Game.csproj into managed/ (follow-up
+      # FU-PDB). The project is copied below RUNNER_TEMP, outside the checkout's git repository: source control gives
+      # it no source root, so the export's source roots file has to map its paths. The step checks that the notices,
+      # vcruntime140.dll and the three assemblies arrived, then runs that runtime headless with scripting for 300
+      # frames (08_testing.md 7.3 nightly table), requires the log line the project's ExportProbe script writes when
+      # it is created, and checks the runtime's exported symbols. Nobody on the runner answered for the copied
+      # project, so the export needs --trust-project or it exits with 2 (PROJECT_NOT_TRUSTED, 04_editor.md D27). It
+      # needs both builds and nothing else, so a red symbol or path check in the step before does not hide it.
+      - name: Export and run
+        id: export
+        if: ${{ !cancelled() && steps.build-dist.outcome == 'success' && steps.build-dev.outcome == 'success' }}
+        shell: powershell
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP 'export_project'
+          if (Test-Path -LiteralPath $project) { Remove-Item -LiteralPath $project -Recurse -Force }
+          Copy-Item -Recurse tests/assets/projects/scripted $project
+          build/${{ matrix.dev-preset }}/bin/conjure_editor.exe --headless --project $project `
             --trust-project --export build/export_out --distribution build/${{ matrix.dist-preset }}/bin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($file in 'THIRD_PARTY_NOTICES.txt', 'vcruntime140.dll') {
+          $shipped = @('THIRD_PARTY_NOTICES.txt', 'vcruntime140.dll', 'managed/Conjure.Bootstrap.dll',
+            'managed/Conjure.Managed.dll', 'managed/Game.dll')
+          foreach ($file in $shipped) {
             if (-not (Test-Path -LiteralPath "build/export_out/$file" -PathType Leaf)) {
               Write-Output "::error::the export has no $file"
               exit 1
             }
           }
-          build/export_out/conjure_runtime.exe --project build/export_out --headless --frames 300
+          # The Distribution runtime is a Windows GUI program, which PowerShell starts without waiting for it: the
+          # pipe makes it wait, so the exit code and the log are the finished run's.
+          build/export_out/conjure_runtime.exe --project build/export_out --headless --scripting --frames 300 `
+            --log-level info --log-file build/export_runtime.log | Write-Output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -LiteralPath build/export_runtime.log -SimpleMatch -Quiet `
+              'ExportProbe ran in the exported game')) {
+            Get-Content -LiteralPath build/export_runtime.log | Write-Output
+            Write-Output "::error::the exported runtime did not run the project's ExportProbe script"
+            exit 1
+          }
           python tools/check_distribution_symbols.py --binary build/export_out/conjure_runtime.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Neither the source nor the build directory may appear in the Distribution runtime or conjure_shared, in a
-      # string, debug information or a PDB reference (code sweep F613, cmake/ConjureDistributionPaths.cmake). Runs
-      # whenever the Distribution build succeeded, so a red export does not hide it.
-      - name: Distribution path check
-        if: ${{ !cancelled() && steps.build-dist.outcome == 'success' }}
-        run: python tools/check_distribution_paths.py --build-dir build/${{ matrix.dist-preset }}
+      # The managed assemblies of the export (follow-up FU-PDB): neither the checkout nor the exported project, which
+      # lies outside git below RUNNER_TEMP, may appear in Conjure.Managed.dll, Conjure.Bootstrap.dll, the game's
+      # scripts or their .pdb files, in the CodeView PDB path, a string or a document of a portable PDB
+      # (tools/check_distribution_paths.py reads all three; it always checks the checkout, --root adds the project).
+      # The export step required the assemblies, so a missing managed directory here is an error.
+      - name: Managed path check
+        if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+        shell: powershell
+        run: |
+          $managed = 'build/export_out/managed'
+          if (-not (Test-Path -LiteralPath $managed -PathType Container)) {
+            Write-Output "::error::the export published no managed code (no $managed)"
+            exit 1
+          }
+          $arguments = @()
+          foreach ($file in Get-ChildItem -LiteralPath $managed -File) {
+            if ($file.Extension -in '.dll', '.pdb') {
+              $arguments += '--binary'
+              $arguments += $file.FullName
+            }
+          }
+          if ($arguments.Count -eq 0) {
+            Write-Output "::error::$managed holds no assembly"
+            exit 1
+          }
+          python tools/check_distribution_paths.py --root (Join-Path $env:RUNNER_TEMP 'export_project') @arguments
+          exit $LASTEXITCODE
       # The whole unit suite in the shipping configuration (08_testing.md D16, code sweep F332): asserts and
       # TRACE/DEBUG logging are compiled out here and in no other job, so code that leans on an assert's side
       # effect fails only in this run. The test executables are part of the Distribution build above; the preset
@@ -176,13 +241,37 @@ jobs:
         id: dist-tests
         if: ${{ !cancelled() && steps.build-dist.outcome == 'success' }}
         run: ctest --preset ${{ matrix.dist-preset }} --output-junit junit_dist.xml
-      # Runs whenever the suite step ran, green or red: ctest writes junit_dist.xml also when cases fail, so a
-      # red night reports its unexpected skips in the same run instead of hiding them until the failures are fixed.
+      # Runs whenever the suite step or the process step ran, green or red: ctest writes its report also when cases
+      # fail, so a red night reports its unexpected skips in the same run instead of hiding them until the failures
+      # are fixed. A report is checked when its step ran and wrote it; a red process step that stopped at the
+      # registration check wrote none and is red already, but a green step without its report is an error.
       - name: Check skips
-        if: ${{ !cancelled() && (steps.dist-tests.outcome == 'success' || steps.dist-tests.outcome == 'failure') }}
-        run: >
-          python tools/ctest_check_skips.py --build-dir build/${{ matrix.dist-preset }}
-          --junit build/${{ matrix.dist-preset }}/junit_dist.xml ${{ matrix.skip-tags }}
+        if: >-
+          ${{ !cancelled() && (steps.dist-tests.outcome == 'success' || steps.dist-tests.outcome == 'failure'
+          || steps.process-tests.outcome == 'success' || steps.process-tests.outcome == 'failure') }}
+        shell: powershell
+        run: |
+          $reports = @()
+          $runs = @(
+            @{ Outcome = '${{ steps.dist-tests.outcome }}'; Report = 'junit_dist.xml' },
+            @{ Outcome = '${{ steps.process-tests.outcome }}'; Report = 'junit_dist_process.xml' }
+          )
+          foreach ($run in $runs) {
+            $path = "build/${{ matrix.dist-preset }}/$($run.Report)"
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+              $reports += '--junit'
+              $reports += $path
+            } elseif ($run.Outcome -eq 'success') {
+              Write-Output "::error::the step that writes $path succeeded without writing it"
+              exit 1
+            }
+          }
+          if ($reports.Count -eq 0) {
+            Write-Output "::error::neither ctest run wrote a JUnit report"
+            exit 1
+          }
+          python tools/ctest_check_skips.py --build-dir build/${{ matrix.dist-preset }} @reports ${{ matrix.skip-tags }}
+          exit $LASTEXITCODE
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -190,6 +279,7 @@ jobs:
           name: distribution-reports-${{ matrix.name }}
           path: |
             build/${{ matrix.dist-preset }}/junit_dist.xml
+            build/${{ matrix.dist-preset }}/junit_dist_process.xml
             build/${{ matrix.dist-preset }}/test_output
           if-no-files-found: ignore
 

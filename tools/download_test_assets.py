@@ -53,7 +53,7 @@ def load_lock() -> dict[str, str]:
 
 
 def save_lock(lock: dict[str, str]) -> None:
-    LOCK.write_text(json.dumps(dict(sorted(lock.items())), indent=2) + "\n", encoding="utf-8")
+    LOCK.write_text(json.dumps(dict(sorted(lock.items())), indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def download(url: str, destination: pathlib.Path) -> None:
