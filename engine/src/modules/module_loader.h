@@ -25,8 +25,11 @@ namespace conjure::modules::detail {
     /// <summary>
     /// Checks the manager settings, finds (and optionally shadow copies) the binary, opens it,
     /// looks up the two entry symbols, runs describe() and compares the ABI signature and name
-    /// with the manifest. SHARED_LIBRARIES_DISABLED, BINARY_NOT_FOUND, BINARY_COPY_FAILED,
-    /// BINARY_LOAD_FAILED, ENTRY_SYMBOL_MISSING, ABI_MISMATCH or NAME_MISMATCH on failure.
+    /// with the manifest. A path past Windows' classic limit is opened in its extended-length form
+    /// (long_path.h). SHARED_LIBRARIES_DISABLED, BINARY_NOT_FOUND, BINARY_COPY_FAILED,
+    /// BINARY_LOAD_FAILED (naming the path in its classic form, and its length and MAX_PATH for such a
+    /// path on Windows),
+    /// ENTRY_SYMBOL_MISSING, ABI_MISMATCH or NAME_MISMATCH on failure.
     /// </summary>
     [[nodiscard]] core::result<opened_binary> open_module_binary(
       const module_manifest &manifest,

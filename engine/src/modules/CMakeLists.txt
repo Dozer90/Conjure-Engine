@@ -25,12 +25,20 @@ set(CONJURE_MODULES_PUBLIC_HEADERS
     ${PROJECT_SOURCE_DIR}/engine/include/conjure/modules/modules.h
 )
 
+# The long-path helpers (long_path.h) have one backend per platform family.
+set(CONJURE_MODULES_PLATFORM_SOURCES long_path_posix.cpp)
+if(WIN32)
+    set(CONJURE_MODULES_PLATFORM_SOURCES long_path_windows.cpp)
+endif()
+
 conjure_add_module(modules
     PUBLIC_HEADERS
         ${CONJURE_MODULES_PUBLIC_HEADERS}
     SOURCES
         log_category.h
         log_category.cpp
+        long_path.h
+        ${CONJURE_MODULES_PLATFORM_SOURCES}
         manifest_paths.h
         module_abi.cpp
         module_consumer.cpp

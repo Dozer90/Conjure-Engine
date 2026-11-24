@@ -9,7 +9,9 @@
 // Windows locks a loaded DLL (docs/design/07_modules.md D9). With module_manager_desc::
 // shadowCopyBinaries the manager copies a module binary (and its .pdb / .dSYM when present) to
 // <cache>/<name>/<n>/ and loads the copy, so a rebuild can overwrite the original while the module
-// is loaded. The code is plain std::filesystem and runs identically on every platform.
+// is loaded. The code is std::filesystem throughout; on Windows each path it hands to a file call takes
+// the extended-length form from 248 characters on (long_path.h), so a cache or binary past MAX_PATH works,
+// and elsewhere paths are used as given.
 
 namespace conjure::modules::detail {
 

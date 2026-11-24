@@ -2,6 +2,7 @@
 
 #include "conjure/modules/module_error.h"
 #include "modules/log_category.h"
+#include "modules/long_path.h"
 #include "modules/manifest_paths.h"
 
 #include "conjure/core/json/document.h"
@@ -376,8 +377,11 @@ result<module_manifest> conjure::modules::parse_module_manifest(
 }
 
 result<module_manifest> conjure::modules::load_module_manifest(const std::filesystem::path &path) {
+    // A manifest in a deep project folder is read through the long form (long_path.h); messages name
+    // the path as it was given.
+    const std::filesystem::path readablePath = modules::detail::extend_path(path);
     std::error_code ignored = {};
-    if (!std::filesystem::is_regular_file(path, ignored)) {
+    if (!std::filesystem::is_regular_file(readablePath, ignored)) {
         return make_module_error(
           module_error::MANIFEST_NOT_FOUND,
           "manifest '{}' does not exist",
@@ -385,7 +389,7 @@ result<module_manifest> conjure::modules::load_module_manifest(const std::filesy
         );
     }
 
-    result<json::document> parsed = json::document::parse_file(path);
+    result<json::document> parsed = json::document::parse_file(readablePath);
     if (!parsed.has_value()) {
         return invalid(path.generic_string(), "", parsed.get_error().message());
     }

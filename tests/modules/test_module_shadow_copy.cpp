@@ -13,7 +13,6 @@
 #include "conjure/core/platform_detect.h"
 
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -46,14 +45,6 @@ namespace {
             }
         }
         return false;
-    }
-
-    /// <summary>
-    /// True when the file can be opened for writing right now (a loaded DLL cannot be, on Windows).
-    /// </summary>
-    bool is_writable(const std::filesystem::path &file) {
-        std::ofstream stream(file, std::ios::binary | std::ios::app);
-        return stream.is_open();
     }
 
     module_manager_desc shadow_desc(const std::filesystem::path &cache) {
@@ -230,5 +221,45 @@ TEST_SUITE("modules/module_shadow_copy") {
         }
         CONJURE_REQUIRE_OK(host.manager.unload(alpha));
         CHECK(is_writable(original));
+    }
+
+    TEST_CASE("regression - code sweep FU-LONGPATH shadow copies past MAX_PATH are made, loaded, cleaned and removed") {
+        // The cache and the module lie past Windows' MAX_PATH (260), where its file calls and loader refuse the
+        // classic form of a path; Linux and macOS have no such limit, and the case runs the same calls there.
+        const conjure::testing::temp_directory source("ms_long_src");
+        const conjure::testing::temp_directory cache("ms_long_cache");
+        const std::filesystem::path deepCache = long_directory(cache, PAST_MAX_PATH);
+        const std::filesystem::path deepSource = long_directory(source, PAST_MAX_PATH);
+        const std::filesystem::path staleRelative = deepCache.lexically_relative(cache.path()) / "module_alpha" / "7";
+        cache.write_file((staleRelative / "nested" / "stale.txt").generic_string(), "left over");
+        const std::filesystem::path manifest =
+          copy_fixture_to("module_alpha", deepSource / "module_alpha") / MODULE_MANIFEST_FILE_NAME;
+        conjure::testing::log_capture logs = {};
+        shared_host host(shadow_desc(deepCache));
+
+        // The manager's construction cleaned the cache.
+        CHECK_FALSE(std::filesystem::exists(extended_length_path(deepCache / "module_alpha" / "7")));
+        CHECK(logs.count(log_level::WARN) == 0);
+
+        const module_id alpha = host.manager.add_manifest(manifest).value();
+        const std::filesystem::path original = host.manager.registry().binary_path(alpha);
+        const std::filesystem::path firstCopy = deepCache / "module_alpha" / "1" / original.filename();
+        const std::filesystem::path secondCopy = deepCache / "module_alpha" / "2" / original.filename();
+        CHECK(original.native().size() > PAST_MAX_PATH);
+        CHECK(firstCopy.native().size() > PAST_MAX_PATH);
+
+        CONJURE_REQUIRE_OK(host.manager.load(alpha));
+        CHECK(std::filesystem::exists(extended_length_path(firstCopy)));
+        CHECK(is_writable(extended_length_path(original)));
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            CHECK_FALSE(is_writable(extended_length_path(firstCopy)));
+        }
+
+        CONJURE_REQUIRE_OK(host.manager.reload(alpha, reload_scope::FULL));
+        CHECK_FALSE(std::filesystem::exists(extended_length_path(firstCopy.parent_path())));
+        CHECK(std::filesystem::exists(extended_length_path(secondCopy)));
+
+        CONJURE_REQUIRE_OK(host.manager.unload(alpha));
+        CHECK_FALSE(std::filesystem::exists(extended_length_path(secondCopy.parent_path())));
     }
 }

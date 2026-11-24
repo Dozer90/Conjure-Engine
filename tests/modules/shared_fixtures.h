@@ -9,8 +9,11 @@
 #include "conjure/modules/module_types.h"
 
 #include "conjure/core/event_bus.h"
+#include "conjure/core/types.h"
 
 #include <filesystem>
+#include <fstream>
+#include <ios>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -32,6 +35,48 @@ namespace conjure::modules::testing {
         return fixture_directory(name) / MODULE_MANIFEST_FILE_NAME;
     }
 
+    // The test's own file calls reach a folder past MAX_PATH through the support library's long form, and the
+    // long folders come from there too.
+    using conjure::testing::extended_length_path;
+    using conjure::testing::long_directory;
+    using conjure::testing::PAST_MAX_PATH;
+
+    /// <summary>
+    /// The length from which the module system opens a path in Windows' extended-length form and a failed
+    /// load names the length (engine/src/modules/long_path.h, EXTENDED_PATH_THRESHOLD).
+    /// </summary>
+    inline constexpr usize WINDOWS_EXTENDED_PATH_THRESHOLD = 248;
+
+    /// <summary>
+    /// True when the file can be opened for writing right now (a loaded DLL cannot be, on Windows). Pass the
+    /// extended_length_path() of a file past MAX_PATH.
+    /// </summary>
+    inline bool is_writable(const std::filesystem::path &file) {
+        std::ofstream stream(file, std::ios::binary | std::ios::app);
+        return stream.is_open();
+    }
+
+    /// <summary>
+    /// Copies the tree 'source' to 'root' (created with its parents; it may lie past MAX_PATH) and returns 'root'.
+    /// </summary>
+    inline std::filesystem::path copy_tree_to(const std::filesystem::path &source, const std::filesystem::path &root) {
+        std::error_code failure = {};
+        std::filesystem::create_directories(extended_length_path(root.parent_path()), failure);
+        REQUIRE_MESSAGE(!failure, "cannot create " << root.parent_path().string() << ": " << failure.message());
+        const std::filesystem::copy_options options = std::filesystem::copy_options::recursive;
+        std::filesystem::copy(extended_length_path(source), extended_length_path(root), options, failure);
+        REQUIRE_MESSAGE(
+          !failure, "cannot copy " << source.string() << " to " << root.string() << ": " << failure.message());
+        return root;
+    }
+
+    /// <summary>
+    /// Copies a fixture's tree to 'root' (created with its parents; it may lie past MAX_PATH) and returns 'root'.
+    /// </summary>
+    inline std::filesystem::path copy_fixture_to(std::string_view name, const std::filesystem::path &root) {
+        return copy_tree_to(fixture_directory(name), root);
+    }
+
     /// <summary>
     /// A private copy of a fixture's tree, so a test can add files to it or lock its binary without touching
     /// the fixture other test processes load. The copy is directory/&lt;relativeRoot&gt;/, directory/&lt;name&gt;/
@@ -42,13 +87,7 @@ namespace conjure::modules::testing {
       std::string_view name,
       std::string_view relativeRoot = {}
     ) {
-        const std::filesystem::path root = directory.path() / std::string(relativeRoot.empty() ? name : relativeRoot);
-        std::error_code failure = {};
-        std::filesystem::create_directories(root.parent_path(), failure);
-        REQUIRE_FALSE(static_cast<bool>(failure));
-        std::filesystem::copy(fixture_directory(name), root, std::filesystem::copy_options::recursive, failure);
-        REQUIRE_FALSE(static_cast<bool>(failure));
-        return root;
+        return copy_fixture_to(name, directory.path() / std::string(relativeRoot.empty() ? name : relativeRoot));
     }
 
     /// <summary>
@@ -76,6 +115,15 @@ namespace conjure::modules::testing {
         module_manifest manifest = {};
         manifest.binary = "module_surface";
         return module_binary_path(manifest, surface_fixture_directory(), host_binary_triplet());
+    }
+
+    /// <summary>
+    /// The module_sibling fixture (tests/modules/fixtures/module_sibling) is built into its own root,
+    /// CONJURE_TEST_SIBLING_MODULE_DIR/module_sibling/, with the library it depends on, sibling_helper, next to
+    /// its binary and nowhere else. discover() over fixture_root() never sees it.
+    /// </summary>
+    inline std::filesystem::path sibling_fixture_directory() {
+        return std::filesystem::path(CONJURE_TEST_SIBLING_MODULE_DIR) / "module_sibling";
     }
 
     inline module_manager_desc shared_desc() noexcept {

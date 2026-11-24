@@ -84,8 +84,10 @@ namespace conjure::modules {
     );
 
     /// <summary>
-    /// Reads and parses a manifest file once; messages name its generic path. MANIFEST_NOT_FOUND
-    /// when the file is missing, otherwise as parse_module_manifest().
+    /// Reads and parses a manifest file once, also past Windows' MAX_PATH; messages name its generic
+    /// path. A file that cannot be read or parsed also carries the JSON reader's message, which names the
+    /// path as it was opened (on Windows the extended-length form from 248 characters on).
+    /// MANIFEST_NOT_FOUND when the file is missing, otherwise as parse_module_manifest().
     /// </summary>
     [[nodiscard]] CONJURE_API core::result<module_manifest> load_module_manifest(const std::filesystem::path &path);
 

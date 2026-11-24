@@ -2,6 +2,7 @@
 
 #include "conjure/modules/module_error.h"
 #include "modules/log_category.h"
+#include "modules/long_path.h"
 
 #include "conjure/core/log.h"
 
@@ -20,12 +21,18 @@ namespace {
     /// </summary>
     result<void> copy_companion(const std::filesystem::path &source, const std::filesystem::path &destination) {
         std::error_code failure = {};
-        if (!std::filesystem::exists(source, failure)) {
+        if (!std::filesystem::exists(modules::detail::extend_path(source), failure)) {
             return {};
         }
+        // A .dSYM bundle is a tree: the copy builds paths below both ends, so both take the long form.
         const std::filesystem::copy_options options =
           std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive;
-        std::filesystem::copy(source, destination, options, failure);
+        std::filesystem::copy(
+          modules::detail::always_extended_path(source),
+          modules::detail::always_extended_path(destination),
+          options,
+          failure
+        );
         if (failure) {
             return make_module_error(
               module_error::BINARY_COPY_FAILED,
@@ -55,7 +62,7 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
 
     const std::filesystem::path targetDirectory = cacheDirectory / std::string(moduleName) / std::to_string(copyIndex);
     std::error_code failure = {};
-    std::filesystem::create_directories(targetDirectory, failure);
+    std::filesystem::create_directories(modules::detail::extend_path(targetDirectory), failure);
     if (failure) {
         return make_module_error(
           module_error::BINARY_COPY_FAILED,
@@ -66,7 +73,12 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
     }
 
     const std::filesystem::path target = targetDirectory / binaryPath.filename();
-    std::filesystem::copy_file(binaryPath, target, std::filesystem::copy_options::overwrite_existing, failure);
+    std::filesystem::copy_file(
+      modules::detail::extend_path(binaryPath),
+      modules::detail::extend_path(target),
+      std::filesystem::copy_options::overwrite_existing,
+      failure
+    );
     if (failure) {
         return make_module_error(
           module_error::BINARY_COPY_FAILED,
@@ -89,14 +101,18 @@ result<std::filesystem::path> conjure::modules::detail::shadow_copy_binary(
 }
 
 void conjure::modules::detail::clean_shadow_copy_cache(const std::filesystem::path &cacheDirectory) {
+    if (cacheDirectory.empty()) {
+        return;
+    }
     std::error_code failure = {};
-    if (cacheDirectory.empty() || !std::filesystem::is_directory(cacheDirectory, failure)) {
+    if (!std::filesystem::is_directory(modules::detail::extend_path(cacheDirectory), failure)) {
         return;
     }
 
     // The non-throwing increment: engine code never throws, and a listing that fails halfway ends
-    // in the warning below.
-    std::filesystem::directory_iterator iterator(cacheDirectory, failure);
+    // in the warning below. The entries come in the long form and are removed as they come; the
+    // warning names them below the cache directory as it was given.
+    std::filesystem::directory_iterator iterator(modules::detail::always_extended_path(cacheDirectory), failure);
     for (const std::filesystem::directory_iterator end = {}; !failure && iterator != end; iterator.increment(failure)) {
         const std::filesystem::directory_entry &entry = *iterator;
         std::error_code removeFailure = {};
@@ -105,7 +121,7 @@ void conjure::modules::detail::clean_shadow_copy_cache(const std::filesystem::pa
             CONJURE_LOG_WARN(
               LOG_MODULES,
               "shadow copy cache: cannot remove '{}' ({}); a loaded module may still hold it",
-              entry.path().generic_string(),
+              (cacheDirectory / entry.path().filename()).generic_string(),
               removeFailure.message()
             );
         }
@@ -125,5 +141,5 @@ void conjure::modules::detail::remove_shadow_copy(const std::filesystem::path &c
         return;
     }
     std::error_code ignored = {};
-    std::filesystem::remove_all(copiedBinaryPath.parent_path(), ignored);
+    std::filesystem::remove_all(modules::detail::always_extended_path(copiedBinaryPath.parent_path()), ignored);
 }

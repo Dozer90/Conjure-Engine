@@ -52,7 +52,7 @@ kind: header
 <div class="function-declaration" id="function-load-module-manifest-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/result/result.html">core::result</a>&lt;<a href="module-manifest/module-manifest.html">module_manifest</a>&gt; load_module_manifest(
     <span class="k">const</span> std::filesystem::path &amp;path);</code></pre></div>
 
-<p>Reads and parses a manifest file once; messages name its generic path. <code>MANIFEST_NOT_FOUND</code> when the file is missing, otherwise as <code><a href="#function-parse-module-manifest-1">parse_module_manifest</a>()</code>.</p>
+<p>Reads and parses a manifest file once, also past Windows&#x27; <code>MAX_PATH</code>; messages name its generic path. <code>A</code> file that cannot be read or parsed also carries the JSON reader&#x27;s message, which names the path as it was opened (on Windows the extended-length form from 248 characters on). <code>MANIFEST_NOT_FOUND</code> when the file is missing, otherwise as <code><a href="#function-parse-module-manifest-1">parse_module_manifest</a>()</code>.</p>
 
 #### `module_binary_directory` {#function-module-binary-directory}
 

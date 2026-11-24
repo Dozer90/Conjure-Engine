@@ -4,6 +4,7 @@
 #include "conjure/modules/module_events.h"
 #include "conjure/modules/module_resolver.h"
 #include "modules/log_category.h"
+#include "modules/long_path.h"
 #include "modules/module_loader.h"
 #include "modules/module_record.h"
 #include "modules/shadow_copy.h"
@@ -102,7 +103,8 @@ namespace {
     // Copies the entries of 'source' into the existing folder 'target', leaving out the by-products.
     // Links are followed: a linked file ships as a file, a linked folder as a folder, since the shipped
     // game cannot rely on a link target outside its own tree. Existing files in 'target' are
-    // overwritten; files of an earlier export that are not in 'source' stay.
+    // overwritten; files of an earlier export that are not in 'source' stay. The folder is listed in
+    // the long form (long_path.h); each entry is named and passed on below 'source' as it was given.
     result<void> copy_binary_entries(
       std::string_view moduleName,
       const std::filesystem::path &source,
@@ -110,7 +112,7 @@ namespace {
       std::vector<std::filesystem::path> &openFolders
     ) {
         std::error_code failure = {};
-        std::filesystem::directory_iterator iterator(source, failure);
+        std::filesystem::directory_iterator iterator(modules::detail::always_extended_path(source), failure);
         const std::filesystem::directory_iterator end = {};
         for (; !failure && iterator != end; iterator.increment(failure)) {
             const std::filesystem::directory_entry &entry = *iterator;
@@ -118,11 +120,12 @@ namespace {
                 continue;
             }
 
+            const std::filesystem::path entryPath = source / entry.path().filename();
             const std::filesystem::path destination = target / entry.path().filename();
             std::error_code statusFailure = {};
             const std::filesystem::file_status status = entry.status(statusFailure);
             if (std::filesystem::is_directory(status)) {
-                CONJURE_TRY(copy_binary_folder(moduleName, entry.path(), destination, openFolders));
+                CONJURE_TRY(copy_binary_folder(moduleName, entryPath, destination, openFolders));
                 continue;
             }
             if (!std::filesystem::is_regular_file(status)) {
@@ -132,20 +135,24 @@ namespace {
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot copy '{}': {}",
                   moduleName,
-                  entry.path().generic_string(),
+                  entryPath.generic_string(),
                   statusFailure ? statusFailure.message() : std::string("it is neither a file nor a folder")
                 );
             }
 
             std::error_code copyFailure = {};
             std::filesystem::copy_file(
-              entry.path(), destination, std::filesystem::copy_options::overwrite_existing, copyFailure);
+              entry.path(),
+              modules::detail::extend_path(destination),
+              std::filesystem::copy_options::overwrite_existing,
+              copyFailure
+            );
             if (copyFailure) {
                 return make_module_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': cannot copy '{}' to '{}': {}",
                   moduleName,
-                  entry.path().generic_string(),
+                  entryPath.generic_string(),
                   destination.generic_string(),
                   copyFailure.message()
                 );
@@ -172,8 +179,11 @@ namespace {
       const std::filesystem::path &target,
       std::vector<std::filesystem::path> &openFolders
     ) {
+        // canonical() returns the classic form whatever form it is given (the standard library drops the
+        // extended-length prefix on Windows), so every entry of 'openFolders' compares in the same form.
         std::error_code failure = {};
-        const std::filesystem::path canonicalSource = std::filesystem::canonical(source, failure);
+        const std::filesystem::path canonicalSource =
+          std::filesystem::canonical(modules::detail::extend_path(source), failure);
         if (failure) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -192,7 +202,7 @@ namespace {
               canonicalSource.generic_string()
             );
         }
-        std::filesystem::create_directories(target, failure);
+        std::filesystem::create_directories(modules::detail::extend_path(target), failure);
         if (failure) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -212,21 +222,23 @@ namespace {
     // Removes every by-product under 'folder', at any depth, without following links: a linked entry is
     // removed as a link and a linked folder is not entered.
     result<void> remove_by_products(std::string_view moduleName, const std::filesystem::path &folder) {
-        // Collected first and removed after the listing, so no entry disappears under the iterator.
+        // Collected first and removed after the listing, so no entry disappears under the iterator. The
+        // folder is listed in the long form (long_path.h); the entries are kept below 'folder' as given.
         std::vector<std::filesystem::path> byProducts = {};
         std::vector<std::filesystem::path> subfolders = {};
         std::error_code failure = {};
-        std::filesystem::directory_iterator iterator(folder, failure);
+        std::filesystem::directory_iterator iterator(modules::detail::always_extended_path(folder), failure);
         const std::filesystem::directory_iterator end = {};
         for (; !failure && iterator != end; iterator.increment(failure)) {
             const std::filesystem::directory_entry &entry = *iterator;
+            const std::filesystem::path entryPath = folder / entry.path().filename();
             if (is_export_by_product(entry.path())) {
-                byProducts.push_back(entry.path());
+                byProducts.push_back(entryPath);
                 continue;
             }
             std::error_code statusFailure = {};
             if (std::filesystem::is_directory(entry.symlink_status(statusFailure))) {
-                subfolders.push_back(entry.path());
+                subfolders.push_back(entryPath);
             }
         }
         if (failure) {
@@ -240,7 +252,7 @@ namespace {
         }
 
         for (const std::filesystem::path &byProduct : byProducts) {
-            std::filesystem::remove_all(byProduct, failure);
+            std::filesystem::remove_all(modules::detail::always_extended_path(byProduct), failure);
             if (failure) {
                 return make_module_error(
                   module_error::EXPORT_FAILED,
@@ -266,10 +278,12 @@ namespace {
       const std::filesystem::path &target
     ) {
         std::error_code failure = {};
-        if (!std::filesystem::is_directory(target, failure)) {
+        if (!std::filesystem::is_directory(modules::detail::extend_path(target), failure)) {
             return {};      // a first export; a file in the way is reported when the folder is created
         }
-        const std::filesystem::path canonicalSource = std::filesystem::canonical(source, failure);
+        // Both canonical paths come back in the classic form (see copy_binary_folder), so they compare.
+        const std::filesystem::path canonicalSource =
+          std::filesystem::canonical(modules::detail::extend_path(source), failure);
         if (failure) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -279,7 +293,8 @@ namespace {
               failure.message()
             );
         }
-        const std::filesystem::path canonicalTarget = std::filesystem::canonical(target, failure);
+        const std::filesystem::path canonicalTarget =
+          std::filesystem::canonical(modules::detail::extend_path(target), failure);
         if (failure) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -360,7 +375,7 @@ result<module_id> module_manager::add_manifest(const std::filesystem::path &mani
 
 result<u32> module_manager::discover(const std::filesystem::path &searchDirectory) {
     std::error_code failure = {};
-    if (!std::filesystem::is_directory(searchDirectory, failure)) {
+    if (!std::filesystem::is_directory(modules::detail::extend_path(searchDirectory), failure)) {
         return make_module_error(
           module_error::MANIFEST_NOT_FOUND,
           "module search directory '{}' does not exist",
@@ -369,17 +384,19 @@ result<u32> module_manager::discover(const std::filesystem::path &searchDirector
     }
 
     // The non-throwing increment: engine code never throws, and a listing that fails halfway
-    // reports the same error as one that cannot start.
+    // reports the same error as one that cannot start. The directory is listed in the long form
+    // (long_path.h); the manifests are registered below 'searchDirectory' as it was given, so the
+    // module roots and binary paths the registry reports keep that form.
     std::vector<std::filesystem::path> manifests = {};
-    std::filesystem::directory_iterator iterator(searchDirectory, failure);
+    std::filesystem::directory_iterator iterator(modules::detail::always_extended_path(searchDirectory), failure);
     for (const std::filesystem::directory_iterator end = {}; !failure && iterator != end; iterator.increment(failure)) {
         const std::filesystem::directory_entry &entry = *iterator;
         std::error_code ignored = {};
         if (!entry.is_directory(ignored)) {
             continue;
         }
-        const std::filesystem::path manifest = entry.path() / MODULE_MANIFEST_FILE_NAME;
-        if (std::filesystem::is_regular_file(manifest, ignored)) {
+        const std::filesystem::path manifest = searchDirectory / entry.path().filename() / MODULE_MANIFEST_FILE_NAME;
+        if (std::filesystem::is_regular_file(modules::detail::extend_path(manifest), ignored)) {
             manifests.push_back(manifest);
         }
     }
@@ -696,7 +713,7 @@ result<void> module_manager::export_layout(
 
         const std::filesystem::path targetRoot = outputDirectory / "modules" / manifest.name;
         std::error_code failure = {};
-        std::filesystem::create_directories(targetRoot, failure);
+        std::filesystem::create_directories(modules::detail::extend_path(targetRoot), failure);
         if (failure) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -712,7 +729,8 @@ result<void> module_manager::export_layout(
         module_manifest exportedManifest = manifest;
         exportedManifest.managedAssemblies = record.registrations.managedAssemblies;
         const json::document exported = write_module_manifest(exportedManifest, false);
-        const result<void> written = exported.write_file(targetRoot / MODULE_MANIFEST_FILE_NAME, true);
+        const result<void> written =
+          exported.write_file(modules::detail::extend_path(targetRoot / MODULE_MANIFEST_FILE_NAME), true);
         if (!written.has_value()) {
             return make_module_error(
               module_error::EXPORT_FAILED,
@@ -724,7 +742,7 @@ result<void> module_manager::export_layout(
 
         if (!manifest.binary.empty()) {
             const std::filesystem::path sourceBin = module_binary_directory(record.rootDirectory, triplet);
-            if (!std::filesystem::is_directory(sourceBin, failure)) {
+            if (!std::filesystem::is_directory(modules::detail::extend_path(sourceBin), failure)) {
                 return make_module_error(
                   module_error::BINARY_NOT_FOUND,
                   "module '{}': no {} binaries at '{}'; build the project in {} first",
@@ -747,7 +765,7 @@ result<void> module_manager::export_layout(
         for (const std::string &assembly : record.registrations.managedAssemblies) {
             const std::filesystem::path source = record.rootDirectory / assembly;
             const std::filesystem::path target = targetRoot / assembly;
-            if (!std::filesystem::is_regular_file(source, failure)) {
+            if (!std::filesystem::is_regular_file(modules::detail::extend_path(source), failure)) {
                 return make_module_error(
                   module_error::EXPORT_FAILED,
                   "module '{}': managed assembly '{}' does not exist",
@@ -755,7 +773,7 @@ result<void> module_manager::export_layout(
                   source.generic_string()
                 );
             }
-            std::filesystem::create_directories(target.parent_path(), failure);
+            std::filesystem::create_directories(modules::detail::extend_path(target.parent_path()), failure);
             if (failure) {
                 return make_module_error(
                   module_error::EXPORT_FAILED,
@@ -765,7 +783,12 @@ result<void> module_manager::export_layout(
                   failure.message()
                 );
             }
-            std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, failure);
+            std::filesystem::copy_file(
+              modules::detail::extend_path(source),
+              modules::detail::extend_path(target),
+              std::filesystem::copy_options::overwrite_existing,
+              failure
+            );
             if (failure) {
                 return make_module_error(
                   module_error::EXPORT_FAILED,

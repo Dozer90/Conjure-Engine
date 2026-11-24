@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "module_sibling",
+  "displayName": "Sibling",
+  "description": "Fixture: imports sibling_helper, a library that lies next to the module binary and nowhere else",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "engine": "*",
+  "binary": "module_sibling"
+}

@@ -21,6 +21,11 @@
 // dependencies, loads, unloads and reloads modules in order and hands registrations to consumers.
 // Every mutator runs on the main thread at the engine's structural sync point (asserted); request_*
 // enqueue work that apply_pending() performs at the next frame start.
+//
+// Module roots, binaries, the shadow-copy cache and export folders may lie past Windows' MAX_PATH: from
+// 248 characters on the manager opens them in the extended-length form, which Windows accepts up to about
+// 32,767 characters; a library the module depends on is still found in the module's own folder. A failed
+// load of such a path names the path in its classic form, its length and MAX_PATH in its BINARY_LOAD_FAILED.
 
 namespace conjure::modules {
 
@@ -204,7 +209,8 @@ namespace conjure::modules {
             /// BINARY_NOT_FOUND names the missing configuration; EXPORT_FAILED any create, write, list, resolve,
             /// remove or copy error, an entry that is neither a file nor a folder (a broken link), a link back to a
             /// folder being copied and a missing managed assembly. A failure leaves the files copied before it
-            /// in place.
+            /// in place. Paths past Windows' MAX_PATH are read and written in their extended-length form; a manifest
+            /// that cannot be written carries the JSON writer's message, which names the path in that form.
             /// </summary>
             [[nodiscard]] core::result<void> export_layout(
               const std::filesystem::path &outputDirectory,

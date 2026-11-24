@@ -16,12 +16,14 @@
 #include "conjure/core/containers/small_vector.h"
 #include "conjure/core/dynamic_library.h"
 #include "conjure/core/event_bus.h"
+#include "conjure/core/platform_detect.h"
 #include "conjure/core/string_id.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 using namespace conjure;
@@ -301,6 +303,107 @@ TEST_SUITE("modules/module_manager_shared") {
         CONJURE_CHECK_ERROR(broken, module_error::BINARY_LOAD_FAILED);
         CHECK(broken.get_error().message().find("bogus") != std::string::npos);
         CHECK(broken.get_error().message().size() > bogusBinary.generic_string().size() + 20);
+    }
+
+    TEST_CASE("regression - code sweep FU-LONGPATH a failed load names the path length from 248 characters on") {
+        // A file that is not a library fails to load at every length; only the length decides the note. Linux and
+        // macOS have no MAX_PATH, so there no length gets a note.
+        usize targetLength = 0;
+        SUBCASE("one character below the threshold") {
+            targetLength = WINDOWS_EXTENDED_PATH_THRESHOLD - 1;
+        }
+        SUBCASE("at the threshold") {
+            targetLength = WINDOWS_EXTENDED_PATH_THRESHOLD;
+        }
+        SUBCASE("past MAX_PATH") {
+            targetLength = PAST_MAX_PATH;
+        }
+        CAPTURE(targetLength);
+        shared_host host = {};
+        conjure::testing::log_capture logs = {};
+        logs.allow_errors();
+        const conjure::testing::temp_directory directory("modules_long_bogus");
+
+        // The module folder is padded so the binary's absolute path has exactly the target length, in segments of
+        // at most 100 characters (a folder name has at most 255).
+        module_manifest manifest = {};
+        manifest.binary = "bogus";
+        const std::filesystem::path probe = module_binary_path(manifest, directory.path() / "p", host_binary_triplet());
+        const usize overhead = probe.native().size() - 1;
+        if (overhead >= targetLength) {
+            MESSAGE("the test folder is too deep to place a binary path of " << targetLength << " characters");
+            return;
+        }
+        constexpr usize SEGMENT_LENGTH = 100;
+        std::string folder = {};
+        usize remaining = targetLength - overhead;
+        while (remaining > SEGMENT_LENGTH + 1) {
+            folder += std::string(SEGMENT_LENGTH, 'p') + "/";
+            remaining -= SEGMENT_LENGTH + 1;
+        }
+        folder += std::string(remaining, 'p');
+        CONJURE_REQUIRE_OK(directory.write_text(
+          folder + "/module.json",
+          R"({"schema": 1, "name": "bogus", "version": "1.0.0", "engine": "*", "binary": "bogus"})"
+        ));
+        const module_id bogus = host.manager.add_manifest(directory.file(folder + "/module.json")).value();
+        const std::filesystem::path bogusBinary = host.manager.registry().binary_path(bogus);
+        CHECK(bogusBinary.native().size() == targetLength);
+        CONJURE_REQUIRE_OK(directory.write_text(
+          bogusBinary.lexically_relative(directory.path()).generic_string(), "this is not a shared library"));
+
+        const result<void> broken = host.manager.load(bogus);
+        CONJURE_CHECK_ERROR(broken, module_error::BINARY_LOAD_FAILED);
+        const std::string message = broken.get_error().message();
+        CAPTURE(message);
+        CHECK(message.find("module 'bogus'") != std::string::npos);
+        CHECK(host.manager.registry().state(bogus) == module_state::FAILED);
+        // The loader's message names the binary in its classic form, never the extended-length form it was opened in.
+        const std::u8string classicBinary = std::filesystem::absolute(bogusBinary).u8string();
+        CHECK(message.find(std::string(classicBinary.begin(), classicBinary.end())) != std::string::npos);
+        CHECK(message.find(R"(\\?\)") == std::string::npos);
+        if (CONJURE_PLATFORM_WINDOWS == 1 && targetLength >= WINDOWS_EXTENDED_PATH_THRESHOLD) {
+            // The length is named as a fact; the file's format, not the length, is why it did not load.
+            CHECK(message.find("the path has " + std::to_string(targetLength) + " characters") != std::string::npos);
+            CHECK(message.find("MAX_PATH") != std::string::npos);
+            CHECK(message.find("shorter") == std::string::npos);
+        } else {
+            CHECK(message.find("MAX_PATH") == std::string::npos);
+        }
+    }
+
+    TEST_CASE("regression - code sweep FU-LONGPATH a module past MAX_PATH finds its dependency in its own folder") {
+        // module_sibling imports sibling_helper, which lies next to its binary and nowhere the loader searches by
+        // default. Past MAX_PATH Windows opens the module in the extended-length form, and the module's folder is
+        // still searched; Linux and macOS find the helper through the module's run path at any length.
+        shared_host host = {};
+        const conjure::testing::temp_directory directory("modules_long_sibling");
+        const std::filesystem::path deep = long_directory(directory, PAST_MAX_PATH);
+        const std::filesystem::path root = copy_tree_to(sibling_fixture_directory(), deep / "module_sibling");
+        const module_id sibling = host.manager.add_manifest(root / MODULE_MANIFEST_FILE_NAME).value();
+        const std::filesystem::path binary = host.manager.registry().binary_path(sibling);
+        const std::filesystem::path helper = binary.parent_path() / dynamic_library::decorate_name("sibling_helper");
+        CHECK(binary.native().size() > PAST_MAX_PATH);
+        std::error_code ignored = {};
+        REQUIRE(std::filesystem::exists(extended_length_path(helper), ignored));
+
+        // A process never loads the helper before the first SUBCASE: a loader would reuse a library of that name
+        // it already holds instead of searching for it.
+        SUBCASE("without the library next to it the load fails, so nothing else supplies it") {
+            conjure::testing::log_capture logs = {};
+            logs.allow_errors();
+            std::error_code failure = {};
+            REQUIRE(std::filesystem::remove(extended_length_path(helper), failure));
+            const result<void> broken = host.manager.load(sibling);
+            CONJURE_CHECK_ERROR(broken, module_error::BINARY_LOAD_FAILED);
+            CHECK(host.manager.registry().state(sibling) == module_state::FAILED);
+        }
+        SUBCASE("with the library next to it the module loads and its entry calls it") {
+            conjure::testing::log_capture logs = {};
+            CONJURE_REQUIRE_OK(host.manager.load(sibling));
+            CHECK(host.manager.registry().state(sibling) == module_state::LOADED);
+            CONJURE_REQUIRE_OK(host.manager.unload(sibling));
+        }
     }
 
     TEST_CASE("module_manager - shared libraries can be disabled per host") {

@@ -110,6 +110,49 @@ conjure_add_game_module(conjure_fixture_module_surface
 set_target_properties(conjure_fixture_module_surface PROPERTIES FOLDER "Tests/ModuleFixtures")
 list(APPEND fixtureTargets conjure_fixture_module_surface)
 
+# module_sibling imports sibling_helper, which is built next to the module binary and nowhere else (not in
+# the application directory every loader searches), so the module loads only when the loader searches the
+# module's own folder for its dependencies: Windows through dynamic_library::load, Linux through the
+# module's $ORIGIN run path and macOS through the helper's @loader_path install name. The long-path case
+# (code sweep FU-LONGPATH) loads a copy past MAX_PATH. It lives in its own root so discover() over the
+# fixture tree above keeps its record count.
+set(CONJURE_TEST_SIBLING_MODULE_DIR "${PROJECT_BINARY_DIR}/test_modules_sibling")
+set(siblingTriplet "${CONJURE_HOST_PLATFORM_NAME}-${CONJURE_HOST_ARCH_NAME}-$<LOWER_CASE:$<CONFIG>>")
+set(siblingBinaryDir "${CONJURE_TEST_SIBLING_MODULE_DIR}/module_sibling/bin/${siblingTriplet}")
+configure_file(
+    "${fixtureSourceDir}/module_sibling/module.json"
+    "${CONJURE_TEST_SIBLING_MODULE_DIR}/module_sibling/module.json"
+    COPYONLY
+)
+add_library(conjure_fixture_sibling_helper SHARED "${fixtureSourceDir}/module_sibling/sibling_helper.cpp")
+target_include_directories(conjure_fixture_sibling_helper PRIVATE "${PROJECT_SOURCE_DIR}/engine/include")
+target_link_libraries(conjure_fixture_sibling_helper
+    PRIVATE
+        conjure::platform_defines
+        conjure::warnings
+        conjure::sanitizers
+)
+set_target_properties(conjure_fixture_sibling_helper PROPERTIES
+    FOLDER "Tests/ModuleFixtures"
+    OUTPUT_NAME "sibling_helper"
+    RUNTIME_OUTPUT_DIRECTORY "${siblingBinaryDir}"
+    LIBRARY_OUTPUT_DIRECTORY "${siblingBinaryDir}"
+)
+if(APPLE)
+    set_target_properties(conjure_fixture_sibling_helper PROPERTIES
+        INSTALL_NAME_DIR "@loader_path"
+        BUILD_WITH_INSTALL_NAME_DIR TRUE
+    )
+endif()
+conjure_add_game_module(conjure_fixture_module_sibling
+    MANIFEST "${fixtureSourceDir}/module_sibling/module.json"
+    OUTPUT_ROOT "${CONJURE_TEST_SIBLING_MODULE_DIR}/module_sibling"
+    SOURCES "${fixtureSourceDir}/module_sibling/module_sibling.cpp"
+    DEPS conjure_fixture_sibling_helper
+)
+set_target_properties(conjure_fixture_module_sibling PROPERTIES FOLDER "Tests/ModuleFixtures")
+list(APPEND fixtureTargets conjure_fixture_module_sibling)
+
 #------------------------------------------------------------------------------
 # Test executable
 #------------------------------------------------------------------------------
@@ -146,6 +189,7 @@ target_include_directories(conjure_modules_tests PRIVATE "${fixtureSourceDir}")
 target_compile_definitions(conjure_modules_tests PRIVATE
     CONJURE_TEST_MODULE_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_TEST_MODULE_DIR}>"
     CONJURE_TEST_SURFACE_MODULE_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_TEST_SURFACE_MODULE_DIR}>"
+    CONJURE_TEST_SIBLING_MODULE_DIR="$<PATH:CMAKE_PATH,NORMALIZE,${CONJURE_TEST_SIBLING_MODULE_DIR}>"
     CONJURE_TEST_SURFACE_RENDERER=${surfaceRenderer}
 )
 add_dependencies(conjure_modules_tests ${fixtureTargets})

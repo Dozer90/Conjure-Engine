@@ -10,6 +10,7 @@
 
 #include "conjure/core/json/document.h"
 #include "conjure/core/log.h"
+#include "conjure/core/platform_detect.h"
 
 #include <array>
 #include <filesystem>
@@ -356,6 +357,36 @@ TEST_SUITE("modules/module_manifest") {
         const result<module_manifest> broken = load_module_manifest(directory.file("broken.json"));
         CONJURE_CHECK_ERROR(broken, module_error::MANIFEST_INVALID);
         CHECK(broken.get_error().message().find("broken.json") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep FU-LONGPATH load_module_manifest reads a manifest past MAX_PATH") {
+        // Past Windows' MAX_PATH the file is read through the extended-length form; Linux and macOS have no such
+        // limit, and the classic form runs the same calls there.
+        const conjure::testing::temp_directory directory("modules_manifest_long");
+        const std::filesystem::path deep = conjure::testing::long_directory(directory, conjure::testing::PAST_MAX_PATH);
+        const std::string relative = deep.lexically_relative(directory.path()).generic_string();
+        CONJURE_REQUIRE_OK(directory.write_text(relative + "/module.json", MINIMAL_MANIFEST));
+        CONJURE_REQUIRE_OK(directory.write_text(relative + "/broken.json", "{"));
+
+        SUBCASE("in the classic form") {
+            const result<module_manifest> loaded = load_module_manifest(deep / "module.json");
+            CONJURE_REQUIRE_OK(loaded);
+            CHECK(loaded->name == "tiny");
+            const std::filesystem::path brokenPath = deep / "broken.json";
+            const result<module_manifest> broken = load_module_manifest(brokenPath);
+            CONJURE_CHECK_ERROR(broken, module_error::MANIFEST_INVALID);
+            CHECK(broken.get_error().message().find(brokenPath.generic_string()) == 0);
+        }
+        SUBCASE("in the generic device form //?/, which is not prefixed a second time") {
+            if constexpr (CONJURE_PLATFORM_WINDOWS == 0) {
+                MESSAGE("the //?/ device form exists on Windows only");
+                return;
+            }
+            const std::filesystem::path device = "//?/" + (deep / "module.json").generic_string();
+            const result<module_manifest> loaded = load_module_manifest(device);
+            CONJURE_REQUIRE_OK(loaded);
+            CHECK(loaded->name == "tiny");
+        }
     }
 
     TEST_CASE("module_manifest - load_module_manifest names the file and the pointer of an invalid member") {

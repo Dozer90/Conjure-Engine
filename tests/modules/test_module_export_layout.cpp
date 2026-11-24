@@ -11,6 +11,8 @@
 #include "conjure/modules/module_types.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/platform_detect.h"
+#include "conjure/core/string_id.h"
 
 #include <array>
 #include <cstdint>
@@ -425,5 +427,61 @@ TEST_SUITE("modules/module_export_layout") {
         CONJURE_CHECK_ERROR(exported, module_error::EXPORT_FAILED);
         CHECK(exported.get_error().message().find("loop") != std::string::npos);
         CHECK(exported.get_error().message().find("links back") != std::string::npos);
+    }
+
+    TEST_CASE("regression - code sweep FU-LONGPATH modules past MAX_PATH are discovered, loaded and exported") {
+        // Both folders lie past Windows' MAX_PATH (260), where its file calls and loader refuse the classic form
+        // of a path; Linux and macOS have no such limit, and the case runs the same calls there.
+        const conjure::testing::temp_directory project("mx_long");
+        const conjure::testing::temp_directory output("mx_long_out");
+        const std::filesystem::path deepProject = long_directory(project, PAST_MAX_PATH);
+        const std::filesystem::path deepOutput = long_directory(output, PAST_MAX_PATH);
+        copy_fixture_to("module_alpha", deepProject / "module_alpha");
+        copy_fixture_to("module_managed_only", deepProject / "module_managed_only");
+        shared_host host = {};
+
+        const result<u32> discovered = host.manager.discover(deepProject);
+        CONJURE_REQUIRE_OK(discovered);
+        CHECK(*discovered == 2);
+        const module_id alpha = host.manager.registry().find(string_id("module_alpha"));
+        REQUIRE(alpha.is_valid());
+        // The registry keeps the classic form, without the extended-length prefix the manager opens it with.
+        const std::filesystem::path binary = host.manager.registry().binary_path(alpha);
+        CHECK(binary.native().size() > PAST_MAX_PATH);
+        CHECK(binary.lexically_relative(deepProject).generic_string().starts_with("module_alpha/bin/"));
+
+        CONJURE_REQUIRE_OK(host.manager.load_all());
+        CHECK(host.manager.registry().state(alpha) == module_state::LOADED);
+        if constexpr (CONJURE_PLATFORM_WINDOWS == 1) {
+            // Loaded straight from its folder: Windows holds the binary open.
+            CHECK_FALSE(is_writable(extended_length_path(binary)));
+        }
+
+        const std::filesystem::path exportedAlpha = deepOutput / "modules" / "module_alpha";
+        const std::filesystem::path exportedBin = module_binary_directory(exportedAlpha, host_binary_triplet());
+        SUBCASE("a first export") {
+            CONJURE_REQUIRE_OK(host.manager.export_layout(deepOutput, host_build_config()));
+        }
+        SUBCASE("an export over an earlier one removes its by-products") {
+            const std::string earlierBin = exportedBin.lexically_relative(output.path()).generic_string();
+            output.write_file(earlierBin + "/stale.pdb", "an earlier export");
+            output.write_file(earlierBin + "/old/stale.lib", "an earlier export");
+            CONJURE_REQUIRE_OK(host.manager.export_layout(deepOutput, host_build_config()));
+            CHECK_FALSE(path_exists(extended_length_path(exportedBin / "stale.pdb")));
+            CHECK_FALSE(path_exists(extended_length_path(exportedBin / "old" / "stale.lib")));
+            CHECK(path_exists(extended_length_path(exportedBin / "old")));
+        }
+
+        CHECK(path_exists(extended_length_path(exportedBin / binary.filename())));
+        std::filesystem::path symbols = binary.filename();
+        symbols.replace_extension(".pdb");
+        CHECK_FALSE(path_exists(extended_length_path(exportedBin / symbols)));
+        const result<module_manifest> reparsed = load_module_manifest(exportedAlpha / MODULE_MANIFEST_FILE_NAME);
+        CONJURE_REQUIRE_OK(reparsed);
+        CHECK(reparsed->name == "module_alpha");
+        const std::filesystem::path assembly = deepOutput / "modules" / "module_managed_only" / "managed";
+        CHECK(path_exists(extended_length_path(assembly / "ManagedOnly.dll")));
+
+        CONJURE_REQUIRE_OK(host.manager.unload(alpha));
     }
 }
