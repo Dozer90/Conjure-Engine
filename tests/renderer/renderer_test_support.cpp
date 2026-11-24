@@ -6,6 +6,7 @@
 #include "conjure/renderer/camera.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 
 #include "conjure/core/log.h"
@@ -13,6 +14,7 @@
 #include "conjure/rhi/backend.h"
 #include "conjure/rhi/device.h"
 #include "conjure/rhi/shader_library.h"
+#include "conjure/rhi/texture_format.h"
 
 #include <cmath>
 #include <filesystem>
@@ -185,6 +187,21 @@ headless_renderer conjure::testing::renderer_support::make_headless_renderer(
 
 headless_renderer conjure::testing::renderer_support::make_raw_headless_renderer(core::jobs::job_system *jobs) {
     return renderer_on(make_raw_device(), jobs);
+}
+
+renderer::render_target_id conjure::testing::renderer_support::make_target(
+  renderer_type &instance,
+  math::uvec2 size,
+  bool withDepth,
+  rhi::texture_format format
+) {
+    renderer::render_target_desc desc = {};
+    desc.size = size;
+    desc.colourFormat = format;
+    desc.withDepth = withDepth;
+    core::result<renderer::render_target_id> created = instance.create_render_target(desc);
+    CONJURE_REQUIRE_OK(created);
+    return created.value();
 }
 
 u32 conjure::testing::renderer_support::warning_count(const log_capture &logs, std::string_view text) {

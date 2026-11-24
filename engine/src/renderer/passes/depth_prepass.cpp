@@ -3,8 +3,8 @@
 #include <nvrhi/utils.h>
 
 // Depth + normal prepass (docs/design/02_renderer.md R1, 3.3): creates the view's depth buffer unless
-// an earlier pass (the skybox of a blended-only view) already did, and the octahedral view-space
-// normals, both at the target size.
+// the view imported its render target's depth (render_target.h) or an earlier pass (the skybox of a
+// blended-only view) already created one, and the octahedral view-space normals, both at the target size.
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -22,6 +22,7 @@ void depth_prepass::setup(pass_builder &builder) {
     const math::uvec2 size = mShared.view->targetSize;
     // A blended-only view with an environment runs the skybox first, which created and cleared the
     // depth buffer; a second one would never be cleared and the blended passes would test against it.
+    // An imported target depth is cleared by whichever pass binds it first, through clear_targets_once.
     if (mShared.graph.depth == INVALID_GRAPH_RESOURCE) {
         graph_texture_desc depth = {};
         depth.width = size.x;

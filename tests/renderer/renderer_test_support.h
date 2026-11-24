@@ -6,6 +6,7 @@
 #include "conjure/renderer/camera.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 
 #include "conjure/assets/asset_types.h"
@@ -15,6 +16,7 @@
 #include "conjure/core/types.h"
 #include "conjure/rhi/device.h"
 #include "conjure/rhi/shader_library.h"
+#include "conjure/rhi/texture_format.h"
 
 #include <filesystem>
 #include <memory>
@@ -27,6 +29,7 @@
 //   CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);       // [gpu] cases, WARP through software_device_desc()
 //   headless_renderer gpu = make_headless_renderer(true);           // the WARP device
 //   headless_renderer gate = make_raw_headless_renderer();          // allocation gates: no validation layer
+//   const render_target_id target = make_target(*fixture, math::uvec2(64, 64), false);   // a target without depth
 //   open_written_shaders(device, directory, stages);                // a hand-written index: missing shaders
 //   CHECK(warning_count(logs, "exceed MAX_VIEWS") == 1);            // how often one warning was logged
 //   CONJURE_CHECK_APPROX(unpacked_tangent(vertex), math::vec4(1.0f, 0.0f, 0.0f, 1.0f));   // a packed vertex
@@ -154,6 +157,18 @@ namespace conjure::testing::renderer_support {
     /// A headless renderer on make_raw_device() or fails the case; for the allocation gates only.
     /// </summary>
     [[nodiscard]] headless_renderer make_raw_headless_renderer(core::jobs::job_system *jobs = nullptr);
+
+    /// <summary>
+    /// Creates an off-screen target of 'size' on 'instance' or fails the case. 'withDepth' keeps the scene
+    /// depth in the target (render_target_desc::withDepth); without it every view renders with a transient
+    /// depth buffer of the frame graph.
+    /// </summary>
+    [[nodiscard]] renderer::render_target_id make_target(
+      renderer_type &instance,
+      math::uvec2 size,
+      bool withDepth = true,
+      rhi::texture_format format = rhi::texture_format::RGBA8_SRGB
+    );
 
     /// <summary>
     /// Number of WARN messages 'logs' captured so far whose text contains 'text'; for the cases that

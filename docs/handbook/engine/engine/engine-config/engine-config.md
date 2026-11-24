@@ -60,7 +60,7 @@ struct CONJURE_API engine_config
 
 <div class="function-declaration" id="function-defaults-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">static</span> <a href="engine-config.html">engine_config</a> defaults();</code></pre></div>
 
-<p>The desktop defaults of; <code>gpuValidation</code> is forced on in Debug builds.</p>
+<p>The desktop defaults of; <code>rendering.gpuValidation</code> is <code>DEBUG_LAYER</code> in a Debug build and <code>OFF</code> in the others.</p>
 
 #### `headless_defaults` {#function-headless-defaults}
 

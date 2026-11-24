@@ -167,6 +167,13 @@ class CONJURE_API renderer
 
 <p>Synchronous readback of a render target&#x27;s colour texture as RGBA8 (waits for the GPU). On the <code>null</code> device the image is zero-filled and the right size. Fails with <code>NOT_FOUND</code> for an unknown target, <code>rhi_error::DEVICE_LOST</code> on a lost device and <code>renderer_error::RESOURCE_CREATION_FAILED</code> when the staging texture cannot be created or mapped.</p>
 
+#### `read_back_depth` {#function-read-back-depth}
+
+<div class="function-declaration" id="function-read-back-depth-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/result/result.html">core::result</a>&lt;<a href="../render-target/depth-read-back.html">depth_read_back</a>&gt; read_back_depth(
+    <a href="../gpu-ids.html#symbol-render-target-id">render_target_id</a> target);</code></pre></div>
+
+<p>Synchronous readback of a render target&#x27;s depth (waits for the GPU): the scene depth the first view of the last frame with a view into the target drew (<code><a href="../render-target/render-target.html">render_target</a>.h</code>), reverse-<code>Z</code>. <code>A</code> target no view has rendered into since its creation or last resize reads as all zeros (the far plane) without a GPU copy, and on the <code>null</code> device every value is zero. Fails with <code>NOT_FOUND</code> for an unknown target, <code>INVALID_ARGUMENT</code> for a target created without depth, <code>rhi_error::DEVICE_LOST</code> on a lost device and <code>renderer_error::RESOURCE_CREATION_FAILED</code> when the staging texture cannot be created or mapped. Render thread.</p>
+
 #### `register_asset_types` {#function-register-asset-types}
 
 <div class="function-declaration" id="function-register-asset-types-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">static</span> <a href="../../core/result/result.html">core::result</a>&lt;<span class="k">void</span>&gt; register_asset_types(

@@ -5,6 +5,7 @@
 
 #include "renderer/read_back_decode.h"
 
+#include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
 #include "conjure/renderer/render_target.h"
@@ -15,17 +16,21 @@
 #include "conjure/core/log.h"
 #include "conjure/core/math.h"
 #include "conjure/core/types.h"
+#include "conjure/rhi/null_device_stats.h"
 #include "conjure/rhi/texture_format.h"
 
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <memory>
+#include <optional>
 
 // render_target.h (docs/design/02_renderer.md 4.2, R12): off-screen targets created, resized and
-// destroyed through the renderer, with the colour texture registered as a gpu_texture_id.
+// destroyed through the renderer, with the colour texture registered as a gpu_texture_id, and the depth
+// kept by the first view of a frame into a target with depth (code sweep F384).
 
 using namespace conjure;
 using namespace conjure::renderer;
@@ -39,6 +44,50 @@ namespace {
     /// </summary>
     [[nodiscard]] u8 srgb8_of(f32 linear) noexcept {
         return encode_srgb8(linear);
+    }
+
+    /// <summary>
+    /// What a frame of render_views cost: the transient textures the renderer's pool holds and the depth
+    /// clears the null device recorded.
+    /// </summary>
+    struct frame_cost {
+        u32 transientTexturesLive = 0;
+        u32 depthClears = 0;
+    };
+
+    /// <summary>
+    /// Renders one view per entry of 'targets' (an entry may repeat) for two frames, the first of which
+    /// flushes the uploads, and returns the cost of the second. With 'withSphere' every view sees a unit
+    /// sphere at the origin; shadows and SSAO stay off so the transients are the views' own buffers.
+    /// </summary>
+    [[nodiscard]] frame_cost render_views(
+      headless_renderer &fixture,
+      std::initializer_list<render_target_id> targets,
+      bool withSphere
+    ) {
+        render_scene scene = {};
+        for (const render_target_id target : targets) {
+            scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target));
+        }
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = false;
+        if (withSphere) {
+            const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f);
+            const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
+            const gpu_material_id material = fixture->upload_material(test_asset_id(2), material_asset());
+            scene.meshes.push_back(instance_at(sphere, material, math::vec3(0.0f), sphereMesh.bounds()));
+        }
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        fixture.device->reset_null_stats();
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == targets.size());
+        CHECK(fixture->stats().executed("depth_prepass") == withSphere);
+        const std::optional<rhi::null_device_stats> nullStats = fixture.device->null_stats();
+        REQUIRE(nullStats.has_value());
+        frame_cost cost = {};
+        cost.transientTexturesLive = fixture->stats().transientTexturesLive;
+        cost.depthClears = nullStats->depthClears;
+        return cost;
     }
 }
 
@@ -265,5 +314,70 @@ TEST_SUITE("renderer/render_target") {
         CONJURE_REQUIRE_OK(again);
         CHECK(again.value() != created.value());
         CHECK(fixture->get_render_target(again.value()) != nullptr);
+    }
+
+    TEST_CASE("regression - code sweep F384 a view into a target with depth draws into the target's depth") {
+        // The target's depth texture used to be allocated and never bound: every view drew into a transient
+        // depth buffer of the pool, and the scene depth died with the frame. The view now imports the
+        // target's depth in place of the transient, so the pool holds one texture fewer.
+        log_capture logs = {};
+        headless_renderer owning = make_headless_renderer();
+        headless_renderer plain = make_headless_renderer();
+        const render_target_id withDepth = make_target(*owning, math::uvec2(64, 48), true);
+        const render_target_id withoutDepth = make_target(*plain, math::uvec2(64, 48), false);
+        const frame_cost owned = render_views(owning, {withDepth}, true);
+        const frame_cost transient = render_views(plain, {withoutDepth}, true);
+        CHECK(transient.transientTexturesLive > 1);
+        CHECK(owned.transientTexturesLive + 1 == transient.transientTexturesLive);
+        // The prepass clears the depth it binds first, imported or not, and nothing clears it twice.
+        CHECK(owned.depthClears == 1);
+        CHECK(transient.depthClears == 1);
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("render_target - only the first view of a frame into a target owns its depth") {
+        log_capture logs = {};
+        headless_renderer owning = make_headless_renderer();
+        headless_renderer plain = make_headless_renderer();
+        const math::uvec2 size(32, 32);
+        const render_target_id first = make_target(*owning, size, true);
+        const render_target_id second = make_target(*owning, size, true);
+        const render_target_id firstPlain = make_target(*plain, size, false);
+        const render_target_id secondPlain = make_target(*plain, size, false);
+
+        SUBCASE("two views into one target: the second renders with a transient depth buffer") {
+            const frame_cost owned = render_views(owning, {first, first}, true);
+            const frame_cost transient = render_views(plain, {firstPlain, firstPlain}, true);
+            CHECK(owned.transientTexturesLive + 1 == transient.transientTexturesLive);
+            CHECK(owned.depthClears == 2);
+            CHECK(transient.depthClears == 2);
+        }
+        SUBCASE("two views into two targets: each view owns the depth of its own target") {
+            const frame_cost owned = render_views(owning, {first, second}, true);
+            const frame_cost transient = render_views(plain, {firstPlain, secondPlain}, true);
+            CHECK(owned.transientTexturesLive + 2 == transient.transientTexturesLive);
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
+    }
+
+    TEST_CASE("regression - code sweep F384 a frame that draws nothing still clears the target's depth") {
+        // With nothing to draw no pass binds a depth buffer. The target's depth would keep an earlier
+        // frame's scene, so the owning view clears it to the far plane itself; a transient needs no clear,
+        // and a later view of the frame into the same target leaves the owner's depth alone.
+        log_capture logs = {};
+        headless_renderer owning = make_headless_renderer();
+        headless_renderer plain = make_headless_renderer();
+        const render_target_id withDepth = make_target(*owning, math::uvec2(16, 16), true);
+        const render_target_id withoutDepth = make_target(*plain, math::uvec2(16, 16), false);
+
+        SUBCASE("one view") {
+            CHECK(render_views(owning, {withDepth}, false).depthClears == 1);
+            CHECK(render_views(plain, {withoutDepth}, false).depthClears == 0);
+        }
+        SUBCASE("two views into the same target") {
+            CHECK(render_views(owning, {withDepth, withDepth}, false).depthClears == 1);
+            CHECK(render_views(plain, {withoutDepth, withoutDepth}, false).depthClears == 0);
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 }

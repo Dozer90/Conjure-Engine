@@ -299,6 +299,73 @@ TEST_SUITE("engine/command_line") {
         CHECK(config.window.fullscreen);
     }
 
+    TEST_CASE("command_line - --gpu-validation takes off, debug and gpu in any case and sets the level") {
+        struct sample {
+            std::string_view text = {};
+            gpu_validation_level level = gpu_validation_level::OFF;
+        };
+        const std::array<sample, 4> samples = {{
+            {"off", gpu_validation_level::OFF},
+            {"debug", gpu_validation_level::DEBUG_LAYER},
+            {"gpu", gpu_validation_level::GPU_BASED},
+            {"GPU", gpu_validation_level::GPU_BASED},
+        }};
+        for (const sample &entry : samples) {
+            CAPTURE(entry.text);
+            const core::result<command_line_options> parsed = parse({"--gpu-validation", entry.text});
+            CONJURE_REQUIRE_OK(parsed);
+            CHECK(parsed.value().gpuValidation == entry.level);
+            // The flag sets the level whatever the configuration had, lower or higher.
+            for (const gpu_validation_level before :
+                 {gpu_validation_level::OFF, gpu_validation_level::DEBUG_LAYER, gpu_validation_level::GPU_BASED}) {
+                CAPTURE(to_string(before));
+                engine_config config = engine_config::defaults();
+                config.rendering.gpuValidation = before;
+                apply_command_line(parsed.value(), config);
+                CHECK(config.rendering.gpuValidation == entry.level);
+            }
+        }
+
+        SUBCASE("without the flag the configuration keeps its level") {
+            const core::result<command_line_options> parsed = parse({"--headless"});
+            CONJURE_REQUIRE_OK(parsed);
+            CHECK_FALSE(parsed.value().gpuValidation.has_value());
+            engine_config config = engine_config::defaults();
+            config.rendering.gpuValidation = gpu_validation_level::GPU_BASED;
+            apply_command_line(parsed.value(), config);
+            CHECK(config.rendering.gpuValidation == gpu_validation_level::GPU_BASED);
+        }
+        SUBCASE("the last --gpu-validation wins") {
+            const core::result<command_line_options> parsed =
+              parse({"--gpu-validation", "gpu", "--headless", "--gpu-validation", "off"});
+            CONJURE_REQUIRE_OK(parsed);
+            CHECK(parsed.value().gpuValidation == gpu_validation_level::OFF);
+        }
+    }
+
+    TEST_CASE("command_line - an unknown or missing --gpu-validation level is BAD_ARGUMENTS") {
+        // The project.json names are not command-line spellings.
+        const std::array<std::string_view, 5> refused = {"debug_layer", "gpu_based", "on", "true", ""};
+        for (const std::string_view text : refused) {
+            CAPTURE(text);
+            const core::result<command_line_options> parsed = parse({"--gpu-validation", text});
+            CONJURE_CHECK_ERROR(parsed, engine_error::BAD_ARGUMENTS);
+            REQUIRE_FALSE(parsed.has_value());
+            CHECK(parsed.get_error().message().find("--gpu-validation") != std::string::npos);
+            CHECK(parsed.get_error().message().find(std::format("'{}'", text)) != std::string::npos);
+        }
+        CONJURE_CHECK_ERROR(parse({"--gpu-validation"}), engine_error::BAD_ARGUMENTS);
+        CONJURE_CHECK_ERROR(parse({"--gpu-validation", "--headless"}), engine_error::BAD_ARGUMENTS);
+    }
+
+    TEST_CASE("command_line - the help text has one line for --gpu-validation naming its levels") {
+        const std::string_view help = command_line_help();
+        const std::string_view line = "\n  --gpu-validation off|debug|gpu ";
+        const usize first = help.find(line);
+        REQUIRE(first != std::string_view::npos);
+        CHECK(help.find(line, first + 1) == std::string_view::npos);
+    }
+
     TEST_CASE("command_line - an audio backend re-enables audio") {
         const core::result<command_line_options> parsed = parse({"--audio", "null"});
         CONJURE_REQUIRE_OK(parsed);

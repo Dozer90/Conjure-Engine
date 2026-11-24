@@ -77,6 +77,8 @@ class CONJURE_API render_target
 
 <div class="function-declaration" id="function-has-depth-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="k">bool</span> has_depth() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>
 
+<p>True when the target was created with <code>render_target_desc::withDepth</code> and so keeps the scene depth of the first view of each frame that renders into it (<code>renderer::read_back_depth</code>).</p>
+
 #### `size` {#function-size}
 
 <div class="function-declaration" id="function-size-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../../core/math/glm-types.html#symbol-uvec2">math::uvec2</a> size() <span class="k">const</span> <span class="k">noexcept</span>;</code></pre></div>

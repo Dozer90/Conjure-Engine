@@ -62,8 +62,10 @@ core::result<void> rhi_subsystem::startup(engine_context &context) {
     const bool realWindow =
       context.window != nullptr && context.window->backend() != platform::backend_kind::NULL_BACKEND;
     rhi::device_desc desc = {};
-    desc.enableDebugLayer = config.rendering.gpuValidation;
-    desc.enableGpuValidation = config.rendering.gpuValidation;
+    // DEBUG_LAYER and GPU_BASED both need the debug layer; only GPU_BASED adds GPU-based validation, which the
+    // D3D12 backend alone acts on (code sweep F458).
+    desc.enableDebugLayer = config.rendering.gpuValidation != gpu_validation_level::OFF;
+    desc.enableGpuValidation = config.rendering.gpuValidation == gpu_validation_level::GPU_BASED;
     if (realWindow) {
         desc.window = to_native_window(context.window->native_handle());
     }

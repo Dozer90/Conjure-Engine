@@ -9,6 +9,7 @@
 #include "conjure/renderer/material_asset.h"
 #include "conjure/renderer/mesh_asset.h"
 #include "conjure/renderer/render_scene.h"
+#include "conjure/renderer/render_target.h"
 #include "conjure/renderer/renderer.h"
 #include "conjure/renderer/texture_asset.h"
 
@@ -41,15 +42,6 @@ using namespace conjure::testing::renderer_support;
 namespace {
 
     constexpr math::uvec2 TARGET_SIZE = math::uvec2(128, 128);
-
-    [[nodiscard]] render_target_id make_target(renderer_type &instance, math::uvec2 size = TARGET_SIZE) {
-        render_target_desc desc = {};
-        desc.size = size;
-        desc.colourFormat = rhi::texture_format::RGBA8_SRGB;
-        core::result<render_target_id> created = instance.create_render_target(desc);
-        CONJURE_REQUIRE_OK(created);
-        return created.value();
-    }
 
     [[nodiscard]] math::mat4 clip_from_world_of(const render_view &view) {
         const f32 aspect = static_cast<f32>(TARGET_SIZE.x) / static_cast<f32>(TARGET_SIZE.y);
@@ -164,7 +156,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
         const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
         const gpu_material_id material = fixture->upload_material(test_asset_id(2), white_rough());
@@ -240,7 +232,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset floorMesh = floor_mesh();
         const mesh_asset cubeMesh = mesh_asset::unit_cube();
         const gpu_mesh_id floor = fixture->upload_mesh(test_asset_id(1), floorMesh);
@@ -308,7 +300,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
         const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
         const gpu_material_id material = fixture->upload_material(test_asset_id(2), white_rough());
@@ -364,7 +356,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset floorMesh = floor_mesh();
         const mesh_asset cubeMesh = mesh_asset::unit_cube();
         const gpu_mesh_id floor = fixture->upload_mesh(test_asset_id(1), floorMesh);
@@ -426,7 +418,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset quadMesh = mesh_asset::quad(1.0f);
         const gpu_mesh_id quad = fixture->upload_mesh(test_asset_id(1), quadMesh);
         material_asset glowing = {};
@@ -486,7 +478,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
         const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
         const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
         const auto greyMetal = [](f32 roughness) {
@@ -602,7 +594,7 @@ TEST_SUITE("renderer/gpu") {
         CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
         log_capture logs = {};
         headless_renderer fixture = make_headless_renderer(true);
-        const render_target_id target = make_target(*fixture);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
 
         // A quad facing +Z with its UVs turned 45 degrees: U grows along (1, 1, 0), which makes the
         // generated tangent (1, 1, 0) / sqrt(2).
@@ -698,7 +690,7 @@ TEST_SUITE("renderer/gpu") {
         core::result<std::unique_ptr<renderer_type>> created = renderer_type::create(desc);
         CONJURE_REQUIRE_OK(created);
         renderer_type &instance = *created.value();
-        const render_target_id target = make_target(instance);
+        const render_target_id target = make_target(instance, TARGET_SIZE);
 
         const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
         const gpu_mesh_id sphere = instance.upload_mesh(test_asset_id(1), sphereMesh);
@@ -742,6 +734,71 @@ TEST_SUITE("renderer/gpu") {
 
         created.value().reset();
         swapchain.value().reset();
+    }
+
+    TEST_CASE("regression - code sweep F384 [gpu] a target's depth holds the scene depth its first view drew") {
+        CONJURE_TEST_REQUIRE(precondition::SOFTWARE_GPU_ADAPTER);
+        // The target's depth texture used to be allocated and never drawn into: the views drew into a
+        // transient depth buffer and the read-back had nothing to read. It now holds the reverse-Z depth of
+        // the first view of the last frame, cleared to the far plane (0) where nothing was drawn.
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer(true);
+        const render_target_id target = make_target(*fixture, TARGET_SIZE);
+        const mesh_asset sphereMesh = mesh_asset::uv_sphere(1.0f, 32, 64);
+        const gpu_mesh_id sphere = fixture->upload_mesh(test_asset_id(1), sphereMesh);
+        const gpu_material_id material = fixture->upload_material(test_asset_id(2), white_rough());
+        render_view facing = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target, 0.6f);
+        facing.flags = view_flags::NO_POST_PROCESS;
+        render_view away = look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f, 0.0f, 10.0f), target, 0.6f);
+        away.flags = view_flags::NO_POST_PROCESS;
+        render_scene scene = {};
+        scene.meshes.push_back(instance_at(sphere, material, math::vec3(0.0f), sphereMesh.bounds()));
+        scene.shadows.enabled = false;
+        scene.ssao.enabled = false;
+
+        // The sphere's nearest point projects to the centre pixel at the depth the projection gives it.
+        const math::mat4 clipFromWorld = clip_from_world_of(facing);
+        const math::vec4 nearest = clipFromWorld * math::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+        const f32 expectedDepth = nearest.z / nearest.w;
+        REQUIRE(expectedDepth > 0.0f);
+        const math::uvec2 centre = project_to_pixel(clipFromWorld, math::vec3(0.0f, 0.0f, 1.0f), TARGET_SIZE);
+        REQUIRE(centre.x != std::numeric_limits<u32>::max());
+        const auto depthAt = [&fixture, target](math::uvec2 pixel) {
+            core::result<depth_read_back> depth = fixture->read_back_depth(target);
+            CONJURE_REQUIRE_OK(depth);
+            REQUIRE(depth.value().size == TARGET_SIZE);
+            return depth.value().depth[static_cast<usize>(pixel.y) * TARGET_SIZE.x + pixel.x];
+        };
+
+        // The first frame flushes the uploads; the second draws the sphere into the target's depth.
+        scene.views = {facing};
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(depthAt(centre) == doctest::Approx(expectedDepth).epsilon(0.01));
+        CHECK(depthAt(math::uvec2(2, 2)) == 0.0f);
+
+        // Two views into the target: the first owns the depth, the second draws with a transient buffer.
+        scene.views = {away, facing};
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 2);
+        CHECK(depthAt(centre) == 0.0f);
+        scene.views = {facing, away};
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(depthAt(centre) == doctest::Approx(expectedDepth).epsilon(0.01));
+
+        // A frame without a view into the target leaves its depth as the last such frame left it.
+        const render_target_id other = make_target(*fixture, TARGET_SIZE);
+        scene.views = {look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), other, 0.6f)};
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(fixture->stats().viewsRendered == 1);
+        CHECK(depthAt(centre) == doctest::Approx(expectedDepth).epsilon(0.01));
+
+        // A frame with nothing to draw leaves the far plane, not the previous frame's sphere.
+        scene.views = {facing};
+        scene.meshes.clear();
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        CHECK(depthAt(centre) == 0.0f);
+        CHECK(logs.count(core::log_level::ERR) == 0);
     }
 
     TEST_CASE("regression - code sweep F044 [gpu] rendering, resizing the swapchain and rendering again succeeds") {

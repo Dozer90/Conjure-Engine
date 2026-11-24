@@ -33,6 +33,7 @@ namespace {
       "  --target-hz <n>                frame pacing target when no vsync present happens\n"
       "  --time-scale <f>               simulation time scale\n"
       "  --jobs <n|auto>                worker threads (0 = every job inline; default auto)\n"
+      "  --gpu-validation off|debug|gpu graphics validation for this run (gpu: D3D12 GPU-based validation)\n"
       "  --log-level <level>            trace|debug|info|warn|error|fatal|off\n"
       "  --log-file <path>              also log to a file\n"
       "  --help                         print this text\n"
@@ -78,6 +79,22 @@ namespace {
             return bad_argument(flag, std::format("'{}' is too large", text));
         }
         return static_cast<u32>(value);
+    }
+
+    /// <summary>
+    /// The --gpu-validation spellings, case-insensitively: off, debug (DEBUG_LAYER) and gpu (GPU_BASED).
+    /// </summary>
+    [[nodiscard]] core::result<gpu_validation_level> parse_validation(std::string_view flag, std::string_view text) {
+        if (core::str::iequals(text, "off")) {
+            return gpu_validation_level::OFF;
+        }
+        if (core::str::iequals(text, "debug")) {
+            return gpu_validation_level::DEBUG_LAYER;
+        }
+        if (core::str::iequals(text, "gpu")) {
+            return gpu_validation_level::GPU_BASED;
+        }
+        return bad_argument(flag, std::format("unknown level '{}' (expected off, debug or gpu)", text));
     }
 
     [[nodiscard]] core::result<f32> parse_real(std::string_view flag, std::string_view text, bool allowZero) {
@@ -175,6 +192,10 @@ core::result<command_line_options> conjure::engine::parse_command_line(std::span
                 CONJURE_TRY_ASSIGN(const u32 jobs, parse_count32(token, value, true));
                 options.jobs = jobs;
             }
+        } else if (token == "--gpu-validation") {
+            CONJURE_TRY_ASSIGN(const std::string_view value, take_value(arguments, index, token));
+            CONJURE_TRY_ASSIGN(const gpu_validation_level level, parse_validation(token, value));
+            options.gpuValidation = level;
         } else if (token == "--log-level") {
             CONJURE_TRY_ASSIGN(const std::string_view value, take_value(arguments, index, token));
             const std::optional<core::log_level> level = core::parse_log_level(value);
@@ -253,6 +274,9 @@ void conjure::engine::apply_command_line(const command_line_options &options, en
     }
     if (options.jobs.has_value()) {
         config.jobs.workerCount = *options.jobs;
+    }
+    if (options.gpuValidation.has_value()) {
+        config.rendering.gpuValidation = *options.gpuValidation;
     }
     if (options.logLevel.has_value()) {
         config.logLevel = *options.logLevel;

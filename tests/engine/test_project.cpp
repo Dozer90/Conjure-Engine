@@ -5,15 +5,19 @@
 #include "engine_test_support.h"
 
 #include "conjure/core/json/document.h"
+#include "conjure/core/json/json.h"
 #include "conjure/core/log.h"
 #include "conjure/core/types.h"
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 #include "conjure/engine/project.h"
 
+#include <array>
 #include <cmath>
 #include <filesystem>
+#include <format>
 #include <string>
+#include <string_view>
 
 // project.h (docs/design/06_engine_loop.md 2.10, R39, R52, R53): load, validation errors, extensions
 // preservation, fixed_hz round trips, apply_to and the module manifest listing.
@@ -78,7 +82,7 @@ TEST_SUITE("engine/project") {
         CHECK(desc.physics.maxBodies == 1024);
         CHECK(desc.physicsSection.root()["collision_steps"].as_u64() == 2);
         CHECK(desc.rendering.backend == rhi_backend_choice::VULKAN);
-        CHECK(desc.rendering.gpuValidation);
+        CHECK(desc.rendering.gpuValidation == gpu_validation_level::GPU_BASED);
         CHECK(desc.audio.backend == audio_backend_choice::MINIAUDIO);
         CHECK(desc.audio.sampleRate == 44100);
         CHECK(desc.audio.deviceName == "Speakers");
@@ -164,7 +168,97 @@ TEST_SUITE("engine/project") {
         CHECK(written.root()["time"]["fixed_hz"].as_f64() == 120.0);
         CHECK(written.root()["cooked"].as_bool() == false);
         CHECK(written.root()["assets"]["hot_reload"].as_bool() == false);
+        CHECK(written.root()["rendering"]["gpu_validation"].as_string() == "gpu_based");
+        CHECK(desc.rendering.gpuValidation == gpu_validation_level::GPU_BASED);
         CHECK_FALSE(logs.contains(core::log_level::WARN, "'assets'"));
+    }
+
+    TEST_CASE("project - gpu_validation reads the three level names and the boolean of older projects") {
+        // Before code sweep F458 the key was a boolean and true turned on GPU-based validation as well.
+        struct sample {
+            std::string_view json = {};
+            gpu_validation_level level = gpu_validation_level::OFF;
+        };
+        const std::array<sample, 6> samples = {{
+            {R"("off")", gpu_validation_level::OFF},
+            {R"("debug_layer")", gpu_validation_level::DEBUG_LAYER},
+            {R"("gpu_based")", gpu_validation_level::GPU_BASED},
+            {R"("Debug_Layer")", gpu_validation_level::DEBUG_LAYER},
+            {"true", gpu_validation_level::GPU_BASED},
+            {"false", gpu_validation_level::OFF},
+        }};
+        for (const sample &entry : samples) {
+            CAPTURE(entry.json);
+            const std::string text =
+              std::format(R"({{"schema_version": 1, "name": "v", "rendering": {{"gpu_validation": {}}}}})", entry.json);
+            const core::result<project> parsed = project::parse(text, std::filesystem::path("."));
+            CONJURE_REQUIRE_OK(parsed);
+            CHECK(parsed.value().description().rendering.gpuValidation == entry.level);
+            // to_json writes the name, which reads back as the same level.
+            const core::json::document written = parsed.value().to_json();
+            CHECK(written.root()["rendering"]["gpu_validation"].as_string() == to_string(entry.level));
+            const std::string writtenText = core::json::to_string(written.root());
+            const core::result<project> reread = project::parse(writtenText, std::filesystem::path("."));
+            CONJURE_REQUIRE_OK(reread);
+            CHECK(reread.value().description().rendering.gpuValidation == entry.level);
+        }
+
+        SUBCASE("an absent key is OFF, the level of a section built by hand") {
+            const core::result<project> bare = project::parse(
+              R"({"schema_version": 1, "name": "bare", "rendering": {"enabled": true}})",
+              std::filesystem::path(".")
+            );
+            CONJURE_REQUIRE_OK(bare);
+            CHECK(bare.value().description().rendering.gpuValidation == gpu_validation_level::OFF);
+        }
+        SUBCASE("an unknown name or another type is PROJECT_INVALID naming the key") {
+            const std::array<std::string_view, 5> refused = {R"("gpu")", R"("debug")", R"("")", "1", "null"};
+            for (const std::string_view json : refused) {
+                CAPTURE(json);
+                const std::string text =
+                  std::format(R"({{"schema_version": 1, "name": "v", "rendering": {{"gpu_validation": {}}}}})", json);
+                const core::result<project> parsed = project::parse(text, std::filesystem::path("."));
+                CONJURE_CHECK_ERROR(parsed, engine_error::PROJECT_INVALID);
+                REQUIRE_FALSE(parsed.has_value());
+                CHECK(parsed.get_error().message().find("rendering/gpu_validation") != std::string::npos);
+            }
+        }
+    }
+
+    TEST_CASE("project - apply_to only raises the GPU validation level") {
+        // A saved project always names a level, usually OFF, so the project raises the build default and never
+        // lowers it; --gpu-validation lowers it for one run (test_application_desc.cpp).
+        struct sample {
+            gpu_validation_level configured = gpu_validation_level::OFF;
+            gpu_validation_level project = gpu_validation_level::OFF;
+            gpu_validation_level merged = gpu_validation_level::OFF;
+        };
+        const std::array<sample, 5> samples = {{
+            {gpu_validation_level::DEBUG_LAYER, gpu_validation_level::OFF, gpu_validation_level::DEBUG_LAYER},
+            {gpu_validation_level::DEBUG_LAYER, gpu_validation_level::GPU_BASED, gpu_validation_level::GPU_BASED},
+            {gpu_validation_level::OFF, gpu_validation_level::DEBUG_LAYER, gpu_validation_level::DEBUG_LAYER},
+            {gpu_validation_level::GPU_BASED, gpu_validation_level::DEBUG_LAYER, gpu_validation_level::GPU_BASED},
+            {gpu_validation_level::OFF, gpu_validation_level::OFF, gpu_validation_level::OFF},
+        }};
+        for (const sample &entry : samples) {
+            CAPTURE(to_string(entry.configured));
+            CAPTURE(to_string(entry.project));
+            const std::string text = std::format(
+              R"({{"schema_version": 1, "name": "v", "rendering": {{"gpu_validation": "{}"}}}})",
+              to_string(entry.project)
+            );
+            const core::result<project> parsed = project::parse(text, std::filesystem::path("."));
+            CONJURE_REQUIRE_OK(parsed);
+            // Headless or not: the level is merged in both cases (the headless guard of apply_to does not cover it).
+            engine_config interactive = engine_config::defaults();
+            interactive.rendering.gpuValidation = entry.configured;
+            parsed.value().apply_to(interactive);
+            CHECK(interactive.rendering.gpuValidation == entry.merged);
+            engine_config headless = engine_config::headless_defaults();
+            headless.rendering.gpuValidation = entry.configured;
+            parsed.value().apply_to(headless);
+            CHECK(headless.rendering.gpuValidation == entry.merged);
+        }
     }
 
     TEST_CASE("project - the audio device is the key \"device\" in the file and deviceName in the section") {

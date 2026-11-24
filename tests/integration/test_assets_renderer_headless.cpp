@@ -323,10 +323,11 @@ TEST_SUITE("integration/assets_renderer_headless") {
         CHECK(stats.instancesDrawn == 2);
         CHECK(stats.trianglesDrawn == 2 * 12 + 1);
         CHECK(stats.dispatches == 3 + 2 + 6 + 5);
-        // Transient textures of the first frame: depth and view normals (prepass), the HDR target
+        // Transient textures of the first frame: the view normals (prepass; the depth is the render
+        // target's own, imported in place of a transient since code sweep F384), the HDR target
         // (forward), the half-resolution AO, AO depth and the two blur targets (SSAO) and the six
         // bloom mips.
-        CHECK(stats.transientTexturesCreated == 2 + 1 + 4 + 6);
+        CHECK(stats.transientTexturesCreated == 1 + 1 + 4 + 6);
         CHECK(stats.transientTexturesLive == stats.transientTexturesCreated);
 
         // What the null device recorded for the same frame (engine/src/rhi/backends/null): the draws

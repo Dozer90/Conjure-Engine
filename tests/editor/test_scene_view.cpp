@@ -53,7 +53,7 @@ namespace {
         desc.config.scripting.enabled = false;
         desc.config.rendering.enabled = true;
         desc.config.rendering.backend = engine::rhi_backend_choice::NULL_DEVICE;
-        desc.config.rendering.gpuValidation = false;
+        desc.config.rendering.gpuValidation = engine::gpu_validation_level::OFF;
         desc.config.logLevel = core::log_level::WARN;
         return desc;
     }

@@ -27,6 +27,7 @@
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <string_view>
 #include <utility>
 
 // The renderer (docs/design/02_renderer.md 3.1): begin_frame (acquire, uploads), prepare (resolve
@@ -975,6 +976,13 @@ void prepare_frame(renderer_state &state, const render_scene &scene, nvrhi::ITex
             stateOfView.targetSize = targetState.desc.size;
             stateOfView.targetFormat = targetState.desc.colourFormat;
             ++targetState.framesRendered;
+            // The first view of the frame into the target owns its depth (render_target.h); a later view
+            // into the same target renders with a transient depth buffer. No view is skipped once it gets
+            // here, so the owner is always rendered.
+            if (targetState.depth != nullptr && targetState.depthOwnerFrame != state.frameIndex) {
+                targetState.depthOwnerFrame = state.frameIndex;
+                stateOfView.targetDepth = targetState.depth.Get();
+            }
         } else {
             if (backBuffer == nullptr) {
                 if (!state.warnedNoSwapchain) {
@@ -1376,6 +1384,9 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
     graph.reset();
     view_resources &resourcesOfView = state.frame.view(stateOfView.viewIndex);
     shared.graph.target = graph.import_texture(stateOfView.targetTexture, "target");
+    if (stateOfView.targetDepth != nullptr) {
+        shared.graph.depth = graph.import_texture(stateOfView.targetDepth, "target_depth");
+    }
     shared.graph.instances = graph.import_buffer(state.frame.instances(), "instances");
     shared.graph.lights = graph.import_buffer(resourcesOfView.lights, "lights");
     shared.graph.shadowTiles = graph.import_buffer(resourcesOfView.shadowTiles, "shadow_tiles");
@@ -1453,6 +1464,21 @@ void render_view_graph(renderer_state &state, frame_view_state &stateOfView, con
 
     graph.compile(*state.pool, state.frameIndex);
     graph.execute(*state.commandList, *state.framebuffers, stateOfView.constants, state.stats, state.timers.get());
+
+    // The owned target depth holds this frame's scene depth even when no pass bound it (a view with
+    // nothing to draw, or a pass that skipped itself): cleared to the far plane (reverse-Z: 0) instead of
+    // keeping an earlier frame's contents.
+    if (stateOfView.targetDepth != nullptr && !stateOfView.depthCleared) {
+        state.commandList->clearDepthStencilTexture(
+          stateOfView.targetDepth,
+          nvrhi::AllSubresources,
+          true,
+          0.0f,
+          false,
+          0
+        );
+        stateOfView.depthCleared = true;
+    }
     ++state.stats.viewsRendered;
 }
 
@@ -1626,6 +1652,103 @@ void renderer::set_imgui_draw_data(ImDrawData *drawData) noexcept {
 /*===========================================================================*/
 // Readback
 
+namespace {
+
+    /// <summary>
+    /// A staging texture mapped for reading by map_staging; the caller unmaps it.
+    /// </summary>
+    struct mapped_staging {
+        const std::byte *rows = nullptr;
+        usize rowPitch = 0;
+    };
+
+    /// <summary>
+    /// Copies a whole texture of the given size into a new CPU-readable staging texture and waits for the
+    /// GPU. Fails with renderer_error::RESOURCE_CREATION_FAILED when the device refuses the staging texture
+    /// or the command list and with rhi_error::DEVICE_LOST when the device is lost during the wait. The
+    /// errors name 'caller'.
+    /// </summary>
+    [[nodiscard]] core::result<nvrhi::StagingTextureHandle> copy_to_staging(
+      renderer_state &state,
+      nvrhi::ITexture &texture,
+      math::uvec2 size,
+      std::string_view caller
+    ) {
+        nvrhi::TextureDesc stagingDesc = {};
+        stagingDesc.width = size.x;
+        stagingDesc.height = size.y;
+        stagingDesc.format = texture.getDesc().format;
+        stagingDesc.dimension = nvrhi::TextureDimension::Texture2D;
+        stagingDesc.mipLevels = 1;
+        stagingDesc.arraySize = 1;
+        stagingDesc.debugName = "read_back.staging";
+        nvrhi::StagingTextureHandle staging = state.device->createStagingTexture(
+          stagingDesc,
+          nvrhi::CpuAccessMode::Read
+        );
+        if (staging == nullptr) {
+            return core::make_error(
+              renderer_error::RESOURCE_CREATION_FAILED,
+              "{}: the device refused the staging texture",
+              caller
+            );
+        }
+        nvrhi::CommandListHandle commandList = state.device->createCommandList();
+        if (commandList == nullptr) {
+            return core::make_error(
+              renderer_error::RESOURCE_CREATION_FAILED,
+              "{}: the device refused a command list",
+              caller
+            );
+        }
+        commandList->open();
+        commandList->copyTexture(staging, nvrhi::TextureSlice(), &texture, nvrhi::TextureSlice());
+        commandList->close();
+        nvrhi::ICommandList *copyList = commandList.Get();
+        state.device->executeCommandLists(&copyList, 1);
+        state.desc.device->wait_idle();
+        if (state.desc.device->is_lost()) {
+            state.lost = true;
+            return device_lost_error();
+        }
+        return staging;
+    }
+
+    /// <summary>
+    /// Maps a staging texture copy_to_staging filled. Fails with rhi_error::DEVICE_LOST when the device was
+    /// lost and renderer_error::RESOURCE_CREATION_FAILED (naming 'caller') when it cannot be mapped.
+    /// </summary>
+    [[nodiscard]] core::result<mapped_staging> map_staging(
+      renderer_state &state,
+      nvrhi::IStagingTexture &staging,
+      std::string_view caller
+    ) {
+        size_t rowPitch = 0;
+        const void *mapped = state.device->mapStagingTexture(
+          &staging,
+          nvrhi::TextureSlice(),
+          nvrhi::CpuAccessMode::Read,
+          &rowPitch
+        );
+        // A blank image would read as a successful capture of a black frame (or an empty depth buffer).
+        if (mapped == nullptr) {
+            if (state.desc.device->is_lost()) {
+                state.lost = true;
+                return device_lost_error();
+            }
+            return core::make_error(
+              renderer_error::RESOURCE_CREATION_FAILED,
+              "{}: the staging texture could not be mapped",
+              caller
+            );
+        }
+        mapped_staging result = {};
+        result.rows = static_cast<const std::byte *>(mapped);
+        result.rowPitch = rowPitch;
+        return result;
+    }
+}
+
 core::result<core::image> renderer::read_back(render_target_id target) {
     impl &state = *mImpl;
     std::unique_ptr<render_target> *slot = state.targets.find(target);
@@ -1640,63 +1763,16 @@ core::result<core::image> renderer::read_back(render_target_id target) {
     const math::uvec2 size = targetState.desc.size;
     const rhi::texture_format format = targetState.desc.colourFormat;
 
-    nvrhi::TextureDesc stagingDesc = {};
-    stagingDesc.width = size.x;
-    stagingDesc.height = size.y;
-    stagingDesc.format = targetState.colour->getDesc().format;
-    stagingDesc.dimension = nvrhi::TextureDimension::Texture2D;
-    stagingDesc.mipLevels = 1;
-    stagingDesc.arraySize = 1;
-    stagingDesc.debugName = "read_back.staging";
-    nvrhi::StagingTextureHandle staging = state.device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-    if (staging == nullptr) {
-        return core::make_error(
-          renderer_error::RESOURCE_CREATION_FAILED,
-          "read_back: the device refused the staging texture"
-        );
-    }
-    nvrhi::CommandListHandle commandList = state.device->createCommandList();
-    if (commandList == nullptr) {
-        return core::make_error(
-          renderer_error::RESOURCE_CREATION_FAILED,
-          "read_back: the device refused a command list"
-        );
-    }
-    commandList->open();
-    commandList->copyTexture(staging, nvrhi::TextureSlice(), targetState.colour, nvrhi::TextureSlice());
-    commandList->close();
-    nvrhi::ICommandList *copyList = commandList.Get();
-    state.device->executeCommandLists(&copyList, 1);
-    state.desc.device->wait_idle();
-    if (state.desc.device->is_lost()) {
-        state.lost = true;
-        return device_lost_error();
-    }
-
-    size_t rowPitch = 0;
-    const void *mapped = state.device->mapStagingTexture(
-      staging,
-      nvrhi::TextureSlice(),
-      nvrhi::CpuAccessMode::Read,
-      &rowPitch
+    CONJURE_TRY_ASSIGN(
+      const nvrhi::StagingTextureHandle staging,
+      copy_to_staging(state, *targetState.colour, size, "read_back")
     );
-    // A blank image would read as a successful capture of a black frame.
-    if (mapped == nullptr) {
-        if (state.desc.device->is_lost()) {
-            state.lost = true;
-            return device_lost_error();
-        }
-        return core::make_error(
-          renderer_error::RESOURCE_CREATION_FAILED,
-          "read_back: the staging texture could not be mapped"
-        );
-    }
+    CONJURE_TRY_ASSIGN(const mapped_staging mapped, map_staging(state, *staging, "read_back"));
 
     core::image image(size.x, size.y);
-    const std::byte *rows = static_cast<const std::byte *>(mapped);
     const u32 bytesPerPixel = rhi::bytes_per_pixel(format);
     for (u32 y = 0; y < size.y; ++y) {
-        const std::byte *row = rows + static_cast<usize>(y) * rowPitch;
+        const std::byte *row = mapped.rows + static_cast<usize>(y) * mapped.rowPitch;
         for (u32 x = 0; x < size.x; ++x) {
             const std::byte *texel = row + static_cast<usize>(x) * bytesPerPixel;
             image.set_pixel(x, y, decode_read_back_texel(format, texel));
@@ -1704,6 +1780,46 @@ core::result<core::image> renderer::read_back(render_target_id target) {
     }
     state.device->unmapStagingTexture(staging);
     return image;
+}
+
+core::result<depth_read_back> renderer::read_back_depth(render_target_id target) {
+    impl &state = *mImpl;
+    std::unique_ptr<render_target> *slot = state.targets.find(target);
+    if (slot == nullptr || *slot == nullptr) {
+        return core::make_error(core::error_code::NOT_FOUND, "read_back_depth: unknown render target");
+    }
+    const render_target::impl &targetState = renderer_access::state(**slot);
+    if (targetState.depth == nullptr) {
+        return core::make_error(
+          core::error_code::INVALID_ARGUMENT,
+          "read_back_depth: the render target was created without depth"
+        );
+    }
+    if (state.lost || state.desc.device->is_lost()) {
+        state.lost = true;
+        return device_lost_error();
+    }
+    depth_read_back result = {};
+    result.size = targetState.desc.size;
+    const usize rowLength = static_cast<usize>(result.size.x);
+    result.depth.assign(rowLength * static_cast<usize>(result.size.y), 0.0f);
+    // A texture no view has rendered into has no defined contents on every backend: it reads as the far
+    // plane, as the header promises, without a copy.
+    if (targetState.depthOwnerFrame == 0) {
+        return result;
+    }
+
+    CONJURE_TRY_ASSIGN(
+      const nvrhi::StagingTextureHandle staging,
+      copy_to_staging(state, *targetState.depth, result.size, "read_back_depth")
+    );
+    CONJURE_TRY_ASSIGN(const mapped_staging mapped, map_staging(state, *staging, "read_back_depth"));
+    for (u32 y = 0; y < result.size.y; ++y) {
+        const std::byte *row = mapped.rows + static_cast<usize>(y) * mapped.rowPitch;
+        std::memcpy(result.depth.data() + static_cast<usize>(y) * rowLength, row, rowLength * sizeof(f32));
+    }
+    state.device->unmapStagingTexture(staging);
+    return result;
 }
 
 /*===========================================================================*/

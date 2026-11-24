@@ -35,6 +35,20 @@ namespace conjure::engine {
     };
 
     /// <summary>
+    /// How much the graphics device validates (rendering.gpuValidation; 06_engine_loop.md 2.3, code sweep F458).
+    /// The levels are ordered: a later one validates more. OFF creates the device without validation.
+    /// DEBUG_LAYER turns on the D3D12 debug layer or the Vulkan validation layers, plus NVRHI's own validation
+    /// layer (rhi::device_desc::enableDebugLayer). GPU_BASED adds D3D12 GPU-based validation
+    /// (rhi::device_desc::enableGpuValidation); the Vulkan and null backends ignore it, so there it validates
+    /// as DEBUG_LAYER does. engine_config::defaults() picks DEBUG_LAYER in a Debug build and OFF in the others.
+    /// </summary>
+    enum class gpu_validation_level : u8 {
+        OFF,
+        DEBUG_LAYER,
+        GPU_BASED
+    };
+
+    /// <summary>
     /// Which audio backend the audio engine uses. AUTO picks miniaudio and falls back to the null backend.
     /// </summary>
     enum class audio_backend_choice : u8 {
@@ -83,7 +97,7 @@ namespace conjure::engine {
     struct rendering_settings {
         bool enabled = true;
         rhi_backend_choice backend = rhi_backend_choice::AUTO;
-        bool gpuValidation = false;             // forced on in Debug by defaults()
+        gpu_validation_level gpuValidation = gpu_validation_level::OFF;    // DEBUG_LAYER in Debug by defaults()
         std::filesystem::path shaderDirectory = {};     // index.json location; empty = <executable>/shaders
 
         [[nodiscard]] bool operator==(const rendering_settings &) const = default;
@@ -209,7 +223,8 @@ namespace conjure::engine {
         memory_settings memory = {};
 
         /// <summary>
-        /// The desktop defaults of 06_engine_loop.md 2.3; gpuValidation is forced on in Debug builds.
+        /// The desktop defaults of 06_engine_loop.md 2.3; rendering.gpuValidation is DEBUG_LAYER in a Debug build
+        /// and OFF in the others.
         /// </summary>
         [[nodiscard]] static engine_config defaults();
 
@@ -254,6 +269,12 @@ namespace conjure::engine {
     [[nodiscard]] CONJURE_API std::string_view to_string(audio_backend_choice value) noexcept;
 
     /// <summary>
+    /// The lower-case name project.json uses for a level: "off", "debug_layer" or "gpu_based". The command line
+    /// spells the levels off, debug and gpu (--gpu-validation, command_line.h).
+    /// </summary>
+    [[nodiscard]] CONJURE_API std::string_view to_string(gpu_validation_level value) noexcept;
+
+    /// <summary>
     /// "framework-dependent" or "self-contained" (R39).
     /// </summary>
     [[nodiscard]] CONJURE_API std::string_view to_string(script_export_mode value) noexcept;
@@ -264,4 +285,10 @@ namespace conjure::engine {
     [[nodiscard]] CONJURE_API core::result<rhi_backend_choice> parse_rhi_backend_choice(std::string_view text);
     [[nodiscard]] CONJURE_API core::result<audio_backend_choice> parse_audio_backend_choice(std::string_view text);
     [[nodiscard]] CONJURE_API core::result<script_export_mode> parse_script_export_mode(std::string_view text);
+
+    /// <summary>
+    /// Parses the project.json names of a level ("off", "debug_layer", "gpu_based") case-insensitively. Fails
+    /// with BAD_ARGUMENTS for anything else, the command-line spellings debug and gpu included.
+    /// </summary>
+    [[nodiscard]] CONJURE_API core::result<gpu_validation_level> parse_gpu_validation_level(std::string_view text);
 }

@@ -47,7 +47,8 @@ namespace engine_test {
     [[nodiscard]] conjure::engine::engine_config inline_config();
 
     /// <summary>
-    /// Turns rendering on with the null device so extraction and render_frame run headless.
+    /// Turns rendering on with the null device so extraction and render_frame run headless, with GPU validation
+    /// OFF whatever the build's default level.
     /// </summary>
     void enable_null_rendering(conjure::engine::engine_config &config);
 

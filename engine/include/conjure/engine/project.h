@@ -132,7 +132,9 @@ namespace conjure::engine {
             /// log settings and projectPath are untouched. rendering.enabled, the rendering and audio
             /// backends, assets.hotReload, scripting.enabled and the window size are copied only when the
             /// config is not headless, so headless_defaults() survive a project (the command line turns
-            /// scripting back on with --scripting); audio.enabled is copied either way.
+            /// scripting back on with --scripting); audio.enabled is copied either way. rendering.gpuValidation
+            /// is only raised, to the higher of the two levels: a saved project always names one, usually OFF,
+            /// and that must not drop the debug layer of a Debug build (--gpu-validation sets any level).
             /// </summary>
             void apply_to(engine_config &config) const;
 

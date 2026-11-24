@@ -9,10 +9,19 @@
 #include "conjure/core/types.h"
 
 #include <memory>
+#include <vector>
 
 // Off-screen targets (docs/design/02_renderer.md 4.2, R12): the editor viewport and the AI agent's
 // screenshots render into one and read it back synchronously through renderer::read_back. Created,
 // resized and destroyed through the renderer; this class exposes only what the editor needs.
+//
+// A target created with depth keeps the scene depth of the frame (code sweep F384): the first view of a
+// frame that renders into the target uses the target's depth texture as its depth buffer instead of a
+// transient one and clears all of it, so renderer::read_back_depth reads what that view drew and the far
+// plane everywhere else, outside its viewport included. Further views of the same frame into the same
+// target (split screen, an overlay viewport) render with a transient depth buffer of their own and leave
+// the target's depth as the first view wrote it; a frame without a view into the target leaves it as the
+// last such frame did.
 
 namespace conjure::renderer {
 
@@ -21,9 +30,19 @@ namespace conjure::renderer {
     struct render_target_desc {
         math::uvec2 size = math::uvec2(0, 0);
         rhi::texture_format colourFormat = rhi::texture_format::RGBA8_SRGB;
-        bool withDepth = true;
+        bool withDepth = true;                  // keep the scene depth (32-bit float, reverse-Z) in the target
 
         [[nodiscard]] bool operator==(const render_target_desc &other) const noexcept = default;
+    };
+
+    /// <summary>
+    /// A render target's depth as renderer::read_back_depth returns it: size.x * size.y reverse-Z values
+    /// row by row from the top-left pixel, 1 at the near plane and 0 at the far plane, where nothing was
+    /// drawn and in a target no view has rendered into yet.
+    /// </summary>
+    struct depth_read_back {
+        math::uvec2 size = math::uvec2(0, 0);
+        std::vector<f32> depth = {};
     };
 
     class CONJURE_API render_target {
@@ -64,6 +83,10 @@ namespace conjure::renderer {
             /// </summary>
             [[nodiscard]] gpu_texture_id colour_texture() const noexcept;
 
+            /// <summary>
+            /// True when the target was created with render_target_desc::withDepth and so keeps the scene
+            /// depth of the first view of each frame that renders into it (renderer::read_back_depth).
+            /// </summary>
             [[nodiscard]] bool has_depth() const noexcept;
 
             /// <summary>

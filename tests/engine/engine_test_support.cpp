@@ -45,7 +45,7 @@ engine_config engine_test::inline_config() {
 void engine_test::enable_null_rendering(engine_config &config) {
     config.rendering.enabled = true;
     config.rendering.backend = rhi_backend_choice::NULL_DEVICE;
-    config.rendering.gpuValidation = false;
+    config.rendering.gpuValidation = gpu_validation_level::OFF;
 }
 
 bool engine_test::scripting_module_built() noexcept {

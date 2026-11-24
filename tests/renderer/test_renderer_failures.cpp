@@ -617,6 +617,47 @@ TEST_SUITE("renderer/failures") {
         fixture->destroy_render_target(target.value());
     }
 
+    TEST_CASE("failures - read_back_depth refuses unknown targets, targets without depth and a lost device") {
+        log_capture logs = {};
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(16, 16);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), target.value()));
+
+        SUBCASE("an unknown or destroyed target is NOT_FOUND") {
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(render_target_id()), core::error_code::NOT_FOUND);
+            fixture->destroy_render_target(target.value());
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(target.value()), core::error_code::NOT_FOUND);
+        }
+        SUBCASE("a target created without depth is INVALID_ARGUMENT, before and after a frame") {
+            desc.withDepth = false;
+            core::result<render_target_id> colourOnly = fixture->create_render_target(desc);
+            CONJURE_REQUIRE_OK(colourOnly);
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(colourOnly.value()), core::error_code::INVALID_ARGUMENT);
+            scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), colourOnly.value()));
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(colourOnly.value()), core::error_code::INVALID_ARGUMENT);
+            // The colour read-back of the same target is unaffected.
+            CONJURE_CHECK_OK(fixture->read_back(colourOnly.value()));
+        }
+        SUBCASE("a lost device is DEVICE_LOST, even for a target no view has rendered into") {
+            logs.allow_errors();
+            fixture->on_device_lost();
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(target.value()), rhi::rhi_error::DEVICE_LOST);
+        }
+        SUBCASE("a device lost while waiting for the copy is DEVICE_LOST and stays lost") {
+            logs.allow_errors();
+            CONJURE_REQUIRE_OK(fixture->render(scene));
+            fixture.device->inject_null_fault(rhi::null_fault::WAIT_IDLE);
+            CONJURE_CHECK_ERROR(fixture->read_back_depth(target.value()), rhi::rhi_error::DEVICE_LOST);
+            CHECK(fixture->is_lost());
+            CONJURE_CHECK_ERROR(fixture->render(scene), rhi::rhi_error::DEVICE_LOST);
+        }
+    }
+
     TEST_CASE("failures - a loss reported by the device itself is detected at the next render") {
         log_capture logs = {};
         logs.allow_errors();

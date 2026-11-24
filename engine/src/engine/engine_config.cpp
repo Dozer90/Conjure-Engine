@@ -28,7 +28,10 @@ namespace {
 
 engine_config engine_config::defaults() {
     engine_config config = {};
-    config.rendering.gpuValidation = CONJURE_DEBUG != 0;
+    // The cheap debug layer in Debug; GPU-based validation slows every frame down, so a run asks for it with
+    // --gpu-validation gpu or the project's "gpu_validation": "gpu_based" (code sweep F458).
+    config.rendering.gpuValidation =
+      CONJURE_DEBUG != 0 ? gpu_validation_level::DEBUG_LAYER : gpu_validation_level::OFF;
     return config;
 }
 
@@ -137,6 +140,18 @@ std::string_view conjure::engine::to_string(audio_backend_choice value) noexcept
     return "auto";
 }
 
+std::string_view conjure::engine::to_string(gpu_validation_level value) noexcept {
+    switch (value) {
+        case gpu_validation_level::OFF:
+            return "off";
+        case gpu_validation_level::DEBUG_LAYER:
+            return "debug_layer";
+        case gpu_validation_level::GPU_BASED:
+            return "gpu_based";
+    }
+    return "off";
+}
+
 std::string_view conjure::engine::to_string(script_export_mode value) noexcept {
     switch (value) {
         case script_export_mode::FRAMEWORK_DEPENDENT:
@@ -184,4 +199,20 @@ core::result<script_export_mode> conjure::engine::parse_script_export_mode(std::
         return script_export_mode::SELF_CONTAINED;
     }
     return make_error(engine_error::BAD_ARGUMENTS, std::format("unknown script export mode '{}'", text));
+}
+
+core::result<gpu_validation_level> conjure::engine::parse_gpu_validation_level(std::string_view text) {
+    if (core::str::iequals(text, "off")) {
+        return gpu_validation_level::OFF;
+    }
+    if (core::str::iequals(text, "debug_layer")) {
+        return gpu_validation_level::DEBUG_LAYER;
+    }
+    if (core::str::iequals(text, "gpu_based")) {
+        return gpu_validation_level::GPU_BASED;
+    }
+    return make_error(
+      engine_error::BAD_ARGUMENTS,
+      std::format("unknown gpu validation level '{}' (expected off, debug_layer or gpu_based)", text)
+    );
 }

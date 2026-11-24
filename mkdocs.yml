@@ -1111,6 +1111,7 @@ nav:
                   - "ssao_settings": handbook/engine/renderer/render-settings/ssao-settings.md
               - "render_target.h":
                   - handbook/engine/renderer/render-target.md
+                  - "depth_read_back": handbook/engine/renderer/render-target/depth-read-back.md
                   - "render_target": handbook/engine/renderer/render-target/render-target.md
                   - "render_target_desc": handbook/engine/renderer/render-target/render-target-desc.md
               - "renderer.h":

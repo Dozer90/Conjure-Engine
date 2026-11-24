@@ -45,6 +45,18 @@ enum class audio_backend_choice : u8 {
 
 Which audio backend the audio engine uses. <code>AUTO</code> picks miniaudio and falls back to the <code>null</code> backend.
 
+### `gpu_validation_level` {#symbol-gpu-validation-level}
+
+```cpp
+enum class gpu_validation_level : u8 {
+    OFF,
+    DEBUG_LAYER,
+    GPU_BASED
+};
+```
+
+How much the graphics device validates (<code>rendering.gpuValidation</code>). The levels are ordered: a later one validates more. <code>OFF</code> creates the device without validation. <code>DEBUG_LAYER</code> turns on the <code>D3D12</code> debug layer or the Vulkan validation layers, plus NVRHI&#x27;s own validation layer (<code>rhi::device_desc::enableDebugLayer</code>). <code>GPU_BASED</code> adds <code>D3D12</code> GPU-based validation (<code>rhi::device_desc::enableGpuValidation</code>); the Vulkan and <code>null</code> backends ignore it, so there it validates as <code>DEBUG_LAYER</code> does. <code>engine_config::defaults()</code> picks <code>DEBUG_LAYER</code> in a Debug build and <code>OFF</code> in the others.
+
 ### `rhi_backend_choice` {#symbol-rhi-backend-choice}
 
 ```cpp
@@ -86,6 +98,13 @@ How the exported managed runtime is published.
 <div class="function-declaration" id="function-parse-audio-backend-choice-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/result/result.html">core::result</a>&lt;<a href="engine-config.html#symbol-audio-backend-choice">audio_backend_choice</a>&gt; parse_audio_backend_choice(
     std::string_view text);</code></pre></div>
 
+#### `parse_gpu_validation_level` {#function-parse-gpu-validation-level}
+
+<div class="function-declaration" id="function-parse-gpu-validation-level-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/result/result.html">core::result</a>&lt;<a href="engine-config.html#symbol-gpu-validation-level">gpu_validation_level</a>&gt; parse_gpu_validation_level(
+    std::string_view text);</code></pre></div>
+
+<p>Parses the <code>project.json</code> names of a level (&quot;off&quot;, &quot;<code>debug_layer</code>&quot;, &quot;<code>gpu_based</code>&quot;) case-insensitively. Fails with <code>BAD_ARGUMENTS</code> for anything else, the command-line spellings debug and gpu included.</p>
+
 #### `parse_rhi_backend_choice` {#function-parse-rhi-backend-choice}
 
 <div class="function-declaration" id="function-parse-rhi-backend-choice-1"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> <a href="../core/result/result.html">core::result</a>&lt;<a href="engine-config.html#symbol-rhi-backend-choice">rhi_backend_choice</a>&gt; parse_rhi_backend_choice(
@@ -122,6 +141,11 @@ How the exported managed runtime is published.
     <a href="engine-config.html#symbol-audio-backend-choice">audio_backend_choice</a> value) <span class="k">noexcept</span>;</code></pre></div>
 
 <div class="function-declaration" id="function-to-string-3"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view to_string(
+    <a href="engine-config.html#symbol-gpu-validation-level">gpu_validation_level</a> value) <span class="k">noexcept</span>;</code></pre></div>
+
+<p>The lower-case name <code>project.json</code> uses for a level: &quot;off&quot;, &quot;<code>debug_layer</code>&quot; or &quot;<code>gpu_based</code>&quot;. The command line spells the levels off, debug and gpu (--gpu-validation, <code>command_line.h</code>).</p>
+
+<div class="function-declaration" id="function-to-string-4"><pre><code>[[<span class="na">nodiscard</span>]] <span class="na">CONJURE_API</span> std::string_view to_string(
     <a href="engine-config.html#symbol-script-export-mode">script_export_mode</a> value) <span class="k">noexcept</span>;</code></pre></div>
 
 <p>&quot;framework-dependent&quot; or &quot;self-contained&quot;.</p>

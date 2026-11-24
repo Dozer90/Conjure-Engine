@@ -77,6 +77,10 @@ namespace conjure::renderer {
         math::uvec2 targetSize = math::uvec2(1, 1);
         rhi::texture_format targetFormat = rhi::texture_format::RGBA8_SRGB;
         nvrhi::ITexture *targetTexture = nullptr;
+        // The render target's depth when this view owns it this frame (render_target.h): imported as the
+        // graph's depth instead of a transient one. Null for the swapchain, a target without depth and a
+        // later view of the frame into the same target.
+        nvrhi::ITexture *targetDepth = nullptr;
         gpu::view_constants constants = {};
         math::frustum frustum = {};
         bool postProcess = true;
@@ -136,6 +140,7 @@ namespace conjure::renderer {
             targetSize = math::uvec2(1, 1);
             targetFormat = rhi::texture_format::RGBA8_SRGB;
             targetTexture = nullptr;
+            targetDepth = nullptr;
             constants = gpu::view_constants{};
             frustum = math::frustum{};
             postProcess = true;
@@ -169,6 +174,8 @@ namespace conjure::renderer {
     /// Graph resources of the current view, filled by the passes that create or import them.
     /// </summary>
     struct view_graph_resources {
+        // The target's depth, imported before the passes when the view owns it (frame_view_state::targetDepth);
+        // otherwise a transient created by the first pass that needs a depth buffer.
         graph_resource depth = INVALID_GRAPH_RESOURCE;
         graph_resource viewNormals = INVALID_GRAPH_RESOURCE;
         graph_resource hdr = INVALID_GRAPH_RESOURCE;

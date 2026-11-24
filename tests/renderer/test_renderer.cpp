@@ -244,6 +244,56 @@ TEST_SUITE("renderer/renderer") {
         CONJURE_CHECK_OK(fixture->read_back(packed.value()));
     }
 
+    TEST_CASE("renderer - read_back_depth returns the target's depth size with zeros on the null device") {
+        headless_renderer fixture = make_headless_renderer();
+        render_target_desc desc = {};
+        desc.size = math::uvec2(24, 12);
+        core::result<render_target_id> target = fixture->create_render_target(desc);
+        CONJURE_REQUIRE_OK(target);
+        const auto expectFarPlane = [](const depth_read_back &depth, math::uvec2 size) {
+            CHECK(depth.size == size);
+            CHECK(depth.depth.size() == static_cast<usize>(size.x) * size.y);
+            bool allFar = true;
+            for (const f32 value : depth.depth) {
+                allFar = allFar && value == 0.0f;
+            }
+            CHECK(allFar);
+        };
+
+        // No view has rendered into the target yet: its texture has no defined contents on every backend,
+        // so the far plane is returned without a copy.
+        fixture.device->reset_null_stats();
+        core::result<depth_read_back> fresh = fixture->read_back_depth(target.value());
+        CONJURE_REQUIRE_OK(fresh);
+        expectFarPlane(fresh.value(), desc.size);
+        CHECK(fixture.device->null_stats().value().stagingTexturesCreated == 0);
+        CHECK(fixture.device->null_stats().value().textureCopies == 0);
+
+        // After a frame with a view into the target the depth texture is copied back.
+        render_scene scene = {};
+        scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 5.0f), math::vec3(0.0f), target.value()));
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        fixture.device->reset_null_stats();
+        core::result<depth_read_back> rendered = fixture->read_back_depth(target.value());
+        CONJURE_REQUIRE_OK(rendered);
+        expectFarPlane(rendered.value(), desc.size);
+        CHECK(fixture.device->null_stats().value().stagingTexturesCreated == 1);
+        CHECK(fixture.device->null_stats().value().textureCopies == 1);
+
+        // A resize replaces the depth texture: the new size, and no copy until a view renders again.
+        CONJURE_REQUIRE_OK(fixture->resize_render_target(target.value(), math::uvec2(8, 1)));
+        fixture.device->reset_null_stats();
+        core::result<depth_read_back> resized = fixture->read_back_depth(target.value());
+        CONJURE_REQUIRE_OK(resized);
+        expectFarPlane(resized.value(), math::uvec2(8, 1));
+        CHECK(fixture.device->null_stats().value().stagingTexturesCreated == 0);
+        CONJURE_REQUIRE_OK(fixture->render(scene));
+        core::result<depth_read_back> again = fixture->read_back_depth(target.value());
+        CONJURE_REQUIRE_OK(again);
+        expectFarPlane(again.value(), math::uvec2(8, 1));
+        CHECK(fixture.device->null_stats().value().stagingTexturesCreated == 1);
+    }
+
     TEST_CASE("render_stats - reset clears everything while executed and count query the pass names") {
         render_stats stats = {};
         CHECK(stats.viewsSkipped == 0);

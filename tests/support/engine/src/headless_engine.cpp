@@ -630,7 +630,7 @@ engine::engine_config headless_engine::build_config() const {
     if (mOptions.enableRenderer && !shaderDirectory.empty()) {
         config.rendering.enabled = true;
         config.rendering.backend = engine::rhi_backend_choice::NULL_DEVICE;
-        config.rendering.gpuValidation = false;
+        config.rendering.gpuValidation = engine::gpu_validation_level::OFF;
         config.rendering.shaderDirectory = shaderDirectory;
     }
 #endif

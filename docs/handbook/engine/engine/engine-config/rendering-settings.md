@@ -33,7 +33,7 @@ struct rendering_settings
 <tbody>
 <tr><td>public</td><td><code class="signature">backend</code></td><td><code class="signature"><a href="../engine-config.html#symbol-rhi-backend-choice">rhi_backend_choice</a></code></td><td><code class="signature">rhi_<wbr>backend_<wbr>choice::<wbr>AUTO</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">enabled</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">true</code></td><td></td></tr>
-<tr><td>public</td><td><code class="signature">gpu<wbr>Validation</code></td><td><code class="signature"><span class="k">bool</span></code></td><td><code class="signature">false</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">gpu<wbr>Validation</code></td><td><code class="signature"><a href="../engine-config.html#symbol-gpu-validation-level">gpu_validation_level</a></code></td><td><code class="signature">gpu_<wbr>validation_<wbr>level::<wbr>OFF</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">shader<wbr>Directory</code></td><td><code class="signature">std::filesystem::path</code></td><td><code class="signature">{}</code></td><td></td></tr>
 </tbody>
 </table>

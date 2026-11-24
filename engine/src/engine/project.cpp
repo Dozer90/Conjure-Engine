@@ -230,6 +230,30 @@ namespace {
         return core::result<void>::success();
     }
 
+    /// <summary>
+    /// Reads "gpu_validation": "off", "debug_layer" or "gpu_based". A boolean is the format before code sweep
+    /// F458, when true turned on GPU-based validation and false nothing: true reads as GPU_BASED and false as OFF.
+    /// </summary>
+    [[nodiscard]] core::result<void> read_gpu_validation(const value &section, gpu_validation_level &target) {
+        const value member = section["gpu_validation"];
+        if (!member.is_valid()) {
+            return core::result<void>::success();
+        }
+        if (member.is_bool()) {
+            target = member.as_bool() ? gpu_validation_level::GPU_BASED : gpu_validation_level::OFF;
+            return core::result<void>::success();
+        }
+        if (!member.is_string()) {
+            return invalid("rendering/gpu_validation", "expected \"off\", \"debug_layer\" or \"gpu_based\"");
+        }
+        core::result<gpu_validation_level> parsed = parse_gpu_validation_level(member.as_string());
+        if (!parsed.has_value()) {
+            return invalid("rendering/gpu_validation", parsed.get_error().message());
+        }
+        target = parsed.value();
+        return core::result<void>::success();
+    }
+
     [[nodiscard]] core::result<void> read_rendering(const value &root, rendering_settings &settings) {
         CONJURE_TRY_ASSIGN(const value section, read_object(root, "rendering"));
         if (!section.is_valid()) {
@@ -245,7 +269,7 @@ namespace {
             }
             settings.backend = parsed.value();
         }
-        CONJURE_TRY(read_bool(section, "gpu_validation", settings.gpuValidation));
+        CONJURE_TRY(read_gpu_validation(section, settings.gpuValidation));
         return core::result<void>::success();
     }
 
@@ -524,7 +548,7 @@ core::json::document project::to_json() const {
     core::json::document rendering = core::json::document::object();
     rendering.set("enabled", desc.rendering.enabled);
     rendering.set("backend", to_string(desc.rendering.backend));
-    rendering.set("gpu_validation", desc.rendering.gpuValidation);
+    rendering.set("gpu_validation", to_string(desc.rendering.gpuValidation));
     root.set("rendering", rendering);
 
     core::json::document audio = core::json::document::object();
@@ -610,7 +634,10 @@ void project::apply_to(engine_config &config) const {
     config.audio.speedOfSound = desc.audio.speedOfSound;
     config.audio.groups = desc.audio.groups;
     config.audio.enabled = desc.audio.enabled;
-    config.rendering.gpuValidation = desc.rendering.gpuValidation || config.rendering.gpuValidation;
+    // The project only raises the level: to_json always writes the key, so most saved projects name OFF, and
+    // reading that as a choice would switch off the debug layer a Debug build starts with. --gpu-validation,
+    // applied after this merge (D9), sets any level for one run (code sweep F458).
+    config.rendering.gpuValidation = std::max(desc.rendering.gpuValidation, config.rendering.gpuValidation);
     config.window.title = desc.window.title;
     config.window.fullscreen = desc.window.fullscreen;
     config.window.resizable = desc.window.resizable;

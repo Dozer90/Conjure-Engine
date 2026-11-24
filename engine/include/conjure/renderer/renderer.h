@@ -29,10 +29,10 @@
 // turns a render_scene into one command list per frame. Owns the render_scene_pair (R8), every GPU
 // mirror of the renderer asset types (R10), the render targets and the ImGui backend (R16).
 //
-// Threading: create, render, destroy, find_*, create_render_target, read_back and the extract calls
-// belong to the render thread (the main thread in v1). upload_* and release_* may be called from any
-// thread: the payload is copied at enqueue time and the GPU objects are created at the start of the
-// next render(). Culling, sorting and instance filling run on jobs inside render().
+// Threading: create, render, destroy, find_*, create_render_target, read_back, read_back_depth and the
+// extract calls belong to the render thread (the main thread in v1). upload_* and release_* may be called
+// from any thread: the payload is copied at enqueue time and the GPU objects are created at the start of
+// the next render(). Culling, sorting and instance filling run on jobs inside render().
 
 struct ImDrawData;
 
@@ -286,6 +286,17 @@ namespace conjure::renderer {
             /// renderer_error::RESOURCE_CREATION_FAILED when the staging texture cannot be created or mapped.
             /// </summary>
             [[nodiscard]] core::result<core::image> read_back(render_target_id target);
+
+            /// <summary>
+            /// Synchronous readback of a render target's depth (waits for the GPU): the scene depth the first
+            /// view of the last frame with a view into the target drew (render_target.h), reverse-Z. A target
+            /// no view has rendered into since its creation or last resize reads as all zeros (the far plane)
+            /// without a GPU copy, and on the null device every value is zero. Fails with NOT_FOUND
+            /// for an unknown target, INVALID_ARGUMENT for a target created without depth,
+            /// rhi_error::DEVICE_LOST on a lost device and renderer_error::RESOURCE_CREATION_FAILED when the
+            /// staging texture cannot be created or mapped. Render thread.
+            /// </summary>
+            [[nodiscard]] core::result<depth_read_back> read_back_depth(render_target_id target);
 
             /// <summary>
             /// Statistics of the last render().

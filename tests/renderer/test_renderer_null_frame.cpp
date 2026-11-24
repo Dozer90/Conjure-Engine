@@ -133,19 +133,6 @@ namespace {
         }
     }
 
-    [[nodiscard]] render_target_id make_target(
-      renderer_type &instance,
-      math::uvec2 size,
-      rhi::texture_format format = rhi::texture_format::RGBA8_SRGB
-    ) {
-        render_target_desc desc = {};
-        desc.size = size;
-        desc.colourFormat = format;
-        core::result<render_target_id> created = instance.create_render_target(desc);
-        CONJURE_REQUIRE_OK(created);
-        return created.value();
-    }
-
     [[nodiscard]] render_view grid_view(render_target_id target) {
         return look_at_view(math::vec3(0.0f, 30.0f, 20.0f), math::vec3(0.0f, 0.0f, -80.0f), target);
     }
@@ -612,9 +599,10 @@ TEST_SUITE("renderer/null_frame") {
     TEST_CASE("null_frame - a non-sRGB target adds the blit and a viewport restricts the view") {
         headless_renderer fixture = make_headless_renderer();
         const scene_assets assets = upload_assets(*fixture);
-        const render_target_id half = make_target(*fixture, math::uvec2(64, 64), rhi::texture_format::RGBA16_FLOAT);
-        const render_target_id unorm = make_target(*fixture, math::uvec2(64, 64), rhi::texture_format::RGBA8_UNORM);
-        const render_target_id srgb = make_target(*fixture, math::uvec2(64, 64));
+        const math::uvec2 size(64, 64);
+        const render_target_id half = make_target(*fixture, size, true, rhi::texture_format::RGBA16_FLOAT);
+        const render_target_id unorm = make_target(*fixture, size, true, rhi::texture_format::RGBA8_UNORM);
+        const render_target_id srgb = make_target(*fixture, size);
         render_scene scene = {};
         scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), half));
         scene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), unorm));
@@ -886,14 +874,24 @@ TEST_SUITE("renderer/null_frame") {
     ) {
         // Without opaque geometry the skybox runs before the prepass and creates (and clears) the depth
         // buffer. The prepass used to create a second one that nothing cleared, and forward_blend,
-        // the sprites and the debug lines tested against stale pooled depth.
+        // the sprites and the debug lines tested against stale pooled depth. A target with depth gives the
+        // view its own depth in place of a transient (code sweep F384), so neither pass creates one there:
+        // the targets without depth are the ones that pin the transient path.
+        bool withDepth = false;
+        SUBCASE("targets without depth: the skybox's transient depth is the only one") {
+            withDepth = false;
+        }
+        SUBCASE("targets with depth: the skybox binds and clears the imported depth") {
+            withDepth = true;
+        }
+        CAPTURE(withDepth);
         log_capture logs = {};
         headless_renderer withSky = make_headless_renderer();
         headless_renderer withoutSky = make_headless_renderer();
         const scene_assets skyAssets = upload_assets(*withSky);
         const scene_assets plainAssets = upload_assets(*withoutSky);
-        const render_target_id skyTarget = make_target(*withSky, math::uvec2(64, 64));
-        const render_target_id plainTarget = make_target(*withoutSky, math::uvec2(64, 64));
+        const render_target_id skyTarget = make_target(*withSky, math::uvec2(64, 64), withDepth);
+        const render_target_id plainTarget = make_target(*withoutSky, math::uvec2(64, 64), withDepth);
         render_scene skyScene = {};
         skyScene.views.push_back(look_at_view(math::vec3(0.0f, 0.0f, 6.0f), math::vec3(0.0f), skyTarget));
         skyScene.meshes.push_back(
@@ -912,9 +910,16 @@ TEST_SUITE("renderer/null_frame") {
         CHECK(sky.executed("skybox"));
         CHECK_FALSE(sky.executed("forward_opaque"));
         CHECK_FALSE(plain.executed("skybox"));
-        // The environment adds no depth buffer of its own: the same transients as without it.
+        // The environment adds no depth buffer of its own: the same transients as without it, and the one
+        // depth buffer of each view is cleared once.
         CHECK(sky.transientTexturesCreated > 0);
         CHECK(sky.transientTexturesCreated == plain.transientTexturesCreated);
+        const std::optional<rhi::null_device_stats> skyDevice = withSky.device->null_stats();
+        const std::optional<rhi::null_device_stats> plainDevice = withoutSky.device->null_stats();
+        REQUIRE(skyDevice.has_value());
+        REQUIRE(plainDevice.has_value());
+        CHECK(skyDevice->depthClears == 1);
+        CHECK(plainDevice->depthClears == 1);
 
         usize skybox = sky.passNames.size();
         usize prepass = sky.passNames.size();

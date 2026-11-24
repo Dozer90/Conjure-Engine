@@ -17,6 +17,7 @@ kind: header
 
 | File | Description |
 |---|---|
+| [`depth_read_back`](render-target/depth-read-back.md) | <code>A</code> render target&#x27;s depth as <code>renderer::read_back_depth</code> returns it: <code>size.x</code> * <code>size.y</code> reverse-<code>Z</code> values row by row from the top-left pixel, 1 at the near plane and 0 at the far plane, where nothing was drawn and in a target no view has rendered into yet. |
 | [`render_target_desc`](render-target/render-target-desc.md) |  |
 
 ## Classes

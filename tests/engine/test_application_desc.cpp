@@ -10,6 +10,8 @@
 #include "conjure/engine/engine_config.h"
 #include "conjure/engine/engine_error.h"
 
+#include <array>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
@@ -208,6 +210,50 @@ TEST_SUITE("engine/application_desc") {
         CHECK(config.window.width == 1024);
         CHECK(config.window.height == 720);
         CHECK(config.rendering.backend == rhi_backend_choice::NULL_DEVICE);
+    }
+
+    TEST_CASE("regression - code sweep F458 --gpu-validation sets the level over the build default and project.json") {
+        // Before F458 a Debug run could not turn validation off: project.json only raises the level and no flag
+        // existed. The base configuration names the level itself so the case runs the same in every build.
+        struct sample {
+            std::string_view name = {};
+            gpu_validation_level base = gpu_validation_level::OFF;
+            std::string_view projectLevel = {};         // the project.json value, JSON text
+            std::string_view flag = {};                 // empty = no --gpu-validation
+            gpu_validation_level merged = gpu_validation_level::OFF;
+        };
+        const std::array<sample, 5> samples = {{
+            {"off over a Debug default", gpu_validation_level::DEBUG_LAYER, R"("off")", "off",
+             gpu_validation_level::OFF},
+            {"off over a project asking for gpu_based", gpu_validation_level::DEBUG_LAYER, R"("gpu_based")", "off",
+             gpu_validation_level::OFF},
+            {"gpu over a project asking for the debug layer", gpu_validation_level::OFF, R"("debug_layer")", "gpu",
+             gpu_validation_level::GPU_BASED},
+            {"no flag: the project raises the default", gpu_validation_level::OFF, "true", "",
+             gpu_validation_level::GPU_BASED},
+            {"no flag: a saved off keeps the default", gpu_validation_level::DEBUG_LAYER, R"("off")", "",
+             gpu_validation_level::DEBUG_LAYER},
+        }};
+        for (const sample &entry : samples) {
+            CAPTURE(entry.name);
+            temp_directory directory("engine_desc_gpu_validation");
+            const std::string rendering = std::format(R"("rendering": {{ "gpu_validation": {} }})", entry.projectLevel);
+            const project loaded = engine_test::write_project(directory.path(), "validation", {}, rendering);
+            REQUIRE(loaded.description().name == "validation");
+
+            engine_config base = engine_config::defaults();
+            base.rendering.gpuValidation = entry.base;
+            const std::string projectArgument = directory.path().string();
+            std::vector<std::string_view> arguments = {"--project", projectArgument};
+            if (!entry.flag.empty()) {
+                arguments.emplace_back("--gpu-validation");
+                arguments.push_back(entry.flag);
+            }
+            const core::result<application_desc> desc =
+              application_desc::from_command_line(std::span<const std::string_view>(arguments), base);
+            CONJURE_REQUIRE_OK(desc);
+            CHECK(desc.value().config.rendering.gpuValidation == entry.merged);
+        }
     }
 
     TEST_CASE("application_desc - a missing project directory is PROJECT_NOT_FOUND") {

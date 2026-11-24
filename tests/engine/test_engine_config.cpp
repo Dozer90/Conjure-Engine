@@ -1,10 +1,15 @@
 #include "conjure/testing/doctest.h"
 
+#include "engine_test_support.h"
+
 #include "conjure/core/jobs/job_system.h"
 #include "conjure/core/platform_detect.h"
 #include "conjure/core/types.h"
+#include "conjure/engine/application.h"
 #include "conjure/engine/engine_config.h"
+#include "conjure/engine/engine_context.h"
 #include "conjure/engine/engine_error.h"
+#include "conjure/rhi/device.h"
 
 #if defined(CONJURE_WITH_AUDIO) && CONJURE_WITH_AUDIO
     #include "conjure/audio/audio_engine.h"
@@ -15,12 +20,15 @@
 #endif
 
 #include <array>
+#include <format>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 // engine_config.h (docs/design/06_engine_loop.md 2.3, D8, D9, D13): defaults, headless defaults, every
-// validate() rule, the worker-count resolution and the names of the two sections that feed a module's settings.
+// validate() rule, the worker-count resolution, the names of the two sections that feed a module's settings and
+// the GPU validation levels with the device flags each one starts (code sweep F458).
 
 using namespace conjure;
 using namespace conjure::engine;
@@ -198,13 +206,84 @@ TEST_SUITE("engine/engine_config") {
         CHECK(message.find(std::to_string(core::jobs::MAX_WORKER_COUNT)) != std::string::npos);
     }
 
-    TEST_CASE("engine_config - debug builds force GPU validation on") {
+    TEST_CASE("regression - code sweep F458 a Debug build defaults to the debug layer, not GPU-based validation") {
+        // GPU-based validation slows every frame down; a Debug run asks for it explicitly. The other
+        // configurations start without validation. headless_defaults() starts from defaults() and keeps the level.
         const engine_config config = engine_config::defaults();
+        const engine_config headless = engine_config::headless_defaults();
 #if CONJURE_DEBUG
-        CHECK(config.rendering.gpuValidation);
+        CHECK(config.rendering.gpuValidation == gpu_validation_level::DEBUG_LAYER);
 #else
-        CHECK_FALSE(config.rendering.gpuValidation);
+        CHECK(config.rendering.gpuValidation == gpu_validation_level::OFF);
 #endif
+        CHECK(headless.rendering.gpuValidation == config.rendering.gpuValidation);
+        // A section built by hand starts at OFF: the build default comes from defaults() alone.
+        const rendering_settings plain = {};
+        CHECK(plain.gpuValidation == gpu_validation_level::OFF);
+    }
+
+    TEST_CASE("engine_config - GPU validation levels are ordered and named as project.json spells them") {
+        // project::apply_to raises the level with std::max, which relies on this order.
+        CHECK(gpu_validation_level::OFF < gpu_validation_level::DEBUG_LAYER);
+        CHECK(gpu_validation_level::DEBUG_LAYER < gpu_validation_level::GPU_BASED);
+
+        const std::array<gpu_validation_level, 3> levels = {
+            gpu_validation_level::OFF, gpu_validation_level::DEBUG_LAYER, gpu_validation_level::GPU_BASED
+        };
+        const std::array<std::string_view, 3> names = {"off", "debug_layer", "gpu_based"};
+        for (usize index = 0; index < levels.size(); ++index) {
+            CAPTURE(index);
+            CHECK(to_string(levels[index]) == names[index]);
+            const core::result<gpu_validation_level> parsed = parse_gpu_validation_level(names[index]);
+            CONJURE_REQUIRE_OK(parsed);
+            CHECK(parsed.value() == levels[index]);
+        }
+
+        SUBCASE("the names parse in any case") {
+            const core::result<gpu_validation_level> upper = parse_gpu_validation_level("GPU_Based");
+            CONJURE_REQUIRE_OK(upper);
+            CHECK(upper.value() == gpu_validation_level::GPU_BASED);
+        }
+        SUBCASE("the command-line spellings, booleans and empty text are BAD_ARGUMENTS naming the value") {
+            const std::array<std::string_view, 6> refused = {"debug", "gpu", "true", "false", "", "debug layer"};
+            for (const std::string_view text : refused) {
+                CAPTURE(text);
+                const core::result<gpu_validation_level> parsed = parse_gpu_validation_level(text);
+                CONJURE_CHECK_ERROR(parsed, engine_error::BAD_ARGUMENTS);
+                REQUIRE_FALSE(parsed.has_value());
+                CHECK(parsed.get_error().message().find(std::format("'{}'", text)) != std::string::npos);
+            }
+        }
+    }
+
+    TEST_CASE("regression - code sweep F458 each GPU validation level starts the device with its own flags") {
+        // rhi_subsystem maps the level onto rhi::device_desc: OFF neither flag, DEBUG_LAYER the debug layer only
+        // (before F458 a Debug run always added GPU-based validation too), GPU_BASED both. The null device keeps
+        // the description it was created with, so the flags are visible here; only D3D12 acts on the second.
+        struct expectation {
+            gpu_validation_level level = gpu_validation_level::OFF;
+            bool debugLayer = false;
+            bool gpuBased = false;
+        };
+        expectation expected = {};
+        SUBCASE("off") {
+            expected = {gpu_validation_level::OFF, false, false};
+        }
+        SUBCASE("debug layer") {
+            expected = {gpu_validation_level::DEBUG_LAYER, true, false};
+        }
+        SUBCASE("gpu based") {
+            expected = {gpu_validation_level::GPU_BASED, true, true};
+        }
+        engine_config config = engine_test::inline_config();
+        engine_test::enable_null_rendering(config);
+        config.rendering.gpuValidation = expected.level;
+        application app(engine_test::make_desc(config));
+        CONJURE_REQUIRE_OK(app.initialise());
+        REQUIRE(app.context().device != nullptr);
+        CHECK(app.context().device->desc().enableDebugLayer == expected.debugLayer);
+        CHECK(app.context().device->desc().enableGpuValidation == expected.gpuBased);
+        app.shutdown();
     }
 
     TEST_CASE("engine_config - automatic worker count is hardware minus one clamped to the range") {

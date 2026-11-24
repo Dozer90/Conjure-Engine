@@ -305,7 +305,7 @@ CONJURE_BENCHMARK(engine.full_frame_10k_transform_render) {
     engine::engine_config config = frame_fixture::base_config(context);
     config.rendering.enabled = true;
     config.rendering.backend = engine::rhi_backend_choice::NULL_DEVICE;
-    config.rendering.gpuValidation = false;
+    config.rendering.gpuValidation = engine::gpu_validation_level::OFF;
     engine::application_desc desc = {};
     desc.config = config;
 
