@@ -1,11 +1,15 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Conjure;
 using Conjure.Components;
 using Conjure.Dod;
 using Conjure.Interop;
+using Conjure.Runtime;
 
 namespace Conjure.TestScripts;
 
@@ -36,6 +40,46 @@ internal static class ProbeSupport
             return exception.GetType().Name;
         }
     }
+
+    /// <summary>
+    /// Runs 'action' and returns "Type: message" of the exception, or "none".
+    /// </summary>
+    public static string CatchWithMessage(Action action)
+    {
+        try
+        {
+            action();
+            return "none";
+        }
+        catch (Exception exception)
+        {
+            return exception.GetType().Name + ": " + exception.Message;
+        }
+    }
+
+    /// <summary>
+    /// A value in thousandths, rounded: the probes report numbers as integers so the text is the same in every
+    /// culture and the native test compares it exactly.
+    /// </summary>
+    public static int Thousandths(float value) => (int)MathF.Round(value * 1000.0f);
+
+    /// <summary>
+    /// The values in thousandths, comma separated ("1000,0,-500").
+    /// </summary>
+    public static string Join(params float[] values)
+    {
+        string text = "";
+        for (int index = 0; index < values.Length; ++index)
+        {
+            text += (index > 0 ? "," : "") + Thousandths(values[index]);
+        }
+        return text;
+    }
+
+    /// <summary>
+    /// A vector as "x,y,z" in thousandths.
+    /// </summary>
+    public static string Axis(Vector3 value) => Join(value.X, value.Y, value.Z);
 }
 
 /// <summary>
@@ -237,7 +281,8 @@ public sealed class BindingAssetRefProbe : ScriptBehaviour
 
 /// <summary>
 /// Resolves every [NativeComponent] mirror against the native registry (layout hash included), reads the
-/// entity's LocalTransform and adds a RigidBodyData.
+/// entity's LocalTransform, adds a RigidBodyData and round-trips a Sprite: AddComponent writes the bytes the native
+/// test reads, GetComponent reads them back (SpriteRead lists what it saw).
 /// </summary>
 public sealed class BindingMirrorProbe : ScriptBehaviour
 {
@@ -246,6 +291,10 @@ public sealed class BindingMirrorProbe : ScriptBehaviour
     public string Unresolved = "";
     public int LocalTransformRead;
     public int RigidBodyAdded;
+    public string SpriteRead = "";
+    public int CameraExists = -1;
+    public string MainRay = "";
+    public string Errors = "";
     public int Ran;
 
     protected override void OnUpdate(float deltaTime)
@@ -276,11 +325,43 @@ public sealed class BindingMirrorProbe : ScriptBehaviour
         Check<CharacterControllerData>();
         Check<AudioSourceData>();
         Check<AudioListenerData>();
+        Check<Inactive>();
+        Check<Sprite>();
+        Check<CameraSettings>();
+        Check<Light>();
         LocalTransformRead = HasComponent<LocalTransform>() && GetComponent<LocalTransform>().Scale == Vector3.One ? 1 : 0;
         RigidBodyData body = RigidBodyData.Default;
         body.MotionType = MotionType.Static;
         Entity.AddComponent(in body);
         RigidBodyAdded = HasComponent<RigidBodyData>() ? 1 : 0;
+        // No entity carries a camera here; without the renderer Exists stays false and picking is not supported.
+        CameraExists = new Camera(Entity).Exists ? 1 : 0;
+        MainRay = ProbeSupport.Catch(() => Camera.Main.ScreenPointToRay(Vector2.Zero, out _));
+        try
+        {
+            RoundTripSprite();
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private void RoundTripSprite()
+    {
+        Sprite sprite = Sprite.Default;
+        sprite.UvRect = new Vector4(0.125f, 0.25f, 0.5f, 0.75f); // min u, min v, max u, max v
+        sprite.Colour = new Vector4(1.0f, 0.5f, 0.25f, 0.75f);
+        sprite.Size = new Vector2(2.0f, 3.0f);
+        sprite.Space = SpriteSpace.Screen;
+        sprite.Layer = -2;
+        sprite.Order = 7;
+        Entity.AddComponent(in sprite);
+        Sprite read = GetComponent<Sprite>();
+        SpriteRead = ProbeSupport.Join(read.UvRect.X, read.UvRect.Y, read.UvRect.Z, read.UvRect.W) + " " +
+            ProbeSupport.Join(read.Colour.X, read.Colour.Y, read.Colour.Z, read.Colour.W) + " " +
+            ProbeSupport.Join(read.Size.X, read.Size.Y) + " " + read.Space + " " + read.Layer + " " + read.Order + " " +
+            (read.Texture.IsNull ? "untextured" : "textured");
     }
 
     private void Check<T>() where T : unmanaged
@@ -292,6 +373,107 @@ public sealed class BindingMirrorProbe : ScriptBehaviour
             return;
         }
         Unresolved += typeof(T).Name + " ";
+    }
+}
+
+/// <summary>
+/// Adds Sprite.Default, CameraSettings.Default and Light.Default to the three entities the native test passes in,
+/// which then compares each with its default-constructed native component.
+/// </summary>
+public sealed class MirrorDefaultsProbe : ScriptBehaviour
+{
+    public Entity SpriteEntity;
+    public Entity CameraEntity;
+    public Entity LightEntity;
+    public string Errors = "";
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            SpriteEntity.AddComponent(Sprite.Default);
+            CameraEntity.AddComponent(CameraSettings.Default);
+            LightEntity.AddComponent(Light.Default);
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+}
+
+/// <summary>
+/// A deliberately wrong mirror of conjure.renderer.camera_data for NativeStructHashProbe only: the near and far
+/// planes are swapped, the same size and kinds, so the size check and a component lookup (which hashes only the
+/// top-level fields of the camera component) cannot see it. Nothing else uses it.
+/// </summary>
+[NativeStruct("conjure.renderer.camera_data")]
+[StructLayout(LayoutKind.Sequential)]
+public struct DriftedCameraData
+{
+    public ProjectionType Projection;
+    public float VerticalFovRadians;
+    public float OrthographicHeight;
+    public float FarPlane;
+    public float NearPlane;
+}
+
+/// <summary>
+/// Hashes every [NativeStruct] mirror with LayoutHash.ComputeFor so the native test can compare each with
+/// type_info::layout_hash() of the registered struct (the check the runtime does not make for nested structs).
+/// Shipped lists the mirrors of Conjure.Managed and Drifted those of this assembly (DriftedCameraData), both as
+/// "name=hash;" with the hash in 16 lower-case hex digits, sorted by type name.
+/// </summary>
+public sealed class NativeStructHashProbe : ScriptBehaviour
+{
+    public string Shipped = "";
+    public string Drifted = "";
+    public string Errors = "";
+    public int Ran;
+
+    protected override void OnUpdate(float deltaTime)
+    {
+        if (Ran > 0)
+        {
+            return;
+        }
+        Ran = 1;
+        try
+        {
+            Shipped = Hashes(typeof(NativeStructAttribute).Assembly);
+            Drifted = Hashes(typeof(NativeStructHashProbe).Assembly);
+        }
+        catch (Exception exception)
+        {
+            Errors += exception.GetType().Name + ": " + exception.Message + "\n";
+        }
+    }
+
+    private static string Hashes(Assembly assembly)
+    {
+        List<Type> mirrors = new List<Type>();
+        foreach (Type type in assembly.GetTypes())
+        {
+            if (type.IsDefined(typeof(NativeStructAttribute), false))
+            {
+                mirrors.Add(type);
+            }
+        }
+        mirrors.Sort((left, right) => string.CompareOrdinal(left.FullName, right.FullName));
+        string text = "";
+        foreach (Type mirror in mirrors)
+        {
+            NativeStructAttribute attribute = mirror.GetCustomAttribute<NativeStructAttribute>()!;
+            ulong hash = LayoutHash.ComputeFor(mirror);
+            text += attribute.RegisteredName + "=" + hash.ToString("x16", CultureInfo.InvariantCulture) + ";";
+        }
+        return text;
     }
 }
 
@@ -1137,26 +1319,26 @@ public sealed class WorldAxisProbe : ScriptBehaviour
             Conjure.Entity.CreateMany(1, children, Entity);
             Transform child = children[0].Transform;
 
-            Forward = Axis(child.Forward);
-            WorldForward = Axis(child.WorldForward);
-            WorldRight = Axis(child.WorldRight);
-            WorldUp = Axis(child.WorldUp);
+            Forward = ProbeSupport.Axis(child.Forward);
+            WorldForward = ProbeSupport.Axis(child.WorldForward);
+            WorldRight = ProbeSupport.Axis(child.WorldRight);
+            WorldUp = ProbeSupport.Axis(child.WorldUp);
 
             child.Scale = new Vector3(1.0f, 1.0f, -1.0f);
-            MirroredForward = Axis(child.WorldForward);
+            MirroredForward = ProbeSupport.Axis(child.WorldForward);
             child.Scale = new Vector3(1.0f, 1.0f, 0.0f);
-            CollapsedForward = Axis(child.WorldForward);
-            CollapsedRight = Axis(child.WorldRight);
+            CollapsedForward = ProbeSupport.Axis(child.WorldForward);
+            CollapsedRight = ProbeSupport.Axis(child.WorldRight);
             child.Scale = new Vector3(1.0f, 1.0f, 1e-7f);
-            TinyForward = Axis(child.WorldForward);
+            TinyForward = ProbeSupport.Axis(child.WorldForward);
             child.Scale = new Vector3(1.0f, 1.0f, 1e-23f);   // its squared length underflows to zero
-            FaintForward = Axis(child.WorldForward);
+            FaintForward = ProbeSupport.Axis(child.WorldForward);
             child.Scale = Vector3.One;
 
             Vector3 origin = child.World.Position;
             child.LookAt(origin + new Vector3(3.0f, 0.0f, 4.0f));
-            LookAtWorldForward = Axis(child.WorldForward);
-            LookAtForward = Axis(child.Forward);
+            LookAtWorldForward = ProbeSupport.Axis(child.WorldForward);
+            LookAtForward = ProbeSupport.Axis(child.Forward);
 
             Entity dead = ProbeSupport.Dead;
             DeadAxis = ProbeSupport.Catch(() => { _ = dead.Transform.WorldForward; });
@@ -1165,16 +1347,6 @@ public sealed class WorldAxisProbe : ScriptBehaviour
         {
             Errors += exception.GetType().Name + ": " + exception.Message + "\n";
         }
-    }
-
-    private static string Axis(Vector3 value)
-    {
-        return Thousandths(value.X) + "," + Thousandths(value.Y) + "," + Thousandths(value.Z);
-    }
-
-    private static int Thousandths(float value)
-    {
-        return (int)MathF.Round(value * 1000.0f);
     }
 }
 

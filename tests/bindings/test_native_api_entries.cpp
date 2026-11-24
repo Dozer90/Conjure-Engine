@@ -351,7 +351,10 @@ TEST_SUITE("bindings/native_api_entries") {
         CHECK_FALSE(group_available("camera", noWorld));
     }
 
-    TEST_CASE("native_api_entries - the entries this build has not implemented answer NOT_SUPPORTED by name") {
+    TEST_CASE(
+      "native_api_entries - entity_spawn answers NOT_SUPPORTED by name, the camera group is a stub without the "
+      "renderer"
+    ) {
         bare_fixture fixture = {};
         const conjure_native_api &api = fixture.api();
         clear_last_error();
@@ -366,21 +369,28 @@ TEST_SUITE("bindings/native_api_entries") {
         CHECK(last_error_message() == "entity_spawn: not implemented in this build");
         CHECK(spawned[0] == 0);
 
-        // camera_*: the implementation with the renderer, the stubs without it; NOT_SUPPORTED either way.
+        // camera_*: the implementation with the renderer (test_camera_bindings.cpp covers it), the stubs without it.
         CHECK(is_implementation_installed(api, native_function_id::camera_main) == group_compiled("camera"));
-        clear_last_error();
-        CHECK(api.camera_main() == 0);
-        CHECK(last_error_code() == bindings_error::NOT_SUPPORTED);
         const conjure_vec2 pixels = {1.0f, 2.0f};
         const conjure_vec3 point = {1.0f, 2.0f, 3.0f};
         conjure_vec3 origin = {};
         conjure_vec3 direction = {};
-        CHECK(api.camera_screen_ray(1, &pixels, &origin, &direction) == to_status(bindings_error::NOT_SUPPORTED));
-        CHECK(api.camera_screen_to_world(1, &point, &origin) == to_status(bindings_error::NOT_SUPPORTED));
-        CHECK(api.camera_world_to_screen(1, &point, &origin) == to_status(bindings_error::NOT_SUPPORTED));
+        clear_last_error();
+        CHECK(api.camera_main() == 0);
         if (group_compiled("camera")) {
-            CHECK(last_error_message() == "camera_world_to_screen: not implemented in this build");
+            // The real entries: no camera in the bare world is not an error; entity 1 is not alive.
+            CHECK(last_error_code() == bindings_error::NONE);
+            const int32_t notAlive = to_status(bindings_error::ENTITY_NOT_ALIVE);
+            CHECK(api.camera_screen_ray(1, &pixels, &origin, &direction) == notAlive);
+            CHECK(api.camera_screen_to_world(1, &point, &origin) == notAlive);
+            CHECK(api.camera_world_to_screen(1, &point, &origin) == notAlive);
+            CHECK(last_error_message() == "camera_world_to_screen");
         } else {
+            CHECK(last_error_code() == bindings_error::NOT_SUPPORTED);
+            const int32_t unsupported = to_status(bindings_error::NOT_SUPPORTED);
+            CHECK(api.camera_screen_ray(1, &pixels, &origin, &direction) == unsupported);
+            CHECK(api.camera_screen_to_world(1, &point, &origin) == unsupported);
+            CHECK(api.camera_world_to_screen(1, &point, &origin) == unsupported);
             CHECK(last_error_message() == "camera_world_to_screen: subsystem unavailable");
         }
         clear_last_error();

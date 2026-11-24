@@ -16,6 +16,8 @@
 #include "conjure/core/json/document.h"
 #include "conjure/core/json/value.h"
 #include "conjure/core/json/writer.h"
+#include "conjure/core/reflect/type_info.h"
+#include "conjure/core/reflect/type_registry.h"
 #include "conjure/core/string_id.h"
 #include "conjure/ecs/system_phase.h"
 #include "conjure/engine/application.h"
@@ -32,13 +34,19 @@
 #if defined(CONJURE_WITH_PHYSICS) && CONJURE_WITH_PHYSICS
     #include "conjure/physics/components.h"
 #endif
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    #include "conjure/renderer/components.h"
+    #include "engine/subsystems/renderer_components.h"
+#endif
 
+#include <charconv>
 #include <cstddef>
 #include <format>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -101,6 +109,43 @@ namespace {
             app().context().assets->add_source(std::move(owned));
         }
     };
+
+#if defined(CONJURE_WITH_RENDERER) && CONJURE_WITH_RENDERER
+    constexpr std::string_view NATIVE_STRUCT_HASH_PROBE = "Conjure.TestScripts.NativeStructHashProbe";
+    constexpr std::string_view MIRROR_DEFAULTS_PROBE = "Conjure.TestScripts.MirrorDefaultsProbe";
+
+    /// <summary>
+    /// One "name=hash;" pair of NativeStructHashProbe: a registered struct name and the C# layout hash.
+    /// </summary>
+    struct struct_hash {
+        std::string name = {};
+        u64 hash = 0;
+    };
+
+    /// <summary>
+    /// The pairs of a "name=hash;..." field (the hash in hex); a malformed pair fails the case.
+    /// </summary>
+    [[nodiscard]] std::vector<struct_hash> parse_struct_hashes(std::string_view text) {
+        std::vector<struct_hash> pairs = {};
+        while (!text.empty()) {
+            const usize end = text.find(';');
+            REQUIRE(end != std::string_view::npos);
+            const std::string_view pair = text.substr(0, end);
+            text.remove_prefix(end + 1);
+            const usize equals = pair.find('=');
+            REQUIRE(equals != std::string_view::npos);
+            const std::string_view digits = pair.substr(equals + 1);
+            struct_hash parsed = {};
+            parsed.name = std::string(pair.substr(0, equals));
+            const char *digitsEnd = digits.data() + digits.size();
+            const std::from_chars_result read = std::from_chars(digits.data(), digitsEnd, parsed.hash, 16);
+            REQUIRE(read.ec == std::errc{});
+            REQUIRE(read.ptr == digitsEnd);
+            pairs.push_back(std::move(parsed));
+        }
+        return pairs;
+    }
+#endif
 
     /// <summary>
     /// "Record.Field=offset;" for every field of the C records the managed side mirrors, in the order
@@ -358,14 +403,140 @@ TEST_SUITE("bindings/bindings_managed") {
         CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
         log_capture logs = {};
         managed_fixture fixture = {};
-        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), MIRROR_PROBE);
+        const ecs::entity entity = fixture.create("probe");
+        const scripting::script_entry_id probe = fixture.attach(entity, MIRROR_PROBE);
         const i64 total = fixture.field_i64(probe, "Total");
-        CHECK(total >= 20);
-        CHECK(fixture.field_i64(probe, "Resolved") == total);
-        CHECK(fixture.field_string(probe, "Unresolved").empty());
+        // 21 scene, physics and audio mirrors, then Inactive, Sprite, CameraSettings and Light.
+        CHECK(total >= 25);
         CHECK(fixture.field_i64(probe, "LocalTransformRead") == 1);
         CHECK(fixture.field_i64(probe, "RigidBodyAdded") == 1);
+        // The probe entity carries no camera in either build.
+        CHECK(fixture.field_i64(probe, "CameraExists") == 0);
         CHECK(logs.count(core::log_level::ERR) == 0);
+#if !defined(CONJURE_WITH_RENDERER) || !CONJURE_WITH_RENDERER
+        // Without the renderer its components are never registered: the three mirrors resolve to 0, the Sprite
+        // round trip throws, Camera.Exists stays false instead of throwing and the camera entries are stubs.
+        MESSAGE("this build has no renderer: its mirrors must stay unresolved; the Sprite round trip is skipped");
+        CHECK(fixture.field_i64(probe, "Resolved") == total - 3);
+        CHECK(fixture.field_string(probe, "Unresolved") == "Sprite CameraSettings Light ");
+        CHECK(fixture.field_string(probe, "Errors").starts_with("InvalidOperationException"));
+        CHECK(fixture.field_string(probe, "MainRay") == "NotSupportedException");
+#else
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "Resolved") == total);
+        CHECK(fixture.field_string(probe, "Unresolved").empty());
+        // No camera at all: Main is the null entity.
+        CHECK(fixture.field_string(probe, "MainRay") == "EntityNotAliveException");
+
+        // The Sprite round trip: the bytes C# wrote are the native sprite_component, and C# reads them back.
+        const std::string_view expectedSprite = "125,250,500,750 1000,500,250,750 2000,3000 Screen -2 7 untextured";
+        CHECK(fixture.field_string(probe, "SpriteRead") == expectedSprite);
+        const ecs::world &world = *fixture.app().context().world;
+        const renderer::sprite_component *sprite = world.get<renderer::sprite_component>(entity);
+        REQUIRE(sprite != nullptr);
+        CHECK(sprite->texture.id().is_null());
+        CHECK(sprite->uvRect == math::vec4(0.125f, 0.25f, 0.5f, 0.75f));
+        CHECK(sprite->colour == math::vec4(1.0f, 0.5f, 0.25f, 0.75f));
+        CHECK(sprite->size == math::vec2(2.0f, 3.0f));
+        CHECK(sprite->space == renderer::sprite_space::SCREEN);
+        CHECK(sprite->layer == -2);
+        CHECK(sprite->order == 7);
+#endif
+    }
+
+    TEST_CASE(
+      "bindings_managed - each renderer mirror's Default is the native default component [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+#if !defined(CONJURE_WITH_RENDERER) || !CONJURE_WITH_RENDERER
+        MESSAGE("this build has no renderer: Sprite, CameraSettings and Light have no native component to compare");
+#else
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const ecs::entity sprite = fixture.create("sprite");
+        const ecs::entity camera = fixture.create("camera");
+        const ecs::entity light = fixture.create("light");
+        const std::string entities = std::format(
+          R"({{"SpriteEntity":{},"CameraEntity":{},"LightEntity":{}}})",
+          sprite.to_u64(),
+          camera.to_u64(),
+          light.to_u64()
+        );
+        const scripting::script_entry_id probe =
+          fixture.attach(fixture.create("probe"), MIRROR_DEFAULTS_PROBE, 2, entities);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "Ran") == 1);
+        const ecs::world &world = *fixture.app().context().world;
+        const renderer::sprite_component *spriteComponent = world.get<renderer::sprite_component>(sprite);
+        REQUIRE(spriteComponent != nullptr);
+        CHECK(*spriteComponent == renderer::sprite_component{});
+        const renderer::camera_component *cameraComponent = world.get<renderer::camera_component>(camera);
+        REQUIRE(cameraComponent != nullptr);
+        CHECK(*cameraComponent == renderer::camera_component{});
+        const renderer::light_component *lightComponent = world.get<renderer::light_component>(light);
+        REQUIRE(lightComponent != nullptr);
+        CHECK(*lightComponent == renderer::light_component{});
+        CHECK(logs.count(core::log_level::ERR) == 0);
+#endif
+    }
+
+    TEST_CASE(
+      "bindings_managed - every [NativeStruct] mirror hashes like its registered native struct [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+#if !defined(CONJURE_WITH_RENDERER) || !CONJURE_WITH_RENDERER
+        MESSAGE("this build has no renderer: the shipped [NativeStruct] mirrors have no registered native struct");
+#else
+        log_capture logs = {};
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), NATIVE_STRUCT_HASH_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        CHECK(fixture.field_i64(probe, "Ran") == 1);
+        const std::vector<struct_hash> shipped = parse_struct_hashes(fixture.field_string(probe, "Shipped"));
+        // CameraData and LightData at least; a later nested mirror joins the list without a change here.
+        CHECK(shipped.size() >= 2);
+        for (const struct_hash &mirror : shipped) {
+            CAPTURE(mirror.name);
+            const core::reflect::type_info *native = core::reflect::registry().find(mirror.name);
+            // A name the registry does not know is a mirror of nothing: it fails too.
+            REQUIRE(native != nullptr);
+            CHECK(native->layout_hash() == mirror.hash);
+        }
+        CHECK(logs.count(core::log_level::ERR) == 0);
+#endif
+    }
+
+    TEST_CASE(
+      "bindings_managed - a drifted [NativeStruct] mirror hashes unlike its native struct [dotnet]" *
+      doctest::timeout(120)
+    ) {
+        CONJURE_TEST_REQUIRE(precondition::DOTNET_RUNTIME);
+#if !defined(CONJURE_WITH_RENDERER) || !CONJURE_WITH_RENDERER
+        MESSAGE("this build has no renderer: conjure.renderer.camera_data is not registered to compare with");
+#else
+        managed_fixture fixture = {};
+        const scripting::script_entry_id probe = fixture.attach(fixture.create("probe"), NATIVE_STRUCT_HASH_PROBE);
+        CHECK(fixture.field_string(probe, "Errors").empty());
+        // DriftedCameraData swaps the near and far planes: same size, same kinds, a different layout.
+        const std::vector<struct_hash> drifted = parse_struct_hashes(fixture.field_string(probe, "Drifted"));
+        REQUIRE(drifted.size() == 1);
+        CHECK(drifted.front().name == "conjure.renderer.camera_data");
+        const core::reflect::type_info *native = core::reflect::registry().find(drifted.front().name);
+        REQUIRE(native != nullptr);
+        CHECK(native->layout_hash() != drifted.front().hash);
+        const std::vector<struct_hash> shipped = parse_struct_hashes(fixture.field_string(probe, "Shipped"));
+        bool shippedSeen = false;
+        for (const struct_hash &mirror : shipped) {
+            if (mirror.name != drifted.front().name) {
+                continue;
+            }
+            shippedSeen = true;
+            CHECK(mirror.hash != drifted.front().hash);
+        }
+        CHECK(shippedSeen);
+#endif
     }
 
     TEST_CASE(

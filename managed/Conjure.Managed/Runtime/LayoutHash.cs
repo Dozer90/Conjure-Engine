@@ -52,8 +52,8 @@ public readonly struct ComponentFieldLayout
 /// <summary>
 /// The layout of an unmanaged struct as core::reflect describes it, and its layout hash: FNV-1a 64 over
 /// (name bytes, kind byte, offset u32 LE, size u32 LE) per field in declaration order, exactly as
-/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad&lt;digits&gt; of a [NativeComponent]
-/// mirror are padding and excluded; an [EcsComponent] struct keeps every field.
+/// type_info::layout_hash() (10_core.md 2.11, R61). Fields named Pad&lt;digits&gt; of a [NativeComponent] or
+/// [NativeStruct] mirror are padding and excluded; an [EcsComponent] struct keeps every field.
 ///
 /// Offsets and sizes are those of the managed (blittable) layout that Span&lt;T&gt;, sizeof(T) and the
 /// component_get/set copies use, never the marshalled one: Marshal.OffsetOf/SizeOf widen bool to 4 bytes
@@ -198,8 +198,8 @@ public static class LayoutHash
 
     /// <summary>
     /// The fields of an unmanaged struct in declaration order (the Pad&lt;digits&gt; fields of a
-    /// [NativeComponent] mirror excluded, see SkipsPadding). Throws InvalidOperationException for a field
-    /// type that cannot be described.
+    /// [NativeComponent] or [NativeStruct] mirror excluded, see SkipsPadding). Throws InvalidOperationException
+    /// for a field type that cannot be described.
     /// </summary>
     public static List<ComponentFieldLayout> Describe(Type structType)
     {
@@ -286,11 +286,22 @@ public static class LayoutHash
     }
 
     /// <summary>
-    /// True when the struct's Pad&lt;digits&gt; fields are padding (R61): only a [NativeComponent] mirror
-    /// spells out a native type's padding. An [EcsComponent] (or any other) struct keeps every field in its
-    /// layout, so a user field named Pad1 is stored, saved and counted in the alignment like any other.
+    /// True when the struct's Pad&lt;digits&gt; fields are padding (R61): only a mirror of a native type, a
+    /// [NativeComponent] or a nested [NativeStruct], spells out the native padding (or an unreflected native
+    /// field). An [EcsComponent] (or any other) struct keeps every field in its layout, so a user field named
+    /// Pad1 is stored, saved and counted in the alignment like any other.
     /// </summary>
-    public static bool SkipsPadding(Type structType) => structType.IsDefined(typeof(NativeComponentAttribute), false);
+    public static bool SkipsPadding(Type structType) =>
+        structType.IsDefined(typeof(NativeComponentAttribute), false)
+        || structType.IsDefined(typeof(NativeStructAttribute), false);
+
+    /// <summary>
+    /// type_info::layout_hash() of a mirror: Compute(Describe(structType)), so the Pad&lt;digits&gt; fields of a
+    /// [NativeComponent] or [NativeStruct] mirror take no part. A struct without fields gives the FNV-1a offset
+    /// basis, what a reflected struct without fields hashes to (a native tag has no reflection at all, which
+    /// component lookups send as 0 instead). Throws InvalidOperationException as Describe does.
+    /// </summary>
+    public static ulong ComputeFor(Type structType) => Compute(Describe(structType));
 
     /// <summary>
     /// True for the padding fields excluded from a mirror's layout (R61): "Pad" followed by digits only, so a

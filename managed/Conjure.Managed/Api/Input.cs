@@ -39,7 +39,16 @@ public static unsafe partial class Input
     /// </summary>
     public static bool IsKeyHeld(Key key) => IsKeyDown(key) && !IsKeyPressed(key);
 
+    /// <summary>
+    /// The cursor position in logical window units (origin top-left, y down).
+    /// </summary>
     public static Vector2 MousePosition => Frame == null ? Vector2.Zero : new Vector2(Frame->Input.MouseX, Frame->Input.MouseY);
+
+    /// <summary>
+    /// MousePosition in game screen pixels (Screen.LogicalToPixels), the coordinates Camera picking and Screen
+    /// sprites use.
+    /// </summary>
+    public static Vector2 MouseScreenPosition => Screen.LogicalToPixels(MousePosition);
 
     public static Vector2 MouseDelta => Frame == null ? Vector2.Zero : new Vector2(Frame->Input.MouseDx, Frame->Input.MouseDy);
 

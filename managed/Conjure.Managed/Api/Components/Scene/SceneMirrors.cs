@@ -90,6 +90,17 @@ public struct Disabled : IComponent
 }
 
 /// <summary>
+/// Mirror of the scene.inactive tag: on every descendant of a disabled entity. The scene adds and removes it
+/// when an ancestor's Disabled changes, so scripts read it (Entity.IsActiveInHierarchy, a query exclusion) and
+/// never add or remove it themselves.
+/// </summary>
+[NativeComponent("conjure.scene.inactive")]
+[StructLayout(LayoutKind.Sequential)]
+public struct Inactive : IComponent
+{
+}
+
+/// <summary>
 /// Mirror of the scene.transform_dirty tag: set by structural changes, cleared by propagation.
 /// </summary>
 [NativeComponent("conjure.scene.transform_dirty")]

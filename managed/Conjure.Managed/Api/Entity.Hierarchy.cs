@@ -94,6 +94,16 @@ public readonly partial struct Entity
     }
 
     /// <summary>
+    /// True when the entity is alive, enabled itself (no Disabled) and under no disabled ancestor (no Inactive):
+    /// the state the renderer's extraction and Camera.Main honour. False for a dead entity and for one
+    /// reserved in the current ComponentQuery scope until the scope closes. A change made inside a query scope
+    /// shows once the scope closes, when the scene applies it. In a world without scenes, where the two tags are
+    /// not registered, no entity can carry them and every live entity is active (engine::find_main_camera reads
+    /// the world the same way).
+    /// </summary>
+    public bool IsActiveInHierarchy => IsAlive && !CarriesRegistered<Disabled>() && !CarriesRegistered<Inactive>();
+
+    /// <summary>
     /// The gameplay tag's text: "" without a tag, for a dead entity, and for a tag that has a hash but no
     /// interned text natively (one written as a StringId.Of value into the Tag component; TagId still tells
     /// it apart). Setting it tags the entity (scene.tag; "" or null removes the tag) and throws
@@ -141,6 +151,9 @@ public readonly partial struct Entity
     /// </summary>
     [Obsolete("use Tag")]
     public void SetTag(string tag) => Tag = tag;
+
+    // A component the world never registered cannot be on the entity; HasComponent would throw for it.
+    private bool CarriesRegistered<T>() where T : unmanaged => ComponentType<T>.Id != 0 && HasComponent<T>();
 
     /// <summary>
     /// The Tag setter: scene.tag through entity_set_tag ("" or null removes it); EntityNotAliveException for a
