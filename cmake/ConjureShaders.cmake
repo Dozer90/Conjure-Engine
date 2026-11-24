@@ -17,7 +17,7 @@
 #   DXIL  (CONJURE_RHI_D3D12)   dxc -T <vs|ps|cs>_6_5 -E <entry> -HV 2018 -Zpr -WX -D CONJURE_D3D12=1
 #                               -D<defines> -I <dirs> -Fo <out>.dxil, plus -Zi -Qembed_debug in Debug/Development
 #                               and -O3 in Distribution; a second dxc run with -MF <out>.d writes the depfile
-#                               (dxc 1.8 treats -MF / -MD as dependency-only modes and compiles nothing)
+#                               (dxc 1.8 and 1.9 treat -MF / -MD as dependency-only modes and compile nothing)
 #   SPIR-V (CONJURE_RHI_VULKAN) glslang -D -S <vert|frag|comp> -e <entry> -V --target-env vulkan1.2 --hlsl-iomap
 #                               --auto-map-locations with NVRHI's default binding shifts (t:0 s:128 b:256 u:384,
 #                               SSBO 0) -DCONJURE_VULKAN=1 -D<defines> -I<dirs> --depfile <out>.d -o <out>.spv
@@ -31,6 +31,16 @@
 # changes when the source or a listed header changes; headers found only through depfiles are not
 # part of it, which is why engine/shaders lists every .hlsli explicitly. rhi::shader_library reads it.
 #
+# Depfiles: under the Ninja and Makefile generators every blob's custom command carries DEPFILE <out>.d, so a
+# header found through #include rebuilds the blobs that include it. dxc writes its depfile without escaping a
+# space, and a checkout path with a space in it would split every path into files that do not exist and leave
+# every blob dirty on every build, so each dxc depfile (DXIL, and SPIR-V through dxc -spirv) is rewritten by
+# ConjureShaderDepfile.cmake in the same custom command: every path absolute and escaped as CMake's depfile
+# reader expects. glslang (15.1.0) escapes its own depfile and is left alone. CMake hands a '#' or '$' in a
+# path on to Ninja unescaped (CMake 4.3), so a header with one of those in its path still leaves its blobs
+# dirty under Ninja. Other generators (Visual Studio) rebuild a blob only when its source or a DEPENDENCIES
+# file changes.
+#
 # Compilers: dxc is looked up through CONJURE_DXC_EXECUTABLE, then the Windows SDK
 # (Windows Kits/10/bin/<version>/x64, newest first), the Vulkan SDK and PATH. glslang comes from the
 # glslang-standalone target when third_party fetched it (CONJURE_GLSLANG_EXECUTABLE), otherwise from
@@ -42,6 +52,7 @@ set(CONJURE_SPIRV_COMPILER "glslang" CACHE STRING "HLSL to SPIR-V compiler for t
 set_property(CACHE CONJURE_SPIRV_COMPILER PROPERTY STRINGS glslang dxc)
 
 set(CONJURE_SHADER_INDEX_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/ConjureShaderIndex.cmake")
+set(CONJURE_SHADER_DEPFILE_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/ConjureShaderDepfile.cmake")
 
 
 # Finds dxc.exe / dxc, preferring an explicit CONJURE_DXC_EXECUTABLE, then the newest Windows SDK.
@@ -199,9 +210,12 @@ function(conjure_add_shaders)
     endif()
 
     # Ninja and Makefile generators consume depfiles; the others fall back to the listed DEPENDENCIES.
+    # The dxc commands of a depfile generator also run ConjureShaderDepfile.cmake, so they depend on it.
     set(useDepfile FALSE)
+    set(depfileScriptDependency "")
     if(CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
         set(useDepfile TRUE)
+        set(depfileScriptDependency "${CONJURE_SHADER_DEPFILE_SCRIPT}")
     endif()
 
     set(includeArgumentsDxc "")
@@ -302,7 +316,8 @@ function(conjure_add_shaders)
                     ${dxcConfigFlags}
                 )
                 # dxc's -MF / -MD write the dependency list instead of compiling, so the depfile is a
-                # second invocation of the same command line.
+                # second invocation of the same command line; dxc escapes nothing in it, so
+                # ConjureShaderDepfile.cmake rewrites it before CMake reads it.
                 set(depfileCommand "")
                 set(depfileOption "")
                 if(useDepfile)
@@ -310,6 +325,10 @@ function(conjure_add_shaders)
                         COMMAND "${CONJURE_DXC_EXECUTABLE}" ${dxilArguments}
                             -Fo "${outputRelative}/${dxilRelative}" -MF "${outputRelative}/${blobStem}.dxil.d"
                             "${sourcePath}"
+                        COMMAND "${CMAKE_COMMAND}"
+                            -D "CONJURE_DEPFILE=${outputRelative}/${blobStem}.dxil.d"
+                            -D "CONJURE_DEPFILE_TARGET=${outputRelative}/${dxilRelative}"
+                            -P "${CONJURE_SHADER_DEPFILE_SCRIPT}"
                     )
                     set(depfileOption DEPFILE "${dxilOutput}.d")
                 endif()
@@ -319,7 +338,7 @@ function(conjure_add_shaders)
                         -Fo "${outputRelative}/${dxilRelative}"
                         "${sourcePath}"
                     ${depfileCommand}
-                    DEPENDS "${sourcePath}" ${ARG_DEPENDENCIES}
+                    DEPENDS "${sourcePath}" ${ARG_DEPENDENCIES} ${depfileScriptDependency}
                     ${depfileOption}
                     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
                     COMMENT "dxc ${blobStem} (${dxcProfile})"
@@ -352,6 +371,10 @@ function(conjure_add_shaders)
                             COMMAND "${CONJURE_DXC_EXECUTABLE}" ${spirvArguments}
                                 -Fo "${outputRelative}/${spirvRelative}" -MF "${outputRelative}/${blobStem}.spv.d"
                                 "${sourcePath}"
+                            COMMAND "${CMAKE_COMMAND}"
+                                -D "CONJURE_DEPFILE=${outputRelative}/${blobStem}.spv.d"
+                                -D "CONJURE_DEPFILE_TARGET=${outputRelative}/${spirvRelative}"
+                                -P "${CONJURE_SHADER_DEPFILE_SCRIPT}"
                         )
                     endif()
                     add_custom_command(
@@ -360,7 +383,7 @@ function(conjure_add_shaders)
                             -Fo "${outputRelative}/${spirvRelative}"
                             "${sourcePath}"
                         ${depfileCommand}
-                        DEPENDS "${sourcePath}" ${ARG_DEPENDENCIES}
+                        DEPENDS "${sourcePath}" ${ARG_DEPENDENCIES} ${depfileScriptDependency}
                         ${depfileOption}
                         WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
                         COMMENT "dxc -spirv ${blobStem} (${dxcProfile})"

@@ -83,3 +83,42 @@ target_include_directories(conjure_renderer_tests PRIVATE "${PROJECT_SOURCE_DIR}
 
 # Every public header of the module must compile on its own (build-only check, part of ALL).
 conjure_header_check(conjure_renderer)
+
+# The depfiles of the shader build (cmake/ConjureShaders.cmake), both under a scratch directory whose name has a
+# space: build.shader_depfile_rewrite runs cmake/ConjureShaderDepfile.cmake over handwritten depfiles case by case,
+# build.shader_depfile_no_rebuild builds a one-shader project six times with the compilers and backends of this
+# tree and fails when a build compiles a shader that nothing changed for, or misses one whose header changed. Only
+# the Ninja and Makefile generators read depfiles, so the second entry exists only under them.
+set(shaderDepfileTestRoot "${CMAKE_CURRENT_BINARY_DIR}/shader depfile tests")
+add_test(NAME build.shader_depfile_rewrite
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCONJURE_TEST_ROOT=${shaderDepfileTestRoot}"
+        "-DCONJURE_DEPFILE_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/ConjureShaderDepfile.cmake"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/shader_depfile_rewrite.cmake"
+)
+set_tests_properties(build.shader_depfile_rewrite PROPERTIES LABELS "build;renderer" TIMEOUT 60)
+
+if(CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+    # The probe compiles with the glslang this tree's shaders use (cmake/ConjureShaders.cmake, included by engine/).
+    set(shaderDepfileGlslang "")
+    if(CONJURE_RHI_VULKAN AND CONJURE_SPIRV_COMPILER STREQUAL "glslang")
+        conjure_find_glslang(shaderDepfileGlslang shaderDepfileGlslangDependency)
+    endif()
+    add_test(NAME build.shader_depfile_no_rebuild
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCONJURE_PROBE_ROOT=${shaderDepfileTestRoot}/probe"
+            "-DCONJURE_PROBE_CMAKE_DIR=${PROJECT_SOURCE_DIR}/cmake"
+            "-DCONJURE_PROBE_GENERATOR=${CMAKE_GENERATOR}"
+            "-DCONJURE_PROBE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            "-DCONJURE_RHI_D3D12=${CONJURE_RHI_D3D12}"
+            "-DCONJURE_RHI_VULKAN=${CONJURE_RHI_VULKAN}"
+            "-DCONJURE_SPIRV_COMPILER=${CONJURE_SPIRV_COMPILER}"
+            "-DCONJURE_DXC_EXECUTABLE=${CONJURE_DXC_EXECUTABLE}"
+            "-DCONJURE_GLSLANG_EXECUTABLE=${shaderDepfileGlslang}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/shader_depfile_probe.cmake"
+    )
+    set_tests_properties(build.shader_depfile_no_rebuild PROPERTIES LABELS "build;renderer" TIMEOUT 180)
+else()
+    message(STATUS "tests: build.shader_depfile_no_rebuild is not registered, the ${CMAKE_GENERATOR} generator reads "
+        "no depfiles")
+endif()
