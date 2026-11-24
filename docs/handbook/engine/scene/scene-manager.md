@@ -40,7 +40,7 @@ enum class load_mode : u8 {
 };
 ```
 
-Whether a load replaces the current content or adds to it.
+Whether a load replaces the current content or adds to it. Every load (load, <code>load_file</code>, <code>request_load</code> and <code>C</code># <code>Scene.Load</code>) replaces unless <code>ADDITIVE</code> is asked for.
 
 <!-- doc-content:notes:start -->
 

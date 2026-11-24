@@ -28,7 +28,7 @@ namespace conjure::physics {
 namespace {
 
     /// <summary>
-    /// The longest ray a query casts: maxDistance is clamped to it, so an infinite one means unlimited
+    /// The longest ray or sweep a query casts: maxDistance is clamped to it, so an infinite one means unlimited
     /// instead of scaling the direction into infinities and NaNs.
     /// </summary>
     constexpr f32 MAX_RAY_DISTANCE = 1.0e6f;
@@ -139,20 +139,21 @@ namespace {
     };
 
     /// <summary>
-    /// The closest shape cast hit with its entity resolved while the body is locked.
+    /// The closest shape cast hit with its entity resolved while the body is locked. distance is the
+    /// fraction of the sweep times its length in metres (the clamped maxDistance).
     /// </summary>
     class closest_cast_collector final : public JPH::CastShapeCollector {
         private:
             const JPH::Body *mBody = nullptr;
             math::vec3 mBaseOffset = math::vec3(0.0f);
-            f32 mLength = 0.0f;
+            f32 mDistance = 0.0f;
             bool mHasHit = false;
             shape_cast_hit mHit = {};
 
         public:
-            closest_cast_collector(const math::vec3 &baseOffset, f32 length) noexcept :
+            closest_cast_collector(const math::vec3 &baseOffset, f32 distance) noexcept :
                 mBaseOffset(baseOffset),
-                mLength(length) {}
+                mDistance(distance) {}
 
             [[nodiscard]] bool has_hit() const noexcept {
                 return mHasHit;
@@ -183,7 +184,7 @@ namespace {
                   math::vec3(0.0f, 1.0f, 0.0f)
                 );
                 mHit.fraction = result.mFraction;
-                mHit.distance = result.mFraction * mLength;
+                mHit.distance = result.mFraction * mDistance;
                 mHit.penetrationDepth = result.mPenetrationDepth;
                 mHit.layer = jolt::physics_layer_of(mBody->GetObjectLayer());
             }
@@ -398,6 +399,7 @@ std::optional<shape_cast_hit> physics_world::shape_cast(
   const cast_shape_desc &shapeDesc,
   const math::transform &start,
   const math::vec3 &direction,
+  f32 maxDistance,
   const query_filter &filter
 ) const {
     const state &s = *mState;
@@ -405,25 +407,26 @@ std::optional<shape_cast_hit> physics_world::shape_cast(
       !s.busy.load(std::memory_order_acquire),
       "physics_world::shape_cast during a push, step or pull (STEP_IN_PROGRESS)"
     );
-    if (s.busy.load(std::memory_order_acquire)) {
+    if (s.busy.load(std::memory_order_acquire) || !(maxDistance > 0.0f)) {
         return std::nullopt;
     }
     if (!is_finite(start.position) || !is_finite(start.rotation) || !is_finite(direction)) {
         return std::nullopt;
     }
-    const f32 length = glm::length(direction);
+    const f32 distance = std::min(maxDistance, MAX_RAY_DISTANCE);
+    const math::vec3 sweep = math::safe_normalize(direction) * distance;
     const body_record *ignored = s.find_row(filter.ignore);
     const jolt::broad_phase_mask_filter broadPhase(filter);
     const jolt::layer_mask_object_filter objectLayers(filter);
     const jolt::query_body_filter bodies(ignored == nullptr ? JPH::BodyID() : ignored->bodyId, filter.includeTriggers);
 
-    closest_cast_collector collector(start.position, length);
+    closest_cast_collector collector(start.position, distance);
     with_embedded_shape(shapeDesc, [&](const JPH::Shape &shape) {
         const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(
           &shape,
           JPH::Vec3::sOne(),
           jolt::to_jolt_matrix(start.position, start.rotation),
-          jolt::to_jolt(direction)
+          jolt::to_jolt(sweep)
         );
         const JPH::ShapeCastSettings settings = {};
         s.physicsSystem->GetNarrowPhaseQuery().CastShape(

@@ -286,6 +286,74 @@ TEST_SUITE("scene/scene_manager") {
         fixture.base.step();
     }
 
+    TEST_CASE("regression - code sweep F627 request_load replaces by default, as load and load_file do") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        const ecs::entity authored = fixture.base.create("authored");
+        const core::result<scene::scene_id> earlier = manager.load(fixture.sceneA, scene::load_mode::ADDITIVE);
+        CONJURE_REQUIRE_OK(earlier);
+        REQUIRE(fixture.scene().roots().size() == 3);
+        std::optional<scene::scene_id> loaded = std::nullopt;
+
+        SUBCASE("request_load") {
+            const scene::load_request_id request = manager.request_load(fixture.sceneB);
+            REQUIRE(request.is_valid());
+            fixture.base.assets.flush();
+            manager.apply_pending_loads();
+            CHECK(manager.pending_count() == 0);
+            loaded = manager.find_loaded(fixture.sceneB);
+        }
+        SUBCASE("load") {
+            const core::result<scene::scene_id> result = manager.load(fixture.sceneB);
+            CONJURE_REQUIRE_OK(result);
+            loaded = result.value();
+        }
+        SUBCASE("load_file") {
+            core::vfs::memory_file_system fs = {};
+            const std::string text = make_scene_text("beta", "b", 3, 20, fixture.blob, "{\"ambient\":0.9}");
+            CONJURE_REQUIRE_OK(fs.write_text_file("scenes/beta.scene.json", text));
+            const core::result<scene::scene_id> result = manager.load_file(fs, "scenes/beta.scene.json");
+            CONJURE_REQUIRE_OK(result);
+            loaded = result.value();
+        }
+
+        // The earlier scene and the authored entity are gone; the new scene's name and settings apply.
+        REQUIRE(loaded.has_value());
+        CHECK(manager.is_loaded(*loaded));
+        CHECK_FALSE(manager.is_loaded(earlier.value()));
+        CHECK(manager.loaded_scenes().size() == 1);
+        CHECK_FALSE(fixture.scene().contains(authored));
+        CHECK(fixture.scene().name() == "beta");
+        CHECK(fixture.scene().settings().root()["ambient"].as_f64() == doctest::Approx(0.9));
+        CHECK(fixture.scene().roots().size() == 3);
+        CHECK(fixture.base.world.entity_count() == 6);
+        fixture.base.step();
+    }
+
+    TEST_CASE("scene_manager - request_load with ADDITIVE keeps the loaded scenes and the authored entities") {
+        manager_fixture fixture = {};
+        scene::scene_manager &manager = fixture.manager();
+        const core::result<scene::scene_id> earlier = manager.load(fixture.sceneA, scene::load_mode::REPLACE);
+        CONJURE_REQUIRE_OK(earlier);
+        // Made after the REPLACE load, which would have dropped it.
+        const ecs::entity authored = fixture.base.create("authored");
+
+        const scene::load_request_id request = manager.request_load(fixture.sceneB, scene::load_mode::ADDITIVE);
+        REQUIRE(request.is_valid());
+        fixture.base.assets.flush();
+        manager.apply_pending_loads();
+
+        CHECK(manager.pending_count() == 0);
+        CHECK(manager.is_loaded(earlier.value()));
+        REQUIRE(manager.find_loaded(fixture.sceneB).has_value());
+        CHECK(manager.loaded_scenes().size() == 2);
+        CHECK(fixture.scene().contains(authored));
+        CHECK(fixture.scene().name() == "alpha");
+        CHECK(fixture.scene().settings().root()["ambient"].as_f64() == doctest::Approx(0.5));
+        CHECK(fixture.scene().roots().size() == 6);
+        fixture.base.step();
+    }
+
     TEST_CASE("scene_manager - unload destroys only that scene") {
         manager_fixture fixture = {};
         scene::scene_manager &manager = fixture.manager();

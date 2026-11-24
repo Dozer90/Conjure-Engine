@@ -89,9 +89,9 @@ namespace {
     }
 
     /// <summary>
-    /// A query's max_distance must be finite and non-negative: it scales the unit direction, so an infinity
-    /// would turn the zero components into NaN and a negative or NaN distance would cast backwards or nowhere.
-    /// Zero is allowed and misses.
+    /// A query's max_distance must be finite and non-negative: the protocol has no infinite ray (the world
+    /// would clamp one to 1e6 m), and a negative or NaN distance has no meaning. Zero is allowed and misses,
+    /// for a shape cast too (physics_world::shape_cast hits nothing without a positive distance).
     /// </summary>
     [[nodiscard]] bool valid_distance(native_function_id id, float distance, int32_t &status) noexcept {
         if (!std::isfinite(distance) || distance < 0.0f) {
@@ -276,7 +276,8 @@ int32_t conjure::bindings::entries::physics_shape_cast(const conjure_shape_query
     const std::optional<physics::shape_cast_hit> hit = world()->shape_cast(
       shape,
       start,
-      direction * query->ray.max_distance,
+      direction,
+      query->ray.max_distance,
       filter_of(query->ray.layer_mask, query->ray.ignore_entity)
     );
     if (!hit.has_value()) {

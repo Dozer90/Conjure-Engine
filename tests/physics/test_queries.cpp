@@ -27,6 +27,26 @@ namespace {
         ray.direction = math::vec3(0.0f, -1.0f, 0.0f);
         return ray;
     }
+
+    [[nodiscard]] physics::physics_settings settings_without_gravity() {
+        physics::physics_settings settings = test_settings();
+        settings.gravity = math::vec3(0.0f);
+        return settings;
+    }
+
+    /// <summary>
+    /// A static wall, 1 m thick and 10 m square, centred at x = 10 (a sweep along +x from the origin meets
+    /// its face at x = 9.5), stepped once so the queries see it.
+    /// </summary>
+    [[nodiscard]] ecs::entity spawn_wall(physics_fixture &fixture) {
+        const ecs::entity wall = fixture.spawn_box(
+          math::vec3(10.0f, 0.0f, 0.0f),
+          physics::motion_type::STATIC,
+          math::vec3(0.5f, 5.0f, 5.0f)
+        );
+        fixture.run_step();
+        return wall;
+    }
 }
 
 TEST_SUITE("physics/queries") {
@@ -207,9 +227,9 @@ TEST_SUITE("physics/queries") {
         const physics::cast_shape_desc sphere = physics::sphere_shape_desc{};
         math::transform start = {};
         start.position = math::vec3(0.0f, 10.0f, 0.0f);
-        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -infinity, 0.0f)).has_value());
+        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -infinity, 0.0f), 20.0f).has_value());
         start.rotation = math::quat(std::numeric_limits<f32>::quiet_NaN(), 0.0f, 0.0f, 0.0f);
-        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -20.0f, 0.0f)).has_value());
+        CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(0.0f, -1.0f, 0.0f), 20.0f).has_value());
     }
 
     TEST_CASE("overlap_sphere - finds exactly the bodies inside") {
@@ -256,15 +276,8 @@ TEST_SUITE("physics/queries") {
 
     TEST_CASE("shape_cast - a sphere stops at the wall with the analytic fraction") {
         for_each_job_mode([](core::jobs::job_system &jobs) {
-            physics::physics_settings settings = test_settings();
-            settings.gravity = math::vec3(0.0f);
-            physics_fixture fixture(jobs, settings);
-            const ecs::entity wall = fixture.spawn_box(
-              math::vec3(10.0f, 0.0f, 0.0f),
-              physics::motion_type::STATIC,
-              math::vec3(0.5f, 5.0f, 5.0f)
-            );
-            fixture.run_step();
+            physics_fixture fixture(jobs, settings_without_gravity());
+            const ecs::entity wall = spawn_wall(fixture);
             math::transform start = {};
             start.position = math::vec3(0.0f);
             physics::sphere_shape_desc sphere = {};
@@ -272,7 +285,8 @@ TEST_SUITE("physics/queries") {
             const std::optional<physics::shape_cast_hit> hit = fixture.physics.shape_cast(
               sphere,
               start,
-              math::vec3(20.0f, 0.0f, 0.0f)
+              math::vec3(1.0f, 0.0f, 0.0f),
+              20.0f
             );
             REQUIRE(hit.has_value());
             CHECK(hit->entity == wall);
@@ -282,14 +296,16 @@ TEST_SUITE("physics/queries") {
             CHECK(testing::approx_equal(hit->normal, math::vec3(-1.0f, 0.0f, 0.0f), 1.0e-2f));
             CHECK(hit->point.x == doctest::Approx(9.5f).epsilon(0.01));
             CHECK(hit->layer == 0);
-            CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(5.0f, 0.0f, 0.0f)).has_value());
+            CHECK(hit->penetrationDepth == 0.0f);
+            CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(1.0f, 0.0f, 0.0f), 5.0f).has_value());
 
             physics::box_shape_desc box = {};
             box.halfExtents = math::vec3(0.5f);
             const std::optional<physics::shape_cast_hit> boxHit = fixture.physics.shape_cast(
               box,
               start,
-              math::vec3(20.0f, 0.0f, 0.0f)
+              math::vec3(1.0f, 0.0f, 0.0f),
+              20.0f
             );
             REQUIRE(boxHit.has_value());
             CHECK(std::abs(boxHit->fraction - 0.45f) < 1.0e-2f);
@@ -297,11 +313,95 @@ TEST_SUITE("physics/queries") {
             const std::optional<physics::shape_cast_hit> capsuleHit = fixture.physics.shape_cast(
               capsule,
               start,
-              math::vec3(20.0f, 0.0f, 0.0f)
+              math::vec3(1.0f, 0.0f, 0.0f),
+              20.0f
             );
             REQUIRE(capsuleHit.has_value());
             CHECK(std::abs(capsuleHit->fraction - 0.45f) < 1.0e-2f);
         });
+    }
+
+    TEST_CASE("regression - code sweep F621 shape_cast takes a unit direction and a maxDistance like raycast") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, settings_without_gravity());
+        const ecs::entity wall = spawn_wall(fixture);
+        const physics::cast_shape_desc sphere = physics::sphere_shape_desc{0.5f};
+        const math::transform start = math::transform::from_position(math::vec3(0.0f));
+
+        SUBCASE("the length of the direction does not scale the sweep") {
+            // The sphere surface meets the wall face at x = 9.5, so its centre travels 9 m of the 20.
+            constexpr std::array<f32, 4> LENGTHS = {0.25f, 1.0f, 4.0f, 20.0f};
+            for (const f32 length : LENGTHS) {
+                CAPTURE(length);
+                const math::vec3 direction = math::vec3(length, 0.0f, 0.0f);
+                const std::optional<physics::shape_cast_hit> hit =
+                  fixture.physics.shape_cast(sphere, start, direction, 20.0f);
+                REQUIRE(hit.has_value());
+                CHECK(hit->entity == wall);
+                CHECK(std::abs(hit->fraction - 0.45f) < 1.0e-3f);
+                CHECK(std::abs(hit->distance - 9.0f) < 0.02f);
+                CHECK(std::abs(hit->distance - hit->fraction * 20.0f) < 1.0e-4f);
+                // 5 m stops short of the wall whatever the length of the direction.
+                CHECK_FALSE(fixture.physics.shape_cast(sphere, start, direction, 5.0f).has_value());
+            }
+        }
+
+        SUBCASE("an infinite maxDistance is clamped to 1e6 m and hits like a long finite one") {
+            const f32 infinity = std::numeric_limits<f32>::infinity();
+            const std::optional<physics::shape_cast_hit> unlimited =
+              fixture.physics.shape_cast(sphere, start, math::vec3(1.0f, 0.0f, 0.0f), infinity);
+            REQUIRE(unlimited.has_value());
+            CHECK(unlimited->entity == wall);
+            CHECK(std::abs(unlimited->distance - 9.0f) < 0.02f);
+            CHECK(std::abs(unlimited->distance - unlimited->fraction * 1.0e6f) < 1.0e-3f);
+            CHECK(testing::approx_equal(unlimited->normal, math::vec3(-1.0f, 0.0f, 0.0f), 1.0e-2f));
+        }
+
+        SUBCASE("a maxDistance that is not positive hits nothing, even from inside a body") {
+            // Both starts point away from the wall (-x), so a negative distance that reversed the sweep would
+            // send it towards the wall from the origin and deeper into it from inside, and either would hit.
+            const math::vec3 away = math::vec3(-1.0f, 0.0f, 0.0f);
+            const math::transform inside = math::transform::from_position(math::vec3(9.8f, 0.0f, 0.0f));
+            constexpr std::array<f32, 4> REFUSED = {0.0f, -0.0f, -20.0f, std::numeric_limits<f32>::quiet_NaN()};
+            for (usize index = 0; index < REFUSED.size(); ++index) {
+                CAPTURE(index);
+                CHECK_FALSE(fixture.physics.shape_cast(sphere, start, away, REFUSED[index]).has_value());
+                CHECK_FALSE(fixture.physics.shape_cast(sphere, inside, away, REFUSED[index]).has_value());
+            }
+        }
+    }
+
+    TEST_CASE("shape_cast - a zero direction sweeps along minus z and a start inside a body that sweeps deeper hits "
+              "at fraction 0") {
+        core::jobs::job_system jobs = {};
+        physics_fixture fixture(jobs, settings_without_gravity());
+        const ecs::entity wall = spawn_wall(fixture);
+        const physics::cast_shape_desc sphere = physics::sphere_shape_desc{0.5f};
+
+        SUBCASE("a zero direction takes the default direction of math::ray") {
+            // The +z face of the wall is at z = 5: from z = 15 the centre of the sphere travels 9.5 m along -z.
+            const math::transform start = math::transform::from_position(math::vec3(10.0f, 0.0f, 15.0f));
+            const std::optional<physics::shape_cast_hit> hit =
+              fixture.physics.shape_cast(sphere, start, math::vec3(0.0f), 20.0f);
+            REQUIRE(hit.has_value());
+            CHECK(hit->entity == wall);
+            CHECK(std::abs(hit->distance - 9.5f) < 0.02f);
+            CHECK(testing::approx_equal(hit->normal, math::vec3(0.0f, 0.0f, 1.0f), 1.0e-2f));
+            // The same start sweeping along +x misses the wall.
+            CHECK_FALSE(fixture.physics.shape_cast(sphere, start, math::vec3(1.0f, 0.0f, 0.0f), 20.0f).has_value());
+        }
+
+        SUBCASE("a shape that starts inside a body and sweeps deeper reports it at fraction 0") {
+            // At x = 9.8 the sphere reaches 0.8 m past the -x face of the wall (x = 9.5). Only the fraction and
+            // the distance are pinned: the normal and penetrationDepth of an overlapping start are approximate.
+            const math::transform inside = math::transform::from_position(math::vec3(9.8f, 0.0f, 0.0f));
+            const std::optional<physics::shape_cast_hit> hit =
+              fixture.physics.shape_cast(sphere, inside, math::vec3(1.0f, 0.0f, 0.0f), 20.0f);
+            REQUIRE(hit.has_value());
+            CHECK(hit->entity == wall);
+            CHECK(hit->fraction == 0.0f);
+            CHECK(hit->distance == 0.0f);
+        }
     }
 
     TEST_CASE("queries - triggers are excluded unless includeTriggers") {
@@ -325,7 +425,8 @@ TEST_SUITE("physics/queries") {
         CHECK_FALSE(fixture.physics.shape_cast(
           physics::sphere_shape_desc{},
           math::transform::from_position(math::vec3(-5.0f, 0.0f, 0.0f)),
-          math::vec3(10.0f, 0.0f, 0.0f)
+          math::vec3(1.0f, 0.0f, 0.0f),
+          10.0f
         ).has_value());
 
         physics::query_filter withTriggers = {};
@@ -339,7 +440,8 @@ TEST_SUITE("physics/queries") {
         CHECK(fixture.physics.shape_cast(
           physics::sphere_shape_desc{},
           math::transform::from_position(math::vec3(-5.0f, 0.0f, 0.0f)),
-          math::vec3(10.0f, 0.0f, 0.0f),
+          math::vec3(1.0f, 0.0f, 0.0f),
+          10.0f,
           withTriggers
         ).has_value());
 
@@ -393,7 +495,8 @@ TEST_SUITE("physics/queries") {
               probe.cast = fixture.physics.shape_cast(
                 physics::sphere_shape_desc{},
                 math::transform::from_position(math::vec3(0.0f, 10.0f, 0.0f)),
-                math::vec3(0.0f, -20.0f, 0.0f)
+                math::vec3(0.0f, -1.0f, 0.0f),
+                20.0f
               );
               probe.pose = fixture.physics.body_pose(ground);
           }

@@ -257,6 +257,26 @@ TEST_SUITE("bindings/physics_bindings") {
         CHECK(api.physics_raycast_all(&zero, hits.data(), 4) == 0);
     }
 
+    TEST_CASE("physics - a shape_cast with max_distance zero misses from inside a body") {
+        physics_fixture fixture = {};
+        conjure_native_api &api = fixture.base.api();
+        const ecs::entity ground = fixture.spawn_ground();
+        fixture.run_steps(1);
+        conjure_shape_query cast = {};
+        cast.ray = fixture.down_from(0.0f);            // the lower half of the sphere is inside the ground
+        cast.shape = static_cast<uint8_t>(conjure_cast_shape::SPHERE);
+        cast.rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+        cast.radius = 0.5f;
+        cast.ray.max_distance = 0.0f;
+        conjure_raycast_hit hit = {};
+        CHECK(api.physics_shape_cast(&cast, &hit) == 0);
+        // A positive distance, here sweeping down into the ground, reports the overlap at once.
+        cast.ray.max_distance = 1.0f;
+        REQUIRE(api.physics_shape_cast(&cast, &hit) == 1);
+        CHECK(hit.entity == ground.to_u64());
+        CHECK(hit.distance == 0.0f);
+    }
+
     TEST_CASE("physics - overlap counts follow the protocol") {
         physics_fixture fixture = {};
         conjure_native_api &api = fixture.base.api();

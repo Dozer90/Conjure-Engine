@@ -301,9 +301,9 @@ namespace conjure::physics {
             ) const;
 
             /// <summary>
-            /// The out.size() nearest hits along the ray, sorted by distance; returns the count written.
-            /// maxDistance is clamped to 1e6 m (infinity means unlimited); a non-finite origin or direction
-            /// hits nothing.
+            /// The out.size() nearest hits along the ray, sorted by distance. Returns the number written, at most
+            /// out.size(); a result equal to out.size() may be truncated. maxDistance is clamped to 1e6 m
+            /// (infinity means unlimited); a non-finite origin or direction hits nothing.
             /// </summary>
             [[nodiscard]] u32 raycast_all(
               const math::ray &ray,
@@ -313,7 +313,8 @@ namespace conjure::physics {
             ) const;
 
             /// <summary>
-            /// Entities whose bodies overlap the sphere, one entry per body, at most out.size().
+            /// Entities whose bodies overlap the sphere, one entry per body. Returns the number written, at most
+            /// out.size(); a result equal to out.size() may be truncated.
             /// </summary>
             [[nodiscard]] u32 overlap_sphere(
               const math::vec3 &center,
@@ -323,7 +324,8 @@ namespace conjure::physics {
             ) const;
 
             /// <summary>
-            /// Entities whose bodies overlap the oriented box, one entry per body, at most out.size().
+            /// Entities whose bodies overlap the oriented box, one entry per body. Returns the number written, at
+            /// most out.size(); a result equal to out.size() may be truncated.
             /// </summary>
             [[nodiscard]] u32 overlap_box(
               const math::vec3 &center,
@@ -334,13 +336,21 @@ namespace conjure::physics {
             ) const;
 
             /// <summary>
-            /// Sweeps the shape from start along direction (which includes the length); the closest hit.
-            /// A non-finite start or direction hits nothing.
+            /// Sweeps the shape from start along direction for maxDistance metres, as raycast casts its ray; the
+            /// closest hit, with hit.distance = hit.fraction * maxDistance. direction is normalised (its length
+            /// does not matter; a nearly zero one sweeps along -z, math::ray's default direction) and
+            /// maxDistance is clamped to 1e6 m (infinity means unlimited). A maxDistance that is not positive
+            /// (zero, negative or NaN) and a non-finite start or direction hit nothing. A shape that starts
+            /// overlapping a body is reported at fraction 0 for some directions only, and the normal and
+            /// penetrationDepth of that hit are approximate (often a depth of 0): the deepest penetration is not
+            /// computed, and a sweep that leads away from the body can skip it as a back face. Test a start
+            /// position with overlap_sphere or overlap_box instead.
             /// </summary>
             [[nodiscard]] std::optional<shape_cast_hit> shape_cast(
               const cast_shape_desc &shape,
               const math::transform &start,
               const math::vec3 &direction,
+              f32 maxDistance,
               const query_filter &filter = {}
             ) const;
 

@@ -236,7 +236,7 @@ class CONJURE_API physics_world
     std::span&lt;<a href="../../ecs/entity/entity.html">ecs::entity</a>&gt; out,
     <span class="k">const</span> <a href="../queries/query-filter.html">query_filter</a> &amp;filter = {}) <span class="k">const</span>;</code></pre></div>
 
-<p>Entities whose bodies overlap the oriented box, one entry per body, at most <code>out.size()</code>.</p>
+<p>Entities whose bodies overlap the oriented box, one entry per body. Returns the number written, at most <code>out.size()</code>; a result equal to <code>out.size()</code> may be truncated.</p>
 
 #### `overlap_sphere` {#function-overlap-sphere}
 
@@ -246,7 +246,7 @@ class CONJURE_API physics_world
     std::span&lt;<a href="../../ecs/entity/entity.html">ecs::entity</a>&gt; out,
     <span class="k">const</span> <a href="../queries/query-filter.html">query_filter</a> &amp;filter = {}) <span class="k">const</span>;</code></pre></div>
 
-<p>Entities whose bodies overlap the sphere, one entry per body, at most <code>out.size()</code>.</p>
+<p>Entities whose bodies overlap the sphere, one entry per body. Returns the number written, at most <code>out.size()</code>; a result equal to <code>out.size()</code> may be truncated.</p>
 
 #### `pull_transforms` {#function-pull-transforms}
 
@@ -280,7 +280,7 @@ class CONJURE_API physics_world
     std::span&lt;<a href="../queries/raycast-hit.html">raycast_hit</a>&gt; out,
     <span class="k">const</span> <a href="../queries/query-filter.html">query_filter</a> &amp;filter = {}) <span class="k">const</span>;</code></pre></div>
 
-<p>The <code>out.size()</code> nearest hits along the ray, sorted by distance; returns the count written. <code>maxDistance</code> is clamped to 1e6 m (infinity means unlimited); a non-finite origin or direction hits nothing.</p>
+<p>The <code>out.size()</code> nearest hits along the ray, sorted by distance. Returns the number written, at most <code>out.size()</code>; a result equal to <code>out.size()</code> may be truncated. <code>maxDistance</code> is clamped to 1e6 m (infinity means unlimited); a non-finite origin or direction hits nothing.</p>
 
 #### `set_angular_velocity` {#function-set-angular-velocity}
 
@@ -315,9 +315,10 @@ class CONJURE_API physics_world
     <span class="k">const</span> <a href="../queries.html#symbol-cast-shape-desc">cast_shape_desc</a> &amp;shape,
     <span class="k">const</span> <a href="../../core/math/transform/transform.html">math::transform</a> &amp;start,
     <span class="k">const</span> <a href="../../core/math/glm-types.html#symbol-vec3">math::vec3</a> &amp;direction,
+    <a href="../../core/types.html#symbol-f32">f32</a> maxDistance,
     <span class="k">const</span> <a href="../queries/query-filter.html">query_filter</a> &amp;filter = {}) <span class="k">const</span>;</code></pre></div>
 
-<p>Sweeps the shape from start along direction (which includes the length); the closest hit. <code>A</code> non-finite start or direction hits nothing.</p>
+<p>Sweeps the shape from start along direction for <code>maxDistance</code> metres, as raycast casts its ray; the closest hit, with <code>hit.distance</code> = <code>hit.fraction</code> * <code>maxDistance</code>. direction is normalised (its length does not matter; a nearly zero one sweeps along -z, <code><a href="../../core/math/ray/ray.html">math::ray</a></code>&#x27;s default direction) and <code>maxDistance</code> is clamped to 1e6 m (infinity means unlimited). <code>A</code> <code>maxDistance</code> that is not positive (zero, negative or NaN) and a non-finite start or direction hit nothing. <code>A</code> shape that starts overlapping a body is reported at fraction 0 for some directions only, and the normal and penetrationDepth of that hit are approximate (often a depth of 0): the deepest penetration is not computed, and a sweep that leads away from the body can skip it as a back face. Test a start position with <code>overlap_sphere</code> or <code>overlap_box</code> instead.</p>
 
 #### `sleep` {#function-sleep}
 

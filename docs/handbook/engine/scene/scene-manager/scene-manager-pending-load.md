@@ -34,7 +34,7 @@ struct pending_load
 <tr><td>public</td><td><code class="signature">asset</code></td><td><code class="signature"><a href="../../assets/asset-types.html#symbol-asset-id">assets::asset_id</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">handle</code></td><td><code class="signature"><a href="../../assets/asset-ref/asset-handle.html">assets::asset_handle</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>public</td><td><code class="signature">id</code></td><td><code class="signature"><a href="load-request-id.html">load_request_id</a></code></td><td><code class="signature">{}</code></td><td></td></tr>
-<tr><td>public</td><td><code class="signature">mode</code></td><td><code class="signature"><a href="../scene-manager.html#symbol-load-mode">load_mode</a></code></td><td><code class="signature">load_<wbr>mode::<wbr>ADDITIVE</code></td><td></td></tr>
+<tr><td>public</td><td><code class="signature">mode</code></td><td><code class="signature"><a href="../scene-manager.html#symbol-load-mode">load_mode</a></code></td><td><code class="signature">load_<wbr>mode::<wbr>REPLACE</code></td><td></td></tr>
 </tbody>
 </table>
 

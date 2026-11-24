@@ -33,7 +33,7 @@ namespace conjure::physics {
         math::vec3 point = math::vec3(0.0f);
         math::vec3 normal = math::vec3(0.0f);
         f32 distance = 0.0f;                              // metres along the ray
-        f32 fraction = 0.0f;                              // distance / maxDistance
+        f32 fraction = 0.0f;                              // distance / maxDistance (clamped to 1e6 m)
         u8 layer = 0;
         bool isTrigger = false;
 
@@ -47,9 +47,9 @@ namespace conjure::physics {
         ecs::entity entity = {};
         math::vec3 point = math::vec3(0.0f);              // contact point on the hit body
         math::vec3 normal = math::vec3(0.0f);             // points away from the hit body
-        f32 distance = 0.0f;                              // fraction * length(direction)
-        f32 fraction = 0.0f;
-        f32 penetrationDepth = 0.0f;                      // > 0 when the shape started inside the body
+        f32 distance = 0.0f;                              // metres the shape travelled along the direction
+        f32 fraction = 0.0f;                              // distance / maxDistance (clamped to 1e6 m)
+        f32 penetrationDepth = 0.0f;                      // 0 from a clear start, approximate (often 0) if overlapping
         u8 layer = 0;
 
         [[nodiscard]] bool operator==(const shape_cast_hit &) const = default;

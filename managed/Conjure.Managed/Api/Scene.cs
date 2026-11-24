@@ -27,7 +27,7 @@ public static unsafe class Scene
     }
 
     /// <summary>
-    /// Requests a scene by asset reference.
+    /// Requests a scene by asset reference; replaces the loaded scenes unless 'additive'.
     /// </summary>
     public static void Load(AssetRef<SceneAsset> scene, bool additive = false)
     {

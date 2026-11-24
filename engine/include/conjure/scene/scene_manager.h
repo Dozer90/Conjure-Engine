@@ -30,7 +30,8 @@
 namespace conjure::scene {
 
     /// <summary>
-    /// Whether a load replaces the current content or adds to it.
+    /// Whether a load replaces the current content or adds to it. Every load (load, load_file, request_load and
+    /// C# Scene.Load) replaces unless ADDITIVE is asked for.
     /// </summary>
     enum class load_mode : u8 {
         REPLACE,
@@ -107,7 +108,7 @@ namespace conjure::scene {
             struct pending_load {
                 load_request_id id = {};
                 assets::asset_id asset = {};
-                load_mode mode = load_mode::ADDITIVE;
+                load_mode mode = load_mode::REPLACE;
                 assets::asset_handle handle = {};
             };
 
@@ -196,11 +197,12 @@ namespace conjure::scene {
             );
 
             /// <summary>
-            /// Queues an asynchronous load applied by apply_pending_loads once the asset is resident.
+            /// Queues an asynchronous load applied by apply_pending_loads once the asset is resident. Like load
+            /// and load_file it replaces the loaded scenes and the authored entities unless mode is ADDITIVE.
             /// </summary>
             [[nodiscard]] load_request_id request_load(
               const assets::asset_id &id,
-              load_mode mode = load_mode::ADDITIVE
+              load_mode mode = load_mode::REPLACE
             );
 
             /// <summary>

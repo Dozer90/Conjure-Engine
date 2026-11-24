@@ -177,9 +177,9 @@ class CONJURE_API scene_manager
 
 <div class="function-declaration" id="function-request-load-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="load-request-id.html">load_request_id</a> request_load(
     <span class="k">const</span> <a href="../../assets/asset-types.html#symbol-asset-id">assets::asset_id</a> &amp;id,
-    <a href="../scene-manager.html#symbol-load-mode">load_mode</a> mode = load_mode::ADDITIVE);</code></pre></div>
+    <a href="../scene-manager.html#symbol-load-mode">load_mode</a> mode = load_mode::REPLACE);</code></pre></div>
 
-<p>Queues an asynchronous load applied by <code>apply_pending_loads</code> once the asset is resident.</p>
+<p>Queues an asynchronous load applied by <code>apply_pending_loads</code> once the asset is resident. Like load and <code>load_file</code> it replaces the loaded scenes and the authored entities unless mode is <code>ADDITIVE</code>.</p>
 
 #### `request_unload` {#function-request-unload}
 
