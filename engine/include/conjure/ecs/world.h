@@ -197,6 +197,7 @@ namespace conjure::ecs {
             // returned. world::clear() is the one point that returns the peak capacity to the heap.
             std::vector<flush_entry> mFlushPlan = {};
             std::vector<entity> mPlacedScratch = {};
+            std::vector<u64> mFlushDestroyed = {};          // a flush's destroy targets, when it instantiates
 
         public:
             explicit world(const component_registry &registry, world_desc desc = {});
@@ -418,8 +419,11 @@ namespace conjure::ecs {
             /// <summary>
             /// Applies a command buffer (01_ecs.md 3.4): one archetype move per touched entity,
             /// destroys last, observers for the mask delta only. Commands on dead or stale entities
-            /// are skipped and counted. The buffer is empty afterwards. A structural violation leaves
-            /// the buffer untouched and reports nothing applied.
+            /// are skipped and counted. A destroy of the root an instantiation of the same buffer returned
+            /// cancels that copy: the archive is not placed for it, its ids are handed back with a bumped
+            /// generation and the root never becomes alive, as a reserved id the buffer destroys. The buffer
+            /// is empty afterwards. A structural violation leaves the buffer untouched and reports nothing
+            /// applied.
             /// </summary>
             [[nodiscard]] flush_report flush(command_buffer &commands);
 
@@ -593,6 +597,9 @@ namespace conjure::ecs {
             // Flush and archives (world_structural.cpp, world_archive.cpp)
 
             [[nodiscard]] flush_report flush_internal(command_buffer &commands);
+            // Drops the copies of 'entry' whose root is in 'destroyed' (sorted ids): their inner ids are released,
+            // their roots stay reserved for the destroy that names them.
+            void cancel_destroyed_copies(command_buffer::instantiate_entry &entry, std::span<const u64> destroyed);
             [[nodiscard]] core::result<void> instantiate_now(
               const entity_archive &archive,
               std::span<const entity> ids,

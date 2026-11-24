@@ -256,6 +256,67 @@ TEST_SUITE("ecs/command_buffer") {
         CONJURE_CHECK_OK(world.validate());
     }
 
+    TEST_CASE("regression - code sweep OWN-P2 a destroy of an instantiation root in the same buffer cancels the copy") {
+        // A scene links the archive's inner entities to the root only after the flush, so the root's destroy cascade
+        // could not reach them in it: the copy is never placed, its ids come back and the root never becomes alive,
+        // as for a create the same buffer destroys. The other copies, of this record or another, are placed.
+        ecs_fixture fixture = {};
+        world &world = fixture.world;
+        std::array<entity, 3> sources = {};
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), sources));
+        core::result<entity_archive> captured = entity_archive::capture(world, sources);
+        CONJURE_REQUIRE_OK(captured);
+        const std::shared_ptr<const entity_archive> archive =
+          std::make_shared<const entity_archive>(std::move(captured).value());
+        u32 destroyedEvents = 0;
+        const observer_id watcher = world.observe_destroyed([&destroyedEvents](ecs::world &, entity, command_buffer &) {
+            ++destroyedEvents;
+        });
+        tracked::reset_counters();
+
+        command_buffer commands(world);
+        const core::result<entity> doomed = commands.instantiate(archive);
+        CONJURE_REQUIRE_OK(doomed);
+        commands.add<tracked>(doomed.value(), tracked(1));
+        commands.destroy_entity(doomed.value());
+        const core::result<entity> kept = commands.instantiate(archive);
+        CONJURE_REQUIRE_OK(kept);
+        std::array<entity, 3> batchRoots = {};
+        std::vector<entity> batchIds = {};
+        CONJURE_REQUIRE_OK(world.instantiate_batch(archive, batchRoots, &commands, &batchIds));
+        REQUIRE(batchIds.size() == 9);
+        commands.destroy_entity(batchRoots[1]);
+
+        const flush_report report = world.flush(commands);
+        CHECK(report.skipped == 0);
+        CHECK(destroyedEvents == 0);                 // nothing was placed for the cancelled copies
+        CHECK(tracked::live() == 0);                 // the add's payload went with the root
+        CHECK_FALSE(world.is_alive(doomed.value()));
+        CHECK_FALSE(world.is_alive(batchRoots[1]));
+        for (usize index = 3; index < 6; ++index) {
+            CAPTURE(index);
+            CHECK_FALSE(world.is_alive(batchIds[index]));
+        }
+        CHECK(world.is_alive(kept.value()));
+        CHECK(world.is_alive(batchRoots[0]));
+        CHECK(world.is_alive(batchRoots[2]));
+        CHECK(world.is_alive(batchIds[8]));
+        CHECK(world.entity_count() == 3 + 3 + 2 * 3);
+        CHECK(commands.empty());
+        CONJURE_CHECK_OK(world.validate());
+
+        // The cancelled ids were handed back with a bumped generation: no new entity aliases them.
+        std::vector<entity> fresh(64);
+        CONJURE_REQUIRE_OK(world.create_entities(fixture.mask<position>(), fresh));
+        for (const entity id : fresh) {
+            CHECK(id != doomed.value());
+            CHECK(id != batchRoots[1]);
+        }
+        CHECK_FALSE(world.is_alive(doomed.value()));
+        CONJURE_CHECK_OK(world.validate());
+        world.unobserve(watcher);
+    }
+
     TEST_CASE("command_buffer - instantiate entry points still refuse a corrupt archive") {
         // push_instantiate trusts its callers to validate; both entry points still do, before any id is
         // reserved or any command recorded.

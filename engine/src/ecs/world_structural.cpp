@@ -12,6 +12,7 @@
 #include "conjure/core/log.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -271,6 +272,37 @@ void world::discard_placed(entity target) {
     --mAliveCount;
 }
 
+void world::cancel_destroyed_copies(command_buffer::instantiate_entry &entry, std::span<const u64> destroyed) {
+    const usize count = entry.archive == nullptr ? 0 : static_cast<usize>(entry.archive->entity_count());
+    if (count == 0 || entry.ids.size() != count * entry.copies) {
+        return;
+    }
+    // Copy-major ids (copy * count + entry): the surviving copies close up in place, ahead of where they were.
+    u32 kept = 0;
+    for (u32 copy = 0; copy < entry.copies; ++copy) {
+        const usize first = static_cast<usize>(copy) * count;
+        if (!std::binary_search(destroyed.begin(), destroyed.end(), entry.ids[first].to_u64())) {
+            if (kept != copy) {
+                std::copy_n(
+                  entry.ids.begin() + static_cast<std::ptrdiff_t>(first),
+                  count,
+                  entry.ids.begin() + static_cast<std::ptrdiff_t>(static_cast<usize>(kept) * count)
+                );
+            }
+            ++kept;
+            continue;
+        }
+        // The root's destroy cascade could not reach the inner entities in this flush (a scene links them to the
+        // root only after it), so the copy is never placed. The root stays reserved: the plan entry of its destroy
+        // hands it back like any reserved id a destroy wins on, with the commands recorded on it.
+        for (usize index = 1; index < count; ++index) {
+            release_reserved(entry.ids[first + index]);
+        }
+    }
+    entry.ids.resize(static_cast<usize>(kept) * count);
+    entry.copies = kept;
+}
+
 void world::release_reserved(entity target) {
     // A reserved id that never became alive: hand it back with a bumped generation so the handle the
     // caller still holds can never alias the next occupant of the index. An index the record table has
@@ -517,6 +549,10 @@ flush_report world::flush_internal(command_buffer &commands) {
     u32 highest = 0;
     bool anyEntity = false;
     bool anyPlanned = false;
+    // The destroy targets, gathered only when the buffer instantiates: a destroy of a copy's root cancels it.
+    std::vector<u64> &destroyed = mFlushDestroyed;
+    destroyed.clear();
+    const bool instantiates = !commands.mInstantiates.empty();
     for (const record_type *command = commands.mFirst; command != nullptr; command = command->next) {
         if (command->op == opcode::INSTANTIATE) {
             for (const entity id : commands.mInstantiates[command->instantiateIndex].ids) {
@@ -530,7 +566,11 @@ flush_report world::flush_internal(command_buffer &commands) {
             highest = std::max(highest, command->target.index);
             anyEntity = true;
         }
+        if (instantiates && command->op == opcode::DESTROY) {
+            destroyed.push_back(command->target.to_u64());
+        }
     }
+    std::sort(destroyed.begin(), destroyed.end());
     if (anyEntity) {
         const core::result<void> records = ensure_records(highest);
         if (!records.has_value()) {
@@ -549,6 +589,9 @@ flush_report world::flush_internal(command_buffer &commands) {
             continue;
         }
         command_buffer::instantiate_entry &entry = commands.mInstantiates[command->instantiateIndex];
+        if (!destroyed.empty()) {
+            cancel_destroyed_copies(entry, destroyed);
+        }
         const core::result<void> created = instantiate_now(*entry.archive, entry.ids, entry.copies);
         if (!created.has_value()) {
             CONJURE_LOG_WARN(LOG_ECS, "flush could not instantiate an archive: {}", created.get_error().message());

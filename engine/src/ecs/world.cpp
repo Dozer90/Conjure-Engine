@@ -402,6 +402,8 @@ void world::clear() {
     mFlushPlan.shrink_to_fit();
     mPlacedScratch.clear();
     mPlacedScratch.shrink_to_fit();
+    mFlushDestroyed.clear();
+    mFlushDestroyed.shrink_to_fit();
     mDeferred->shrink_to_fit();
     mDeferredFlushing->shrink_to_fit();
     bump_version();

@@ -59,6 +59,7 @@ class CONJURE_API world
 <tr><td>private</td><td><code class="signature">mDeferred</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../command-buffer/command-buffer.html">command_<wbr>buffer</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Deferred<wbr>Flushing</code></td><td><code class="signature">std::<wbr>unique_<wbr>ptr&lt;<wbr><a href="../command-buffer/command-buffer.html">command_<wbr>buffer</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">m<wbr>Empty<wbr>Archetype</code></td><td><code class="signature"><a href="../archetype/archetype.html">archetype</a> *</code></td><td><code class="signature">nullptr</code></td><td></td></tr>
+<tr><td>private</td><td><code class="signature">m<wbr>Flush<wbr>Destroyed</code></td><td><code class="signature">std::vector&lt;<a href="../../core/types.html#symbol-u64">u64</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mFlushPlan</code></td><td><code class="signature">std::vector&lt;<a href="world-flush-entry.html">flush_entry</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mFlushSlots</code></td><td><code class="signature">std::vector&lt;<a href="world-flush-slot.html">flush_slot</a>&gt;</code></td><td><code class="signature">{}</code></td><td></td></tr>
 <tr><td>private</td><td><code class="signature">mFlushStamp</code></td><td><code class="signature"><a href="../../core/types.html#symbol-u32">u32</a></code></td><td><code class="signature"><span class="mi">0</span></code></td><td></td></tr>
@@ -154,7 +155,7 @@ class CONJURE_API world
 <div class="function-declaration" id="function-flush-1"><pre><code>[[<span class="na">nodiscard</span>]] <a href="../command-buffer/flush-report.html">flush_report</a> flush(
     <a href="../command-buffer/command-buffer.html">command_buffer</a> &amp;commands);</code></pre></div>
 
-<p>Applies a command buffer: one archetype move per touched entity, destroys last, observers for the mask delta only. Commands on dead or stale entities are skipped and counted. The buffer is empty afterwards. <code>A</code> structural violation leaves the buffer untouched and reports nothing applied.</p>
+<p>Applies a command buffer: one archetype move per touched entity, destroys last, observers for the mask delta only. Commands on dead or stale entities are skipped and counted. <code>A</code> destroy of the root an instantiation of the same buffer returned cancels that copy: the archive is not placed for it, its ids are handed back with a bumped generation and the root never becomes alive, as a reserved id the buffer destroys. The buffer is empty afterwards. <code>A</code> structural violation leaves the buffer untouched and reports nothing applied.</p>
 
 #### `get` {#function-get}
 
@@ -381,6 +382,12 @@ class CONJURE_API world
 #### `begin_structural` {#function-begin-structural}
 
 <div class="function-declaration" id="function-begin-structural-1"><pre><code><span class="k">void</span> begin_structural() <span class="k">noexcept</span>;</code></pre></div>
+
+#### `cancel_destroyed_copies` {#function-cancel-destroyed-copies}
+
+<div class="function-declaration" id="function-cancel-destroyed-copies-1"><pre><code><span class="k">void</span> cancel_destroyed_copies(
+    <a href="../command-buffer/command-buffer-instantiate-entry.html">command_buffer::instantiate_entry</a> &amp;entry,
+    std::span&lt;<span class="k">const</span> <a href="../../core/types.html#symbol-u64">u64</a>&gt; destroyed);</code></pre></div>
 
 #### `check_structural` {#function-check-structural}
 
