@@ -71,13 +71,23 @@ namespace conjure::editor::support {
         }
 
         /// <summary>
-        /// Loads the prefab asset synchronously and returns its payload.
+        /// Returns the payload of the prefab asset, synchronously. A LOADED prefab (loaded earlier and not yet
+        /// unloaded by asset_manager::collect(); no command keeps a handle on it) is used as it is. Any other
+        /// state, and any prefab once the asset manager is shut down, goes through asset_manager::load_blocking,
+        /// which inside a frame logs its once-per-frame hitch WARN: a prefab that was never loaded, was unloaded
+        /// by collect(), or is RELOADING after prefab.apply (the wait gives the command the applied payload, not
+        /// the previous one). A shut-down manager still refuses with SHUTTING_DOWN. Code sweep F736: a resident
+        /// prefab costs the frame neither a blocking load nor that WARN. prefab.create normally blocks: its asset
+        /// was just imported.
         /// </summary>
         core::result<const scene::prefab_asset *> load_prefab(editor_context &context, const assets::asset_id &id) {
             assets::asset_manager &manager = *context.assets();
-            const core::result<assets::asset_handle> loaded = manager.load_blocking(id);
-            if (!loaded.has_value()) {
-                return wrap(loaded.get_error());
+            const bool resident = !manager.is_shut_down() && manager.state_of(id) == assets::asset_state::LOADED;
+            if (!resident) {
+                const core::result<assets::asset_handle> loaded = manager.load_blocking(id);
+                if (!loaded.has_value()) {
+                    return wrap(loaded.get_error());
+                }
             }
             const scene::prefab_asset *asset = manager.bind<scene::prefab_asset>(id).get();
             if (asset == nullptr) {

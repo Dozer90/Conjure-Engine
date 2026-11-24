@@ -2,7 +2,12 @@
 
 #include "editor_test_support.h"
 
+#include "conjure/testing/log_capture.h"
+
+#include "conjure/assets/asset_manager.h"
+#include "conjure/assets/asset_types.h"
 #include "conjure/core/json/document.h"
+#include "conjure/core/log.h"
 #include "conjure/core/result.h"
 #include "conjure/core/uuid.h"
 #include "conjure/editor/command_registry.h"
@@ -16,6 +21,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -70,6 +76,40 @@ namespace {
         }
         std::sort(names.begin(), names.end());
         return names;
+    }
+
+    /// <summary>
+    /// Holds the asset manager inside a frame (at its own frame index) for the scope's lifetime. The editor
+    /// dispatches commands inside a frame, where asset_manager::load_blocking logs its once-per-frame hitch WARN;
+    /// the test harness dispatches between frames, where it does not.
+    /// </summary>
+    class asset_frame_scope {
+        private:
+            assets::asset_manager *mManager = nullptr;
+
+        public:
+            explicit asset_frame_scope(assets::asset_manager &manager) :
+                mManager(&manager) {
+                mManager->begin_frame(mManager->frame_index());
+            }
+
+            ~asset_frame_scope() {
+                mManager->end_frame();
+            }
+
+            asset_frame_scope(const asset_frame_scope &) = delete;
+            asset_frame_scope &operator=(const asset_frame_scope &) = delete;
+    };
+
+    /// <summary>
+    /// The first component of the entity's sprite size, read through component.get.
+    /// </summary>
+    f32 sprite_width(editor_test::headless_editor &editor, const std::string &entity) {
+        const core::json::document size = editor.ok(
+          "component.get",
+          core::json::object({{"entity", entity}, {"path", "sprite.size"}})
+        );
+        return size.root()["value"][0].as_f32();
     }
 }
 
@@ -440,6 +480,92 @@ TEST_SUITE("editor/commands_asset_prefab") {
           "prefab.create",
           core::json::object({{"entity", root}, {"path", "prefabs/cell"}})
         ) == protocol_error_code::INVALID_ARGS);
+    }
+
+    TEST_CASE("regression - code sweep F736 prefab commands use a resident prefab without a blocking load") {
+        editor_test::headless_editor editor = {};
+        const std::string root = editor.create_entity("Cell");
+        (void) editor.ok(
+          "component.add",
+          core::json::object({
+            {"entity", root},
+            {"type", "sprite"},
+            {"value", core::json::object({{"size", core::json::array({0.9f, 0.9f})}})},
+          })
+        );
+        const std::string uuid = std::string(editor.ok(
+          "prefab.create",
+          core::json::object({{"entity", root}, {"path", "prefabs/cell"}})
+        ).root()["uuid"].as_string());
+        const std::optional<core::uuid> id = core::uuid::parse(uuid);
+        REQUIRE(id.has_value());
+        assets::asset_manager *manager = editor.context().assets();
+        REQUIRE(manager != nullptr);
+
+        SUBCASE("prefab.instantiate and prefab.apply of a resident prefab do not block") {
+            // prefab.create loaded the prefab, and nothing unloads it before collect() runs.
+            REQUIRE(manager->state_of(*id) == assets::asset_state::LOADED);
+            const asset_frame_scope frame(*manager);
+            const testing::log_capture logs = {};
+            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(made.root()["guids"].size() == 1);
+            const std::string copy = std::string(made.root()["guids"][0].as_string());
+            (void) editor.ok(
+              "component.set",
+              core::json::object({
+                {"entity", copy},
+                {"path", "sprite.size"},
+                {"value", core::json::array({2.0f, 2.0f})},
+              })
+            );
+            (void) editor.ok("prefab.apply", core::json::object({{"entity", copy}}));
+            CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
+        }
+
+        SUBCASE("a prefab reloading after prefab.apply is waited for, so the next instance holds the applied state") {
+            const asset_frame_scope frame(*manager);
+            const testing::log_capture logs = {};
+            (void) editor.ok(
+              "component.set",
+              core::json::object({
+                {"entity", root},
+                {"path", "sprite.size"},
+                {"value", core::json::array({2.0f, 2.0f})},
+              })
+            );
+            (void) editor.ok("prefab.apply", core::json::object({{"entity", root}}));
+            REQUIRE(manager->state_of(*id) == assets::asset_state::RELOADING);
+            CHECK_FALSE(logs.contains(core::log_level::WARN, "load_blocking"));
+            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(made.root()["guids"].size() == 1);
+            CHECK(sprite_width(editor, std::string(made.root()["guids"][0].as_string())) == doctest::Approx(2.0f));
+            CHECK(manager->state_of(*id) == assets::asset_state::LOADED);
+            CHECK(logs.contains(core::log_level::WARN, "load_blocking"));
+        }
+
+        SUBCASE("a prefab that is no longer resident is loaded synchronously and instantiated") {
+            // No command or instance holds a handle on the prefab, so collect() unloads it.
+            (void) manager->collect();
+            REQUIRE(manager->state_of(*id) == assets::asset_state::UNLOADED);
+            const asset_frame_scope frame(*manager);
+            const testing::log_capture logs = {};
+            const core::json::document made = editor.ok("prefab.instantiate", core::json::object({{"prefab", uuid}}));
+            REQUIRE(made.root()["guids"].size() == 1);
+            CHECK(sprite_width(editor, std::string(made.root()["guids"][0].as_string())) == doctest::Approx(0.9f));
+            CHECK(manager->state_of(*id) == assets::asset_state::LOADED);
+            CHECK(logs.contains(core::log_level::WARN, "load_blocking"));
+        }
+
+        SUBCASE("a resident prefab is refused once the asset manager is shut down") {
+            // shutdown() leaves the LOADED slot LOADED; the command still goes through load_blocking, which
+            // refuses with SHUTTING_DOWN (an internal error on the protocol) instead of binding the payload.
+            manager->shutdown();
+            REQUIRE(manager->state_of(*id) == assets::asset_state::LOADED);
+            CHECK(
+              editor.fail("prefab.instantiate", core::json::object({{"prefab", uuid}})) ==
+              protocol_error_code::INTERNAL
+            );
+        }
     }
 
     TEST_CASE("regression - prefab.instantiate with a guid listed twice fails up front and leaves nothing behind") {
